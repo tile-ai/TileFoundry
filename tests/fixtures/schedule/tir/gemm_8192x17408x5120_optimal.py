@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=GEMM_8192X17408X5120_OPTIMAL function=gemm topology=cta wave=132/132
 # selection requested=memory executed=memory
-# memory traffic=gmem:r192.00MB/w306.00MB@logical,r1.01GB/w306.00MB@total,r1.01GB/w306.00MB@cta,r1.01GB/w306.00MB@thread;rmem:r2.71GB/w2.67GB@logical,r2.71GB/w2.71GB@total,r2.71GB/w2.71GB@cta,r11.51MB/w10.82MB@thread;smem:r24.97MB/w17.74MB@logical,r24.97MB/w24.97MB@total,r24.97MB/w24.97MB@cta,r19.74MB/w8.04MB@thread footprint=a:256.00KB;b:288.00KB;v27:96:128.00KB;v28:97:8.25MB peak=gmem:522.00MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
+# memory traffic=gmem:r192.00MB/w306.00MB@logical,r1.01GB/w306.00MB@total,r1.01GB/w306.00MB@cta,r1.01GB/w306.00MB@thread;rmem:r2.71GB/w2.67GB@logical,r2.71GB/w2.71GB@total,r2.71GB/w2.71GB@cta,r11.51MB/w10.82MB@thread;smem:r24.97MB/w17.74MB@logical,r24.97MB/w24.97MB@total,r24.97MB/w24.97MB@cta,r19.74MB/w8.04MB@thread footprint=a:256.00KB;b:288.00KB;v27:96:128.00KB;v28:97:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
 
 from __future__ import annotations
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import isl
+import pytest
 
 from tests.fixtures.placed.gemm_schedules import (
     WAVE_BK,
@@ -37,7 +38,9 @@ from tests.fixtures.placed.hand_checked import (
 )
 from tests.fixtures.placed.persistent_gemm_flat import PersistentGemmFlat
 from tests.fixtures.placed.persistent_gemm_tiled import PersistentGemmTiled
-from tilefoundry.analysis import analyze
+from tilefoundry.analysis import AnalysisPrecision, analyze
+from tilefoundry.analysis import footprint as footprint_analysis
+from tilefoundry.analysis import memory as memory_analysis
 from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
 from tilefoundry.analysis.report import report_data
 from tilefoundry.ir.types import DType
@@ -82,27 +85,50 @@ def _reuse_conclusions(memory: dict) -> list[dict]:
     return [{field: row[field] for field in fields} for row in memory["reuse_windows"]]
 
 
-def test_uncounted_boundary_marks_the_footprint_incomplete() -> None:
+@pytest.mark.parametrize("counted_precision", tuple(AnalysisPrecision))
+@pytest.mark.parametrize(
+    "missing_precision", (AnalysisPrecision.LOWER_BOUND, AnalysisPrecision.UNKNOWN)
+)
+def test_uncounted_boundary_marks_the_footprint_incomplete(
+    counted_precision: AnalysisPrecision,
+    missing_precision: AnalysisPrecision,
+) -> None:
     buffer = InvariantReuse.entry_function().params[0]
     uncounted = ReachedAddresses(
         buffer=buffer,
         output_index=0,
         dtype=None,
         reached=None,
-        exact=False,
+        precision=missing_precision,
+    )
+    counted = ReachedAddresses(
+        buffer, 0, DType.bf16, isl.set("{ [i] : 0 <= i < 4 }"), counted_precision
     )
 
     footprint = footprint_of(
-        merged((uncounted,)),
+        merged((uncounted, counted)),
         memory_level="gmem",
         labels={id(buffer): "x"},
     )
 
-    assert footprint.buffers == ()
-    assert footprint.complete is False
+    assert dict(footprint.buffers)["x"].of("gmem").total == 8
+    expected = (
+        missing_precision
+        if counted_precision in (AnalysisPrecision.EXACT, missing_precision)
+        else AnalysisPrecision.UNKNOWN
+    )
+    assert footprint.precision is expected
+    assert (
+        footprint_of((uncounted,), memory_level="gmem", labels={id(buffer): "x"}).precision
+        is missing_precision
+    )
 
 
-def test_tuple_output_boundaries_add_instead_of_union() -> None:
+@pytest.mark.parametrize("left", tuple(AnalysisPrecision))
+@pytest.mark.parametrize("right", tuple(AnalysisPrecision))
+def test_tuple_output_boundaries_add_instead_of_union(
+    left: AnalysisPrecision, right: AnalysisPrecision,
+) -> None:
     buffer = InvariantReuse.entry_function().params[0]
     addresses = isl.set("{ [i] : 0 <= i < 4 }")
     reached = tuple(
@@ -111,9 +137,9 @@ def test_tuple_output_boundaries_add_instead_of_union() -> None:
             output_index=index,
             dtype=DType.bf16,
             reached=addresses,
-            exact=True,
+            precision=precision,
         )
-        for index in range(2)
+        for index, precision in enumerate((left, right))
     )
 
     distinct = merged(reached)
@@ -127,7 +153,12 @@ def test_tuple_output_boundaries_add_instead_of_union() -> None:
 
     assert len(distinct) == 2
     assert gmem is not None and gmem.total == 2 * 4 * 2
-    assert footprint.complete is True
+    expected = (
+        right if left is AnalysisPrecision.EXACT
+        else left if right is AnalysisPrecision.EXACT or left is right
+        else AnalysisPrecision.UNKNOWN
+    )
+    assert footprint.precision is expected
 
 
 def test_invariant_reuse_matches_the_written_arithmetic() -> None:
@@ -144,7 +175,7 @@ def test_overlapping_reads_are_unioned_not_summed() -> None:
     memory = _memory_record(OverlappingReads)
 
     assert _footprint_bytes(memory, "x") == 12 * 2
-    assert memory["footprint"]["complete"] is True
+    assert memory["footprint"]["precision"] == "exact"
 
 
 def test_sliced_view_counts_against_the_final_source() -> None:
@@ -263,7 +294,15 @@ def test_persistent_gemm_fits_reuse_conclusions_match_the_reviewed_report() -> N
     ]
 
 
-def test_persistent_gemm_over_reuse_conclusions_match_the_reviewed_report() -> None:
+@pytest.mark.parametrize("precision", tuple(AnalysisPrecision))
+def test_persistent_gemm_over_reuse_conclusions_match_the_reviewed_report(
+    precision: AnalysisPrecision, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count = footprint_analysis.footprint_of
+    monkeypatch.setattr(
+        footprint_analysis, "footprint_of",
+        lambda *args, **kwargs: replace(count(*args, **kwargs), precision=precision),
+    )
     memory = _memory_record(Gemm_MNK_NN128x128x64_w12x11_k16384)
 
     assert _reuse_conclusions(memory) == [
@@ -284,27 +323,46 @@ def test_persistent_gemm_over_reuse_conclusions_match_the_reviewed_report() -> N
             "fits": False,
         },
     ]
-    assert memory["errors"] == [
-        "l2 reuse window mi holds 176.00MB at a 132-unit wave, exceeding "
-        "capacity 47.68MB",
-        "l2 reuse window ni holds 92.00MB at a 132-unit wave, exceeding "
-        "capacity 47.68MB",
+    category = "errors" if precision in (
+        AnalysisPrecision.EXACT, AnalysisPrecision.LOWER_BOUND
+    ) else "advisories"
+    assert all(row["precision"] == precision.value for row in memory["reuse_windows"])
+    assert memory[category] == [
+        "l2 reuse window mi holds 176.00MB at a 132-unit wave, exceeding capacity 47.68MB",
+        "l2 reuse window ni holds 92.00MB at a 132-unit wave, exceeding capacity 47.68MB",
     ]
+    assert memory["advisories" if category == "errors" else "errors"] == []
 
 
-def test_capacity_exceeded_matches_the_written_ratio() -> None:
+@pytest.mark.parametrize("precision", tuple(AnalysisPrecision))
+def test_capacity_exceeded_matches_the_written_ratio(
+    precision: AnalysisPrecision,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count = memory_analysis.footprint_of
+    monkeypatch.setattr(
+        memory_analysis,
+        "footprint_of",
+        lambda *args, **kwargs: replace(count(*args, **kwargs), precision=precision),
+    )
     data = _report(CapacityExceeded)
     memory = data["function_records"]["memory"]
     used = _working_set_bytes(memory)
     capacity = 1_048_576
-    l2_errors = [error for error in memory["errors"] if error.startswith("l2 working set")]
+    category = (
+        "errors"
+        if precision in (AnalysisPrecision.EXACT, AnalysisPrecision.LOWER_BOUND)
+        else "advisories"
+    )
 
     assert (used, capacity, used * 100 / capacity) == (1_572_864, 1_048_576, 150.0)
-    assert l2_errors == [
-        "l2 working set 1.50MB at the first iteration of a 1-unit wave "
-        "exceeds capacity 1.00MB"
+    diagnosis = [
+        "l2 working set 1.50MB at the first iteration of a 1-unit wave exceeds capacity 1.00MB"
     ]
-    assert memory["advisories"] == []
+    assert memory["errors"] == [
+        "rmem placement peak 1.50MB exceeds capacity 256.00KB"
+    ] + (diagnosis if category == "errors" else [])
+    assert memory["advisories"] == (diagnosis if category == "advisories" else [])
 
 
 def test_persistent_tiled_holds_the_loop_at_its_start_expression() -> None:
@@ -312,7 +370,7 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression() -> None:
 
     assert _footprint_bytes(memory, "a") == 12 * 64 * 32 * 2
     assert _footprint_bytes(memory, "b") == 11 * 32 * 64 * 2
-    assert memory["footprint"]["complete"] is True
+    assert memory["footprint"]["precision"] == "exact"
 
 
 def test_persistent_flat_states_its_precision() -> None:
@@ -331,14 +389,13 @@ def test_persistent_flat_states_its_precision() -> None:
         and any(operand["name"] == "out" for operand in call["memory"]["operands"])
     )
 
-    assert memory["footprint"]["complete"] is True
-    assert store["memory"]["footprint"]["complete"] is True
+    assert memory["footprint"]["precision"] == "exact"
+    assert store["memory"]["footprint"]["precision"] == "exact"
     assert _footprint_bytes(memory, "a") == 2 * 64 * 32 * 2
     assert _footprint_bytes(memory, "b") == 66 * 32 * 64 * 2
     assert _working_set_bytes(memory) == 2_473_984
     assert sorted(
-        levels["gmem"]["total"]
-        for levels in store["memory"]["footprint"]["buffers"].values()
+        levels["gmem"]["total"] for levels in store["memory"]["footprint"]["buffers"].values()
     ) == [64 * 64 * 4, 132 * 64 * 64 * 4]
 
 
@@ -346,9 +403,10 @@ def test_tile_area_scales_traffic_and_working_set() -> None:
     tile64 = _memory_record(Gemm_MNK_NN64)
     tile128 = _memory_record(Gemm_MNK_NN128)
 
-    assert tile64["traffic"]["storage"]["gmem"]["total"] != tile128["traffic"][
-        "storage"
-    ]["gmem"]["total"]
+    assert (
+        tile64["traffic"]["storage"]["gmem"]["total"]
+        != tile128["traffic"]["storage"]["gmem"]["total"]
+    )
     assert _working_set_bytes(tile64) == 2 * 64 * 64 * 2
     assert _working_set_bytes(tile128) == 2 * 128 * 128 * 2
     assert _working_set_bytes(tile64) * 4 == _working_set_bytes(tile128)

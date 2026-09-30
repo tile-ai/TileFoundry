@@ -69,6 +69,7 @@ from .metadata import (
     TrafficBytes,
     ValueLifetime,
 )
+from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
 
 SELECTOR = "memory"
@@ -504,9 +505,7 @@ def values_in_region(
             continue
         declared = facts.explicit(lifetime.memory_level)
         if declared is None or not declared.owner:
-            raise AnalysisError(
-                f"memory: level {lifetime.memory_level!r} has no declared owner"
-            )
+            raise AnalysisError(f"memory: level {lifetime.memory_level!r} has no declared owner")
         if declared.owner == TARGET_MEMORY_OWNER:
             continue
         owner_position = positions.get(declared.owner)
@@ -896,29 +895,34 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             )
         )
     levels = tuple(levels_list)
-    placement_errors = tuple(
+    errors = tuple(
         f"{item.memory_level} placement peak {format_bytes(item.peak_bytes)} exceeds "
         f"capacity {format_bytes(item.capacity_bytes)}"
         for item in levels
         if item.exceeds_capacity
     )
-    errors = placement_errors
-    overfull_snapshot_holds: set[int] = set()
+    advisories: tuple[str, ...] = ()
+    reliable = (AnalysisPrecision.EXACT, AnalysisPrecision.LOWER_BOUND)
+    overfull_snapshot_holds: set[tuple[int, bool]] = set()
     if cache is not None and wave is not None:
         cache_level, _backing_level, cache_capacity_bytes = cache
-        overfull_windows: dict[str, int] = {}
+        overfull_windows: dict[str, tuple[int, AnalysisPrecision]] = {}
         for row in reuse:
             if not row.fits:
                 window = row.time or row.space
-                overfull_windows.setdefault(window, row.holds_bytes)
+                overfull_windows.setdefault(window, (row.holds_bytes, row.precision))
                 if not row.time:
-                    overfull_snapshot_holds.add(row.holds_bytes)
-        errors += tuple(
-            f"{cache_level} reuse window {window} holds {format_bytes(holds_bytes)} at a "
-            f"{wave[0]}-unit wave, exceeding capacity "
-            f"{format_bytes(cache_capacity_bytes)}"
-            for window, holds_bytes in overfull_windows.items()
-        )
+                    overfull_snapshot_holds.add((row.holds_bytes, row.precision in reliable))
+        for window, (holds_bytes, precision) in overfull_windows.items():
+            message = (
+                f"{cache_level} reuse window {window} holds {format_bytes(holds_bytes)} at a "
+                f"{wave[0]}-unit wave, exceeding capacity "
+                f"{format_bytes(cache_capacity_bytes)}"
+            )
+            if precision in reliable:
+                errors += (message,)
+            else:
+                advisories += (message,)
     footprint = None
     cache_level = ""
     cache_capacity_bytes = None
@@ -942,12 +946,19 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             for _buffer, breakdown in footprint.buffers
             for _level, spread in breakdown.kinds
         )
-        if used > cache_capacity_bytes and used not in overfull_snapshot_holds:
-            errors += (
+        if (
+            used >= cache_capacity_bytes
+            and (used, footprint.precision in reliable) not in overfull_snapshot_holds
+        ):
+            message = (
                 f"{cache_level} working set {format_bytes(used)} at the first iteration "
                 f"of a {wave_units}-unit wave exceeds capacity "
-                f"{format_bytes(cache_capacity_bytes)}",
+                f"{format_bytes(cache_capacity_bytes)}"
             )
+            if footprint.precision in reliable:
+                errors += (message,)
+            else:
+                advisories += (message,)
     attach(
         function,
         RegionMemoryMetadata(
@@ -960,9 +971,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             reuse_windows=reuse,
             lifetimes=lifetimes,
             peaks=levels,
-            placement_errors=placement_errors,
             solver_status="feasible",
             errors=errors,
+            advisories=advisories,
         ),
     )
 

@@ -1,8 +1,8 @@
 # analysis target=nvidia.h200_sxm module=WGMMA_EXPLICIT_WINDOWS function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r12.00KB/w32.00KB@logical,r24.00KB/w32.00KB@total,r24.00KB/w32.00KB@cta,r24.00KB/w16.12KB@thread;rmem:r112.19KB/w88.00KB@logical,r112.31KB/w112.00KB@total,r112.31KB/w112.00KB@cta,r1.19KB/w896B@thread;smem:r1.25KB/w640B@logical,r1.25KB/w1.25KB@total,r1.25KB/w1.25KB@cta,r288B/w1.25KB@thread footprint=a:2.00KB;b:1.00KB;v10:84:4.00KB peak=gmem:28.00KB;rmem:8.00KB;smem:6.00KB persistent=gmem:12.00KB
-#   buffer=a holds=10.00KB time=n space=none reuse=4.00KB fits=yes
-#   buffer=b holds=16.00KB time=m space=none reuse=4.00KB fits=yes
+# memory traffic=gmem:r12.00KB/w32.00KB@logical,r24.00KB/w32.00KB@total,r24.00KB/w32.00KB@cta,r24.00KB/w16.12KB@thread;rmem:r112.19KB/w88.00KB@logical,r112.31KB/w112.00KB@total,r112.31KB/w112.00KB@cta,r1.19KB/w896B@thread;smem:r1.25KB/w640B@logical,r1.25KB/w1.25KB@total,r1.25KB/w1.25KB@cta,r288B/w1.25KB@thread footprint=a:2.00KB;b:1.00KB;v10:84:4.00KB footprint-precision=exact peak=gmem:28.00KB;rmem:8.00KB;smem:6.00KB persistent=gmem:12.00KB
+#   buffer=a holds=10.00KB time=n space=none reuse=4.00KB fits=yes precision=exact
+#   buffer=b holds=16.00KB time=m space=none reuse=4.00KB fits=yes precision=exact
 
 from __future__ import annotations
 

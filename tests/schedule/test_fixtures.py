@@ -20,6 +20,7 @@ import pytest
 import torch
 
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
+from tilefoundry.analysis import AnalysisPrecision
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.liveness import analyze_liveness, result_copies
@@ -426,6 +427,10 @@ def test_scheduled_hir_program_has_analysis_metadata(
                 assert record.offsets
 
     if analysis == "compute-cost":
+        if path.stem == "gemm_8192x17408x5120_optimal":
+            record = get_metadata(result.function, ComputeCostMetadata)
+            assert record.precision is AnalysisPrecision.UPPER_BOUND
+            assert sum(spread.total for _, spread in record.flops.kinds) == 12_048_559_767_552
         schedules = (
             expr
             for expr in collect_exprs(result.function.body)

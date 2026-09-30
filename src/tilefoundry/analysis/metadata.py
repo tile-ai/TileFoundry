@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
+from .precision import AnalysisPrecision
+
 
 @dataclass(frozen=True)
 class Spread[V]:
@@ -89,6 +91,7 @@ class ComputeCostMetadata(IRMetadata):
     topologies: tuple[str, ...] = ()
     flops: Breakdown[int] = Breakdown()
     other_ops: Breakdown[int] = Breakdown()
+    precision: AnalysisPrecision = AnalysisPrecision.EXACT
 
 
 @dataclass(frozen=True)
@@ -110,7 +113,7 @@ class Footprint:
     """Unique bytes one wave touches, by source buffer and memory level."""
 
     buffers: tuple[tuple[str, Breakdown[int]], ...] = ()
-    complete: bool = True
+    precision: AnalysisPrecision = AnalysisPrecision.EXACT
 
 
 @dataclass(frozen=True)
@@ -187,7 +190,7 @@ class ReuseWindow:
     holds_bytes: int = 0
     reuse_bytes: int = 0
     fits: bool = True
-    complete: bool = True
+    precision: AnalysisPrecision = AnalysisPrecision.EXACT
 
 
 @dataclass(frozen=True)
@@ -206,7 +209,6 @@ class RegionMemoryMetadata(IRMetadata):
     reuse_windows: tuple[ReuseWindow, ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     peaks: tuple[MemoryLevelPeak, ...] = ()
-    placement_errors: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     advisories: tuple[str, ...] = ()
 

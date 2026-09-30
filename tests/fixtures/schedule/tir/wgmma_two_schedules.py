@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=WGMMA_TWO_SCHEDULES function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r12.00KB/w0@logical,r12.00KB/w0@total,r12.00KB/w0@cta,r12.00KB/w0@thread;rmem:r40.12KB/w44.00KB@logical,r40.12KB/w44.00KB@total,r40.12KB/w44.00KB@cta,r448B/w352B@thread;smem:r640B/w640B@logical,r640B/w640B@total,r640B/w640B@cta,r144B/w640B@thread footprint=a:2.00KB;b:1.00KB;c:2.00KB;d:1.00KB peak=gmem:12.00KB;rmem:8.00KB;smem:12.00KB persistent=gmem:12.00KB
+# memory traffic=gmem:r12.00KB/w0@logical,r12.00KB/w0@total,r12.00KB/w0@cta,r12.00KB/w0@thread;rmem:r40.12KB/w44.00KB@logical,r40.12KB/w44.00KB@total,r40.12KB/w44.00KB@cta,r448B/w352B@thread;smem:r640B/w640B@logical,r640B/w640B@total,r640B/w640B@cta,r144B/w640B@thread footprint=a:2.00KB;b:1.00KB;c:2.00KB;d:1.00KB footprint-precision=exact peak=gmem:12.00KB;rmem:8.00KB;smem:12.00KB persistent=gmem:12.00KB
 
 from __future__ import annotations
 

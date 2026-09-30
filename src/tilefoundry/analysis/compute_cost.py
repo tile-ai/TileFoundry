@@ -19,6 +19,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
 from .metadata import Breakdown, ComputeCostMetadata, MemoryMetadata, breakdown, shares
+from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
 
 SELECTOR = "compute-cost"
@@ -251,6 +252,7 @@ class ComputeCostContext(AnalyzeContext):
     other_ops_logical: dict[str, int] = field(default_factory=dict)
     by_unit: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
     call_count: list[int] = field(default_factory=lambda: [0])
+    precision: list[AnalysisPrecision] = field(default_factory=lambda: [AnalysisPrecision.EXACT])
 
 
 class ComputeCostVisitor(ExprVisitor[None]):
@@ -297,6 +299,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
         while cursor.parent is not None:
             if cursor.is_variant(expr):
                 repeats *= max(1, cursor.trips())
+                ctx.precision[0] = ctx.precision[0].join(cursor.trips_precision)
             cursor = cursor.parent
         _accumulate(ctx, record, repeats)
 
@@ -330,6 +333,7 @@ def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
             function,
             ComputeCostMetadata(
                 topologies=units,
+                precision=cost_context.precision[0],
                 flops=breakdown(
                     cost_context.flops,
                     tuple(cost_context.by_unit[u]["flops"] for u in units),

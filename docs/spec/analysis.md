@@ -162,6 +162,12 @@ layer settles is which type a field holds and what its keys name:
 
 #### 1.2.1 `compute-cost`
 
+Analysis quantities share `AnalysisPrecision`: `EXACT`, `UPPER_BOUND`,
+`LOWER_BOUND`, and `UNKNOWN`. Their JSON spellings are `exact`, `upper_bound`,
+`lower_bound`, and `unknown`. Exact evidence is the identity when evidence is
+combined; equal directions retain their direction, opposing directions become
+unknown, and unknown evidence absorbs every other direction.
+
 `compute-cost` measures the logical work of each authored `Call` without reading
 target hardware facts. What an occurrence moves is the memory family's answer
 ([§1.2.2](#122-memory)), read off the same registered evaluator.
@@ -173,6 +179,7 @@ class ComputeCostMetadata(IRMetadata):
     topologies: tuple[str, ...] = ()
     flops: Breakdown[int] = Breakdown()
     other_ops: Breakdown[int] = Breakdown()
+    precision: AnalysisPrecision = AnalysisPrecision.EXACT
 ```
 
 
@@ -181,13 +188,14 @@ class ComputeCostMetadata(IRMetadata):
 | `topologies` | The effective Module topology levels, coarsest first. | No |
 | `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written; the total then multiplies by the enclosing recomputation factor and the number of positions in its execution scope, and each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level. For a Function Call, take the callee's summed record and multiply by the call site's factor. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `other_ops` | The evaluator's non-floating-point operation counts (`integer`, `predicate`, `select`, `special`), totalled and shared the same way. These keys map directly to target one-unit operation-throughput keys; target-side service naming is unchanged. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `precision` | One-trip Call work is exact; Function work combines the precision of the trip counts actually used for recomputation. Coordinate-dependent maximum trip counts yield an upper bound. | No |
 
 Requesting this family adds one summary line, prefixed by `# `: the Function's own
 record, stated exactly as a Call's is. The whole program's work is not a second
 record.
 
 ```text
-compute-cost flops=<dtype>:<int>@logical,<int>@total,<int>@<level>[,...][;<dtype>:...] other-ops=<kind>:<int>@logical,<int>@total,<int>@<level>[,...][;<kind>:...]
+compute-cost flops=<dtype>:<int>@logical,<int>@total,<int>@<level>[,...][;<dtype>:...] other-ops=<kind>:<int>@logical,<int>@total,<int>@<level>[,...][;<kind>:...] precision=<exact|upper_bound|lower_bound|unknown>
 ```
 
 Every measured Call receives this annotation. Each key pairs the whole quantity
@@ -200,7 +208,8 @@ Each reported Call's JSON projection is under its `compute-cost` key:
  "flops": {<dtype>: {"logical": <int>, "total": <int>,
                       "per_unit": [<int>, ...]}},
  "other_ops": {<kind>: {"logical": <int>, "total": <int>,
-                         "per_unit": [<int>, ...]}}}
+                         "per_unit": [<int>, ...]}},
+ "precision": <"exact"|"upper_bound"|"lower_bound"|"unknown">}
 ```
 
 - constraints:
@@ -250,7 +259,7 @@ class ReuseWindow:
     holds_bytes: int = 0
     reuse_bytes: int = 0
     fits: bool = True
-    complete: bool = True
+    precision: AnalysisPrecision = AnalysisPrecision.EXACT
 
 
 class RegionMemoryMetadata(IRMetadata):
@@ -364,16 +373,16 @@ a cache backs. It is stated per source buffer, named as a lifetime names one.
 
 ```python
 class Footprint:
-    """Unique bytes one wave touches, or the lower bound when incomplete."""
+    """Unique bytes one wave touches, with directional counting evidence."""
 
     buffers: tuple[tuple[str, Breakdown[int]], ...] = ()
-    complete: bool = True
+    precision: AnalysisPrecision = AnalysisPrecision.EXACT
 ```
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `Footprint.buffers` | Group reached address sets by source-buffer identity, union each group, count its elements, and pack the source dtype's bits into whole bytes. Each buffer has one memory-level kind whose `Spread` states the same count in `logical` and `total` and has no `per_unit` entries. | `MemoryHierarchyFacts` selects the level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
-| `Footprint.complete` | False when any contributing boundary is not exact, has no finite count, or belongs to a refused scope; otherwise true. | No |
+| `Footprint.precision` | Combine each contributing boundary's direction: omitted boundaries or uncountable amounts are lower bounds, counted widened accesses are upper bounds, and refused boundaries have unknown direction. | No |
 | `MemoryMetadata.footprint` | The unique addresses this occurrence's own boundaries reach at every enclosing loop's first iteration over one wave, or `None` when no wave can be stated. | As above |
 | `RegionMemoryMetadata.footprint` | The union of every Call's reached addresses below the Function, deduplicated per buffer before counting, or `None` when no wave can be stated. | As above |
 
@@ -404,9 +413,10 @@ class Footprint:
   - Each buffer's count is one number. It MUST be stated in every counting
     domain a `Spread` carries, because a union over units divides back into no
     per-unit share.
-  - `Footprint.complete` is the only completeness marker. It is false when any
-    contributing boundary is not `AccessPrecision.EXACT`, has no finite count,
-    or belongs to a refused scope, and the stated bytes are then a lower bound.
+  - `Footprint.precision` MUST preserve direction throughout address merging
+    and counting. A missing boundary MUST contribute `LOWER_BOUND`; a counted
+    widened relation MUST contribute `UPPER_BOUND`; a refused boundary MUST
+    contribute `UNKNOWN`. No intermediate Boolean may discard this direction.
   - A footprint MUST be absent, not empty, when analysis cannot state the wave
     it is taken over.
 
@@ -492,9 +502,8 @@ class MemoryLevelPeak:
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level. | As above |
 | `RegionMemoryMetadata.solver_status` | `"feasible"` after the whole-Function placement settles, including when there is no addressable value. | No |
-| `RegionMemoryMetadata.placement_errors` | The placement-capacity subset of `errors`, kept separate so consumers can reject unplaceable schedules without treating cache findings as placement failures. | `MemoryHierarchyFacts` |
-| `RegionMemoryMetadata.errors` | Non-fatal placement-capacity and cache-capacity failures. | `MemoryHierarchyFacts` |
-| `RegionMemoryMetadata.advisories` | Lower-severity target-aware memory findings recorded by this family. | `MemoryHierarchyFacts` |
+| `RegionMemoryMetadata.errors` | Non-fatal placement-capacity failures and cache-capacity failures proved by exact or lower-bound counts. | `MemoryHierarchyFacts` |
+| `RegionMemoryMetadata.advisories` | Cache-capacity findings whose upper-bound or unknown counts do not prove excess. | `MemoryHierarchyFacts` |
 
 - constraints:
   - `RegionMemoryMetadata` MUST be attached per reachable `Function` and per
@@ -570,7 +579,7 @@ once. A buffer with neither states no row.
 | `ReuseWindow.holds_bytes` | Unique bytes of every buffer the whole wave touches while this buffer must remain resident. | `MemoryHierarchyFacts` selects the backed level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
 | `ReuseWindow.reuse_bytes` | `(time trips * space units - 1)` times this buffer's unique bytes in the window; an absent axis contributes one. | As above |
 | `ReuseWindow.fits` | True exactly when `holds_bytes` is less than the cache capacity. | `MemoryHierarchyFacts.implicit_levels[]` |
-| `ReuseWindow.complete` | False when any boundary contributing to `holds_bytes` is inexact, uncountable, or refused; otherwise true. | No |
+| `ReuseWindow.precision` | The precision of the footprint supplying `holds_bytes`, without mixing in the trip upper bound used for `reuse_bytes`. | No |
 | `RegionMemoryMetadata.reuse_windows` | One row for every buffer with a time or space reuse axis and nonzero savings. | As above |
 
 - constraints:
@@ -603,10 +612,8 @@ once. A buffer with neither states no row.
     of the loop that carries the later read.
   - A time window is a loop-granularity over-approximation. A true reuse
     distance starts at the previous touch of the same cache line; this window
-    covers a whole iteration of the carrying loop. For a complete row,
-    `holds_bytes` is therefore never below the true byte reuse distance:
-    `fits=yes` is sound, while `fits=no` may be conservative. An incomplete row
-    retains the lower-bound rule below and supports neither conclusion.
+    covers a whole iteration of the carrying loop. Precision describes the
+    counted window, not hardware cache misses or true byte reuse distance.
   - Rows MUST NOT be summed. One row's window lies inside another's whenever
     its axis is nested inside, so a row that fits implies those nested in it
     fit.
@@ -615,10 +622,12 @@ once. A buffer with neither states no row.
   - Data read once states no row; its bytes still enter every row whose window
     contains it.
   - A row whose computed reuse is zero states no row.
-  - A window above capacity MUST add one non-fatal `errors` entry, regardless
-    of how many buffer rows share it, and MUST NOT fail the call.
-  - The stated bytes are a lower bound when any contributing boundary is
-    inexact, exactly as a footprint is.
+  - A window at or above capacity MUST add one non-fatal diagnosis, regardless
+    of how many buffer rows share it, and MUST NOT fail the call. `EXACT` and
+    `LOWER_BOUND` conclusions belong to `errors`: their true holds are at least
+    the stated capacity-exceeding amount. `UPPER_BOUND` and `UNKNOWN`
+    conclusions belong to `advisories`: exceeding capacity is not proved.
+    The same directional rule applies to the Function working set.
   - The capacity is stated per one instance of the cache's `scope`, and this
     analysis compares one wave against one instance. A deployment that spreads
     one wave across several instances is not modelled.
@@ -729,7 +738,7 @@ class MemoryHierarchyFacts:
 Requesting memory adds one Function line and one line per finding:
 
 ```text
-memory traffic=<memory-level>:r<bytes>/w<bytes>@logical,r<bytes>/w<bytes>@total,r<bytes>/w<bytes>@<topology>[,...] footprint=<buffer>:<bytes>[;<buffer>:<bytes>] peak=<level>:<bytes>[,...] persistent=<level>:<bytes>[,...]
+memory traffic=<memory-level>:r<bytes>/w<bytes>@logical,r<bytes>/w<bytes>@total,r<bytes>/w<bytes>@<topology>[,...] footprint=<buffer>:<bytes>[;<buffer>:<bytes>] footprint-precision=<exact|upper_bound|lower_bound|unknown> peak=<level>:<bytes>[,...] persistent=<level>:<bytes>[,...]
   buffer=<buffer> holds=<bytes> time=<loop|none> space=<mesh-axis|none> reuse=<bytes> fits=<yes|no>
   error="<text>"
   advisory="<text>"
@@ -746,7 +755,7 @@ receives a `memory` annotation; `operands` is emitted only when asked for
 ([cli Analyze](./cli.md#analyze)):
 
 ```text
-memory traffic=<memory-level>:r<bytes>/w<bytes>@logical,r<bytes>/w<bytes>@total,r<bytes>/w<bytes>@<topology>[,...] footprint=<buffer>:<bytes>[;<buffer>:<bytes>] [operands=<position>:r<bytes>/w<bytes>[;<position>:...]]
+memory traffic=<memory-level>:r<bytes>/w<bytes>@logical,r<bytes>/w<bytes>@total,r<bytes>/w<bytes>@<topology>[,...] footprint=<buffer>:<bytes>[;<buffer>:<bytes>] footprint-precision=<exact|upper_bound|lower_bound|unknown> [operands=<position>:r<bytes>/w<bytes>[;<position>:...]]
 ```
 
 In the printed `footprint` field, a buffer uses the same value label as a
@@ -762,18 +771,17 @@ under `function_records.memory`:
  "traffic": {"storage": {<memory-level>: <spread>, ...},
              "communication": {<topology-level>: <spread>, ...}},
  "footprint": {"buffers": {<buffer>: {<memory-level>: <spread>}, ...},
-               "complete": <bool>} | null,
+               "precision": <"exact"|"upper_bound"|"lower_bound"|"unknown">} | null,
  "reuse_windows": [{"buffer": <name>, "time": <loop|"">,
                      "space": <mesh-axis|"">, "holds_bytes": <int>,
                      "reuse_bytes": <int>, "fits": <bool>,
-                     "complete": <bool>}, ...],
+                     "precision": <"exact"|"upper_bound"|"lower_bound"|"unknown">}, ...],
  "lifetimes": [{"binding": <name>, "memory_level": <level>, "bytes": <int>,
                 "defined_at": <int>, "last_used_at": <int>,
                 "persistent": <bool>}, ...],
  "peaks": [{"memory_level": <level>, "peak_bytes": <int>,
              "persistent_bytes": <int>, "capacity_bytes": <int|null>}, ...],
  "solver_status": "feasible",
- "placement_errors": [<text>, ...],
  "errors": [<text>, ...],
  "advisories": [<text>, ...]}
 ```

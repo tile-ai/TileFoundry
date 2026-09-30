@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from enum import Enum, auto
 
 import isl
 
@@ -25,14 +24,7 @@ from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .errors import AnalysisError
-
-
-class AccessPrecision(Enum):
-    """How faithfully an access relation describes the authored access."""
-
-    EXACT = auto()
-    WIDENED = auto()
-    UNKNOWN = auto()
+from .precision import AnalysisPrecision
 
 
 @dataclass(frozen=True)
@@ -42,7 +34,7 @@ class Access:
     input_index: int | None
     relation: isl.map
     buffer: Expr
-    precision: AccessPrecision = AccessPrecision.EXACT
+    precision: AnalysisPrecision = AnalysisPrecision.EXACT
     output_index: int | None = None
 
 
@@ -126,15 +118,14 @@ def _parameter_term(
     held: object,
     *,
     narrow: bool,
-) -> tuple[str | None, dict[str, tuple[int, int] | None], AccessPrecision]:
+) -> tuple[str | None, dict[str, tuple[int, int] | None], AnalysisPrecision]:
     number = static_dim_value(value)
     if number is not None:
-        return str(number), {}, AccessPrecision.EXACT
+        return str(number), {}, AnalysisPrecision.EXACT
     try:
         resolved = _MeshBindingResolver(narrow=narrow).visit(value, scope)
         identities = {
-            id(loop.induction_var): f"__tf_in_{i}"
-            for i, loop in enumerate(scope.enclosing_loops())
+            id(loop.induction_var): f"__tf_in_{i}" for i, loop in enumerate(scope.enclosing_loops())
         }
         param_map = dict(scope.domain_params)
         identities.update((id(parameter), param) for param, parameter in param_map.items())
@@ -144,9 +135,9 @@ def _parameter_term(
         pass
     else:
         if all(bound is not None for bound in params.values()):
-            return expression, params, AccessPrecision.EXACT
+            return expression, params, AnalysisPrecision.EXACT
     number = widest_allowed(relation, name, held)
-    return None if number is None else str(number), {}, AccessPrecision.WIDENED
+    return None if number is None else str(number), {}, AnalysisPrecision.UPPER_BOUND
 
 
 def eliminate_parameters(
@@ -156,9 +147,9 @@ def eliminate_parameters(
     held: object,
     *,
     narrow: bool,
-) -> tuple[isl.map, AccessPrecision]:
+) -> tuple[isl.map, AnalysisPrecision]:
     """Eliminate parameters using scoped affine expressions or widening."""
-    precision = AccessPrecision.EXACT
+    precision = AnalysisPrecision.EXACT
     inputs = ", ".join(f"__tf_in_{i}" for i in range(relation.dim(isl.dim_type.IN)))
     outputs = ", ".join(f"__tf_out_{i}" for i in range(relation.dim(isl.dim_type.OUT)))
     names = dict.fromkeys(
@@ -182,8 +173,7 @@ def eliminate_parameters(
             relation = relation.intersect(
                 isl.map(f"[{', '.join(names)}] -> {{ [{inputs}] -> [{outputs}] : {conditions} }}")
             )
-        if resolved_precision is AccessPrecision.WIDENED:
-            precision = AccessPrecision.WIDENED
+        precision = precision.join(resolved_precision)
         param_index = relation.find_dim_by_name(isl.dim_type.PARAM, name)
         relation = relation.project_out(isl.dim_type.PARAM, param_index, 1)
         del names[name]
@@ -233,10 +223,9 @@ def resolve_access(
             operand.type,
             narrow=narrow,
         )
-        if folded_precision is AccessPrecision.WIDENED:
-            precision = AccessPrecision.WIDENED
-    if precision is AccessPrecision.EXACT and has_unbounded_param(relation):
-        precision = AccessPrecision.UNKNOWN
+        precision = precision.join(folded_precision)
+    if has_unbounded_param(relation):
+        precision = AnalysisPrecision.UNKNOWN
     return Access(
         input_index=input_index,
         relation=relation,
@@ -248,7 +237,6 @@ def resolve_access(
 
 __all__ = [
     "Access",
-    "AccessPrecision",
     "eliminate_parameters",
     "resolve_access",
     "widest_allowed",

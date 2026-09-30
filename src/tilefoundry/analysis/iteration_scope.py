@@ -25,9 +25,10 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
-from .access import Access, AccessPrecision, resolve_access
+from .access import Access, resolve_access
 from .errors import AnalysisError
 from .loop_domain import induction_name, iteration_domain
+from .precision import AnalysisPrecision
 
 
 @dataclass(eq=False)
@@ -85,7 +86,7 @@ class IterationScope:
             cursor = cursor.parent
         return None
 
-    def _counted(self) -> tuple[int, AccessPrecision]:
+    def _counted(self) -> tuple[int, AnalysisPrecision]:
         """This scope's iteration count relative to its parent, and how exact it is.
 
         A loop runs its own span, not the grid it is entered from, so the count
@@ -96,7 +97,7 @@ class IterationScope:
         what every consumer of a trip count already reads it as.
         """
         if isinstance(self.owner, MeshRegion) or self.parent is None:
-            return 1, AccessPrecision.EXACT
+            return 1, AnalysisPrecision.EXACT
         owner = self.owner
         span = simplify_dim(DimSub, (owner.extent, owner.start))
         step = static_dim_value(owner.step)
@@ -106,7 +107,7 @@ class IterationScope:
                 "a number; how often it runs is not stated"
             )
         widest = static_dim_value(span)
-        precision = AccessPrecision.EXACT
+        precision = AnalysisPrecision.EXACT
         if widest is None:
             try:
                 bounds = dim_range(span)
@@ -120,7 +121,7 @@ class IterationScope:
                 )
             widest = bounds[1] - 1
             if bounds[1] - bounds[0] > 1:
-                precision = AccessPrecision.WIDENED
+                precision = AnalysisPrecision.UPPER_BOUND
         if step <= 0 or widest <= 0:
             return 1, precision
         return max(1, -(-widest // step)), precision
@@ -134,10 +135,10 @@ class IterationScope:
         return cached[0]
 
     @property
-    def trips_precision(self) -> AccessPrecision:
+    def trips_precision(self) -> AnalysisPrecision:
         """How exactly :meth:`trips` counts this scope's iterations.
 
-        ``EXACT`` where the span between the bounds is a number, ``WIDENED``
+        ``EXACT`` where the span between the bounds is a number, ``UPPER_BOUND``
         where it is read at its widest because a bound names something no one
         here fixes -- a coordinate of the scope the loop is entered from.
         """

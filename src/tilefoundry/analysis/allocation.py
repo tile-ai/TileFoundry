@@ -23,11 +23,12 @@ from tilefoundry.visitor_registry.access_relation import relation_of, renaming_r
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
-from .access import Access, AccessPrecision
+from .access import Access
 from .errors import AnalysisError
 from .iteration_scope import IterationScope, walk_scopes
 from .liveness import Liveness, storage_source
 from .metadata import ValueLifetime
+from .precision import AnalysisPrecision
 
 
 class SolverOptions(Protocol):
@@ -217,7 +218,7 @@ def operand_to_result_relation(
 
     def coverage(accesses: tuple[Access, ...]) -> isl.set | None:
         if not accesses or any(
-            access.precision is not AccessPrecision.EXACT for access in accesses
+            access.precision is not AnalysisPrecision.EXACT for access in accesses
         ):
             return None
         result = accesses[0].relation.domain()
@@ -227,7 +228,7 @@ def operand_to_result_relation(
 
     def access_relation(accesses: tuple[Access, ...]) -> isl.map | None:
         if not accesses or any(
-            access.precision is not AccessPrecision.EXACT for access in accesses
+            access.precision is not AnalysisPrecision.EXACT for access in accesses
         ):
             return None
         result = accesses[0].relation

@@ -5,6 +5,7 @@ from __future__ import annotations
 # ruff: noqa: I001 -- curated public import order.
 
 from .errors import AnalysisError
+from .precision import AnalysisPrecision
 from .facts import (
     ExplicitMemoryLevelFacts,
     ImplicitMemoryLevelFacts,
@@ -39,6 +40,7 @@ from .check import check_program
 __all__ = [
     "Analyzer",
     "AnalysisError",
+    "AnalysisPrecision",
     "AnalysisResult",
     "MemoryMetadata",
     "ComputeCostMetadata",

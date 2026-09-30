@@ -81,6 +81,9 @@ class CommentPrinter:
     def print_Prose(self, value):
         return json.dumps(str(value))
 
+    def print_AnalysisPrecision(self, value):
+        return value.value
+
     def print_TrafficBytes(self, value):
         return f"r{format_bytes(value.read)}{PAIR}w{format_bytes(value.write)}"
 
@@ -149,12 +152,15 @@ class CommentPrinter:
             (
                 ("flops", self._breakdown(record.flops, record.topologies)),
                 ("other_ops", self._breakdown(record.other_ops, record.topologies)),
+                ("precision", record.precision),
             ),
         )
 
     def print_MemoryMetadata(self, record, *, opt_in=frozenset()):
         traffic = self._breakdown(record.traffic.storage, record.topologies)
         values = [("traffic", traffic), ("footprint", self._footprint(record.footprint))]
+        if record.footprint is not None:
+            values.append(("footprint_precision", record.footprint.precision))
         if "operands" in opt_in:
             last = len(record.operands) - 1
             operands = {
@@ -171,11 +177,13 @@ class CommentPrinter:
                 ("traffic", self._breakdown(record.traffic.storage, record.topologies)),
                 ("footprint", self._footprint(record.footprint)),
                 (
+                    "footprint_precision",
+                    record.footprint.precision if record.footprint else None,
+                    None,
+                ),
+                (
                     "peak",
-                    {
-                        item.memory_level: format_bytes(item.peak_bytes)
-                        for item in record.peaks
-                    },
+                    {item.memory_level: format_bytes(item.peak_bytes) for item in record.peaks},
                 ),
                 (
                     "persistent",
@@ -198,6 +206,7 @@ class CommentPrinter:
                 ("space", record.space or "none"),
                 ("reuse", format_bytes(record.reuse_bytes)),
                 ("fits", "yes" if record.fits else "no"),
+                ("precision", record.precision),
             ),
         )
 

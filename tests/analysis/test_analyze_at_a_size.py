@@ -24,6 +24,7 @@ from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
 from tests.models.corpus import ConcreteCase, placed_cases
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import (
+    AnalysisPrecision,
     AnalysisResult,
     ComputeCostMetadata,
     MemoryMetadata,
@@ -33,7 +34,7 @@ from tilefoundry.analysis import (
     RooflineMetadata,
     analyze,
 )
-from tilefoundry.analysis.access import Access, AccessPrecision
+from tilefoundry.analysis.access import Access
 from tilefoundry.analysis.allocation import aligned, alignment_of, storage_owners
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
@@ -99,7 +100,7 @@ KNOWN_OVER_BOUND = {
 class _PersistentScheduleExpectation:
     loop_trips: tuple[tuple[str, int], ...]
     store_loop: str
-    store_precision: AccessPrecision
+    store_precision: AnalysisPrecision
     compared_units: tuple[tuple[int, ...], tuple[int, ...]]
 
 
@@ -324,13 +325,13 @@ EXPECTED_PERSISTENT_SCHEDULES = {
     "persistent_gemm_flat.PersistentGemmFlat.gemm[static]": _PersistentScheduleExpectation(
         loop_trips=(("t", 30), ("ki", 128)),
         store_loop="t",
-        store_precision=AccessPrecision.EXACT,
+        store_precision=AnalysisPrecision.EXACT,
         compared_units=((0,), (1,)),
     ),
     "persistent_gemm_tiled.PersistentGemmTiled.gemm[static]": _PersistentScheduleExpectation(
         loop_trips=(("mi", 5), ("ni", 6), ("ki", 128)),
         store_loop="ni",
-        store_precision=AccessPrecision.EXACT,
+        store_precision=AnalysisPrecision.EXACT,
         compared_units=((0, 0), (1, 0)),
     ),
 }
@@ -680,11 +681,12 @@ def test_every_concrete_program_predicts_coherently(
             for access in accesses
         ]
         assert cache_writes and all(
-            access.precision is AccessPrecision.WIDENED for access in cache_writes
-        ), "CacheUpdate cur/width lack RangeMetadata; widest_allowed must keep writes WIDENED"
+            access.precision is AnalysisPrecision.UPPER_BOUND for access in cache_writes
+        ), "CacheUpdate cur/width lack RangeMetadata; widest_allowed must keep writes UPPER_BOUND"
     if case.id == "rmsnorm_quant_seq2.RmsnormQuantSeq2Module.rmsnorm_quant_seq_2[static]":
         reshaped = next(
-            expr for expr in collect_exprs(result.function.body)
+            expr
+            for expr in collect_exprs(result.function.body)
             if isinstance(expr, Call) and isinstance(expr.target, Reshape)
         )
         liveness = analyze_liveness(result.function)

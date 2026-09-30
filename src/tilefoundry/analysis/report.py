@@ -6,6 +6,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import fields, is_dataclass
+from enum import Enum
 from types import UnionType
 from typing import Union, get_args, get_origin, get_type_hints
 
@@ -85,6 +86,8 @@ def _reported_value(value: object, declared: object) -> object:
     """
     if value is None:
         return None
+    if isinstance(value, Enum):
+        return value.value
     if get_origin(declared) in (Union, UnionType):
         stated = [arg for arg in get_args(declared) if arg is not type(None)]
         if len(stated) == 1:
