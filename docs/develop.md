@@ -66,6 +66,8 @@ pytest tests/e2e -q                              # runtime header / host wrapper
 - One commit per milestone batch; commit messages carry the milestone
   tag. No `--amend`, no force-push to `main`, no `--no-verify`.
 - Claiming done requires test evidence.
+- Commit, issue and pull request titles, the pull request body, branch
+  names and the review loop: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## 5. Principles
 

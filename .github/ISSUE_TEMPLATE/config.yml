@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Contribution rules
+    url: https://github.com/tile-ai/TileFoundry/blob/main/CONTRIBUTING.md
+    about: Title format, pull request body, branch names, and the review loop.

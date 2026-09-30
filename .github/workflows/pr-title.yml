@@ -1,0 +1,27 @@
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  conventional:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the title against CONTRIBUTING.md
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # The shape only. Which word names the kind of change, and which areas it
+          # scopes, is the author's call -- this repository's own history uses more
+          # than any fixed list would hold.
+          pattern='^[a-z][a-z0-9-]*(\([a-z0-9][a-z0-9._/,-]*\))?!?: [^ ].*$'
+          if [[ ! "$TITLE" =~ $pattern ]]; then
+            echo "::error::'$TITLE' is not <type>(<scope>): <short imperative>"
+            echo "Example: fix(analysis): count replicated movement once per mesh position"
+            exit 1
+          fi
+          echo "ok: $TITLE"
