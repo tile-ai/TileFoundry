@@ -34,7 +34,7 @@ def gemm(
         )
         with Mesh(
             (Topology("thread", 384),), Layout((3, 128), (128, 1)), names=("d0", "d1")
-        ) as scope_3:
+        ) as scope:
             with Mesh(
                 (Topology("thread", 384),), ComposedLayout(
     inner=None,
@@ -54,7 +54,7 @@ def gemm(
                 ), shape=(128, 64)))
             rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1))), shape=(64, 16)), T.tensor_view(2048, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1))), shape=(64, 16)))
             for k in range(0, 128, 64):
-                with scope_3[:1, :32] as scope:
+                with scope[:1, :32] as scope_1:
                     tile = T.tensor_view(
                         T.ptr_of(a[0:0 + 128, k:k + 64]),
                         layout=Layout((128, 64), (128, 1)),
@@ -81,7 +81,7 @@ def gemm(
 ), names=("d0",)
                     ) as threads_2:
                         T.copy_async_tensor(tile_1, rhs_stages[(k // 64) % 2])
-                with scope_3[1:] as scope_1:
+                with scope[1:] as scope_2:
                     with Mesh(
                         (Topology("thread", 384),), ComposedLayout(
     inner=None,
@@ -366,7 +366,7 @@ def gemm(
                                         rhs_view_7,
                                         atom=T.cuda.sm90.Wgmma(n=16, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_4),
                                     )
-            with scope_3[1:] as scope_2:
+            with scope[1:] as scope_3:
                 with Mesh(
                     (Topology("thread", 384),), ComposedLayout(
     inner=None,

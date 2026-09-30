@@ -65,7 +65,7 @@ def gemm(
         )
         with Mesh(
             (Topology("thread", 256),), Layout((2, 128), (128, 1)), names=("d0", "d1")
-        ) as scope_4:
+        ) as scope:
             with Mesh(
                 (Topology("thread", 256),), ComposedLayout(
     inner=None,
@@ -77,7 +77,7 @@ def gemm(
             lhs_stages = (T.tensor_view(2048, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)), T.tensor_view(4096, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)))
             rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)), T.tensor_view(1024, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)))
             for k in range(0, 32, 16):
-                with scope_4[:1, :32] as scope:
+                with scope[:1, :32] as scope_1:
                     tile = T.tensor_view(
                         T.ptr_of(a[0:0 + 64, k:k + 16]),
                         layout=Layout((64, 16), (32, 1)),
@@ -122,7 +122,7 @@ def gemm(
                             shape=(16, 32),
                         )
                         T.copy(src_frame_1, rhs_stages[(k // 16) % 2])
-                with scope_4[1:] as scope_2:
+                with scope[1:] as scope_3:
                     with Mesh(
                         (Topology("thread", 256),), ComposedLayout(
     inner=None,
@@ -162,7 +162,7 @@ def gemm(
                                         rhs_view,
                                         atom=T.cuda.sm90.Wgmma(n=32, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_5),
                                     )
-            with scope_4[1:] as scope_3:
+            with scope[1:] as scope_4:
                 with Mesh(
                     (Topology("thread", 256),), ComposedLayout(
     inner=None,

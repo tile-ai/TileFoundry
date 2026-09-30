@@ -38,7 +38,7 @@ def gemm(
         T.fill(out, 0.0)
         with Mesh(
             (Topology("thread", 384),), Layout((3, 128), (128, 1)), names=("d0", "d1")
-        ) as scope_4:
+        ) as scope:
             for m in range(0, 8192, 128):
                 staged = T.tensor_view(
                     147456,
@@ -87,7 +87,7 @@ def gemm(
                             outer=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))),
                         ), shape=(64, 256)))
                     for k in range(0, 5120, 64):
-                        with scope_4[:1, :32] as scope:
+                        with scope[:1, :32] as scope_1:
                             tile = T.tensor_view(
                                 T.ptr_of(a[m:m + 128, k:k + 64]),
                                 layout=Layout((128, 64), (5120, 1)),
@@ -114,7 +114,7 @@ def gemm(
 ), names=("d0",)
                             ) as threads_2:
                                 T.copy_async_tensor(tile_1, rhs_stages[(k // 64) % 3])
-                        with scope_4[1:] as scope_1:
+                        with scope[1:] as scope_2:
                             with Mesh(
                                 (Topology("thread", 384),), ComposedLayout(
     inner=None,
@@ -431,7 +431,7 @@ def gemm(
                                                 rhs_view_7,
                                                 atom=T.cuda.sm90.Wgmma(n=256, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_4),
                                             )
-                    with scope_4[1:] as scope_2:
+                    with scope[1:] as scope_3:
                         with Mesh(
                             (Topology("thread", 384),), ComposedLayout(
     inner=None,
@@ -456,7 +456,7 @@ def gemm(
                                 shape=(128, 256),
                             )
                             T.copy(src_frame_1, staged)
-                    with scope_4[:1, :32] as scope_3:
+                    with scope[:1, :32] as scope_4:
                         with Mesh(
                             (Topology("thread", 384),), ComposedLayout(
     inner=None,

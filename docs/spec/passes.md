@@ -252,6 +252,13 @@ class ConvertHIRToTIR(ModulePass):
     become `AllocTensor`; scheduled and ordinary value operations become
     effect-form TIR calls. Views follow their storage root, so a parameter view
     is addressed through `PtrOf` rather than an analyzed arena offset.
+  - Generated region bindings MUST be reserved in lexical pre-order before
+    statement emission, so an outer `scope` index precedes its nested indices.
+    The root CTA and zero-only regions MUST NOT reserve a `scope` name.
+    Adjacent `MeshScope` statements with identical physical meshes are merged
+    by `_MeshScopeCoalescer`, retaining the first binding. Their reserved source
+    indices MAY therefore have gaps; merging MUST NOT trigger renaming after
+    emission or require the naming pass to predict coalescing decisions.
   - Any construct without a complete lowering MUST raise `LoweringError`; the
     pass never emits a partial `PrimFunction` or silently preserves HIR.
 

@@ -13,7 +13,7 @@ from math import prod
 import isl
 
 from tilefoundry.analysis import MemoryMetadata, analyze
-from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
+from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
 from tilefoundry.analysis.liveness import storage_source
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
@@ -187,6 +187,22 @@ class Names:
         binding = get_metadata(authored, BindingMetadata) if authored is not None else None
         return self.fresh(binding.name if binding is not None else fallback)
 
+
+def _scope_names(root: IterationScope, names: Names) -> dict[int, str]:
+    """Name emitted MeshRegions in pre-order, omitting zero-only scopes.
+
+    The root mesh is emitted separately as cta by run, not visit_MeshRegion.
+    """
+    found = {}
+    for scope in walk_scopes(root):
+        region = scope.owner
+        if not isinstance(region, MeshRegion) or region is root.owner.body:
+            continue
+        if not (isinstance(region.body, Call) and isinstance(region.body.target, Zeros)):
+            found[id(region)] = names.fresh("scope")
+    return found
+
+
 def _frame(mesh: Mesh) -> Mesh:
     rank = len(tuple(flatten(flatten(mesh.layout).shape)))
     return Mesh(mesh.topologies, mesh.layout, tuple(f"d{index}" for index in range(rank)))
@@ -259,6 +275,7 @@ class Lowering(ExprVisitor[Expr]):
         if not isinstance(self.function.return_type, TensorType):
             raise LoweringError("scheduled lowering currently requires one tensor result")
 
+        self.scope_names = _scope_names(self.scopes, self.names)
         result_type = self.function.return_type
         out_type = TensorType(tuple(result_type.shape), result_type.dtype, None, StorageKind.GMEM)
         self.output = Var(self.names.fresh("out"), type=out_type)
@@ -494,7 +511,7 @@ class Lowering(ExprVisitor[Expr]):
             cursor.add(
                 MeshScope(
                     self._physical_frame(region.mesh),
-                    Var(self.names.fresh("scope"), type=_BINDING),
+                    Var(self.scope_names[id(region)], type=_BINDING),
                     built,
                 )
             )

@@ -34,7 +34,7 @@ def gemm(
         )
         with Mesh(
             (Topology("thread", 384),), Layout((3, 128), (128, 1)), names=("d0", "d1")
-        ) as scope_3:
+        ) as scope:
             with Mesh(
                 (Topology("thread", 384),), ComposedLayout(
     inner=None,
@@ -46,7 +46,7 @@ def gemm(
             lhs_stages = (T.tensor_view(16384, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))), shape=(128, 16)), T.tensor_view(20480, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))), shape=(128, 16)))
             rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (4, 8, 8)), ((64, 8), (1024, 128, 1))), shape=(16, 256)), T.tensor_view(8192, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (4, 8, 8)), ((64, 8), (1024, 128, 1))), shape=(16, 256)))
             for k in range(0, 32, 16):
-                with scope_3[:1, :32] as scope:
+                with scope[:1, :32] as scope_1:
                     tile = T.tensor_view(
                         T.ptr_of(a[0:0 + 128, k:k + 16]),
                         layout=Layout((128, 16), (32, 1)),
@@ -73,7 +73,7 @@ def gemm(
 ), names=("d0",)
                     ) as threads_2:
                         T.copy_async_tensor(tile_1, rhs_stages[(k // 16) % 2])
-                with scope_3[1:] as scope_1:
+                with scope[1:] as scope_2:
                     with Mesh(
                         (Topology("thread", 384),), ComposedLayout(
     inner=None,
@@ -152,7 +152,7 @@ def gemm(
                                         rhs_view_1,
                                         atom=T.cuda.sm90.Wgmma(n=64, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_4),
                                     )
-            with scope_3[1:] as scope_2:
+            with scope[1:] as scope_3:
                 with Mesh(
                     (Topology("thread", 384),), ComposedLayout(
     inner=None,
