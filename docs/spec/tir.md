@@ -151,6 +151,7 @@ class PrimFunction(Stmt):
         body: attribute; Function body.
         output_count: attribute; Number of trailing output parameters.
         target: attribute; Compilation target for this function.
+        metadata: attribute; Non-semantic function-level analysis records.
     """
 
     name: str

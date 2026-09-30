@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from tilefoundry.ir.core import Var
+from tilefoundry.ir.core import IRMetadata, Var
 from tilefoundry.ir.pattern import Pattern
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Sequential
@@ -33,6 +33,9 @@ class PrimFunction(Stmt):
     target: Target = field(default_factory=_default_target)
     specializations: tuple[Pattern, ...] = ()
     variants: tuple["PrimFunction", ...] = ()
+    metadata: tuple[IRMetadata, ...] = field(
+        default=(), kw_only=True, compare=False, hash=False, repr=False
+    )
     _sealed: bool = field(default=False, compare=False, hash=False, repr=False)
     _display_name: str | None = field(default=None, compare=False, hash=False, repr=False)
 

@@ -1,3 +1,7 @@
+# analysis target=nvidia.h200_sxm module=WGMMA_CAST_BETWEEN_SCHEDULES function=gemm topology=cta wave=1/1
+# selection requested=memory executed=memory
+# memory traffic=gmem:r16.00KB/w0@logical,r16.00KB/w0@total,r14.00KB/w0@cta,r4.19KB/w0@thread;rmem:r62.81KB/w54.88KB@logical,r62.81KB/w54.88KB@total,r59.81KB/w51.88KB@cta,r728B/w604B@thread;smem:r320B/w320B@logical,r320B/w320B@total,r320B/w320B@cta,r72B/w260B@thread footprint=a:2.00KB;b_f32:2.00KB;bias:8.00KB peak=gmem:16.00KB;rmem:11.00KB;smem:6.00KB persistent=gmem:16.00KB
+
 from __future__ import annotations
 
 from tilefoundry import prim_func

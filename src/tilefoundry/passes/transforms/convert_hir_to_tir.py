@@ -12,9 +12,11 @@ from math import prod
 
 import isl
 
-from tilefoundry.analysis import MemoryMetadata, RegionMemoryMetadata, analyze
+from tilefoundry.analysis import MemoryMetadata, analyze
 from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
 from tilefoundry.analysis.liveness import storage_source
+from tilefoundry.inspection.analysis_report import render_analysis
+from tilefoundry.inspection.values import ReportIdentity, ReportSelection
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
@@ -23,6 +25,7 @@ from tilefoundry.ir.core import (
     SourceSpanMetadata,
     Tuple,
     Var,
+    attach_metadata,
     get_metadata,
     op_identifier,
 )
@@ -1172,11 +1175,11 @@ class ConvertHIRToTIR(ModulePass):
         if not isinstance(authored, Function):
             raise LoweringError(f"{getattr(authored, 'name', self.entry)!r} is not an HIR function")
         result = analyze(module, authored, analysis=("memory",))
-        memory = get_metadata(result.function, RegionMemoryMetadata)
-        placement_errors = () if memory is None else memory.placement_errors
-        if placement_errors:
-            raise LoweringError("; ".join(placement_errors))
         lowered = Lowering(result.module, authored, result.function).run()
+        lowered.metadata = result.function.metadata
+        for record in render_analysis(result).summary:
+            if isinstance(record, (ReportIdentity, ReportSelection)):
+                attach_metadata(lowered, record)
         functions = tuple(
             lowered if function is authored else function for function in module.functions
         )

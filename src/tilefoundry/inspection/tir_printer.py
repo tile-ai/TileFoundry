@@ -6,7 +6,7 @@ import re
 
 from tilefoundry.inspection.print_context import TirPrintContext
 from tilefoundry.inspection.printer_base import PythonPrinter
-from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
+from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var, get_metadata
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
@@ -379,7 +379,34 @@ def _imports_from(lines) -> list[str]:
 def tir_function_to_python(fn: PrimFunction, *, options=None) -> str:
     lines = _function_block(fn)
     lines = ["from __future__ import annotations", "", *_imports_from(lines), "", "", *lines]
+    comments = _function_comments(fn, options)
+    if comments:
+        lines = [*comments, "", *lines]
     return "\n".join(lines) + "\n"
+
+
+def _function_comments(fn: PrimFunction, options) -> list[str]:
+    """Render requested function metadata using the analysis report machinery.
+
+    Import after initialization: analysis_report imports HirPrinter, whose
+    module imports this TIR printer.
+    """
+    if options is None:
+        return []
+    from tilefoundry.analysis.metadata import RegionMemoryMetadata  # noqa: PLC0415
+    from tilefoundry.inspection.analysis_report import (  # noqa: PLC0415
+        memory_summary,
+        render_summary,
+    )
+
+    records = []
+    for metadata_type in options.comment_metadata_types:
+        record = get_metadata(fn, metadata_type)
+        if record is not None:
+            records.extend(
+                memory_summary(record) if isinstance(record, RegionMemoryMetadata) else (record,)
+            )
+    return render_summary(records, opt_in=options.comment_opt_in).splitlines()
 
 
 def tir_module_to_python(mod: Module, module_name: str | None = None, *, options=None) -> str:
@@ -419,7 +446,7 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
             raise TypeError(f"TIR printer cannot serialize {type(fn).__name__}")
         block = _function_block(fn)
         imports.update(block.imports)
-        blocks.append(block)
+        blocks.append([*_function_comments(fn, options), *block])
     for index, block in enumerate(blocks):
         if index:
             lines.append("")

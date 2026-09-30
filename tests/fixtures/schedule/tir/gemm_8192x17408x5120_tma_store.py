@@ -1,3 +1,10 @@
+# analysis target=nvidia.h200_sxm module=GEMM_8192X17408X5120_TMA_STORE function=gemm topology=cta wave=1/1
+# selection requested=memory executed=memory
+# memory traffic=gmem:r522.00MB/w816.00MB@logical,r16.20GB/w816.00MB@total,r16.20GB/w816.00MB@cta,r16.20GB/w816.00MB@thread;rmem:r43.30GB/w42.77GB@logical,r43.31GB/w43.30GB@total,r43.31GB/w43.30GB@cta,r183.88MB/w173.19MB@thread;smem:r399.50MB/w273.91MB@logical,r399.50MB/w399.50MB@total,r399.50MB/w399.50MB@cta,r315.83MB/w128.56MB@thread footprint=a:16.00KB;b:32.00KB;v11:87:128.00KB;v12:88:64.00KB peak=gmem:522.00MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
+#   buffer=b holds=175.62MB time=m space=none reuse=10.46GB fits=no
+#   buffer=a holds=3.94MB time=n space=none reuse=83.75MB fits=yes
+#   error="l2 reuse window m holds 175.62MB at a 1-unit wave, exceeding capacity 47.68MB"
+
 from __future__ import annotations
 
 from tilefoundry import prim_func

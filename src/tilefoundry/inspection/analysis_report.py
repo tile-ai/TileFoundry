@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from tilefoundry.analysis.api import AnalysisResult
@@ -108,9 +109,7 @@ def _summary(
         assert memory is not None
         views.append(memory)
         if RegionMemoryMetadata in selected:
-            views.extend(memory.reuse_windows)
-            views.extend(ErrorSummary(Prose(note)) for note in memory.errors)
-            views.extend(AdvisorySummary(Prose(note)) for note in memory.advisories)
+            views.extend(memory_summary(memory)[1:])
     if "roofline" in function_records:
         views.append(get_metadata(function, RooflineMetadata))
     if "performance" in function_records:
@@ -132,10 +131,26 @@ def report(result: AnalysisResult) -> dict[str, object]:
 
 def render_text(rendering: AnalysisRendering) -> str:
     """Render one stable comment line per report conclusion."""
+    return render_summary(rendering.summary)
+
+
+def memory_summary(memory: RegionMemoryMetadata) -> tuple[IRMetadata, ...]:
+    """Expand the same memory record into summary and diagnostic rows."""
+    return (
+        memory,
+        *memory.reuse_windows,
+        *(ErrorSummary(Prose(note)) for note in memory.errors),
+        *(AdvisorySummary(Prose(note)) for note in memory.advisories),
+    )
+
+
+def render_summary(records: Iterable[IRMetadata], *, opt_in: frozenset[str] = frozenset()) -> str:
+    """Print report rows with the shared metadata comment renderers."""
     nested = (ReuseWindow, ErrorSummary, AdvisorySummary)
     return "\n".join(
-        f"# {'  ' if isinstance(view, nested) else ''}{render_comment(view)}"
-        for view in rendering.summary
+        f"# {'  ' if isinstance(view, nested) else ''}{comment}"
+        for view in records
+        if (comment := render_comment(view, opt_in=opt_in)) is not None
     )
 
 
@@ -143,6 +158,8 @@ __all__ = [
     "AnalysisRendering",
     "render_analysis",
     "render_json",
+    "memory_summary",
+    "render_summary",
     "render_text",
     "report",
     "selected_types",

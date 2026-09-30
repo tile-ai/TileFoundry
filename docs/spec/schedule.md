@@ -162,9 +162,12 @@ contributes no bound; it is neither treated as zero bandwidth nor rejected.
 The concrete mapping of issues to participants is a lowering contract rather
 than authored ScheduleOp state.
 
-Finalization MUST reject a scheduled program whose memory analysis reports a
-placement peak above the target capacity. Cache reuse-window and working-set
-findings remain analysis diagnostics and do not prevent finalization.
+Finalization MUST NOT reject a program because analysis reports capacity
+findings. It MUST retain the function-level analysis metadata on the resulting
+PrimFunction and print the same report header as `analyze` before the entire
+TIR program. Placement and cache findings remain analysis diagnostics; whether
+to adopt the result is the user's decision. Successful finalization MUST leave
+stdout and stderr empty, and JSON output MUST contain only the `source` field.
 
 ## 6. Reference value semantics
 

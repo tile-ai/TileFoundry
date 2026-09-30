@@ -793,7 +793,8 @@ def test_schedule_evaluation_rejects_an_unregistered_instruction() -> None:
 def test_tir_program_is_verified_and_canonical(path: Path) -> None:
     function = _prim_in(path)
     verify_prim_function(function)
-    assert as_script(function) == path.read_text()
+    source = path.read_text()
+    assert as_script(function) == source[source.index("from __future__ import annotations") :]
 
 
 def test_parameter_structure_does_not_repeat_its_name() -> None:
@@ -1144,7 +1145,7 @@ def _assert_cli_lowering_error(
     assert not out.exists()
 
 
-def test_lowering_rejects_smem_placement_above_capacity(
+def test_lowering_reports_smem_placement_above_capacity(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source = (
@@ -1157,12 +1158,11 @@ def test_lowering_rejects_smem_placement_above_capacity(
     four_stage = tmp_path / source.name
     four_stage.write_text(source.read_text().replace("STAGES = 3", "STAGES = 4", 1))
 
-    _assert_cli_lowering_error(
-        four_stage,
-        "smem placement peak 256.00KB exceeds capacity 227.00KB",
-        tmp_path,
-        capsys,
-    )
+    out = tmp_path / "finalized.py"
+    assert cli_main(["schedule", "finalize", str(four_stage), str(out)]) == 0
+    assert capsys.readouterr() == ("", "")
+    assert 'error="smem placement peak 256.00KB exceeds capacity 227.00KB"' in out.read_text()
+    verify_prim_function(_prim_in(out))
 
 
 def test_lowering_rejects_instruction_without_access_relation(

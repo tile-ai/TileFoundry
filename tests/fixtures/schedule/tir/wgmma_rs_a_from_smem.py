@@ -1,3 +1,7 @@
+# analysis target=nvidia.h200_sxm module=WGMMA_RS_A_FROM_SMEM function=gemm topology=cta wave=1/1
+# selection requested=memory executed=memory
+# memory traffic=gmem:r6.00KB/w0@logical,r6.00KB/w0@total,r6.00KB/w0@cta,r6.00KB/w0@thread;rmem:r28.06KB/w32.00KB@logical,r28.06KB/w32.00KB@total,r28.06KB/w32.00KB@cta,r288B/w256B@thread;smem:r320B/w320B@logical,r320B/w320B@total,r320B/w320B@cta,r24B/w320B@thread footprint=a:2.00KB;b:1.00KB peak=gmem:6.00KB;rmem:10.00KB;smem:6.00KB persistent=gmem:6.00KB
+
 from __future__ import annotations
 
 from tilefoundry import prim_func
