@@ -59,6 +59,7 @@ from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFa
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
+_ALLOCATION_ALIGNMENT = 16
 CASES = placed_cases()
 INVENTORY = [pytest.param(case, id=case.id) for case in CASES]
 API_INVENTORY = frozenset(
@@ -557,7 +558,12 @@ def _case_source(case: ConcreteCase, tmp_path: Path) -> str:
 
 
 def _assert_reported(case: ConcreteCase, report: dict) -> None:
-    """CLI and API cases share the same report checks."""
+    """CLI and API cases share the same report checks.
+
+    Every placed offset is aligned to the greater of 16 bytes and the element
+    width (docs/spec/analysis.md, allocation). The widest dtype here is 64 bits,
+    so no element is wider than 16 bytes.
+    """
     assert set(report["executed"]) == set(FAMILIES)
     assert_reported_contract(report)
     reported = report["function_records"]["memory"]
@@ -577,7 +583,7 @@ def _assert_reported(case: ConcreteCase, report: dict) -> None:
         aligned_live_upper = max(
             (
                 sum(
-                    aligned(lifetime["bytes"], lifetime["alignment"])
+                    aligned(lifetime["bytes"], _ALLOCATION_ALIGNMENT)
                     for lifetime in level_lifetimes
                     if lifetime["defined_at"] <= point <= lifetime["last_used_at"]
                 )

@@ -41,7 +41,6 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 from .allocation import (
     AllocationValue,
     alias_components,
-    alignment_of,
     find_aliases,
     solve_allocation,
     storage_owners,
@@ -424,7 +423,6 @@ def _project_allocation_values(
                         binding=label,
                         memory_level=memory_level,
                         bytes=amount * copies,
-                        alignment=alignment_of(expr),
                         defined_at=interval.defined_at,
                         last_used_at=(
                             liveness.timeline_end if persistent else interval.last_used_at

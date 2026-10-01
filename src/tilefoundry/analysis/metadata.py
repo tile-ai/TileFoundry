@@ -168,7 +168,6 @@ class ValueLifetime:
     binding: str
     memory_level: str
     bytes: int
-    alignment: int
     defined_at: int
     last_used_at: int
     persistent: bool = False

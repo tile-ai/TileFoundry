@@ -669,7 +669,7 @@ def solve_allocation(
     if not values:
         return AllocationResult(0, "optimal")
 
-    alignments = tuple(item.lifetime.alignment for item in values)
+    alignments = tuple(alignment_of(item.value) for item in values)
     largest = max(item.lifetime.bytes for item in values)
     limit = sum(
         aligned(item.lifetime.bytes, alignment)
