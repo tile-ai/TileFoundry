@@ -772,9 +772,10 @@ memory traffic=<memory-level>:r<bytes>/w<bytes>@logical,r<bytes>/w<bytes>@total,
 In the printed `footprint` field, a buffer's value label may itself contain `:`
 (for example, `v0:57:1.00KB`). The byte count is the formatted value after the
 last colon.
-Use the root buffer's authored name, otherwise the first capturing parameter's
-name in program order that resolves to that root, otherwise the existing value
-label; duplicate-label suffixes remain unchanged.
+A root that is a declared parameter keeps its own name; otherwise use the
+first capturing parameter, in program order, that resolves to that root;
+otherwise use the existing value label. Duplicate-label suffixes remain
+unchanged.
 
 Missing optional conclusions omit their whole printed field. Call and Function
 JSON projections are both under `memory`. The Function's full projection is
