@@ -96,8 +96,10 @@ def storage_owners(root: IterationScope, liveness: Liveness) -> dict[int, Expr]:
         following = storage_source(value, liveness.bindings)
         if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
             operand = value.args[position]
-            declared = declarations[key].relations[key][1]
-            relation = relation_of(renaming_relation(value, TypeInferContext(), stated=declared))
+            ctx = TypeInferContext()
+            relation = relation_of(
+                renaming_relation(value, ctx, declarations[key].projected_relations(value, ctx))
+            )
             box = index_set(operand.type.shape)
             if (
                 box is None

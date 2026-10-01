@@ -25,7 +25,7 @@ from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.isl_utils import cardinality
-from tilefoundry.visitor_registry.access_relation import leaves_of, projected
+from tilefoundry.visitor_registry.access_relation import leaves_of
 from tilefoundry.visitor_registry.contexts import CostContext
 
 from .access import Access, resolve_access
@@ -555,9 +555,7 @@ def moving_boundaries(
                 else {}
             )
             try:
-                unit_relations = projected(
-                    scope.stated_relations(call, ctx), call, ctx
-                )
+                unit_relations = scope.projected_relations(call, ctx)
             except (NotImplementedError, TypeError, ValueError, isl.Error):
                 unit_relations = None
             for access in _call_accesses(scope, call):

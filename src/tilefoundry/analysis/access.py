@@ -213,7 +213,7 @@ def resolve_access(
     if box is not None:
         relation = relation.intersect_range(box)
     while isinstance(operand, Call) and (position := aliased_operand(operand)) is not None:
-        folded = renaming_relation(operand, ctx, stated=scope.stated_relations(operand, ctx))
+        folded = renaming_relation(operand, ctx, scope.projected_relations(operand, ctx))
         relation = relation.apply_range(relation_of(folded))
         operand = operand.args[position]
         relation, folded_precision = eliminate_parameters(

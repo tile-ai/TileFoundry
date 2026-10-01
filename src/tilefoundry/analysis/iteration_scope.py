@@ -44,18 +44,33 @@ class IterationScope:
     accesses: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
     outputs: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
     relations: dict[int, tuple[Call, AccessRelations]] = field(default_factory=dict)
+    projections: dict[tuple[int, str | None], tuple[Call, AccessRelations]] = field(
+        default_factory=dict
+    )
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
     _variance: dict[int, frozenset[int]] = field(default_factory=dict, repr=False)
 
-    def stated_relations(self, call: Call, ctx: TypeInferContext) -> AccessRelations:
-        """Return the Op-declared relations recorded in this scope chain."""
+    def projected_relations(self, call: Call, ctx: TypeInferContext) -> AccessRelations:
+        """Return *call*'s relations in *ctx*'s topology window, projecting it once.
+
+        Cache on the scope that recorded the call's stated relations, keyed by
+        the window. Contexts that substitute types must project on their own.
+        """
+        holder, stated = self, None
         cursor: IterationScope | None = self
         while cursor is not None:
-            stored = cursor.relations.get(id(call))
-            if stored is not None and stored[0] is call:
-                return stored[1]
+            recorded = cursor.relations.get(id(call))
+            if recorded is not None and recorded[0] is call:
+                holder, stated = cursor, recorded[1]
+                break
             cursor = cursor.parent
-        return relations_of(call, ctx)
+        key = (id(call), getattr(ctx, "topology_level", None))
+        held = holder.projections.get(key)
+        if held is not None and held[0] is call:
+            return held[1]
+        local = projected(stated if stated is not None else relations_of(call, ctx), call, ctx)
+        holder.projections[key] = (call, local)
+        return local
 
     def is_variant(self, value: Expr) -> bool:
         """Whether *value* depends on this loop's induction or carry values."""
@@ -175,7 +190,7 @@ class ScopeBuilder:
         try:
             stated = relations_of(expr, self.type_ctx)
             scope.relations[id(expr)] = (expr, stated)
-            local_relations = projected(stated, expr, self.type_ctx)
+            local_relations = scope.projected_relations(expr, self.type_ctx)
         except (NotImplementedError, TypeError, ValueError, isl.Error):
             for view in self.views:
                 scope.refused[view] = scope.refused.get(view, frozenset()) | {expr}

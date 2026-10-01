@@ -332,7 +332,7 @@ def _iterating_over(
     return _rebuilt(held, bindings)
 
 
-def renaming_relation(call, ctx, stated: AccessRelations | None = None) -> "AffineAccess":
+def renaming_relation(call, ctx, local_relations: AccessRelations) -> "AffineAccess":
     """One view's own coordinates, as coordinates of the value it renames.
 
     A view states where it reads and where it writes over one space, so going
@@ -340,10 +340,8 @@ def renaming_relation(call, ctx, stated: AccessRelations | None = None) -> "Affi
     backwards and the first forwards. Every consumer that folds a view into its
     buffer asks for this rather than rebuilding the Op's arithmetic, which is
     how one relation answers dependence, footprint and movement alike.
+    ``local_relations`` is the call's relations projected into ``ctx``'s window.
     """
-    local_relations = projected(
-        stated if stated is not None else relations_of(call, ctx), call, ctx
-    )
     if isinstance(ctx.type_of(call.args[0]), TupleType):
         raise ValueError(
             f"{type(call.target).__name__} renames a field of a tuple, which is "

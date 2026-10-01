@@ -254,7 +254,7 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
         )
 
     def measured():
-        return call_traffic(call, CostContext(), {"cta": CostContext()}, asked="cta")
+        return call_traffic(call, CostContext(), {"cta": CostContext()})
 
     both = measured()
     assert both.operands == (TrafficBytes(), TrafficBytes(read=12), TrafficBytes())

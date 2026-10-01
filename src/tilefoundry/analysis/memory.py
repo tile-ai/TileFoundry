@@ -27,7 +27,6 @@ from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.units import format_bytes
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
     access_relation_registry,
     leaves_of,
     projected,
@@ -142,7 +141,7 @@ def _movement(
     cost: Cost,
     ctx: CostContext,
     types: tuple[Type, ...],
-    stated_relations: AccessRelations | None = None,
+    scope: IterationScope | None = None,
 ) -> tuple[tuple[tuple[str, TrafficBytes], ...], tuple[TrafficBytes, ...]]:
     """What each operand of *call* moves, and the levels those bytes are at.
 
@@ -175,10 +174,11 @@ def _movement(
                 f"{describe_expr(call)}: states no access relations, so nothing here "
                 "says what it moves"
             )
-        stated_relations = (
-            stated_relations if stated_relations is not None else relations_of(call, ctx)
+        local_relations = (
+            scope.projected_relations(call, ctx)
+            if scope is not None
+            else projected(relations_of(call, ctx), call, ctx)
         )
-        local_relations = projected(stated_relations, call, ctx)
         result = ctx.local_type_of(call)
         fields = result.fields if isinstance(result, TupleType) else (result,)
         if len(fields) > len(local_relations.outputs):
@@ -231,8 +231,7 @@ def call_traffic(
     expr: Call,
     whole: CostContext,
     locals_by_unit: "dict[str, CostContext]",
-    stated_relations: AccessRelations | None = None,
-    asked: "str | None" = None,
+    scope: IterationScope | None = None,
 ) -> MemoryMetadata:
     """What one Call moves, whole and for one participant.
 
@@ -257,7 +256,7 @@ def call_traffic(
             *(ctx.local_type_of(arg) for arg in expr.args),
             ctx.local_type_of(expr),
         )
-        levels, positional = _movement(expr, cost, ctx, types, stated_relations)
+        levels, positional = _movement(expr, cost, ctx, types, scope)
         for memory_level, moved in levels:
             if unit is None:
                 storage_whole[memory_level] = moved
@@ -623,13 +622,7 @@ class MemoryVisitor(ExprVisitor[None]):
         if ctx.whole is None or not ctx.locals_by_unit:
             raise AnalysisError("memory: visitor context is missing cost contexts")
         moved = (
-            call_traffic(
-                expr,
-                ctx.whole,
-                ctx.locals_by_unit,
-                ctx.current.stated_relations(expr, ctx.whole),
-                ctx.topology_level,
-            )
+            call_traffic(expr, ctx.whole, ctx.locals_by_unit, ctx.current)
             if recorded
             else MemoryMetadata()
         )
