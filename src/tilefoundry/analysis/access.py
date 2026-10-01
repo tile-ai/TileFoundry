@@ -99,9 +99,6 @@ class _RegionBindingResolver(ExprCloner):
         return self.default_visit(value, scope)
 
     def visit_Var(self, value: Var, scope: "IterationScope") -> Expr:
-        root = scope.capture_root(value)
-        if root is value:
-            return value
         cursor = scope
         while cursor is not None:
             owner = cursor.owner

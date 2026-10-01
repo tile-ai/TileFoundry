@@ -13,7 +13,6 @@ from tilefoundry.ir.core import Expr, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.region_capture import CapturingRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import canonical_specialization_signature
@@ -52,7 +51,7 @@ from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.tensor_type import TupleType
 from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.ir.visitor import ExprVisitor, collect_exprs
+from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
@@ -283,19 +282,13 @@ def _verify_signature_dim_vars(fn: Function) -> None:
 
 
 class _StmtRejectingVisitor(ExprVisitor[None]):
-    def visit_LoopRegion(self, expr: LoopRegion, ctx=None) -> None:
+    def _visit_region(self, expr: CapturingRegion, ctx=None) -> None:
         verify_region_isolated(expr)
-        for arg in expr.args:
-            self.visit(arg, ctx)
-        self.visit(expr.body, ctx)
-        for yielded in expr.yield_values:
-            self.visit(yielded, ctx)
+        for operand in expr_children(expr):
+            self.visit(operand, ctx)
 
-    def visit_MeshRegion(self, expr: MeshRegion, ctx=None) -> None:
-        verify_region_isolated(expr)
-        for arg in expr.args:
-            self.visit(arg, ctx)
-        self.visit(expr.body, ctx)
+    visit_LoopRegion = _visit_region
+    visit_MeshRegion = _visit_region
 
     def visit_Call(self, expr: Call, ctx=None) -> None:
         for arg in expr.args:

@@ -2900,8 +2900,10 @@ class SliceEndpointBinaryPattern(ElementPattern):
     def construct(match, children, context):
         left = children["left"]
         right = children["right"]
+        op = type(match.node.op)
+        if op is ast.Mult and isinstance(right, slice) and not isinstance(left, slice):
+            left, right = right, left
         if isinstance(left, slice) or isinstance(right, slice):
-            op = type(match.node.op)
             if isinstance(right, slice) or op not in {ast.Add, ast.Sub, ast.Mult}:
                 raise ParseError.from_node(
                     match.node, context, "tile windows only support ± c and * c"
@@ -2923,6 +2925,8 @@ class SliceEndpointBinaryPattern(ElementPattern):
             except (TypeError, ValueError, ZeroDivisionError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
             return slice(start, stop, runtime.normalize_dim(step))
+        if op is ast.Div:
+            raise ParseError.from_node(match.node, context, "index arithmetic uses //, not /")
         numeric = all(
             isinstance(value, (int, float)) and not isinstance(value, bool)
             for value in (left, right)

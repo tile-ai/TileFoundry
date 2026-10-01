@@ -13,6 +13,7 @@ from tilefoundry.ir.core.metadata import (
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.region_capture import CapturingRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard as HirReshard
 from tilefoundry.ir.mesh_scope import covered_by_scope, storage_reaches
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -176,23 +177,35 @@ class TypeInferVisitor(ExprVisitor[Type]):
         """
         return TupleType(fields=operands)
 
-    def visit_LoopRegion(self, region: LoopRegion, ctx: TypeInferContext) -> Type:
-        """Infer a loop after binding its induction and carried variables."""
-        for bound in (region.start, region.extent, region.step):
-            if isinstance(bound, Expr):
-                self.visit(bound, ctx)
+    def _region_memo(
+        self, region: CapturingRegion, ctx: TypeInferContext
+    ) -> dict[int, tuple[Expr, Type]]:
+        """Infer arguments and bind compatible entry parameters for an isolated region."""
         arg_types = tuple(self.visit(arg, ctx) for arg in region.args)
         from .verify import verify_region_isolated  # noqa: PLC0415
 
         verify_region_isolated(region, ctx)
         for index, (param, arg_type) in enumerate(zip(region.params, arg_types, strict=True)):
             if not types_compatible(param.annotation, arg_type):
-                ctx.error(region, f"loop scope arg {index} type mismatch for param {param.name!r}")
-        memo = {
-            **self._memo,
-            id(region.induction_var): (region.induction_var, region.induction_var.annotation),
-            **{id(phi): (phi, type_) for phi, type_ in zip(region.params, arg_types, strict=True)},
+                ctx.error(
+                    region,
+                    f"{type(region).__name__} arg {index} type mismatch for param {param.name!r}",
+                )
+        return {
+            **ctx.memo,
+            **{
+                id(param): (param, arg_type)
+                for param, arg_type in zip(region.params, arg_types, strict=True)
+            },
         }
+
+    def visit_LoopRegion(self, region: LoopRegion, ctx: TypeInferContext) -> Type:
+        """Infer a loop after binding its induction and carried variables."""
+        for bound in (region.start, region.extent, region.step):
+            if isinstance(bound, Expr):
+                self.visit(bound, ctx)
+        memo = self._region_memo(region, ctx)
+        memo[id(region.induction_var)] = (region.induction_var, region.induction_var.annotation)
         inner = TypeInferVisitor(
             memo=memo,
             owns_body=self._owns_body,
@@ -217,28 +230,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         body does: who runs the work is not a fact about the shape of what it
         produced, and what one unit costs is cost's question.
         """
-        arg_types = tuple(self.visit(arg, ctx) for arg in expr.args)
-        if len(arg_types) != len(expr.params):
-            ctx.error(
-                expr,
-                f"mesh scope expects {len(expr.params)} argument(s), got {len(arg_types)}",
-            )
-        for index, (param, arg_type) in enumerate(zip(expr.params, arg_types, strict=True)):
-            if not types_compatible(param.annotation, arg_type):
-                ctx.error(
-                    expr,
-                    f"mesh scope arg {index} type mismatch for param {param.name!r}",
-                )
-        memo = {
-            **ctx.memo,
-            **{
-                id(param): (param, arg_type)
-                for param, arg_type in zip(expr.params, arg_types, strict=True)
-            },
-        }
-        from .verify import verify_region_isolated  # noqa: PLC0415
-
-        verify_region_isolated(expr, ctx)
+        memo = self._region_memo(expr, ctx)
         mesh = make_mesh(ctx.current_mesh, expr.mesh) if ctx.current_mesh else expr.mesh
         return self.visit(expr.body, replace(ctx, current_mesh=mesh, memo=memo))
 

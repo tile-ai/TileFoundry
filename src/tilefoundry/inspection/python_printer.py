@@ -909,7 +909,7 @@ def _emit_def(
             region.args[: len(region.yield_values)],
             strict=True,
         ):
-            if isinstance(init, Var):
+            if isinstance(init, Var) and _names[id(carry)] != printer.reference(init):
                 lines.append(f"{level}{_names[id(carry)]} = {printer.reference(init)}")
             printed.add(id(carry))
         extent = printer.visit(region.extent, ctx)

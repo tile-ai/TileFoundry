@@ -21,7 +21,10 @@ from tilefoundry.parser import ParseError
     [
         ("t:t + 128", r"tile loop variable is already a window.*x\[:, t, :\].*base = t \+ 0"),
         ("t / 2", r"tile windows only support ± c and \* c"),
+        ("8 / 2", r"index arithmetic uses //"),
+        ("N / 2", r"index arithmetic uses //"),
         ("t * 2", None),
+        ("2 * t", None),
         ("t * 2 + 1", None),
         ("t * 2 - 1", None),
     ],
@@ -30,6 +33,9 @@ def test_a_tile_window_bound_names_the_authored_fix(index, message) -> None:
     source = f"""from tilefoundry import func
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
+from tilefoundry.ir.types.dim import DimVar
+
+N = DimVar("N", 1, 257)
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 def stage(x: Tensor[(1, 256, 64), "f32"], out: Tensor[(1, 128, 64), "f32"]):
