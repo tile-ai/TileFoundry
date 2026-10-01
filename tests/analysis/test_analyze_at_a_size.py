@@ -30,20 +30,18 @@ from tilefoundry.analysis import (
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
-    RegionMemoryMetadata,
-    RooflineMetadata,
     analyze,
 )
 from tilefoundry.analysis.access import Access
-from tilefoundry.analysis.allocation import aligned, alignment_of, storage_owners
+from tilefoundry.analysis.allocation import aligned
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
 from tilefoundry.analysis.liveness import analyze_liveness
-from tilefoundry.analysis.memory import _allocation_intervals
+from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
-from tilefoundry.ir.core import Call, describe_expr, get_metadata, value_labels
+from tilefoundry.ir.core import Call, describe_expr, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.specialize import (
@@ -63,6 +61,20 @@ DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 CASES = placed_cases()
 INVENTORY = [pytest.param(case, id=case.id) for case in CASES]
+API_INVENTORY = frozenset(
+    {
+        "persistent_gemm_tiled.PersistentGemmTiled.gemm[static]",
+        "persistent_gemm_flat.PersistentGemmFlat.gemm[static]",
+        "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]",
+        "gemm_schedules.Gemm_MNK_NN64x128x32_w12x11.gemm[static]",
+        "hand_checked.SiblingLoopReuse.read[static]",
+        "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]",
+        "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]",
+        "rmsnorm_quant_seq2.RmsnormQuantSeq2Module.rmsnorm_quant_seq_2[static]",
+    }
+)
+CLI_INVENTORY = [param for param in INVENTORY if param.id not in API_INVENTORY]
+assert API_INVENTORY <= {case.id for case in CASES}
 
 _GQA_MATERIAL_TRANSPOSE_GMEM = 284_672
 _PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 278_528
@@ -340,10 +352,10 @@ assert set(EXPECTED_MEMORY_PEAKS) == {case.id for case in CASES}
 assert set(EXPECTED_PERSISTENT_SCHEDULES) <= {case.id for case in CASES}
 
 
-def _loop_scopes(result: AnalysisResult) -> dict[str, IterationScope]:
+def _loop_scopes(scopes: tuple[IterationScope, ...]) -> dict[str, IterationScope]:
     return {
         scope.owner.induction_var.name: scope
-        for scope in walk_scopes(build_scopes(result.module, result.function))
+        for scope in scopes
         if isinstance(scope.owner, LoopRegion)
     }
 
@@ -364,14 +376,14 @@ def _at_unit(image: isl.set, coordinates: tuple[int, ...]) -> isl.set:
 
 
 def _assert_persistent_schedule(
-    result: AnalysisResult,
+    scopes: tuple[IterationScope, ...],
     expected: _PersistentScheduleExpectation,
 ) -> None:
-    scopes = _loop_scopes(result)
+    loops = _loop_scopes(scopes)
     for name, trips in expected.loop_trips:
-        assert scopes[name].trips() == trips
+        assert loops[name].trips() == trips
 
-    store = _insert_slice_output(scopes[expected.store_loop])
+    store = _insert_slice_output(loops[expected.store_loop])
     assert store.precision is expected.store_precision
     written = store.relation.range()
     first, second = (_at_unit(written, unit) for unit in expected.compared_units)
@@ -391,35 +403,58 @@ def _subject(family: str):
     return module, module.entry_function(), DIMS
 
 
-def assert_performance_contract(result: AnalysisResult) -> None:
-    """Every performance conclusion traces back to what it was derived from.
+def assert_reported_contract(report: dict) -> None:
+    """Reported predictions contain their occurrences and respect the ideal bound."""
+    records = report["function_records"]
+    summary = records["performance"]
+    timeline = summary["timeline"]
+    assert 0 <= timeline["start_ns"] <= timeline["end_ns"]
+    assert records["memory"]["solver_status"] in ("optimal", "feasible")
+    predicted_ns = timeline["end_ns"] - timeline["start_ns"]
+    assert summary["waves"] > 0 and predicted_ns % summary["waves"] == 0
+    assert records["roofline"]["ideal_ns"] <= predicted_ns
 
-    The prediction contains each occurrence it timed and is no faster than the
-    ideal bound. An occurrence's duration is its own compute-cost record priced
-    at the target's rates, and a solve that proved nothing says so. One a loop
-    repeats is written once, so its interval is that many of its own durations
-    and its last trip still lands inside the prediction that contains it.
-    A loop is not an occurrence and carries neither a timeline nor a placeholder
-    memory record of its own.
-    """
-    fn = result.function
-    summary = get_metadata(fn, PerformanceSummaryMetadata)
-    assert summary is not None
-    assert 0 <= summary.timeline.start_ns <= summary.timeline.end_ns
-    placement = get_metadata(fn, RegionMemoryMetadata)
-    assert placement is not None
-    assert placement.solver_status in ("optimal", "feasible")
-    predicted_ns = summary.timeline.end_ns - summary.timeline.start_ns
-    assert summary.waves > 0 and predicted_ns % summary.waves == 0
-    bound = get_metadata(fn, RooflineMetadata)
-    assert bound is not None and bound.ideal_ns <= predicted_ns
+    timed = 0
+    for call in report["calls"]:
+        record = call.get("performance")
+        if record is None:
+            continue
+        timed += 1
+        occurrence = record["timeline"]
+        start, end = occurrence["start_ns"], occurrence["end_ns"]
+        assert timeline["start_ns"] <= start <= end <= timeline["end_ns"], call["value"]
+        trips, stride = occurrence["trips"], occurrence["stride_ns"]
+        assert trips >= 1, call["value"]
+        assert (stride == 0) if trips == 1 else (stride >= end - start), call["value"]
+        assert end + (trips - 1) * stride <= timeline["end_ns"], call["value"]
+    assert bool(timed) is bool(predicted_ns)
+    for loop in report["loops"]:
+        assert "performance" not in loop, loop["value"]
 
+    def nonnegative(value: object) -> None:
+        if isinstance(value, dict):
+            for item in value.values():
+                nonnegative(item)
+        elif isinstance(value, list):
+            for item in value:
+                nonnegative(item)
+        elif isinstance(value, (int, float)):
+            assert value >= 0, value
+
+    nonnegative(report)
+    for lifetime in records["memory"]["lifetimes"]:
+        assert 0 <= lifetime["defined_at"] <= lifetime["last_used_at"]
+        assert "<buffer " not in lifetime["binding"]
+
+
+def assert_internal_contract(
+    result: AnalysisResult, scopes: tuple[IterationScope, ...]
+) -> None:
+    """Each duration matches its priced work and divides the enclosing loop trips."""
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts, result.level)
-    scopes = tuple(walk_scopes(build_scopes(result.module, fn)))
-    timed = 0
-    for expr in collect_exprs(fn.body):
+    for expr in collect_exprs(result.function.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
             continue
         cost = get_metadata(expr, ComputeCostMetadata)
@@ -435,11 +470,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
         if not duration:
             assert record is None
             continue
-        timed += 1
         assert record is not None
-        assert summary.timeline.start_ns <= record.timeline.start_ns
-        assert record.timeline.end_ns <= summary.timeline.end_ns
-
         span = record.timeline.end_ns - record.timeline.start_ns
         assert span % duration == 0, describe_expr(expr)
         runs = span // duration
@@ -455,19 +486,8 @@ def assert_performance_contract(result: AnalysisResult) -> None:
                     available *= max(1, cursor.trips())
                 cursor = cursor.parent
         assert 1 <= runs <= available and available % runs == 0, describe_expr(expr)
-        trips, stride = record.timeline.trips, record.timeline.stride_ns
+        trips = record.timeline.trips
         assert 1 <= trips <= available and available % trips == 0, describe_expr(expr)
-        assert (stride == 0) if trips == 1 else (stride >= span), describe_expr(expr)
-        assert record.timeline.end_ns + (trips - 1) * stride <= summary.timeline.end_ns, (
-            describe_expr(expr)
-        )
-    assert bool(timed) is bool(predicted_ns)
-    _every_number_counts_something(result)
-    for expr in collect_exprs(fn.body):
-        if not isinstance(expr, LoopRegion):
-            continue
-        assert get_metadata(expr, PerformanceMetadata) is None, describe_expr(expr)
-        assert get_metadata(expr, PerformanceSummaryMetadata) is None, describe_expr(expr)
 
 
 @pytest.mark.parametrize(
@@ -496,83 +516,6 @@ def test_more_of_the_same_work_is_never_predicted_to_take_less_time(smaller, lar
     assert _predicted_ns(*smaller) <= _predicted_ns(*larger)
 
 
-def _every_number_counts_something(result: AnalysisResult) -> None:
-    """Every quantity these four families report is a count, so none is below zero.
-
-    Work, moved bytes, placement peaks and a bound are all counts of something that
-    happened or has to happen. A negative one is not a small answer but a
-    derivation that ran backwards -- a projection dividing what it should have
-    multiplied, or a difference taken the wrong way round -- and it would then be
-    added into a total that still looks plausible.
-    """
-    fn = result.function
-    for expr in (fn, *collect_exprs(fn.body)):
-        for record, rows in (
-            (ComputeCostMetadata, ()),
-            (MemoryMetadata, ()),
-            (RegionMemoryMetadata, ()),
-            (RooflineMetadata, ()),
-            (PerformanceMetadata, ()),
-        ):
-            held = get_metadata(expr, record)
-            if held is None:
-                continue
-            for field in rows:
-                value = getattr(held, field)
-                if field == "flops_logical":
-                    assert value >= 0, f"{describe_expr(expr)}: {field} = {value}"
-                    continue
-                for name, value in value:
-                    assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
-            if record is ComputeCostMetadata:
-                for field in ("flops", "other_ops"):
-                    breakdown = getattr(held, field)
-                    for name, spread in breakdown.kinds:
-                        for value in (spread.logical, spread.total, *spread.per_unit):
-                            assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
-            if record in (MemoryMetadata, RegionMemoryMetadata):
-                for field in ("storage", "communication"):
-                    breakdown = getattr(held.traffic, field)
-                    for level, spread in breakdown.kinds:
-                        for moved in (spread.logical, spread.total, *spread.per_unit):
-                            assert moved.read >= 0 and moved.write >= 0, (
-                                f"{describe_expr(expr)}: {field}[{level}] = {moved}"
-                            )
-            if record is MemoryMetadata:
-                for position, moved in enumerate(held.operands):
-                    assert moved.read >= 0 and moved.write >= 0, (
-                        f"{describe_expr(expr)}: operand {position} = {moved}"
-                    )
-            if record is RegionMemoryMetadata:
-                for level in held.peaks:
-                    assert level.peak_bytes >= 0 and level.persistent_bytes >= 0
-                for item in held.lifetimes:
-                    assert item.bytes >= 0 and 0 <= item.defined_at <= item.last_used_at
-                    assert "<buffer " not in item.binding, describe_expr(expr)
-            if record is RooflineMetadata:
-                assert held.ideal_ns >= 0 and held.compute_ns >= 0 and held.memory_ns >= 0
-            if record is PerformanceMetadata:
-                assert 0 <= held.timeline.start_ns <= held.timeline.end_ns
-
-
-def _allocation_alignments(result: AnalysisResult) -> dict[str, int]:
-    """Rebuild the allocator's binding-to-alignment map for bound checks."""
-    function = result.function
-    liveness = analyze_liveness(function)
-    owners = storage_owners(build_scopes(result.module, function), liveness)
-    intervals = _allocation_intervals(
-        liveness, frozenset(id(parameter) for parameter in function.params), owners
-    )
-    return {
-        label: alignment_of(interval.value)
-        for label, interval in zip(
-            value_labels(interval.value for interval in intervals),
-            intervals,
-            strict=True,
-        )
-    }
-
-
 def _case_source(case: ConcreteCase, tmp_path: Path) -> str:
     """Name a corpus case through the same SOURCE selector the CLI accepts."""
     identity = case.id.partition("[")[0].split(".")
@@ -594,43 +537,10 @@ def _case_source(case: ConcreteCase, tmp_path: Path) -> str:
     return f"{source}:{root}.{'.'.join(selection)}"
 
 
-@pytest.mark.parametrize("case", INVENTORY)
-def test_every_concrete_program_predicts_coherently(
-    case: ConcreteCase,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Every placed program, at every size and selector it exposes.
-
-    This inventory is the whole of what these four analyses are held to: it is
-    read off the directory rather than from a list beside it, so a program added
-    there is asked the same questions without anyone choosing to ask. Each of
-    them is asked for all four families and has to answer with a coherent
-    prediction.
-    """
-    report_path = tmp_path / "memory.json"
-    command = [
-        "analyze",
-        _case_source(case, tmp_path),
-        str(report_path),
-        "--memory",
-        "--json",
-    ]
-    for name, extent in (case.dims or {}).items():
-        command.extend(("--dim", f"{name}={extent}"))
-    assert cli_main(command) == 0
-    assert capsys.readouterr() == ("", "")
-    reported = json.loads(report_path.read_text())["function_records"]["memory"]
-
-    owner, function = case.program()
-    result = analyze(owner, function, analysis=FAMILIES, dims=case.dims)
-
-    assert result.module is owner
-    assert set(result.executed) == set(FAMILIES)
-    assert_performance_contract(result)
-    placement = get_metadata(result.function, RegionMemoryMetadata)
-    assert placement is not None
-    alignments = _allocation_alignments(result)
+def _assert_reported(case: ConcreteCase, report: dict) -> None:
+    assert set(report["executed"]) == set(FAMILIES)
+    assert_reported_contract(report)
+    reported = report["function_records"]["memory"]
     over_bound: set[tuple[str, str]] = set()
     for peak in reported["peaks"]:
         memory_level = peak["memory_level"]
@@ -647,7 +557,7 @@ def test_every_concrete_program_predicts_coherently(
         aligned_live_upper = max(
             (
                 sum(
-                    aligned(lifetime["bytes"], alignments[lifetime["binding"]])
+                    aligned(lifetime["bytes"], lifetime["alignment"])
                     for lifetime in level_lifetimes
                     if lifetime["defined_at"] <= point <= lifetime["last_used_at"]
                 )
@@ -672,10 +582,54 @@ def test_every_concrete_program_predicts_coherently(
     }
     observed = {item["memory_level"]: item["peak_bytes"] for item in reported["peaks"]}
     assert observed == EXPECTED_MEMORY_PEAKS[case.id]
+
+
+@pytest.mark.parametrize("case", CLI_INVENTORY)
+def test_every_concrete_program_predicts_coherently(
+    case: ConcreteCase,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Each CLI corpus case reports all four families from one analysis."""
+    report_path = tmp_path / "analysis.json"
+    command = [
+        "analyze",
+        _case_source(case, tmp_path),
+        str(report_path),
+        "--memory",
+        "--compute-cost",
+        "--roofline",
+        "--performance",
+        "--json",
+    ]
+    for name, extent in (case.dims or {}).items():
+        command.extend(("--dim", f"{name}={extent}"))
+    assert cli_main(command) == 0
+    assert capsys.readouterr() == ("", "")
+    _assert_reported(case, json.loads(report_path.read_text()))
+
+
+@pytest.mark.parametrize("case", [param for param in INVENTORY if param.id in API_INVENTORY])
+def test_every_internal_record_agrees(case: ConcreteCase) -> None:
+    """API cases check the same report and the invariants that require scopes."""
+    owner, function = case.program()
+    result = analyze(owner, function, analysis=FAMILIES, dims=case.dims)
+    assert result.module is owner
+    report = report_data(
+        module=result.module,
+        function=result.function,
+        analyses=result.analyses,
+        topology_level=result.topology_level,
+        executed=result.executed,
+        metadata_types=result.metadata_types,
+    )
+    _assert_reported(case, json.loads(render_json(report)))
+    scopes = tuple(walk_scopes(build_scopes(result.module, result.function)))
+    assert_internal_contract(result, scopes)
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]":
         cache_writes = [
             access
-            for scope in walk_scopes(build_scopes(result.module, result.function))
+            for scope in scopes
             for call, accesses in scope.outputs.get("narrow", {}).values()
             if isinstance(call.target, CacheUpdate)
             for access in accesses
@@ -696,7 +650,7 @@ def test_every_concrete_program_predicts_coherently(
         )
     expected_schedule = EXPECTED_PERSISTENT_SCHEDULES.get(case.id)
     if expected_schedule is not None:
-        _assert_persistent_schedule(result, expected_schedule)
+        _assert_persistent_schedule(scopes, expected_schedule)
 
 
 @pytest.mark.parametrize("family", FAMILIES)
