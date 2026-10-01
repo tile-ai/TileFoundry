@@ -404,7 +404,13 @@ def _subject(family: str):
 
 
 def assert_reported_contract(report: dict) -> None:
-    """Reported predictions contain their occurrences and respect the ideal bound."""
+    """Every performance conclusion traces back to what it was derived from.
+
+    The prediction contains each occurrence it timed and is no faster than the
+    ideal bound, and a solve that proved nothing says so. One a loop repeats is
+    written once, and its last trip still lands inside the prediction that
+    contains it. A loop is not an occurrence and carries no timeline of its own.
+    """
     records = report["function_records"]
     summary = records["performance"]
     timeline = summary["timeline"]
@@ -432,6 +438,14 @@ def assert_reported_contract(report: dict) -> None:
         assert "performance" not in loop, loop["value"]
 
     def nonnegative(value: object) -> None:
+        """Every quantity these four families report is a count, so none is below zero.
+
+        Work, moved bytes, placement peaks and a bound are all counts of something that
+        happened or has to happen. A negative one is not a small answer but a
+        derivation that ran backwards -- a projection dividing what it should have
+        multiplied, or a difference taken the wrong way round -- and it would then be
+        added into a total that still looks plausible.
+        """
         if isinstance(value, dict):
             for item in value.values():
                 nonnegative(item)
@@ -450,7 +464,12 @@ def assert_reported_contract(report: dict) -> None:
 def assert_internal_contract(
     result: AnalysisResult, scopes: tuple[IterationScope, ...]
 ) -> None:
-    """Each duration matches its priced work and divides the enclosing loop trips."""
+    """Each duration matches its priced work and divides the enclosing loop trips.
+
+    An occurrence's duration is its own compute-cost record priced at the
+    target's rates. One a loop repeats is written once, so its interval is that
+    many of its own durations.
+    """
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts, result.level)
@@ -538,6 +557,7 @@ def _case_source(case: ConcreteCase, tmp_path: Path) -> str:
 
 
 def _assert_reported(case: ConcreteCase, report: dict) -> None:
+    """CLI and API cases share the same report checks."""
     assert set(report["executed"]) == set(FAMILIES)
     assert_reported_contract(report)
     reported = report["function_records"]["memory"]
@@ -590,7 +610,14 @@ def test_every_concrete_program_predicts_coherently(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Each CLI corpus case reports all four families from one analysis."""
+    """Every placed program, at every size and selector it exposes.
+
+    This inventory is the whole of what these four analyses are held to: it is
+    read off the directory rather than from a list beside it, so a program added
+    there is asked the same questions without anyone choosing to ask. Each of
+    them is asked for all four families and has to answer with a coherent
+    prediction. Each case is analysed once.
+    """
     report_path = tmp_path / "analysis.json"
     command = [
         "analyze",
