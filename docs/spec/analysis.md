@@ -387,10 +387,10 @@ class Footprint:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `Footprint.buffers` | Group reached address sets by source-buffer identity, union each group, count its elements, and pack the source dtype's bits into whole bytes. Each buffer has one memory-level kind whose `Spread` states the same count in `logical` and `total` and has no `per_unit` entries. | `MemoryHierarchyFacts` selects the level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
+| `Footprint.buffers` | Group reached address sets by source-buffer identity, union each group, count its elements, and pack the source dtype's bits into whole bytes. Each buffer has one memory-level kind whose `Spread` states one window's unique bytes in `logical` and the executed windows' bytes in `total`, with no `per_unit` entries. | `MemoryHierarchyFacts` selects the level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
 | `Footprint.precision` | Combine each contributing boundary's direction: omitted boundaries or uncountable amounts are lower bounds, counted widened accesses are upper bounds, and refused boundaries have unknown direction. | No |
-| `MemoryMetadata.footprint` | The unique addresses this occurrence's own boundaries reach at every enclosing loop's first iteration over one wave, or `None` when no wave can be stated. | As above |
-| `RegionMemoryMetadata.footprint` | The union of every Call's reached addresses below the Function, deduplicated per buffer before counting, or `None` when no wave can be stated. | As above |
+| `MemoryMetadata.footprint` | The unique addresses this occurrence's own boundaries reach at every enclosing loop's first iteration over one wave. `total` multiplies this window by the number of waves in the enclosing mesh; absent when no wave can be stated. | As above |
+| `RegionMemoryMetadata.footprint` | The union of every Call's reached addresses below the Function in `logical`. For `total`, group Calls by their enclosing loop/mesh chain, union each group per buffer, multiply by its waves and every enclosing loop's trips, and sum the groups. Absent when no wave can be stated. | As above |
 
 - constraints:
   - Overlapping ranges into one buffer MUST be unioned before they are counted,
@@ -416,9 +416,14 @@ class Footprint:
   - A program declaring more units than the target holds MUST NOT have them all
     counted as concurrent. The wave is the first `wave_units` positions in the
     mesh's own linear order, taken through `Mesh.layout`'s strides.
-  - Each buffer's count is one number. It MUST be stated in every counting
-    domain a `Spread` carries, because a union over units divides back into no
-    per-unit share.
+  - `logical` MUST retain the single-window union. `total` MUST count that
+    union once per executed window, with no `per_unit` entries. The wave count
+    MUST be `ceil(mesh_positions(topology_level) / wave_units)`; a partial last
+    wave MUST count as a full wave. Function accumulation MUST union Calls
+    sharing an enclosing loop/mesh chain before multiplying by that group's
+    waves and every enclosing loop's trips, then sum the groups.
+  - Reuse, cache capacity checks, and the printed `footprint` field MUST use
+    the single-window `logical` bytes.
   - `Footprint.precision` MUST preserve direction throughout address merging
     and counting. A missing boundary MUST contribute `LOWER_BOUND`; a counted
     widened relation MUST contribute `UPPER_BOUND`; a refused boundary MUST
@@ -824,8 +829,8 @@ class RooflineMetadata(IRMetadata):
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `compute_ns` | For each recorded dtype with a published rate, round `flops * 1e9 / rate` up to ns and sum the dtype times. A Function uses its summed flops, not a sum of per-Call times. | `ThroughputFacts.peak_flops_per_second` |
-| `memory_ns` | Add reads and writes at `bandwidth_level`, multiply by `1e9 / memory_bandwidth_bytes_per_second`, and round up to ns; zero when no bandwidth is published or no bytes move. A Function uses its summed traffic, not a sum of per-Call times. | `ThroughputFacts.bandwidth_level` and `memory_bandwidth_bytes_per_second` |
-| `ideal_ns` | Maximum of `compute_ns` and `memory_ns`; one ns when the occurrence records nonzero flops or nonzero `bandwidth_level` traffic and neither published rate yields a bound, otherwise zero. Traffic at any other level is stated and does not earn a bound: no rate was published for it, so none is owed. | Through the two times |
+| `memory_ns` | Sum footprint `total` bytes at `bandwidth_level`, multiply by `1e9 / memory_bandwidth_bytes_per_second`, and round up to ns; zero when no bandwidth is published or no bytes are counted. When the footprint is absent or counts another level, use traffic `total` reads plus writes at `bandwidth_level`. A Function uses its accumulated footprint or traffic, not a sum of per-Call times. | `ThroughputFacts.bandwidth_level` and `memory_bandwidth_bytes_per_second` |
+| `ideal_ns` | Maximum of `compute_ns` and `memory_ns`; one ns when the occurrence records nonzero flops or nonzero priced `bandwidth_level` bytes and neither published rate yields a bound, otherwise zero. Bytes at any other level is stated and does not earn a bound: no rate was published for it, so none is owed. | Through the two times |
 | `bound_by` | `none` for no bound, which includes an occurrence whose only movement is at a level with no published bandwidth, `balanced` for equal nonzero times, `memory` when memory is greater, `compute` when compute is greater, and `unrated` for the one-ns bound owed by work this prices whose rate is missing. | Through the two times |
 
 The family reads this target projection:
@@ -916,8 +921,16 @@ its full form as defined in that family's section.
     for an unstated dtype, kind or level. Performance MUST reject non-zero work
     of that dtype, kind or level and MUST NOT substitute the whole-device rate
     or another kind's rate.
-  - `bandwidth_level` MUST select the traffic level divided by the published
-    bandwidth rather than summing traffic across levels.
+  - Roofline MUST price footprint `total` at `bandwidth_level` without applying
+    any further repetition factor. An absent footprint or one counting another
+    level MUST fall back to traffic `total` reads plus writes at that level. A
+    footprint with omitted boundaries MUST still be used as its stated lower
+    bound. No other memory level may enter the bandwidth calculation.
+  - Footprint pricing assumes ideal reuse within one wave and repeats bytes
+    across windows. Counting a partial last wave as full is a pessimistic
+    approximation; deduplication within one wave is optimistic. Below the
+    device's parallel topology level, each parent instance's windows are
+    counted separately, overestimating bytes when parents share data.
   - Performance local duration MUST divide one unit's share of
     `ComputeCostMetadata.flops` by `unit_flops`, of `service` by `unit_ops`, and
     the `bandwidth_level` entry of `MemoryMetadata.traffic.storage` by

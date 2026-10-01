@@ -6,7 +6,12 @@ import pytest
 
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
 from tilefoundry import func, module
-from tilefoundry.analysis import ComputeCostMetadata, RegionMemoryMetadata, analyze
+from tilefoundry.analysis import (
+    ComputeCostMetadata,
+    RegionMemoryMetadata,
+    RooflineMetadata,
+    analyze,
+)
 from tilefoundry.analysis.metadata import shares
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
@@ -51,26 +56,34 @@ class UnshardedInScope:
                 return tf.reshard(local + local, (8, 16), "gmem")
 
 
-def _cost(owner) -> tuple[int, int, int]:
+def _cost(owner) -> tuple[int, int, int, int]:
     result = analyze(
         owner,
         owner.entry_function(),
-        analysis=("compute-cost", "memory"),
+        analysis=("compute-cost", "memory", "roofline"),
         topology_level="thread",
     )
     record = get_metadata(result.function, ComputeCostMetadata)
     assert record is not None
+    memory = get_metadata(result.function, RegionMemoryMetadata)
+    footprint_total = sum(
+        held.of("gmem").total for _buffer, held in memory.footprint.buffers
+    )
+    assert get_metadata(result.function, RooflineMetadata).memory_ns == -(
+        -(footprint_total * 1_000_000_000) // 4_800_000_000_000
+    )
     return (
         shares(record.flops, record.topologies)["f32"],
         shares(record.flops, record.topologies, "thread")["f32"],
-        get_metadata(result.function, RegionMemoryMetadata).traffic.storage.of("gmem").total.total_bytes,
+        memory.traffic.storage.of("gmem").total.total_bytes,
+        footprint_total,
     )
 
 
 def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
-    assert _cost(NoScope) == (128, 128, 1536)
-    assert _cost(WithScope) == (256, 32, 2048)
-    assert _cost(UnshardedInScope) == (1024, 128, 4096)
+    assert _cost(NoScope) == (128, 128, 1536, 1024)
+    assert _cost(WithScope) == (256, 32, 2048, 2048)
+    assert _cost(UnshardedInScope) == (1024, 128, 4096, 1024)
 
 
 def test_region_boundaries_price_calls_per_position_and_values_once() -> None:

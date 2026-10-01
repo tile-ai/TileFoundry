@@ -570,8 +570,12 @@ class MemoryContext(AnalyzeContext):
     communication: _TrafficAccounts = field(default_factory=_TrafficAccounts)
     memory_level: str | None = None
     wave: tuple[int, int] | None = None
-    reached: list[ReachedAddresses] = field(default_factory=list)
-    call_reached: list[tuple[Call, tuple[ReachedAddresses, ...]]] = field(default_factory=list)
+    reached_by_scope: dict[
+        IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]
+    ] = field(default_factory=dict)
+    call_reached: list[tuple[IterationScope, Call, tuple[ReachedAddresses, ...]]] = field(
+        default_factory=list
+    )
     footprint_available: bool = False
 
 
@@ -582,11 +586,11 @@ def _footprint_inputs(
     wave: tuple[int, int],
     whole: CostContext,
 ) -> tuple[
-    list[ReachedAddresses],
+    dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]],
     bool,
 ]:
     """Account for Calls with no recorded boundaries."""
-    refused: list[ReachedAddresses] = []
+    refused: dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]] = {}
     available = True
     wave_units, declared_units = wave
     for scope in walk_scopes(root):
@@ -604,7 +608,7 @@ def _footprint_inputs(
             if reached is None:
                 available = False
             else:
-                refused.extend(reached)
+                refused.setdefault(scope, []).append((call, reached))
 
     return refused, available
 
@@ -652,8 +656,8 @@ class MemoryVisitor(ExprVisitor[None]):
                 window=ctx.current.depth - 1,
             )
             if reached is not None:
-                ctx.reached.extend(reached)
-                ctx.call_reached.append((expr, reached))
+                ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, reached))
+                ctx.call_reached.append((ctx.current, expr, reached))
             else:
                 ctx.footprint_available = False
         attach(expr, moved)
@@ -689,7 +693,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     cache = cached_level(facts)
     wave = wave_of(module, context.target, topology_level) if cache is not None else None
     memory_level = cache[1] if cache is not None and wave is not None else None
-    refused_reached: list[ReachedAddresses] = []
+    refused_reached: dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]] = {}
     footprint_available = False
     if memory_level is not None and wave is not None:
         (
@@ -723,11 +727,16 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         locals_by_unit=locals_by_unit,
         memory_level=memory_level,
         wave=wave,
-        reached=refused_reached,
+        reached_by_scope=refused_reached,
         footprint_available=footprint_available,
     )
     MemoryVisitor().visit(function.body, memory_context)
-    merged_reached = merged(memory_context.reached)
+    merged_reached = merged(
+        item
+        for calls in memory_context.reached_by_scope.values()
+        for _call, reached in calls
+        for item in reached
+    )
     distinct: dict[int, Expr] = {}
     for item in merged_reached:
         if item.reached is not None:
@@ -748,8 +757,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         if memory_level is not None and wave is not None
         else ()
     )
-    if memory_level is not None:
-        for call, reached in memory_context.call_reached:
+    if memory_level is not None and wave is not None:
+        for scope, call, reached in memory_context.call_reached:
+            repeats = scope.repeats_of(call, topology_level)
             moved = get_metadata(call, MemoryMetadata)
             if moved is None:
                 raise AnalysisError("memory: Call footprint has no movement record")
@@ -761,6 +771,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                         merged(reached),
                         memory_level=memory_level,
                         labels=footprint_labels,
+                        windows=-(-repeats.mesh_positions // wave[0]),
                     ),
                 ),
             )
@@ -937,10 +948,38 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             memory_level=memory_level,
             labels=footprint_labels,
         )
+        totals: dict[tuple[str, str], int] = {}
+        for scope, calls in memory_context.reached_by_scope.items():
+            repeats = scope.repeats_of(calls[0][0], topology_level)
+            counted = footprint_of(
+                merged(item for _call, reached in calls for item in reached),
+                memory_level=memory_level,
+                labels=footprint_labels,
+                windows=-(-repeats.mesh_positions // wave[0]) * repeats.loop_trips,
+            )
+            for buffer, breakdown in counted.buffers:
+                for level, spread in breakdown.kinds:
+                    key = (buffer, level)
+                    totals[key] = totals.get(key, 0) + spread.total
+        footprint = replace(
+            footprint,
+            buffers=tuple(
+                (
+                    buffer,
+                    Breakdown(
+                        tuple(
+                            (level, replace(spread, total=totals[(buffer, level)]))
+                            for level, spread in breakdown.kinds
+                        )
+                    ),
+                )
+                for buffer, breakdown in footprint.buffers
+            ),
+        )
         cache_level, _backing_level, cache_capacity_bytes = cache
         wave_units, declared_units = wave
         used = sum(
-            spread.total
+            spread.logical
             for _buffer, breakdown in footprint.buffers
             for _level, spread in breakdown.kinds
         )

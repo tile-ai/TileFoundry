@@ -58,11 +58,11 @@ from tilefoundry.ir.types import DType
 from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
 
 
-def _report(module) -> dict:
+def _report(module, *, analysis=("memory",)) -> dict:
     result = analyze(
         module,
         module.entry_function(),
-        analysis=("memory",),
+        analysis=analysis,
     )
     data = report_data(
         module=result.module,
@@ -80,12 +80,12 @@ def _memory_record(module) -> dict:
 
 
 def _footprint_bytes(memory: dict, name: str) -> int:
-    return memory["footprint"]["buffers"][name]["gmem"]["total"]
+    return memory["footprint"]["buffers"][name]["gmem"]["logical"]
 
 
 def _working_set_bytes(memory: dict) -> int:
     return sum(
-        level["total"]
+        level["logical"]
         for levels in memory["footprint"]["buffers"].values()
         for level in levels.values()
     )
@@ -176,7 +176,7 @@ def test_invariant_reuse_matches_the_written_arithmetic() -> None:
     result = analyze(
         InvariantReuse,
         InvariantReuse.entry_function(),
-        analysis=("compute-cost", "memory", "performance"),
+        analysis=("compute-cost", "memory", "roofline", "performance"),
     )
     data = report_data(
         module=result.module,
@@ -192,6 +192,11 @@ def test_invariant_reuse_matches_the_written_arithmetic() -> None:
     assert traffic["total"] == {"read": 768, "write": 0}
     assert traffic["per_unit"] == [{"read": 192, "write": 0}]
     assert _footprint_bytes(memory, "x") == 16
+    footprint_total = memory["footprint"]["buffers"]["x"]["gmem"]["total"]
+    assert footprint_total == 192
+    assert data["function_records"]["roofline"]["memory_ns"] == -(
+        -(footprint_total * 1_000_000_000) // 4_800_000_000_000
+    )
     assert N // BN == 3
     assert data["function_records"]["compute-cost"]["flops"]["bf16"] == {
         "logical": 32, "total": 384, "per_unit": [96],
@@ -249,13 +254,15 @@ def test_packed_dtype_rounds_up_to_whole_bytes() -> None:
 
 
 def test_wave_truncation_counts_only_the_resident_ctas() -> None:
-    resident_data = _report(WaveTruncation)
+    resident_data = _report(WaveTruncation, analysis=("memory", "roofline"))
     resident = resident_data["function_records"]["memory"]
     wide_target = CudaTarget(
         replace(WaveTruncation.target.device, sm_count=256),
         architecture=WaveTruncation.target.architecture,
     )
-    all_declared_data = _report(replace(WaveTruncation, target=wide_target))
+    all_declared_data = _report(
+        replace(WaveTruncation, target=wide_target), analysis=("memory", "roofline")
+    )
     all_declared = all_declared_data["function_records"]["memory"]
 
     assert resident_data["wave"] == {"counted": 132, "declared": 256}
@@ -264,14 +271,26 @@ def test_wave_truncation_counts_only_the_resident_ctas() -> None:
     assert resident["traffic"]["storage"]["gmem"]["total"] == {"read": 2048, "write": 0}
     assert all_declared["traffic"]["storage"]["gmem"]["total"] == {"read": 2048, "write": 0}
     assert _footprint_bytes(all_declared, "x") == 256 * 4 * 2
+    assert resident["footprint"]["buffers"]["x"]["gmem"]["total"] == 2112
+    assert all_declared["footprint"]["buffers"]["x"]["gmem"]["total"] == 2048
+    assert resident_data["function_records"]["roofline"]["memory_ns"] == -(
+        -(2112 * 1_000_000_000) // 4_800_000_000_000
+    )
 
 
 def test_truncated_wave_keeps_reuse_from_participating_boundaries() -> None:
-    data = _report(TruncatedWaveReuse)
+    data = _report(TruncatedWaveReuse, analysis=("memory", "roofline"))
     memory = data["function_records"]["memory"]
 
     assert data["wave"] == {"counted": 132, "declared": 256}
     assert memory["traffic"]["storage"]["gmem"]["total"] == {"read": 8192, "write": 0}
+    assert _working_set_bytes(memory) == 32
+    assert sum(
+        levels["gmem"]["total"] for levels in memory["footprint"]["buffers"].values()
+    ) == 64
+    assert data["function_records"]["roofline"]["memory_ns"] == -(
+        -(64 * 1_000_000_000) // 4_800_000_000_000
+    )
     assert _reuse_conclusions(memory) == [
         {
             "buffer": "<value 0>",
@@ -447,7 +466,7 @@ def test_persistent_flat_states_its_precision() -> None:
     assert _footprint_bytes(memory, "b") == 66 * 32 * 64 * 2
     assert _working_set_bytes(memory) == 2_473_984
     assert sorted(
-        levels["gmem"]["total"] for levels in store["memory"]["footprint"]["buffers"].values()
+        levels["gmem"]["logical"] for levels in store["memory"]["footprint"]["buffers"].values()
     ) == [64 * 64 * 4, 132 * 64 * 64 * 4]
 
 

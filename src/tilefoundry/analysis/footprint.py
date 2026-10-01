@@ -894,7 +894,7 @@ def _reuse_rows(
         if counted is None:
             continue
         amounts = {
-            name: sum(spread.total for _level, spread in breakdown.kinds)
+            name: sum(spread.logical for _level, spread in breakdown.kinds)
             for name, breakdown in counted.buffers
         }
         holds = sum(amounts.values())
@@ -976,6 +976,7 @@ def footprint_of(
     *,
     memory_level: str,
     labels: Mapping[int, str],
+    windows: int = 1,
 ) -> Footprint:
     """Count unioned addresses and pack their element widths into bytes."""
     totals: dict[tuple[str, str], int] = {}
@@ -1000,7 +1001,7 @@ def footprint_of(
     buffers = tuple(
         (
             name,
-            Breakdown(((level, Spread(size, size, ())),)),
+            Breakdown(((level, Spread(size, size * windows, ())),)),
         )
         for (name, level), size in sorted(totals.items())
     )

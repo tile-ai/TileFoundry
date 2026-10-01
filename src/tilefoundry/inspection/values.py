@@ -142,7 +142,7 @@ class CommentPrinter:
         if footprint is None:
             return {}
         return {
-            name: format_bytes(sum(spread.total for _level, spread in breakdown.kinds))
+            name: format_bytes(sum(spread.logical for _level, spread in breakdown.kinds))
             for name, breakdown in footprint.buffers
         }
 

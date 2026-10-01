@@ -238,7 +238,10 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
 
 
 def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
-    """Group_index * 32 is an address, not an unbound parameter."""
+    """Group_index * 32 is an address, not an unbound parameter.
+
+    Address arithmetic executes in each of the 32 position iterations.
+    """
     observed = {}
     for name, owner in (
         ("literal", _LiteralStoreOffset),
@@ -254,6 +257,7 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
         bound = get_metadata(result.function, RooflineMetadata)
         summary = get_metadata(result.function, PerformanceSummaryMetadata)
         assert cost is not None and bound is not None and summary is not None
+        assert bound.memory_ns == 398_459
         integer_ops = cost.other_ops.of("integer")
         assert integer_ops is not None
         observed[name] = (
@@ -265,10 +269,10 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
 
     literal_service, literal_local, literal_roofline, literal_performance = observed["literal"]
     symbolic_service, symbolic_local, symbolic_roofline, symbolic_performance = observed["symbolic"]
-    assert literal_roofline == symbolic_roofline == 398_459
-    assert symbolic_local - literal_local == 6
-    assert symbolic_service - literal_service == 6 * 128
-    assert symbolic_performance - literal_performance == 6
+    assert literal_roofline == symbolic_roofline == 418_219
+    assert symbolic_local - literal_local == 6 * 32
+    assert symbolic_service - literal_service == 6 * 32 * 128
+    assert symbolic_performance - literal_performance == 6 * 32
 
 
 def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:
