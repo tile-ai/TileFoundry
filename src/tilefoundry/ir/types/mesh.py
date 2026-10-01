@@ -256,7 +256,11 @@ def starts(mesh: Mesh) -> tuple[int, ...]:
 
 
 def selected_run(arrangement: Layout, start: int) -> tuple[tuple, tuple, int]:
-    """Reduce one level's selected positions to its joined modes and start."""
+    """Reduce one level's selected positions to its joined modes and start.
+
+    A symbolic extent or stride orders against nothing and is adjacent to
+    nothing, so a level carrying one states its modes as they stand.
+    """
     strides = arrangement.strides
     if strides is None:
         return tuple(flatten(arrangement.shape)), (), start
@@ -265,6 +269,12 @@ def selected_run(arrangement: Layout, start: int) -> tuple[tuple, tuple, int]:
         for extent, stride in zip(flatten(arrangement.shape), flatten(strides))
         if extent != 1
     ]
+    if any(not isinstance(part, int) or isinstance(part, bool) for mode in modes for part in mode):
+        return (
+            tuple(extent for extent, _ in modes),
+            tuple(stride for _, stride in modes),
+            start,
+        )
     joined: list[list] = []
     for extent, stride in sorted(modes, key=lambda mode: (mode[1], mode[0])):
         if joined and joined[-1][0] * joined[-1][1] == stride:

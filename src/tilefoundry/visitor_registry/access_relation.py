@@ -1265,9 +1265,9 @@ def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
     Factory for a GLOBAL-level access-relation handler whose ``n_inputs``
     inputs and single output are all elementwise identity.
 
-    Read operands contribute their own-rank identities. A write-only operand
-    uses the read iteration rank, so its type need not be known yet. A
-    structural (non-tensor) operand borrows that rank as well.
+    A read operand states where the Op's coordinates reach it, right-aligned,
+    so one shorter than the Op or holding one of an axis still answers. A
+    write-only or structural operand uses the read iteration rank.
     """
 
     def _handler(call, ctx) -> AccessRelations:
@@ -1278,20 +1278,18 @@ def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
             param for param in type(call.target)._op_schema.signature if param.kind == "input"
         )
 
-        def _rank_of(index) -> int:
+        def _boundary(index) -> "AffineAccess":
             if params[index].effect == MemoryEffect.WRITE:
-                return out_rank
-            arg = call.args[index]
-            ty = ctx.type_of(arg)
-            return len(ty.shape) if hasattr(ty, "shape") else out_rank
+                return identity_access(out_rank)
+            shape = getattr(ctx.type_of(call.args[index]), "shape", None)
+            if shape is None or len(shape) > out_rank:
+                return identity_access(out_rank)
+            return broadcast_access(tuple(walked.shape), tuple(shape))
 
         return iterating(
             walked.shape,
             AccessRelations(
-                inputs=tuple(
-                    BoundaryRelation(identity_access(_rank_of(index)))
-                    for index in range(n_inputs)
-                ),
+                inputs=tuple(BoundaryRelation(_boundary(index)) for index in range(n_inputs)),
                 outputs=(BoundaryRelation(identity_access(out_rank)),),
             ),
         )

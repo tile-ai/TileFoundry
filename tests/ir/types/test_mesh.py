@@ -9,9 +9,10 @@ from tilefoundry.ir.mesh_scope import (
     states_consistent_positions,
 )
 from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, Topology, make_mesh
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.int_tuple import product
 from tilefoundry.ir.types.layout_algebra import size
-from tilefoundry.ir.types.mesh import check_topology, separate
+from tilefoundry.ir.types.mesh import check_topology, levels, selected_run, separate
 
 
 def test_mesh_position_consistency_is_an_explicit_predicate() -> None:
@@ -140,3 +141,27 @@ def test_mesh_refuses_a_repeated_topology_name() -> None:
             (Topology("thread", 4), Topology("thread", 32)),
             Layout(((4,), (32,)), ((1,), (1,))),
         )
+
+
+def test_selected_run_states_a_symbolic_mode_instead_of_ordering_it() -> None:
+    """A mesh axis whose extent a `DimVar` decides still states a run.
+
+    Chunk-parallel placement names `seq_len // chunk` positions, which makes the
+    stride of every axis outside it symbolic. Those modes order against nothing
+    and are adjacent to nothing, so the run repeats what the mesh states, and a
+    scope compares equal to itself.
+    """
+    chunks = DimVar("seq_len", 64, 32769) // 64
+    mesh = Mesh(
+        (Topology("cta", 132),),
+        Layout(shape=(2, chunks, 2), strides=(chunks * 2, 2, 1)),
+        ("pair", "chunk", "half"),
+    )
+    arrangement = levels(mesh)[0]
+
+    extents, strides, start = selected_run(arrangement, 0)
+
+    assert extents == (2, chunks, 2)
+    assert strides == (chunks * 2, 2, 1)
+    assert start == 0
+    assert covered_by_scope(mesh, mesh)
