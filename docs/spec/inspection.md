@@ -302,10 +302,19 @@ or lowering-only `ShapeOf` nodes. A display-only rendering is
 human-readable and MUST NOT be used as a structural round-trip validation
 artifact. Lowering-only node renderings need not import.
 
+The printer MUST emit all LoopRegion `args` before its `for` statement.
+Invariant parameters print using their external argument names through the
+capture alias chain, including captured tile induction variables. Reparsing
+MUST preserve the parameters and arguments across loop and mesh boundaries.
+A canonical tile window with static integer scaling and translation MUST retain
+its index form (`t * c` or `t * c ± k`): start `c * iv ± k`, element count equal
+to the tile step, and stride `c`. This keeps index dimension arithmetic inside
+the subscript when reparsed.
+
 A canonical grid loop MUST render each yielded expression under its own unique
 binding. After the loop body has emitted every yielded expression, the printer
 MUST emit one `carry = yield` assignment per carried value, in
-`LoopRegion.carried_args` order. Those assignments are the final statements
+`LoopRegion.params[:len(yield_values)]` order. Those assignments are the final statements
 in the loop body. This preserves references to the old carry until the update
 point and lets the parser's final-RHS carry rule rebuild the same loop.
 

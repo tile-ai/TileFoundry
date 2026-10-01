@@ -12,11 +12,14 @@ class LoopRegion(Expr):
 
     A region rather than a scope: the values the loop carries are its own state,
     stated once here, not something every expression inside holds a copy of.
+
+    The first len(yield_values) params carry state; remaining params capture
+    invariant values. All matching args are evaluated outside the loop.
     """
 
     induction_var: Var
-    carried_args: tuple[Var, ...]
-    init_args: tuple[Expr, ...]
+    params: tuple[Var, ...]
+    args: tuple[Expr, ...]
     body: Expr
     yield_values: tuple[Expr, ...]
     extent: ShapeDim

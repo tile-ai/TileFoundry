@@ -261,12 +261,12 @@ class DimensionInstantiator(ExprCloner):
 
     def visit_LoopRegion(self, region: LoopRegion, ctx: InstantiateContext) -> Expr:
         """Rebuild loop bindings and shape fields excluded by generic cloning."""
-        new_inits = tuple(self.visit(arg, ctx) for arg in region.init_args)
+        new_inits = tuple(self.visit(arg, ctx) for arg in region.args)
         new_phis = tuple(
             old_phi if new_init.type == old_phi.type else Var(type=new_init.type, name=old_phi.name)
-            for old_phi, new_init in zip(region.carried_args, new_inits)
+            for old_phi, new_init in zip(region.params, new_inits)
         )
-        for old_phi, new_phi in zip(region.carried_args, new_phis):
+        for old_phi, new_phi in zip(region.params, new_phis):
             if new_phi is not old_phi:
                 ctx.subst[id(old_phi)] = new_phi
         new_body = self.visit(region.body, ctx)
@@ -274,8 +274,8 @@ class DimensionInstantiator(ExprCloner):
         bounds = (region.extent, region.step, region.start)
         new_bounds = tuple(substitute_shape_dim(bound, ctx.dims) for bound in bounds)
         if (
-            all(new is old for new, old in zip(new_inits, region.init_args))
-            and all(new is old for new, old in zip(new_phis, region.carried_args))
+            all(new is old for new, old in zip(new_inits, region.args))
+            and all(new is old for new, old in zip(new_phis, region.params))
             and new_body is region.body
             and all(new is old for new, old in zip(new_yields, region.yield_values))
             and new_bounds == bounds
@@ -283,8 +283,8 @@ class DimensionInstantiator(ExprCloner):
             return region
         rebuilt = dataclasses.replace(
             region,
-            carried_args=new_phis,
-            init_args=new_inits,
+            params=new_phis,
+            args=new_inits,
             body=new_body,
             yield_values=new_yields,
             extent=new_bounds[0],
@@ -499,9 +499,8 @@ class _DimVarCollector(ExprWalker[None]):
         for child in (
             getattr(expr, "args", ())
             + getattr(expr, "elements", ())
-            + getattr(expr, "init_args", ())
             + getattr(expr, "yield_values", ())
-            + getattr(expr, "carried_args", ())
+            + getattr(expr, "params", ())
         ):
             self.visit(child, ctx)
         body = getattr(expr, "body", None)
@@ -594,9 +593,8 @@ class _SymbolicDimVisitor(ExprVisitor[bool]):
         children = (
             getattr(expr, "args", ())
             + getattr(expr, "elements", ())
-            + getattr(expr, "init_args", ())
             + getattr(expr, "yield_values", ())
-            + getattr(expr, "carried_args", ())
+            + getattr(expr, "params", ())
         )
         body = getattr(expr, "body", None)
         return any(self.visit(child, ctx) for child in children) or (

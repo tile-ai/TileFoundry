@@ -244,7 +244,7 @@ def test_expr_functor_requires_explicit_handler_for_unknown_expr() -> None:
 def test_expr_cloner_skips_loop_region_binding_vars() -> None:
     """Binding-site Vars are not exposed to a generic ExprCloner.
 
-    Binding-site Vars (``induction_var`` / ``carried_args``) are not
+    Binding-site Vars (``induction_var`` / ``params``) are not
     exposed to a generic ExprCloner (would otherwise be type-illegal).
     """
     ind = _var("i", _i32())
@@ -253,8 +253,8 @@ def test_expr_cloner_skips_loop_region_binding_vars() -> None:
     region = LoopRegion(
         type=_t(),
         induction_var=ind,
-        carried_args=carried,
-        init_args=init,
+        params=carried,
+        args=init,
         body=_var("out"),
         yield_values=(_var("y0"), _var("y1")),
         extent=1,
@@ -269,12 +269,12 @@ def test_expr_cloner_skips_loop_region_binding_vars() -> None:
             return _const(0.0)
 
     out = ToConst().visit(region)
-    assert out.induction_var is ind and out.carried_args is carried
+    assert out.induction_var is ind and out.params is carried
     assert isinstance(out.body, Constant)
 
     assert "i" not in replaced and "a" not in replaced and "b" not in replaced
     assert "a0" in replaced and "b0" in replaced
-    assert all(isinstance(e, Constant) for e in out.init_args)
+    assert all(isinstance(e, Constant) for e in out.args)
 
 
 def _simple_for_body() -> For:

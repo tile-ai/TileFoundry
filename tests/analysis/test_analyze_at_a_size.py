@@ -44,6 +44,7 @@ from tilefoundry.cli.source import load_namespace
 from tilefoundry.ir.core import Call, describe_expr, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
 from tilefoundry.ir.hir.specialize import (
     origin_of,
     residual_dims,
@@ -79,13 +80,20 @@ assert API_INVENTORY <= {case.id for case in CASES}
 
 _GQA_MATERIAL_TRANSPOSE_GMEM = 284_672
 _PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 278_528
-_QWEN_LOOP_INVARIANT_VALUES_GMEM = 145_374_224
+_QWEN_LOOP_INVARIANT_VALUES_GMEM = 154_289_168
 _MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING = 5_245_008
 _MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_195_376
 _MHA_SHORTER_GMEM_WITH_28_BYTES_ALIGNMENT_PADDING = 2_098_224
 _MHA_SINGLE_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 8_392_752
 
 KNOWN_OVER_BOUND = {
+    (
+        "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]",
+        "gmem",
+    ): (
+        "LEFTOVERS #14: first-solution allocator exceeds the aligned live-byte upper "
+        "bound once loop-invariant captures stay live across the loop"
+    ),
     (
         "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]",
         "smem",
@@ -279,7 +287,7 @@ EXPECTED_MEMORY_PEAKS = {
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]": {
         "gmem": _QWEN_LOOP_INVARIANT_VALUES_GMEM,
-        "rmem": 1_132,
+        "rmem": 1_036,
         "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]": {
@@ -567,6 +575,10 @@ def _assert_reported(case: ConcreteCase, report: dict) -> None:
     assert set(report["executed"]) == set(FAMILIES)
     assert_reported_contract(report)
     reported = report["function_records"]["memory"]
+    if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
+        gmem = reported["traffic"]["storage"]["gmem"]
+        assert gmem["logical"]["read"] + gmem["logical"]["write"] == 102_172_180
+        assert gmem["total"]["read"] + gmem["total"]["write"] == 106_862_100
     over_bound: set[tuple[str, str]] = set()
     for peak in reported["peaks"]:
         memory_level = peak["memory_level"]
@@ -659,6 +671,15 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
     _assert_reported(case, json.loads(render_json(report)))
     scopes = tuple(walk_scopes(build_scopes(result.module, result.function)))
     assert_internal_contract(result, scopes)
+    if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
+        rms_scopes = [
+            scope
+            for scope in scopes
+            for call, _ in scope.accesses["narrow"].values()
+            if isinstance(call.target, RMSNorm)
+        ]
+        assert len(rms_scopes) == 4
+        assert all(not scope.enclosing_loops() for scope in rms_scopes)
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]":
         cache_writes = [
             access

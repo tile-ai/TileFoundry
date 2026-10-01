@@ -10,6 +10,7 @@ from tilefoundry.analysis import ComputeCostMetadata, analyze
 from tilefoundry.analysis.metadata import shares
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType, Layout, TensorType
@@ -103,12 +104,23 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
     assert binary_flops == [8, helper_flops * 2, 16]
 
 
-def test_analysis_rejects_a_region_body_that_embeds_its_raw_argument() -> None:
+@pytest.mark.parametrize("kind", (MeshRegion, LoopRegion))
+def test_analysis_rejects_a_region_body_that_embeds_its_raw_argument(kind) -> None:
     """The isolation invariant is checked on hand-built HIR as an analysis consumer."""
     value_type = TensorType(shape=(8,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM)
     value = Var(name="value", type=value_type)
-    scope = MeshRegion(
-        mesh=Mesh((Topology("cta", 1),), Layout((1,), (1,)), ("cta",)),
+    fields = (
+        {"mesh": Mesh((Topology("cta", 1),), Layout((1,), (1,)), ("cta",))}
+        if kind is MeshRegion
+        else {
+            "induction_var": Var(name="i", type=TensorType.scalar(DType.i64)),
+            "yield_values": (),
+            "extent": 2,
+            "step": 1,
+        }
+    )
+    scope = kind(
+        **fields,
         params=(Var(name="param", type=value_type),),
         args=(value,),
         body=value,

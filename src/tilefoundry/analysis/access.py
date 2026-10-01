@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import isl
 
 from tilefoundry.ir.core import Call, Constant, Expr, Var
-from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.region_capture import CapturingRegion, region_captures
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.isl_interop import dim_range, dim_to_isl_expr, index_set
 from tilefoundry.ir.types import TensorType
@@ -73,8 +73,8 @@ def widest_allowed(access: isl.map, name: str, held: object) -> int | None:
     return None if best is None else best[1]
 
 
-class _MeshBindingResolver(ExprCloner):
-    """Resolve mesh bindings and local coordinates before affine rendering."""
+class _RegionBindingResolver(ExprCloner):
+    """Resolve region captures and local coordinates before affine rendering."""
 
     def __init__(self, *, narrow: bool) -> None:
         super().__init__()
@@ -99,11 +99,14 @@ class _MeshBindingResolver(ExprCloner):
         return self.default_visit(value, scope)
 
     def visit_Var(self, value: Var, scope: "IterationScope") -> Expr:
+        root = scope.capture_root(value)
+        if root is value:
+            return value
         cursor = scope
         while cursor is not None:
             owner = cursor.owner
-            if isinstance(owner, MeshRegion):
-                for param, argument in zip(owner.params, owner.args, strict=True):
+            if isinstance(owner, CapturingRegion):
+                for param, argument in region_captures(owner):
                     if value is param:
                         return self.visit(argument, cursor.parent)
             cursor = cursor.parent
@@ -123,12 +126,14 @@ def _parameter_term(
     if number is not None:
         return str(number), {}, AnalysisPrecision.EXACT
     try:
-        resolved = _MeshBindingResolver(narrow=narrow).visit(value, scope)
+        resolved = _RegionBindingResolver(narrow=narrow).visit(value, scope)
         identities = {
             id(loop.induction_var): f"__tf_in_{i}" for i, loop in enumerate(scope.enclosing_loops())
         }
         param_map = dict(scope.domain_params)
-        identities.update((id(parameter), param) for param, parameter in param_map.items())
+        identities.update(
+            (id(scope.capture_root(parameter)), param) for param, parameter in param_map.items()
+        )
         params = {param: dim_range(parameter) for param, parameter in param_map.items()}
         expression = dim_to_isl_expr(resolved, params, param_map=param_map, identities=identities)
     except (TypeError, ValueError, NotImplementedError, isl.Error):
@@ -212,10 +217,11 @@ def resolve_access(
     box = index_set(tuple(held.shape)) if isinstance(held, TensorType) else None
     if box is not None:
         relation = relation.intersect_range(box)
+    operand = scope.capture_root(operand)
     while isinstance(operand, Call) and (position := aliased_operand(operand)) is not None:
         folded = renaming_relation(operand, ctx, scope.projected_relations(operand, ctx))
         relation = relation.apply_range(relation_of(folded))
-        operand = operand.args[position]
+        operand = scope.capture_root(operand.args[position])
         relation, folded_precision = eliminate_parameters(
             relation,
             folded.parameters,

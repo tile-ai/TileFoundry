@@ -275,7 +275,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
     def visit_LoopRegion(self, expr: LoopRegion, ctx: ComputeCostContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
         inner = replace(ctx, current=child)
-        for operand in expr.init_args:
+        for operand in expr.args:
             self.visit(operand, ctx)
         self.visit(expr.body, inner)
         for operand in expr.yield_values:

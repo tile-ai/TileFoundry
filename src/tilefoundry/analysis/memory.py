@@ -394,7 +394,7 @@ def _allocation_intervals(
         if isinstance(value, (Call, Constant, LoopRegion)) and owner is value:
             resident.add(id(value))
         if isinstance(value, LoopRegion):
-            resident.update(id(phi) for phi in value.carried_args)
+            resident.update(id(phi) for phi in value.params[: len(value.yield_values)])
     return tuple(interval for interval in liveness.intervals if id(interval.value) in resident)
 
 
@@ -607,7 +607,7 @@ class MemoryVisitor(ExprVisitor[None]):
     def visit_LoopRegion(self, expr: LoopRegion, ctx: MemoryContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
         inner = replace(ctx, current=child)
-        for operand in expr.init_args:
+        for operand in expr.args:
             self.visit(operand, ctx)
         self.visit(expr.body, inner)
         for operand in expr.yield_values:

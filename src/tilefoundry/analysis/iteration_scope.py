@@ -12,6 +12,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.region_capture import CapturingRegion, region_captures
 from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.types import Mesh
 from tilefoundry.ir.types.dim import DimSub, simplify_dim
@@ -71,6 +72,18 @@ class IterationScope:
         local = projected(stated if stated is not None else relations_of(call, ctx), call, ctx)
         holder.projections[key] = (call, local)
         return local
+
+    def capture_root(self, value: Expr) -> Expr:
+        """Resolve invariant parameters through their enclosing region captures."""
+        cursor = self
+        while cursor is not None:
+            if isinstance(cursor.owner, CapturingRegion):
+                for param, argument in region_captures(cursor.owner):
+                    if value is param:
+                        value = argument
+                        break
+            cursor = cursor.parent
+        return value
 
     def is_variant(self, value: Expr) -> bool:
         """Whether *value* depends on this loop's induction or carry values."""
@@ -240,7 +253,7 @@ class ScopeBuilder:
             return
         self.seen.add(id(expr))
         if isinstance(expr, LoopRegion):
-            for operand in expr.init_args:
+            for operand in expr.args:
                 self._visit(operand, scope)
             domain, domain_params = iteration_domain(expr, scope)
             child = IterationScope(
@@ -254,8 +267,11 @@ class ScopeBuilder:
             )
             scope.children = (*scope.children, child)
             self.seeds[id(expr.induction_var)] = child
-            for carried in expr.carried_args:
+            for carried in expr.params[: len(expr.yield_values)]:
                 self.seeds[id(carried)] = child
+            for param, argument in region_captures(expr):
+                self._record_variance(param, (argument,))
+                self.seen.add(id(param))
             self._visit(expr.body, child)
             for operand in expr.yield_values:
                 self._visit(operand, child)
@@ -274,7 +290,7 @@ class ScopeBuilder:
                 accesses=self._empty_accesses(),
             )
             scope.children = (*scope.children, child)
-            for param, argument in zip(expr.params, expr.args, strict=True):
+            for param, argument in region_captures(expr):
                 self._record_variance(param, (argument,))
                 self.seen.add(id(param))
             self._visit(expr.body, child)

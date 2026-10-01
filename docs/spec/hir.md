@@ -333,8 +333,8 @@ class LoopRegion(Expr):
 
     Attributes:
         induction_var: attribute; loop induction Var, ranging over range(start, extent, step).
-        carried_args: attribute; loop-phi carry chain (equal lengths).
-        init_args: attribute; loop-phi carry chain (equal lengths).
+        params: attribute; entry bindings, carry slots followed by invariant captures.
+        args: attribute; matching values evaluated in the enclosing scope.
         body: attribute; the loop body Expr.
         yield_values: attribute; loop-phi carry chain (equal lengths).
         extent: attribute; iteration-domain stop (half-open).
@@ -343,8 +343,8 @@ class LoopRegion(Expr):
     """
 
     induction_var: Var
-    carried_args: tuple[Var, ...]
-    init_args: tuple[Expr, ...]
+    params: tuple[Var, ...]
+    args: tuple[Expr, ...]
     body: Expr
     yield_values: tuple[Expr, ...]
     extent: ShapeDim
@@ -392,28 +392,32 @@ multiply by `step`.
 grid-loop body contains an `ast.Assign` whose single
 `Name` target binds an outer-scope name:
 
-- the carried name becomes a phi `Var` in `carried_args`,
+- the carried name becomes a phi `Var` in `params`,
 - the pre-loop binding of that name becomes the matching entry in
-  `init_args` (the carry's value on the first iteration),
+  `args` (the carry's value on the first iteration),
 - inside the loop body the same name resolves to that phi `Var`,
 - after the loop, the post-region binding refers to the
   `LoopRegion` itself (single carry) or a `tuple_get_item` of it
   (multi-carry, when `len(yield_values) > 1`).
 
-`init_args` are value Exprs (traversed and rewritten by the
-visitor / mutator), distinct from the binding-site `carried_args` /
-`induction_var`. `len(init_args) == len(carried_args) ==
-len(yield_values)`; all three are empty for a no-carry loop. The node
-is self-contained: the first-iteration value of each `carried_args`
-phi is its `init_args` entry, not a name looked up in the enclosing
-parser scope.
+`args` are value Exprs traversed and rewritten by the visitor / mutator;
+`params` and `induction_var` are binding sites. `len(params) == len(args)`
+and `k = len(yield_values) <= len(params)`. The first `k` slots carry loop state:
+first-iteration values come from `args[:k]`, and later values come from the
+matching yield. Remaining slots are invariant captures evaluated once outside
+the loop. A no-carry loop has `k == 0` and may still have captured parameters.
 
-Type inference first derives every `init_args` type in the enclosing visitor.
-It then opens a new visitor over the same context, seeded with the enclosing
-memo plus the induction variable's annotation and each `carried_args` phi bound
-to its matching init type. The body and yields are derived in that region
-visitor. A carry result is read from those phi bindings, never from the phi
-node's stamped `.type`.
+A LoopRegion MUST be isolated like a MeshRegion: its body and yields MUST read
+outside values through entry parameters, never by embedding an `args` value.
+The parser captures each external expression binding across every region
+boundary; an external Call therefore belongs to its enclosing structural scope.
+`region_captures(region)` pairs only invariant parameters and arguments, skipping
+carry slots; `CapturingRegion` is `MeshRegion | LoopRegion`.
+
+Type inference derives every argument outside the loop and checks compatibility
+with its parameter annotation. It seeds the inner visitor with the induction
+binding and all parameter types, then derives the body and yields. A carry
+result is read from the first `k` parameter bindings.
 
 `LoopRegion.type` is `TensorType` (single carry) or `TupleType`
 (multi-carry); the value is the Expr itself, not a `Call`.
@@ -464,9 +468,9 @@ becomes (sketched):
 # example
 LoopRegion(
     induction_var = i,
-    carried_args  = (acc_phi,),
-    init_args     = (Call(Zeros(...), ()),),   # the pre-loop `acc`
-    body          = Call(Binary(kind=ADD), (acc_phi, load_tile(x, i))),
+    params        = (acc_phi, x_param),
+    args          = (Call(Zeros(...), ()), x),   # pre-loop values
+    body          = Call(Binary(kind=ADD), (acc_phi, load_tile(x_param, i))),
     yield_values  = (Call(Binary(kind=ADD), ...),),
     extent        = K,
     step          = BLOCK,

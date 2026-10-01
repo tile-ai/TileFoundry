@@ -236,20 +236,18 @@ class EvaluatorVisitor(ExprVisitor):
 ## 5. `LoopRegion`
 
 A `LoopRegion` ([hir §1.2](./hir.md#12-loopregion)) is a loop over its iteration
-domain whose carry chain starts from `init_args`:
+domain with an isolated entry block of `params` and `args`.
 
-`EvaluatorVisitor.visit_LoopRegion(region)` implements the loop; there is no
-separate `eval_grid` function.
+`EvaluatorVisitor.visit_LoopRegion(region)` implements the loop. All `args`
+are evaluated once in the enclosing scope. With `k = len(yield_values)`:
 
-- The first iteration binds each `carried_args` phi to the matching
-  `init_args` value; each later iteration binds it to the previous
-  iteration's `yield_values`.
-- `induction_var` is bound to the current index (a rank-0 tensor) for
-  every iteration.
-- The result is the final carried value (single carry) or a `TupleValue`
-  of them (multi-carry), matching the node's `type`.
-- A no-carry loop (`init_args` / `carried_args` / `yield_values` all
-  empty) yields the final `body` value.
+- The first iteration binds `params[:k]` to `args[:k]`; later iterations bind
+  them to the previous iteration's `yield_values`.
+- Every iteration binds invariant `params[k:]` to the saved `args[k:]` values
+  and `induction_var` to the current index (a rank-0 tensor). Its memo contains
+  only these entry bindings; body Calls execute in that iteration.
+- The result is the final carried value or a `TupleValue` of multiple carries.
+- A no-carry loop (`k == 0`) yields the final `body` value; it may capture values.
 
 ## 6. Layout domain
 

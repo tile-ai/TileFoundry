@@ -47,14 +47,15 @@ def _sum_loop_fn(extent, *, step=1, extra_params=()):
     iv = Var(type=_i32(()), name="i")
     init = Constant(value=0.0, type=_f32(()))
     index = Call(type=_i32((1,)), target=Reshape(new_shape=(1,)), args=(iv,))
-    selected = Call(type=_f32((1,)), target=IndexSelect(dim=0), args=(x, index))
+    captured_x = Var(type=x.type, name="x")
+    selected = Call(type=_f32((1,)), target=IndexSelect(dim=0), args=(captured_x, index))
     row = Call(type=_f32(()), target=Reshape(new_shape=()), args=(selected,))
     new_acc = Call(type=_f32(()), target=Binary(kind=BinaryKind.ADD), args=(acc, row))
     grid = LoopRegion(
         type=_f32(()),
         induction_var=iv,
-        carried_args=(acc,),
-        init_args=(init,),
+        params=(acc, captured_x),
+        args=(init, x),
         body=new_acc,
         yield_values=(new_acc,),
         extent=extent,

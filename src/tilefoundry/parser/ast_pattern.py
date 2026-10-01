@@ -834,7 +834,8 @@ class LoopFrame:
     step: object
     carry_names: tuple[str, ...]
     phi_vars: tuple[object, ...]
-    init_args: tuple[object, ...]
+    params: tuple[object, ...]
+    args: tuple[object, ...]
 
 
 @dataclass(frozen=True)

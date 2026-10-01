@@ -181,11 +181,17 @@ class TypeInferVisitor(ExprVisitor[Type]):
         for bound in (region.start, region.extent, region.step):
             if isinstance(bound, Expr):
                 self.visit(bound, ctx)
-        inits = tuple(self.visit(arg, ctx) for arg in region.init_args)
+        arg_types = tuple(self.visit(arg, ctx) for arg in region.args)
+        from .verify import verify_region_isolated  # noqa: PLC0415
+
+        verify_region_isolated(region, ctx)
+        for index, (param, arg_type) in enumerate(zip(region.params, arg_types, strict=True)):
+            if not types_compatible(param.annotation, arg_type):
+                ctx.error(region, f"loop scope arg {index} type mismatch for param {param.name!r}")
         memo = {
             **self._memo,
             id(region.induction_var): (region.induction_var, region.induction_var.annotation),
-            **{id(phi): (phi, type_) for phi, type_ in zip(region.carried_args, inits)},
+            **{id(phi): (phi, type_) for phi, type_ in zip(region.params, arg_types, strict=True)},
         }
         inner = TypeInferVisitor(
             memo=memo,
@@ -195,11 +201,12 @@ class TypeInferVisitor(ExprVisitor[Type]):
         body_type = inner.visit(region.body, ctx)
         for y in region.yield_values:
             inner.visit(y, ctx)
-        if not region.carried_args:
+        carried = region.params[: len(region.yield_values)]
+        if not carried:
             return body_type
-        if len(region.carried_args) == 1:
-            return inner.visit(region.carried_args[0], ctx)
-        return TupleType(fields=tuple(inner.visit(phi, ctx) for phi in region.carried_args))
+        if len(carried) == 1:
+            return inner.visit(carried[0], ctx)
+        return TupleType(fields=tuple(inner.visit(phi, ctx) for phi in carried))
 
     def visit_MeshRegion(self, expr: MeshRegion, ctx: TypeInferContext) -> Type:
         """Type a region against the participants in force inside it.
@@ -229,9 +236,9 @@ class TypeInferVisitor(ExprVisitor[Type]):
                 for param, arg_type in zip(expr.params, arg_types, strict=True)
             },
         }
-        from .verify import _verify_isolated  # noqa: PLC0415
+        from .verify import verify_region_isolated  # noqa: PLC0415
 
-        _verify_isolated(expr, ctx)
+        verify_region_isolated(expr, ctx)
         mesh = make_mesh(ctx.current_mesh, expr.mesh) if ctx.current_mesh else expr.mesh
         return self.visit(expr.body, replace(ctx, current_mesh=mesh, memo=memo))
 

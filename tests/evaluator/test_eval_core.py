@@ -84,7 +84,7 @@ def _carry_sum(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "
 
 
 def test_single_carry_accumulator():
-    """Carry init comes from the IR's init_args (the param ``a``), looped 3×."""
+    """Carry init comes from the IR's args (the param ``a``), looped 3×."""
     a, b = torch.randn(4), torch.randn(4)
     assert torch.allclose(evaluate(_carry_sum, a, b), a + 3 * b)
 
