@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=SM80_MMA_LDMATRIX function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r1.50KB/w0@logical,r1.50KB/w0@total,r1.50KB/w0@cta,r1.50KB/w0@thread;rmem:r3.06KB/w3.25KB@logical,r3.06KB/w3.25KB@total,r1.56KB/w1.94KB@cta,r144B/w104B@thread;smem:r1.50KB/w1.50KB@logical,r1.50KB/w1.50KB@total,r1.50KB/w1.50KB@cta,r48B/w1.50KB@thread footprint=a:512B;b:256B footprint-precision=lower_bound peak=gmem:1.50KB;rmem:1.25KB;smem:1.50KB persistent=gmem:1.50KB
+# memory traffic=gmem:r1.50KB/w0@logical,r1.50KB/w0@total,r1.50KB/w0@cta,r1.50KB/w0@thread;rmem:r3.06KB/w3.25KB@logical,r1.56KB/w1.94KB@total,r1.56KB/w1.94KB@cta,r144B/w104B@thread;smem:r1.50KB/w1.50KB@logical,r1.50KB/w1.50KB@total,r1.50KB/w1.50KB@cta,r48B/w1.50KB@thread footprint=a:512B;b:256B footprint-precision=lower_bound peak=gmem:1.50KB;rmem:1.25KB;smem:1.50KB persistent=gmem:1.50KB
 
 from __future__ import annotations
 

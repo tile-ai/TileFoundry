@@ -769,9 +769,12 @@ receives a `memory` annotation; `operands` is emitted only when asked for
 memory traffic=<memory-level>:r<bytes>/w<bytes>@logical,r<bytes>/w<bytes>@total,r<bytes>/w<bytes>@<topology>[,...] footprint=<buffer>:<bytes>[;<buffer>:<bytes>] footprint-precision=<exact|upper_bound|lower_bound|unknown> [operands=<position>:r<bytes>/w<bytes>[;<position>:...]]
 ```
 
-In the printed `footprint` field, a buffer uses the same value label as a
-lifetime binding and that label may itself contain `:` (for example,
-`v0:57:1.00KB`). The byte count is the formatted value after the last colon.
+In the printed `footprint` field, a buffer's value label may itself contain `:`
+(for example, `v0:57:1.00KB`). The byte count is the formatted value after the
+last colon.
+Use the root buffer's authored name, otherwise the first capturing parameter's
+name in program order that resolves to that root, otherwise the existing value
+label; duplicate-label suffixes remain unchanged.
 
 Missing optional conclusions omit their whole printed field. Call and Function
 JSON projections are both under `memory`. The Function's full projection is
@@ -830,7 +833,7 @@ class RooflineMetadata(IRMetadata):
 |---|---|---|
 | `compute_ns` | For each recorded dtype with a published rate, round `flops * 1e9 / rate` up to ns and sum the dtype times. A Function uses its summed flops, not a sum of per-Call times. | `ThroughputFacts.peak_flops_per_second` |
 | `memory_ns` | Sum footprint `total` bytes at `bandwidth_level`, multiply by `1e9 / memory_bandwidth_bytes_per_second`, and round up to ns; zero when no bandwidth is published or no bytes are counted. When the footprint is absent or counts another level, use traffic `total` reads plus writes at `bandwidth_level`. A Function uses its accumulated footprint or traffic, not a sum of per-Call times. | `ThroughputFacts.bandwidth_level` and `memory_bandwidth_bytes_per_second` |
-| `ideal_ns` | Maximum of `compute_ns` and `memory_ns`; one ns when the occurrence records nonzero flops or nonzero priced `bandwidth_level` bytes and neither published rate yields a bound, otherwise zero. Bytes at any other level is stated and does not earn a bound: no rate was published for it, so none is owed. | Through the two times |
+| `ideal_ns` | Maximum of `compute_ns` and `memory_ns`; one ns when the occurrence records nonzero flops or nonzero priced `bandwidth_level` bytes and neither published rate yields a bound, otherwise zero. Bytes at any other level are stated and does not earn a bound: no rate was published for it, so none is owed. | Through the two times |
 | `bound_by` | `none` for no bound, which includes an occurrence whose only movement is at a level with no published bandwidth, `balanced` for equal nonzero times, `memory` when memory is greater, `compute` when compute is greater, and `unrated` for the one-ns bound owed by work this prices whose rate is missing. | Through the two times |
 
 The family reads this target projection:

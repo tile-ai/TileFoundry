@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=WGMMA_CTA_GRID_4X17 function=gemm topology=cta wave=68/68
 # selection requested=memory executed=memory
-# memory traffic=gmem:r18.00KB/w0@logical,r18.00KB/w0@total,r18.00KB/w0@cta,r18.00KB/w0@thread;rmem:r40.12KB/w44.00KB@logical,r40.12KB/w44.00KB@total,r40.12KB/w44.00KB@cta,r288B/w176B@thread;smem:r1.12KB/w1.12KB@logical,r1.12KB/w1.12KB@total,r1.12KB/w1.12KB@cta,r144B/w1.12KB@thread footprint=a:4.00KB;b:512B footprint-precision=exact peak=gmem:18.00KB;rmem:8.00KB;smem:13.50KB persistent=gmem:18.00KB
+# memory traffic=gmem:r18.00KB/w0@logical,r1.20MB/w0@total,r18.00KB/w0@cta,r18.00KB/w0@thread;rmem:r40.12KB/w44.00KB@logical,r2.66MB/w2.92MB@total,r40.12KB/w44.00KB@cta,r288B/w176B@thread;smem:r1.12KB/w1.12KB@logical,r76.50KB/w76.50KB@total,r1.12KB/w1.12KB@cta,r144B/w1.12KB@thread footprint=a:4.00KB;b:512B footprint-precision=exact peak=gmem:18.00KB;rmem:8.00KB;smem:13.50KB persistent=gmem:18.00KB
 #   buffer=a holds=4.50KB time=none space=cta.bm,cta.bn reuse=268.00KB fits=yes precision=exact
 #   buffer=b holds=4.50KB time=none space=cta.bm,cta.bn reuse=33.50KB fits=yes precision=exact
 
