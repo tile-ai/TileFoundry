@@ -6,7 +6,6 @@ import os
 import sys
 import textwrap
 import threading
-import time
 from pathlib import Path
 from typing import Mapping
 
@@ -37,11 +36,13 @@ ANALYSES: tuple[str, ...] = tuple(EVIDENCE)
 _ANALYSIS_TIMEOUT_SECONDS = 300.0
 
 
-def _watch(limit: float) -> None:
-    """Bound the whole analyze command by wall clock."""
+def _watch(limit: float) -> threading.Event:
+    """Bound the whole analyze command until its caller disarms the timer."""
+    disarmed = threading.Event()
 
     def stop() -> None:
-        time.sleep(limit)
+        if disarmed.wait(limit):
+            return
         sys.stderr.write(
             f"tilefoundry: error: analysis too complex, timed out after {limit:.0f}s\n"
         )
@@ -49,6 +50,7 @@ def _watch(limit: float) -> None:
         os._exit(1)
 
     threading.Thread(target=stop, daemon=True).start()
+    return disarmed
 
 
 def guidance() -> str:
@@ -124,48 +126,53 @@ def run_authored_analysis(
     runs once on one view, and Metadata ownership keeps one family from changing
     another's records.
     """
-    _watch(_ANALYSIS_TIMEOUT_SECONDS)
-    module = load_authored_ir(source)
-    function = module.entry_function()
-    stated = {} if dims is None else dims
-    unbound = [
-        (name, dim_var)
-        for name, dim_var in _program_dim_vars(module, function).items()
-        if name not in stated
-    ]
-    if unbound:
-        guidance = "; ".join(
-            f"{name} is declared as [{dim_var.lo}, {dim_var.hi}); bind it with "
-            f"--dim {name}=EXTENT (try {', '.join(map(str, suggested_extents(dim_var.lo, dim_var.hi)))})"
-            for name, dim_var in unbound
-        )
-        raise ValueError(f"analyze needs one EXTENT for every open dimension: {guidance}")
-    if not analyses:
-        try:
-            checked_module, checked = resolve_program_geometry(
-                module,
-                function,
-                dims,
-                TypeInferContext(scope=FunctionScope(module, function)),
+    disarmed = _watch(_ANALYSIS_TIMEOUT_SECONDS)
+    try:
+        module = load_authored_ir(source)
+        function = module.entry_function()
+        stated = {} if dims is None else dims
+        unbound = [
+            (name, dim_var)
+            for name, dim_var in _program_dim_vars(module, function).items()
+            if name not in stated
+        ]
+        if unbound:
+            guidance = "; ".join(
+                f"{name} is declared as [{dim_var.lo}, {dim_var.hi}); bind it with "
+                f"--dim {name}=EXTENT (try {', '.join(map(str, suggested_extents(dim_var.lo, dim_var.hi)))})"
+                for name, dim_var in unbound
             )
-        except SpecializationError as error:
-            raise ValueError(f"analyze: {error}") from None
-        expanded = check_program(checked_module, checked)
-        annotated = as_script(expanded, options=PythonPrintOptions(show_types=True))
-        Path(out_path).write_text(annotated, encoding="utf-8")
-        return 0
+            raise ValueError(f"analyze needs one EXTENT for every open dimension: {guidance}")
+        if not analyses:
+            try:
+                checked_module, checked = resolve_program_geometry(
+                    module,
+                    function,
+                    dims,
+                    TypeInferContext(scope=FunctionScope(module, function)),
+                )
+            except SpecializationError as error:
+                raise ValueError(f"analyze: {error}") from None
+            expanded = check_program(checked_module, checked)
+            annotated = as_script(expanded, options=PythonPrintOptions(show_types=True))
+            Path(out_path).write_text(annotated, encoding="utf-8")
+            return 0
 
-    result = analyze(module, function, analysis=analyses, topology_level=topology, dims=dims)
-    rendered = render_analysis(result, operands=operands and not as_json)
-    if as_json:
+        result = analyze(module, function, analysis=analyses, topology_level=topology, dims=dims)
+        rendered = render_analysis(result, operands=operands and not as_json)
+        if as_json:
+            Path(out_path).write_text(
+                f"{render_json({**rendered.data, 'source': rendered.annotated})}\n",
+                encoding="utf-8",
+            )
+            return 0
+
         Path(out_path).write_text(
-            f"{render_json({**rendered.data, 'source': rendered.annotated})}\n",
-            encoding="utf-8",
+            f"{render_text(rendered)}\n\n{rendered.annotated}", encoding="utf-8"
         )
         return 0
-
-    Path(out_path).write_text(f"{render_text(rendered)}\n\n{rendered.annotated}", encoding="utf-8")
-    return 0
+    finally:
+        disarmed.set()
 
 
 __all__ = ["ANALYSES", "EVIDENCE", "guidance", "run_authored_analysis"]

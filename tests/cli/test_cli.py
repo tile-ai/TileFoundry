@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import tilefoundry.cli.analyze as analyze_cli
 import tilefoundry.cli.target as target_cli
 from tests.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tilefoundry import cli
@@ -128,6 +129,32 @@ class Sound:
             placed = tf.reshard(x, (N @ m.block,), 'gmem')
             return tf.reshard(tf.square(placed), (N @ m.block,), 'gmem')
 """
+
+
+@pytest.mark.parametrize(
+    ("root", "flags", "expected"),
+    [
+        ("Sound", (), 0),
+        ("Sound", ("--compute-cost",), 0),
+        ("Sound", ("--compute-cost", "--json"), 0),
+        ("Unsound", ("--compute-cost",), 1),
+    ],
+)
+def test_analyze_disarms_its_watchdog_on_every_exit(
+    tmp_path, monkeypatch, root, flags, expected
+) -> None:
+    """Neither successful returns nor raised errors leave a timer armed in the caller."""
+    source = tmp_path / "neighbours.py"
+    source.write_text(_NEIGHBOURS, encoding="utf-8")
+    disarmed = analyze_cli._watch(analyze_cli._ANALYSIS_TIMEOUT_SECONDS)
+    monkeypatch.setattr(analyze_cli, "_watch", lambda limit: disarmed)
+    assert not disarmed.is_set()
+
+    assert (
+        cli.main(["analyze", f"{source}:{root}", str(tmp_path / "report.txt"), *flags])
+        == expected
+    )
+    assert disarmed.is_set()
 
 
 def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(tmp_path, capsys) -> None:
