@@ -69,7 +69,7 @@ def test_invariant_gemm_operands_repeat_in_total_traffic() -> None:
 
     assert gmem is not None
     assert gmem.logical == TrafficBytes(read=27_262_976, write=16_777_216)
-    assert gmem.total == TrafficBytes(read=142_606_336, write=16_777_216)
+    assert gmem.total == TrafficBytes(read=18_824_036_352, write=2_214_592_512)
 
 
 _ROUNDING_N = 11_489

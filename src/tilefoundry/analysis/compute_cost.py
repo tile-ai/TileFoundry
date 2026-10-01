@@ -16,6 +16,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
+from .iteration_scope import Repeats
 from .metadata import Breakdown, ComputeCostMetadata, MemoryMetadata, breakdown, shares
 from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
@@ -139,7 +140,7 @@ def local_duration_ns(
 def _call_cost_record(
     expr: Call,
     locals_by_unit: dict[str, CostContext],
-    positions_by_unit: dict[str, int],
+    positions: int,
     whole: CostContext,
     asked: str | None = None,
 ) -> ComputeCostMetadata:
@@ -162,9 +163,8 @@ def _call_cost_record(
         flops_by_unit.append(unit_flops)
         other_ops_by_unit.append(unit_other_ops)
         if unit == (asked or next(iter(locals_by_unit))):
-            repeats = positions_by_unit[unit]
-            total_flops = tuple((name, value * repeats) for name, value in unit_flops)
-            total_other_ops = tuple((kind, value * repeats) for kind, value in unit_other_ops)
+            total_flops = tuple((name, value * positions) for name, value in unit_flops)
+            total_other_ops = tuple((kind, value * positions) for kind, value in unit_other_ops)
     return ComputeCostMetadata(
         topologies=tuple(locals_by_unit),
         flops=breakdown(
@@ -201,20 +201,26 @@ def _domain_values(held: Breakdown[int], domain: str) -> tuple[tuple[str, int], 
     return tuple((name, getattr(spread, domain)) for name, spread in held.kinds)
 
 
-def _accumulate(ctx: "ComputeCostContext", record: ComputeCostMetadata, trips: int) -> None:
-    _add(ctx.flops_logical, _domain_values(record.flops, "logical"), trips)
-    _add(ctx.flops, _domain_values(record.flops, "total"), trips)
-    _add(ctx.other_ops_logical, _domain_values(record.other_ops, "logical"), trips)
-    _add(ctx.other_ops, _domain_values(record.other_ops, "total"), trips)
+def _accumulate(ctx: "ComputeCostContext", record: ComputeCostMetadata, repeats: Repeats) -> None:
+    _add(ctx.flops_logical, _domain_values(record.flops, "logical"), repeats.varying_loop_trips)
+    _add(ctx.flops, _domain_values(record.flops, "total"), repeats.loop_trips)
+    _add(
+        ctx.other_ops_logical,
+        _domain_values(record.other_ops, "logical"),
+        repeats.varying_loop_trips,
+    )
+    _add(ctx.other_ops, _domain_values(record.other_ops, "total"), repeats.loop_trips)
     for index, unit in enumerate(record.topologies):
         held = ctx.by_unit.setdefault(unit, {"flops": {}, "other_ops": {}})
         _add(
-            held["flops"], ((name, spread.at(index)) for name, spread in record.flops.kinds), trips
+            held["flops"],
+            ((name, spread.at(index)) for name, spread in record.flops.kinds),
+            repeats.loop_trips,
         )
         _add(
             held["other_ops"],
             ((name, spread.at(index)) for name, spread in record.other_ops.kinds),
-            trips,
+            repeats.loop_trips,
         )
 
 
@@ -222,7 +228,6 @@ def _accumulate(ctx: "ComputeCostContext", record: ComputeCostMetadata, trips: i
 class ComputeCostContext(AnalyzeContext):
     locals_by_unit: dict[str, CostContext] = field(default_factory=dict)
     whole: CostContext | None = None
-    executing_positions: dict[str, int] = field(default_factory=dict)
     flops: dict[str, int] = field(default_factory=dict)
     flops_logical: dict[str, int] = field(default_factory=dict)
     other_ops: dict[str, int] = field(default_factory=dict)
@@ -239,11 +244,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
         child = next(item for item in ctx.current.children if item.owner is expr)
         for arg in expr.args:
             self.visit(arg, ctx)
-        positions = {unit: child.mesh_positions(unit) for unit in ctx.locals_by_unit}
-        self.visit(
-            expr.body,
-            replace(ctx, current=child, executing_positions=positions),
-        )
+        self.visit(expr.body, replace(ctx, current=child))
 
     def visit_LoopRegion(self, expr: LoopRegion, ctx: ComputeCostContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
@@ -262,18 +263,12 @@ class ComputeCostVisitor(ExprVisitor[None]):
         ctx.call_count[0] += 1
         if not ctx.locals_by_unit or ctx.whole is None:
             raise AnalysisError("compute-cost: visitor context is missing its cost context")
+        repeats = ctx.current.repeats_of(expr, ctx.topology_level)
         record = _call_cost_record(
-            expr, ctx.locals_by_unit, ctx.executing_positions, ctx.whole, ctx.topology_level
+            expr, ctx.locals_by_unit, repeats.mesh_positions, ctx.whole, ctx.topology_level
         )
         attach(expr, record)
-        owner = ctx.current if id(expr) in ctx.current.accesses["narrow"] else ctx.root
-        repeats = 1
-        cursor = owner
-        while cursor.parent is not None:
-            if cursor.is_variant(expr):
-                repeats *= max(1, cursor.trips())
-                ctx.precision[0] = ctx.precision[0].join(cursor.trips_precision)
-            cursor = cursor.parent
+        ctx.precision[0] = ctx.precision[0].join(repeats.trips_precision)
         _accumulate(ctx, record, repeats)
 
 
@@ -297,7 +292,6 @@ def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
         current=context.current,
         locals_by_unit=locals_by_unit,
         whole=CostContext(scope=scope),
-        executing_positions=dict.fromkeys(locals_by_unit, 1),
     )
     ComputeCostVisitor().visit(function.body, cost_context)
     if cost_context.call_count[0] > 0:

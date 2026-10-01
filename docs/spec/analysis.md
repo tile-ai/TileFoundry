@@ -186,9 +186,9 @@ class ComputeCostMetadata(IRMetadata):
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `topologies` | The effective Module topology levels, coarsest first. | No |
-| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written; the total then multiplies by the enclosing recomputation factor and the number of positions in its execution scope, and each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level. For a Function Call, take the callee's summed record and multiply by the call site's factor. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written for `logical`; each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level, and `total` is the selected unit's share times its executing mesh positions. Function accumulation multiplies `logical` by varying-loop trips, and `per_unit` and `total` by all enclosing loop trips. For a Function Call, take the callee's summed record and apply the call site's factors. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `other_ops` | The evaluator's non-floating-point operation counts (`integer`, `predicate`, `select`, `special`), totalled and shared the same way. These keys map directly to target one-unit operation-throughput keys; target-side service naming is unchanged. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `precision` | One-trip Call work is exact; Function work combines the precision of the trip counts actually used for recomputation. Coordinate-dependent maximum trip counts yield an upper bound. | No |
+| `precision` | One-trip Call work is exact; Function work combines the precision of every enclosing loop's trip count. Coordinate-dependent maximum trip counts yield an upper bound. | No |
 
 Requesting this family adds one summary line, prefixed by `# `: the Function's own
 record, stated exactly as a Call's is. The whole program's work is not a second
@@ -218,10 +218,11 @@ Each reported Call's JSON projection is under its `compute-cost` key:
     not the direct sum of the one-occurrence Call records.
   - An op with no registered cost evaluator MUST raise `AnalysisError`.
   - Missing program geometry MUST NOT be replaced with a target capacity.
-  - The enclosing recomputation factor MUST be the product of the authored loop
-    trip counts for loops whose induction variable or carried argument the Call
-    transitively reads. A loop-invariant Call MUST keep a factor of one. The
-    same rule MUST apply to primitive and Function Calls.
+  - `logical` MUST multiply only the authored loop trip counts for loops whose
+    induction variable or carried argument the Call transitively reads.
+    `per_unit` and `total` MUST multiply every enclosing loop's trip count,
+    because a Call written in a loop body executes on every iteration.
+    The same rule MUST apply to primitive and Function Calls.
   - Downstream families MUST read the already-scaled record and MUST NOT apply
     authored loop trip counts a second time.
 
@@ -321,6 +322,11 @@ anything; it does not say how much, and an Op with no relation fails closed.
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
 
 - constraints:
+  - A Call's traffic `total` MUST equal the counted unit's share multiplied by
+    the number of positions executing its mesh scope, as for `compute-cost`.
+    Storage MUST count the selected topology unit; communication MUST count
+    the topology unit named by its boundary. An undeclared communication
+    boundary MUST raise `AnalysisError`, rather than use whole movement.
   - One relation MUST answer for the whole program and for one unit, from one
     registration; every boundary MUST be held to the iterations its participant
     performs. Projecting an operand's Type is not enough, because a value nobody
@@ -1099,6 +1105,10 @@ model.
     end. Two positive-duration occurrences whose participant sets intersect
     MUST NOT overlap; disjoint sets MAY overlap, while a partial intersection
     serializes each whole occurrence rather than splitting it by participant.
+  - A Call's scheduled duration MUST multiply every enclosing authored loop's
+    trip count, including loops in which the Call is invariant. Work explicitly
+    defined outside a loop MUST keep its defining scope's repetition count.
+    Mesh positions MUST NOT multiply this duration: units execute in parallel.
   - A `LoopRegion` MUST be represented as one structured performance node. Its
     body is solved once, from the time the loop itself begins rather than from
     zero, so a body occurrence's reported `[start_ns, end_ns)` is the interval it

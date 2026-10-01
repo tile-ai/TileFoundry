@@ -34,10 +34,8 @@ from .loop_domain import induction_name, iteration_domain
 from .precision import AnalysisPrecision
 
 
-def _positions_at(mesh: Mesh, unit: str | None, topologies: tuple[Topology, ...]) -> int:
+def _positions_at(mesh: Mesh, unit: str, topologies: tuple[Topology, ...]) -> int:
     """Count mesh positions at the selected unit and all coarser topology levels."""
-    if unit is None:
-        return 1
     declared = {topology.name: index for index, topology in enumerate(topologies)}
     selected = declared[unit]
     stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout

@@ -16,26 +16,29 @@ _H200 = CudaTarget("nvidia.h200_sxm")
 _ONE_MIB = 1024 * 1024
 
 
-@module(entry="reuse", target=_H200, topologies=(Topology("cta", 1),))
+@module(entry="reuse", target=_H200, topologies=(Topology("cta", 4),))
 class InvariantReuse:
     """Expose an ``n``-invariant read without making it dead work.
 
     One ``x`` tile is ``BM * BK * sizeof(bf16) = 4 * 2 * 2 = 16 B``.
     The authored nest executes it ``(S/BM) * (N/BN) * (K/BK) = 2 * 3 * 2``
-    times, so its traffic is 192 B.  Its logical account omits the invariant
-    ``n`` replication and is ``2 * 2 * 16 = 64 B``.
+    times per CTA, so its traffic is 192 B per CTA and 768 B across four CTAs.
+    Its logical account omits the invariant ``n`` replication and is
+    ``2 * 2 * 16 = 64 B``. Addition after each load costs 8 flops,
+    giving 32 logical, 96 per CTA, and 384 total flops.
     """
 
     @func
     def reuse(
         x: Tensor[(S, K), "bf16"],
     ):
-        with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
+        with Mesh(("cta",), layout=(4,), names=("cta",)) as _cta:
             result = tf.zeros(Tensor[(BM, BK), "bf16", (BM, BK), "smem"])
             for m in tile(S, BM):  # noqa: F405
                 for n in tile(N, BN):  # noqa: F405
                     for k in tile(K, BK):  # noqa: F405
-                        result = tf.reshard(x[m, k], (BM, BK), "smem")
+                        loaded = tf.reshard(x[m, k], (BM, BK), "smem")
+                        result = loaded + loaded
             return result
 
 

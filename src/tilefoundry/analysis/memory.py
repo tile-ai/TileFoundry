@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 from tilefoundry.ir.core import (
@@ -56,7 +57,7 @@ from .footprint import (
     reuse_windows,
     wave_of,
 )
-from .iteration_scope import IterationScope, build_scopes, walk_scopes
+from .iteration_scope import IterationScope, Repeats, build_scopes, walk_scopes
 from .liveness import LiveInterval, Liveness, analyze_liveness, result_copies
 from .metadata import (
     Breakdown,
@@ -232,6 +233,7 @@ def call_traffic(
     whole: CostContext,
     locals_by_unit: "dict[str, CostContext]",
     scope: IterationScope | None = None,
+    counted: str | None = None,
 ) -> MemoryMetadata:
     """What one Call moves, whole and for one participant.
 
@@ -271,12 +273,16 @@ def call_traffic(
                 crossing_per_unit.setdefault(boundary, {})[unit] = moved
         if unit is None:
             operands = positional
+    positions = scope.mesh_positions if scope is not None else lambda _unit: 1
+    counted = counted or next(iter(locals_by_unit))
     return MemoryMetadata(
         topologies=tuple(locals_by_unit),
         traffic=Traffic(
-            storage=_occurrence_shares(storage_whole, storage_per_unit, tuple(locals_by_unit)),
+            storage=_occurrence_shares(
+                storage_whole, storage_per_unit, tuple(locals_by_unit), counted, positions
+            ),
             communication=_occurrence_shares(
-                crossing_whole, crossing_per_unit, tuple(locals_by_unit)
+                crossing_whole, crossing_per_unit, tuple(locals_by_unit), None, positions
             ),
         ),
         operands=operands,
@@ -300,28 +306,37 @@ def _occurrence_shares(
     whole: dict[str, TrafficBytes],
     per_unit: dict[str, dict[str, TrafficBytes]],
     topologies: tuple[str, ...],
+    counted: str | None,
+    positions: Callable[[str | None], int],
 ) -> "Breakdown[TrafficBytes]":
     """One entry per level, each carrying the whole and every level's share.
 
+    ``counted`` selects storage's unit; None counts each communication boundary
+    at its own topology. Total scales that share by its executing positions.
     The shares run in *topologies* order, so a level a move never reached --
     a unit inside the boundary it crossed -- reads as no bytes rather than as
     a missing entry.
     """
-    return Breakdown(
-        tuple(
+    entries = []
+    for name in sorted({*whole, *per_unit}):
+        unit = counted if counted is not None else name
+        if unit not in topologies:
+            raise AnalysisError(f"memory: counted topology {unit!r} is not declared")
+        moved = per_unit.get(name, {}).get(unit, TrafficBytes())
+        factor = positions(unit)
+        entries.append(
             (
                 name,
                 Spread(
                     logical=whole.get(name, TrafficBytes()),
-                    total=whole.get(name, TrafficBytes()),
+                    total=TrafficBytes(moved.read * factor, moved.write * factor),
                     per_unit=tuple(
-                        per_unit.get(name, {}).get(unit, TrafficBytes()) for unit in topologies
+                        per_unit.get(name, {}).get(level, TrafficBytes()) for level in topologies
                     ),
                 ),
             )
-            for name in sorted({*whole, *per_unit})
         )
-    )
+    return Breakdown(tuple(entries))
 
 
 @dataclass
@@ -368,8 +383,7 @@ def add_traffic(
     storage: _TrafficAccounts,
     communication: _TrafficAccounts,
     record: MemoryMetadata,
-    logical_trips: int,
-    total_trips: int,
+    repeats: Repeats,
 ) -> None:
     """Add one occurrence to each independent Function counting domain."""
     for into, stated in (
@@ -377,10 +391,10 @@ def add_traffic(
         (communication, record.traffic.communication),
     ):
         for name, spread in stated.kinds:
-            _accumulate(into.logical, name, spread.logical, logical_trips)
-            _accumulate(into.total, name, spread.total, total_trips)
+            _accumulate(into.logical, name, spread.logical, repeats.varying_loop_trips)
+            _accumulate(into.total, name, spread.total, repeats.loop_trips)
             for unit, moved in zip(record.topologies, spread.per_unit, strict=False):
-                _accumulate(into.per_unit.setdefault(name, {}), unit, moved, total_trips)
+                _accumulate(into.per_unit.setdefault(name, {}), unit, moved, repeats.loop_trips)
 
 
 def _allocation_intervals(
@@ -622,7 +636,7 @@ class MemoryVisitor(ExprVisitor[None]):
         if ctx.whole is None or not ctx.locals_by_unit:
             raise AnalysisError("memory: visitor context is missing cost contexts")
         moved = (
-            call_traffic(expr, ctx.whole, ctx.locals_by_unit, ctx.current)
+            call_traffic(expr, ctx.whole, ctx.locals_by_unit, ctx.current, ctx.topology_level)
             if recorded
             else MemoryMetadata()
         )
@@ -645,21 +659,12 @@ class MemoryVisitor(ExprVisitor[None]):
         attach(expr, moved)
         if not recorded:
             return
-        logical_repeats = 1
-        total_repeats = 1
-        cursor = ctx.current
-        while cursor.parent is not None:
-            trips = max(1, cursor.trips())
-            total_repeats *= trips
-            if cursor.is_variant(expr):
-                logical_repeats *= trips
-            cursor = cursor.parent
+        repeats = ctx.current.repeats_of(expr, ctx.topology_level)
         add_traffic(
             ctx.storage,
             ctx.communication,
             moved,
-            logical_repeats,
-            total_repeats,
+            repeats,
         )
 
 

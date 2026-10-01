@@ -510,8 +510,7 @@ def assert_internal_contract(
         if owner is not None:
             cursor = owner
             while cursor.parent is not None:
-                if cursor.is_variant(expr):
-                    available *= max(1, cursor.trips())
+                available *= cursor.trips()
                 cursor = cursor.parent
         assert 1 <= runs <= available and available % runs == 0, describe_expr(expr)
         trips = record.timeline.trips
@@ -578,7 +577,7 @@ def _assert_reported(case: ConcreteCase, report: dict) -> None:
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
         gmem = reported["traffic"]["storage"]["gmem"]
         assert gmem["logical"]["read"] + gmem["logical"]["write"] == 102_172_180
-        assert gmem["total"]["read"] + gmem["total"]["write"] == 106_862_100
+        assert gmem["total"]["read"] + gmem["total"]["write"] == 13_678_348_800
     over_bound: set[tuple[str, str]] = set()
     for peak in reported["peaks"]:
         memory_level = peak["memory_level"]

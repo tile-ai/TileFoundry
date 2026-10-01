@@ -96,12 +96,14 @@ class ComputeCostMetadata(IRMetadata):
 
 @dataclass(frozen=True)
 class Traffic:
-    """The bytes one occurrence or region moves in its two coordinates.
+    """Movement by storage level and crossed communication boundary.
 
-    ``storage`` says where the bytes are; ``communication`` says whose boundary
-    they crossed, which a storage level cannot answer: data handed from one
-    card to another is global memory at both ends and has still gone
-    somewhere. One movement is counted in both, because it spends both.
+    One movement is counted in both coordinates because it spends both.
+    A Call's ``logical`` is authored movement, ``per_unit`` is each unit's share,
+    and ``total`` multiplies the counted share by executing mesh positions.
+    Storage counts the selected unit; communication counts the boundary's unit.
+    Function accumulation multiplies logical movement by varying-loop trips
+    and the other domains by all enclosing trips.
     """
 
     storage: Breakdown[TrafficBytes] = Breakdown()
