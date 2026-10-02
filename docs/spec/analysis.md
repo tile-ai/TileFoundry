@@ -186,9 +186,9 @@ class ComputeCostMetadata(IRMetadata):
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `topologies` | The effective Module topology levels, coarsest first. | No |
-| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written; the total then multiplies by the enclosing recomputation factor and the number of positions in its execution scope, and each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level. For a Function Call, take the callee's summed record and multiply by the call site's factor. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written for `logical`; each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level, and `total` is the selected unit's share times its executing mesh positions. Function accumulation multiplies `logical` by varying-loop trips, and `per_unit` and `total` by all enclosing loop trips. For a Function Call, take the callee's summed record and apply the call site's factors. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `other_ops` | The evaluator's non-floating-point operation counts (`integer`, `predicate`, `select`, `special`), totalled and shared the same way. These keys map directly to target one-unit operation-throughput keys; target-side service naming is unchanged. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `precision` | One-trip Call work is exact; Function work combines the precision of the trip counts actually used for recomputation. Coordinate-dependent maximum trip counts yield an upper bound. | No |
+| `precision` | One-trip Call work is exact; Function work combines the precision of every enclosing loop's trip count. Coordinate-dependent maximum trip counts yield an upper bound. | No |
 
 Requesting this family adds one summary line, prefixed by `# `: the Function's own
 record, stated exactly as a Call's is. The whole program's work is not a second
@@ -218,10 +218,11 @@ Each reported Call's JSON projection is under its `compute-cost` key:
     not the direct sum of the one-occurrence Call records.
   - An op with no registered cost evaluator MUST raise `AnalysisError`.
   - Missing program geometry MUST NOT be replaced with a target capacity.
-  - The enclosing recomputation factor MUST be the product of the authored loop
-    trip counts for loops whose induction variable or carried argument the Call
-    transitively reads. A loop-invariant Call MUST keep a factor of one. The
-    same rule MUST apply to primitive and Function Calls.
+  - `logical` MUST multiply only the authored loop trip counts for loops whose
+    induction variable or carried argument the Call transitively reads.
+    `per_unit` and `total` MUST multiply every enclosing loop's trip count,
+    because a Call written in a loop body executes on every iteration.
+    The same rule MUST apply to primitive and Function Calls.
   - Downstream families MUST read the already-scaled record and MUST NOT apply
     authored loop trip counts a second time.
 
@@ -321,6 +322,11 @@ anything; it does not say how much, and an Op with no relation fails closed.
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
 
 - constraints:
+  - A Call's traffic `total` MUST equal the counted unit's share multiplied by
+    the number of positions executing its mesh scope, as for `compute-cost`.
+    Storage MUST count the selected topology unit; communication MUST count
+    the topology unit named by its boundary. An undeclared communication
+    boundary MUST raise `AnalysisError`, rather than use whole movement.
   - One relation MUST answer for the whole program and for one unit, from one
     registration; every boundary MUST be held to the iterations its participant
     performs. Projecting an operand's Type is not enough, because a value nobody
@@ -381,10 +387,10 @@ class Footprint:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `Footprint.buffers` | Group reached address sets by source-buffer identity, union each group, count its elements, and pack the source dtype's bits into whole bytes. Each buffer has one memory-level kind whose `Spread` states the same count in `logical` and `total` and has no `per_unit` entries. | `MemoryHierarchyFacts` selects the level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
+| `Footprint.buffers` | Group reached address sets by source-buffer identity, union each group, count its elements, and pack the source dtype's bits into whole bytes. Each buffer has one memory-level kind whose `Spread` states one window's unique bytes in `logical` and the executed windows' bytes in `total`, with no `per_unit` entries. | `MemoryHierarchyFacts` selects the level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
 | `Footprint.precision` | Combine each contributing boundary's direction: omitted boundaries or uncountable amounts are lower bounds, counted widened accesses are upper bounds, and refused boundaries have unknown direction. | No |
-| `MemoryMetadata.footprint` | The unique addresses this occurrence's own boundaries reach at every enclosing loop's first iteration over one wave, or `None` when no wave can be stated. | As above |
-| `RegionMemoryMetadata.footprint` | The union of every Call's reached addresses below the Function, deduplicated per buffer before counting, or `None` when no wave can be stated. | As above |
+| `MemoryMetadata.footprint` | The unique addresses this occurrence's own boundaries reach at every enclosing loop's first iteration over one wave. `total` multiplies this window by the number of waves in the enclosing mesh; absent when no wave can be stated. | As above |
+| `RegionMemoryMetadata.footprint` | The union of every Call's reached addresses below the Function in `logical`. For `total`, group Calls by their enclosing loop/mesh chain, union each group per buffer, multiply by its waves and every enclosing loop's trips, and sum the groups. Absent when no wave can be stated. | As above |
 
 - constraints:
   - Overlapping ranges into one buffer MUST be unioned before they are counted,
@@ -410,9 +416,14 @@ class Footprint:
   - A program declaring more units than the target holds MUST NOT have them all
     counted as concurrent. The wave is the first `wave_units` positions in the
     mesh's own linear order, taken through `Mesh.layout`'s strides.
-  - Each buffer's count is one number. It MUST be stated in every counting
-    domain a `Spread` carries, because a union over units divides back into no
-    per-unit share.
+  - `logical` MUST retain the single-window union. `total` MUST count that
+    union once per executed window, with no `per_unit` entries. The wave count
+    MUST be `ceil(mesh_positions(topology_level) / wave_units)`; a partial last
+    wave MUST count as a full wave. Function accumulation MUST union Calls
+    sharing an enclosing loop/mesh chain before multiplying by that group's
+    waves and every enclosing loop's trips, then sum the groups.
+  - Reuse, cache capacity checks, and the printed `footprint` field MUST use
+    the single-window `logical` bytes.
   - `Footprint.precision` MUST preserve direction throughout address merging
     and counting. A missing boundary MUST contribute `LOWER_BOUND`; a counted
     widened relation MUST contribute `UPPER_BOUND`; a refused boundary MUST
@@ -758,9 +769,13 @@ receives a `memory` annotation; `operands` is emitted only when asked for
 memory traffic=<memory-level>:r<bytes>/w<bytes>@logical,r<bytes>/w<bytes>@total,r<bytes>/w<bytes>@<topology>[,...] footprint=<buffer>:<bytes>[;<buffer>:<bytes>] footprint-precision=<exact|upper_bound|lower_bound|unknown> [operands=<position>:r<bytes>/w<bytes>[;<position>:...]]
 ```
 
-In the printed `footprint` field, a buffer uses the same value label as a
-lifetime binding and that label may itself contain `:` (for example,
-`v0:57:1.00KB`). The byte count is the formatted value after the last colon.
+In the printed `footprint` field, a buffer's value label may itself contain `:`
+(for example, `v0:57:1.00KB`). The byte count is the formatted value after the
+last colon.
+A root that is a declared parameter keeps its own name; otherwise use the
+first capturing parameter, in program order, that resolves to that root;
+otherwise use the existing value label. Duplicate-label suffixes remain
+unchanged.
 
 Missing optional conclusions omit their whole printed field. Call and Function
 JSON projections are both under `memory`. The Function's full projection is
@@ -818,8 +833,8 @@ class RooflineMetadata(IRMetadata):
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `compute_ns` | For each recorded dtype with a published rate, round `flops * 1e9 / rate` up to ns and sum the dtype times. A Function uses its summed flops, not a sum of per-Call times. | `ThroughputFacts.peak_flops_per_second` |
-| `memory_ns` | Add reads and writes at `bandwidth_level`, multiply by `1e9 / memory_bandwidth_bytes_per_second`, and round up to ns; zero when no bandwidth is published or no bytes move. A Function uses its summed traffic, not a sum of per-Call times. | `ThroughputFacts.bandwidth_level` and `memory_bandwidth_bytes_per_second` |
-| `ideal_ns` | Maximum of `compute_ns` and `memory_ns`; one ns when the occurrence records nonzero flops or nonzero `bandwidth_level` traffic and neither published rate yields a bound, otherwise zero. Traffic at any other level is stated and does not earn a bound: no rate was published for it, so none is owed. | Through the two times |
+| `memory_ns` | Sum footprint `total` bytes at `bandwidth_level`, multiply by `1e9 / memory_bandwidth_bytes_per_second`, and round up to ns; zero when no bandwidth is published or no bytes are counted. When the footprint is absent or counts another level, use traffic `total` reads plus writes at `bandwidth_level`. A Function uses its accumulated footprint or traffic, not a sum of per-Call times. | `ThroughputFacts.bandwidth_level` and `memory_bandwidth_bytes_per_second` |
+| `ideal_ns` | Maximum of `compute_ns` and `memory_ns`; one ns when the occurrence records nonzero flops or nonzero priced `bandwidth_level` bytes and neither published rate yields a bound, otherwise zero. Bytes at any other level are stated and does not earn a bound: no rate was published for it, so none is owed. | Through the two times |
 | `bound_by` | `none` for no bound, which includes an occurrence whose only movement is at a level with no published bandwidth, `balanced` for equal nonzero times, `memory` when memory is greater, `compute` when compute is greater, and `unrated` for the one-ns bound owed by work this prices whose rate is missing. | Through the two times |
 
 The family reads this target projection:
@@ -910,8 +925,16 @@ its full form as defined in that family's section.
     for an unstated dtype, kind or level. Performance MUST reject non-zero work
     of that dtype, kind or level and MUST NOT substitute the whole-device rate
     or another kind's rate.
-  - `bandwidth_level` MUST select the traffic level divided by the published
-    bandwidth rather than summing traffic across levels.
+  - Roofline MUST price footprint `total` at `bandwidth_level` without applying
+    any further repetition factor. An absent footprint or one counting another
+    level MUST fall back to traffic `total` reads plus writes at that level. A
+    footprint with omitted boundaries MUST still be used as its stated lower
+    bound. No other memory level may enter the bandwidth calculation.
+  - Footprint pricing assumes ideal reuse within one wave and repeats bytes
+    across windows. Counting a partial last wave as full is a pessimistic
+    approximation; deduplication within one wave is optimistic. Below the
+    device's parallel topology level, each parent instance's windows are
+    counted separately, overestimating bytes when parents share data.
   - Performance local duration MUST divide one unit's share of
     `ComputeCostMetadata.flops` by `unit_flops`, of `service` by `unit_ops`, and
     the `bandwidth_level` entry of `MemoryMetadata.traffic.storage` by
@@ -1099,6 +1122,10 @@ model.
     end. Two positive-duration occurrences whose participant sets intersect
     MUST NOT overlap; disjoint sets MAY overlap, while a partial intersection
     serializes each whole occurrence rather than splitting it by participant.
+  - A Call's scheduled duration MUST multiply every enclosing authored loop's
+    trip count, including loops in which the Call is invariant. Work explicitly
+    defined outside a loop MUST keep its defining scope's repetition count.
+    Mesh positions MUST NOT multiply this duration: units execute in parallel.
   - A `LoopRegion` MUST be represented as one structured performance node. Its
     body is solved once, from the time the loop itself begins rather than from
     zero, so a body occurrence's reported `[start_ns, end_ns)` is the interval it

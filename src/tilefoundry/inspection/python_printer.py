@@ -47,15 +47,17 @@ from tilefoundry.ir.hir.specialize import (
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
     ShardLayout,
     Split,
 )
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
@@ -110,9 +112,11 @@ class HirPrinter(PythonPrinter):
             return self.reference(self._param_alias[id(expr)])
         projection = _region_projection(expr)
         if isinstance(projection, LoopRegion):
-            return self._names[id(projection.carried_args[_projection_index(expr)])]
+            return self._names[id(projection.params[_projection_index(expr)])]
         if isinstance(expr, LoopRegion):
-            carried = tuple(self._names[id(carry)] for carry in expr.carried_args)
+            carried = tuple(
+                self._names[id(carry)] for carry in expr.params[: len(expr.yield_values)]
+            )
             return carried[0] if len(carried) == 1 else "(" + ", ".join(carried) + ")"
         if isinstance(projection, MeshRegion):
             return self.reference(projection.body.elements[_projection_index(expr)])
@@ -128,8 +132,11 @@ class HirPrinter(PythonPrinter):
         moved = self._moved_window(start, size, stride)
         if moved is None:
             return repr(start.value) if isinstance(start, Constant) else self.reference(start)
-        window, offset = moved
-        return _moved_window_ref(self.reference(window), offset)
+        window, offset, scale = moved
+        name = self.reference(window)
+        if scale is not None:
+            name = f"{name} * {scale}"
+        return _moved_window_ref(name, offset)
 
     def visit_program_call(self, expr: Call, ctx=None) -> str:
         """Render one HIR call after expression-level dispatch selected it."""
@@ -604,14 +611,20 @@ def _emit_def(
     _order: list[Expr] = list(iter_exprs(fn.body, _seen))
     for p in fn.params:
         _order.extend(iter_exprs(p, _seen))
-    for scope in tuple(expr for expr in _order if isinstance(expr, MeshRegion)):
+    region_types = (LoopRegion, MeshRegion)
+    for scope in tuple(expr for expr in _order if isinstance(expr, region_types)):
         for param in scope.params:
             _order.extend(iter_exprs(param, _seen))
     _param_alias = {
         id(param): arg
-        for scope in tuple(expr for expr in _order if isinstance(expr, MeshRegion))
-        for param, arg in zip(scope.params, scope.args, strict=True)
+        for scope in tuple(expr for expr in _order if isinstance(expr, region_types))
+        for param, arg in scope.captures()
     }
+
+    def _capture_root(value):
+        while id(value) in _param_alias:
+            value = _param_alias[id(value)]
+        return value
 
     _op_names_set: set[str] = set()
     for expr in _order:
@@ -633,6 +646,27 @@ def _emit_def(
         and len(expr.type.shape) < len(expr.args[0].type.shape)
     }
 
+    def _window_base(start, stride):
+        """Recognize an induction window, optionally scaled and shifted by integers."""
+        window, offset = window_base(start)
+        window = _capture_root(window)
+        while isinstance(window, Call) and isinstance(window.target, (DimAdd, DimSub)):
+            left, right = window.args
+            shift = static_dim_value(normalize_dim(_capture_root(right)))
+            if shift is None:
+                break
+            offset += shift if isinstance(window.target, DimAdd) else -shift
+            window = _capture_root(left)
+        if isinstance(window, Var) and stride == 1:
+            return window, offset, None
+        if isinstance(window, Call) and isinstance(window.target, DimMul):
+            for value, coefficient in (window.args, window.args[::-1]):
+                root = _capture_root(value)
+                scale = static_dim_value(_capture_root(coefficient))
+                if isinstance(root, Var) and scale is not None and scale == stride:
+                    return root, offset, scale
+        return None
+
     _grid_internal_ids: set[int] = set()
     _mesh_region_internal_ids: set[int] = set()
     _nested_grid_ids: set[int] = set()
@@ -646,7 +680,9 @@ def _emit_def(
             and len(candidate.args) == 2
             and isinstance(candidate.args[1], Tuple)
             and any(
-                window_base(start)[0] is expr.induction_var and size == expr.step and stride == 1
+                (window := _window_base(start, stride)) is not None
+                and window[0] is expr.induction_var
+                and size == expr.step
                 for start, size, stride in zip(
                     candidate.args[1].elements,
                     candidate.target.sizes,
@@ -656,9 +692,14 @@ def _emit_def(
             for candidate in _order
         ):
             _tile_window_steps[id(expr.induction_var)] = expr.step
-        for carry, init, value in zip(expr.carried_args, expr.init_args, expr.yield_values):
+        for carry, init, value in zip(
+            expr.params[: len(expr.yield_values)],
+            expr.args[: len(expr.yield_values)],
+            expr.yield_values,
+        ):
             _forced_names[id(carry)] = _sanitize_name(carry.name)
-            _forced_names[id(init)] = _sanitize_name(carry.name)
+            if not isinstance(init, Var):
+                _forced_names[id(init)] = _sanitize_name(carry.name)
         for _ in iter_exprs(expr.body, _grid_internal_ids):
             pass
         for value in expr.yield_values:
@@ -676,7 +717,7 @@ def _emit_def(
     for expr in _order:
         if not isinstance(expr, LoopRegion) or id(expr) in _nested_grid_ids:
             continue
-        for init in expr.init_args:
+        for init in expr.args:
             for _ in iter_exprs(init, _root_grid_init_ids):
                 pass
     _grid_internal_ids.difference_update(_root_grid_init_ids)
@@ -688,9 +729,9 @@ def _emit_def(
 
     def _moved_window(start, size, stride):
         """The tile window and offset *start* moves it by, else ``None``."""
-        window, offset = window_base(start)
-        if isinstance(window, Var) and stride == 1 and _tile_window_steps.get(id(window)) == size:
-            return window, offset
+        window = _window_base(start, stride)
+        if window is not None and _tile_window_steps.get(id(window[0])) == size:
+            return window
         return None
 
     _inlined_start_ids = {
@@ -704,6 +745,18 @@ def _emit_def(
             expr.args[1].elements, expr.target.sizes, expr.target.strides
         )
         if _moved_window(start, size, stride) is not None
+    }
+    _window_start_call_ids = {
+        id(node)
+        for expr in _order
+        if isinstance(expr, Call) and isinstance(expr.target, Slice)
+        and isinstance(expr.args[1], Tuple)
+        for start, size, stride in zip(
+            expr.args[1].elements, expr.target.sizes, expr.target.strides
+        )
+        if _moved_window(start, size, stride) is not None
+        for node in iter_exprs(start, set())
+        if isinstance(node, Call)
     }
     _tuple_index_ids: set[int] = set()
     for expr in _order:
@@ -721,7 +774,11 @@ def _emit_def(
             name = _forced_names[key]
         elif isinstance(expr, Var):
             name = _sanitize_name(expr.name)
-        elif isinstance(expr, Call) and (authored_name := binding_name(expr)):
+        elif (
+            isinstance(expr, Call)
+            and key not in _window_start_call_ids
+            and (authored_name := binding_name(expr))
+        ):
             name = _sanitize_name(authored_name)
         else:
             name = f"v{_counter[0]}"
@@ -745,7 +802,7 @@ def _emit_def(
             _assign_name(expr)
     for expr in _order:
         if isinstance(expr, LoopRegion):
-            for carry in expr.carried_args:
+            for carry in expr.params[: len(expr.yield_values)]:
                 _assign_name(carry)
     printer.bind_def(_names, _param_alias, child_entries, _moved_window)
 
@@ -845,9 +902,15 @@ def _emit_def(
         key = id(region)
         if key in printed:
             return
-        for init in region.init_args:
+        for init in region.args:
             _emit_expr(init, level)
-        for carry in region.carried_args:
+        for carry, init in zip(
+            region.params[: len(region.yield_values)],
+            region.args[: len(region.yield_values)],
+            strict=True,
+        ):
+            if isinstance(init, Var) and _names[id(carry)] != printer.reference(init):
+                lines.append(f"{level}{_names[id(carry)]} = {printer.reference(init)}")
             printed.add(id(carry))
         extent = printer.visit(region.extent, ctx)
         step = printer.visit(region.step, ctx)
@@ -871,7 +934,7 @@ def _emit_def(
         _emit_expr(region.body, inner)
         for value in region.yield_values:
             _emit_expr(value, inner)
-        for carry, value in zip(region.carried_args, region.yield_values):
+        for carry, value in zip(region.params[: len(region.yield_values)], region.yield_values):
             lines.append(f"{inner}{_names[id(carry)]} = {printer.reference(value)}")
 
     def _emit_mesh_region(region: MeshRegion, level: str, *, terminal: bool = False) -> None:
@@ -954,7 +1017,9 @@ def _emit_def(
         if isinstance(fn.body, Tuple):
             lines.append(f"{indent}return {printer.tuple_reference(fn.body.elements)}")
         elif isinstance(fn.body, LoopRegion):
-            values = tuple(_names[id(carry)] for carry in fn.body.carried_args)
+            values = tuple(
+                _names[id(carry)] for carry in fn.body.params[: len(fn.body.yield_values)]
+            )
             result = values[0] if len(values) == 1 else "(" + ", ".join(values) + ")"
             lines.append(f"{indent}return {result}")
         else:

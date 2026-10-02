@@ -71,9 +71,19 @@ body and expires when the statement ends. When a body binds names that are read
 after the `with`, each escaping name is rebound to the enclosing `MeshRegion`
 result (a tuple region with `TupleGetItem` projections when several names
 escape); names used only inside the body remain local to the scope. Names read
-inside a region but bound outside it are captured as `MeshRegion.args`, with a
-fresh `MeshRegion.params` binding used by the body. Capture is performed one
-region boundary at a time, so nested regions pass a value through each door.
+inside either a MeshRegion or LoopRegion but bound outside it are captured as
+`args`, with a fresh `params` binding used by the body. LoopRegion places
+carry slots first and excludes its own induction and carry names from captures.
+Capture is performed one region boundary at a time, so nested regions pass a
+value through each door.
+When a captured name denotes a tile window `slice(iv, iv + step, 1)`, the parser
+captures the induction Expr and reconstructs the window with its new parameter.
+Tile windows support `window ± c` (translate start/stop), `window * c`, and `c * window`
+(scale start, stop, and stride, preserving the element count). Division,
+floor division, remainder, and operations between two windows MUST raise
+`ParseError`; a Python slice MUST NOT enter the HIR expression graph.
+Non-window index arithmetic MUST reject `/` with a diagnostic directing the
+author to integer division `//`, rather than returning a float.
 
 A loop body holds `with Mesh(...)` statements, and the loop carries what one
 binds. Because the body repeats, a name the `with` reads on its way to binding

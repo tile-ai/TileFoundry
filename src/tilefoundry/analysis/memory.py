@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 from tilefoundry.ir.core import (
@@ -56,7 +57,7 @@ from .footprint import (
     reuse_windows,
     wave_of,
 )
-from .iteration_scope import IterationScope, build_scopes, walk_scopes
+from .iteration_scope import IterationScope, Repeats, build_scopes, walk_scopes
 from .liveness import LiveInterval, Liveness, analyze_liveness, result_copies
 from .metadata import (
     Breakdown,
@@ -232,6 +233,7 @@ def call_traffic(
     whole: CostContext,
     locals_by_unit: "dict[str, CostContext]",
     scope: IterationScope | None = None,
+    counted: str | None = None,
 ) -> MemoryMetadata:
     """What one Call moves, whole and for one participant.
 
@@ -271,12 +273,16 @@ def call_traffic(
                 crossing_per_unit.setdefault(boundary, {})[unit] = moved
         if unit is None:
             operands = positional
+    positions = scope.mesh_positions if scope is not None else lambda _unit: 1
+    counted = counted or next(iter(locals_by_unit))
     return MemoryMetadata(
         topologies=tuple(locals_by_unit),
         traffic=Traffic(
-            storage=_occurrence_shares(storage_whole, storage_per_unit, tuple(locals_by_unit)),
+            storage=_occurrence_shares(
+                storage_whole, storage_per_unit, tuple(locals_by_unit), counted, positions
+            ),
             communication=_occurrence_shares(
-                crossing_whole, crossing_per_unit, tuple(locals_by_unit)
+                crossing_whole, crossing_per_unit, tuple(locals_by_unit), None, positions
             ),
         ),
         operands=operands,
@@ -300,28 +306,37 @@ def _occurrence_shares(
     whole: dict[str, TrafficBytes],
     per_unit: dict[str, dict[str, TrafficBytes]],
     topologies: tuple[str, ...],
+    counted: str | None,
+    positions: Callable[[str | None], int],
 ) -> "Breakdown[TrafficBytes]":
     """One entry per level, each carrying the whole and every level's share.
 
+    ``counted`` selects storage's unit; None counts each communication boundary
+    at its own topology. Total scales that share by its executing positions.
     The shares run in *topologies* order, so a level a move never reached --
     a unit inside the boundary it crossed -- reads as no bytes rather than as
     a missing entry.
     """
-    return Breakdown(
-        tuple(
+    entries = []
+    for name in sorted({*whole, *per_unit}):
+        unit = counted if counted is not None else name
+        if unit not in topologies:
+            raise AnalysisError(f"memory: counted topology {unit!r} is not declared")
+        moved = per_unit.get(name, {}).get(unit, TrafficBytes())
+        factor = positions(unit)
+        entries.append(
             (
                 name,
                 Spread(
                     logical=whole.get(name, TrafficBytes()),
-                    total=whole.get(name, TrafficBytes()),
+                    total=TrafficBytes(moved.read * factor, moved.write * factor),
                     per_unit=tuple(
-                        per_unit.get(name, {}).get(unit, TrafficBytes()) for unit in topologies
+                        per_unit.get(name, {}).get(level, TrafficBytes()) for level in topologies
                     ),
                 ),
             )
-            for name in sorted({*whole, *per_unit})
         )
-    )
+    return Breakdown(tuple(entries))
 
 
 @dataclass
@@ -368,8 +383,7 @@ def add_traffic(
     storage: _TrafficAccounts,
     communication: _TrafficAccounts,
     record: MemoryMetadata,
-    logical_trips: int,
-    total_trips: int,
+    repeats: Repeats,
 ) -> None:
     """Add one occurrence to each independent Function counting domain."""
     for into, stated in (
@@ -377,10 +391,10 @@ def add_traffic(
         (communication, record.traffic.communication),
     ):
         for name, spread in stated.kinds:
-            _accumulate(into.logical, name, spread.logical, logical_trips)
-            _accumulate(into.total, name, spread.total, total_trips)
+            _accumulate(into.logical, name, spread.logical, repeats.varying_loop_trips)
+            _accumulate(into.total, name, spread.total, repeats.loop_trips)
             for unit, moved in zip(record.topologies, spread.per_unit, strict=False):
-                _accumulate(into.per_unit.setdefault(name, {}), unit, moved, total_trips)
+                _accumulate(into.per_unit.setdefault(name, {}), unit, moved, repeats.loop_trips)
 
 
 def _allocation_intervals(
@@ -394,7 +408,7 @@ def _allocation_intervals(
         if isinstance(value, (Call, Constant, LoopRegion)) and owner is value:
             resident.add(id(value))
         if isinstance(value, LoopRegion):
-            resident.update(id(phi) for phi in value.carried_args)
+            resident.update(id(phi) for phi in value.params[: len(value.yield_values)])
     return tuple(interval for interval in liveness.intervals if id(interval.value) in resident)
 
 
@@ -556,8 +570,12 @@ class MemoryContext(AnalyzeContext):
     communication: _TrafficAccounts = field(default_factory=_TrafficAccounts)
     memory_level: str | None = None
     wave: tuple[int, int] | None = None
-    reached: list[ReachedAddresses] = field(default_factory=list)
-    call_reached: list[tuple[Call, tuple[ReachedAddresses, ...]]] = field(default_factory=list)
+    reached_by_scope: dict[
+        IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]
+    ] = field(default_factory=dict)
+    call_reached: list[tuple[IterationScope, Call, tuple[ReachedAddresses, ...]]] = field(
+        default_factory=list
+    )
     footprint_available: bool = False
 
 
@@ -568,11 +586,11 @@ def _footprint_inputs(
     wave: tuple[int, int],
     whole: CostContext,
 ) -> tuple[
-    list[ReachedAddresses],
+    dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]],
     bool,
 ]:
     """Account for Calls with no recorded boundaries."""
-    refused: list[ReachedAddresses] = []
+    refused: dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]] = {}
     available = True
     wave_units, declared_units = wave
     for scope in walk_scopes(root):
@@ -590,7 +608,7 @@ def _footprint_inputs(
             if reached is None:
                 available = False
             else:
-                refused.extend(reached)
+                refused.setdefault(scope, []).append((call, reached))
 
     return refused, available
 
@@ -607,7 +625,7 @@ class MemoryVisitor(ExprVisitor[None]):
     def visit_LoopRegion(self, expr: LoopRegion, ctx: MemoryContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
         inner = replace(ctx, current=child)
-        for operand in expr.init_args:
+        for operand in expr.args:
             self.visit(operand, ctx)
         self.visit(expr.body, inner)
         for operand in expr.yield_values:
@@ -622,7 +640,7 @@ class MemoryVisitor(ExprVisitor[None]):
         if ctx.whole is None or not ctx.locals_by_unit:
             raise AnalysisError("memory: visitor context is missing cost contexts")
         moved = (
-            call_traffic(expr, ctx.whole, ctx.locals_by_unit, ctx.current)
+            call_traffic(expr, ctx.whole, ctx.locals_by_unit, ctx.current, ctx.topology_level)
             if recorded
             else MemoryMetadata()
         )
@@ -638,28 +656,19 @@ class MemoryVisitor(ExprVisitor[None]):
                 window=ctx.current.depth - 1,
             )
             if reached is not None:
-                ctx.reached.extend(reached)
-                ctx.call_reached.append((expr, reached))
+                ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, reached))
+                ctx.call_reached.append((ctx.current, expr, reached))
             else:
                 ctx.footprint_available = False
         attach(expr, moved)
         if not recorded:
             return
-        logical_repeats = 1
-        total_repeats = 1
-        cursor = ctx.current
-        while cursor.parent is not None:
-            trips = max(1, cursor.trips())
-            total_repeats *= trips
-            if cursor.is_variant(expr):
-                logical_repeats *= trips
-            cursor = cursor.parent
+        repeats = ctx.current.repeats_of(expr, ctx.topology_level)
         add_traffic(
             ctx.storage,
             ctx.communication,
             moved,
-            logical_repeats,
-            total_repeats,
+            repeats,
         )
 
 
@@ -684,7 +693,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     cache = cached_level(facts)
     wave = wave_of(module, context.target, topology_level) if cache is not None else None
     memory_level = cache[1] if cache is not None and wave is not None else None
-    refused_reached: list[ReachedAddresses] = []
+    refused_reached: dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]] = {}
     footprint_available = False
     if memory_level is not None and wave is not None:
         (
@@ -718,16 +727,29 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         locals_by_unit=locals_by_unit,
         memory_level=memory_level,
         wave=wave,
-        reached=refused_reached,
+        reached_by_scope=refused_reached,
         footprint_available=footprint_available,
     )
     MemoryVisitor().visit(function.body, memory_context)
-    merged_reached = merged(memory_context.reached)
+    merged_reached = merged(
+        item
+        for calls in memory_context.reached_by_scope.values()
+        for _call, reached in calls
+        for item in reached
+    )
     distinct: dict[int, Expr] = {}
     for item in merged_reached:
         if item.reached is not None:
             distinct.setdefault(id(item.buffer), item.buffer)
-    footprint_labels = dict(zip(distinct, value_labels(distinct.values()), strict=True))
+    captured_names: dict[int, Expr] = {}
+    for scope in walk_scopes(context.root):
+        for param, _argument in scope.captures:
+            captured_names.setdefault(id(scope.capture_root(param)), param)
+    label_values = (
+        value if getattr(value, "name", None) else captured_names.get(key, value)
+        for key, value in distinct.items()
+    )
+    footprint_labels = dict(zip(distinct, value_labels(label_values), strict=True))
     liveness = analyze_liveness(function)
     owners = storage_owners(context.root, liveness)
     reuse = (
@@ -743,8 +765,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         if memory_level is not None and wave is not None
         else ()
     )
-    if memory_level is not None:
-        for call, reached in memory_context.call_reached:
+    if memory_level is not None and wave is not None:
+        for scope, call, reached in memory_context.call_reached:
+            repeats = scope.repeats_of(call, topology_level)
             moved = get_metadata(call, MemoryMetadata)
             if moved is None:
                 raise AnalysisError("memory: Call footprint has no movement record")
@@ -756,6 +779,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                         merged(reached),
                         memory_level=memory_level,
                         labels=footprint_labels,
+                        windows=-(-repeats.mesh_positions // wave[0]),
                     ),
                 ),
             )
@@ -932,10 +956,38 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             memory_level=memory_level,
             labels=footprint_labels,
         )
+        totals: dict[tuple[str, str], int] = {}
+        for scope, calls in memory_context.reached_by_scope.items():
+            repeats = scope.repeats_of(calls[0][0], topology_level)
+            counted = footprint_of(
+                merged(item for _call, reached in calls for item in reached),
+                memory_level=memory_level,
+                labels=footprint_labels,
+                windows=-(-repeats.mesh_positions // wave[0]) * repeats.loop_trips,
+            )
+            for buffer, breakdown in counted.buffers:
+                for level, spread in breakdown.kinds:
+                    key = (buffer, level)
+                    totals[key] = totals.get(key, 0) + spread.total
+        footprint = replace(
+            footprint,
+            buffers=tuple(
+                (
+                    buffer,
+                    Breakdown(
+                        tuple(
+                            (level, replace(spread, total=totals[(buffer, level)]))
+                            for level, spread in breakdown.kinds
+                        )
+                    ),
+                )
+                for buffer, breakdown in footprint.buffers
+            ),
+        )
         cache_level, _backing_level, cache_capacity_bytes = cache
         wave_units, declared_units = wave
         used = sum(
-            spread.total
+            spread.logical
             for _buffer, breakdown in footprint.buffers
             for _level, spread in breakdown.kinds
         )

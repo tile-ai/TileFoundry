@@ -100,7 +100,7 @@ def _walk_ir(expr, seen=None):
         for element in expr.elements:
             yield from _walk_ir(element, seen)
     elif isinstance(expr, LoopRegion):
-        for arg in expr.init_args:
+        for arg in expr.args:
             yield from _walk_ir(arg, seen)
         yield from _walk_ir(expr.body, seen)
         for value in expr.yield_values:
@@ -118,7 +118,7 @@ def test_static_fixture_has_one_fixed_online_softmax_region() -> None:
     assert len(regions) == 1
     region = regions[0]
     assert (region.start, region.extent, region.step) == (0, 4096, 1)
-    assert {value.name for value in region.carried_args} == {"m", "l", "o"}
+    assert {value.name for value in region.params[: len(region.yield_values)]} == {"m", "l", "o"}
     assert static_online_attend.resolve_target() == CudaTarget("nvidia.h200_sxm")
     assert tuple(
         (topology.name, topology.size) for topology in static_online_attend.effective_topologies()

@@ -152,7 +152,7 @@ def is_non_conflicting(
     while cursor is not None:
         loop = cursor.owner
         if isinstance(loop, LoopRegion):
-            for slot, carried in enumerate(loop.carried_args):
+            for slot, carried in enumerate(loop.params[: len(loop.yield_values)]):
                 if (
                     owners[id(carried)] is operand_owner
                     and slot < len(loop.yield_values)
@@ -438,13 +438,16 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
     def visit_LoopRegion(self, node: LoopRegion, ctx: AllocationModel) -> None:
         child = next(item for item in ctx.current.children if item.owner is node)
         inner = replace(ctx, current=child)
-        for operand in node.init_args:
+        for operand in node.args:
             self.visit(operand, ctx)
         self.visit(node.body, inner)
         for operand in node.yield_values:
             self.visit(operand, inner)
         for initial, carried, yielded in zip(
-            node.init_args, node.carried_args, node.yield_values, strict=True
+            node.args[: len(node.yield_values)],
+            node.params[: len(node.yield_values)],
+            node.yield_values,
+            strict=True,
         ):
             self.tie(carried, initial, ctx)
             self.tie(yielded, carried, inner)

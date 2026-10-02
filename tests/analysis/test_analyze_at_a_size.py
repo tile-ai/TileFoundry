@@ -44,6 +44,7 @@ from tilefoundry.cli.source import load_namespace
 from tilefoundry.ir.core import Call, describe_expr, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
 from tilefoundry.ir.hir.specialize import (
     origin_of,
     residual_dims,
@@ -77,9 +78,9 @@ API_INVENTORY = frozenset(
 CLI_INVENTORY = [param for param in INVENTORY if param.id not in API_INVENTORY]
 assert API_INVENTORY <= {case.id for case in CASES}
 
-_GQA_MATERIAL_TRANSPOSE_GMEM = 284_672
-_PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 278_528
-_QWEN_LOOP_INVARIANT_VALUES_GMEM = 145_374_224
+_GQA_MATERIAL_TRANSPOSE_GMEM = 282_624
+_PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 245_760
+_QWEN_LOOP_INVARIANT_VALUES_GMEM = 154_289_168
 _MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING = 5_245_008
 _MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_195_376
 _MHA_SHORTER_GMEM_WITH_28_BYTES_ALIGNMENT_PADDING = 2_098_224
@@ -87,24 +88,33 @@ _MHA_SINGLE_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 8_392_752
 
 KNOWN_OVER_BOUND = {
     (
+        "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]",
+        "gmem",
+    ): (
+        "LEFTOVERS #14: first-solution allocator exceeds the aligned live-byte upper "
+        "bound once loop-invariant captures stay live across the loop"
+    ),
+    (
+        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]",
+        "gmem",
+    ): (
+        "LEFTOVERS #14: first-solution allocator exceeds the aligned live-byte upper "
+        "bound once loop-invariant captures stay live across the loop"
+    ),
+    (
+        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]",
+        "gmem",
+    ): (
+        "LEFTOVERS #14: first-solution allocator exceeds the aligned live-byte upper "
+        "bound once loop-invariant captures stay live across the loop"
+    ),
+    (
         "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]",
         "smem",
     ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
     (
         "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]",
         "gmem",
-    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
-    (
-        "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]",
-        "smem",
-    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
-    (
-        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=0,seq=512]",
-        "smem",
-    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
-    (
-        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=512]",
-        "smem",
     ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
 }
 
@@ -279,32 +289,32 @@ EXPECTED_MEMORY_PEAKS = {
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]": {
         "gmem": _QWEN_LOOP_INVARIANT_VALUES_GMEM,
-        "rmem": 1_132,
+        "rmem": 1_036,
         "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]": {
-        "gmem": 163_193_872,
-        "rmem": 198_144,
+        "gmem": 171_582_480,
+        "rmem": 132_608,
         "smem": 131_072,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=0,seq=512]": {
-        "gmem": 5_304_603_152,
-        "rmem": 263_680,
+        "gmem": 5_269_475_856,
+        "rmem": 132_608,
         "smem": 131_072,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]": {
-        "gmem": 4_602_883_616,
-        "rmem": 1_644,
+        "gmem": 4_611_717_152,
+        "rmem": 1_036,
         "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]": {
-        "gmem": 4_602_883_616,
-        "rmem": 1_644,
+        "gmem": 4_611_717_152,
+        "rmem": 1_036,
         "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=512]": {
-        "gmem": 5_304_603_152,
-        "rmem": 263_680,
+        "gmem": 5_269_475_856,
+        "rmem": 132_608,
         "smem": 131_072,
     },
     "region_boundaries.RegionBoundaries.helper[static]": {"gmem": 64, "rmem": 32},
@@ -502,8 +512,7 @@ def assert_internal_contract(
         if owner is not None:
             cursor = owner
             while cursor.parent is not None:
-                if cursor.is_variant(expr):
-                    available *= max(1, cursor.trips())
+                available *= cursor.trips()
                 cursor = cursor.parent
         assert 1 <= runs <= available and available % runs == 0, describe_expr(expr)
         trips = record.timeline.trips
@@ -567,6 +576,10 @@ def _assert_reported(case: ConcreteCase, report: dict) -> None:
     assert set(report["executed"]) == set(FAMILIES)
     assert_reported_contract(report)
     reported = report["function_records"]["memory"]
+    if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
+        gmem = reported["traffic"]["storage"]["gmem"]
+        assert gmem["logical"]["read"] + gmem["logical"]["write"] == 102_172_180
+        assert gmem["total"]["read"] + gmem["total"]["write"] == 13_678_348_800
     over_bound: set[tuple[str, str]] = set()
     for peak in reported["peaks"]:
         memory_level = peak["memory_level"]
@@ -659,6 +672,15 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
     _assert_reported(case, json.loads(render_json(report)))
     scopes = tuple(walk_scopes(build_scopes(result.module, result.function)))
     assert_internal_contract(result, scopes)
+    if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
+        rms_scopes = [
+            scope
+            for scope in scopes
+            for call, _ in scope.accesses["narrow"].values()
+            if isinstance(call.target, RMSNorm)
+        ]
+        assert len(rms_scopes) == 4
+        assert all(not scope.enclosing_loops() for scope in rms_scopes)
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]":
         cache_writes = [
             access

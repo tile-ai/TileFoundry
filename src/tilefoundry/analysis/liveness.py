@@ -127,7 +127,7 @@ class LivenessVisitor(ExprVisitor[None]):
                 bound_ids.update(id(parameter) for parameter in value.params)
             elif isinstance(value, LoopRegion):
                 bound_ids.add(id(value.induction_var))
-                bound_ids.update(id(phi) for phi in value.carried_args)
+                bound_ids.update(id(phi) for phi in value.params)
         free_vars = tuple(
             value for value in values if isinstance(value, Var) and id(value) not in bound_ids
         )
@@ -197,7 +197,7 @@ class LivenessVisitor(ExprVisitor[None]):
         parameter_definition = self.next_event()
         for parameter in region.params:
             self.define(parameter, parameter_definition)
-        self.bindings.update(zip((id(param) for param in region.params), region.args, strict=True))
+        self.bindings.update((id(param), arg) for param, arg in region.captures())
 
         self.visit(region.body, ctx)
         body_use = self.next_event()
@@ -207,17 +207,18 @@ class LivenessVisitor(ExprVisitor[None]):
 
     def visit_LoopRegion(self, region: LoopRegion, ctx=None) -> None:
         """Represent entry, one body iteration, backedge, and exit events."""
-        for initial in region.init_args:
+        for initial in region.args:
             self.visit(initial, ctx)
         entry_use = self.next_event()
-        for initial in region.init_args:
+        for initial in region.args:
             self.use(initial, entry_use)
 
         phi_definition = self.next_event()
         self.define(region.induction_var, phi_definition)
-        for phi in region.carried_args:
+        for phi in region.params:
             self.define(phi, phi_definition)
 
+        self.bindings.update((id(param), arg) for param, arg in region.captures())
         self.loop_entries.append((phi_definition, set(), set()))
         self.visit(region.body, ctx)
         for yielded in region.yield_values:
@@ -236,8 +237,9 @@ class LivenessVisitor(ExprVisitor[None]):
             self.loop_entries[-1][2].update(staged)
 
         exit_use = self.next_event()
-        for source in region.carried_args or (region.body,):
-            self.use(source, exit_use, synthetic=bool(region.carried_args))
+        carried = region.params[: len(region.yield_values)]
+        for source in carried or (region.body,):
+            self.use(source, exit_use, synthetic=bool(carried))
         self.define(region, self.next_event())
 
 

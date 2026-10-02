@@ -38,20 +38,31 @@ from tests.fixtures.placed.hand_checked import (
 )
 from tests.fixtures.placed.persistent_gemm_flat import PersistentGemmFlat
 from tests.fixtures.placed.persistent_gemm_tiled import PersistentGemmTiled
-from tilefoundry.analysis import AnalysisPrecision, analyze
+from tilefoundry.analysis import (
+    AnalysisPrecision,
+    ComputeCostMetadata,
+    MemoryMetadata,
+    PerformanceMetadata,
+    analyze,
+)
 from tilefoundry.analysis import footprint as footprint_analysis
 from tilefoundry.analysis import memory as memory_analysis
+from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
+from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
 from tilefoundry.analysis.report import report_data
+from tilefoundry.ir.core import get_metadata
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import DType
-from tilefoundry.target import CudaTarget
+from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
 
 
-def _report(module) -> dict:
+def _report(module, *, analysis=("memory",)) -> dict:
     result = analyze(
         module,
         module.entry_function(),
-        analysis=("memory",),
+        analysis=analysis,
     )
     data = report_data(
         module=result.module,
@@ -69,12 +80,12 @@ def _memory_record(module) -> dict:
 
 
 def _footprint_bytes(memory: dict, name: str) -> int:
-    return memory["footprint"]["buffers"][name]["gmem"]["total"]
+    return memory["footprint"]["buffers"][name]["gmem"]["logical"]
 
 
 def _working_set_bytes(memory: dict) -> int:
     return sum(
-        level["total"]
+        level["logical"]
         for levels in memory["footprint"]["buffers"].values()
         for level in levels.values()
     )
@@ -162,13 +173,56 @@ def test_tuple_output_boundaries_add_instead_of_union(
 
 
 def test_invariant_reuse_matches_the_written_arithmetic() -> None:
-    memory = _memory_record(InvariantReuse)
+    result = analyze(
+        InvariantReuse,
+        InvariantReuse.entry_function(),
+        analysis=("compute-cost", "memory", "roofline", "performance"),
+    )
+    data = report_data(
+        module=result.module,
+        function=result.function,
+        analyses=result.analyses,
+        topology_level=result.topology_level,
+        executed=result.executed,
+        metadata_types=result.metadata_types,
+    )
+    memory = data["function_records"]["memory"]
     traffic = memory["traffic"]["storage"]["gmem"]
     assert traffic["logical"] == {"read": 64, "write": 0}
-    assert traffic["total"] == {"read": 192, "write": 0}
+    assert traffic["total"] == {"read": 768, "write": 0}
     assert traffic["per_unit"] == [{"read": 192, "write": 0}]
     assert _footprint_bytes(memory, "x") == 16
+    footprint_total = memory["footprint"]["buffers"]["x"]["gmem"]["total"]
+    assert footprint_total == 192
+    assert data["function_records"]["roofline"]["memory_ns"] == -(
+        -(footprint_total * 1_000_000_000) // 4_800_000_000_000
+    )
     assert N // BN == 3
+    assert data["function_records"]["compute-cost"]["flops"]["bf16"] == {
+        "logical": 32, "total": 384, "per_unit": [96],
+    }
+    scopes = tuple(walk_scopes(build_scopes(result.module, result.function)))
+    loaded = next(
+        call
+        for scope in scopes
+        for call, _ in scope.accesses["narrow"].values()
+        if isinstance(call.target, Reshard)
+    )
+    n_scope = next(
+        scope for scope in scopes
+        if isinstance(scope.owner, LoopRegion) and scope.owner.induction_var.name == "n"
+    )
+    assert not n_scope.is_variant(loaded)
+    target = result.module.resolve_target()
+    duration = local_duration_ns(
+        get_metadata(loaded, ComputeCostMetadata),
+        target.get_facts(ThroughputFacts),
+        target.get_facts(PerformanceServiceFacts, result.topology_level),
+        moved=get_metadata(loaded, MemoryMetadata),
+        level=result.topology_level,
+    )
+    timeline = get_metadata(loaded, PerformanceMetadata).timeline
+    assert (timeline.end_ns - timeline.start_ns) * timeline.trips == duration * 12
 
 
 def test_overlapping_reads_are_unioned_not_summed() -> None:
@@ -200,26 +254,43 @@ def test_packed_dtype_rounds_up_to_whole_bytes() -> None:
 
 
 def test_wave_truncation_counts_only_the_resident_ctas() -> None:
-    resident_data = _report(WaveTruncation)
+    resident_data = _report(WaveTruncation, analysis=("memory", "roofline"))
     resident = resident_data["function_records"]["memory"]
     wide_target = CudaTarget(
         replace(WaveTruncation.target.device, sm_count=256),
         architecture=WaveTruncation.target.architecture,
     )
-    all_declared_data = _report(replace(WaveTruncation, target=wide_target))
+    all_declared_data = _report(
+        replace(WaveTruncation, target=wide_target), analysis=("memory", "roofline")
+    )
     all_declared = all_declared_data["function_records"]["memory"]
 
     assert resident_data["wave"] == {"counted": 132, "declared": 256}
     assert _footprint_bytes(resident, "x") == 132 * 4 * 2
     assert all_declared_data["wave"] == {"counted": 256, "declared": 256}
+    assert resident["traffic"]["storage"]["gmem"]["total"] == {"read": 2048, "write": 0}
+    assert all_declared["traffic"]["storage"]["gmem"]["total"] == {"read": 2048, "write": 0}
     assert _footprint_bytes(all_declared, "x") == 256 * 4 * 2
+    assert resident["footprint"]["buffers"]["x"]["gmem"]["total"] == 2112
+    assert all_declared["footprint"]["buffers"]["x"]["gmem"]["total"] == 2048
+    assert resident_data["function_records"]["roofline"]["memory_ns"] == -(
+        -(2112 * 1_000_000_000) // 4_800_000_000_000
+    )
 
 
 def test_truncated_wave_keeps_reuse_from_participating_boundaries() -> None:
-    data = _report(TruncatedWaveReuse)
+    data = _report(TruncatedWaveReuse, analysis=("memory", "roofline"))
     memory = data["function_records"]["memory"]
 
     assert data["wave"] == {"counted": 132, "declared": 256}
+    assert memory["traffic"]["storage"]["gmem"]["total"] == {"read": 8192, "write": 0}
+    assert _working_set_bytes(memory) == 32
+    assert sum(
+        levels["gmem"]["total"] for levels in memory["footprint"]["buffers"].values()
+    ) == 64
+    assert data["function_records"]["roofline"]["memory_ns"] == -(
+        -(64 * 1_000_000_000) // 4_800_000_000_000
+    )
     assert _reuse_conclusions(memory) == [
         {
             "buffer": "<value 0>",
@@ -395,7 +466,7 @@ def test_persistent_flat_states_its_precision() -> None:
     assert _footprint_bytes(memory, "b") == 66 * 32 * 64 * 2
     assert _working_set_bytes(memory) == 2_473_984
     assert sorted(
-        levels["gmem"]["total"] for levels in store["memory"]["footprint"]["buffers"].values()
+        levels["gmem"]["logical"] for levels in store["memory"]["footprint"]["buffers"].values()
     ) == [64 * 64 * 4, 132 * 64 * 64 * 4]
 
 
@@ -421,7 +492,7 @@ def test_two_waves_share_traffic_but_differ_in_working_set() -> None:
         for memory in (naive, reuse_a, reuse_b)
     }
 
-    assert total_reads == {3_244_032}
+    assert total_reads == {428_212_224}
     assert _working_set_bytes(naive) == (WAVE_BM + WAVE_C * WAVE_BN) * WAVE_BK * 2
     assert _working_set_bytes(reuse_a) != _working_set_bytes(reuse_b)
 

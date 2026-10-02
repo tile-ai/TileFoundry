@@ -343,8 +343,8 @@ class Lowering(ExprVisitor[Expr]):
             if following is not None:
                 value = following
                 continue
-            if isinstance(value, LoopRegion) and len(value.init_args) == 1:
-                value = value.init_args[0]
+            if isinstance(value, LoopRegion) and len(value.yield_values) == 1:
+                value = value.args[0]
                 continue
             return value
         raise LoweringError("output seed resolution found a cyclic value")
@@ -461,7 +461,7 @@ class Lowering(ExprVisitor[Expr]):
         known = self._memo.get(id(expr))
         return expr if known is None else known[1]
 
-    def _bind_region_args(self, region: MeshRegion, cursor: _Cursor) -> None:
+    def _bind_region_args(self, region: LoopRegion | MeshRegion, cursor: _Cursor) -> None:
         self.bindings.update(zip(map(id, region.params), region.args, strict=True))
         values = tuple(self.visit(arg, cursor) for arg in region.args)
         for param, value in zip(region.params, values, strict=True):
@@ -518,12 +518,8 @@ class Lowering(ExprVisitor[Expr]):
         return result
 
     def visit_LoopRegion(self, loop: LoopRegion, cursor: _Cursor) -> Expr:
-        self.bindings.update(zip(map(id, loop.carried_args), loop.init_args, strict=True))
-        init = tuple(self.visit(value, cursor) for value in loop.init_args)
-        if len(init) != len(loop.carried_args):
-            raise LoweringError("loop carry arity changed during lowering")
-        for var, value in zip(loop.carried_args, init, strict=True):
-            self._memo[id(var)] = (var, value)
+        self._bind_region_args(loop, cursor)
+        init = tuple(self._known(param) for param in loop.params[: len(loop.yield_values)])
         induction = Var(loop.induction_var.name, type=_INDEX)
         self._memo[id(loop.induction_var)] = (loop.induction_var, induction)
         inner = _Cursor()

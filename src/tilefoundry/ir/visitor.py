@@ -54,7 +54,7 @@ def expr_children(expr: Expr) -> tuple[Expr, ...]:
     """Enumerate direct child Expr nodes of `expr`.
 
     Binding-site Var fields (e.g. `LoopRegion.induction_var` /
-    `LoopRegion.carried_args`) are intentionally excluded — rewriting
+    `LoopRegion.params`) are intentionally excluded — rewriting
     them with a generic ExprCloner could produce type-illegal nodes (a
     non-Var in a `tuple[Var, ...]` slot). A mutator that wants to rename
     or substitute bindings must override `visit_LoopRegion` and rebuild
@@ -67,8 +67,8 @@ def expr_children(expr: Expr) -> tuple[Expr, ...]:
             return args
         case MeshRegion(args=args, body=body):
             return (*args, body)
-        case LoopRegion(init_args=init_args, body=body, yield_values=yield_values):
-            return (*init_args, body, *yield_values)
+        case LoopRegion(args=args, body=body, yield_values=yield_values):
+            return (*args, body, *yield_values)
         case HirFunction(body=body):
             return (body,)
         case Tuple(elements=elements):
@@ -90,12 +90,12 @@ def _rebuild_expr(expr: Expr, new_children: tuple[Expr, ...]) -> Expr:
         case MeshRegion(args=args):
             n_args = len(args)
             return replace(expr, args=new_children[:n_args], body=new_children[n_args])
-        case LoopRegion(init_args=init_args):
-            n_init = len(init_args)
+        case LoopRegion(args=args):
+            n_init = len(args)
             init = new_children[:n_init]
             body = new_children[n_init]
             yields = new_children[n_init + 1 :]
-            return replace(expr, init_args=init, body=body, yield_values=yields)
+            return replace(expr, args=init, body=body, yield_values=yields)
         case HirFunction():
             (body,) = new_children
             return replace(expr, body=body)
@@ -410,18 +410,17 @@ class BindingSubstitutionCloner(ExprCloner):
         )
 
     def visit_LoopRegion(self, region: LoopRegion, ctx: Mapping[int, Expr]) -> LoopRegion:
-        init_args = tuple(self.visit(item, ctx) for item in region.init_args)
+        args = tuple(self.visit(item, ctx) for item in region.args)
         induction_var = replace(
             region.induction_var,
             metadata=self._cloned_metadata(region.induction_var),
         )
-        carried_args = tuple(
-            replace(item, metadata=self._cloned_metadata(item))
-            for item in region.carried_args
+        params = tuple(
+            replace(item, metadata=self._cloned_metadata(item)) for item in region.params
         )
         inner = dict(ctx)
         inner[id(region.induction_var)] = induction_var
-        inner.update((id(old), new) for old, new in zip(region.carried_args, carried_args))
+        inner.update((id(old), new) for old, new in zip(region.params, params))
         return replace(
             region,
             start=(
@@ -440,8 +439,8 @@ class BindingSubstitutionCloner(ExprCloner):
                 else region.step
             ),
             induction_var=induction_var,
-            carried_args=carried_args,
-            init_args=init_args,
+            params=params,
+            args=args,
             body=self.visit(region.body, inner),
             yield_values=tuple(self.visit(item, inner) for item in region.yield_values),
             metadata=self._cloned_metadata(region),

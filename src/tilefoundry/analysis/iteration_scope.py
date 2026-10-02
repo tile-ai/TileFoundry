@@ -7,14 +7,16 @@ from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr
+from tilefoundry.ir.core import Call, Expr, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.isl_interop import dim_range
-from tilefoundry.ir.types import Mesh
+from tilefoundry.ir.types import Mesh, Topology
 from tilefoundry.ir.types.dim import DimSub, simplify_dim
+from tilefoundry.ir.types.layout import ComposedLayout, get, size
+from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.access_relation import (
@@ -31,6 +33,35 @@ from .loop_domain import induction_name, iteration_domain
 from .precision import AnalysisPrecision
 
 
+def _positions_at(mesh: Mesh, unit: str, topologies: tuple[Topology, ...]) -> int:
+    """Count mesh positions at the selected unit and all coarser topology levels."""
+    declared = {topology.name: index for index, topology in enumerate(topologies)}
+    selected = declared[unit]
+    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+    positions = 1
+    for index, topology in enumerate(mesh.topologies):
+        if declared[topology.name] > selected:
+            continue
+        count = size(get(stated, index))
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise AnalysisError(
+                f"mesh level {topology.name!r} needs positive static "
+                f"extents, got {count!r}"
+            )
+        positions *= count
+    return positions
+
+
+@dataclass(frozen=True)
+class Repeats:
+    """Separate variant trips, all trips, executing positions, and trip precision."""
+
+    varying_loop_trips: int
+    loop_trips: int
+    mesh_positions: int
+    trips_precision: AnalysisPrecision
+
+
 @dataclass(eq=False)
 class IterationScope:
     """One Function, authored loop, or mesh region, with all accesses below it."""
@@ -40,6 +71,7 @@ class IterationScope:
     children: tuple[IterationScope, ...]
     depth: int
     domain: isl.set
+    captures: tuple[tuple[Var, Expr], ...]
     domain_params: dict[str, object] = field(default_factory=dict)
     accesses: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
     outputs: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
@@ -48,6 +80,7 @@ class IterationScope:
         default_factory=dict
     )
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
+    topologies: tuple[Topology, ...] = ()
     _variance: dict[int, frozenset[int]] = field(default_factory=dict, repr=False)
 
     def projected_relations(self, call: Call, ctx: TypeInferContext) -> AccessRelations:
@@ -71,6 +104,17 @@ class IterationScope:
         local = projected(stated if stated is not None else relations_of(call, ctx), call, ctx)
         holder.projections[key] = (call, local)
         return local
+
+    def capture_root(self, value: Expr) -> Expr:
+        """Resolve invariant parameters through their enclosing region captures."""
+        cursor = self
+        while cursor is not None:
+            for param, argument in cursor.captures:
+                if value is param:
+                    value = argument
+                    break
+            cursor = cursor.parent
+        return value
 
     def is_variant(self, value: Expr) -> bool:
         """Whether *value* depends on this loop's induction or carry values."""
@@ -100,6 +144,36 @@ class IterationScope:
                 return cursor.owner.mesh
             cursor = cursor.parent
         return None
+
+    def mesh_positions(self, unit: str | None) -> int:
+        """Count positions in the composed enclosing meshes at a topology unit."""
+        meshes = []
+        root = self
+        cursor: IterationScope | None = self
+        while cursor is not None:
+            if isinstance(cursor.owner, MeshRegion):
+                meshes.append(cursor.owner.mesh)
+            root = cursor
+            cursor = cursor.parent
+        if not meshes or unit is None:
+            return 1
+        meshes.reverse()
+        return _positions_at(make_mesh(*meshes), unit, root.topologies)
+
+    def repeats_of(self, call: Call, unit: str | None) -> Repeats:
+        """Return this Call's loop and mesh multiplicities in the current scope."""
+        varying = loops = 1
+        precision = AnalysisPrecision.EXACT
+        cursor: IterationScope | None = self
+        while cursor is not None:
+            if isinstance(cursor.owner, LoopRegion):
+                trips = cursor.trips()
+                loops *= trips
+                if cursor.is_variant(call):
+                    varying *= trips
+                precision = precision.join(cursor.trips_precision)
+            cursor = cursor.parent
+        return Repeats(varying, loops, self.mesh_positions(unit), precision)
 
     def _counted(self) -> tuple[int, AnalysisPrecision]:
         """This scope's iteration count relative to its parent, and how exact it is.
@@ -172,6 +246,7 @@ class ScopeBuilder:
         views: Sequence[str] = ("narrow", "device"),
     ) -> None:
         self.graph = graph
+        self.topologies = module.effective_topologies()
         self.views = tuple(views)
         self.type_ctx = TypeInferContext(scope=FunctionScope(module, graph))
         self.seeds: dict[int, IterationScope]
@@ -240,7 +315,7 @@ class ScopeBuilder:
             return
         self.seen.add(id(expr))
         if isinstance(expr, LoopRegion):
-            for operand in expr.init_args:
+            for operand in expr.args:
                 self._visit(operand, scope)
             domain, domain_params = iteration_domain(expr, scope)
             child = IterationScope(
@@ -249,13 +324,17 @@ class ScopeBuilder:
                 children=(),
                 depth=scope.depth + 1,
                 domain=domain,
+                captures=expr.captures(),
                 domain_params=domain_params,
                 accesses=self._empty_accesses(),
             )
             scope.children = (*scope.children, child)
             self.seeds[id(expr.induction_var)] = child
-            for carried in expr.carried_args:
+            for carried in expr.params[: len(expr.yield_values)]:
                 self.seeds[id(carried)] = child
+            for param, argument in child.captures:
+                self._record_variance(param, (argument,))
+                self.seen.add(id(param))
             self._visit(expr.body, child)
             for operand in expr.yield_values:
                 self._visit(operand, child)
@@ -270,11 +349,12 @@ class ScopeBuilder:
                 children=(),
                 depth=scope.depth,
                 domain=scope.domain,
+                captures=expr.captures(),
                 domain_params=scope.domain_params,
                 accesses=self._empty_accesses(),
             )
             scope.children = (*scope.children, child)
-            for param, argument in zip(expr.params, expr.args, strict=True):
+            for param, argument in child.captures:
                 self._record_variance(param, (argument,))
                 self.seen.add(id(param))
             self._visit(expr.body, child)
@@ -298,8 +378,10 @@ class ScopeBuilder:
             children=(),
             depth=0,
             domain=domain,
+            captures=(),
             domain_params=domain_params,
             accesses=self._empty_accesses(),
+            topologies=self.topologies,
         )
         for param in self.graph.params:
             self._visit(param, root)
@@ -328,6 +410,7 @@ def walk_scopes(root: IterationScope) -> Iterator[IterationScope]:
 
 __all__ = [
     "IterationScope",
+    "Repeats",
     "ScopeBuilder",
     "build_scopes",
     "walk_scopes",

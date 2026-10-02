@@ -193,7 +193,12 @@ class EvaluatorVisitor(ExprVisitor):
             raise EvalError(f"evaluator: LoopRegion {what}: {exc}") from None
 
     def visit_LoopRegion(self, region: LoopRegion, ctx: EvaluateContext) -> Value:
-        init_values = tuple(self.visit(init, ctx) for init in region.init_args)
+        init_values = tuple(self.visit(init, ctx) for init in region.args)
+        k = len(region.yield_values)
+        captured = {
+            id(param): (param, value)
+            for param, value in zip(region.params[k:], init_values[k:], strict=True)
+        }
         iv = region.induction_var
         iv_dtype = to_torch_dtype(iv.type.dtype)
         start = self._resolve_loop_field(region.start, "start", ctx)
@@ -209,7 +214,7 @@ class EvaluatorVisitor(ExprVisitor):
 
         def iter_memo(i: int, carried) -> dict:
             memo = {
-                **self._memo,
+                **captured,
                 id(iv): (
                     iv,
                     TensorValue(
@@ -218,11 +223,11 @@ class EvaluatorVisitor(ExprVisitor):
                     ),
                 ),
             }
-            for phi, value in zip(region.carried_args, carried):
+            for phi, value in zip(region.params[:k], carried, strict=True):
                 memo[id(phi)] = (phi, value)
             return memo
 
-        if not region.carried_args:
+        if not k:
             last = None
             for i in indices:
                 last = EvaluatorVisitor(memo=iter_memo(i, ())).visit(region.body, ctx)
@@ -230,7 +235,7 @@ class EvaluatorVisitor(ExprVisitor):
                 raise EvalError("evaluator: LoopRegion has an empty iteration domain")
             return last
 
-        carried = list(init_values)
+        carried = list(init_values[:k])
         for i in indices:
             sub = EvaluatorVisitor(memo=iter_memo(i, carried))
             carried = [sub.visit(y, ctx) for y in region.yield_values]

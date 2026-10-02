@@ -12,6 +12,7 @@ from typing import Iterable
 from tilefoundry.ir.core import Expr, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import canonical_specialization_signature
@@ -50,7 +51,7 @@ from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.tensor_type import TupleType
 from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.ir.visitor import ExprVisitor, collect_exprs
+from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
@@ -59,15 +60,18 @@ from tilefoundry.visitor_registry.contexts import VerifyContext
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 
 
-def _verify_isolated(region: MeshRegion, ctx=None) -> None:
+def verify_region_isolated(region: LoopRegion | MeshRegion, ctx=None) -> None:
     """Ensure a region body reaches captured values only through its params."""
     if len(region.params) != len(region.args):
         message = f"region has {len(region.params)} params but {len(region.args)} args"
         if ctx is not None:
             ctx.error(region, message)
-        raise VerifyError(f"MeshRegion: {message}")
+        raise VerifyError(f"{type(region).__name__}: {message}")
     arg_ids = {id(arg) for arg in region.args}
-    leaked = arg_ids.intersection(id(expr) for expr in collect_exprs(region.body))
+    roots = (
+        (region.body, *region.yield_values) if isinstance(region, LoopRegion) else (region.body,)
+    )
+    leaked = arg_ids.intersection(id(expr) for root in roots for expr in collect_exprs(root))
     if not leaked:
         return
     message = (
@@ -75,7 +79,7 @@ def _verify_isolated(region: MeshRegion, ctx=None) -> None:
     )
     if ctx is not None:
         ctx.error(region, message)
-    raise VerifyError(f"MeshRegion: {message}")
+    raise VerifyError(f"{type(region).__name__}: {message}")
 
 
 def verify_function(fn: Function, *, module=None) -> None:
@@ -278,11 +282,13 @@ def _verify_signature_dim_vars(fn: Function) -> None:
 
 
 class _StmtRejectingVisitor(ExprVisitor[None]):
-    def visit_MeshRegion(self, expr: MeshRegion, ctx=None) -> None:
-        _verify_isolated(expr)
-        for arg in expr.args:
-            self.visit(arg, ctx)
-        self.visit(expr.body, ctx)
+    def _visit_region(self, expr: LoopRegion | MeshRegion, ctx=None) -> None:
+        verify_region_isolated(expr)
+        for operand in expr_children(expr):
+            self.visit(operand, ctx)
+
+    visit_LoopRegion = _visit_region
+    visit_MeshRegion = _visit_region
 
     def visit_Call(self, expr: Call, ctx=None) -> None:
         for arg in expr.args:
@@ -883,4 +889,5 @@ __all__ = [
     "verify_module",
     "verify_operands",
     "verify_prim_function",
+    "verify_region_isolated",
 ]

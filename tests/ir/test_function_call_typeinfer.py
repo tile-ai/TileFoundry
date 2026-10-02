@@ -74,12 +74,13 @@ def test_carrying_loop_propagates_split():
     init = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(x, x))
     phi = Var(type=param_type, name="acc")
     iv = Var(type=make_tensor_type((), DType.i64), name="i")
-    body = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(phi, x))
+    captured_x = Var(type=param_type, name="x")
+    body = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(phi, captured_x))
     grid = LoopRegion(
         type=param_type,
         induction_var=iv,
-        carried_args=(phi,),
-        init_args=(init,),
+        params=(phi, captured_x),
+        args=(init, x),
         body=body,
         yield_values=(body,),
         extent=8,

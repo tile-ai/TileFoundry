@@ -54,7 +54,7 @@ class PerformanceVisitor(ExprVisitor[None]):
     def visit_LoopRegion(self, expr: LoopRegion, ctx: PerformanceContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
         inner = replace(ctx, current=child)
-        for operand in expr.init_args:
+        for operand in expr.args:
             self.visit(operand, ctx)
         self.visit(expr.body, inner)
         for operand in expr.yield_values:
@@ -113,12 +113,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     for scope, call, duration in performance_context.occurrences:
         if not duration:
             continue
-        trips = 1
-        owner = scope
-        while owner.parent is not None:
-            if owner.is_variant(call):
-                trips *= max(1, owner.trips())
-            owner = owner.parent
+        trips = scope.repeats_of(call, context.topology_level).loop_trips
         scheduled = duration * trips
         serialize_boundary = (
             (scope.depth >= 4 and getattr(call.type, "shape", ()) != ())

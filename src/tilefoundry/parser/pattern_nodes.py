@@ -2867,7 +2867,7 @@ class SliceEndpointBinaryPattern(ElementPattern):
                     PredicatePattern(
                         "dim-op",
                         lambda op, context: (
-                            type(op) in {ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod}
+                            type(op) in {ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod}
                         ),
                     ),
                 ),
@@ -2878,6 +2878,7 @@ class SliceEndpointBinaryPattern(ElementPattern):
                         ast.Add: runtime.DimAdd,
                         ast.Sub: runtime.DimSub,
                         ast.Mult: runtime.DimMul,
+                        ast.Div: None,
                         ast.FloorDiv: runtime.DimFloorDiv,
                         ast.Mod: runtime.DimMod,
                     }[type(node.op)],
@@ -2899,20 +2900,33 @@ class SliceEndpointBinaryPattern(ElementPattern):
     def construct(match, children, context):
         left = children["left"]
         right = children["right"]
-        if (
-            isinstance(left, slice)
-            and type(match.node.op) in {ast.Add, ast.Sub}
-            and isinstance(right, (int, runtime.Expr))
-        ):
-            offset = right
-            if type(match.node.op) is ast.Sub:
-                offset = runtime.simplify_dim(runtime.DimMul, (-1, offset))
+        op = type(match.node.op)
+        if op is ast.Mult and isinstance(right, slice) and not isinstance(left, slice):
+            left, right = right, left
+        if isinstance(left, slice) or isinstance(right, slice):
+            if isinstance(right, slice) or op not in {ast.Add, ast.Sub, ast.Mult}:
+                raise ParseError.from_node(
+                    match.node, context, "tile windows only support ± c and * c"
+                )
             try:
-                start = runtime.simplify_dim(runtime.DimAdd, (left.start, offset))
-                stop = runtime.simplify_dim(runtime.DimAdd, (left.stop, offset))
+                if op is ast.Mult:
+                    start = runtime.simplify_dim(runtime.DimMul, (left.start, right))
+                    stop = runtime.simplify_dim(runtime.DimMul, (left.stop, right))
+                    step = runtime.simplify_dim(runtime.DimMul, (left.step, right))
+                else:
+                    offset = (
+                        right
+                        if op is ast.Add
+                        else runtime.simplify_dim(runtime.DimMul, (-1, right))
+                    )
+                    start = runtime.simplify_dim(runtime.DimAdd, (left.start, offset))
+                    stop = runtime.simplify_dim(runtime.DimAdd, (left.stop, offset))
+                    step = left.step
             except (TypeError, ValueError, ZeroDivisionError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
-            return slice(start, stop, left.step)
+            return slice(start, stop, runtime.normalize_dim(step))
+        if op is ast.Div:
+            raise ParseError.from_node(match.node, context, "index arithmetic uses //, not /")
         numeric = all(
             isinstance(value, (int, float)) and not isinstance(value, bool)
             for value in (left, right)
@@ -3525,7 +3539,7 @@ def _scoped_region(mesh, body, params=(), args=()):
     )
 
 
-def _mesh_scope_captures(node, context):
+def _region_captures(node, context, excluded=frozenset()):
     """Capture outer expression bindings for one region boundary."""
 
     def free_names(statements, outer_bound=frozenset()):
@@ -3557,16 +3571,18 @@ def _mesh_scope_captures(node, context):
                     visit(child, frozenset(nested_bound))
                 return
             if isinstance(statement, (ast.For, ast.AsyncFor)):
-                for child in ast.iter_child_nodes(statement):
-                    if child is statement.target:
-                        continue
-                    if isinstance(child, ast.expr):
-                        for name in ast.walk(child):
-                            if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Load):
-                                if name.id not in bound:
-                                    found.add(name.id)
-                    elif isinstance(child, ast.stmt):
-                        visit(child, bound)
+                found.update(
+                    name.id
+                    for name in ast.walk(statement.iter)
+                    if isinstance(name, ast.Name)
+                    and isinstance(name.ctx, ast.Load)
+                    and name.id not in bound
+                )
+                targets = {
+                    name.id for name in ast.walk(statement.target) if isinstance(name, ast.Name)
+                }
+                found.update(free_names(statement.body, bound | targets))
+                found.update(free_names(statement.orelse, bound))
                 return
             for name in ast.walk(statement):
                 if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Load):
@@ -3577,18 +3593,36 @@ def _mesh_scope_captures(node, context):
             visit(statement, visible)
         return found
 
-    free = free_names(node.body)
+    free = free_names(node.body, excluded)
     params = []
     args = []
     for name in sorted(free):
         value = context.lexical_scope.lookup(name)
         if isinstance(value, (bool, int, float)):
             value = _constant(value)
+        if isinstance(value, slice):
+            value = value.start
         if not isinstance(value, runtime.Expr):
             continue
         params.append(runtime.Var(type=value.type, name=name))
         args.append(value)
     return tuple(params), tuple(args)
+
+
+def _region_capture_bindings(params, context):
+    """Rebuild captured tile windows around the region's new induction parameter."""
+    bindings = {}
+    for param in params:
+        value = context.lexical_scope.lookup(param.name)
+        if isinstance(value, slice):
+            width = runtime.normalize_dim(
+                runtime.simplify_dim(runtime.DimSub, (value.stop, value.start))
+            )
+            stop = runtime.simplify_dim(runtime.DimAdd, (param, width))
+            bindings[param.name] = slice(param, stop, value.step)
+        else:
+            bindings[param.name] = param
+    return bindings
 
 
 def _bind_region_results(context, region, names, node):
@@ -3684,7 +3718,7 @@ class WithPattern(ElementPattern):
         item = node.items[0]
         assert isinstance(item.optional_vars, ast.Name)
         binding = item.optional_vars.id
-        params, args = _mesh_scope_captures(node, context)
+        params, args = _region_captures(node, context)
         return dataclasses.replace(
             matched,
             pattern_id="statement.with_mesh",
@@ -3711,7 +3745,7 @@ class WithPattern(ElementPattern):
                     "block",
                     "with_body",
                     lexical_bindings=(
-                        {param.name: param for param in params}
+                        _region_capture_bindings(params, context)
                         if context.function.dialect == "hir"
                         else None
                     ),
@@ -4190,11 +4224,17 @@ class LoopHeaderPattern(ElementPattern):
             for name in children["carry"]
             if isinstance(context.lexical_scope.lookup(name), runtime.Expr)
         )
-        init_args = tuple(context.lexical_scope.lookup(name) for name in carry_names)
+        carry_inits = tuple(context.lexical_scope.lookup(name) for name in carry_names)
         phi_vars = tuple(
-            runtime.Var(type=value.type, name=name) for name, value in zip(carry_names, init_args)
+            runtime.Var(type=value.type, name=name) for name, value in zip(carry_names, carry_inits)
         )
+        params, args = _region_captures(
+            match.node, context, frozenset((match.captures["target"], *carry_names))
+        )
+        bindings = _region_capture_bindings(params, context)
         context.lexical_scope.push_frame()
+        for name, value in bindings.items():
+            context.lexical_scope.define(name, value)
         if match.captures["kind"] == "tile":
             stop = runtime.simplify_dim(runtime.DimAdd, (induction_var, runtime.dim_expr(step)))
             binding = slice(induction_var, stop, 1)
@@ -4212,7 +4252,8 @@ class LoopHeaderPattern(ElementPattern):
             step=step,
             carry_names=carry_names,
             phi_vars=phi_vars,
-            init_args=init_args,
+            params=(*phi_vars, *params),
+            args=(*carry_inits, *args),
         )
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
@@ -4354,8 +4395,8 @@ class ForPattern(ElementPattern):
         grid = runtime.LoopRegion(
             type=result_type,
             induction_var=frame.induction_var,
-            carried_args=frame.phi_vars,
-            init_args=frame.init_args,
+            params=frame.params,
+            args=frame.args,
             body=body,
             yield_values=yield_values,
             start=frame.start,

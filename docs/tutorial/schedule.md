@@ -144,9 +144,9 @@ sed -n '/^from __future__/q;p' persistent.txt
 ```text
 # analysis target=nvidia.h200_sxm module=PERSISTENT function=gemm topology=cta wave=132/132
 # selection requested=compute-cost,memory,performance executed=compute-cost,memory,performance
-# compute-cost flops=bf16:21476933632@logical,708946427904@total,5370806272@cta,5370806272@thread;f32:335544320@logical,27682406400@total,209715200@cta,209715200@thread other-ops=integer:65@logical,8580@total,65@cta,65@thread precision=upper_bound
-# memory traffic=gmem:r86.50MB/w280.00MB@logical,r244.00MB/w280.00MB@total,r244.00MB/w280.00MB@cta,r244.00MB/w280.00MB@thread;rmem:r1.26GB/w1.25GB@logical,r1.26GB/w1.26GB@total,r1.26GB/w812.00MB@cta,r1.26GB/w812.00MB@thread;smem:r1.17GB/w1.02GB@logical,r1.17GB/w1.17GB@total,r360.00MB/w480.00MB@cta,r360.00MB/w480.00MB@thread footprint=a:32.00KB;b:2.12MB;v21:38:128.00KB;v22:39:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:64.00KB persistent=gmem:250.00MB
-# performance root=PERSISTENT::gemm predicted-ns=13392246 waves=1
+# compute-cost flops=bf16:21476933632@logical,708946427904@total,5370806272@cta,5370806272@thread;f32:335544320@logical,27682406400@total,209715200@cta,209715200@thread other-ops=integer:65@logical,16896@total,128@cta,128@thread precision=upper_bound
+# memory traffic=gmem:r86.50MB/w280.00MB@logical,r31.45GB/w36.09GB@total,r244.00MB/w280.00MB@cta,r244.00MB/w280.00MB@thread;rmem:r1.26GB/w1.25GB@logical,r166.57GB/w104.67GB@total,r1.26GB/w812.00MB@cta,r1.26GB/w812.00MB@thread;smem:r1.17GB/w1.02GB@logical,r46.41GB/w61.88GB@total,r360.00MB/w480.00MB@cta,r360.00MB/w480.00MB@thread footprint=a:32.00KB;b:2.12MB;v21:38:128.00KB;v22:39:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:64.00KB persistent=gmem:250.00MB
+# performance root=PERSISTENT::gemm predicted-ns=17938389 waves=1
 ```
 
 One wave replaces 33, and the model's prediction falls with it. These `predicted-ns`
@@ -357,7 +357,7 @@ sed -n '1,114p' optimal_tir.py
 ```text
 # analysis target=nvidia.h200_sxm module=GEMM_8192X17408X5120_OPTIMAL function=gemm topology=cta wave=132/132
 # selection requested=memory executed=memory
-# memory traffic=gmem:r192.00MB/w306.00MB@logical,r1.01GB/w306.00MB@total,r1.01GB/w306.00MB@cta,r1.01GB/w306.00MB@thread;rmem:r2.71GB/w2.67GB@logical,r2.71GB/w2.71GB@total,r2.71GB/w2.71GB@cta,r11.51MB/w10.82MB@thread;smem:r24.97MB/w17.74MB@logical,r24.97MB/w24.97MB@total,r24.97MB/w24.97MB@cta,r19.74MB/w8.04MB@thread footprint=a:256.00KB;b:288.00KB;v27:96:128.00KB;v28:97:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
+# memory traffic=gmem:r192.00MB/w306.00MB@logical,r133.68GB/w39.45GB@total,r1.01GB/w306.00MB@cta,r1.01GB/w306.00MB@thread;rmem:r2.71GB/w2.67GB@logical,r357.29GB/w357.20GB@total,r2.71GB/w2.71GB@cta,r11.51MB/w10.82MB@thread;smem:r24.97MB/w17.74MB@logical,r3.22GB/w3.22GB@total,r24.97MB/w24.97MB@cta,r19.74MB/w8.04MB@thread footprint=a:256.00KB;b:288.00KB;v27:96:128.00KB;v28:97:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
 
 from __future__ import annotations
 

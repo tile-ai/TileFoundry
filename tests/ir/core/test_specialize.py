@@ -266,7 +266,7 @@ def _reshape_targets(fn) -> list[tuple]:
             found.append(tuple(target.new_shape))
         if isinstance(target, type(ENTRY)):
             walk(target.body, depth + 1)
-        for name in ("args", "elements", "init_args", "yield_values"):
+        for name in ("args", "elements", "yield_values"):
             for child in getattr(expr, name, ()) or ():
                 walk(child, depth + 1)
         walk(getattr(expr, "body", None), depth + 1)
