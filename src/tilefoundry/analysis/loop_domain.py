@@ -7,7 +7,6 @@ import isl
 from tilefoundry.ir.core import value_label
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.region_capture import CapturingRegion, region_captures
 from tilefoundry.ir.isl_interop import dim_to_isl_expr
 from tilefoundry.ir.types.utils import static_dim_value
 
@@ -89,11 +88,10 @@ def iteration_domain(
         identities[id(loop.induction_var)] = f"p{index}"
         cursor = parent
         while cursor is not None:
-            if isinstance(cursor.owner, CapturingRegion):
-                for param, _ in region_captures(cursor.owner):
-                    root = parent.capture_root(param)
-                    if id(root) in identities:
-                        identities[id(param)] = identities[id(root)]
+            for param, _ in cursor.captures:
+                root = parent.capture_root(param)
+                if id(root) in identities:
+                    identities[id(param)] = identities[id(root)]
             cursor = cursor.parent
     for name, bound in params.items():
         if bound is None:

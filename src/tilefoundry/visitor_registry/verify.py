@@ -13,7 +13,7 @@ from tilefoundry.ir.core import Expr, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.region_capture import CapturingRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import canonical_specialization_signature
 from tilefoundry.ir.pattern import PatternMatcher, RangePattern, between_rules, locate_dim_var
@@ -60,7 +60,7 @@ from tilefoundry.visitor_registry.contexts import VerifyContext
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 
 
-def verify_region_isolated(region: CapturingRegion, ctx=None) -> None:
+def verify_region_isolated(region: LoopRegion | MeshRegion, ctx=None) -> None:
     """Ensure a region body reaches captured values only through its params."""
     if len(region.params) != len(region.args):
         message = f"region has {len(region.params)} params but {len(region.args)} args"
@@ -282,7 +282,7 @@ def _verify_signature_dim_vars(fn: Function) -> None:
 
 
 class _StmtRejectingVisitor(ExprVisitor[None]):
-    def _visit_region(self, expr: CapturingRegion, ctx=None) -> None:
+    def _visit_region(self, expr: LoopRegion | MeshRegion, ctx=None) -> None:
         verify_region_isolated(expr)
         for operand in expr_children(expr):
             self.visit(operand, ctx)

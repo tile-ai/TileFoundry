@@ -19,7 +19,6 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.region_capture import CapturingRegion, region_captures
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
 from tilefoundry.ir.types.shard_layout import shard_layout_of
@@ -744,9 +743,8 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             distinct.setdefault(id(item.buffer), item.buffer)
     captured_names: dict[int, Expr] = {}
     for scope in walk_scopes(context.root):
-        if isinstance(scope.owner, CapturingRegion):
-            for param, _argument in region_captures(scope.owner):
-                captured_names.setdefault(id(scope.capture_root(param)), param)
+        for param, _argument in scope.captures:
+            captured_names.setdefault(id(scope.capture_root(param)), param)
     label_values = (
         value if getattr(value, "name", None) else captured_names.get(key, value)
         for key, value in distinct.items()

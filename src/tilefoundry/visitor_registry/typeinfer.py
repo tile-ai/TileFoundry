@@ -13,7 +13,6 @@ from tilefoundry.ir.core.metadata import (
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.region_capture import CapturingRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard as HirReshard
 from tilefoundry.ir.mesh_scope import covered_by_scope, storage_reaches
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -178,7 +177,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         return TupleType(fields=operands)
 
     def _region_memo(
-        self, region: CapturingRegion, ctx: TypeInferContext
+        self, region: LoopRegion | MeshRegion, ctx: TypeInferContext
     ) -> dict[int, tuple[Expr, Type]]:
         """Infer arguments and bind compatible entry parameters for an isolated region."""
         arg_types = tuple(self.visit(arg, ctx) for arg in region.args)

@@ -26,5 +26,12 @@ class LoopRegion(Expr):
     step: ShapeDim
     start: ShapeDim = 0
 
+    def captures(self) -> tuple[tuple[Var, Expr], ...]:
+        """Pair invariant parameters with their arguments, excluding carries."""
+        carried = len(self.yield_values)
+        return tuple(
+            zip(self.params[carried:], self.args[carried:], strict=True)
+        )
+
 
 __all__ = ["LoopRegion"]

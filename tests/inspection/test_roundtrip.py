@@ -7,6 +7,7 @@ See [inspection §2.7](docs/spec/inspection.md#27-round-trip-contract).
 """
 
 from tests._source import import_dsl
+from tests.fixtures.shapes.tile_window_syntax import nested_scan_copy, scan_copy
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.types import DType
 
@@ -84,26 +85,15 @@ def test_slice_runtime_starts_tuple_roundtrips() -> None:
 
 
 def test_two_argument_tile_window_roundtrips_as_a_subscript() -> None:
-    for body, index in (
-        ("        out = insert_slice(out, x[row, :], (row, 0))\n", "x[row, :]"),
-        (
-            "        for col in tile(4, 2):\n"
-            "            out = insert_slice(out, x[row, col], (row, col))\n",
-            "x[row, col]",
-        ),
+    for fn, index in (
+        (scan_copy, "x[row, :]"),
+        (nested_scan_copy, "x[row, col]"),
     ):
-        fn = import_dsl(
-            _HEADER + "\n@func\n"
-            'def scan_copy(x: Tensor[(4, 4), "f32"]):\n'
-            '    out = zeros(Tensor[(4, 4), "f32"])\n'
-            "    for row in tile(4, 2):\n"
-            + body + "    return out\n"
-        )
         script = as_script(fn)
 
         assert index in script
         lines = script.splitlines()
-        if "for col" in body:
+        if fn is nested_scan_copy:
             inner = next(i for i, line in enumerate(lines) if line.strip() == "for col in tile(4, 2):")
             assert lines[inner - 1].strip() != "out = out"
             assert lines[-2].strip() == "out = out"

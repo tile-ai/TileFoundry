@@ -411,8 +411,11 @@ A LoopRegion MUST be isolated like a MeshRegion: its body and yields MUST read
 outside values through entry parameters, never by embedding an `args` value.
 The parser captures each external expression binding across every region
 boundary; an external Call therefore belongs to its enclosing structural scope.
-`region_captures(region)` pairs only invariant parameters and arguments, skipping
-carry slots; `CapturingRegion` is `MeshRegion | LoopRegion`.
+Each structured region exposes its invariant bindings through `captures()`.
+`MeshRegion.captures()` pairs every parameter with its argument;
+`LoopRegion.captures()` skips the carry slots and pairs only the remaining
+parameters and arguments. Analysis stores those pairs on its iteration-scope
+tree, so capture resolution does not need to inspect the region kind.
 
 Type inference derives every argument outside the loop and checks compatibility
 with its parameter annotation. It seeds the inner visitor with the induction

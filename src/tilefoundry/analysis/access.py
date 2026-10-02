@@ -8,7 +8,6 @@ from dataclasses import dataclass
 import isl
 
 from tilefoundry.ir.core import Call, Constant, Expr, Var
-from tilefoundry.ir.hir.region_capture import CapturingRegion, region_captures
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.isl_interop import dim_range, dim_to_isl_expr, index_set
 from tilefoundry.ir.types import TensorType
@@ -101,11 +100,9 @@ class _RegionBindingResolver(ExprCloner):
     def visit_Var(self, value: Var, scope: "IterationScope") -> Expr:
         cursor = scope
         while cursor is not None:
-            owner = cursor.owner
-            if isinstance(owner, CapturingRegion):
-                for param, argument in region_captures(owner):
-                    if value is param:
-                        return self.visit(argument, cursor.parent)
+            for param, argument in cursor.captures:
+                if value is param:
+                    return self.visit(argument, cursor.parent)
             cursor = cursor.parent
         return value
 

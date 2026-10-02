@@ -9,7 +9,6 @@ from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.region_capture import region_captures
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
@@ -198,7 +197,7 @@ class LivenessVisitor(ExprVisitor[None]):
         parameter_definition = self.next_event()
         for parameter in region.params:
             self.define(parameter, parameter_definition)
-        self.bindings.update((id(param), arg) for param, arg in region_captures(region))
+        self.bindings.update((id(param), arg) for param, arg in region.captures())
 
         self.visit(region.body, ctx)
         body_use = self.next_event()
@@ -219,7 +218,7 @@ class LivenessVisitor(ExprVisitor[None]):
         for phi in region.params:
             self.define(phi, phi_definition)
 
-        self.bindings.update((id(param), arg) for param, arg in region_captures(region))
+        self.bindings.update((id(param), arg) for param, arg in region.captures())
         self.loop_entries.append((phi_definition, set(), set()))
         self.visit(region.body, ctx)
         for yielded in region.yield_values:

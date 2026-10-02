@@ -36,7 +36,6 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.region_capture import CapturingRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor._view_layout import derive_view_layout
@@ -462,7 +461,7 @@ class Lowering(ExprVisitor[Expr]):
         known = self._memo.get(id(expr))
         return expr if known is None else known[1]
 
-    def _bind_region_args(self, region: CapturingRegion, cursor: _Cursor) -> None:
+    def _bind_region_args(self, region: LoopRegion | MeshRegion, cursor: _Cursor) -> None:
         self.bindings.update(zip(map(id, region.params), region.args, strict=True))
         values = tuple(self.visit(arg, cursor) for arg in region.args)
         for param, value in zip(region.params, values, strict=True):

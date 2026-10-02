@@ -7,12 +7,11 @@ from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr
+from tilefoundry.ir.core import Call, Expr, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.region_capture import CapturingRegion, region_captures
 from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.types import Mesh, Topology
 from tilefoundry.ir.types.dim import DimSub, simplify_dim
@@ -72,6 +71,7 @@ class IterationScope:
     children: tuple[IterationScope, ...]
     depth: int
     domain: isl.set
+    captures: tuple[tuple[Var, Expr], ...]
     domain_params: dict[str, object] = field(default_factory=dict)
     accesses: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
     outputs: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
@@ -109,11 +109,10 @@ class IterationScope:
         """Resolve invariant parameters through their enclosing region captures."""
         cursor = self
         while cursor is not None:
-            if isinstance(cursor.owner, CapturingRegion):
-                for param, argument in region_captures(cursor.owner):
-                    if value is param:
-                        value = argument
-                        break
+            for param, argument in cursor.captures:
+                if value is param:
+                    value = argument
+                    break
             cursor = cursor.parent
         return value
 
@@ -325,6 +324,7 @@ class ScopeBuilder:
                 children=(),
                 depth=scope.depth + 1,
                 domain=domain,
+                captures=expr.captures(),
                 domain_params=domain_params,
                 accesses=self._empty_accesses(),
             )
@@ -332,7 +332,7 @@ class ScopeBuilder:
             self.seeds[id(expr.induction_var)] = child
             for carried in expr.params[: len(expr.yield_values)]:
                 self.seeds[id(carried)] = child
-            for param, argument in region_captures(expr):
+            for param, argument in child.captures:
                 self._record_variance(param, (argument,))
                 self.seen.add(id(param))
             self._visit(expr.body, child)
@@ -349,11 +349,12 @@ class ScopeBuilder:
                 children=(),
                 depth=scope.depth,
                 domain=scope.domain,
+                captures=expr.captures(),
                 domain_params=scope.domain_params,
                 accesses=self._empty_accesses(),
             )
             scope.children = (*scope.children, child)
-            for param, argument in region_captures(expr):
+            for param, argument in child.captures:
                 self._record_variance(param, (argument,))
                 self.seen.add(id(param))
             self._visit(expr.body, child)
@@ -377,6 +378,7 @@ class ScopeBuilder:
             children=(),
             depth=0,
             domain=domain,
+            captures=(),
             domain_params=domain_params,
             accesses=self._empty_accesses(),
             topologies=self.topologies,

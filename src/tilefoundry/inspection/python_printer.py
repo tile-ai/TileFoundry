@@ -38,7 +38,6 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.region_capture import CapturingRegion, region_captures
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import (
     canonical_specialization_signature,
@@ -612,13 +611,14 @@ def _emit_def(
     _order: list[Expr] = list(iter_exprs(fn.body, _seen))
     for p in fn.params:
         _order.extend(iter_exprs(p, _seen))
-    for scope in tuple(expr for expr in _order if isinstance(expr, CapturingRegion)):
+    region_types = (LoopRegion, MeshRegion)
+    for scope in tuple(expr for expr in _order if isinstance(expr, region_types)):
         for param in scope.params:
             _order.extend(iter_exprs(param, _seen))
     _param_alias = {
         id(param): arg
-        for scope in tuple(expr for expr in _order if isinstance(expr, CapturingRegion))
-        for param, arg in region_captures(scope)
+        for scope in tuple(expr for expr in _order if isinstance(expr, region_types))
+        for param, arg in scope.captures()
     }
 
     def _capture_root(value):
@@ -746,7 +746,7 @@ def _emit_def(
         )
         if _moved_window(start, size, stride) is not None
     }
-    _scaled_start_ids = {
+    _window_start_call_ids = {
         id(node)
         for expr in _order
         if isinstance(expr, Call) and isinstance(expr.target, Slice)
@@ -754,7 +754,7 @@ def _emit_def(
         for start, size, stride in zip(
             expr.args[1].elements, expr.target.sizes, expr.target.strides
         )
-        if (window := _moved_window(start, size, stride)) is not None and window[2] is not None
+        if _moved_window(start, size, stride) is not None
         for node in iter_exprs(start, set())
         if isinstance(node, Call)
     }
@@ -776,7 +776,7 @@ def _emit_def(
             name = _sanitize_name(expr.name)
         elif (
             isinstance(expr, Call)
-            and key not in _scaled_start_ids
+            and key not in _window_start_call_ids
             and (authored_name := binding_name(expr))
         ):
             name = _sanitize_name(authored_name)
