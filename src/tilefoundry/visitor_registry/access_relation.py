@@ -16,7 +16,6 @@ from typing import Callable
 import isl
 
 from tilefoundry.ir.core.expr import Constant
-from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.isl_interop import index_set, isl_to_dim, shape_to_isl_domain
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis
@@ -1263,35 +1262,16 @@ def linearized_view(out_shape: tuple, in_shape: tuple) -> "AffineAccess":
 def identity_relations(call, ctx) -> AccessRelations:
     """Walk the operands' broadcast domain and map each boundary into it.
 
-    Non-broadcastable transfers keep their per-operand identities. Write-only
-    or structural operands whose shape is not inferred yet borrow the domain.
+    Structural operands whose shape is not inferred yet borrow the domain.
     Only operand types are read: HIR type inference derives its result here.
+    Incompatible shapes expose an invalid relation instead of guessing a domain.
     """
     types = tuple(ctx.type_of(arg) for arg in call.args)
     shapes = tuple(tuple(ty.shape) if hasattr(ty, "shape") else None for ty in types)
-
-    def merge(domain, shape):
-        return None if domain is None else broadcast_shapes(domain, shape, raising=False)
-
-    domain = reduce(merge, (shape for shape in shapes if shape is not None), ())
-    compatible = domain is not None
-    if not compatible:
-        params = tuple(
-            param for param in type(call.target)._op_schema.signature if param.kind == "input"
-        )
-        domain = next(
-            (
-                shape
-                for param, shape in zip(params, shapes, strict=True)
-                if param.effect == MemoryEffect.WRITE and shape is not None
-            ),
-            shapes[0],
-        )
+    domain = reduce(broadcast_shapes, (shape for shape in shapes if shape is not None), ())
 
     def access(shape):
-        if shape is None:
-            return identity_access(len(domain))
-        return broadcast_access(domain, shape) if compatible else identity_access(len(shape))
+        return identity_access(len(domain)) if shape is None else broadcast_access(domain, shape)
 
     return iterating(
         domain,
