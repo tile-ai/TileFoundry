@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types.int_tuple import product
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten, get, size
 from tilefoundry.ir.types.layout import rank as _rank
 from tilefoundry.ir.types.layout_algebra import filter, is_contiguous
@@ -292,7 +291,7 @@ def check_topology(mesh: Mesh) -> None:
         declared = getattr(topology, "size", None)
         if not isinstance(declared, int) or isinstance(declared, bool):
             continue
-        count = product(tuple(flatten(arrangement.shape)))
+        count = size(arrangement)
         if isinstance(count, int) and count > declared:
             raise ValueError(
                 f"mesh level {getattr(topology, 'name', topology)!r} has {count} "

@@ -20,6 +20,7 @@ from .layout import (
     apply,
     flat_shape,
     flat_stride,
+    get,
     size,
 )
 from .stride import compact_col_major
@@ -190,7 +191,7 @@ def is_contiguous(layout: Layout, *, major: str = "col") -> bool:
     return len(flat_shape(other)) == 1 and flat_stride(other) == (1,)
 
 
-def complement(layout: Layout, max_idx: int = 1) -> Layout:
+def complement(layout: Layout, max_idx: int = 1, *, major: str = "col") -> Layout:
     """CuTe ``complement``: the modes that fill the gaps below ``max_idx``."""
     result_shape: list[int] = []
     result_stride: list[int] = []
@@ -205,7 +206,12 @@ def complement(layout: Layout, max_idx: int = 1) -> Layout:
         current_idx = shape * stride
     result_shape.append((max_idx + current_idx - 1) // current_idx)
     result_stride.append(current_idx)
-    return coalesce(Layout(shape=tuple(result_shape), strides=tuple(result_stride)))
+    if major == "row":
+        result_shape.reverse()
+        result_stride.reverse()
+    return coalesce(
+        Layout(shape=tuple(result_shape), strides=tuple(result_stride)), major=major
+    )
 
 
 def _make_flat(a: Layout, b: Layout) -> Layout:
@@ -290,13 +296,145 @@ def _check_admissible(scope: ComposedLayout) -> None:
         raise NotProjectable("outer layout is not inverse-projectable (injective + compact)")
 
 
-def composition(left, right, offset: int = 0):
-    """CuTe ``composition``, dispatched to the supported overloads."""
-    if swizzle_layout.supports_composition(left, right):
-        return swizzle_layout.composition(left, right, offset)
+def _make_layout(*layouts: Layout) -> Layout:
+    """CuTe ``make_layout``: collect each layout as one mode.
+
+    Layout stores even scalar modes in a tuple; unwrap that representation
+    when a mode has one leaf, retaining all nontrivial nesting.
+    """
+    def mode(values):
+        return values[0] if len(values) == 1 else values
+
+    return Layout(
+        shape=tuple(mode(layout.shape) for layout in layouts),
+        strides=tuple(
+            mode(layout.strides if layout.strides is not None else compact_col_major(layout.shape))
+            for layout in layouts
+        ),
+    )
+
+
+def _compose_mode(left: Layout, shape: int, stride: int, *, major: str) -> Layout:
+    """Compose one scalar mode using CuTe's strided-domain decomposition."""
+    if stride == 0:
+        return Layout((shape,), (0,))
+    flat = coalesce(left, major=major)
+    modes = tuple(zip(flat_shape(flat), flat_stride(flat)))
+    if major == "row":
+        modes = tuple(reversed(modes))
+    result_shape, result_stride = [], []
+    rest_shape, rest_stride = shape, stride
+    for current_shape, current_stride in modes[:-1]:
+        if not (current_shape % rest_stride == 0 or rest_stride % current_shape == 0):
+            raise AssertionError
+        new_shape = min(max(1, current_shape // rest_stride), rest_shape)
+        if new_shape != 1:
+            result_shape.append(new_shape)
+            result_stride.append(rest_stride * current_stride)
+        rest_shape //= new_shape
+        rest_stride = -(-rest_stride // current_shape)
+    if rest_shape != 1 or not result_shape:
+        result_shape.append(rest_shape)
+        result_stride.append(rest_stride * modes[-1][1])
+    if major == "row":
+        result_shape.reverse()
+        result_stride.reverse()
+    return Layout(tuple(result_shape), tuple(result_stride))
+
+
+def _compose_layout(left: Layout, right, *, major: str) -> Layout:
+    """CuTe's None, integer, tuple-of-tiles and Layout composition overloads."""
+    if right is None:
+        return left
+    if isinstance(right, int):
+        return _compose_mode(left, right, 1, major=major)
+    if isinstance(right, tuple):
+        if len(left.shape) < len(right):
+            raise AssertionError
+        return _make_layout(
+            *(_compose_layout(get(left, index), tile, major=major) for index, tile in enumerate(right)),
+            *(get(left, index) for index in range(len(right), len(left.shape))),
+        )
+    if isinstance(right, Layout):
+        strides = right.strides if right.strides is not None else compact_col_major(right.shape)
+        if len(right.shape) == 1 and not isinstance(right.shape[0], tuple):
+            return _compose_mode(left, right.shape[0], strides[0], major=major)
+        return _make_layout(
+            *(_compose_layout(left, get(right, index), major=major) for index in range(len(right.shape)))
+        )
     raise NotImplementedError(
         f"composition: no rule for {type(left).__name__} ∘ {type(right).__name__}"
     )
+
+
+def composition(left, right, offset: int = 0, *, major: str = "col"):
+    """CuTe ``composition``, dispatched to the supported overloads.
+
+    The general Layout overload has no consumers in this round. Future
+    consumers include ``utils._inner_layout`` and ``utils.tile_view_layout``;
+    their currently pre-grouped tiles require a separate refactor. ``offset``
+    belongs to the existing swizzle overload.
+    """
+    if swizzle_layout.supports_composition(left, right):
+        return swizzle_layout.composition(left, right, offset)
+    if isinstance(left, Layout):
+        return _compose_layout(left, right, major=major)
+    raise NotImplementedError(
+        f"composition: no rule for {type(left).__name__} ∘ {type(right).__name__}"
+    )
+
+
+def logical_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
+    """CuTe ``logical_divide``: compose the integer tile and its complement.
+
+    No consumers are connected in this round. ``utils._inner_layout`` and
+    ``utils.tile_view_layout`` are future consumers after their pre-grouped
+    tile representation is refactored. Symbolic tiles are unsupported.
+    """
+    if tile is None:
+        return layout
+    if isinstance(tile, tuple):
+        if len(layout.shape) < len(tile):
+            raise AssertionError
+        return _make_layout(
+            *(logical_divide(get(layout, index), one, major=major) for index, one in enumerate(tile)),
+            *(get(layout, index) for index in range(len(tile), len(layout.shape))),
+        )
+    if isinstance(tile, int) and not isinstance(tile, bool):
+        tile = Layout((tile,), (1,))
+    if not isinstance(tile, Layout) or any(
+        not isinstance(value, int) or isinstance(value, bool)
+        for value in (*flat_shape(tile), *flat_stride(tile))
+    ):
+        raise TypeError("logical_divide: tile must have integer extents and strides")
+    return composition(
+        layout, _make_layout(tile, complement(tile, size(layout), major=major)), major=major
+    )
+
+
+def zipped_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
+    """CuTe ``zipped_divide``: gather the divided tile and remainder modes.
+
+    No consumers are connected in this round. ``utils._inner_layout`` and
+    ``utils.tile_view_layout`` are future consumers after their pre-grouped
+    tile representation is refactored. Symbolic tiles are unsupported.
+    """
+    if tile is None:
+        return _make_layout(Layout((1,), (0,)), layout)
+    if isinstance(tile, tuple):
+        if len(layout.shape) < len(tile):
+            raise AssertionError
+        split = tuple(
+            zipped_divide(get(layout, index), one, major=major) for index, one in enumerate(tile)
+        )
+        return _make_layout(
+            _make_layout(*(get(one, 0) for one in split)),
+            _make_layout(
+                *(get(one, 1) for one in split),
+                *(get(layout, index) for index in range(len(tile), len(layout.shape))),
+            ),
+        )
+    return logical_divide(layout, tile, major=major)
 
 
 def left_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
@@ -349,4 +487,6 @@ __all__ = [
     "is_inverse_projectable",
     "right_inverse",
     "left_inverse",
+    "logical_divide",
+    "zipped_divide",
 ]

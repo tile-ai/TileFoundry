@@ -934,6 +934,26 @@ def coalesce(layout: Layout | ComposedLayout, trg_profile=..., *, major: str = "
     ...
 
 
+def composition(left, right, offset: int = 0, *, major: str = "col"):
+    """Compose CuTe layouts; offset belongs to the swizzle overload."""
+    ...
+
+
+def complement(layout: Layout, max_idx: int = 1, *, major: str = "col") -> Layout:
+    """Return the modes filling the layout's gaps below max_idx."""
+    ...
+
+
+def logical_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
+    """Compose a tile and its complement into the source layout."""
+    ...
+
+
+def zipped_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
+    """Gather hierarchical tile and remainder modes into two modes."""
+    ...
+
+
 def is_inverse_projectable(layout: Layout) -> bool:
     """Return whether a layout admits the supported inverse construction.
 
@@ -1003,3 +1023,13 @@ def right_inverse(layout: Layout | ComposedLayout):
   - Inverting a composed mesh layout MUST accept only an identity inner mapping
     and an inverse-projectable primitive outer layout; other layouts MUST raise
     `NotProjectable` rather than guess an inverse.
+  - General `composition` MUST support a `Layout` on the left and a `Layout`,
+    integer tile, tuple of per-mode tiles, or identity `None` on the right,
+    preserving unmatched trailing modes in a tuple dispatch. The existing
+    swizzle overload MUST retain its offset semantics.
+  - `logical_divide` MUST compose the tile with its complement; `zipped_divide`
+    MUST gather the hierarchical result into tile and remainder modes.
+    Tiles MUST have integer extents and strides. `None` denotes an unsplit mode.
+    All three operations and `complement` MUST interpret traversal order via
+    `major="col"` or `major="row"`, without changing their per-mode tile dispatch.
+    Overlapping modes in `complement` MUST remain rejected as `NotProjectable`.
