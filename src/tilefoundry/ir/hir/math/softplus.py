@@ -39,4 +39,4 @@ def _eval_softplus(ctx):
     return TensorValue(data=torch.nn.functional.softplus(ctx.args[0].data), type=ctx.result_type)
 
 
-register_access_relation(Softplus)(identity_relations(1))
+register_access_relation(Softplus)(identity_relations)

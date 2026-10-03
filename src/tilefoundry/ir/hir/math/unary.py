@@ -93,4 +93,4 @@ def _eval_unary(ctx):
 __all__ = ["Unary"]
 
 
-register_access_relation(Unary)(identity_relations(1))
+register_access_relation(Unary)(identity_relations)

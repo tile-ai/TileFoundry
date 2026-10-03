@@ -23,7 +23,7 @@ class Cast(Op):
     dtype = ParamDef(kind="attribute", annotation=DType)
 
 
-register_access_relation(Cast)(identity_relations(1))
+register_access_relation(Cast)(identity_relations)
 
 
 @register_typeinfer(Cast)

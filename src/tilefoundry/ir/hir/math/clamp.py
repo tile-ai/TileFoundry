@@ -54,4 +54,4 @@ def _eval_clamp(ctx):
 __all__ = ["Clamp"]
 
 
-register_access_relation(Clamp)(identity_relations(1))
+register_access_relation(Clamp)(identity_relations)

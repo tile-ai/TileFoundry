@@ -47,4 +47,4 @@ def _eval_gelu(ctx):
     )
 
 
-register_access_relation(Gelu)(identity_relations(1))
+register_access_relation(Gelu)(identity_relations)

@@ -727,7 +727,7 @@ def test_schedule_typeinfer_requires_instruction_verifier(monkeypatch) -> None:
     monkeypatch.setitem(
         access_relation_registry._map,
         _UnstatedInstruction,
-        identity_relations(1),
+        identity_relations,
     )
 
     with pytest.raises(ValueError, match="has no registered verifier"):
@@ -746,7 +746,7 @@ def test_schedule_typeinfer_requires_whole_instruction_tiles(monkeypatch) -> Non
     monkeypatch.setitem(
         access_relation_registry._map,
         _UnstatedInstruction,
-        identity_relations(1),
+        identity_relations,
     )
 
     with pytest.raises(

@@ -37,4 +37,4 @@ def _eval_tanh(ctx):
     return TensorValue(data=torch.tanh(ctx.args[0].data), type=ctx.result_type)
 
 
-register_access_relation(Tanh)(identity_relations(1))
+register_access_relation(Tanh)(identity_relations)

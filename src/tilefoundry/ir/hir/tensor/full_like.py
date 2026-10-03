@@ -44,4 +44,4 @@ def _eval_full_like(ctx):
     return TensorValue(data=data, type=ctx.result_type)
 
 
-register_access_relation(FullLike)(identity_relations(1))
+register_access_relation(FullLike)(identity_relations)

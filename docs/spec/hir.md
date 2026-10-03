@@ -554,6 +554,9 @@ class Binary(Op):
     kind: BinaryKind
 ```
 - constraints:
+  - Both operands MUST use symmetric right-aligned broadcasting: missing axes
+    and size-1 axes read the broadcast operand at zero, including rank-0 scalars.
+    The result shape MUST be the broadcast of both operand shapes.
   - Values follow torch pointwise semantics; dtypes do not promote. Both operands
     MUST already carry the same `dtype`, and typeinfer MUST reject a mismatch. A
     Python literal is an ordinary operand of the dtype it is written with — `f32`

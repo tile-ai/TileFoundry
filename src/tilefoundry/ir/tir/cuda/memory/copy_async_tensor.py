@@ -196,7 +196,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
-register_access_relation(CopyAsyncTensor)(identity_relations(2))
+register_access_relation(CopyAsyncTensor)(identity_relations)
 
 
 @register_schedule_eval(CopyAsyncTensor)

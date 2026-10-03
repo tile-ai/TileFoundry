@@ -162,6 +162,14 @@ def _emit_binary(call, ctx: CudaCodegenContext) -> None:
     rhs_n = _tensor_expr(rhs, ctx)
     dst_n = _tensor_expr(dst, ctx)
 
+    lhs_modes = _broadcast_modes(
+        _materialised_shape(dst.type),
+        _materialised_shape(lhs.type),
+        _runtime_total(dst.type, ctx),
+    )
+    if lhs_modes is not None:
+        lhs_n = broadcast_view(lhs_n, lhs_modes, ctx)
+
     modes = _broadcast_modes(
         _materialised_shape(dst.type),
         _materialised_shape(rhs.type),

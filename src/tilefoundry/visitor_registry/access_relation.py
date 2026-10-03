@@ -10,6 +10,7 @@ relations, so there is one place to be right and nothing to keep in step.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import reduce
 from typing import Callable
 
 import isl
@@ -1259,44 +1260,46 @@ def linearized_view(out_shape: tuple, in_shape: tuple) -> "AffineAccess":
     return AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
 
 
-def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
-    """Identity relations.
+def identity_relations(call, ctx) -> AccessRelations:
+    """Walk the operands' broadcast domain and map each boundary into it.
 
-    Factory for a GLOBAL-level access-relation handler whose ``n_inputs``
-    inputs and single output are all elementwise identity.
-
-    Read operands contribute their own-rank identities. A write-only operand
-    uses the read iteration rank, so its type need not be known yet. A
-    structural (non-tensor) operand borrows that rank as well.
+    Non-broadcastable transfers keep their per-operand identities. Write-only
+    or structural operands whose shape is not inferred yet borrow the domain.
+    Only operand types are read: HIR type inference derives its result here.
     """
+    types = tuple(ctx.type_of(arg) for arg in call.args)
+    shapes = tuple(tuple(ty.shape) if hasattr(ty, "shape") else None for ty in types)
 
-    def _handler(call, ctx) -> AccessRelations:
-        walked = ctx.type_of(call.args[0])
-        out_rank = len(walked.shape)
+    def merge(domain, shape):
+        return None if domain is None else broadcast_shapes(domain, shape, raising=False)
 
+    domain = reduce(merge, (shape for shape in shapes if shape is not None), ())
+    compatible = domain is not None
+    if not compatible:
         params = tuple(
             param for param in type(call.target)._op_schema.signature if param.kind == "input"
         )
-
-        def _rank_of(index) -> int:
-            if params[index].effect == MemoryEffect.WRITE:
-                return out_rank
-            arg = call.args[index]
-            ty = ctx.type_of(arg)
-            return len(ty.shape) if hasattr(ty, "shape") else out_rank
-
-        return iterating(
-            walked.shape,
-            AccessRelations(
-                inputs=tuple(
-                    BoundaryRelation(identity_access(_rank_of(index)))
-                    for index in range(n_inputs)
-                ),
-                outputs=(BoundaryRelation(identity_access(out_rank)),),
+        domain = next(
+            (
+                shape
+                for param, shape in zip(params, shapes, strict=True)
+                if param.effect == MemoryEffect.WRITE and shape is not None
             ),
+            shapes[0],
         )
 
-    return _handler
+    def access(shape):
+        if shape is None:
+            return identity_access(len(domain))
+        return broadcast_access(domain, shape) if compatible else identity_access(len(shape))
+
+    return iterating(
+        domain,
+        AccessRelations(
+            inputs=tuple(BoundaryRelation(access(shape)) for shape in shapes),
+            outputs=(BoundaryRelation(identity_access(len(domain))),),
+        ),
+    )
 
 
 def static_bytes(type_: "Type") -> int | None:

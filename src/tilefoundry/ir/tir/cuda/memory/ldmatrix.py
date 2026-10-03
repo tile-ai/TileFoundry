@@ -39,7 +39,7 @@ class LdMatrix(Op):
 
 register_typeinfer(LdMatrix)(typeinfer_registry.lookup(Copy))
 register_verify_stmt(LdMatrix)(verify_stmt_registry.lookup(Copy))
-register_access_relation(LdMatrix)(identity_relations(2))
+register_access_relation(LdMatrix)(identity_relations)
 register_schedule_eval(LdMatrix)(schedule_eval_registry.lookup(Copy))
 
 

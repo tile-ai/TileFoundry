@@ -37,4 +37,4 @@ def _eval_sigmoid(ctx):
     return TensorValue(data=torch.sigmoid(ctx.args[0].data), type=ctx.result_type)
 
 
-register_access_relation(Sigmoid)(identity_relations(1))
+register_access_relation(Sigmoid)(identity_relations)

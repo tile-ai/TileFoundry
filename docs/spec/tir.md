@@ -799,6 +799,9 @@ class Binary(Op):
 - constraints:
   - `lhs` and `rhs` declare `READ`; `dst` declares `WRITE`; all three are rmem tensors. A tile held
     elsewhere is moved in and out by `Copy`, which schedule inserts from this declaration.
+  - Both `lhs` and `rhs` MUST support right-aligned broadcasting, including
+    missing axes, size-1 axes, and rank-0 scalars. `dst.shape` MUST equal the
+    broadcast of their shapes. Operand order MUST be preserved for every kind.
   - Lowers to the binary runtime family without per-kind TIR classes.
 
 ##### Unary
