@@ -666,7 +666,13 @@ Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
   `N > mesh_extent(a)` is canonicalized at parse time into a
   factorised form (`(mesh_extent(a) @ m.a, N // mesh_extent(a))`); the
   factorised residual axis enters the IR as a non-`Split` layout dim. See
-  [parser §2.1](./parser.md#21-syntax).
+  [parser §2.1](./parser.md#21-syntax). A symbolic logical axis split across
+  multiple mesh axes MUST be factored in mesh-axis order by exact successive
+  quotients: equal extents yield one, and a `DimMul` containing the mesh extent
+  as either factor yields its other factor. Integer quotients MUST be exact;
+  undecidable divisions MUST be rejected. Thus `NC * 128` split over `(NC, 64)`
+  becomes `(NC, 64, 2)`, with the residual `2` unbound. Symbolic factored shapes
+  keep `strides=None` until specialization.
 - `local_shape(sl)[k] = G[k] / sl.mesh.layout.shape[a] = 1` iff some mesh axis
   `a` has `sl.attrs[a] = Split(k)`.
 - `local_shape(sl)[k] = G[k]` otherwise.
@@ -967,9 +973,11 @@ def right_inverse(layout: Layout | ComposedLayout):
 
 - constraints:
   - `canonical_shard_layout` MUST factor each logical axis split by one or more
-    static mesh axes in mesh-axis order, remap each `Split` to its factor, and
-    append a non-unit residual factor. It MUST reject indivisible or
-    unrepresentable dynamic multi-axis splits.
+    mesh axes in mesh-axis order, remap each `Split` to its factor, and append
+    a non-unit residual factor. Symbolic multi-axis splits MUST use successive
+    exact integer or structural product quotients as specified in
+    [shard §7.1.1](./shard.md#711-layoutshape).
+    It MUST reject indivisible or undecidable dynamic multi-axis splits.
   - `shard_layout_local_shape` MUST multiply the divisors of multiple `Split`
     attributes that name the same layout axis. Equal symbolic split and mesh
     extents produce local extent one. A `DimMul` with the mesh extent as either
