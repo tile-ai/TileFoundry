@@ -42,7 +42,11 @@ _NO_PROFILE = object()
 
 
 def _coalesce_flat(layout: Layout, *, major: str = "col") -> Layout:
-    """Apply the flat CuTe ``coalesce`` rule to one layout."""
+    """Apply the flat CuTe ``coalesce`` rule to one layout.
+
+    Dimension interop imports core/types; defer until staged type imports
+    finish. Likewise utils imports mesh, which imports layout_algebra.
+    """
     from tilefoundry.ir.isl_interop import normalize_dim  # noqa: PLC0415
 
     from .utils import static_dim_value  # noqa: PLC0415
@@ -144,7 +148,10 @@ def coalesce(
 
 
 def filter(layout: Union[Layout, ComposedLayout], profile=_NO_PROFILE, *, major: str = "col"):
-    """CuTe ``filter``: drop shape-1 and stride-0 modes, then coalesce."""
+    """CuTe ``filter``: drop shape-1 and stride-0 modes, then coalesce.
+
+    Defer utils: it imports mesh, which imports layout_algebra at module load.
+    """
     from .utils import static_dim_value  # noqa: PLC0415
 
     if get_swizzle_portion(layout) is not None:
@@ -163,15 +170,18 @@ def filter(layout: Union[Layout, ComposedLayout], profile=_NO_PROFILE, *, major:
 
 
 def is_contiguous(layout: Layout, *, major: str = "col") -> bool:
-    """Whether the filtered layout covers ``[0, size)`` without gaps.
+    """Whether an already filtered layout covers ``[0, size)`` without gaps.
 
+    Pass the result of ``filter(layout, major=major)`` to avoid repeating that
+    reduction. It has already coalesced in ``major`` order.
     Static extents use CuTe's ``size == cosize``. Symbolic extents use its
     structural equivalent: either coalescing direction leaves one mode
     stepping by one. Continuity does not depend on the order of modes.
+
+    Defer utils: it imports mesh, which imports layout_algebra at module load.
     """
     from .utils import static_dim_value  # noqa: PLC0415
 
-    layout = filter(layout, major=major)
     if all(static_dim_value(shape) is not None for shape in flat_shape(layout)):
         return size(layout) == cosize(layout)
     if len(flat_shape(layout)) == 1 and flat_stride(layout) == (1,):

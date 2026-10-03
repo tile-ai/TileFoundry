@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.types.int_tuple import product
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten, get
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten, get, size
 from tilefoundry.ir.types.layout import rank as _rank
-from tilefoundry.ir.types.layout_algebra import filter, is_contiguous, size
+from tilefoundry.ir.types.layout_algebra import filter, is_contiguous
 from tilefoundry.ir.types.stride import compact_major, compact_row_major, crd2idx, idx2crd
 from tilefoundry.ir.types.tensor_type import ShapeDim
 
@@ -257,7 +257,11 @@ def starts(mesh: Mesh) -> tuple[int, ...]:
 
 
 def within_scope(mesh: Mesh, current: Mesh) -> bool:
-    """Whether each continuous selection is contained in the enclosing level."""
+    """Whether each continuous selection is contained in the enclosing level.
+
+    Defer dimension interop: it imports core/types, whose staged imports
+    include this mesh.
+    """
     from tilefoundry.ir.isl_interop import dim_at_most  # noqa: PLC0415
 
     enclosing = dict(zip(_named(current), zip(levels(current), starts(current))))

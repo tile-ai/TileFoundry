@@ -996,8 +996,9 @@ def right_inverse(layout: Layout | ComposedLayout):
     normalize dimension expressions on both sides.
   - `filter(layout, profile=..., major="col")` MUST remove shape-one and
     stride-zero modes before coalescing, with the same profile and major-order
-    conventions. `is_contiguous(layout, major="col")` MUST test its filtered
-    layout using `size == cosize` for static extents and one unit-stride mode
+    conventions. `is_contiguous(layout, major="col")` takes the already filtered
+    result with the same `major` and MUST test it without repeating filtering,
+    using `size == cosize` for static extents and one unit-stride mode
     after coalescing in either direction for symbolic extents.
   - Inverting a composed mesh layout MUST accept only an identity inner mapping
     and an inverse-projectable primitive outer layout; other layouts MUST raise

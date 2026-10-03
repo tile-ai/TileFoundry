@@ -53,12 +53,14 @@ def covered_by_scope(mesh: Mesh, current: Mesh) -> bool:
     CTA's threads -- says which positions it is by where its run starts and how
     its modes step, and a value laid out over that same run is inside it
     however either of them wrote the axes down.
+
+    Dimension interop imports core/types; defer until staged type imports finish.
     """
     from tilefoundry.ir.isl_interop import normalize_dim  # noqa: PLC0415
 
     def selection(arrangement, start):
         reduced = filter(arrangement, major="row")
-        if is_contiguous(reduced):
+        if is_contiguous(reduced, major="row"):
             return normalize_dim(size(reduced)), start
         return reduced, start
 
