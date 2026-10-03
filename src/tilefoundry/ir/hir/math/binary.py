@@ -19,7 +19,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import TensorPattern
 from tilefoundry.ir.types import DType, Layout, TensorType
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
@@ -31,12 +31,8 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    BoundaryRelation,
-    broadcast_access,
     broadcast_shapes,
-    identity_access,
-    iterating,
+    identity_relations,
     register_access_relation,
     relations_of,
     shape_from_relation,
@@ -59,8 +55,8 @@ _INT_ONLY_KINDS = {BinaryKind.FLOOR_DIV, BinaryKind.MOD}
 class Binary(Op):
     """Value-form pointwise binary operation."""
 
-    lhs = ParamDef(kind="input", pattern=Tensor)
-    rhs = ParamDef(kind="input", pattern=Tensor)
+    lhs = ParamDef(kind="input", pattern=TensorPattern())
+    rhs = ParamDef(kind="input", pattern=TensorPattern())
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
 
 
@@ -107,23 +103,7 @@ def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
     raise ValueError(f"incompatible operand layouts {a!r} vs {b!r}")
 
 
-@register_access_relation(Binary)
-def _elementwise_binary(call: "Call", ctx) -> AccessRelations:
-    shapes = tuple(tuple(ctx.type_of(arg).shape) for arg in call.args)
-    out_shape = broadcast_shapes(*shapes)
-    produced = 1
-    for extent in out_shape:
-        produced *= extent if isinstance(extent, int) else 1
-    return iterating(
-        out_shape,
-        AccessRelations(
-            inputs=tuple(
-                BoundaryRelation(broadcast_access(out_shape, shape))
-                for arg, shape in zip(call.args, shapes)
-            ),
-            outputs=(BoundaryRelation(identity_access(len(out_shape))),),
-        ),
-    )
+register_access_relation(Binary)(identity_relations)
 
 
 @register_typeinfer(Binary)

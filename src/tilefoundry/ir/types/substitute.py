@@ -379,19 +379,15 @@ def substitute_shape_dim(entry: object, bindings: Mapping[str, int]) -> object:
 
 
 def _checked(variable: DimVar, extent: int) -> int:
-    """*extent*, once the declaration is known to admit it.
-
-    DimVar bounds are half-open; specialization patterns use closed ranges.
-    covers, so the two cannot disagree about which side an endpoint falls on.
-    """
+    """*extent*, once the closed declaration is known to admit it."""
     if isinstance(extent, bool) or not isinstance(extent, int):
         raise DimSubstitutionError(
             f"dimension {variable.name!r} takes an integer extent, got {extent!r}"
         )
-    if not variable.lo <= extent < variable.hi:
+    if not variable.lo <= extent <= variable.hi:
         raise DimSubstitutionError(
             f"dimension {variable.name!r} was declared over "
-            f"[{variable.lo}, {variable.hi}) and cannot take {extent}"
+            f"[{variable.lo}, {variable.hi}] and cannot take {extent}"
         )
     return extent
 

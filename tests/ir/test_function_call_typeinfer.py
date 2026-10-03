@@ -127,7 +127,7 @@ def test_broadcast_formal_accepts_reshaped_runtime_slice():
 
 
 def test_symbolic_arithmetic_signature_matches_inferred_argument():
-    seq = DimVar("call_seq", 1, 4097)
+    seq = DimVar("call_seq", 1, 4096)
     authored_dim = simplify_dim(DimMul, (seq, 2))
     authored_type = make_tensor_type((authored_dim, 8), _F)
     x = Var(type=authored_type, name="x")

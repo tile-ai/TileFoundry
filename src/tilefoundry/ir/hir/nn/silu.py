@@ -42,4 +42,4 @@ def _eval_silu(ctx):
 __all__ = ["Silu"]
 
 
-register_access_relation(Silu)(identity_relations(1))
+register_access_relation(Silu)(identity_relations)

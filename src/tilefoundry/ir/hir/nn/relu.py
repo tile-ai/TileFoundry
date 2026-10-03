@@ -36,4 +36,4 @@ def _eval_relu(ctx):
     return TensorValue(data=torch.relu(ctx.args[0].data), type=ctx.result_type)
 
 
-register_access_relation(ReLU)(identity_relations(1))
+register_access_relation(ReLU)(identity_relations)

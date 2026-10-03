@@ -22,7 +22,7 @@ from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.parser import ParseError
 
-N = DimVar("N", 1, 257)
+N = DimVar("N", 1, 256)
 
 
 def test_a_tile_window_cannot_be_used_as_an_explicit_bound() -> None:

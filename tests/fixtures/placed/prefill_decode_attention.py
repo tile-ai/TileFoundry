@@ -15,8 +15,8 @@ from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare tile() in authored 
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
-SEQ = DimVar("seq", 1, 4097)
-CTX = DimVar("ctx", 1, 4097)
+SEQ = DimVar("seq", 1, 4096)
+CTX = DimVar("ctx", 1, 4096)
 
 HEADS = 16
 HEAD_DIM = 64

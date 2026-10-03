@@ -31,8 +31,8 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.utils.isl_utils import cardinality
 
-P = DimVar("P", 2048, 1_048_577)
-Q = DimVar("Q", 2, 33)
+P = DimVar("P", 2048, 1_048_576)
+Q = DimVar("Q", 2, 32)
 
 
 def test_normalize_dim_uses_isl_affine_normal_form():
@@ -63,7 +63,7 @@ def test_normalize_dim_uses_isl_affine_normal_form():
 def test_normalize_dim_leaves_unsupported_expressions_unchanged():
     symbolic_divisor = simplify_dim(
         DimFloorDiv,
-        (simplify_dim(DimMul, (P, Q)), DimVar("G", 1, 65)),
+        (simplify_dim(DimMul, (P, Q)), DimVar("G", 1, 64)),
     )
     piecewise = simplify_dim(DimMin, (P, 8192))
 
@@ -104,18 +104,18 @@ def test_normalize_dim_keys_runtime_parameters_by_object_identity():
 def test_dim_range_interval_arithmetic():
     """Conservative half-open interval per dim kind, incl. nesting."""
     assert dim_range(7) == (7, 8)
-    assert dim_range(P) == (P.lo, P.hi)
-    assert dim_range(simplify_dim(DimAdd, (128, P))) == (128 + P.lo, 128 + P.hi)
-    assert dim_range(simplify_dim(DimSub, (P, Q))) == (P.lo - (Q.hi - 1), P.hi - Q.lo)
-    assert dim_range(simplify_dim(DimMul, (4, P))) == (4 * P.lo, 4 * (P.hi - 1) + 1)
+    assert dim_range(P) == (P.lo, P.hi + 1)
+    assert dim_range(simplify_dim(DimAdd, (128, P))) == (128 + P.lo, 128 + P.hi + 1)
+    assert dim_range(simplify_dim(DimSub, (P, Q))) == (P.lo - Q.hi, P.hi - Q.lo + 1)
+    assert dim_range(simplify_dim(DimMul, (4, P))) == (4 * P.lo, 4 * P.hi + 1)
     assert dim_range(simplify_dim(DimMul, (P, Q))) == (
         P.lo * Q.lo,
-        (P.hi - 1) * (Q.hi - 1) + 1,
+        P.hi * Q.hi + 1,
     )
-    assert dim_range(simplify_dim(DimFloorDiv, (P, 4))) == (P.lo // 4, (P.hi - 1) // 4 + 1)
+    assert dim_range(simplify_dim(DimFloorDiv, (P, 4))) == (P.lo // 4, P.hi // 4 + 1)
     assert dim_range(simplify_dim(DimMod, (P, 128))) == (0, 128)
-    assert dim_range(simplify_dim(DimMax, (P, Q))) == (max(P.lo, Q.lo), max(P.hi, Q.hi))
-    assert dim_range(simplify_dim(DimMin, (P, Q))) == (min(P.lo, Q.lo), min(P.hi, Q.hi))
+    assert dim_range(simplify_dim(DimMax, (P, Q))) == (max(P.lo, Q.lo), max(P.hi, Q.hi) + 1)
+    assert dim_range(simplify_dim(DimMin, (P, Q))) == (min(P.lo, Q.lo), min(P.hi, Q.hi) + 1)
 
     inner = simplify_dim(DimFloorDiv, (P, 4))
     outer = simplify_dim(DimFloorDiv, (inner, 2))
@@ -125,11 +125,11 @@ def test_dim_range_interval_arithmetic():
     product = simplify_dim(DimMul, (P, Q))
     shared_leaf = simplify_dim(DimAdd, (product, P))
     plo, phi = dim_range(product)
-    assert dim_range(shared_leaf) == (plo + P.lo, phi + P.hi - 1)
+    assert dim_range(shared_leaf) == (plo + P.lo, phi + P.hi)
 
 
 def test_dim_range_symbolic_divisor_unsupported():
-    n = DimVar("N", 1, 8)
+    n = DimVar("N", 1, 7)
     with pytest.raises(NotImplementedError, match="symbolic divisor"):
         dim_range(simplify_dim(DimFloorDiv, (P, n)))
     with pytest.raises(NotImplementedError, match="symbolic divisor"):
@@ -202,7 +202,7 @@ def test_shape_to_isl_domain_encoding():
 
 def test_shape_to_isl_domain_same_name_conflicting_bounds_raises():
     with pytest.raises(ValueError, match="conflicting bounds"):
-        shape_to_isl_domain((DimVar("S", 1, 8), DimVar("S", 1, 16)))
+        shape_to_isl_domain((DimVar("S", 1, 7), DimVar("S", 1, 15)))
 
 
 def test_index_set_is_the_nonnegative_literal_shape_special_case():

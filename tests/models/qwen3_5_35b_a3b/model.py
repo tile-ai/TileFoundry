@@ -98,7 +98,7 @@ _L2_EPS = 1e-6
 
 
 # Prior-cache length. The caller appends this step's returned K/V entry.
-C = DimVar("ctx_len", 0, config.max_position_embeddings)
+C = DimVar("ctx_len", 0, config.max_position_embeddings - 1)
 
 # One token per step.
 

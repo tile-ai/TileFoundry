@@ -21,8 +21,8 @@ from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.types.dim import DimVar
 
-_M = DimVar("m", 1, 64)
-_K = DimVar("k", 1, 64)
+_M = DimVar("m", 1, 63)
+_K = DimVar("k", 1, 63)
 _SUM = ReduceKind.SUM
 
 

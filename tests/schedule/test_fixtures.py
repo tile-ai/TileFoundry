@@ -21,7 +21,7 @@ import torch
 
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import check_program
+from tilefoundry.analysis.check import check_program, resolve_program_geometry
 from tilefoundry.analysis.liveness import analyze_liveness, result_copies
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
@@ -79,16 +79,18 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
 PLAIN = (
+    "chunk_rmsnorm",
     "gemm_8192x17408x5120_cta_grid",
     "gemm_relu_gemm_smem_staged",
     "gemm_relu_gemm_tiled",
     "gemm_relu_gemm_untiled",
 )
+PLAIN_DIMS = {"chunk_rmsnorm": {"chunks": 16}}
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
@@ -122,6 +124,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "scalar_binary": 0,
     "gemm_8192x17408x5120_register_store": 196_608,
     "gemm_8192x17408x5120_tma_store": 212_992,
     "sm80_mma_ldmatrix": 1_536,
@@ -143,6 +146,11 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "scalar_binary": {
+        "thread@0:32#0": _RmemExpectation(
+            132, "32-element f32 register tile plus one f32 lhs broadcast value"
+        ),
+    },
     "gemm_8192x17408x5120_register_store": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
         "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
@@ -351,9 +359,13 @@ def _direct_operand_matches(function: PrimFunction) -> list[tuple[object, str, d
 def test_plain_program_is_analyzable(name: str) -> None:
     module = importlib.import_module(f"tests.fixtures.schedule.plain.{name}")
     program = next(value for value in vars(module).values() if type(value).__name__ == "Module")
-    entry = next(function for function in program.functions if function.name == "gemm")
-    check_program(program, entry)
-    result = analyze(program, entry, analysis=("memory", "performance"))
+    entry = program.entry_function()
+    dims = PLAIN_DIMS.get(name)
+    concrete, concrete_entry = resolve_program_geometry(
+        program, entry, dims, TypeInferContext(scope=FunctionScope(program, entry))
+    )
+    check_program(concrete, concrete_entry)
+    result = analyze(program, entry, analysis=("memory", "performance"), dims=dims)
     assert result.metadata_types
 
 
@@ -510,7 +522,8 @@ def test_scheduled_hir_program_has_analysis_metadata(
                 ):
                     outside_uses += 1
                     assert interval.last_used_at >= backedge
-        assert outside_uses
+        if loop_bounds:
+            assert outside_uses
 
         for interval in liveness.intervals:
             if result_copies(interval.value) == 1:
@@ -528,7 +541,16 @@ def test_schedule_memory_report_carries_allocations(
     report = json.loads(out.read_text())
     memory = report["function_records"]["memory"]
     peaks = {item["memory_level"]: item["peak_bytes"] for item in memory["peaks"]}
-    assert peaks["smem"] == SMEM_GOLDEN[path.stem]
+    program = _module_in(path)
+    has_smem = any(
+        isinstance(expr.type, TensorType) and expr.type.storage is StorageKind.SMEM
+        for expr in collect_exprs(program.entry_function().body)
+    )
+    if has_smem:
+        assert peaks["smem"] == SMEM_GOLDEN[path.stem]
+    else:
+        assert "smem" not in peaks
+        assert SMEM_GOLDEN[path.stem] == 0
     assert memory["solver_status"] == "feasible"
     for row in report["calls"]:
         allocation = row["memory"]
@@ -727,7 +749,7 @@ def test_schedule_typeinfer_requires_instruction_verifier(monkeypatch) -> None:
     monkeypatch.setitem(
         access_relation_registry._map,
         _UnstatedInstruction,
-        identity_relations(1),
+        identity_relations,
     )
 
     with pytest.raises(ValueError, match="has no registered verifier"):
@@ -746,7 +768,7 @@ def test_schedule_typeinfer_requires_whole_instruction_tiles(monkeypatch) -> Non
     monkeypatch.setitem(
         access_relation_registry._map,
         _UnstatedInstruction,
-        identity_relations(1),
+        identity_relations,
     )
 
     with pytest.raises(
@@ -970,7 +992,8 @@ def test_schedule_candidate_reports_cover_every_site(
     for name in PLAIN:
         source = f"tests/fixtures/schedule/plain/{name}.py"
         out = tmp_path / f"{name}.json"
-        assert cli_main(["schedule", "candidates", source, str(out), "--json"]) == 0
+        dims = [f"--dim={key}={value}" for key, value in PLAIN_DIMS.get(name, {}).items()]
+        assert cli_main(["schedule", "candidates", source, str(out), "--json", *dims]) == 0
         reports.append((name, json.loads(out.read_text())))
 
     assert capsys.readouterr() == ("", "")
@@ -983,16 +1006,19 @@ def test_schedule_candidate_reports_cover_every_site(
 
 
 @pytest.mark.parametrize(
-    ("name", "matmuls", "reshards", "accepted_matmuls"),
+    ("name", "dims", "matmuls", "reshards", "accepted_matmuls"),
     (
-        ("gemm_8192x17408x5120_cta_grid", 1, 4, 1),
-        ("gemm_relu_gemm_smem_staged", 2, 6, 0),
-        ("gemm_relu_gemm_tiled", 2, 2, 0),
-        ("gemm_relu_gemm_untiled", 2, 0, 0),
+        ("chunk_rmsnorm", ("chunks=16",), 0, 7, 0),
+        ("chunk_rmsnorm", ("chunks=32",), 0, 7, 0),
+        ("gemm_8192x17408x5120_cta_grid", (), 1, 4, 1),
+        ("gemm_relu_gemm_smem_staged", (), 2, 6, 0),
+        ("gemm_relu_gemm_tiled", (), 2, 2, 0),
+        ("gemm_relu_gemm_untiled", (), 2, 0, 0),
     ),
 )
 def test_schedule_candidates_reports_every_plain_site(
     name: str,
+    dims: tuple[str, ...],
     matmuls: int,
     reshards: int,
     accepted_matmuls: int,
@@ -1002,7 +1028,12 @@ def test_schedule_candidates_reports_every_plain_site(
     source = f"tests/fixtures/schedule/plain/{name}.py"
     out = tmp_path / f"{name}.json"
 
-    assert cli_main(["schedule", "candidates", source, str(out), "--json"]) == 0
+    assert (
+        cli_main(
+            ["schedule", "candidates", source, str(out), "--json", *(f"--dim={d}" for d in dims)]
+        )
+        == 0
+    )
     assert capsys.readouterr() == ("", "")
     report = json.loads(out.read_text())
     assert report["source"] == source
@@ -1013,6 +1044,25 @@ def test_schedule_candidates_reports_every_plain_site(
     assert sum(bool(row["candidates"]) for row in matmul_rows) == accepted_matmuls
     assert all(row["candidates"] or row["refused"] for row in report["lines"])
     assert all(row["candidates"] for row in reshard_rows)
+
+    if name == "chunk_rmsnorm":
+        binaries = [row for row in report["lines"] if row["op"] == "tf.binary"]
+        assert len(binaries) == 5
+        assert all(any(c["id"] == "T.binary" for c in row["candidates"]) for row in binaries)
+        assert all(row["op"] != "tf.schedule" for row in report["lines"])
+        if dims == ("chunks=16",):
+            invalid_out = tmp_path / "invalid.json"
+            assert (
+                cli_main(["schedule", "candidates", source, str(invalid_out), "--dim=chunks=33"])
+                != 0
+            )
+            assert "[1, 32]" in capsys.readouterr().err
+            assert not invalid_out.exists()
+            assert cli_main(["schedule", "candidates", source, str(invalid_out)]) != 0
+            error = capsys.readouterr().err
+            assert "chunks is declared as [1, 32]" in error
+            assert "bind it with --dim" in error
+            assert not invalid_out.exists()
 
 
 @pytest.mark.parametrize("source", HIR, ids=lambda path: path.stem)

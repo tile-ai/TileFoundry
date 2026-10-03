@@ -258,6 +258,12 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_candidates.add_argument(
         "--json", action="store_true", help="write the same candidate report as JSON"
     )
+    schedule_candidates.add_argument(
+        "--dim",
+        action="append",
+        metavar="NAME=EXTENT",
+        help="bind one open dimension to a concrete extent; repeat for other dimensions",
+    )
     return parser
 
 
@@ -336,7 +342,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "schedule":
         try:
             if args.schedule_command == "candidates":
-                return run_schedule_candidates(args.source, args.out, as_json=args.json)
+                return run_schedule_candidates(
+                    args.source, args.out, as_json=args.json, dims=args.dim
+                )
             if args.schedule_command == "facts":
                 instruction, out = (
                     (None, args.instruction_or_out)

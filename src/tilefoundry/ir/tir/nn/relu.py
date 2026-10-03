@@ -37,7 +37,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
-register_access_relation(ReLU)(identity_relations(2))
+register_access_relation(ReLU)(identity_relations)
 
 
 @register_verify_stmt(ReLU)

@@ -15,7 +15,7 @@ from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import TensorPattern
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -28,7 +28,7 @@ from tilefoundry.visitor_registry.access_relation import (
 class Unary(Op):
     """Value-form pointwise unary operation."""
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=TensorPattern())
     kind = ParamDef(kind="attribute", annotation=UnaryKind)
 
 
@@ -93,4 +93,4 @@ def _eval_unary(ctx):
 __all__ = ["Unary"]
 
 
-register_access_relation(Unary)(identity_relations(1))
+register_access_relation(Unary)(identity_relations)

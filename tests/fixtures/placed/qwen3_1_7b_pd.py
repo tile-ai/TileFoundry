@@ -22,8 +22,8 @@ from tilefoundry.target import CudaTarget
 _CONFIG = Path(__file__).parents[2] / "models" / "qwen3_1_7b" / "config.json"
 MAX_POSITION_EMBEDDINGS = json.loads(_CONFIG.read_text(encoding="utf-8"))["max_position_embeddings"]
 
-SEQ = DimVar("seq", 1, 8193)
-CTX = DimVar("ctx_len", 0, MAX_POSITION_EMBEDDINGS)
+SEQ = DimVar("seq", 1, 8192)
+CTX = DimVar("ctx_len", 0, MAX_POSITION_EMBEDDINGS - 1)
 
 CAP = 4608
 

@@ -52,7 +52,7 @@ def _sym(name: str) -> Call:
     """
     return Call(
         type=TensorType.scalar(DType.i64),
-        target=DimVar(name=name, lo=1, hi=1024),
+        target=DimVar(name=name, lo=1, hi=1023),
         args=(),
     )
 
@@ -97,7 +97,7 @@ def test_simplify_dim_constructs_symbolic_and_invalid_arithmetic() -> None:
 
 
 def test_dim_call_arithmetic_is_pure_construction_in_both_directions() -> None:
-    seq = DimVar("S_chain", 1, 1024)
+    seq = DimVar("S_chain", 1, 1023)
     base = seq - 1
 
     expressions = (
@@ -155,7 +155,7 @@ def test_non_dim_calls_do_not_gain_dimension_arithmetic() -> None:
 
 
 def test_typeinfer_canonicalizes_equivalent_symbolic_shapes() -> None:
-    seq = DimVar("S_canonical", 1, 8193)
+    seq = DimVar("S_canonical", 1, 8192)
     verbose = simplify_dim(
         DimFloorDiv,
         (
@@ -231,7 +231,7 @@ def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
     assert ty.shape == (1, 4, 32, 128)
     assert all(isinstance(d, int) and not isinstance(d, bool) for d in ty.shape)
 
-    s = DimVar(name="S_ti", lo=1, hi=8)
+    s = DimVar(name="S_ti", lo=1, hi=7)
     mixed = TensorType(shape=(s, _i64(128)), dtype=DType.f32, layout=None, storage="gmem")
     assert mixed.shape[0] is s
     assert mixed.shape[1] == 128 and isinstance(mixed.shape[1], int)
@@ -285,7 +285,7 @@ def test_unary_propagates_dim_var_in_shape() -> None:
     that ``DimVar`` (with the same bounds) on the result type — the
     dynamic dim is not collapsed to a concrete int.
     """
-    s = DimVar(name="S_ti", lo=1, hi=8)
+    s = DimVar(name="S_ti", lo=1, hi=7)
     in_ty = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")
     x = Var(type=in_ty, name="x")
     call = Call(type=in_ty, target=Unary(kind=UnaryKind.NEG), args=(x,))
@@ -293,7 +293,7 @@ def test_unary_propagates_dim_var_in_shape() -> None:
     assert out_ty.shape == (s, 8)
 
     assert out_ty.shape[0] is s
-    assert (out_ty.shape[0].lo, out_ty.shape[0].hi) == (1, 8)
+    assert (out_ty.shape[0].lo, out_ty.shape[0].hi) == (1, 7)
 
 
 def test_a_copied_dim_var_is_the_canonical_one() -> None:
@@ -303,7 +303,7 @@ def test_a_copied_dim_var_is_the_canonical_one() -> None:
     signature that came back holding a fresh ``DimVar`` would no longer bind
     against the one its caller wrote.
     """
-    s = DimVar(name="S_copy", lo=1, hi=8)
+    s = DimVar(name="S_copy", lo=1, hi=7)
     in_ty = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")
 
     assert copy.deepcopy(s) is s

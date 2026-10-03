@@ -29,6 +29,9 @@ def _tile_counts(whole: tuple, inner: tuple) -> tuple[int, ...]:
         raise ValueError(f"whole shape {whole} and inner shape {inner} have different ranks")
     counts = []
     for whole_extent, inner_extent in zip(whole, inner, strict=True):
+        if not isinstance(whole_extent, int) and whole_extent == inner_extent:
+            counts.append(1)
+            continue
         if (
             not isinstance(whole_extent, int)
             or isinstance(whole_extent, bool)
@@ -658,7 +661,7 @@ def upper_bound(dim) -> int:
     from .dim import DimVar  # noqa: PLC0415 - cycle guard
 
     if isinstance(dim, DimVar):
-        return int(dim.hi) - 1
+        return int(dim.hi)
     static = static_dim_value(dim)
     if static is not None:
         return static

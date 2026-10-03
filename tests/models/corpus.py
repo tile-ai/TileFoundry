@@ -418,7 +418,7 @@ def _probe_dims(owner: Module, function: Function) -> "Mapping[str, int] | None"
     if not declared:
         return None
     return {
-        name: max(int(var.lo), min(_PROBE, int(var.hi) - 1))
+        name: max(int(var.lo), min(_PROBE, int(var.hi)))
         for name, var in sorted(declared.items())
     }
 

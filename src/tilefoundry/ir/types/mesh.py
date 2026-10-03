@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import product as cartesian_product
+
+import isl
 
 from tilefoundry.ir.types.int_tuple import product
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten, get
@@ -255,57 +258,92 @@ def starts(mesh: Mesh) -> tuple[int, ...]:
     return tuple(idx2crd(offset, sizes, compact_major(sizes)))
 
 
-def selected_run(arrangement: Layout, start: int) -> tuple[tuple, tuple, int]:
-    """Reduce one level's selected positions to its joined modes and start."""
+_POSITION_ENUMERATION_LIMIT = 256
+
+
+def level_positions(mesh: Mesh, level: str) -> isl.set:
+    """The selected positions of one level, under its declared dimension bounds.
+
+    The isl boundary normalizes library errors to ValueError so callers can add
+    source locations; this is exception normalization, not a scope decision.
+    """
+    from tilefoundry.ir.isl_interop import dim_to_isl_expr  # noqa: PLC0415
+
+    names = _named(mesh)
+    index = names.index(level)
+    arrangement = levels(mesh)[index]
+    shape = tuple(flatten(arrangement.shape))
     strides = arrangement.strides
-    if strides is None:
-        return tuple(flatten(arrangement.shape)), (), start
-    modes = [
-        (extent, stride)
-        for extent, stride in zip(flatten(arrangement.shape), flatten(strides))
-        if extent != 1
-    ]
-    joined: list[list] = []
-    for extent, stride in sorted(modes, key=lambda mode: (mode[1], mode[0])):
-        if joined and joined[-1][0] * joined[-1][1] == stride:
-            joined[-1][0] *= extent
+    strides = tuple(flatten(strides)) if strides is not None else compact_row_major(shape)
+    params = {}
+    terms, constraints, coordinates, enumerated = [], [], [], []
+    choices = 1
+
+    def render(value):
+        try:
+            return dim_to_isl_expr(value, params)
+        except (TypeError, ValueError, NotImplementedError, isl.Error) as error:
+            raise ValueError(f"mesh level {level!r} dimension is not affine: {error}") from error
+
+    for axis, (extent, stride) in enumerate(zip(shape, strides, strict=True)):
+        if isinstance(stride, int):
+            coordinate = f"c{axis}"
+            coordinates.append(coordinate)
+            constraints.append(f"0 <= {coordinate} < {render(extent)}")
+            terms.append(f"{stride} * {coordinate}")
+        elif isinstance(extent, int):
+            enumerated.append((axis, extent, render(stride)))
+            choices *= extent
         else:
-            joined.append([extent, stride])
-    return (
-        tuple(extent for extent, _ in joined),
-        tuple(stride for _, stride in joined),
-        start,
-    )
+            raise ValueError(
+                f"mesh level {level!r} axis {axis} has symbolic extent and stride; "
+                "bind dimensions with --dim before comparing positions"
+            )
+    if choices > _POSITION_ENUMERATION_LIMIT:
+        axes = tuple((axis, extent) for axis, extent, _ in enumerated)
+        bindings = ", ".join(f"--dim {name}=EXTENT" for name in params)
+        raise ValueError(
+            f"mesh level {level!r} axes {axes} require {choices} enumerated positions, "
+            f"exceeding limit {_POSITION_ENUMERATION_LIMIT}; bind dimensions first with "
+            f"{bindings} so strides become static"
+        )
+    start = starts(mesh)[index]
+    alternatives = []
+    for selected in cartesian_product(*(range(extent) for _, extent, _ in enumerated)):
+        address = [str(start), *terms]
+        address.extend(f"{value} * {stride}" for value, (_, _, stride) in zip(selected, enumerated))
+        alternatives.append(f"p = {' + '.join(address)}")
+    positions = " or ".join(alternatives) if alternatives else "1 = 0"
+    constraints.append(f"({positions})")
+    constraints.extend(f"{lo} <= {name} < {hi}" for name, (lo, hi) in params.items())
+    body = " and ".join(constraints)
+    if coordinates:
+        body = f"exists {', '.join(coordinates)}: {body}"
+    prefix = f"[{', '.join(params)}] -> " if params else ""
+    try:
+        return isl.set(prefix + f"{{ [p] : {body} }}")
+    except isl.Error as error:
+        raise ValueError(f"mesh level {level!r} positions are not affine: {error}") from error
 
 
-def _continuous_interval(run: tuple[tuple, tuple, int]) -> tuple[int, int] | None:
-    extents, strides, start = run
-    if not isinstance(start, int):
-        return None
-    if not extents:
-        return start, start + 1
-    if len(extents) != 1 or strides != (1,) or not isinstance(extents[0], int):
-        return None
-    return start, start + extents[0]
+def _continuous_positions(positions: isl.set) -> bool:
+    """No selected position except the last may have an unselected successor."""
+    successors = positions.subtract(positions.lexmax()).apply(isl.map("{ [p] -> [q] : q = p + 1 }"))
+    return successors.is_subset(positions)
 
 
 def within_scope(mesh: Mesh, current: Mesh) -> bool:
-    """Whether each continuous run selected by *mesh* is within *current*."""
-    scope = {
-        getattr(topology, "name", topology): selected_run(arrangement, start)
-        for topology, arrangement, start in zip(
-            current.topologies, levels(current), starts(current)
-        )
-    }
-    for topology, arrangement, start in zip(
-        mesh.topologies, levels(mesh), starts(mesh)
-    ):
-        name = getattr(topology, "name", topology)
-        inner = _continuous_interval(selected_run(arrangement, start))
-        outer = _continuous_interval(scope[name]) if name in scope else None
-        if inner is None or outer is None:
+    """Whether each continuous selection is contained in the enclosing level."""
+    current_names = _named(current)
+    for name in _named(mesh):
+        if name not in current_names:
             return False
-        if not (outer[0] <= inner[0] and inner[1] <= outer[1]):
+        inner, outer = level_positions(mesh, name), level_positions(current, name)
+        context = inner.params().intersect(outer.params())
+        inner, outer = inner.intersect_params(context), outer.intersect_params(context)
+        if not _continuous_positions(inner) or not _continuous_positions(outer):
+            return False
+        if not inner.is_subset(outer):
             return False
     return True
 
@@ -392,23 +430,16 @@ def make_mesh(*meshes: Mesh) -> Mesh:
                 or isinstance(inner.layout, ComposedLayout),
             )
             if not within_scope(result, current):
-                parent_runs = {
-                    name: selected_run(arrangement, start)
-                    for name, arrangement, start in zip(
-                        here, levels(current), starts(current)
-                    )
-                    if name in there
+                parent_positions = {
+                    name: str(level_positions(current, name)) for name in here if name in there
                 }
-                inner_runs = {
-                    name: selected_run(arrangement, start)
-                    for name, arrangement, start in zip(
-                        there, levels(inner), starts(inner)
-                    )
+                inner_positions = {
+                    name: str(level_positions(inner, name)) for name in there
                 }
                 raise ValueError(
-                    f"replacement scope selects runs {inner_runs}, outside parent "
-                    f"scope runs {parent_runs}; both must be continuous and each "
-                    "replacement run must be contained in its parent run"
+                    f"replacement scope selects positions {inner_positions}, outside parent "
+                    f"scope positions {parent_positions}; both must be continuous and each "
+                    "replacement selection must be contained in its parent selection"
                 )
         else:
             shared = sorted(set(here) & set(there))
@@ -443,7 +474,7 @@ __all__ = [
     "check_topology",
     "levels",
     "make_mesh",
-    "selected_run",
+    "level_positions",
     "separate",
     "starts",
     "within_scope",

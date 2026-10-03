@@ -7,7 +7,7 @@ from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.types import Layout, Mesh, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
-_S = DimVar("S", 1, 256)
+_S = DimVar("S", 1, 255)
 
 
 @module(

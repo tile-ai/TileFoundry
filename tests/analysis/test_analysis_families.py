@@ -116,7 +116,7 @@ class _RoomierShared(_RestatedCapacity):
     levels = {"smem": 845_000}
 
 
-_GRID = DimVar("grid", 1, 397)
+_GRID = DimVar("grid", 1, 396)
 
 
 @module(entry="main", target=_LARGE_H200, topologies=(Topology("cta", 1),))

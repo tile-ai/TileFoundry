@@ -53,7 +53,7 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
         target.validate_program_topology(Topology("core", 9))
     with pytest.raises(ValueError, match="must be positive"):
         target.validate_program_topology(Topology("core", 0))
-    target.validate_program_topology(Topology("core", DimVar("cores", 1, 8)))
+    target.validate_program_topology(Topology("core", DimVar("cores", 1, 7)))
 
 
 def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got():

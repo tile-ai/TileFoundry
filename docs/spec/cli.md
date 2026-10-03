@@ -408,7 +408,7 @@ explicit analysis; there is no ordinary `--target` option.
     between them silently answers a request that has no answer.
   - With no `--dim`, the selection MUST be analysed or type-checked as authored.
     A selection that leaves a dimension open MUST then fail naming the dimension,
-    its declared `[lo, hi)` interval, and concrete extents inside that interval
+    its declared `[lo, hi]` interval, and concrete extents inside that interval
     the caller can use: inferring its concrete program requires an extent, and a
     range is not one. The bare form MUST apply stated dimensions before running
     the public program check used by Analyze, followed by the same
@@ -445,7 +445,7 @@ and the two reports used to choose an instruction. Its subcommands are:
 ```text
 tilefoundry schedule finalize SOURCE PATH [--json]
 tilefoundry schedule facts [INSTRUCTION] --target TARGET PATH [--json]
-tilefoundry schedule candidates SOURCE PATH [--json]
+tilefoundry schedule candidates SOURCE PATH [--json] [--dim NAME=EXTENT ...]
 ```
 
 `finalize` checks and inlines the selected entry, runs memory analysis, lowers
@@ -479,6 +479,10 @@ candidate discovery; explicitly selecting that Op in `tf.schedule` remains an
 error.
 
 - constraints:
+  - `candidates --dim NAME=EXTENT` MUST bind one extent per dimension before
+    analysis, with the same format and duplicate-dimension validation as Analyze.
+    An unbound dimension MUST be named with its closed declared interval and
+    suggested extents; the command MUST NOT write a report when binding fails.
   - `PATH` is required, is the only report destination, and MUST NOT be partly
     written when the operation fails. A successful command writes a trailing
     newline and writes nothing to stdout.

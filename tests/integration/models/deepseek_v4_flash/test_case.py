@@ -46,6 +46,6 @@ def test_the_context_lengths_the_case_names_are_ones_the_model_has():
     )
 
     with pytest.raises(
-        DimSubstitutionError, match=r"declared over \[0, 128\) and cannot take 1024"
+        DimSubstitutionError, match=r"declared over \[0, 127\] and cannot take 1024"
     ):
         specialize_concretely(function, {"ctx_len": 1024})

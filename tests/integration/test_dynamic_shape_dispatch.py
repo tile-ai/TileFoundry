@@ -1,6 +1,6 @@
 """GPU end-to-end for dynamic-shape dispatch.
 
-A ``pass`` prototype partitions ``DimVar('S', 1, 8)`` into closed ranges:
+A ``pass`` prototype partitions ``DimVar('S', 1, 7)`` into closed ranges:
 ``[1, 4)`` squares and ``[4, 8)`` doubles. One kernel holds both arms and
 picks between them on the extent it was told, so one binary handles every
 shape in the envelope.
@@ -17,7 +17,7 @@ from tilefoundry.dsl import DimVar, RangePattern, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — binds bare ``mul`` / ``add``
 from tilefoundry.target import CudaTarget
 
-_S = DimVar("S", 1, 8)
+_S = DimVar("S", 1, 7)
 
 
 @module(entry="main")

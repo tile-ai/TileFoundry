@@ -10,7 +10,7 @@ from tilefoundry.ir.pattern import (
     TensorPattern,
     WildcardPattern,
 )
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, StorageKind, TensorType
 
 
 def _tensor(shape: tuple[int, ...], dtype: DType = DType.f32) -> TensorType:
@@ -22,7 +22,13 @@ def test_pattern_match_contract() -> None:
     assert Scalar.match(TensorType.umat_scalar())
     assert not Scalar.match(_tensor((3,)))
     assert Tensor.match(_tensor((3, 4)))
-    assert not Tensor.match(TensorType.umat_scalar())
+    scalar = TensorType.umat_scalar()
+    assert not Tensor.match(scalar)
+    assert TensorPattern().match(scalar)
+    assert TensorPattern(shape=()).match(scalar)
+    assert not TensorPattern(shape=()).match(_tensor((3,)))
+    for storage in StorageKind:
+        assert TensorPattern(storage=storage).match(scalar)
     assert not Tensor.match(type("FakeTy", (), {"shape": (3, 4)})())
 
     rank2_bf16 = TensorPattern(shape=(WildcardPattern(),) * 2, dtype=DType.bf16)

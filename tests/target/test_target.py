@@ -263,7 +263,7 @@ def test_program_topologies_use_target_resource_facts() -> None:
     target.validate_program_topology(Topology("cta", 132))
     target.validate_program_topology(Topology("cta", 310_000))
     target.validate_program_topology(Topology("thread", 1024))
-    target.validate_program_topology(Topology("cta", DimVar("ctas", 1, 310_001)))
+    target.validate_program_topology(Topology("cta", DimVar("ctas", 1, 310_000)))
     ExternalCudaTarget("nvidia.h200_sxm").validate_program_topology(Topology("thread", 1024))
     with pytest.raises(ValueError, match="must be positive"):
         target.validate_program_topology(Topology("cta", 0))

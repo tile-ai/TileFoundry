@@ -31,11 +31,11 @@ from tilefoundry.target import CudaTarget
 
 ENTRY = GqaOnline.entry_function()
 STEADY = {"ctx_len": SMALL_CONTEXT_T + NUM_SPLITS}
-_LOOP_CTX = DimVar("loop_ctx", 1, 4097)
-_CALL_M = DimVar("call_m", 1, 17)
+_LOOP_CTX = DimVar("loop_ctx", 1, 4096)
+_CALL_M = DimVar("call_m", 1, 16)
 _N_MAX = 1023
-_CALL_N = DimVar("call_n", 1, _N_MAX + 1)
-_NESTED_N = DimVar("nested_n", 1, _N_MAX + 1)
+_CALL_N = DimVar("call_n", 1, _N_MAX)
+_NESTED_N = DimVar("nested_n", 1, _N_MAX)
 _DISPATCH_BOUND = 128
 
 

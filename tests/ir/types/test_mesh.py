@@ -3,15 +3,34 @@ from __future__ import annotations
 import pytest
 
 from tests.fixtures.meshes import CT, CTA, RUN, THR
+from tilefoundry.ir.core import Call, Var, VerifyError
+from tilefoundry.ir.core.kinds import UnaryKind
+from tilefoundry.ir.core.metadata import SourceSpanMetadata
+from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.mesh_scope import (
     covered_by_scope,
     mesh_scope_matches_required_scope,
     states_consistent_positions,
 )
-from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, Topology, make_mesh
+from tilefoundry.ir.types import (
+    Broadcast,
+    ComposedLayout,
+    DType,
+    Layout,
+    Mesh,
+    ShardLayout,
+    TensorType,
+    Topology,
+    UnitType,
+    make_mesh,
+)
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.int_tuple import product
 from tilefoundry.ir.types.layout_algebra import size
-from tilefoundry.ir.types.mesh import check_topology, separate
+from tilefoundry.ir.types.mesh import check_topology, level_positions, separate, within_scope
+from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.typeinfer import inference_type
 
 
 def test_mesh_position_consistency_is_an_explicit_predicate() -> None:
@@ -140,3 +159,63 @@ def test_mesh_refuses_a_repeated_topology_name() -> None:
             (Topology("thread", 4), Topology("thread", 32)),
             Layout(((4,), (32,)), ((1,), (1,))),
         )
+
+
+@pytest.mark.parametrize(
+    "case", ["contiguous", "contained", "holes", "strided", "both_symbolic", "enumeration_limit", "non_affine"]
+)
+def test_symbolic_scope_compares_selected_positions(case) -> None:
+    sequence = DimVar("mesh_sequence", 64, 2048)
+    chunks = sequence // 64
+    topology = (Topology("cta", 132),)
+    full = Mesh(topology, Layout((2, chunks, 2), (2 * chunks, 2, 1)))
+    if case == "contiguous":
+        flat = Mesh(topology, Layout((4 * chunks,), (1,)))
+        assert covered_by_scope(full, full)
+        assert within_scope(full, full)
+        assert covered_by_scope(full, flat)
+    elif case == "contained":
+        half = Mesh(topology, Layout((2 * chunks,), (1,)))
+        assert within_scope(half, full)
+        assert not within_scope(full, half)
+        assert not covered_by_scope(half, full)
+        assert not within_scope(full, THR)
+    elif case in ("holes", "strided"):
+        selection = (
+            Mesh(topology, Layout((2, chunks), (2 * chunks, 1)))
+            if case == "holes"
+            else Mesh(topology, Layout((chunks,), (3,)))
+        )
+        assert not within_scope(selection, selection)
+        assert not within_scope(selection, full)
+        with pytest.raises(ValueError, match="both must be continuous"):
+            make_mesh(make_mesh(THR, selection), selection)
+    else:
+        if case == "both_symbolic":
+            selection = Mesh(topology, Layout((chunks, chunks), (chunks, 1)))
+            message = "symbolic extent and stride"
+        elif case == "enumeration_limit":
+            selection = Mesh(topology, Layout((257, chunks), (chunks, 1)))
+            message = r"axes .*257.*require 257.*--dim mesh_sequence=EXTENT"
+        else:
+            selection = Mesh(topology, Layout((2, chunks), (chunks * chunks, 1)))
+            message = "dimension is not affine"
+        with pytest.raises(ValueError, match=message):
+            level_positions(selection, "cta")
+
+        span = SourceSpanMetadata("symbolic_mesh.py", 12, 4)
+        tensor = TensorType(
+            (1,), DType.f32,
+            ShardLayout(Layout((1,), (1,)), (Broadcast(), Broadcast()), selection),
+            "rmem",
+        )
+        value = Var(name="value", type=tensor)
+        calls = (
+            Call(target=Unary(kind=UnaryKind.RSQRT), args=(value,), type=tensor, metadata=(span,)),
+            Call(target=MeshCoord(mesh=selection), args=(), type=UnitType(), metadata=(span,)),
+        )
+        for call in calls:
+            with pytest.raises(VerifyError, match=r"at symbolic_mesh.py:12:4") as error:
+                inference_type(call, TypeInferContext(current_mesh=selection))
+            if case != "non_affine":
+                assert "--dim" in str(error.value)

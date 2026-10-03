@@ -16,7 +16,7 @@ def composed_leaf_source(dim_name: str) -> str:
         "from tilefoundry import func, module\n"
         "from tilefoundry.dsl import ConstTensor, DimVar, Tensor, tf\n"
         "from tilefoundry.target import CudaTarget\n"
-        f"N = DimVar('{dim_name}', 1, 9)\n"
+        f"N = DimVar('{dim_name}', 1, 8)\n"
         "@module(entry='run')\n"
         "class Leaf:\n"
         "    @func\n"

@@ -73,12 +73,29 @@ def shard_layout_of(layout: object) -> "ShardLayout | None":
     return None
 
 
+def _structural_quotient(value, divisor):
+    """Return an exact integer or structural product quotient, if decidable."""
+    from tilefoundry.ir.core.expr import Call, Constant  # noqa: PLC0415
+    from tilefoundry.ir.types.dim import DimMul  # noqa: PLC0415
+
+    if isinstance(value, int) and isinstance(divisor, int):
+        return value // divisor if divisor != 0 and value % divisor == 0 else None
+    if value == divisor:
+        return 1
+    if isinstance(value, Call) and isinstance(value.target, DimMul) and divisor in value.args:
+        left, right = value.args
+        quotient = right if left == divisor else left
+        return quotient.value if isinstance(quotient, Constant) else quotient
+    return None
+
+
 def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "ShardLayout":
     """Bind logical axes to mesh axes in the canonical factored layout.
 
     Static splits produce mesh-sized positions plus a residual; dynamic
-    single-axis splits remain whole. Attributes are remapped to factored
-    positions and strides are rebuilt in C order when static.
+    single-axis splits remain whole. Dynamic multi-axis splits divide by each
+    mesh extent structurally. Attributes are remapped to factored positions;
+    strides are rebuilt in C order when static.
 
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
@@ -101,6 +118,24 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
             factor_position[splitting_mesh_axes[0]] = len(layout_shape)
             layout_shape.append(axis_size)
             continue
+        if not axis_static:
+            residual = axis_size
+            for mesh_axis in splitting_mesh_axes:
+                extent = mesh_shape[mesh_axis]
+                quotient = _structural_quotient(residual, extent)
+                if quotient is None:
+                    raise ValueError(
+                        f"canonical_shard_layout: logical axis {logical_axis} size "
+                        f"{axis_size!r} is dynamic; cannot factorize across multiple "
+                        f"mesh axes (undecidable division by axis {mesh_axis} "
+                        f"extent {extent!r})"
+                    )
+                factor_position[mesh_axis] = len(layout_shape)
+                layout_shape.append(extent)
+                residual = quotient
+            if residual != 1:
+                layout_shape.append(residual)
+            continue
         extent_product = 1
         for mesh_axis in splitting_mesh_axes:
             extent = mesh_shape[mesh_axis]
@@ -113,12 +148,6 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
             factor_position[mesh_axis] = len(layout_shape)
             layout_shape.append(extent)
             extent_product *= extent
-        if not axis_static:
-            raise ValueError(
-                f"canonical_shard_layout: logical axis {logical_axis} size "
-                f"{axis_size!r} is dynamic; cannot factorize across multiple "
-                f"mesh axes"
-            )
         if axis_size % extent_product != 0:
             raise ValueError(
                 f"canonical_shard_layout: logical axis {logical_axis} size "
@@ -144,14 +173,13 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
 def shard_layout_local_shape(
     sl: "ShardLayout", *, require_static: bool = True
 ) -> tuple:
-    """Derive one shard's local shape from a global ``ShardLayout``.
+    """Derive one shard's local shape from its global layout.
 
-    Each ``Split`` divides its bound layout position by the mesh extent;
-    repeated splits multiply their divisors. Equal symbolic extents yield one;
-    other symbolic splits are undecidable before binding. Other attributes do
-    not consume a layout position. ``require_static`` keeps lowering and
-    codegen on their concrete-shape boundary while type inference may retain an
-    unconsumed symbolic extent.
+    Splits divide their layout position by the mesh extent. Equal symbolic
+    extents yield one; a product containing the mesh extent yields its other
+    factor. Other symbolic splits are undecidable. Non-Split attributes do not
+    consume positions. ``require_static=False`` permits unconsumed symbolic
+    extents during type inference; lowering and codegen require concrete shapes.
 
     See [shard §7](docs/spec/shard.md#7-shardlayout).
     """
@@ -168,15 +196,16 @@ def shard_layout_local_shape(
             if isinstance(mesh_ext, int) and isinstance(local[k], int):
                 if mesh_ext != 0:
                     local[k] //= mesh_ext
-            elif local[k] == mesh_ext:
-                local[k] = 1
             else:
-                raise ValueError(
-                    f"shard_layout_local_shape: layout dim {k} ({local[k]!r}) "
-                    f"and mesh axis {mesh_axis_idx} extent {mesh_ext!r} do not "
-                    "have a decidable divisibility relation; bind symbolic "
-                    "dimensions before local projection"
-                )
+                quotient = _structural_quotient(local[k], mesh_ext)
+                if quotient is None:
+                    raise ValueError(
+                        f"shard_layout_local_shape: layout dim {k} ({local[k]!r}) "
+                        f"and mesh axis {mesh_axis_idx} extent {mesh_ext!r} do not "
+                        "have a decidable divisibility relation; bind symbolic "
+                        "dimensions before local projection"
+                    )
+                local[k] = quotient
 
     if require_static:
         for i, d in enumerate(local):

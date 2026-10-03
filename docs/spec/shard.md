@@ -319,17 +319,25 @@ def starts(mesh: Mesh) -> tuple[int, ...]:
     ...
 
 
-def selected_run(arrangement: Layout, start: int) -> tuple[tuple, tuple, int]:
-    """Reduce one level's selected positions to its joined modes and start."""
+def level_positions(mesh: Mesh, level: str) -> isl.set:
+    """Return the level's selected positions under declared dimension bounds."""
     ...
 
 
 def within_scope(mesh: Mesh, current: Mesh) -> bool:
-    """Return whether each continuous run selected by mesh is within current."""
+    """Return whether each continuous position set is contained in current."""
     ...
 ```
 
 - constraints:
+  - `level_positions` MUST express each level's selection as an isl position set,
+    with `DimVar` parameters restricted to their closed declared envelopes.
+    Static strides MUST use bounded existential coordinates. A symbolic stride
+    with a static extent MUST enumerate that axis; the product of only those
+    enumerated extents MUST NOT exceed 256. Exceeding the limit MUST report the
+    axes, product, and `--dim` bindings that make strides static. A symbolic
+    extent paired with a symbolic stride, or a non-affine dimension expression,
+    MUST be rejected rather than approximated.
   - a compile-time constant that does not enter the IR graph; describes the device
     domain, not a tensor layout object. A slice never becomes an IR/SSA value.
 
@@ -373,9 +381,10 @@ Mesh composition uses the following rules:
   inner mesh. The combined `ComposedLayout.offset` MUST then be re-encoded in
   device numbering from those per-level starts. Replacing an unsliced suffix
   and replacing the whole mesh retain their existing behavior. Every replaced
-  level MUST reduce to one continuous run contained in the enclosing level's
-  continuous run. A replacement or enclosing selection that does not reduce to
-  one continuous run MUST be rejected rather than approximated as an interval.
+  level MUST select a continuous position set contained in the enclosing level's
+  continuous position set. Continuity and containment MUST hold throughout the
+  declared dimension envelopes. A replacement or enclosing selection with holes
+  MUST be rejected rather than approximated as an interval.
 - `make_mesh(*meshes)` invokes `check_topology` on its result. For each named
   level with a concrete declared extent, its position count MUST NOT exceed
   that extent; symbolic extents are deferred until dimensions are bound. A
@@ -657,7 +666,13 @@ Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
   `N > mesh_extent(a)` is canonicalized at parse time into a
   factorised form (`(mesh_extent(a) @ m.a, N // mesh_extent(a))`); the
   factorised residual axis enters the IR as a non-`Split` layout dim. See
-  [parser §2.1](./parser.md#21-syntax).
+  [parser §2.1](./parser.md#21-syntax). A symbolic logical axis split across
+  multiple mesh axes MUST be factored in mesh-axis order by exact successive
+  quotients: equal extents yield one, and a `DimMul` containing the mesh extent
+  as either factor yields its other factor. Integer quotients MUST be exact;
+  undecidable divisions MUST be rejected. Thus `NC * 128` split over `(NC, 64)`
+  becomes `(NC, 64, 2)`, with the residual `2` unbound. Symbolic factored shapes
+  keep `strides=None` until specialization.
 - `local_shape(sl)[k] = G[k] / sl.mesh.layout.shape[a] = 1` iff some mesh axis
   `a` has `sl.attrs[a] = Split(k)`.
 - `local_shape(sl)[k] = G[k]` otherwise.
@@ -958,13 +973,16 @@ def right_inverse(layout: Layout | ComposedLayout):
 
 - constraints:
   - `canonical_shard_layout` MUST factor each logical axis split by one or more
-    static mesh axes in mesh-axis order, remap each `Split` to its factor, and
-    append a non-unit residual factor. It MUST reject indivisible or
-    unrepresentable dynamic multi-axis splits.
+    mesh axes in mesh-axis order, remap each `Split` to its factor, and append
+    a non-unit residual factor. Symbolic multi-axis splits MUST use successive
+    exact integer or structural product quotients as specified in
+    [shard §7.1.1](./shard.md#711-layoutshape).
+    It MUST reject indivisible or undecidable dynamic multi-axis splits.
   - `shard_layout_local_shape` MUST multiply the divisors of multiple `Split`
     attributes that name the same layout axis. Equal symbolic split and mesh
-    extents produce local extent one; other symbolic split relations MUST be
-    rejected as undecidable. An unconsumed symbolic extent MAY pass through
+    extents produce local extent one. A `DimMul` with the mesh extent as either
+    factor MUST yield its other factor as the local extent; other symbolic split
+    relations MUST be rejected as undecidable. An unconsumed symbolic extent MAY pass through
     only when `require_static=False`; strict mode MUST reject it.
   - `try_c_order_strides` MUST return `None` unless every shape entry is a
     non-boolean integer.

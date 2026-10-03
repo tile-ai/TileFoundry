@@ -10,11 +10,8 @@ from pathlib import Path
 from typing import Mapping
 
 from tilefoundry.analysis import analyze, check_program
-from tilefoundry.analysis.check import (
-    _program_dim_vars,
-    resolve_program_geometry,
-)
-from tilefoundry.cli.source import load_authored_ir, suggested_extents
+from tilefoundry.analysis.check import resolve_program_geometry
+from tilefoundry.cli.source import load_authored_ir, require_bound_dims
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import (
     render_analysis,
@@ -130,19 +127,7 @@ def run_authored_analysis(
     try:
         module = load_authored_ir(source)
         function = module.entry_function()
-        stated = {} if dims is None else dims
-        unbound = [
-            (name, dim_var)
-            for name, dim_var in _program_dim_vars(module, function).items()
-            if name not in stated
-        ]
-        if unbound:
-            guidance = "; ".join(
-                f"{name} is declared as [{dim_var.lo}, {dim_var.hi}); bind it with "
-                f"--dim {name}=EXTENT (try {', '.join(map(str, suggested_extents(dim_var.lo, dim_var.hi)))})"
-                for name, dim_var in unbound
-            )
-            raise ValueError(f"analyze needs one EXTENT for every open dimension: {guidance}")
+        require_bound_dims(module, function, dims, command="analyze")
         if not analyses:
             try:
                 checked_module, checked = resolve_program_geometry(

@@ -5,8 +5,8 @@ from tilefoundry.dsl import DimVar, Mesh, Tensor, ceildiv, tf
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
-PREFILL_N = DimVar("prefill_n", 1, 65)
-TOPOLOGY_ONLY = DimVar("topology_only", 1, 1025)
+PREFILL_N = DimVar("prefill_n", 1, 64)
+TOPOLOGY_ONLY = DimVar("topology_only", 1, 1024)
 PREFILL_TILES = ceildiv(PREFILL_N, 8)
 
 

@@ -20,7 +20,7 @@ from tilefoundry.passes.transforms import insert_default_host_entry
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
-_S = DimVar("S", 1, 256)
+_S = DimVar("S", 1, 255)
 
 
 def _rows(threads: int) -> ShardLayout:

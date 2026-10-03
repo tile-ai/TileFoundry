@@ -16,7 +16,7 @@ from tilefoundry.ir.types.dim import DimVar
 
 
 def _s_type():
-    return make_tensor_type((DimVar(name="S", lo=1, hi=7),))
+    return make_tensor_type((DimVar(name="S", lo=1, hi=6),))
 
 
 def _fn(*, body_is_self: bool, lo: int = 0, hi: int = 0) -> HirFunction:

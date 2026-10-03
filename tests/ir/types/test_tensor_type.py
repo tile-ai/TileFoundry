@@ -28,31 +28,32 @@ def test_tensor_type_equality_over_a_dim_var_shape_entry() -> None:
     compares equal to an independently constructed one: the DimVar is interned by
     ``(name, lo, hi)``, so an independently built signature uses the same key.
     """
-    s = DimVar("S_a", 1, 8)
+    s = DimVar("S_a", 1, 7)
     t = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")
     assert t.shape == (s, 8)
-    t2 = TensorType(shape=(DimVar("S_a", 1, 8), 8), dtype=DType.f32, layout=None, storage="gmem")
+    t2 = TensorType(shape=(DimVar("S_a", 1, 7), 8), dtype=DType.f32, layout=None, storage="gmem")
     assert t == t2
     assert hash(t) == hash(t2)
 
 
 def test_dim_var_range_validation() -> None:
-    """``lo < hi`` is required (half-open [lo, hi)); a single value is [k, k+1).
+    """``lo <= hi`` is required (closed [lo, hi]); a single value is [k, k].
 
     Same name with different bounds constructs distinct objects rather than
     raising: cross-instance scoping is a signature-level rule enforced by HIR
     ``verify_function``, not by construction.
     """
-    DimVar("S_point", 4, 5)
-    with pytest.raises(ValueError, match="require lo < hi"):
-        DimVar("S_empty", 4, 4)
-    with pytest.raises(ValueError, match="require lo < hi"):
-        DimVar("S_inv", 5, 1)
+    point = DimVar("S_point", 4, 4)
+    assert (point.lo, point.hi) == (4, 4)
+    with pytest.raises(ValueError, match="require lo <= hi"):
+        DimVar("S_empty", 4, 3)
+    with pytest.raises(ValueError, match="require lo <= hi"):
+        DimVar("S_inv", 5, 0)
 
-    a = DimVar("S_conflict", 1, 4)
-    b = DimVar("S_conflict", 1, 8)
+    a = DimVar("S_conflict", 1, 3)
+    b = DimVar("S_conflict", 1, 7)
     assert a is not b
-    assert ((a.lo, a.hi), (b.lo, b.hi)) == ((1, 4), (1, 8))
+    assert ((a.lo, a.hi), (b.lo, b.hi)) == ((1, 3), (1, 7))
 
 
 def test_zero_extent_has_zero_logical_and_local_size() -> None:
@@ -71,7 +72,7 @@ def test_zero_extent_has_zero_logical_and_local_size() -> None:
 
 
 def test_size_rejects_symbolic_and_negative_extents() -> None:
-    ctx_len = DimVar("ctx_len", 0, 4096)
+    ctx_len = DimVar("ctx_len", 0, 4095)
     symbolic = TensorType(shape=(ctx_len,), dtype=DType.f32, layout=None, storage="gmem")
     compound = TensorType(shape=(ctx_len + 1,), dtype=DType.f32, layout=None, storage="gmem")
     negative = TensorType(shape=(-1,), dtype=DType.f32, layout=None, storage="gmem")
@@ -178,7 +179,7 @@ def test_canonical_shard_layout_keeps_rejecting_non_divisible_splits(
 
 
 @pytest.mark.parametrize(
-    "axis", [DimVar("S_fixed", 1, 8193), ceildiv(DimVar("S_fixed_tiles", 1, 8193), 128)]
+    "axis", [DimVar("S_fixed", 1, 8192), ceildiv(DimVar("S_fixed_tiles", 1, 8192), 128)]
 )
 def test_local_type_rejects_dynamic_split_against_fixed_mesh(axis: object) -> None:
     tensor = make_shard_tensor_type((1, axis, 128, 2048), mesh=_cta_mesh(132), attrs=(Split(1),))

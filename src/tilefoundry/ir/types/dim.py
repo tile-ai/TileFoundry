@@ -31,10 +31,10 @@ class _DimVarMeta(type(Op)):
             raise TypeError(f"DimVar({name!r}): lo must be int, got {type(lo).__name__}")
         if not isinstance(hi, int) or isinstance(hi, bool):
             raise TypeError(f"DimVar({name!r}): hi must be int, got {type(hi).__name__}")
-        if not (lo < hi):
+        if not (lo <= hi):
             raise ValueError(
-                f"DimVar({name!r}, {lo}, {hi}): require lo < hi "
-                f"(half-open envelope [lo, hi); a fixed dim is [k, k+1))"
+                f"DimVar({name!r}, {lo}, {hi}): require lo <= hi "
+                f"(closed envelope [lo, hi]; a fixed dim is [k, k])"
             )
         cache = cls.__dict__.get("_var_cache")
         if cache is None:

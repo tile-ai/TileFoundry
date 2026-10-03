@@ -37,7 +37,7 @@ NUM_SPLITS = NUM_CTA
 
 
 S = 1
-C = DimVar("ctx_len", 0, MAX_CTX + 1)
+C = DimVar("ctx_len", 0, MAX_CTX)
 
 
 CBLK = C // NUM_SPLITS
