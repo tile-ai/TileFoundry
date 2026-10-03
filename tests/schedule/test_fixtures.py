@@ -122,6 +122,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "scalar_binary": 0,
     "gemm_8192x17408x5120_register_store": 196_608,
     "gemm_8192x17408x5120_tma_store": 212_992,
     "sm80_mma_ldmatrix": 1_536,
@@ -143,6 +144,9 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "scalar_binary": {
+        "thread@0:32#0": _RmemExpectation(128, "32-element f32 register tile reused by binary results"),
+    },
     "gemm_8192x17408x5120_register_store": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
         "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
@@ -510,7 +514,8 @@ def test_scheduled_hir_program_has_analysis_metadata(
                 ):
                     outside_uses += 1
                     assert interval.last_used_at >= backedge
-        assert outside_uses
+        if loop_bounds:
+            assert outside_uses
 
         for interval in liveness.intervals:
             if result_copies(interval.value) == 1:
@@ -528,7 +533,16 @@ def test_schedule_memory_report_carries_allocations(
     report = json.loads(out.read_text())
     memory = report["function_records"]["memory"]
     peaks = {item["memory_level"]: item["peak_bytes"] for item in memory["peaks"]}
-    assert peaks["smem"] == SMEM_GOLDEN[path.stem]
+    program = _module_in(path)
+    has_smem = any(
+        isinstance(expr.type, TensorType) and expr.type.storage is StorageKind.SMEM
+        for expr in collect_exprs(program.entry_function().body)
+    )
+    if has_smem:
+        assert peaks["smem"] == SMEM_GOLDEN[path.stem]
+    else:
+        assert "smem" not in peaks
+        assert SMEM_GOLDEN[path.stem] == 0
     assert memory["solver_status"] == "feasible"
     for row in report["calls"]:
         allocation = row["memory"]

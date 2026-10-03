@@ -816,10 +816,21 @@ class Lowering(ExprVisitor[Expr]):
             if destination is None:
                 raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
             written = self._declare(call, call.type, buffers, destination)
-        read_values = {
-            param.name: self.visit(value, cursor)
-            for param, value in zip(reads, call.args, strict=True)
-        }
+        read_values = {}
+        for param, operand in zip(reads, call.args, strict=True):
+            value = self.visit(operand, cursor)
+            if (
+                isinstance(value.type, TensorType)
+                and value.type.shape == ()
+                and value.type.storage is StorageKind.UMAT
+            ):
+                scalar_type = replace(value.type, storage=StorageKind.RMEM)
+                scalar = Var(self.names.fresh("scalar"), type=scalar_type)
+                cursor.bind(scalar, Call(AllocTensor(tensor_type=scalar_type), (), type=scalar_type))
+                cursor.add(Evaluate(Fill(), (scalar, value)))
+                self.logical[id(scalar)] = scalar_type
+                value = scalar
+            read_values[param.name] = value
         if id(call) in self.staged:
             written = self._stage(call)
         operands: list[tuple[str, Expr | None]] = []

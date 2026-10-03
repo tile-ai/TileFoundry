@@ -9,6 +9,7 @@ from tilefoundry.ir.types import (
     Layout,
     Mesh,
     ShardLayout,
+    StorageKind,
     Swizzle,
     TensorType,
     make_mesh,
@@ -412,22 +413,25 @@ class PatternMatcher:
             return self._fail(pattern, subject)
         return self.match(pattern.layout, make_mesh(*picked).layout)
 
-    def visit_ScalarPattern(self, pattern, subject) -> bool:
+    def visit_Ranked(self, pattern, subject) -> bool:
         return (
-            isinstance(subject, TensorType) and subject.shape == ()
+            isinstance(subject, TensorType) and len(subject.shape) > 0
         ) or self._fail(pattern, subject)
 
     def visit_TensorPattern(self, pattern, subject) -> bool:
-        if not isinstance(subject, TensorType) or subject.shape == ():
+        if not isinstance(subject, TensorType):
             return self._fail(pattern, subject)
         if pattern.shape is not None and (
             len(pattern.shape) != len(subject.shape)
             or not all(self.match(place, value) for place, value in zip(pattern.shape, subject.shape))
         ):
             return False
-        for place, value in ((pattern.dtype, subject.dtype), (pattern.storage, subject.storage)):
-            if not self.match(place, value):
-                return False
+        if not self.match(pattern.dtype, subject.dtype):
+            return False
+        if not (
+            subject.storage is StorageKind.UMAT and isinstance(pattern.storage, StorageKind)
+        ) and not self.match(pattern.storage, subject.storage):
+            return False
         return pattern.layout is None or self.match(pattern.layout, subject.layout)
 
     def visit_ShardLayoutPattern(self, pattern, subject) -> bool:

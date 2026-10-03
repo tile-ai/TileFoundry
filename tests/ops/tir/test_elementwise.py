@@ -42,22 +42,29 @@ class ColumnBroadcast:
         r: Tensor[(4,), "f32"],
         out: Tensor[(32,), "f32"],
         out_sub: Tensor[(32,), "f32"],
+        out_scalar: Tensor[(32,), "f32"],
     ):
         with Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",)) as m:
             a_view = T.tensor_view(T.ptr_of(a), layout=bcast((32,), (1,), m))
             r_view = T.tensor_view(T.ptr_of(r), layout=bcast((4,), (1,), m))
             out_view = T.tensor_view(T.ptr_of(out), layout=bcast((32,), (1,), m))
             out_sub_view = T.tensor_view(T.ptr_of(out_sub), layout=bcast((32,), (1,), m))
+            out_scalar_view = T.tensor_view(T.ptr_of(out_scalar), layout=bcast((32,), (1,), m))
             lhs = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "rmem"])
             col = T.alloc_tensor(Tensor[(4, 1), "f32", bcast((4, 1), (1, 1), m), "rmem"])
             dst = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "rmem"])
             dst_sub = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "rmem"])
+            scalar = T.alloc_tensor(Tensor[(), "f32", Layout((), ()), "rmem"])
+            dst_scalar = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "rmem"])
             T.copy(a_view, lhs)
             T.copy(r_view, col)
             T.binary(lhs, col, dst, kind=BinaryKind.MUL)
             T.copy(dst, out_view)
             T.binary(col, lhs, dst_sub, kind=BinaryKind.SUB)
             T.copy(dst_sub, out_sub_view)
+            T.fill(scalar, 0.5)
+            T.binary(lhs, scalar, dst_scalar, kind=BinaryKind.ADD)
+            T.copy(dst_scalar, out_scalar_view)
 
 
 @module(topologies=(Topology("cta", _CTAS), Topology("thread", _THREADS)))
@@ -114,6 +121,7 @@ class Elementwise:
         r: Tensor[(4,), "f32"],
         out: Tensor[(32,), "f32"],
         out_sub: Tensor[(32,), "f32"],
+        out_scalar: Tensor[(32,), "f32"],
         level_a: Tensor[(_ROWS,), "f32"],
         level_out: Tensor[(_ROWS,), "f32"],
         axis_a: Tensor[(_ROWS,), "f32"],
@@ -125,6 +133,7 @@ class Elementwise:
             r,
             out,
             out_sub,
+            out_scalar,
             grid=(1, 1, 1),
             block=(32, 1, 1),  # noqa: F821
         )
@@ -179,14 +188,16 @@ def test_a_mesh_names_what_holds_a_tile_three_ways() -> None:
     r = torch.randn(4, dtype=torch.float32, device="cuda")
     out = torch.zeros(32, dtype=torch.float32, device="cuda")
     out_sub = torch.zeros_like(out)
+    out_scalar = torch.zeros_like(out)
     rows = torch.randn(_ROWS, dtype=torch.float32, device="cuda")
     level_out = torch.zeros(_ROWS, dtype=torch.float32, device="cuda")
     axis_out = torch.zeros(_ROWS, dtype=torch.float32, device="cuda")
 
-    rm(a, r, out, out_sub, rows, level_out, rows, axis_out)
+    rm(a, r, out, out_sub, out_scalar, rows, level_out, rows, axis_out)
     torch.cuda.synchronize()
 
     assert torch.allclose(out, a * r.repeat(8), rtol=0, atol=0)
     assert torch.allclose(out_sub, r.repeat(8) - a, rtol=0, atol=0)
+    assert torch.allclose(out_scalar, a + 0.5, rtol=0, atol=0)
     assert torch.allclose(level_out, rows * rows, rtol=0, atol=0)
     assert torch.equal(level_out, axis_out)

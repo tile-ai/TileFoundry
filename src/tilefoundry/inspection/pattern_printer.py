@@ -363,11 +363,11 @@ class PatternPrinter:
     def rules_MeshPattern(self, pattern, name) -> tuple[str, ...]:
         return self.rules(pattern.layout)
 
-    def visit_ScalarPattern(self, pattern, name) -> str:
-        return "scalar"
+    def visit_Ranked(self, pattern, name) -> str:
+        return name
 
-    def rules_ScalarPattern(self, pattern, name) -> tuple[str, ...]:
-        return ()
+    def rules_Ranked(self, pattern, name) -> tuple[str, ...]:
+        return (f"{name} has rank > 0",)
 
     def visit_TensorPattern(self, pattern, name) -> str:
         stated = []

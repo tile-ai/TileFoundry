@@ -19,7 +19,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import TensorPattern
 from tilefoundry.ir.types import DType, Layout, TensorType
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
@@ -55,8 +55,8 @@ _INT_ONLY_KINDS = {BinaryKind.FLOOR_DIV, BinaryKind.MOD}
 class Binary(Op):
     """Value-form pointwise binary operation."""
 
-    lhs = ParamDef(kind="input", pattern=Tensor)
-    rhs = ParamDef(kind="input", pattern=Tensor)
+    lhs = ParamDef(kind="input", pattern=TensorPattern())
+    rhs = ParamDef(kind="input", pattern=TensorPattern())
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
 
 

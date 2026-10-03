@@ -617,7 +617,7 @@ The implementation is split by responsibility under `ir/pattern/`:
   `OrPattern`, `AndPattern`, `SequencePattern`,
   `SwitchPattern`, `RangePattern`,
   `LayoutPattern`, `SwizzlePattern`, `ComposedLayoutPattern`, `MeshPattern`,
-  `ShardLayoutPattern`, `ScalarPattern`, `TensorPattern`, `WildcardPattern`, and
+  `ShardLayoutPattern`, `TensorPattern`, `WildcardPattern`, and
   `StarPattern`. It also owns the `Scalar` and `Tensor` singletons.
 - `predicates.py` defines the computed-condition base `Predicate`; integer
   `Term` expressions and Boolean `Formula` predicates; and the named
@@ -696,11 +696,14 @@ Two consumer surfaces:
 
 - **Parser dispatch** — `ParamDef.pattern` ([§2.3](#23-op)) is matched against an
   argument's `Expr.type` during overload resolution. Subclasses used:
-  `ScalarPattern` (rank-0), `TensorPattern(shape?, dtype?)` (non-scalar), and
+  `TensorPattern(shape?, dtype?, storage?, layout?)` (any rank), and
   `AndPattern(parts)` (conjunction). Two singletons are exported as
-  convenience: `Scalar = ScalarPattern()` and `Tensor = TensorPattern()`.
+  convenience: `Scalar = TensorPattern(shape=())` matches rank-0 tensors;
+  `Tensor` is a `TensorPattern` with a ranked predicate and MUST reject rank-0.
   A tensor rank is stated by giving `shape` that many positions; wildcard
-  positions constrain only the sequence length. During effect-Op verification,
+  positions constrain only the sequence length. An omitted shape admits any
+  rank. During selection, `umat` satisfies any concrete storage requirement
+  because its placement is undecided; lowering MUST materialize it before TIR. During effect-Op verification,
   input patterns match in `ParamDef` order against one shared capture
   environment, so a later operand can require a value captured by an earlier
   operand.

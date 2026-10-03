@@ -368,13 +368,13 @@ class MeshPattern(Pattern):
         require_per_mode(self.layout)
 
 @dataclass(frozen=True)
-class ScalarPattern(Pattern):
-    pass
+class Ranked(Pattern):
+    """Require a tensor with at least one logical axis."""
 
 
 @dataclass(frozen=True)
 class TensorPattern(Pattern):
-    """Match a non-scalar ``TensorType`` field by field."""
+    """Match a ``TensorType`` of any rank, constrained by its stated fields."""
 
     dtype: Any = None
     shape: tuple | None = None
@@ -389,8 +389,8 @@ class ShardLayoutPattern(Pattern):
     attrs: tuple
     mesh: MeshPattern
 
-Scalar: ScalarPattern = ScalarPattern()
-Tensor: TensorPattern = TensorPattern()
+Scalar: TensorPattern = TensorPattern(shape=())
+Tensor: TensorPattern = TensorPattern(predicates=(Ranked(),))
 
 
 __all__ = [
@@ -402,7 +402,6 @@ __all__ = [
     "Pattern",
     "RangePattern",
     "Scalar",
-    "ScalarPattern",
     "SequencePattern",
     "ShardLayoutPattern",
     "StarPattern",
