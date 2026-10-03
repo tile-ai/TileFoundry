@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum
 from math import prod
-from typing import Any
+from typing import Any, Mapping
 
 import isl
 
@@ -465,9 +465,15 @@ def _source_label(sites: tuple[_Site, ...], module, source: str | None) -> str:
     return module.name
 
 
-def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
+def candidates(
+    module,
+    entry,
+    *,
+    source: str | None = None,
+    dims: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
     """Report instruction candidates for every unscheduled supported HIR site."""
-    result = analyze(module, entry, analysis=("memory",))
+    result = analyze(module, entry, analysis=("memory",), dims=dims)
     ctx = TypeInferContext(scope=FunctionScope(result.module, result.function))
     sites = _sites(result.module, result.function, ctx)
     if not sites:

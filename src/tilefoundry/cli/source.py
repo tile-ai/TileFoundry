@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from tilefoundry.analysis.check import _program_dim_vars
 from tilefoundry.ir.core.module import Module, select
 from tilefoundry.ir.hir.function import Function
 
@@ -385,6 +386,29 @@ def one_extent_per_dim(
     return chosen
 
 
+def require_bound_dims(
+    module: Module,
+    function: Function,
+    dims: Mapping[str, int] | None,
+    *,
+    command: str,
+) -> None:
+    """Name every open program dimension and suggest admitted concrete extents."""
+    stated = {} if dims is None else dims
+    unbound = [
+        (name, dim_var)
+        for name, dim_var in _program_dim_vars(module, function).items()
+        if name not in stated
+    ]
+    if unbound:
+        guidance = "; ".join(
+            f"{name} is declared as [{dim_var.lo}, {dim_var.hi}]; bind it with "
+            f"--dim {name}=EXTENT (try {', '.join(map(str, suggested_extents(dim_var.lo, dim_var.hi)))})"
+            for name, dim_var in unbound
+        )
+        raise ValueError(f"{command} needs one EXTENT for every open dimension: {guidance}")
+
+
 def suggested_extents(lo: int, hi: int) -> tuple[int, ...]:
     """A few extents inside a declared range, for the suggestion that follows it."""
     candidates = {lo, lo + 1, (lo + hi) // 2, hi}
@@ -396,6 +420,7 @@ __all__ = [
     "load_namespace",
     "one_extent_per_dim",
     "parse_dims",
+    "require_bound_dims",
     "select_ir",
     "selected_target",
     "suggested_extents",

@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Sequence
 
 from tilefoundry.analysis import RegionMemoryMetadata
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry.cli.source import (
+    load_authored_ir,
+    one_extent_per_dim,
+    parse_dims,
+    require_bound_dims,
+)
 from tilefoundry.cli.target import target_by_identity
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
@@ -56,10 +62,19 @@ def run_facts(
     return 0
 
 
-def run_candidates(source: str, out: str, *, as_json: bool = False) -> int:
+def run_candidates(
+    source: str,
+    out: str,
+    *,
+    as_json: bool = False,
+    dims: Sequence[str] | None = None,
+) -> int:
     """Write instruction candidates for the unscheduled sites in ``source``."""
     module = load_authored_ir(source)
-    report = candidates(module, module.entry_function(), source=source)
+    function = module.entry_function()
+    stated = one_extent_per_dim(parse_dims(dims))
+    require_bound_dims(module, function, stated, command="schedule candidates")
+    report = candidates(module, function, source=source, dims=stated)
     text = json.dumps(report, indent=2) if as_json else render_candidates(report)
     _write(out, text)
     return 0

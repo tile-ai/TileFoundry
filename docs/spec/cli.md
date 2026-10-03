@@ -445,7 +445,7 @@ and the two reports used to choose an instruction. Its subcommands are:
 ```text
 tilefoundry schedule finalize SOURCE PATH [--json]
 tilefoundry schedule facts [INSTRUCTION] --target TARGET PATH [--json]
-tilefoundry schedule candidates SOURCE PATH [--json]
+tilefoundry schedule candidates SOURCE PATH [--json] [--dim NAME=EXTENT ...]
 ```
 
 `finalize` checks and inlines the selected entry, runs memory analysis, lowers
@@ -479,6 +479,10 @@ candidate discovery; explicitly selecting that Op in `tf.schedule` remains an
 error.
 
 - constraints:
+  - `candidates --dim NAME=EXTENT` MUST bind one extent per dimension before
+    analysis, with the same format and duplicate-dimension validation as Analyze.
+    An unbound dimension MUST be named with its closed declared interval and
+    suggested extents; the command MUST NOT write a report when binding fails.
   - `PATH` is required, is the only report destination, and MUST NOT be partly
     written when the operation fails. A successful command writes a trailing
     newline and writes nothing to stdout.
