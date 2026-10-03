@@ -155,8 +155,10 @@ def _relation_shape(boundary) -> tuple[int, tuple[int | None, ...]]:
     return relation.dim(isl.dim_type.IN), projected_axes(boundary.pattern)
 
 
-def _site_relation_shape(site: _Site, ctx: TypeInferContext) -> tuple:
-    relations = relations_of(site.call, ctx)
+def _site_relation_shape(site: _Site) -> tuple:
+    args = tuple(Var(name=name, type=type_) for name, type_ in site.reads)
+    call = Call(target=site.call.target, args=args, type=site.leaves[0][1])
+    relations = relations_of(call, TypeInferContext())
     return (
         tuple(_relation_shape(boundary) for boundary in relations.inputs),
         tuple(_relation_shape(boundary) for boundary in relations.outputs),
@@ -483,7 +485,7 @@ def candidates(
     type_printer = PythonPrinter()
     rows = []
     for site in sites:
-        site_shape = _site_relation_shape(site, ctx)
+        site_shape = _site_relation_shape(site)
         automatic = sole_candidate(site.call.target)
         automatic_id = None if automatic is None else op_identifier(type(automatic))
         usable, refused = [], []
