@@ -319,17 +319,25 @@ def starts(mesh: Mesh) -> tuple[int, ...]:
     ...
 
 
-def selected_run(arrangement: Layout, start: int) -> tuple[tuple, tuple, int]:
-    """Reduce one level's selected positions to its joined modes and start."""
+def level_positions(mesh: Mesh, level: str) -> isl.set:
+    """Return the level's selected positions under declared dimension bounds."""
     ...
 
 
 def within_scope(mesh: Mesh, current: Mesh) -> bool:
-    """Return whether each continuous run selected by mesh is within current."""
+    """Return whether each continuous position set is contained in current."""
     ...
 ```
 
 - constraints:
+  - `level_positions` MUST express each level's selection as an isl position set,
+    with `DimVar` parameters restricted to their closed declared envelopes.
+    Static strides MUST use bounded existential coordinates. A symbolic stride
+    with a static extent MUST enumerate that axis; the product of only those
+    enumerated extents MUST NOT exceed 256. Exceeding the limit MUST report the
+    axes, product, and `--dim` bindings that make strides static. A symbolic
+    extent paired with a symbolic stride, or a non-affine dimension expression,
+    MUST be rejected rather than approximated.
   - a compile-time constant that does not enter the IR graph; describes the device
     domain, not a tensor layout object. A slice never becomes an IR/SSA value.
 
@@ -373,9 +381,10 @@ Mesh composition uses the following rules:
   inner mesh. The combined `ComposedLayout.offset` MUST then be re-encoded in
   device numbering from those per-level starts. Replacing an unsliced suffix
   and replacing the whole mesh retain their existing behavior. Every replaced
-  level MUST reduce to one continuous run contained in the enclosing level's
-  continuous run. A replacement or enclosing selection that does not reduce to
-  one continuous run MUST be rejected rather than approximated as an interval.
+  level MUST select a continuous position set contained in the enclosing level's
+  continuous position set. Continuity and containment MUST hold throughout the
+  declared dimension envelopes. A replacement or enclosing selection with holes
+  MUST be rejected rather than approximated as an interval.
 - `make_mesh(*meshes)` invokes `check_topology` on its result. For each named
   level with a concrete declared extent, its position count MUST NOT exceed
   that extent; symbolic extents are deferred until dimensions are bound. A
@@ -963,8 +972,9 @@ def right_inverse(layout: Layout | ComposedLayout):
     unrepresentable dynamic multi-axis splits.
   - `shard_layout_local_shape` MUST multiply the divisors of multiple `Split`
     attributes that name the same layout axis. Equal symbolic split and mesh
-    extents produce local extent one; other symbolic split relations MUST be
-    rejected as undecidable. An unconsumed symbolic extent MAY pass through
+    extents produce local extent one. A `DimMul` with the mesh extent as either
+    factor MUST yield its other factor as the local extent; other symbolic split
+    relations MUST be rejected as undecidable. An unconsumed symbolic extent MAY pass through
     only when `require_static=False`; strict mode MUST reject it.
   - `try_c_order_strides` MUST return `None` unless every shape entry is a
     non-boolean integer.

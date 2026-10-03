@@ -99,7 +99,11 @@ class TypeInferVisitor(ExprVisitor[Type]):
                 layout = getattr(arg_type, "layout", None)
                 if not isinstance(layout, ShardLayout):
                     continue
-                if not covered_by_scope(layout.mesh, ctx.current_mesh):
+                try:
+                    covered = covered_by_scope(layout.mesh, ctx.current_mesh)
+                except ValueError as error:
+                    ctx.error(call, str(error))
+                if not covered:
                     ctx.error(
                         call,
                         f"input {index} is laid out more finely than the scope it "

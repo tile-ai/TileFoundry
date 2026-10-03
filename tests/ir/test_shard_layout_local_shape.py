@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.mesh import Mesh, Topology
 from tilefoundry.ir.types.shard_layout import (
@@ -94,10 +94,23 @@ def test_unconsumed_symbolic_axis_is_available_to_type_inference() -> None:
 
 
 @pytest.mark.parametrize("require_static", [False, True], ids=["typeinfer", "lowering"])
-def test_matching_symbolic_split_has_one_local_element(require_static: bool) -> None:
-    layout = _symbolic_layout(_N, _N, split=True)
+@pytest.mark.parametrize(
+    ("extent", "expected"),
+    [
+        pytest.param(_N, 1, id="equal"),
+        pytest.param(simplify_dim(DimMul, (_N, 64)), 64, id="symbolic_factor_left"),
+        pytest.param(simplify_dim(DimMul, (64, _N)), 64, id="symbolic_factor_right"),
+        pytest.param(_N * 64 + 1, None, id="not_divisible"),
+    ],
+)
+def test_matching_symbolic_split_has_decidable_local_extent(require_static, extent, expected) -> None:
+    layout = _symbolic_layout(extent, _N, split=True)
 
-    assert shard_layout_local_shape(layout, require_static=require_static) == (1, 8)
+    if expected is None:
+        with pytest.raises(ValueError, match="do not have a decidable divisibility relation"):
+            shard_layout_local_shape(layout, require_static=require_static)
+    else:
+        assert shard_layout_local_shape(layout, require_static=require_static) == (expected, 8)
 
 
 def test_unresolved_symbolic_split_is_rejected() -> None:

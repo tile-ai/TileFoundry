@@ -144,17 +144,19 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
 def shard_layout_local_shape(
     sl: "ShardLayout", *, require_static: bool = True
 ) -> tuple:
-    """Derive one shard's local shape from a global ``ShardLayout``.
+    """Derive one shard's local shape from its global layout.
 
-    Each ``Split`` divides its bound layout position by the mesh extent;
-    repeated splits multiply their divisors. Equal symbolic extents yield one;
-    other symbolic splits are undecidable before binding. Other attributes do
-    not consume a layout position. ``require_static`` keeps lowering and
-    codegen on their concrete-shape boundary while type inference may retain an
-    unconsumed symbolic extent.
+    Splits divide their layout position by the mesh extent. Equal symbolic
+    extents yield one; a product containing the mesh extent yields its other
+    factor. Other symbolic splits are undecidable. Non-Split attributes do not
+    consume positions. ``require_static=False`` permits unconsumed symbolic
+    extents during type inference; lowering and codegen require concrete shapes.
 
     See [shard §7](docs/spec/shard.md#7-shardlayout).
     """
+    from tilefoundry.ir.core.expr import Call, Constant  # noqa: PLC0415
+    from tilefoundry.ir.types.dim import DimMul  # noqa: PLC0415
+
     mesh_shape = flatten(sl.mesh.layout).shape
     local = list(sl.layout.shape)
     for mesh_axis_idx, attr in enumerate(sl.attrs):
@@ -170,6 +172,14 @@ def shard_layout_local_shape(
                     local[k] //= mesh_ext
             elif local[k] == mesh_ext:
                 local[k] = 1
+            elif (
+                isinstance(local[k], Call)
+                and isinstance(local[k].target, DimMul)
+                and mesh_ext in local[k].args
+            ):
+                left, right = local[k].args
+                quotient = right if left == mesh_ext else left
+                local[k] = quotient.value if isinstance(quotient, Constant) else quotient
             else:
                 raise ValueError(
                     f"shard_layout_local_shape: layout dim {k} ({local[k]!r}) "

@@ -44,7 +44,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
     """A coordinate is one number about this unit, so it carries no placement."""
     if not isinstance(call.target.mesh, Mesh):
         ctx.error(call, "MeshCoord.mesh must be a Mesh")
-    if ctx.current_mesh is None or not covered_by_scope(call.target.mesh, ctx.current_mesh):
+    try:
+        covered = ctx.current_mesh is not None and covered_by_scope(call.target.mesh, ctx.current_mesh)
+    except ValueError as error:
+        ctx.error(call, str(error))
+    if not covered:
         ctx.error(call, "MeshCoord.mesh must be bound by the current mesh scope")
     if not call.args:
         ctx.error(call, "missing required input 'axis'")
