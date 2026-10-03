@@ -41,21 +41,32 @@ def cosize(layout: Union[Layout, ComposedLayout]) -> int:
 _NO_PROFILE = object()
 
 
-def _coalesce_flat(layout: Layout) -> Layout:
+def _coalesce_flat(layout: Layout, *, major: str = "col") -> Layout:
     """Apply the flat CuTe ``coalesce`` rule to one layout."""
+    from tilefoundry.ir.isl_interop import normalize_dim  # noqa: PLC0415
+
+    from .utils import static_dim_value  # noqa: PLC0415
+
+    if major not in {"col", "row"}:
+        raise ValueError(f"coalesce: unknown major {major!r}")
     result_shape: list[int] = [1]
     result_stride: list[int] = [0]
-    for shape, stride in zip(flat_shape(layout), flat_stride(layout)):
-        if shape == 1:
+    modes = tuple(zip(flat_shape(layout), flat_stride(layout)))
+    for shape, stride in reversed(modes) if major == "row" else modes:
+        shape, stride = normalize_dim(shape), normalize_dim(stride)
+        if static_dim_value(shape) == 1:
             continue
         if result_shape[-1] == 1:
             result_shape[-1] = shape
             result_stride[-1] = stride
-        elif result_shape[-1] * result_stride[-1] == stride:
-            result_shape[-1] = result_shape[-1] * shape
+        elif normalize_dim(result_shape[-1] * result_stride[-1]) == normalize_dim(stride):
+            result_shape[-1] = normalize_dim(result_shape[-1] * shape)
         else:
             result_shape.append(shape)
             result_stride.append(stride)
+    if major == "row":
+        result_shape.reverse()
+        result_stride.reverse()
     return Layout(shape=tuple(result_shape), strides=tuple(result_stride))
 
 
@@ -63,10 +74,12 @@ def _profile_place(path: tuple[int, ...]) -> str:
     return "profile" + "".join(f"[{index}]" for index in path)
 
 
-def _coalesce_profile(layout: Layout, profile, path: tuple[int, ...]) -> Layout:
+def _coalesce_profile(
+    layout: Layout, profile, path: tuple[int, ...], *, major: str, filtered: bool = False
+) -> Layout:
     """Apply flat coalescing at the terminals selected by one profile."""
     if not isinstance(profile, tuple):
-        return _coalesce_flat(layout)
+        return filter(layout, major=major) if filtered else _coalesce_flat(layout, major=major)
 
     strides = layout.strides
     if strides is None:
@@ -96,7 +109,9 @@ def _coalesce_profile(layout: Layout, profile, path: tuple[int, ...]) -> Layout:
             strides=stride if isinstance(stride, tuple) else (stride,),
         )
         child_profile = profile[index]
-        child = _coalesce_profile(child, child_profile, (*path, index))
+        child = _coalesce_profile(
+            child, child_profile, (*path, index), major=major, filtered=filtered
+        )
         if nested or isinstance(child_profile, tuple):
             result_shape.append(child.shape)
             result_stride.append(child.strides)
@@ -106,7 +121,9 @@ def _coalesce_profile(layout: Layout, profile, path: tuple[int, ...]) -> Layout:
     return Layout(shape=tuple(result_shape), strides=tuple(result_stride))
 
 
-def coalesce(layout: Union[Layout, ComposedLayout], trg_profile=_NO_PROFILE):
+def coalesce(
+    layout: Union[Layout, ComposedLayout], trg_profile=_NO_PROFILE, *, major: str = "col"
+):
     """CuTe ``coalesce``, optionally applied at ``trg_profile`` terminals.
 
     Coalescing renames the domain and leaves the index mapping alone, so a
@@ -116,14 +133,51 @@ def coalesce(layout: Union[Layout, ComposedLayout], trg_profile=_NO_PROFILE):
     """
     if get_swizzle_portion(layout) is not None:
         outer = (
-            coalesce(layout.outer)
+            coalesce(layout.outer, major=major)
             if trg_profile is _NO_PROFILE
-            else coalesce(layout.outer, trg_profile)
+            else coalesce(layout.outer, trg_profile, major=major)
         )
         return ComposedLayout(inner=layout.inner, offset=layout.offset, outer=outer)
     if trg_profile is _NO_PROFILE:
-        return _coalesce_flat(layout)
-    return _coalesce_profile(layout, trg_profile, ())
+        return _coalesce_flat(layout, major=major)
+    return _coalesce_profile(layout, trg_profile, (), major=major)
+
+
+def filter(layout: Union[Layout, ComposedLayout], profile=_NO_PROFILE, *, major: str = "col"):
+    """CuTe ``filter``: drop shape-1 and stride-0 modes, then coalesce."""
+    from .utils import static_dim_value  # noqa: PLC0415
+
+    if get_swizzle_portion(layout) is not None:
+        return ComposedLayout(
+            inner=layout.inner, offset=layout.offset,
+            outer=filter(layout.outer, profile, major=major),
+        )
+    if profile is not _NO_PROFILE:
+        return _coalesce_profile(layout, profile, (), major=major, filtered=True)
+    modes = tuple(
+        (shape, stride) for shape, stride in zip(flat_shape(layout), flat_stride(layout))
+        if static_dim_value(shape) != 1 and static_dim_value(stride) != 0
+    )
+    shape, strides = zip(*modes) if modes else ((1,), (0,))
+    return coalesce(Layout(tuple(shape), tuple(strides)), major=major)
+
+
+def is_contiguous(layout: Layout, *, major: str = "col") -> bool:
+    """Whether the filtered layout covers ``[0, size)`` without gaps.
+
+    Static extents use CuTe's ``size == cosize``. Symbolic extents use its
+    structural equivalent: either coalescing direction leaves one mode
+    stepping by one. Continuity does not depend on the order of modes.
+    """
+    from .utils import static_dim_value  # noqa: PLC0415
+
+    layout = filter(layout, major=major)
+    if all(static_dim_value(shape) is not None for shape in flat_shape(layout)):
+        return size(layout) == cosize(layout)
+    if len(flat_shape(layout)) == 1 and flat_stride(layout) == (1,):
+        return True
+    other = coalesce(layout, major="row" if major == "col" else "col")
+    return len(flat_shape(other)) == 1 and flat_stride(other) == (1,)
 
 
 def complement(layout: Layout, max_idx: int = 1) -> Layout:
@@ -279,6 +333,8 @@ __all__ = [
     "composition",
     "cosize",
     "coalesce",
+    "filter",
+    "is_contiguous",
     "complement",
     "is_inverse_projectable",
     "right_inverse",

@@ -319,25 +319,25 @@ def starts(mesh: Mesh) -> tuple[int, ...]:
     ...
 
 
-def level_positions(mesh: Mesh, level: str) -> isl.set:
-    """Return the level's selected positions under declared dimension bounds."""
-    ...
-
-
 def within_scope(mesh: Mesh, current: Mesh) -> bool:
     """Return whether each continuous position set is contained in current."""
     ...
 ```
 
 - constraints:
-  - `level_positions` MUST express each level's selection as an isl position set,
-    with `DimVar` parameters restricted to their closed declared envelopes.
-    Static strides MUST use bounded existential coordinates. A symbolic stride
-    with a static extent MUST enumerate that axis; the product of only those
-    enumerated extents MUST NOT exceed 256. Exceeding the limit MUST report the
-    axes, product, and `--dim` bindings that make strides static. A symbolic
-    extent paired with a symbolic stride, or a non-affine dimension expression,
-    MUST be rejected rather than approximated.
+  - Scope comparison MUST reduce each level's arrangement with
+    `filter(arrangement, major="row")`, retaining the level's start. Filtering
+    removes shape-one and stride-zero modes and coalesces adjacent modes after
+    affine dimension normalization. For continuous selections,
+    `covered_by_scope` MUST compare starts and normalized sizes, independent
+    of mode order. Otherwise it MUST conservatively compare the filtered
+    arrangements and starts for equality.
+  - `within_scope` MUST require both filtered selections to be continuous and
+    prove containment of their half-open intervals `[start, start + size)`.
+    Static continuity is `size == cosize`; symbolic continuity requires either
+    coalescing direction to leave one mode with stride one. Symbolic interval bounds MUST use the
+    conservative dimension range of their difference; an unproved bound
+    MUST return False.
   - a compile-time constant that does not enter the IR graph; describes the device
     domain, not a tensor layout object. A slice never becomes an IR/SSA value.
 
@@ -920,11 +920,12 @@ def shard_layout_local_shape(
     ...
 
 
-def coalesce(layout: Layout | ComposedLayout, trg_profile=...):
+def coalesce(layout: Layout | ComposedLayout, trg_profile=..., *, major: str = "col"):
     """Merge contiguous modes, optionally within profile-selected groups.
 
     Args:
-        layout: Layout to simplify under CuTe's mode-zero-fast convention.
+        layout: Layout to simplify.
+        major: "col" (mode zero fastest) or "row" (last mode fastest).
         trg_profile: Optional nesting whose terminals select groups to merge.
 
     Returns:
@@ -990,9 +991,14 @@ def right_inverse(layout: Layout | ComposedLayout):
     mode-zero-fast convention. With `trg_profile`, it MUST apply that rule at
     each profile terminal, preserve unmatched trailing modes, and reject a
     profile that asks for more modes at any nesting level with that level in
-    the diagnostic. A row-major consumer MUST reverse modes within each of its
-    groups before calling this CuTe operation; `coalesce` itself does not
-    reinterpret storage order.
+    the diagnostic. `major="row"` MUST process modes from last to first and
+    return the reduced modes in their stated order. Merge comparisons MUST
+    normalize dimension expressions on both sides.
+  - `filter(layout, profile=..., major="col")` MUST remove shape-one and
+    stride-zero modes before coalescing, with the same profile and major-order
+    conventions. `is_contiguous(layout, major="col")` MUST test its filtered
+    layout using `size == cosize` for static extents and one unit-stride mode
+    after coalescing in either direction for symbolic extents.
   - Inverting a composed mesh layout MUST accept only an identity inner mapping
     and an inverse-projectable primitive outer layout; other layouts MUST raise
     `NotProjectable` rather than guess an inverse.

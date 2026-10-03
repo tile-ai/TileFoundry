@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import product as cartesian_product
-
-import isl
 
 from tilefoundry.ir.types.int_tuple import product
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten, get
 from tilefoundry.ir.types.layout import rank as _rank
+from tilefoundry.ir.types.layout_algebra import filter, is_contiguous, size
 from tilefoundry.ir.types.stride import compact_major, compact_row_major, crd2idx, idx2crd
 from tilefoundry.ir.types.tensor_type import ShapeDim
 
@@ -258,92 +256,22 @@ def starts(mesh: Mesh) -> tuple[int, ...]:
     return tuple(idx2crd(offset, sizes, compact_major(sizes)))
 
 
-_POSITION_ENUMERATION_LIMIT = 256
-
-
-def level_positions(mesh: Mesh, level: str) -> isl.set:
-    """The selected positions of one level, under its declared dimension bounds.
-
-    The isl boundary normalizes library errors to ValueError so callers can add
-    source locations; this is exception normalization, not a scope decision.
-    """
-    from tilefoundry.ir.isl_interop import dim_to_isl_expr  # noqa: PLC0415
-
-    names = _named(mesh)
-    index = names.index(level)
-    arrangement = levels(mesh)[index]
-    shape = tuple(flatten(arrangement.shape))
-    strides = arrangement.strides
-    strides = tuple(flatten(strides)) if strides is not None else compact_row_major(shape)
-    params = {}
-    terms, constraints, coordinates, enumerated = [], [], [], []
-    choices = 1
-
-    def render(value):
-        try:
-            return dim_to_isl_expr(value, params)
-        except (TypeError, ValueError, NotImplementedError, isl.Error) as error:
-            raise ValueError(f"mesh level {level!r} dimension is not affine: {error}") from error
-
-    for axis, (extent, stride) in enumerate(zip(shape, strides, strict=True)):
-        if isinstance(stride, int):
-            coordinate = f"c{axis}"
-            coordinates.append(coordinate)
-            constraints.append(f"0 <= {coordinate} < {render(extent)}")
-            terms.append(f"{stride} * {coordinate}")
-        elif isinstance(extent, int):
-            enumerated.append((axis, extent, render(stride)))
-            choices *= extent
-        else:
-            raise ValueError(
-                f"mesh level {level!r} axis {axis} has symbolic extent and stride; "
-                "bind dimensions with --dim before comparing positions"
-            )
-    if choices > _POSITION_ENUMERATION_LIMIT:
-        axes = tuple((axis, extent) for axis, extent, _ in enumerated)
-        bindings = ", ".join(f"--dim {name}=EXTENT" for name in params)
-        raise ValueError(
-            f"mesh level {level!r} axes {axes} require {choices} enumerated positions, "
-            f"exceeding limit {_POSITION_ENUMERATION_LIMIT}; bind dimensions first with "
-            f"{bindings} so strides become static"
-        )
-    start = starts(mesh)[index]
-    alternatives = []
-    for selected in cartesian_product(*(range(extent) for _, extent, _ in enumerated)):
-        address = [str(start), *terms]
-        address.extend(f"{value} * {stride}" for value, (_, _, stride) in zip(selected, enumerated))
-        alternatives.append(f"p = {' + '.join(address)}")
-    positions = " or ".join(alternatives) if alternatives else "1 = 0"
-    constraints.append(f"({positions})")
-    constraints.extend(f"{lo} <= {name} < {hi}" for name, (lo, hi) in params.items())
-    body = " and ".join(constraints)
-    if coordinates:
-        body = f"exists {', '.join(coordinates)}: {body}"
-    prefix = f"[{', '.join(params)}] -> " if params else ""
-    try:
-        return isl.set(prefix + f"{{ [p] : {body} }}")
-    except isl.Error as error:
-        raise ValueError(f"mesh level {level!r} positions are not affine: {error}") from error
-
-
-def _continuous_positions(positions: isl.set) -> bool:
-    """No selected position except the last may have an unselected successor."""
-    successors = positions.subtract(positions.lexmax()).apply(isl.map("{ [p] -> [q] : q = p + 1 }"))
-    return successors.is_subset(positions)
-
-
 def within_scope(mesh: Mesh, current: Mesh) -> bool:
     """Whether each continuous selection is contained in the enclosing level."""
-    current_names = _named(current)
-    for name in _named(mesh):
-        if name not in current_names:
+    from tilefoundry.ir.isl_interop import dim_at_most  # noqa: PLC0415
+
+    enclosing = dict(zip(_named(current), zip(levels(current), starts(current))))
+    for name, arrangement, start in zip(_named(mesh), levels(mesh), starts(mesh)):
+        if name not in enclosing:
             return False
-        inner, outer = level_positions(mesh, name), level_positions(current, name)
-        context = inner.params().intersect(outer.params())
-        inner, outer = inner.intersect_params(context), outer.intersect_params(context)
-        if not _continuous_positions(inner) or not _continuous_positions(outer):
+        outer_arrangement, at_start = enclosing[name]
+        inner = filter(arrangement, major="row")
+        outer = filter(outer_arrangement, major="row")
+        if not is_contiguous(inner, major="row") or not is_contiguous(outer, major="row"):
             return False
-        if not inner.is_subset(outer):
+        if not dim_at_most(at_start, start):
+            return False
+        if not dim_at_most(start + size(inner), at_start + size(outer)):
             return False
     return True
 
@@ -431,10 +359,13 @@ def make_mesh(*meshes: Mesh) -> Mesh:
             )
             if not within_scope(result, current):
                 parent_positions = {
-                    name: str(level_positions(current, name)) for name in here if name in there
+                    name: (filter(arrangement, major="row"), start)
+                    for name, arrangement, start in zip(here, levels(current), starts(current))
+                    if name in there
                 }
                 inner_positions = {
-                    name: str(level_positions(inner, name)) for name in there
+                    name: (filter(arrangement, major="row"), start)
+                    for name, arrangement, start in zip(there, levels(inner), starts(inner))
                 }
                 raise ValueError(
                     f"replacement scope selects positions {inner_positions}, outside parent "
@@ -474,7 +405,6 @@ __all__ = [
     "check_topology",
     "levels",
     "make_mesh",
-    "level_positions",
     "separate",
     "starts",
     "within_scope",

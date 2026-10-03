@@ -411,6 +411,14 @@ def dim_range(dim) -> tuple[int, int] | None:
     return _bound_of(expr, params)
 
 
+def dim_at_most(a, b) -> bool:
+    """Prove ``a <= b`` from the conservative range of their difference."""
+    if isinstance(a, int) and isinstance(b, int):
+        return a <= b
+    bounds = dim_range(b - a)
+    return bounds is not None and bounds[0] >= 0
+
+
 def shape_to_isl_domain(extents: tuple) -> tuple[isl.set, dict[str, object]]:
     """Build an iteration domain and its isl-parameter ShapeDim map.
 
@@ -480,6 +488,7 @@ def index_set(shape: tuple) -> isl.set | None:
 __all__ = [
     "dim_to_isl_expr",
     "dim_range",
+    "dim_at_most",
     "index_set",
     "isl_to_dim",
     "normalize_dim",
