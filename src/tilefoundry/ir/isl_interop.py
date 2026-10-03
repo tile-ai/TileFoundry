@@ -56,7 +56,7 @@ def _bind_param(
 ) -> str:
     if isinstance(value, DimVar):
         name = value.name
-        bound = (value.lo, value.hi)
+        bound = (value.lo, value.hi + 1)
         previous = params.get(name)
         if previous is not None and previous != bound:
             raise ValueError(f"DimVar {name!r} used with conflicting bounds {previous} vs {bound}")
@@ -443,7 +443,7 @@ def shape_to_isl_domain(extents: tuple) -> tuple[isl.set, dict[str, object]]:
         elif isinstance(extent, Constant):
             constraints.append(f"0 <= d{i} < {int(extent.value)}")
         elif isinstance(extent, DimVar):
-            bind(extent.name, extent, (extent.lo, extent.hi))
+            bind(extent.name, extent, (extent.lo, extent.hi + 1))
             constraints.append(f"0 <= d{i} < {extent.name}")
         elif isinstance(extent, Call):
             name = seen.get(extent)

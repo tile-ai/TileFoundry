@@ -138,7 +138,7 @@ def run_authored_analysis(
         ]
         if unbound:
             guidance = "; ".join(
-                f"{name} is declared as [{dim_var.lo}, {dim_var.hi}); bind it with "
+                f"{name} is declared as [{dim_var.lo}, {dim_var.hi}]; bind it with "
                 f"--dim {name}=EXTENT (try {', '.join(map(str, suggested_extents(dim_var.lo, dim_var.hi)))})"
                 for name, dim_var in unbound
             )

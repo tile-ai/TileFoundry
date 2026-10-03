@@ -18,7 +18,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
-_S = DimVar("runtime_shape", 1, 9)
+_S = DimVar("runtime_shape", 1, 8)
 
 
 @func

@@ -223,7 +223,7 @@ def test_broadcast_reshape_and_reshard_order_agree_in_smem():
     assert resharded_then_reshaped == reshaped_then_resharded
 
 
-_S = DimVar(name="seq_len", lo=1, hi=4096)
+_S = DimVar(name="seq_len", lo=1, hi=4095)
 
 
 def test_reshape_evaluate_dynamic_axis_inferred():

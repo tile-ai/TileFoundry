@@ -522,7 +522,7 @@ def ceildiv(a, b) -> Expr:
   - Construction sites MUST use `TensorType.umat_scalar(dtype)` instead of
     restating its field tuple, so structural type equality holds across layers.
   - `DimVar` MUST use a non-empty `name` and plain integer `lo` and `hi` bounds
-    satisfying `lo < hi`. Its envelope is half-open, `[lo, hi)`; `[k, k+1)` is
+    satisfying `lo <= hi`. Its envelope is closed, `[lo, hi]`; `[k, k]` is
     the fixed symbolic dimension `k`.
   - `DimVar` identity MUST be canonical per `(name, lo, hi)`. Same-name
     dimensions in one function signature MUST agree on bounds.

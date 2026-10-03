@@ -96,7 +96,7 @@ def test_a_dispatch_prototype_requires_a_return_annotation() -> None:
 
 
 def test_a_dispatch_prototype_uses_its_tuple_annotation_as_a_variant_contract() -> None:
-    size = DimVar("prototype_size", 1, 9)
+    size = DimVar("prototype_size", 1, 8)
 
     @module(
         entry="root",
@@ -123,7 +123,7 @@ def test_a_dispatch_prototype_uses_its_tuple_annotation_as_a_variant_contract() 
 
 
 def test_a_variant_body_must_satisfy_its_dispatch_return_contract() -> None:
-    size = DimVar("prototype_mismatch_size", 1, 9)
+    size = DimVar("prototype_mismatch_size", 1, 8)
 
     with pytest.raises(ParseError, match="variant body type .*dispatch return contract"):
 

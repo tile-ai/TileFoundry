@@ -658,7 +658,7 @@ def upper_bound(dim) -> int:
     from .dim import DimVar  # noqa: PLC0415 - cycle guard
 
     if isinstance(dim, DimVar):
-        return int(dim.hi) - 1
+        return int(dim.hi)
     static = static_dim_value(dim)
     if static is not None:
         return static

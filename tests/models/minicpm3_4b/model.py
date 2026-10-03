@@ -145,7 +145,7 @@ _ATTN_OUT = config.num_attention_heads * config.v_head_dim   # o_proj in
 # first step, and the exclusive upper bound is `config.max_position_embeddings`
 # because a position beyond
 # the rotary cache has no embedding to gather.
-C = DimVar("ctx_len", 0, config.max_position_embeddings)
+C = DimVar("ctx_len", 0, config.max_position_embeddings - 1)
 
 # One token per step.
 S = 1

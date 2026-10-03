@@ -8,7 +8,7 @@ from tilefoundry.target import CudaTarget
 
 D, W, BOUND = 64, 4, 128
 N_MAX = 1023
-N = DimVar("n", 1, N_MAX + 1)
+N = DimVar("n", 1, N_MAX)
 _CUDA = CudaTarget("nvidia.h200_sxm")
 _CTA = Topology("cta", W)
 

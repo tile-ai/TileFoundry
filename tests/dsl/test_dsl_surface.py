@@ -53,7 +53,7 @@ def test_a_dialect_namespace_resolves_only_its_own_ops() -> None:
         _ = tf.this_op_does_not_exist
 
 
-_S = DimVar("S", 1, 7)
+_S = DimVar("S", 1, 6)
 
 
 @func

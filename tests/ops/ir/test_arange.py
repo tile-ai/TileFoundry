@@ -25,7 +25,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
-_N = DimVar("arange_n", 1, 17)
+_N = DimVar("arange_n", 1, 16)
 
 _COORD_MESH = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("t",))
 _COORD_INDEX = TensorType(shape=(), dtype=DType.i64, layout=None, storage=StorageKind.RMEM)

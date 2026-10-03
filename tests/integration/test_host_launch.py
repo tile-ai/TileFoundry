@@ -72,7 +72,7 @@ def _randn_rows() -> torch.Tensor:
 
 
 _TILE = 12
-_NT = DimVar("Ntile", 1, 64)
+_NT = DimVar("Ntile", 1, 63)
 _DYNAMIC_CTA_LOWERING_WAIT = (
     "waiting for the follow-up dynamic-CTA runtime-lowering plan: lowering must "
     "preserve symbolic topology extents"
@@ -178,7 +178,7 @@ def test_launch_extent_rejects_raw_dimvar() -> None:
     A grid/block extent slot must be an Expr; a raw ``DimVar`` Op (which is
     not an Expr) is rejected by verify ([tir §1.3](docs/spec/tir.md#13-primfunction)).
     """
-    entry = _launch_entry_with_grid_x(DimVar("S", 1, 8))
+    entry = _launch_entry_with_grid_x(DimVar("S", 1, 7))
     with pytest.raises(VerifyError, match="extent"):
         verify_prim_function(entry)
 

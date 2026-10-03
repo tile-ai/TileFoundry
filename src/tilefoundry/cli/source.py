@@ -387,8 +387,8 @@ def one_extent_per_dim(
 
 def suggested_extents(lo: int, hi: int) -> tuple[int, ...]:
     """A few extents inside a declared range, for the suggestion that follows it."""
-    candidates = {lo, lo + 1, (lo + hi) // 2, hi - 1}
-    return tuple(sorted(value for value in candidates if lo <= value < hi))
+    candidates = {lo, lo + 1, (lo + hi) // 2, hi}
+    return tuple(sorted(value for value in candidates if lo <= value <= hi))
 
 
 __all__ = [

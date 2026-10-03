@@ -301,7 +301,7 @@ freeze** below).
 the dispatch envelope; `RangePattern` references that `DimVar` by name.
 The variants' closed ranges MUST **partition** the envelope — pairwise
 **disjoint** and jointly **complete** (their union is exactly the DimVar's
-half-open `[lo, hi)` envelope). Adjacent closed ranges are written
+closed `[lo, hi]` envelope). Adjacent closed ranges are written
 `[.., c - 1]` then `[c, ..]`. Every in-envelope shape
 therefore selects exactly one variant.
 
@@ -1296,7 +1296,7 @@ class TopK(Op):
   - `k` MUST be non-negative (checked whenever `k` is static) and MUST NOT
     exceed the selected-axis length (checked whenever the axis length is
     static and `k` is either static or a symbolic value whose
-    statically-derivable upper bound — `DimVar.hi - 1`, composed through
+    statically-derivable upper bound — `DimVar.hi`, composed through
     `DimMin`/`DimMax`/`DimAdd`/`DimMul`/`DimFloorDiv`/`DimMod` — is known). A
     symbolic `k` against a symbolic axis length, or an upper bound that does
     not statically compose (e.g. through `DimSub`, or a `DimFloorDiv`/

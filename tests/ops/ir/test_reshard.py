@@ -55,7 +55,7 @@ def _materialized(shape, strides, attrs, mesh):
     return ShardLayout(layout=Layout(shape=shape, strides=strides), attrs=attrs, mesh=mesh)
 
 
-_S_DYN = DimVar("seq_len", 1, 4)
+_S_DYN = DimVar("seq_len", 1, 3)
 _MESH_DYN = Mesh(topologies=(Topology("cta", 8),), layout=Layout(shape=(8,), strides=(1,)))
 _SL_DYN_BARE = ShardLayout(
     layout=Layout(shape=(1, _S_DYN, 32, 128), strides=None),

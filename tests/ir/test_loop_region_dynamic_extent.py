@@ -41,7 +41,7 @@ def _sum_loop_fn(extent, *, step=1, extra_params=()):
     `acc = 0; for i in range(0, extent, step): acc += x[i]` over a
     `(seq_len,)` x, plus any *extra_params* whose lengths bind further DimVars.
     """
-    N = DimVar("seq_len", 1, 100)
+    N = DimVar("seq_len", 1, 99)
     x = Var(type=_f32((N,)), name="x")
     acc = Var(type=_f32(()), name="acc")
     iv = Var(type=_i32(()), name="i")
@@ -76,7 +76,7 @@ def test_dynamic_extent_and_step_resolve_from_the_argument_shapes():
     call's argument shapes provide, and nothing else: `resolve_dim` is given the
     same environment the evaluator builds.
     """
-    N = DimVar("seq_len", 1, 100)
+    N = DimVar("seq_len", 1, 99)
     assert resolve_dim(ceildiv(N, 4), {"seq_len": 10}) == 3
     assert resolve_dim(ceildiv(N, 4), {"seq_len": 8}) == 2
     assert resolve_dim(N, {"seq_len": 7}) == 7
@@ -86,7 +86,7 @@ def test_dynamic_extent_and_step_resolve_from_the_argument_shapes():
     assert torch.allclose(evaluate(_sum_loop_fn(N), x), x.sum())
 
     blk = 2
-    B = DimVar("blk", 1, 16)
+    B = DimVar("blk", 1, 15)
     stride_hint = Var(type=_f32((B,)), name="stride_hint")
     fn = _sum_loop_fn(N, step=B, extra_params=(stride_hint,))
     xv = torch.randn(8)
@@ -95,10 +95,10 @@ def test_dynamic_extent_and_step_resolve_from_the_argument_shapes():
 
 
 def test_dynamic_bounds_fail_closed():
-    N = DimVar("seq_len", 1, 100)
+    N = DimVar("seq_len", 1, 99)
 
     with pytest.raises(EvalError, match="unbound DimVar"):
-        evaluate(_sum_loop_fn(DimVar("not_a_param_dim", 1, 100)), torch.randn(5))
+        evaluate(_sum_loop_fn(DimVar("not_a_param_dim", 1, 99)), torch.randn(5))
 
     with pytest.raises(EvalError, match="non-negative"):
         evaluate(_sum_loop_fn(simplify_dim(DimSub, (N, 100))), torch.randn(5))

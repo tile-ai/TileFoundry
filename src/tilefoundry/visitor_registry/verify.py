@@ -169,8 +169,7 @@ def _verify_partition(base: Function) -> None:
             f"hir Function {base.name!r}: dispatch DimVar "
             f"{next(iter(dim_vars))!r} is not reachable from an input parameter"
         )
-    lo, hi_exclusive = envelope
-    hi = hi_exclusive - 1
+    lo, hi = envelope
 
     cursor = lo
     for rlo, rhi in sorted(ranges):
@@ -216,8 +215,8 @@ class _SignatureDimVisitor(ExprVisitor[None]):
         elif prior != (entry.lo, entry.hi):
             raise VerifyError(
                 f"inconsistent DimVar bounds for {entry.name!r} within "
-                f"function signature: [{prior[0]}, {prior[1]}) vs "
-                f"[{entry.lo}, {entry.hi})"
+                f"function signature: [{prior[0]}, {prior[1]}] vs "
+                f"[{entry.lo}, {entry.hi}]"
             )
 
     def visit_Call(self, entry: Call, ctx=None) -> None:
@@ -277,7 +276,7 @@ def _verify_signature_dim_vars(fn: Function) -> None:
         if not (lo <= pat.lo and pat.hi <= hi):
             raise VerifyError(
                 f"RangePattern ({pat.dim_var!r}, {pat.lo}, {pat.hi}) is not "
-                f"contained in DimVar envelope [{lo}, {hi})"
+                f"contained in DimVar envelope [{lo}, {hi}]"
             )
 
 

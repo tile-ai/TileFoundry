@@ -137,7 +137,7 @@ _EMBED_SCALE = config.hidden_size ** 0.5
 # The prior cache this step reads: the only range this model carries. Zero is a
 # first step, and the exclusive upper bound is `config.sliding_window`, so with this
 # step's own token the total is one `_within_window` admits.
-C = DimVar("ctx_len", 0, config.sliding_window)
+C = DimVar("ctx_len", 0, config.sliding_window - 1)
 
 # One token per step.
 S = 1

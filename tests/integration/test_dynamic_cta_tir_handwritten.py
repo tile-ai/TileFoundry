@@ -20,7 +20,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _TILE = 12
-_NT = DimVar("Ntile", 1, 64)
+_NT = DimVar("Ntile", 1, 63)
 _DYNAMIC_CTA_LOWERING_WAIT = (
     "waiting for the follow-up dynamic-CTA runtime-lowering plan: lowering must "
     "preserve symbolic topology extents"

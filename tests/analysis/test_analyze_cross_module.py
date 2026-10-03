@@ -151,7 +151,7 @@ def test_a_reached_child_resolving_another_hierarchy_is_invalid() -> None:
 
 
 def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
-    extent = DimVar("child_topology_extent", 1, 133)
+    extent = DimVar("child_topology_extent", 1, 132)
     hierarchy = (Topology("cta", extent),)
 
     @module(entry="run", topologies=hierarchy)

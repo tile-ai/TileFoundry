@@ -39,7 +39,7 @@ _CTA = context_fixture.CONTEXT_CTA
 _WARP = context_fixture.CONTEXT_WARP
 _THREAD = context_fixture.CONTEXT_THREAD
 ContextTree = context_fixture.ContextTree
-_N = DimVar("n_print", 1, 9)
+_N = DimVar("n_print", 1, 8)
 
 
 def test_a_derived_topology_and_mesh_geometry_survive_the_round_trip() -> None:
@@ -47,8 +47,8 @@ def test_a_derived_topology_and_mesh_geometry_survive_the_round_trip() -> None:
     imported = import_dsl(source)
     signature = source[source.index("    def prefill(") : source.index("        local =")]
 
-    assert 'prefill_n = DimVar("prefill_n", 1, 65)' in source
-    assert 'topology_only = DimVar("topology_only", 1, 1025)' in source
+    assert 'prefill_n = DimVar("prefill_n", 1, 64)' in source
+    assert 'topology_only = DimVar("topology_only", 1, 1024)' in source
     assert 'Topology("cta", ((prefill_n - 1) // 8) + 1)' in source
     assert 'Topology("thread", topology_only)' in source
     assert "ShardLayout(" in signature

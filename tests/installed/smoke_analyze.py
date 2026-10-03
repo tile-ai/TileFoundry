@@ -22,7 +22,7 @@ from tilefoundry import module
 from tilefoundry.dsl import DimVar, Tensor, Topology, func, tf
 from tilefoundry.target import CudaTarget
 
-N = DimVar("N", 1, 9)
+N = DimVar("N", 1, 8)
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class Open:
@@ -159,7 +159,7 @@ def test_a_bare_analyze_binds_every_open_dimension(tf, tmp_path) -> None:
     unbound = tf("analyze", f"{source}:Open", str(tmp_path / "unbound.py"))
     assert unbound.returncode == 1
     assert unbound.stdout == ""
-    assert "N is declared as [1, 9)" in unbound.stderr
+    assert "N is declared as [1, 8]" in unbound.stderr
 
     bound = tf("analyze", f"{source}:Open", str(tmp_path / "bound.py"), "--dim", "N=4")
     assert bound.returncode == 0, bound.stderr
@@ -172,8 +172,8 @@ def test_performance_resolves_derived_execution_geometry(tf, derived_prefill, tm
     unbound = tf("analyze", source, str(tmp_path / "unbound.json"), "--performance", "--json")
     assert unbound.returncode == 1
     assert unbound.stdout == ""
-    assert "prefill_n is declared as [1, 65)" in unbound.stderr
-    assert "topology_only is declared as [1, 1025)" in unbound.stderr
+    assert "prefill_n is declared as [1, 64]" in unbound.stderr
+    assert "topology_only is declared as [1, 1024]" in unbound.stderr
 
     bound = tf(
         "analyze",
@@ -308,8 +308,8 @@ def test_analyze_names_an_open_dimension_and_suggests_extents(tf, shipped, tmp_p
     assert done.returncode == 1
     assert done.stdout == ""
     assert "ctx_len" in done.stderr
-    assert "[0, 262144)" in done.stderr
-    assert "0, 1, 131072, 262143" in done.stderr
+    assert "[0, 262143]" in done.stderr
+    assert "0, 1, 131071, 262143" in done.stderr
 
 
 def test_analyze_rejects_several_extents_for_one_dimension(tf, shipped, tmp_path) -> None:

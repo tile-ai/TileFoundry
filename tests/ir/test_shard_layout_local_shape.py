@@ -70,8 +70,8 @@ def test_only_a_mesh_axis_that_owns_a_dim_divides_it(sharded, expected) -> None:
     assert shard_layout_local_shape(sharded) == expected
 
 
-_N = DimVar("local_n", 1, 65)
-_M = DimVar("mesh_n", 1, 65)
+_N = DimVar("local_n", 1, 64)
+_M = DimVar("mesh_n", 1, 64)
 
 
 def _symbolic_layout(axis_extent, mesh_extent, *, split: bool) -> ShardLayout:

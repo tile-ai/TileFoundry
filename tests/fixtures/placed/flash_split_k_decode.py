@@ -22,7 +22,7 @@ HEADS = 16
 WORKERS = 8
 HEAD_DIM = 64
 BLOCK = 128
-CTX = DimVar("ctx", 1, 65_537)
+CTX = DimVar("ctx", 1, 65_536)
 SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
 

@@ -137,7 +137,7 @@ class PatternMatcher:
         if isinstance(pattern, DimVar):
             if pattern.name in self.bindings:
                 return self.bindings[pattern.name] == subject or self._fail(pattern, subject)
-            if type(subject) is not int or not pattern.lo <= subject < pattern.hi:
+            if type(subject) is not int or not pattern.lo <= subject <= pattern.hi:
                 return self._fail(pattern, subject)
             self.bindings[pattern.name] = subject
             return True
@@ -508,7 +508,7 @@ def matched(pattern, subject, captures=None) -> Match | None:
     if isinstance(pattern, DimVar):
         if pattern.name in held.captures:
             return held if held.captures[pattern.name] == subject else None
-        if type(subject) is not int or not pattern.lo <= subject < pattern.hi:
+        if type(subject) is not int or not pattern.lo <= subject <= pattern.hi:
             return None
         return Match({**held.captures, pattern.name: subject})
     if is_dim_op_call(pattern):

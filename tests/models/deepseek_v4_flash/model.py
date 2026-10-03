@@ -232,7 +232,7 @@ def _submodules(config: DSV4Config):
     # first step, and the exclusive upper bound is the window itself -- a query
     # attends `window` positions counting its own, so the cache before it is one
     # shorter.
-    C = DimVar("ctx_len", 0, config.window)
+    C = DimVar("ctx_len", 0, config.window - 1)
 
 
     @module(entry="mla_attend")

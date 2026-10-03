@@ -17,8 +17,8 @@ from tilefoundry.ir.types.substitute import (
 )
 from tilefoundry.ir.types.tensor_type import TupleType
 
-CTX = DimVar("ctx_len", 1, 262145)
-SEQ = DimVar("seq_len", 1, 5)
+CTX = DimVar("ctx_len", 1, 262144)
+SEQ = DimVar("seq_len", 1, 4)
 
 
 def _tensor(*shape) -> TensorType:
@@ -83,7 +83,7 @@ def test_an_extent_outside_the_declared_range_is_refused() -> None:
     The declaration states what the model was written to handle. Accepting
     a length outside it would report an answer for a program nobody wrote.
     """
-    with pytest.raises(DimSubstitutionError, match=r"\[1, 262145\) and cannot take"):
+    with pytest.raises(DimSubstitutionError, match=r"\[1, 262144\] and cannot take"):
         substitute_dims(_tensor(CTX), {"ctx_len": 262145})
 
     with pytest.raises(DimSubstitutionError, match="cannot take 0"):
@@ -92,11 +92,10 @@ def test_an_extent_outside_the_declared_range_is_refused() -> None:
     assert substitute_dims(_tensor(CTX), {"ctx_len": 262144}).shape == (262144,)
 
 
-def test_dim_var_bounds_remain_half_open() -> None:
-    """DimVar envelopes stay half-open even though specialization ranges are closed."""
+def test_dim_var_bounds_are_closed() -> None:
+    """DimVar envelopes include both endpoints, like specialization ranges."""
     assert substitute_dims(_tensor(CTX), {"ctx_len": CTX.lo}).shape == (CTX.lo,)
-    with pytest.raises(DimSubstitutionError):
-        substitute_dims(_tensor(CTX), {"ctx_len": CTX.hi})
+    assert substitute_dims(_tensor(CTX), {"ctx_len": CTX.hi}).shape == (CTX.hi,)
 
 
 def test_a_non_integer_extent_is_refused() -> None:

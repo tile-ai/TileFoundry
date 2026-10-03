@@ -106,7 +106,7 @@ def test_slice_step_scales_the_unbound_layout_stride():
 
 
 def test_slice_step_composes_with_a_symbolic_layout_stride():
-    stride_dim = DimVar("slice_stride", 1, 65)
+    stride_dim = DimVar("slice_stride", 1, 64)
     source = make_tensor_type(
         (16, 32),
         _F,
@@ -150,7 +150,7 @@ def test_runtime_window_preserves_distribution_without_claiming_an_offset():
 
 
 def test_runtime_window_before_a_split_axis_preserves_the_split_target():
-    seq = DimVar("slice_seq", 1, 4097)
+    seq = DimVar("slice_seq", 1, 4096)
     mesh = Mesh((Topology("gpu", 16),), Layout((16,), (1,)), ("g",))
     source = make_shard_tensor_type((1, seq, 16, 128), mesh=mesh, attrs=(Split(2),))
     start = Var(type=make_tensor_type((), DType.i64), name="start")

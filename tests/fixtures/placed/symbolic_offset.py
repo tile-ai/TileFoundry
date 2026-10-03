@@ -17,7 +17,7 @@ _MESH_TILE = 4
 _ROW_TILE = 256
 _GROUPS = 3
 _OUTPUTS = _GROUPS * _STRIP
-_SEQ = DimVar("seq_len", 0, 8193)
+_SEQ = DimVar("seq_len", 0, 8192)
 _H200 = CudaTarget("nvidia.h200_sxm")
 _CTA = Topology("cta", _GRID)
 

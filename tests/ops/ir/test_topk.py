@@ -159,7 +159,7 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
     invariant that every post-typeinfer ShardLayout has concrete strides — it
     materializes explicit all-ones strides rather than leaving them None.
     """
-    s = DimVar("S", 1, 64)
+    s = DimVar("S", 1, 63)
     x_ty = raw_shard_tensor_type(
         (256, s),
         (256, s),
@@ -193,7 +193,7 @@ def test_topk_parser_preserves_largest_sorted():
     assert topk.largest is False and topk.sorted is True
 
 
-POS = DimVar("POS", 1, 8193)
+POS = DimVar("POS", 1, 8192)
 
 
 K = dim_min(512, POS // 4)
@@ -215,7 +215,7 @@ def _build_topk_fn(x_shape, k, *, axis: int = -1) -> tuple[Function, "TupleType"
     return fn, result_type
 
 
-_BIG_K = DimVar("topk_dyn_big_k", 1, 2000)
+_BIG_K = DimVar("topk_dyn_big_k", 1, 1999)
 
 DYNAMIC_K_TYPEINFER_CASES = [
     TypeInferCase(

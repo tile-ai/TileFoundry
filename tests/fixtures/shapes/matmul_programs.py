@@ -6,7 +6,7 @@ from tilefoundry import func
 from tilefoundry.dsl import DimVar, Tensor, tf
 from tilefoundry.target import AmxTarget, CudaTarget
 
-DYNAMIC_M = DimVar("seq", 1, 128)
+DYNAMIC_M = DimVar("seq", 1, 127)
 
 
 @func

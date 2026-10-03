@@ -408,7 +408,7 @@ explicit analysis; there is no ordinary `--target` option.
     between them silently answers a request that has no answer.
   - With no `--dim`, the selection MUST be analysed or type-checked as authored.
     A selection that leaves a dimension open MUST then fail naming the dimension,
-    its declared `[lo, hi)` interval, and concrete extents inside that interval
+    its declared `[lo, hi]` interval, and concrete extents inside that interval
     the caller can use: inferring its concrete program requires an extent, and a
     range is not one. The bare form MUST apply stated dimensions before running
     the public program check used by Analyze, followed by the same

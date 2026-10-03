@@ -277,7 +277,7 @@ def test_quant_drops_fully_broadcast_mesh_ownership() -> None:
     assert scale.layout is None
 
 
-_SYMBOLIC_LAST = DimVar("quant_symbolic_last", 1, 1025)
+_SYMBOLIC_LAST = DimVar("quant_symbolic_last", 1, 1024)
 
 
 def test_quant_symbolic_scale_extent_and_runtime_divisibility() -> None:

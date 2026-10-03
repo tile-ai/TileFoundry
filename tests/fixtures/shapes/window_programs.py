@@ -7,8 +7,8 @@ from tilefoundry.dsl import DimVar, Tensor, tf
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
-WINDOW_SEQ = DimVar("seq", 4, 64)
-WINDOW_TILE = DimVar("tile_size", 2, 8)
+WINDOW_SEQ = DimVar("seq", 4, 63)
+WINDOW_TILE = DimVar("tile_size", 2, 7)
 
 
 @func

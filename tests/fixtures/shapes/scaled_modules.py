@@ -6,8 +6,8 @@ from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, DimVar, Tensor, tf
 from tilefoundry.target import CudaTarget
 
-EVALUATOR_N = DimVar("N_eval", 1, 8)
-RESOURCE_N = DimVar("n_resource", 1, 9)
+EVALUATOR_N = DimVar("N_eval", 1, 7)
+RESOURCE_N = DimVar("n_resource", 1, 8)
 
 
 @module(entry="run")

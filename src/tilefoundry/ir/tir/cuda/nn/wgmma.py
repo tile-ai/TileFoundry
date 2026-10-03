@@ -78,7 +78,7 @@ a_k_sliced = ComposedLayoutPattern(
 fragment = LayoutPattern((8, 2, 4, 2, 4, c), (1, 8, 16, 64, 128, 512))
 
 
-N = DimVar("n", 8, 257)
+N = DimVar("n", 8, 256)
 
 
 class Wgmma(MmaAtom):
@@ -95,7 +95,7 @@ class Wgmma(MmaAtom):
         pattern=WildcardPattern(
             "n",
             predicates=(
-                RangePattern(lo=N.lo, hi=N.hi - 1),
+                RangePattern(lo=N.lo, hi=N.hi),
                 WildcardPattern("n") % 8 == 0,
             ),
         ),

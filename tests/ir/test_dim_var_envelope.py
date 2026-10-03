@@ -48,7 +48,7 @@ def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
     in the return type is unreadable at runtime and remains unknown. The scan
     covers params, return type, and nested ``TupleType`` fields.
     """
-    s = DimVar(name="S_env", lo=1, hi=8)
+    s = DimVar(name="S_env", lo=1, hi=7)
     forged = _identity_fn(
         params=(Var(type=_tensor((s,)), name="x"),),
         specializations=(RangePattern("S_env", 0, 99),),
@@ -56,13 +56,13 @@ def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
     with pytest.raises(VerifyError, match="not contained in DimVar envelope"):
         verify_function(forged)
 
-    known = Var(type=_tensor((DimVar(name="S_known", lo=1, hi=8),)), name="x")
+    known = Var(type=_tensor((DimVar(name="S_known", lo=1, hi=7),)), name="x")
     with pytest.raises(VerifyError, match="references unknown DimVar"):
         verify_function(
             _identity_fn(params=(known,), specializations=(RangePattern("OTHER", 1, 3),))
         )
 
-    r = DimVar(name="R_ret_only", lo=1, hi=8)
+    r = DimVar(name="R_ret_only", lo=1, hi=7)
     with pytest.raises(VerifyError, match="references unknown DimVar"):
         verify_function(
             _identity_fn(
@@ -72,8 +72,8 @@ def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
             )
         )
 
-    lo_var = DimVar(name="S_inc", lo=1, hi=8)
-    hi_var = DimVar(name="S_inc", lo=4, hi=16)
+    lo_var = DimVar(name="S_inc", lo=1, hi=7)
+    hi_var = DimVar(name="S_inc", lo=4, hi=15)
     x = Var(type=_tensor((lo_var,)), name="x")
     inconsistent = (
         _identity_fn(params=(x, Var(type=_tensor((hi_var,)), name="y"))),
@@ -116,14 +116,14 @@ def test_variants_must_tile_the_envelope_exactly() -> None:
     disjoint. A gap leaves a runtime shape with no arm, and an overlap makes the
     selected arm depend on evaluation order.
     """
-    verify_function(_dispatch_proto("S_par_ok", (1, 8), [(1, 4), (5, 7)]))
-    verify_function(_dispatch_proto("S_par_pt", (1, 8), [(1, 3), (4, 4), (5, 7)]))
+    verify_function(_dispatch_proto("S_par_ok", (1, 7), [(1, 4), (5, 7)]))
+    verify_function(_dispatch_proto("S_par_pt", (1, 7), [(1, 3), (4, 4), (5, 7)]))
 
     with pytest.raises(VerifyError, match="gap or overlap at 4"):
-        verify_function(_dispatch_proto("S_par_ov", (1, 8), [(1, 5), (4, 8)]))
+        verify_function(_dispatch_proto("S_par_ov", (1, 7), [(1, 5), (4, 7)]))
 
     with pytest.raises(VerifyError, match="gap or overlap at 5"):
-        verify_function(_dispatch_proto("S_par_gap", (1, 8), [(1, 3), (5, 8)]))
+        verify_function(_dispatch_proto("S_par_gap", (1, 7), [(1, 3), (5, 7)]))
 
     with pytest.raises(VerifyError, match="gap or overlap at 6"):
-        verify_function(_dispatch_proto("S_par_inc", (1, 8), [(1, 4), (6, 7)]))
+        verify_function(_dispatch_proto("S_par_inc", (1, 7), [(1, 4), (6, 7)]))
