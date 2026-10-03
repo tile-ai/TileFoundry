@@ -179,6 +179,7 @@ def test_symbolic_scope_compares_selected_positions(case) -> None:
         assert within_scope(half, full)
         assert not within_scope(full, half)
         assert not covered_by_scope(half, full)
+        assert not within_scope(full, THR)
     elif case in ("holes", "strided"):
         selection = (
             Mesh(topology, Layout((2, chunks), (2 * chunks, 1)))

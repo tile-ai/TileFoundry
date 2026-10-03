@@ -262,7 +262,11 @@ _POSITION_ENUMERATION_LIMIT = 256
 
 
 def level_positions(mesh: Mesh, level: str) -> isl.set:
-    """The selected positions of one level, under its declared dimension bounds."""
+    """The selected positions of one level, under its declared dimension bounds.
+
+    The isl boundary normalizes library errors to ValueError so callers can add
+    source locations; this is exception normalization, not a scope decision.
+    """
     from tilefoundry.ir.isl_interop import dim_to_isl_expr  # noqa: PLC0415
 
     names = _named(mesh)
