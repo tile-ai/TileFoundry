@@ -149,32 +149,35 @@ def test_mesh_refuses_a_repeated_topology_name() -> None:
         )
 
 
+_SEQUENCE = DimVar("mesh_sequence", 64, 2048)
+_CHUNKS = _SEQUENCE // 64
+_TOPOLOGY = (Topology("cta", 132),)
+_FULL = Mesh(_TOPOLOGY, Layout((2, _CHUNKS, 2), (2 * _CHUNKS, 2, 1)))
+_FLAT = Mesh(_TOPOLOGY, Layout((4 * _CHUNKS,), (1,)))
+_HALF = Mesh(_TOPOLOGY, Layout((2 * _CHUNKS,), (1,)))
+_HOLES = Mesh(_TOPOLOGY, Layout((2, _CHUNKS), (2 * _CHUNKS, 1)))
+_STRIDED = Mesh(_TOPOLOGY, Layout((_CHUNKS,), (3,)))
+
+
 @pytest.mark.parametrize(
-    "case", ["contiguous", "contained", "holes", "strided"]
+    ("inner", "outer", "covered", "within"),
+    (
+        (_FULL, _FULL, True, True),
+        (_FULL, _FLAT, True, True),
+        (_HALF, _FULL, False, True),
+        (_FULL, _HALF, False, False),
+        (_FULL, THR, False, False),
+    ),
+    ids=("same", "equivalent", "contained", "exceeds", "different-topology"),
 )
-def test_symbolic_scope_compares_selected_positions(case) -> None:
-    sequence = DimVar("mesh_sequence", 64, 2048)
-    chunks = sequence // 64
-    topology = (Topology("cta", 132),)
-    full = Mesh(topology, Layout((2, chunks, 2), (2 * chunks, 2, 1)))
-    if case == "contiguous":
-        flat = Mesh(topology, Layout((4 * chunks,), (1,)))
-        assert covered_by_scope(full, full)
-        assert within_scope(full, full)
-        assert covered_by_scope(full, flat)
-    elif case == "contained":
-        half = Mesh(topology, Layout((2 * chunks,), (1,)))
-        assert within_scope(half, full)
-        assert not within_scope(full, half)
-        assert not covered_by_scope(half, full)
-        assert not within_scope(full, THR)
-    elif case in ("holes", "strided"):
-        selection = (
-            Mesh(topology, Layout((2, chunks), (2 * chunks, 1)))
-            if case == "holes"
-            else Mesh(topology, Layout((chunks,), (3,)))
-        )
-        assert not within_scope(selection, selection)
-        assert not within_scope(selection, full)
-        with pytest.raises(ValueError, match="both must be continuous"):
-            make_mesh(make_mesh(THR, selection), selection)
+def test_symbolic_scopes_compare_by_selected_positions(inner, outer, covered, within) -> None:
+    assert covered_by_scope(inner, outer) is covered
+    assert within_scope(inner, outer) is within
+
+
+@pytest.mark.parametrize("selection", (_HOLES, _STRIDED), ids=("holes", "strided"))
+def test_a_scope_with_gaps_is_refused(selection) -> None:
+    assert not within_scope(selection, selection)
+    assert not within_scope(selection, _FULL)
+    with pytest.raises(ValueError, match="both must be continuous"):
+        make_mesh(make_mesh(THR, selection), selection)
