@@ -557,13 +557,24 @@ def ceildiv(a, b) -> Expr:
     conversion between dimension and shape IR values and isl, affine
     normalization, shape-domain construction, and conservative value-range
     queries.
-  - `dim_to_isl_expr` MUST render one dimension expression while registering
-    its leaf parameters; `isl_to_dim` MUST decode an isl affine expression using
-    that parameter map. `shape_to_isl_domain` MUST return one shape's iteration
-    domain and parameter map.
-  - `index_set` MUST be the non-negative, all-literal shape specialization of
-    `shape_to_isl_domain`. It MUST return `None` for a negative, boolean, or
-    non-literal extent rather than constructing a symbolic or empty domain.
+  - Every IR-to-isl conversion in `ir.isl_interop` MUST be named
+    `XX_to_isl_YY`, where `YY` is the isl type it returns, and MUST take the one
+    parameter dictionary `IslParamValues` (isl parameter name to IR value). Every
+    isl-to-IR conversion MUST be named `isl_to_XX` and read the same dictionary.
+    A conversion MUST look a leaf up by object identity, reuse the name it
+    already has, and name a new leaf into the dictionary with a name no other
+    value or coordinate has. Two distinct values sharing a `DimVar` name are two
+    parameters. A parameter's stated range MUST be a constraint on the returned
+    isl object, not a second record.
+  - `dim_to_isl_pw_aff(dim, values, *, coords)` MUST return one dimension
+    expression as an `isl.pw_aff`. `coords` maps the identity of a value that is
+    a coordinate of the space, such as an induction variable, to that dimension's
+    name; those values are dimensions of the result, not parameters.
+    `isl_to_dim` MUST decode an isl affine expression using `values`.
+    `shape_to_isl_set(shape, values)` MUST return one shape's coordinate set; a
+    non-dimension-arithmetic `Call` extent is one opaque parameter for the whole
+    extent. A negative static extent is an empty set and a boolean extent is a
+    `TypeError`.
   - `dim_range(value)` MUST return conservative half-open bounds from
     `RangeMetadata` before attempting structural dimension arithmetic. A value
     with neither stored nor structurally derivable bounds returns `None`.

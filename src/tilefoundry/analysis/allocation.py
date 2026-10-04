@@ -14,9 +14,9 @@ from tilefoundry.ir.core import Call, Expr
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.isl_interop import index_set
+from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.utils import local_type_of, tensor_types
+from tilefoundry.ir.types.utils import is_literal_shape, local_type_of, tensor_types
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
 from tilefoundry.visitor_registry.access_relation import relation_of, renaming_relation
@@ -100,7 +100,11 @@ def storage_owners(root: IterationScope, liveness: Liveness) -> dict[int, Expr]:
             relation = relation_of(
                 renaming_relation(value, ctx, declarations[key].projected_relations(value, ctx))
             )
-            box = index_set(operand.type.shape)
+            box = (
+                shape_to_isl_set(tuple(operand.type.shape), {})
+                if is_literal_shape(operand.type.shape)
+                else None
+            )
             if (
                 box is None
                 or not relation.is_single_valued()
@@ -245,15 +249,18 @@ def operand_to_result_relation(
             return None
         if not isinstance(held, TensorType):
             return None
-        box = index_set(held.shape)
-        return None if box is None else scope.domain.flat_product(box).coalesce()
+        if not is_literal_shape(held.shape):
+            return None
+        return scope.domain.flat_product(shape_to_isl_set(tuple(held.shape), {})).coalesce()
 
     def value_box(value: Expr) -> isl.set | None:
         try:
             held = local_type_of(value.type)
         except (TypeError, ValueError, NotImplementedError):
             return None
-        return index_set(held.shape) if isinstance(held, TensorType) else None
+        if not isinstance(held, TensorType) or not is_literal_shape(held.shape):
+            return None
+        return shape_to_isl_set(tuple(held.shape), {})
 
     def composed(inputs: isl.map, outputs: isl.map) -> isl.map | None:
         try:

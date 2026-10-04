@@ -44,7 +44,7 @@ from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.slice import Slice as SliceOp
-from tilefoundry.ir.isl_interop import index_set
+from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import (
     DType,
@@ -58,7 +58,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.utils import tensor_bytes
+from tilefoundry.ir.types.utils import is_literal_shape, tensor_bytes
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,
@@ -171,8 +171,9 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed() ->
         reached = relation_of(boundary.pattern).range()
         if not isinstance(view, TensorType) or reached.is_empty():
             continue
-        box = index_set(tuple(view.shape))
-        assert box is not None and reached.is_subset(box), (
+        assert is_literal_shape(view.shape), f"{tuple(view.shape)} is not a literal shape"
+        box = shape_to_isl_set(tuple(view.shape), {})
+        assert reached.is_subset(box), (
             f"a boundary reached {reached} outside the {tuple(view.shape)} it was given"
         )
     assert (

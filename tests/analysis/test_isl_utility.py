@@ -12,10 +12,9 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.isl_interop import (
     dim_range,
-    index_set,
     isl_to_dim,
     normalize_dim,
-    shape_to_isl_domain,
+    shape_to_isl_set,
 )
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import (
@@ -171,49 +170,56 @@ def test_cardinality_distinguishes_empty_and_unbounded_parameter_contexts():
     assert cardinality(unbounded) is None
 
 
-def test_shape_to_isl_domain_encoding():
+def test_shape_to_isl_set_encoding():
     """Static extents inline.
 
-    Static extents inline; a bare DimVar keeps its own param name; a
-    composite mints one opaque param bounded by ``dim_range`` and dedups
-    across axes on the canonical expression.
+    Static extents inline; a bare DimVar is a parameter bounded by its envelope;
+    a composite mints one opaque param bounded by ``dim_range``, shared across
+    axes holding the same object. Every parameter is named into ``values``.
     """
-    dom, param_map = shape_to_isl_domain((8, 4))
+    values = {}
+    dom = shape_to_isl_set((8, 4), values)
     assert dom.dim(isl.dim_type.PARAM) == 0
     assert dom.dim(isl.dim_type.SET) == 2
-    assert param_map == {}
+    assert values == {}
 
-    dom, param_map = shape_to_isl_domain((P,))
-    assert dom.get_dim_name(isl.dim_type.PARAM, 0) == "P"
-    assert param_map == {"P": P}
+    dom = shape_to_isl_set((P,), values)
+    name = dom.get_dim_name(isl.dim_type.PARAM, 0)
+    assert values == {name: P}
+    assert f"{P.lo} <= {name} <= {P.hi}" in str(dom)
 
+    values = {}
     d = simplify_dim(DimFloorDiv, (P, 4))
-    dom, param_map = shape_to_isl_domain((d, 128, d))
+    dom = shape_to_isl_set((d, 128, d), values)
     assert dom.dim(isl.dim_type.PARAM) == 1
     name = dom.get_dim_name(isl.dim_type.PARAM, 0)
     lo, hi = dim_range(d)
     assert f"{lo} <= {name} <= {hi - 1}" in str(dom)
-    assert param_map[name] is d
-
-    dom, param_map = shape_to_isl_domain(())
-    assert dom.dim(isl.dim_type.SET) == 0
-    assert param_map == {}
+    assert values == {name: d}
 
 
-def test_shape_to_isl_domain_same_name_conflicting_bounds_raises():
-    with pytest.raises(ValueError, match="conflicting bounds"):
-        shape_to_isl_domain((DimVar("S", 1, 7), DimVar("S", 1, 15)))
+def test_shape_to_isl_set_names_each_value_once():
+    """One object is one parameter; two DimVars sharing a name are two."""
+    narrow, wide = DimVar("S", 1, 7), DimVar("S", 1, 15)
+    values = {}
+    dom = shape_to_isl_set((narrow, wide), values)
+    assert dom.dim(isl.dim_type.PARAM) == 2
+    assert sorted(values.values(), key=lambda dim: dim.hi) == [narrow, wide]
+
+    again = shape_to_isl_set((wide,), values)
+    assert again.dim(isl.dim_type.PARAM) == 1
+    assert values[again.get_dim_name(isl.dim_type.PARAM, 0)] is wide
+    assert len(values) == 2
 
 
-def test_index_set_is_the_nonnegative_literal_shape_special_case():
-    for shape in ((8, 4), (), (0, 3)):
-        domain, param_map = shape_to_isl_domain(shape)
-        assert param_map == {}
-        assert index_set(shape).is_equal(domain)
-
-    assert index_set((-1, 3)) is None
-    assert index_set((P,)) is None
-    assert index_set((True,)) is None
+def test_shape_to_isl_set_literal_shapes():
+    """A literal shape is a box, a zero-dim shape one point, a negative one nothing."""
+    assert cardinality(shape_to_isl_set((8, 4), {})) == 32
+    assert cardinality(shape_to_isl_set((), {})) == 1
+    assert shape_to_isl_set((0, 3), {}).is_empty()
+    assert shape_to_isl_set((-1, 3), {}).is_empty()
+    with pytest.raises(TypeError, match="bool"):
+        shape_to_isl_set((True,), {})
 
 
 def test_round_trip_lossless_for_every_dim_kind():
@@ -242,8 +248,9 @@ def test_round_trip_lossless_for_every_dim_kind():
         simplify_dim(DimMod, (P, 128)),
         simplify_dim(DimAdd, (128, simplify_dim(DimFloorDiv, (P, 4)))),
     )
-    domain, param_map = shape_to_isl_domain(dims)
+    values = {}
+    domain = shape_to_isl_set(dims, values)
     recovered = tuple(
-        isl_to_dim(domain.dim_max(i).add_constant(1), param_map) for i in range(len(dims))
+        isl_to_dim(domain.dim_max(i).add_constant(1), values) for i in range(len(dims))
     )
     assert recovered == dims

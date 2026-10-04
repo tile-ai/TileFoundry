@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import isl
 
 from tilefoundry.ir.core import Call, Constant, Expr, Var
 from tilefoundry.ir.hir.sharding.local import Local
-from tilefoundry.ir.isl_interop import dim_range, dim_to_isl_expr, index_set
+from tilefoundry.ir.isl_interop import IslParamValues, dim_to_isl_pw_aff, shape_to_isl_set
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.utils import local_type_of, static_dim_value
+from tilefoundry.ir.types.utils import is_literal_shape, local_type_of, static_dim_value
 from tilefoundry.ir.visitor import ExprCloner
 from tilefoundry.utils.isl_utils import cardinality, has_unbounded_param
 from tilefoundry.visitor_registry.access_relation import (
@@ -54,7 +54,11 @@ def widest_allowed(access: isl.map, name: str, held: object) -> int | None:
     ends = (probe.dim_min_val(0), probe.dim_max_val(0))
     if not all(end.is_int() for end in ends):
         return None
-    box = index_set(tuple(held.shape)) if isinstance(held, TensorType) else None
+    box = (
+        shape_to_isl_set(tuple(held.shape), {})
+        if isinstance(held, TensorType) and is_literal_shape(held.shape)
+        else None
+    )
     if box is None or box.dim(isl.dim_type.SET) != access.dim(isl.dim_type.OUT):
         return ends[0].get_num_si()
     best: tuple[int, int] | None = None
@@ -115,33 +119,41 @@ def _parameter_term(
     held: object,
     *,
     narrow: bool,
-) -> tuple[str | None, dict[str, tuple[int, int] | None], AnalysisPrecision]:
+) -> tuple[isl.pw_aff | None, AnalysisPrecision]:
+    """What one parameter equals, over the enclosing induction variables.
+
+    The scope's own parameters keep their names and the ranges its domain gives
+    them, and a capture of one of them is that same parameter rather than a
+    second one. A value nothing here can bound is widened to the end of its
+    legal range that reaches the most.
+    """
     number = static_dim_value(value)
     if number is not None:
-        return str(number), {}, AnalysisPrecision.EXACT
+        return isl.pw_aff(f"{{ [{number}] }}"), AnalysisPrecision.EXACT
     try:
         resolved = _RegionBindingResolver(narrow=narrow).visit(value, scope)
-        identities = {
+        coords = {
             id(loop.induction_var): f"__tf_in_{i}" for i, loop in enumerate(scope.enclosing_loops())
         }
-        param_map = dict(scope.domain_params)
-        identities.update(
-            (id(scope.capture_root(parameter)), param) for param, parameter in param_map.items()
+        values: IslParamValues = {
+            param: scope.capture_root(parameter) for param, parameter in scope.domain_params.items()
+        }
+        term = dim_to_isl_pw_aff(resolved, values, coords=coords).intersect_params(
+            scope.domain.params()
         )
-        params = {param: dim_range(parameter) for param, parameter in param_map.items()}
-        expression = dim_to_isl_expr(resolved, params, param_map=param_map, identities=identities)
     except (TypeError, ValueError, NotImplementedError, isl.Error):
         pass
     else:
-        if all(bound is not None for bound in params.values()):
-            return expression, params, AnalysisPrecision.EXACT
+        if not has_unbounded_param(term):
+            return term, AnalysisPrecision.EXACT
     number = widest_allowed(relation, name, held)
-    return None if number is None else str(number), {}, AnalysisPrecision.UPPER_BOUND
+    term = None if number is None else isl.pw_aff(f"{{ [{number}] }}")
+    return term, AnalysisPrecision.UPPER_BOUND
 
 
 def eliminate_parameters(
     relation: isl.map,
-    parameters: Mapping[str, object] | Sequence[tuple[str, object]],
+    parameters: Mapping[str, object],
     scope: "IterationScope",
     held: object,
     *,
@@ -149,33 +161,22 @@ def eliminate_parameters(
 ) -> tuple[isl.map, AnalysisPrecision]:
     """Eliminate parameters using scoped affine expressions or widening."""
     precision = AnalysisPrecision.EXACT
-    inputs = ", ".join(f"__tf_in_{i}" for i in range(relation.dim(isl.dim_type.IN)))
-    outputs = ", ".join(f"__tf_out_{i}" for i in range(relation.dim(isl.dim_type.OUT)))
-    names = dict.fromkeys(
-        relation.get_dim_name(isl.dim_type.PARAM, i)
-        for i in range(relation.dim(isl.dim_type.PARAM))
-    )
-    for name, value in dict(parameters).items():
-        if name not in names:
+    rank = relation.dim(isl.dim_type.IN)
+    for name, value in parameters.items():
+        if relation.find_dim_by_name(isl.dim_type.PARAM, name) < 0:
             raise AnalysisError(f"access pattern parameter {name!r} is missing from its relation")
-        expression, params, resolved_precision = _parameter_term(
+        term, resolved_precision = _parameter_term(
             value, relation, name, scope, held, narrow=narrow
         )
-        if expression is not None:
-            names.update(dict.fromkeys(params))
-            conditions = " and ".join(
-                (
-                    f"{name} = {expression}",
-                    *(f"{lo} <= {param} < {hi}" for param, (lo, hi) in params.items()),
-                )
-            )
-            relation = relation.intersect(
-                isl.map(f"[{', '.join(names)}] -> {{ [{inputs}] -> [{outputs}] : {conditions} }}")
-            )
+        if term is not None:
+            term = term.add_dims(isl.dim_type.IN, rank - term.dim(isl.dim_type.IN))
+            inputs = ", ".join(f"i{index}" for index in range(rank))
+            space = f"[{inputs}] -> [{name}]" if rank else f"[{name}]"
+            named = isl.pw_aff(f"[{name}] -> {{ {space} }}")
+            relation = relation.intersect_domain(named.eq_set(term))
         precision = precision.join(resolved_precision)
         param_index = relation.find_dim_by_name(isl.dim_type.PARAM, name)
         relation = relation.project_out(isl.dim_type.PARAM, param_index, 1)
-        del names[name]
     return relation, precision
 
 
@@ -199,7 +200,7 @@ def resolve_access(
     relation = relation.intersect_domain(scope_domain)
     relation, precision = eliminate_parameters(
         relation,
-        getattr(boundary.pattern, "parameters", ()) or (),
+        boundary.pattern.values,
         scope,
         operand.type,
         narrow=narrow,
@@ -208,9 +209,8 @@ def resolve_access(
         held = local_type_of(operand.type) if narrow else operand.type
     except (TypeError, ValueError, NotImplementedError):
         return None
-    box = index_set(tuple(held.shape)) if isinstance(held, TensorType) else None
-    if box is not None:
-        relation = relation.intersect_range(box)
+    if isinstance(held, TensorType) and is_literal_shape(held.shape):
+        relation = relation.intersect_range(shape_to_isl_set(tuple(held.shape), {}))
     operand = scope.capture_root(operand)
     while isinstance(operand, Call) and (position := aliased_operand(operand)) is not None:
         folded = renaming_relation(operand, ctx, scope.projected_relations(operand, ctx))
@@ -218,7 +218,7 @@ def resolve_access(
         operand = scope.capture_root(operand.args[position])
         relation, folded_precision = eliminate_parameters(
             relation,
-            folded.parameters,
+            folded.values,
             scope,
             operand.type,
             narrow=narrow,

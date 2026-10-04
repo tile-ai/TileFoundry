@@ -627,6 +627,18 @@ def static_dim_value(dim):
     return None
 
 
+def is_literal_shape(shape) -> bool:
+    """Whether every extent of *shape* is a non-negative plain ``int``.
+
+    Stricter than ``static_dim_value``: an integer ``Constant`` does not count,
+    so a reader that clips to a box only does so for a shape written in numbers.
+    """
+    return all(
+        isinstance(extent, int) and not isinstance(extent, bool) and extent >= 0
+        for extent in shape
+    )
+
+
 def i64_const(value: int) -> "Constant":
     """The canonical i64 shape-scalar ``Constant`` (meta-scalar typed)."""
     from .dim import Constant  # noqa: PLC0415 - cycle guard

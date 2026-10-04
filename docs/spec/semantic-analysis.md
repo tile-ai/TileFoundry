@@ -83,6 +83,27 @@ call. An HIR consumer such as [`tf.schedule`](./schedule.md) may use them to
 derive its own value result. Instructions selected by such a consumer MUST
 register their relation explicitly; there is no fallback relation.
 
+### 2.1 IR to isl conversion
+
+Every analysis service converts IR values to isl through the functions that
+[types §4](./types.md#4-dim--symbolic-shape-dimensions) owns, and every
+boundary carries what its parameters stand for in the `values` of its
+`AffineAccess` ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation)).
+Both use the one `IslParamValues` dictionary, from isl parameter name to IR value.
+
+- constraints:
+  - A service MUST compose converted values as isl objects. It MUST NOT render
+    an isl object back to text and splice that text into a new relation.
+  - A loop domain MUST treat each enclosing induction variable, and each
+    capture of one, as a dimension of the space, not as a parameter. Each other
+    leaf of a loop bound MUST be a parameter with a stated range; a loop bound
+    with an unbounded parameter is refused.
+  - A parameter of an access relation that an enclosing scope already names
+    MUST keep that name, and a capture of that value MUST be the same
+    parameter, so one value is one parameter across the scope.
+  - The parameter name has no meaning. A reader MUST find what a parameter
+    stands for in `values`, not in its name.
+
 ## 3. Shard propagation
 
 ### 3.1 Logical shape to layout domain

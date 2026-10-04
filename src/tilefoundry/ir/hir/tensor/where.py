@@ -29,7 +29,6 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
     shape_from_relation,
 )
-from tilefoundry.visitor_registry.isl_utility import shape_to_isl_domain
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -49,10 +48,9 @@ def _broadcast_all(shapes: tuple[tuple, ...]) -> tuple:
     return out_shape
 
 
-def _maps(shapes: tuple[tuple, ...]) -> tuple[object, tuple[AffineAccess, ...], dict]:
+def _maps(shapes: tuple[tuple, ...]) -> tuple[AffineAccess, ...]:
     out_shape = _broadcast_all(shapes)
     rank = len(out_shape)
-    domain, param_map = shape_to_isl_domain(out_shape)
     dims = [f"d{i}" for i in range(rank)]
     source = "[" + ", ".join(dims) + "]"
     maps = []
@@ -64,7 +62,7 @@ def _maps(shapes: tuple[tuple, ...]) -> tuple[object, tuple[AffineAccess, ...], 
         ]
         maps.append(AffineAccess(isl.map(f"{{ {source} -> [{', '.join(accessed)}] }}")))
     maps.append(AffineAccess(isl.map(f"{{ {source} -> [{', '.join(dims)}] }}")))
-    return (domain, tuple(maps), param_map)
+    return tuple(maps)
 
 
 @register_access_relation(Where)
@@ -72,7 +70,7 @@ def _where_access_relation(call: "Call", ctx) -> AccessRelations:
     input_types = tuple(ctx.type_of(arg) for arg in call.args)
     shapes = tuple(type_.shape for type_ in input_types)
     out_shape = _broadcast_all(shapes)
-    _domain, maps, _params = _maps(shapes)
+    maps = _maps(shapes)
     return iterating(
         out_shape,
         AccessRelations(

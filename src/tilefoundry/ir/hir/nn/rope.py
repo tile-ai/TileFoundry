@@ -20,9 +20,10 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials, reject_partials
-from tilefoundry.ir.isl_interop import index_set
+from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TupleType
+from tilefoundry.ir.types.utils import is_literal_shape
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -102,9 +103,8 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     own = ", ".join(f"d{index}" for index in range(rank))
     value = isl.map(f"{{ [{walked}] -> [{own}] : d{rank} = 0 }}")
     grouped = isl.map(f"{{ [{walked}] -> [{own}] : d{rank} = 1 }}")
-    narrower = index_set(tuple(k_ty.shape))
-    if narrower is not None:
-        grouped = grouped.intersect_range(narrower)
+    if is_literal_shape(k_ty.shape):
+        grouped = grouped.intersect_range(shape_to_isl_set(tuple(k_ty.shape), {}))
     value, grouped = AffineAccess(value), AffineAccess(grouped)
     positions = ctx.type_of(call.args[4])
     tables = []

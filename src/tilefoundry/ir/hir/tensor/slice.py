@@ -168,7 +168,7 @@ def _slice_view(call: "Call", ctx) -> tuple:
 
     reads: list[str] = []
     guards: list[str] = []
-    parameters: list[tuple[str, object]] = []
+    values: dict[str, object] = {}
     for axis in range(len(logical_source.shape)):
         term = _Axis(
             axis,
@@ -177,21 +177,20 @@ def _slice_view(call: "Call", ctx) -> tuple:
             strides[axis] if axis < len(strides) else 1,
         )
         begin = term.start(offsets[axis] if axis < len(offsets) else 0, axis)
-        parameters.extend(term.params)
+        values.update(term.params)
         guards.extend(term.guards)
         walked = carried.get(axis, "0")
         stepped = walked if term.stride == "1" else f"{term.stride} * ({walked})"
         reads.append(stepped if begin == "0" else f"{stepped} + {begin}")
 
-    names = [name for name, _value in parameters]
-    prefix = f"[{', '.join(names)}] -> " if names else ""
+    prefix = f"[{', '.join(values)}] -> " if values else ""
     where = f" : {' and '.join(guards)}" if guards else ""
     rank = len(sizes) or len(logical_source.shape)
     domain = ", ".join(f"d{index}" for index in range(rank))
     return (
         AffineAccess(
             isl.map(f"{prefix}{{ [{domain}] -> [{', '.join(reads)}]{where} }}"),
-            tuple(parameters),
+            values,
         ),
         identity_access(rank),
     )

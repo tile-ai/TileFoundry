@@ -322,11 +322,11 @@ class AffineAccess:
 
     Attributes:
         relation: attribute; Which coordinates of its own value it reaches.
-        parameters: attribute; Each isl parameter name paired with the operand element or dimension it is.
+        values: attribute; Each isl parameter name mapped to the operand element or dimension it is.
     """
 
     relation: "isl.map"
-    parameters: tuple[tuple[str, object], ...] = ()
+    values: IslParamValues = {}
 
 class BoundaryRelation:
     """One boundary, as the coordinates it reaches and nothing else.
@@ -372,10 +372,12 @@ def register_access_relation(op_cls: type): ...
     than a second space. There is no separate domain field: what an Op walks is
     the union of its boundary domains.
   - A coordinate an Op only learns at run time is a **parameter** of the
-    relation, paired in `parameters` with the operand element or dimension it
-    is, so whoever restricts the relation binds it rather than guessing. A
+    relation, mapped in `values` with the operand element or dimension it is,
+    so whoever restricts the relation binds it rather than guessing. A
     parameter nobody binds is a hole and MUST be refused; one name MUST be one
-    value across the whole Op.
+    value across the whole Op, and collecting an Op's `values` MUST refuse a
+    name bound to two values. A relation composed or restricted from others
+    MUST carry exactly the parameters it names, taken from those `values`.
   - `inputs` has one entry per input arg in argument order; `outputs` has one
     per output, which for a `TupleType` result is one per field. `coordinates_of`
     holds the input count, each input image's rank against the supplied Type,

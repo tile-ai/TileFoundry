@@ -33,7 +33,6 @@ from tilefoundry.visitor_registry import (
 )
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
-    AffineAccess,
     BoundaryRelation,
     iteration_universe,
     projected,
@@ -42,6 +41,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     relation_of,
     relations_of,
+    restricted_access,
 )
 from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes, VerifyContext
 from tilefoundry.visitor_registry.verify import verify_between
@@ -300,19 +300,7 @@ def _outer_band(
     def lifted(boundary: BoundaryRelation) -> BoundaryRelation:
         pattern = boundary.pattern
         relation = band.apply_range(relation_of(pattern).affine_hull())
-        parameters = dict(pattern.parameters)
-        return BoundaryRelation(
-            AffineAccess(
-                relation,
-                tuple(
-                    (name, parameters[name])
-                    for name in (
-                        relation.get_dim_name(isl.dim_type.PARAM, index)
-                        for index in range(relation.dim(isl.dim_type.PARAM))
-                    )
-                ),
-            )
-        )
+        return BoundaryRelation(restricted_access(relation, pattern.values))
 
     return AccessRelations(
         inputs=tuple(lifted(boundary) for boundary in relations.inputs),
