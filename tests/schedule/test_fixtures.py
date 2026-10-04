@@ -148,7 +148,9 @@ SMEM_GOLDEN = {
 RMEM_EXPECTED = {
     "scalar_binary": {
         "thread@0:32#0": _RmemExpectation(
-            132, "32-element f32 register tile plus one f32 lhs broadcast value"
+            132,
+            "rhs literal materializes in rmem during lowering; the new result reuses "
+            "the same register tile, so the HIR peak stays unchanged",
         ),
     },
     "gemm_8192x17408x5120_register_store": {

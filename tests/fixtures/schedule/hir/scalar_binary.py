@@ -2,7 +2,9 @@
 
 Literals stay unmaterialized in HIR; explicit and automatic instructions must
 allocate and fill rank-zero register tensors. The final scheduled multiply
-broadcasts its size-one lhs over the register tile.
+broadcasts its size-one lhs over the register tile. Explicit scheduling with a
+constant on the left is absent: tf.schedule takes the scheduled tensor as its
+first operand, so a literal there would describe a different path.
 """
 
 from tilefoundry import func, module
@@ -29,5 +31,6 @@ class ScalarBinary:
                 held = tf.schedule((x,), op=T.copy(rmem_layout=_REG))
                 shifted = tf.schedule((held, 0.25), op=T.binary(kind=BinaryKind.ADD))
                 offset = 1.0 - shifted
+                scaled = offset * 0.5
                 left = tf.schedule((lhs,), op=T.copy(rmem_layout=_LHS))
-                return tf.schedule((left, offset), op=T.binary(kind=BinaryKind.MUL))
+                return tf.schedule((left, scaled), op=T.binary(kind=BinaryKind.MUL))
