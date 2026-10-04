@@ -299,6 +299,9 @@ def _dim_visitor_type():
 
 def _render(dim, values: IslParamValues, coords: Mapping[int, str], *, bounded: bool):
     """*dim* as a piecewise affine over *coords*, with or without its parameters' ranges."""
+    clash = set(values) & set(coords.values())
+    if clash:
+        raise ValueError(f"{sorted(clash)} name both a parameter and a coordinate")
     visitor = _dim_visitor_type()(values, coords)
     expr = visitor.visit(dim)
     params = visitor.bounds
@@ -444,13 +447,17 @@ def shape_to_isl_set(shape: tuple, values: IslParamValues) -> "isl.set":
     consumer that needs a bounded set refuses that parameter itself. Parameters
     are named into *values* by identity, so one object is one parameter.
     """
+    dims = [f"d{i}" for i in range(len(shape))]
+    clash = set(values) & set(dims)
+    if clash:
+        raise ValueError(f"{sorted(clash)} name both a parameter and a coordinate")
     known = {id(value): name for name, value in values.items()}
     names: dict[str, tuple[int, int] | None] = {}
 
     def bind(extent, bound) -> str:
         name = known.get(id(extent))
         if name is None:
-            name = _fresh_name(extent, values, set())
+            name = _fresh_name(extent, values, set(dims))
             known[id(extent)] = name
             values[name] = extent
         names.setdefault(name, bound)
@@ -477,8 +484,7 @@ def shape_to_isl_set(shape: tuple, values: IslParamValues) -> "isl.set":
     prefix = f"[{', '.join(names)}] -> " if names else ""
     if not shape:
         return isl.set(prefix + "{ [] }")
-    dims = ", ".join(f"d{i}" for i in range(len(shape)))
-    return isl.set(prefix + f"{{ [{dims}] : {' and '.join(constraints)} }}")
+    return isl.set(prefix + f"{{ [{', '.join(dims)}] : {' and '.join(constraints)} }}")
 
 
 __all__ = [

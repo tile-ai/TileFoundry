@@ -376,8 +376,12 @@ def register_access_relation(op_cls: type): ...
     so whoever restricts the relation binds it rather than guessing. A
     parameter nobody binds is a hole and MUST be refused; one name MUST be one
     value across the whole Op, and collecting an Op's `values` MUST refuse a
-    name bound to two values. A relation composed or restricted from others
-    MUST carry exactly the parameters it names, taken from those `values`.
+    name bound to two values. A handler MAY name each boundary's parameters on
+    its own; `iterating` MUST first rename them by object identity, so one value
+    is one name and two values are two, equating and merging two names one
+    boundary gives one value, without a rename capturing another name. A
+    relation composed or restricted from others MUST carry exactly the
+    parameters it names, taken from those `values`.
   - `inputs` has one entry per input arg in argument order; `outputs` has one
     per output, which for a `TupleType` result is one per field. `coordinates_of`
     holds the input count, each input image's rank against the supplied Type,

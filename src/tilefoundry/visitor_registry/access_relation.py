@@ -657,6 +657,7 @@ def iterating(extents: "Sequence", relations: "AccessRelations") -> "AccessRelat
     contracts; most Ops walk what they produce. A boundary may be partial in
     that space, which is one relation empty somewhere, not a second space.
     """
+    relations = _by_identity(relations)
     values = _values_of(relations)
     try:
         domain = shape_to_isl_set(tuple(extents), values)
@@ -668,6 +669,79 @@ def iterating(extents: "Sequence", relations: "AccessRelations") -> "AccessRelat
         inputs=tuple(_held_to(boundary, domain, values) for boundary in relations.inputs),
         outputs=tuple(_held_to(boundary, domain, values) for boundary in relations.outputs),
     )
+
+
+def _by_identity(relations: AccessRelations) -> AccessRelations:
+    """One Op's boundaries with one parameter name per value, and per value one name.
+
+    A handler names each boundary's parameters on its own, so two boundaries can
+    use one name for two values, or two names for one. Here the names are made
+    the values': one object is one parameter across the Op, two objects are two,
+    and a name a value already has is kept unless another value has it too.
+    """
+    patterns = [pattern for _side, _index, pattern in _affine_boundaries(relations)]
+    owners: dict[str, set[int]] = {}
+    for pattern in patterns:
+        for name, value in pattern.values.items():
+            owners.setdefault(name, set()).add(id(value))
+    taken = set(owners)
+    canonical: dict[int, str] = {}
+    for pattern in patterns:
+        for name, value in pattern.values.items():
+            if id(value) in canonical:
+                continue
+            if len(owners[name]) > 1:
+                suffix = 1
+                while f"{name}_{suffix}" in taken:
+                    suffix += 1
+                name = f"{name}_{suffix}"
+                taken.add(name)
+            canonical[id(value)] = name
+
+    def renamed(boundary: BoundaryRelation) -> BoundaryRelation:
+        pattern = boundary.pattern
+        targets = {name: canonical[id(value)] for name, value in pattern.values.items()}
+        return BoundaryRelation(
+            AffineAccess(
+                _renamed(pattern.relation, targets, taken),
+                {canonical[id(value)]: value for value in pattern.values.values()},
+            )
+        )
+
+    return AccessRelations(
+        inputs=tuple(renamed(boundary) for boundary in relations.inputs),
+        outputs=tuple(renamed(boundary) for boundary in relations.outputs),
+    )
+
+
+def _renamed(relation: "isl.map", targets: dict[str, str], taken: set[str]) -> "isl.map":
+    """*relation* with each parameter renamed to its target, two names for one merged.
+
+    Every name that changes first moves to a name nobody uses, so swapping two
+    names cannot capture either. A target already present is the same value, so
+    the two parameters are equated and one is projected out.
+    """
+    staged: dict[str, str] = {}
+    for name, target in targets.items():
+        if name == target:
+            continue
+        temporary = f"__tf_rename_{len(staged)}"
+        while temporary in taken:
+            temporary = f"_{temporary}"
+        position = relation.find_dim_by_name(isl.dim_type.PARAM, name)
+        relation = relation.set_dim_name(isl.dim_type.PARAM, position, temporary)
+        staged[temporary] = target
+    for temporary, target in staged.items():
+        position = relation.find_dim_by_name(isl.dim_type.PARAM, temporary)
+        if relation.find_dim_by_name(isl.dim_type.PARAM, target) < 0:
+            relation = relation.set_dim_name(isl.dim_type.PARAM, position, target)
+            continue
+        relation = relation.intersect_params(
+            isl.set(f"[{temporary}, {target}] -> {{ : {temporary} = {target} }}")
+        )
+        position = relation.find_dim_by_name(isl.dim_type.PARAM, temporary)
+        relation = relation.project_out(isl.dim_type.PARAM, position, 1)
+    return relation
 
 
 def _held_to(

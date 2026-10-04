@@ -102,7 +102,9 @@ Both use the one `IslParamValues` dictionary, from isl parameter name to IR valu
     MUST keep that name, and a capture of that value MUST be the same
     parameter, so one value is one parameter across the scope.
   - The parameter name has no meaning. A reader MUST find what a parameter
-    stands for in `values`, not in its name.
+    stands for in `values`, not in its name. Boundaries of one Op MUST share a
+    parameter only when they bind the same object, which `iterating` makes so
+    before the Op's boundaries are combined.
 
 ## 3. Shard propagation
 

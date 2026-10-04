@@ -571,10 +571,14 @@ def ceildiv(a, b) -> Expr:
     a coordinate of the space, such as an induction variable, to that dimension's
     name; those values are dimensions of the result, not parameters.
     `isl_to_dim` MUST decode an isl affine expression using `values`.
-    `shape_to_isl_set(shape, values)` MUST return one shape's coordinate set; a
-    non-dimension-arithmetic `Call` extent is one opaque parameter for the whole
-    extent. A negative static extent is an empty set and a boolean extent is a
+    `shape_to_isl_set(shape, values)` MUST return one shape's coordinate set over
+    dimensions `d0` to `d{rank-1}`; every `Call` extent, dimension arithmetic
+    such as `P // 4` included, is one opaque parameter for the whole extent. A
+    negative static extent is an empty set and a boolean extent is a
     `TypeError`.
+  - A conversion MUST raise `ValueError` when a name in `values` is also the
+    name of a coordinate of the result, rather than read that parameter as the
+    coordinate.
   - `dim_range(value)` MUST return conservative half-open bounds from
     `RangeMetadata` before attempting structural dimension arithmetic. A value
     with neither stored nor structurally derivable bounds returns `None`.
