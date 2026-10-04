@@ -17,10 +17,21 @@ from typing import Callable
 import isl
 
 from tilefoundry.ir.core.expr import Constant
-from tilefoundry.ir.isl_interop import IslParamValues, isl_to_dim, shape_to_isl_set
+from tilefoundry.ir.isl_interop import (
+    IslParamValues,
+    isl_to_dim,
+    layout_to_isl_map,
+    shape_to_isl_set,
+)
 from tilefoundry.ir.types import TensorType, TupleType, Type
-from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis
-from tilefoundry.ir.types.utils import is_literal_shape, static_dim_value, tensor_bytes
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis, shard_layout_of
+from tilefoundry.ir.types.utils import (
+    divided_mesh_axes,
+    is_literal_shape,
+    static_dim_value,
+    tensor_bytes,
+)
 from tilefoundry.utils.isl_utils import cardinality
 
 from .registries import DispatchRegistry
@@ -199,22 +210,36 @@ def iteration_universe(relations: AccessRelations) -> "isl.set | None":
     return None if walked is None else walked.coalesce()
 
 
-def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
+def projected(
+    relations: AccessRelations, call, ctx, *, device: "Mapping[str, int] | None" = None
+) -> AccessRelations:
     """Every boundary in the coordinates the reader asking can address.
 
-    An Op states where it reads and writes among logical axes, because that is
-    all it can know before anything is placed. A reader addresses positions, and
-    which ones a logical coordinate is depends on the layout the value ended up
-    with, so the two are composed here for every Op. That composition also holds
-    a participant to its own iterations, and every boundary is then held to the
-    same ones: a value nobody sharded is addressed whole by everyone, so left
-    alone it would charge one participant the whole of what all of them read.
+    An Op states where it reads and writes among logical axes; a reader addresses
+    positions, which depend on the layout the value ended up with, so the two
+    are composed here for every Op. That also holds a participant to its own
+    iterations, and every boundary to the same ones. With no topology level the
+    coordinates stay logical; with one, they are the positions the unit
+    *device* holds -- a coordinate per mesh axis, keyed by its name (or number
+    when unnamed), each 0 unless given.
     """
     held = ctx.local_type_of(call)
     fields = held.fields if isinstance(held, TupleType) else (held,)
     logical = ctx.type_of(call)
     logical_fields = logical.fields if isinstance(logical, TupleType) else (logical,)
     bindings = _values_of(relations)
+    level = getattr(ctx, "topology_level", None)
+    coordinates: IslParamValues = {}
+
+    def placement(value) -> "isl.map | None":
+        shard = shard_layout_of(getattr(value, "layout", None))
+        if level is None or not isinstance(value, TensorType) or shard is None:
+            return None
+        divided = divided_mesh_axes(shard, topology_level=level, topologies=ctx.topologies)
+        placed_at = layout_to_isl_map(
+            tuple(value.shape), value.layout, coordinates, divided=divided
+        )
+        return _at_device(placed_at, coordinates, device or {})
 
     def views(index: int, side: str) -> tuple:
         if side == "output":
@@ -227,7 +252,7 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
 
     placed = {
         side: tuple(
-            _placed(boundary, *views(index, side), side, index, call)
+            _placed(boundary, *views(index, side), side, index, call, placement)
             for index, boundary in enumerate(boundaries)
         )
         for side, boundaries in (("input", relations.inputs), ("output", relations.outputs))
@@ -419,12 +444,40 @@ def boundary_maps(relations: AccessRelations) -> tuple["isl.map", ...]:
     )
 
 
-def _placed(boundary: "BoundaryRelation", local, logical, side: str, index: int, call) -> "isl.map":
+def _at_device(placement: "isl.map", coordinates: IslParamValues, device: Mapping) -> "isl.map":
+    """*placement* at one unit: each mesh coordinate fixed, then gone.
+
+    A coordinate is fixed to the value *device* gives under its mesh axis's
+    name, or 0. A value that is not one of that axis's positions is refused,
+    rather than fixing the unit nowhere and counting nothing.
+    """
+    for name in _parameter_names(placement):
+        target = coordinates[name].target
+        axis = static_dim_value(coordinates[name].args[0])
+        names = target.mesh.names
+        key = names[axis] if axis < len(names) and names[axis] else str(axis)
+        extent = flatten(target.mesh.layout).shape[axis]
+        number = device.get(key, 0)
+        if not isinstance(number, int) or isinstance(number, bool) or not 0 <= number < extent:
+            raise ValueError(
+                f"device coordinate {key!r} is {number!r}, and that mesh axis has "
+                f"positions 0 to {extent - 1}"
+            )
+        placement = placement.intersect_params(isl.set(f"[{name}] -> {{ : {name} = {number} }}"))
+        position = placement.find_dim_by_name(isl.dim_type.PARAM, name)
+        placement = placement.project_out(isl.dim_type.PARAM, position, 1)
+    return placement
+
+
+def _placed(
+    boundary: "BoundaryRelation", local, logical, side: str, index: int, call, placement
+) -> "isl.map":
     """One boundary's image carried from logical axes onto the positions it has.
 
     Held to the positions this participant was given, so which iterations are
     its own follows from the placement rather than from a relation that may
-    reach past what it was handed.
+    reach past what it was handed. A value with no placement is addressed at
+    its own coordinates.
     """
     relation = relation_of(boundary.pattern)
     if (
@@ -440,7 +493,16 @@ def _placed(boundary: "BoundaryRelation", local, logical, side: str, index: int,
             f"{len(logical.shape)} axes of its own; a canonical relation is "
             "stated in the axes an Op was written in"
         )
-    return _within_positions(relation.apply_range(positions_of(local, logical)), local)
+    placed_at = placement(logical)
+    if placed_at is None:
+        return _within_positions(relation, local)
+    if placed_at.dim(isl.dim_type.OUT) != len(local.shape):
+        raise ValueError(
+            f"{type(call.target).__name__} places {side} {index} at "
+            f"{placed_at.dim(isl.dim_type.OUT)} positions, and one unit holds "
+            f"{len(local.shape)}"
+        )
+    return _within_positions(relation.apply_range(placed_at), local)
 
 
 def _within_positions(relation: "isl.map", local) -> "isl.map":
@@ -1029,35 +1091,6 @@ def window_source(
 def _declared(values: IslParamValues) -> str:
     """The parameter list a relation built from *values* declares, or nothing."""
     return f"[{', '.join(values)}] -> " if values else ""
-
-
-def positions_of(local: "Type", logical: "Type") -> "isl.map":
-    """Where one value's logical coordinates live among the positions it has.
-
-    A layout may factor a logical axis into several positions, and then a
-    coordinate on that axis is the mixed-radix digits of those positions: the
-    outer ones are what it divides by, the inner ones what it is left with.
-    Composing an Op's logical relation with this is how a reader gets the
-    coordinates it can address, without any Op saying how. An axis nobody
-    divided is left unguarded, holding all of it saying nothing about whose
-    iterations are whose.
-    """
-    belongs = logical_axes_of(local, logical)
-    coordinates = ", ".join(f"c{axis}" for axis in range(len(logical.shape)))
-    image = factored_image([f"c{axis}" for axis in range(len(logical.shape))], local, logical)
-    guards = []
-    held: dict[int, int] = {}
-    for position, owner in enumerate(belongs):
-        extent = local.shape[position]
-        if isinstance(extent, int) and not isinstance(extent, bool):
-            held[owner] = held.get(owner, 1) * extent
-    for axis, extent in sorted(held.items()):
-        whole = logical.shape[axis] if axis < len(logical.shape) else None
-        if isinstance(whole, int) and not isinstance(whole, bool) and extent >= whole:
-            continue
-        guards.append(f"0 <= c{axis} < {extent}")
-    where = f" : {' and '.join(guards)}" if guards else ""
-    return isl.map(f"{{ [{coordinates}] -> [{', '.join(image)}]{where} }}")
 
 
 def factored_image(reads: "Sequence[str]", local: "Type", logical: "Type") -> list[str]:

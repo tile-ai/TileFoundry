@@ -9,8 +9,9 @@ ranges, and shape domains.
 from __future__ import annotations
 
 import itertools
+import math
 import re
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 
 import isl
@@ -31,7 +32,11 @@ from .types.dim import (
     DimVar,
 )
 from .types.dtype import IntegerDType
+from .types.int_tuple import flatten as flatten_tuple
+from .types.layout import LayoutBase, flatten
+from .types.shard_layout import ShardLayout, Split, shard_layout_of
 from .types.tensor_type import TensorType
+from .types.utils import i64_const, static_dim_value
 
 IslParamValues = dict[str, Expr]
 """isl parameter name -> the IR value it stands for; the one dictionary every conversion shares."""
@@ -55,9 +60,10 @@ def _is_const(node) -> bool:
     return isinstance(node, int) or isinstance(node, Constant)
 
 
-def _fresh_name(value, values: IslParamValues, taken: set[str]) -> str:
+def _fresh_name(value, values: IslParamValues, taken: set[str], hint: str | None = None) -> str:
     """A parameter name no value in *values* and no coordinate in *taken* has."""
-    hint = getattr(value, "name", None) if isinstance(value, (DimVar, Var)) else None
+    if hint is None and isinstance(value, (DimVar, Var)):
+        hint = getattr(value, "name", None)
     hint = re.sub(r"\W", "_", hint, flags=re.ASCII) if isinstance(hint, str) and hint else "rt"
     if hint[0].isdigit():
         hint = f"_{hint}"
@@ -487,12 +493,200 @@ def shape_to_isl_set(shape: tuple, values: IslParamValues) -> "isl.set":
     return isl.set(prefix + f"{{ [{', '.join(dims)}] : {' and '.join(constraints)} }}")
 
 
+def _congruent_groups(shape: tuple, extents: tuple) -> list[list[int]] | None:
+    """Which layout positions each logical axis owns, when they line up in order.
+
+    Each logical axis takes the next positions whose product is its extent; a
+    symbolic axis takes one position equal to it. Anything else -- an axis
+    spread over a boundary, or positions left over that hold more than one --
+    is not congruent, and None says so.
+    """
+    groups: list[list[int]] = []
+    position = 0
+    for extent in shape:
+        group: list[int] = []
+        whole = static_dim_value(extent)
+        if whole is None:
+            while position < len(extents) and static_dim_value(extents[position]) == 1:
+                group.append(position)
+                position += 1
+            if position >= len(extents) or extents[position] != extent:
+                return None
+            group.append(position)
+            position += 1
+        else:
+            product = 1
+            while product < whole:
+                held = static_dim_value(extents[position]) if position < len(extents) else None
+                if held is None:
+                    return None
+                product *= held
+                group.append(position)
+                position += 1
+            if product != whole:
+                return None
+        groups.append(group)
+    if any(static_dim_value(extent) != 1 for extent in extents[position:]):
+        return None
+    return groups
+
+
+def _regrouped(shape: tuple, extents: tuple, coords: list[str]) -> list[str]:
+    """Each layout position's coordinate, by the row-major regroup of *coords*.
+
+    The outermost position of a run is not reduced modulo its extent, so a
+    coordinate past the value is not folded back onto one inside it.
+    """
+    image = ["0"] * len(extents)
+    groups = _congruent_groups(shape, extents)
+    if groups is not None:
+        runs = [(coord, group) for coord, group in zip(coords, groups, strict=True)]
+    else:
+        whole = [static_dim_value(extent) for extent in shape]
+        held = [static_dim_value(extent) for extent in extents]
+        if None in whole or None in held:
+            raise ValueError(
+                f"shape {shape} regroups onto layout positions {extents} across axes, "
+                "which needs static extents on both sides"
+            )
+        if math.prod(whole) != math.prod(held):
+            raise ValueError(f"shape {shape} and layout positions {extents} differ in size")
+        terms = []
+        stride = 1
+        for coord, extent in reversed(list(zip(coords, whole))):
+            terms.append(coord if stride == 1 else f"{stride} * {coord}")
+            stride *= extent
+        runs = [(f"({' + '.join(reversed(terms)) or '0'})", list(range(len(extents))))]
+    for coord, group in runs:
+        inner = 1
+        for position in reversed(group):
+            term = coord if inner == 1 else f"floor({coord}/{inner})"
+            if position == group[0]:
+                image[position] = term
+                break
+            extent = static_dim_value(extents[position])
+            if extent is None:
+                raise ValueError(
+                    f"layout position {position} has extent {extents[position]!r} and a "
+                    "position outside it; dividing a coordinate by it is not affine"
+                )
+            image[position] = f"({term}) mod {extent}"
+            inner *= extent
+    return image
+
+
+def _mesh_coordinate(mesh, axis: int, values: IslParamValues) -> str:
+    """The parameter standing for this unit's coordinate on one mesh axis."""
+    from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord  # noqa: PLC0415 - cycle guard
+
+    for name, value in values.items():
+        if (
+            isinstance(value, Call)
+            and isinstance(value.target, MeshCoord)
+            and value.target.mesh is mesh
+            and static_dim_value(value.args[0]) == axis
+        ):
+            return name
+    coordinate = Call(
+        type=TensorType.umat_scalar(), target=MeshCoord(mesh=mesh), args=(i64_const(axis),)
+    )
+    named = mesh.names[axis] if axis < len(mesh.names) and mesh.names[axis] else str(axis)
+    name = _fresh_name(coordinate, values, set(), hint=f"u_{named}")
+    values[name] = coordinate
+    return name
+
+
+def layout_to_isl_map(
+    shape: tuple, layout: LayoutBase, values: IslParamValues, *, divided: Collection[int]
+) -> "isl.map":
+    """Where each logical coordinate of a *shape* value sits among one unit's positions.
+
+    The coordinates regroup row-major onto the layout's positions
+    ([semantic-analysis §3.1](docs/spec/semantic-analysis.md#31-logical-shape-to-layout-domain)).
+    A position *divided* mesh axes cut is split into digits, cutting axes
+    outermost first, then the residual: a divided digit is that unit's
+    coordinate, a ``MeshCoord`` parameter named into *values*, and the rest is
+    the position within. Only a ``ShardLayout``, direct or under a static-offset
+    view, has positions to place on.
+    """
+    shard = shard_layout_of(layout)
+    if shard is None:
+        raise TypeError(f"layout_to_isl_map places a ShardLayout, not {type(layout).__name__}")
+    if isinstance(shard.layout, ShardLayout):
+        raise ValueError("layout_to_isl_map: a ShardLayout nested in another has no placement")
+    extents = tuple(
+        math.prod(flatten_tuple(mode)) if isinstance(mode, tuple) else mode
+        for mode in shard.layout.shape
+    )
+    coords = [f"c{axis}" for axis in range(len(shape))]
+    clash = set(values) & set(coords)
+    if clash:
+        raise ValueError(f"{sorted(clash)} name both a parameter and a coordinate")
+    domain = ", ".join(coords)
+    if any(static_dim_value(extent) == 0 for extent in (*shape, *extents)):
+        positions = ", ".join(f"p{index}" for index in range(len(extents)))
+        return isl.map(f"{{ [{domain}] -> [{positions}] : 1 = 0 }}")
+    image = _regrouped(tuple(shape), extents, coords)
+    mesh_extents = flatten(shard.mesh.layout).shape
+    cutting: dict[int, list[int]] = {}
+    for mesh_axis, attr in enumerate(shard.attrs):
+        if not isinstance(attr, Split):
+            continue
+        if not 0 <= attr.axis < len(extents) or mesh_axis >= len(mesh_extents):
+            raise ValueError(f"{shard!r} splits a layout position or mesh axis it does not have")
+        cutting.setdefault(attr.axis, []).append(mesh_axis)
+    params: list[str] = []
+    guards: list[str] = []
+    for position, axes in cutting.items():
+        if not any(mesh_axis in divided for mesh_axis in axes):
+            continue
+        whole = static_dim_value(extents[position])
+        parts = [static_dim_value(mesh_extents[mesh_axis]) for mesh_axis in axes]
+        if whole is None or any(part is None or part <= 0 for part in parts):
+            raise ValueError(
+                f"layout position {position} of {shape} is split by mesh extents "
+                f"{tuple(mesh_extents[a] for a in axes)}; placing one unit needs them static"
+            )
+        if whole % math.prod(parts):
+            raise ValueError(
+                f"layout position {position} extent {whole} is not divisible by its mesh "
+                f"extents {tuple(parts)}"
+            )
+        residual = whole // math.prod(parts)
+        coordinate = image[position]
+        stride = whole
+        kept: list[tuple[str, int]] = []
+        for order, (mesh_axis, part) in enumerate(zip(axes, parts)):
+            stride //= part
+            digit = f"floor(({coordinate})/{stride})"
+            if order:
+                digit = f"({digit}) mod {part}"
+            if mesh_axis in divided:
+                name = _mesh_coordinate(shard.mesh, mesh_axis, values)
+                if name not in params:
+                    params.append(name)
+                    guards.append(f"0 <= {name} < {part}")
+                guards.append(f"{digit} = {name}")
+            else:
+                kept.append((digit, part))
+        terms = [f"({coordinate}) mod {residual}"] if residual != 1 else []
+        scale = residual
+        for digit, part in reversed(kept):
+            terms.append(digit if scale == 1 else f"{scale} * ({digit})")
+            scale *= part
+        image[position] = " + ".join(reversed(terms)) or "0"
+    prefix = f"[{', '.join(params)}] -> " if params else ""
+    where = f" : {' and '.join(guards)}" if guards else ""
+    return isl.map(f"{prefix}{{ [{domain}] -> [{', '.join(image)}]{where} }}")
+
+
 __all__ = [
     "IslParamValues",
     "dim_at_most",
     "dim_range",
     "dim_to_isl_pw_aff",
     "isl_to_dim",
+    "layout_to_isl_map",
     "normalize_dim",
     "normalize_dim_entries",
     "shape_to_isl_set",

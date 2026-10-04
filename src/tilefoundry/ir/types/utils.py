@@ -488,15 +488,7 @@ def local_type_of(
         assert projected is not None
         return projected
 
-    levels = {topology.name: index for index, topology in enumerate(topologies)}
-    if topology_level not in levels:
-        available = ", ".join(levels) or "none"
-        raise ValueError(
-            f"local_type_of: topology level {topology_level!r} is not declared; "
-            f"available levels are {available}"
-        )
-    if len(levels) != len(topologies):
-        raise ValueError("local_type_of: topology level names must be unique")
+    selected = _level_index(topology_level, topologies)
     if isinstance(type, TupleType):
         return TupleType(
             fields=tuple(
@@ -513,7 +505,7 @@ def local_type_of(
     if shard is not None:
         return TensorType(
             shape=_local_layout_shape(
-                shard, selected_topology_level=levels[topology_level], topologies=topologies
+                shard, selected_topology_level=selected, topologies=topologies
             ),
             dtype=type.dtype,
             layout=layout,
@@ -524,6 +516,63 @@ def local_type_of(
     raise ValueError(
         f"local_type_of: {type!r} has unresolved layout {layout!r}; local "
         "projection requires None or a resolved ShardLayout"
+    )
+
+
+def _level_index(topology_level: str, topologies: tuple[Topology, ...]) -> int:
+    """Where *topology_level* sits in the declared hierarchy, coarsest first."""
+    levels = {topology.name: index for index, topology in enumerate(topologies)}
+    if topology_level not in levels:
+        available = ", ".join(levels) or "none"
+        raise ValueError(
+            f"local_type_of: topology level {topology_level!r} is not declared; "
+            f"available levels are {available}"
+        )
+    if len(levels) != len(topologies):
+        raise ValueError("local_type_of: topology level names must be unique")
+    return levels[topology_level]
+
+
+def divided_mesh_axes(
+    layout: ShardLayout, *, topology_level: str, topologies: tuple[Topology, ...]
+) -> tuple[int, ...]:
+    """The mesh axes whose ``Split`` one unit of *topology_level* holds one part of.
+
+    A ``Split`` at that level or coarser divides; a finer one does not. This is
+    the rule ``local_type_of`` divides by, stated once for whoever places a
+    value's coordinates among that unit's positions.
+    """
+    selected = _level_index(topology_level, topologies)
+    return _divided_mesh_axes(layout, selected_topology_level=selected, topologies=topologies)
+
+
+def _divided_mesh_axes(
+    layout: ShardLayout, *, selected_topology_level: int, topologies: tuple[Topology, ...]
+) -> tuple[int, ...]:
+    declared = {topology.name: index for index, topology in enumerate(topologies)}
+    for topology in layout.mesh.topologies:
+        if topology.name not in declared:
+            raise ValueError(
+                f"local_type_of: shard uses undeclared topology level {topology.name!r}"
+            )
+    mesh_layout = layout.mesh.layout
+    stated = mesh_layout.outer if isinstance(mesh_layout, ComposedLayout) else mesh_layout
+    axis_topology_level = flatten(
+        tuple(
+            repeat_like(mode, declared[topology.name])
+            for mode, topology in zip(stated.shape, layout.mesh.topologies, strict=True)
+        )
+    )
+    return tuple(
+        mesh_axis
+        for mesh_axis, attr in enumerate(layout.attrs)
+        if isinstance(attr, Split)
+        and (
+            axis_topology_level[mesh_axis]
+            if mesh_axis < len(axis_topology_level)
+            else selected_topology_level
+        )
+        <= selected_topology_level
     )
 
 
@@ -556,31 +605,11 @@ def _local_layout_shape(
             layout.layout, selected_topology_level=selected_topology_level, topologies=topologies
         )
     )
-    declared = {topology.name: index for index, topology in enumerate(topologies)}
-    for topology in layout.mesh.topologies:
-        if topology.name not in declared:
-            raise ValueError(
-                f"local_type_of: shard uses undeclared topology level {topology.name!r}"
-            )
-    mesh_layout = layout.mesh.layout
-    stated = mesh_layout.outer if isinstance(mesh_layout, ComposedLayout) else mesh_layout
-    axis_topology_level = flatten(
-        tuple(
-            repeat_like(mode, declared[topology.name])
-            for mode, topology in zip(stated.shape, layout.mesh.topologies, strict=True)
-        )
-    )
     mesh_shape = flatten(layout.mesh.layout).shape
-    for mesh_axis, attr in enumerate(layout.attrs):
-        if not isinstance(attr, Split):
-            continue
-        here = (
-            axis_topology_level[mesh_axis]
-            if mesh_axis < len(axis_topology_level)
-            else selected_topology_level
-        )
-        if here > selected_topology_level:
-            continue
+    for mesh_axis in _divided_mesh_axes(
+        layout, selected_topology_level=selected_topology_level, topologies=topologies
+    ):
+        attr = layout.attrs[mesh_axis]
         if mesh_axis >= len(mesh_shape):
             raise ValueError("local_type_of: shard attribute exceeds mesh layout rank")
         extent = mesh_shape[mesh_axis]
