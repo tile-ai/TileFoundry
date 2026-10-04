@@ -6,12 +6,12 @@ from dataclasses import dataclass, fields, is_dataclass, replace
 from itertools import count
 from typing import Callable, Iterable
 
-from tilefoundry.ir.types import Broadcast, ComposedLayout, Layout, ShardLayout, Swizzle
+from tilefoundry.ir.types import Broadcast, ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
 from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.layout_algebra import coalesce, is_inverse_projectable
 
 from .match import Unknown, matched
-from .pattern import Pattern, SequencePattern, WildcardPattern
+from .pattern import Pattern, SequencePattern, TensorPattern, WildcardPattern
 
 UNKNOWN = Unknown()
 _MISSING = object()
@@ -136,6 +136,24 @@ class Predicate(Pattern):
     def holds(self, subject, bindings: dict) -> bool | None:
         """Return true, false, or None while required bindings are unknown."""
         raise NotImplementedError
+
+@dataclass(frozen=True)
+class Ranked(Predicate):
+    """Require a tensor with at least one logical axis."""
+
+    def holds(self, subject, bindings: dict) -> bool:
+        return isinstance(subject, TensorType) and len(subject.shape) > 0
+
+
+def is_scalar_tensor(**fields) -> TensorPattern:
+    """Construct a rank-zero tensor pattern with optional field constraints."""
+    return TensorPattern(shape=(), **fields)
+
+
+def is_ranked_tensor(**fields) -> TensorPattern:
+    """Construct a tensor pattern that requires at least one logical axis."""
+    return TensorPattern(predicates=(Ranked(),), **fields)
+
 
 @dataclass(frozen=True, eq=False)
 class Formula(Predicate):
@@ -716,6 +734,7 @@ __all__ = [
     "Injective",
     "PlainArrangement",
     "Predicate",
+    "Ranked",
     "Sum",
     "Table",
     "Term",
@@ -724,5 +743,7 @@ __all__ = [
     "WholeVectors",
     "evaluate",
     "failing",
+    "is_ranked_tensor",
+    "is_scalar_tensor",
     "solve",
 ]

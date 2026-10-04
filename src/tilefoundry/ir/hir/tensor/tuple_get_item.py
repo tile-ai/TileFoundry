@@ -7,7 +7,7 @@ from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Scalar, Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor, is_scalar_tensor
 from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -31,8 +31,8 @@ class TupleGetItem(Op):
     SSA expression model. See [hir §1](docs/spec/hir.md#1-hir-expr-constructs).
     """
 
-    tuple_value = ParamDef(kind="input", pattern=Tensor)
-    index = ParamDef(kind="input", pattern=Scalar)
+    tuple_value = ParamDef(kind="input", pattern=is_ranked_tensor())
+    index = ParamDef(kind="input", pattern=is_scalar_tensor())
 
 
 @register_access_relation(TupleGetItem)

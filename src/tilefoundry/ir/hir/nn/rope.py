@@ -21,7 +21,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials, reject_partials
 from tilefoundry.ir.isl_interop import index_set
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -39,11 +39,11 @@ from tilefoundry.visitor_registry.access_relation import (
 class RoPE(Op):
     """Rotary position embedding on Q and K. ``head_dim`` must be even."""
 
-    q = ParamDef(kind="input", pattern=Tensor)
-    k = ParamDef(kind="input", pattern=Tensor)
-    cos_cache = ParamDef(kind="input", pattern=Tensor)
-    sin_cache = ParamDef(kind="input", pattern=Tensor)
-    pos_ids = ParamDef(kind="input", pattern=Tensor)
+    q = ParamDef(kind="input", pattern=is_ranked_tensor())
+    k = ParamDef(kind="input", pattern=is_ranked_tensor())
+    cos_cache = ParamDef(kind="input", pattern=is_ranked_tensor())
+    sin_cache = ParamDef(kind="input", pattern=is_ranked_tensor())
+    pos_ids = ParamDef(kind="input", pattern=is_ranked_tensor())
 
 
 @register_typeinfer(RoPE)

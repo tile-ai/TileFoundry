@@ -11,7 +11,7 @@ from tilefoundry.ir.core.op_registry import _schemas_by_dialect_name
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.specialize import display_name
-from tilefoundry.ir.pattern import Tensor as TensorPattern
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types.dim import DimVar as IrDimVar
 
 
@@ -35,8 +35,8 @@ def test_a_dialect_namespace_resolves_only_its_own_ops() -> None:
 
     @register_op(dialect="tf", category="math", name="my_add")
     class _MyAdd:
-        a = ParamDef(kind="input", pattern=TensorPattern)
-        b = ParamDef(kind="input", pattern=TensorPattern)
+        a = ParamDef(kind="input", pattern=is_ranked_tensor())
+        b = ParamDef(kind="input", pattern=is_ranked_tensor())
 
         def __init__(self, **kw):
             self.kw = kw

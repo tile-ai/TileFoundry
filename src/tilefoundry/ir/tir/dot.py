@@ -8,7 +8,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor, utils
+from tilefoundry.ir.pattern import is_ranked_tensor, utils
 from tilefoundry.ir.types import StorageKind, UnitType
 from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_local_shape
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
@@ -20,9 +20,9 @@ __all__ = ["Dot"]
 class Dot(Op):
     """Fused multiply-contract; every participant leaves holding the total."""
 
-    lhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=Tensor)
-    rhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=Tensor)
-    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=Tensor)
+    lhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=is_ranked_tensor())
+    rhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=is_ranked_tensor())
+    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=is_ranked_tensor())
     workspace = ParamDef(
         kind="input",
         effect=MemoryEffect.READ | MemoryEffect.WRITE,

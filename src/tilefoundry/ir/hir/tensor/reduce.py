@@ -12,7 +12,7 @@ from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Layout, TensorType
 from tilefoundry.ir.types.shard_layout import canonical_shard_layout, shard_layout_of
 from tilefoundry.ir.types.stride import try_compact_major
@@ -35,7 +35,7 @@ __all__ = ["ReduceKind", "Reduce"]
 class Reduce(Op):
     """Axis reduction over ``x``, one ``ReduceKind`` per runtime reduce tag."""
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     axes = ParamDef(kind="attribute", annotation=tuple)
     keepdim = ParamDef(kind="attribute", annotation=bool, default=True)
     kind = ParamDef(kind="attribute", annotation=ReduceKind, default=ReduceKind.MEAN)

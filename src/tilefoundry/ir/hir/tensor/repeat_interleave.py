@@ -8,7 +8,7 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
@@ -31,7 +31,7 @@ class RepeatInterleave(Op):
     all other dims are unchanged.
     """
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     repeats = ParamDef(kind="attribute", annotation=int)
     axis = ParamDef(kind="attribute", annotation=int)
 

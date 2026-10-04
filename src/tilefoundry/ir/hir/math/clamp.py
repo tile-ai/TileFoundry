@@ -13,7 +13,7 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -28,7 +28,7 @@ _COMMUTES_WITH = frozenset({"max", "min"})
 class Clamp(Op):
     """Element-wise clamp: y = min(max(x, min_val), max_val)."""
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     min_val = ParamDef(kind="attribute", annotation=float)
     max_val = ParamDef(kind="attribute", annotation=float)
 

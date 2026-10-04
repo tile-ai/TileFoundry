@@ -52,7 +52,7 @@ class MemoryEffect(Flag):
 class ParamDef:
     """Class-body descriptor for an Op parameter.
 
-    Use as: ``src = ParamDef(kind="input", pattern=Tensor)``.
+    Use as: ``src = ParamDef(kind="input", pattern=is_ranked_tensor())``.
 
     The ``__set_name__`` hook records the attribute name on the
     descriptor instance for later reflection. ``effect=None`` means the

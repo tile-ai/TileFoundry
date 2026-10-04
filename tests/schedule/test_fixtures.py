@@ -49,9 +49,9 @@ from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.pattern import (
     PatternMatcher,
-    Tensor,
     TensorPattern,
     declared_execution_mesh,
+    is_ranked_tensor,
 )
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
@@ -724,7 +724,7 @@ class _UnstatedInstruction(Op):
     value = ParamDef(
         kind="input",
         effect=MemoryEffect.READ | MemoryEffect.WRITE,
-        pattern=Tensor,
+        pattern=is_ranked_tensor(),
     )
 
 

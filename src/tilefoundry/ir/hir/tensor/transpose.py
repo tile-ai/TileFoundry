@@ -8,7 +8,7 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Layout, TensorType
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
@@ -26,7 +26,7 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 
 @register_op
 class Transpose(Op):
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     perm = ParamDef(kind="attribute", annotation=tuple)
 
 @register_access_relation(Transpose)

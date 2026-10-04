@@ -15,7 +15,7 @@ from tilefoundry.ir.hir._shard_checks import (
     reject_dynamic_shards,
     require_uniform_partial_slices,
 )
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Layout, TensorType
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.stride import try_compact_major
@@ -36,7 +36,7 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 class Stack(Op):
     """Variadic input op. See Concat for encoding rationale."""
 
-    inputs = ParamDef(kind="input", annotation=Tuple[Tensor], pattern=Tensor)
+    inputs = ParamDef(kind="input", annotation=Tuple[is_ranked_tensor()], pattern=is_ranked_tensor())
     axis = ParamDef(kind="attribute", annotation=int)
 
 

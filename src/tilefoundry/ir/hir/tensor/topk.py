@@ -18,7 +18,7 @@ from tilefoundry.ir.core import Call, Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, Layout, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -65,7 +65,7 @@ class TopK(Op):
     ``int`` at evaluation time — not a pad+mask workaround.
     """
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     k = ParamDef(kind="attribute", annotation=ShapeDim)
     axis = ParamDef(kind="attribute", annotation=int, default=-1)
     largest = ParamDef(kind="attribute", annotation=bool, default=True)

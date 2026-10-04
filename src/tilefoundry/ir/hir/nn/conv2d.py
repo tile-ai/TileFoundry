@@ -11,7 +11,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.isl_interop import normalize_dim
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Layout, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes
@@ -34,9 +34,9 @@ from tilefoundry.visitor_registry.shard_propagate import (
 
 @register_op
 class Conv2D(Op):
-    input = ParamDef(kind="input", pattern=Tensor)
-    weight = ParamDef(kind="input", pattern=Tensor)
-    bias = ParamDef(kind="input", pattern=Tensor)
+    input = ParamDef(kind="input", pattern=is_ranked_tensor())
+    weight = ParamDef(kind="input", pattern=is_ranked_tensor())
+    bias = ParamDef(kind="input", pattern=is_ranked_tensor())
     stride = ParamDef(kind="attribute", annotation=tuple)
     padding = ParamDef(kind="attribute", annotation=tuple)
     dilation = ParamDef(kind="attribute", annotation=tuple)

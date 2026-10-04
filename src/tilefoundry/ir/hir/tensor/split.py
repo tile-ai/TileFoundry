@@ -8,7 +8,7 @@ from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Broadcast, Layout, Partial, ShardLayout, TensorType, TupleType
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
@@ -36,7 +36,7 @@ from tilefoundry.visitor_registry.access_relation import (
 class Split(Op):
     """Multi-output op. `Call.type` is `TupleType` ([types §5](docs/spec/types.md#5-tupletype))."""
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     axis = ParamDef(kind="attribute", annotation=int)
     num_splits = ParamDef(kind="attribute", annotation=int)
 

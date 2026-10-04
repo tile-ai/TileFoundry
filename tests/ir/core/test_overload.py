@@ -9,7 +9,12 @@ import pytest
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.overload import OverloadError, filter_candidates, resolve
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.pattern import Scalar, Tensor, TensorPattern, WildcardPattern
+from tilefoundry.ir.pattern import (
+    TensorPattern,
+    WildcardPattern,
+    is_ranked_tensor,
+    is_scalar_tensor,
+)
 from tilefoundry.ir.types import TensorType
 
 _S = TensorType.umat_scalar()
@@ -47,26 +52,26 @@ def test_resolve_picks_first_matching_candidate() -> None:
         TensorPattern(shape=(WildcardPattern(),) * 2),
         TensorPattern(shape=(WildcardPattern(),) * 2),
     )
-    any_t = _schema("matmul", Tensor, Tensor)
+    any_t = _schema("matmul", is_ranked_tensor(), is_ranked_tensor())
 
     assert resolve([rank2, any_t], [_T2, _T2]) is rank2
 
     assert resolve([rank2, any_t], [_T1, _T1]) is any_t
 
-    only_scalar = _schema("relu", Scalar)
+    only_scalar = _schema("relu", is_scalar_tensor())
     with pytest.raises(OverloadError, match="No OpSchema candidate"):
         resolve([only_scalar], [_T1])
 
 
 def test_arity_uses_default_not_optional() -> None:
     """``optional=True`` is nullable, not omittable. Only ``default`` lowers n_min."""
-    nullable_required = ParamDef(kind="input", pattern=Tensor, optional=True)
+    nullable_required = ParamDef(kind="input", pattern=is_ranked_tensor(), optional=True)
     nullable_required._attr_name = "y"
     s_nullable = OpSchema(
         name="op",
         dialect="tf",
         category="test",
-        signature=(ParamDef(kind="input", pattern=Tensor), nullable_required),
+        signature=(ParamDef(kind="input", pattern=is_ranked_tensor()), nullable_required),
         builder=type,
         op_class=type,
     )
@@ -75,5 +80,5 @@ def test_arity_uses_default_not_optional() -> None:
     assert filter_candidates([s_nullable], [_T1]) == []
     assert filter_candidates([s_nullable], [_T1, _T2]) == [s_nullable]
 
-    s_omittable = _schema("op2", Tensor, Tensor, defaults=(None, "X"))
+    s_omittable = _schema("op2", is_ranked_tensor(), is_ranked_tensor(), defaults=(None, "X"))
     assert filter_candidates([s_omittable], [_T1]) == [s_omittable]

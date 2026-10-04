@@ -5,7 +5,7 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
 from tilefoundry.ir.types.layout import Layout
@@ -161,7 +161,7 @@ def _materialize_reshard_strides(
 class Reshard(Op):
     """Convert *x* to a target layout / storage in place, preserving the logical shape."""
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     layout = ParamDef(kind="attribute", annotation=ShardLayout, default=None)
     storage = ParamDef(kind="attribute", default=None)
 

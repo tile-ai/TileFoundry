@@ -11,7 +11,7 @@ from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes
@@ -32,10 +32,10 @@ from tilefoundry.visitor_registry.access_relation import (
 class CacheUpdate(Op):
     """Cache-update HIR operation; see `spec hir § CacheUpdate`."""
 
-    cache = ParamDef(kind="input", pattern=Tensor)
-    cur_pos = ParamDef(kind="input", pattern=Tensor)
-    s = ParamDef(kind="input", pattern=Tensor)
-    new = ParamDef(kind="input", pattern=Tensor)
+    cache = ParamDef(kind="input", pattern=is_ranked_tensor())
+    cur_pos = ParamDef(kind="input", pattern=is_ranked_tensor())
+    s = ParamDef(kind="input", pattern=is_ranked_tensor())
+    new = ParamDef(kind="input", pattern=is_ranked_tensor())
 
 
 def _limit(cache: tuple, supplied: tuple) -> int | None:

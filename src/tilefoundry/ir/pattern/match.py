@@ -413,11 +413,6 @@ class PatternMatcher:
             return self._fail(pattern, subject)
         return self.match(pattern.layout, make_mesh(*picked).layout)
 
-    def visit_Ranked(self, pattern, subject) -> bool:
-        return (
-            isinstance(subject, TensorType) and len(subject.shape) > 0
-        ) or self._fail(pattern, subject)
-
     def visit_TensorPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, TensorType):
             return self._fail(pattern, subject)

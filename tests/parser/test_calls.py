@@ -19,7 +19,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.pattern import Tensor as TensorPattern
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, Topology
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CpuTarget, CudaTarget
@@ -54,7 +54,7 @@ def test_matmul_layout_literals_are_parser_checked() -> None:
 def test_variadic_list_and_tuple_literals_flatten_to_call_args() -> None:
     for annotation in (Concat.inputs.annotation, Stack.inputs.annotation):
         assert get_origin(annotation) is tuple
-        assert get_args(annotation) == (TensorPattern,)
+        assert get_args(annotation) == (is_ranked_tensor(),)
 
     @func
     def from_list(a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]) -> Tensor[(2, 4), "f32"]:

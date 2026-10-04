@@ -7,7 +7,7 @@ from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.shard_layout import (
@@ -33,7 +33,7 @@ from ._view_layout import derive_view_layout
 
 @register_op
 class Reshape(Op):
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     new_shape = ParamDef(kind="attribute", annotation=tuple)
 
 @register_access_relation(Reshape)

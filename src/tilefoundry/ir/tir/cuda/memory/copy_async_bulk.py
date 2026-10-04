@@ -5,7 +5,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import UnitType
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
@@ -15,12 +15,12 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 class CopyAsyncBulk(Op):
     """Stage a tile from global to shared memory, completing on a barrier."""
 
-    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=Tensor)
-    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=Tensor)
+    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=is_ranked_tensor())
+    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=is_ranked_tensor())
     barrier = ParamDef(
         kind="input",
         effect=MemoryEffect.READ | MemoryEffect.WRITE,
-        pattern=Tensor,
+        pattern=is_ranked_tensor(),
     )
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Scalar, utils
+from tilefoundry.ir.pattern import is_scalar_tensor, utils
 from tilefoundry.ir.types import UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
@@ -25,7 +25,7 @@ class Fill(Op):
         effect=MemoryEffect.WRITE,
         pattern=utils.operand_tile(0, execution_mesh=execution_mesh),
     )
-    value = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=Scalar)
+    value = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=is_scalar_tensor())
 
 
 @register_typeinfer(Fill)

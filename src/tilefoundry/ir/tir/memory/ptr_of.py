@@ -8,7 +8,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import PointerType
 from tilefoundry.visitor_registry import register_typeinfer
 
@@ -17,7 +17,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 class PtrOf(Op):
     """Take the device address of a tensor for downstream view ops (value form)."""
 
-    tensor = ParamDef(kind="input", pattern=Tensor)
+    tensor = ParamDef(kind="input", pattern=is_ranked_tensor())
 
 
 @register_typeinfer(PtrOf)

@@ -16,7 +16,7 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -40,8 +40,8 @@ def _identity(rank: int) -> "isl.multi_aff":
 
 @register_op(name="rms_norm")
 class RMSNorm(Op):
-    x = ParamDef(kind="input", pattern=Tensor)
-    weight = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
+    weight = ParamDef(kind="input", pattern=is_ranked_tensor())
     eps = ParamDef(kind="attribute", annotation=float, default=1e-6)
 
 

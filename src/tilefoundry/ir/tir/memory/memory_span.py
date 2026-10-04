@@ -9,7 +9,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 
@@ -18,7 +18,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 class MemorySpan(Op):
     """Re-interpret a memory region as a typed tensor (value form)."""
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
 
 
 @register_typeinfer(MemorySpan)

@@ -9,7 +9,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.tensor.index_add import _infer_index_write
 from tilefoundry.ir.hir.tensor.index_select import _norm_dim
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -27,9 +27,9 @@ from tilefoundry.visitor_registry.access_relation import (
 class IndexCopy(Op):
     """Return ``dst`` with ``src`` slices copied to ``index`` along ``dim``."""
 
-    dst = ParamDef(kind="input", pattern=Tensor)
-    index = ParamDef(kind="input", pattern=Tensor)
-    src = ParamDef(kind="input", pattern=Tensor)
+    dst = ParamDef(kind="input", pattern=is_ranked_tensor())
+    index = ParamDef(kind="input", pattern=is_ranked_tensor())
+    src = ParamDef(kind="input", pattern=is_ranked_tensor())
     dim = ParamDef(kind="attribute", annotation=int, default=0)
 
 

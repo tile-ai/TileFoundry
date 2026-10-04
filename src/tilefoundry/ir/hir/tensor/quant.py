@@ -15,7 +15,7 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, Layout, ShardLayout, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim
 from tilefoundry.ir.types.layout import flatten
@@ -43,7 +43,7 @@ from tilefoundry.visitor_registry.access_relation import (
 class Quant(Op):
     """Per-token-group FP8 quantize. Multi-output (x_q, x_scale)."""
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     scheme = ParamDef(kind="attribute", annotation=str, default="per_token_group")
     group = ParamDef(kind="attribute", annotation=int, default=128)
     target_dtype = ParamDef(kind="attribute", annotation=DType, default=DType.fp8e4m3)

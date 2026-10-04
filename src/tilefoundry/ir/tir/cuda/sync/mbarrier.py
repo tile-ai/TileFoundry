@@ -8,7 +8,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Scalar, Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor, is_scalar_tensor
 from tilefoundry.ir.types import UnitType
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
@@ -32,7 +32,7 @@ def _require_smem_barrier(ctx, call, who: str) -> None:
 class MBarrierInit(Op):
     """Arm ``barrier`` so ``arrive_count`` arrivals complete a phase."""
 
-    barrier = ParamDef(kind="input", pattern=Tensor)
+    barrier = ParamDef(kind="input", pattern=is_ranked_tensor())
     arrive_count = ParamDef(kind="attribute", annotation=int)
 
 
@@ -53,7 +53,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
 class MBarrierArriveExpectTx(Op):
     """Arrive on ``barrier`` and declare ``tx_bytes`` of asynchronous data."""
 
-    barrier = ParamDef(kind="input", pattern=Tensor)
+    barrier = ParamDef(kind="input", pattern=is_ranked_tensor())
     tx_bytes = ParamDef(kind="attribute", annotation=int)
 
 
@@ -74,8 +74,8 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
 class MBarrierWaitParity(Op):
     """Block until ``barrier``'s phase parity reaches ``phase``."""
 
-    barrier = ParamDef(kind="input", pattern=Tensor)
-    phase = ParamDef(kind="input", pattern=Scalar)
+    barrier = ParamDef(kind="input", pattern=is_ranked_tensor())
+    phase = ParamDef(kind="input", pattern=is_scalar_tensor())
 
 
 @register_typeinfer(MBarrierWaitParity)
@@ -92,7 +92,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
 class MBarrierInvalidate(Op):
     """Release ``barrier``'s shared-memory word for other use."""
 
-    barrier = ParamDef(kind="input", pattern=Tensor)
+    barrier = ParamDef(kind="input", pattern=is_ranked_tensor())
 
 
 @register_typeinfer(MBarrierInvalidate)

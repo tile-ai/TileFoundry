@@ -16,7 +16,7 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, Layout, TensorType
 from tilefoundry.ir.types.shard_layout import (
     Split,
@@ -40,7 +40,7 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 
 @register_op
 class ArgMax(Op):
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     axis = ParamDef(kind="attribute", annotation=int, default=-1)
 
 

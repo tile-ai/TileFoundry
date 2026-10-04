@@ -45,7 +45,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.slice import Slice as SliceOp
 from tilefoundry.ir.isl_interop import index_set
-from tilefoundry.ir.pattern import Tensor as TensorPattern
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import (
     DType,
     Layout,
@@ -124,7 +124,7 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
     """
 
     class Unstated(Op):
-        x = ParamDef(kind="input", pattern=TensorPattern)
+        x = ParamDef(kind="input", pattern=is_ranked_tensor())
 
     held = make_tensor_type((4,), DType.f32)
     call = Call(type=held, target=Unstated(), args=(Var(type=held, name="x"),))

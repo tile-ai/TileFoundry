@@ -368,11 +368,6 @@ class MeshPattern(Pattern):
         require_per_mode(self.layout)
 
 @dataclass(frozen=True)
-class Ranked(Pattern):
-    """Require a tensor with at least one logical axis."""
-
-
-@dataclass(frozen=True)
 class TensorPattern(Pattern):
     """Match a ``TensorType`` of any rank, constrained by its stated fields."""
 
@@ -389,10 +384,6 @@ class ShardLayoutPattern(Pattern):
     attrs: tuple
     mesh: MeshPattern
 
-Scalar: TensorPattern = TensorPattern(shape=())
-Tensor: TensorPattern = TensorPattern(predicates=(Ranked(),))
-
-
 __all__ = [
     "AndPattern",
     "ComposedLayoutPattern",
@@ -401,13 +392,11 @@ __all__ = [
     "OrPattern",
     "Pattern",
     "RangePattern",
-    "Scalar",
     "SequencePattern",
     "ShardLayoutPattern",
     "StarPattern",
     "SwizzlePattern",
     "SwitchPattern",
-    "Tensor",
     "TensorPattern",
     "WildcardPattern",
 ]

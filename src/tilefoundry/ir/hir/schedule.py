@@ -11,7 +11,12 @@ from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Op, Var
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import PatternMatcher, ShardLayoutPattern, Tensor, TensorPattern
+from tilefoundry.ir.pattern import (
+    PatternMatcher,
+    ShardLayoutPattern,
+    TensorPattern,
+    is_ranked_tensor,
+)
 from tilefoundry.ir.pattern.utils import (
     declared_shape,
     declared_write_type,
@@ -46,7 +51,7 @@ from tilefoundry.visitor_registry.verify import verify_between
 class ScheduleOp(Op):
     """Apply one TIR instruction repeatedly over a tuple of HIR operands."""
 
-    operands = ParamDef(kind="input", annotation=Tuple[Tensor], pattern=Tensor)
+    operands = ParamDef(kind="input", annotation=Tuple[is_ranked_tensor()], pattern=is_ranked_tensor())
     op = ParamDef(kind="attribute", annotation=Op)
     repeat = ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     order = ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)

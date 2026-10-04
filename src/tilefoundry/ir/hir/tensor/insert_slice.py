@@ -8,7 +8,7 @@ from tilefoundry.ir.core import Constant, Op, Tuple
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
-from tilefoundry.ir.pattern import Scalar, Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor, is_scalar_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
@@ -28,10 +28,10 @@ from tilefoundry.visitor_registry.access_relation import (
 class InsertSlice(Op):
     """Return ``dst`` with ``update`` written into the window at ``offsets``."""
 
-    dst = ParamDef(kind="input", pattern=Tensor)
-    update = ParamDef(kind="input", pattern=Tensor)
+    dst = ParamDef(kind="input", pattern=is_ranked_tensor())
+    update = ParamDef(kind="input", pattern=is_ranked_tensor())
 
-    offsets = ParamDef(kind="input", pattern=Scalar)
+    offsets = ParamDef(kind="input", pattern=is_scalar_tensor())
 
 
 def _offset_axes(call: "Call", rank: int) -> tuple:

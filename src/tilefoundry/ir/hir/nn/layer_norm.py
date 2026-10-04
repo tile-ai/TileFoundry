@@ -9,7 +9,7 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
@@ -26,9 +26,9 @@ from tilefoundry.visitor_registry.access_relation import (
 
 @register_op(name="layer_norm")
 class LayerNorm(Op):
-    x = ParamDef(kind="input", pattern=Tensor)
-    weight = ParamDef(kind="input", pattern=Tensor)
-    bias = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
+    weight = ParamDef(kind="input", pattern=is_ranked_tensor())
+    bias = ParamDef(kind="input", pattern=is_ranked_tensor())
     axis = ParamDef(kind="attribute", annotation=int)
     eps = ParamDef(kind="attribute", annotation=float)
 

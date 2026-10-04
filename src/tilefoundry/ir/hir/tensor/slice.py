@@ -10,7 +10,7 @@ from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.isl_interop import dim_range
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMul, DimSub, simplify_dim
 from tilefoundry.ir.types.int_tuple import flatten
@@ -38,7 +38,7 @@ from ._view_layout import derive_view_layout
 
 @register_op
 class Slice(Op):
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     starts = ParamDef(kind="input")
     sizes = ParamDef(kind="attribute", annotation=tuple)
     strides = ParamDef(kind="attribute", annotation=tuple)

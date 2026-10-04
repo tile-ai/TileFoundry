@@ -11,7 +11,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
@@ -30,8 +30,8 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 class MatMul(Op):
     """Batched matrix multiplication with explicit physical matrix-axis order."""
 
-    lhs = ParamDef(kind="input", pattern=Tensor)
-    rhs = ParamDef(kind="input", pattern=Tensor)
+    lhs = ParamDef(kind="input", pattern=is_ranked_tensor())
+    rhs = ParamDef(kind="input", pattern=is_ranked_tensor())
     a_layout = ParamDef(kind="attribute", annotation=Literal["MK", "KM"], default="MK")
     b_layout = ParamDef(kind="attribute", annotation=Literal["NK", "KN"], default="KN")
 

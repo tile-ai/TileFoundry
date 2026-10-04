@@ -15,7 +15,7 @@ from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -28,7 +28,7 @@ from tilefoundry.visitor_registry.access_relation import (
 class FullLike(Op):
     """Allocate a tensor shaped/typed like ``x``, filled with constant ``value``."""
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    x = ParamDef(kind="input", pattern=is_ranked_tensor())
     value = ParamDef(kind="attribute", annotation=float)
 
 
