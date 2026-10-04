@@ -24,32 +24,8 @@ from .stride import compact_row_major
 from .tensor_type import TensorType, TupleType, Type
 
 
-def _tile_counts(whole: tuple, inner: tuple) -> tuple[int, ...]:
-    if len(whole) != len(inner):
-        raise ValueError(f"whole shape {whole} and inner shape {inner} have different ranks")
-    counts = []
-    for whole_extent, inner_extent in zip(whole, inner, strict=True):
-        if not isinstance(whole_extent, int) and whole_extent == inner_extent:
-            counts.append(1)
-            continue
-        if (
-            not isinstance(whole_extent, int)
-            or isinstance(whole_extent, bool)
-            or not isinstance(inner_extent, int)
-            or isinstance(inner_extent, bool)
-            or inner_extent < 1
-            or whole_extent % inner_extent
-        ):
-            raise ValueError(
-                f"whole extent {whole_extent} is not divisible by inner extent {inner_extent}"
-            )
-        counts.append(whole_extent // inner_extent)
-    return tuple(counts)
-
-
-def _inner_layout(layout: Layout, whole: tuple, inner: tuple) -> tuple[Layout, dict[int, int]]:
+def _inner_layout(layout: Layout, counts: tuple[int, ...]) -> tuple[Layout, dict[int, int]]:
     """Drop each logical axis's leading tile modes, preserving its mode nesting."""
-    counts = _tile_counts(whole, inner)
     shapes = [tuple(flatten_tuple(mode)) for mode in layout.shape]
     strides = (
         None if layout.strides is None else [tuple(flatten_tuple(mode)) for mode in layout.strides]
@@ -214,6 +190,7 @@ def tile_view_layout(
     type_: TensorType,
     inner_shape: tuple,
     *,
+    counts: tuple[int, ...],
     participant: Mesh | None = None,
     enclosing: Mesh | None = None,
     shard_attrs: tuple | None = None,
@@ -222,9 +199,9 @@ def tile_view_layout(
 
     Tensor and mesh layouts use the same convention: leading modes are tile or
     group coordinates and trailing modes are the instruction fragment/frame.
+    ``counts`` comes from the caller's validated repeat projected onto operand
+    axes; this function reads the layout's prefix structure, not shape ratios.
     """
-    whole = tuple(type_.shape)
-    _tile_counts(whole, inner_shape)
     layout = type_.layout
     if layout is None:
         inner_layout = Layout(inner_shape, tuple(compact_row_major(inner_shape)))
@@ -233,7 +210,7 @@ def tile_view_layout(
         inner = layout.inner if composed else None
         outer = layout.outer if composed else layout
         if isinstance(outer, ShardLayout):
-            held, positions = _inner_layout(outer.layout, whole, inner_shape)
+            held, positions = _inner_layout(outer.layout, counts)
             mesh, dropped = (
                 (outer.mesh, 0)
                 if participant is None
@@ -248,7 +225,7 @@ def tile_view_layout(
                 attrs.append(attr)
             inner_layout = ShardLayout(held, tuple(attrs), mesh)
         elif isinstance(outer, Layout):
-            inner_layout, _positions = _inner_layout(outer, whole, inner_shape)
+            inner_layout, _positions = _inner_layout(outer, counts)
         else:
             raise ValueError(f"cannot take tile inner modes from {type(outer).__name__}")
         if composed:
@@ -265,6 +242,7 @@ def tile_inner_type(
     type_: TensorType,
     inner_shape: tuple,
     *,
+    counts: tuple[int, ...],
     participant: Mesh | None = None,
     enclosing: Mesh | None = None,
     shard_attrs: tuple | None = None,
@@ -273,6 +251,7 @@ def tile_inner_type(
     layout = tile_view_layout(
         type_,
         inner_shape,
+        counts=counts,
         participant=participant,
         enclosing=enclosing,
         shard_attrs=shard_attrs,

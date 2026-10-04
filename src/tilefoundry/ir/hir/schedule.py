@@ -247,6 +247,10 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
                     else type_
                 ),
                 shape,
+                counts=tuple(
+                    1 if axis is None else repeat[axis]
+                    for axis in projected_axes(boundary.pattern)
+                ),
                 participant=participant,
                 enclosing=ctx.current_mesh,
                 shard_attrs=(
@@ -255,8 +259,8 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
                     else None
                 ),
             )
-            for param, type_, shape, pattern in zip(
-                params, whole_types, shapes, patterns, strict=True
+            for param, type_, shape, pattern, boundary in zip(
+                params, whole_types, shapes, patterns, single.inputs, strict=True
             )
         )
         if fragments

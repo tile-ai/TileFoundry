@@ -1033,3 +1033,10 @@ def right_inverse(layout: Layout | ComposedLayout):
     All three operations and `complement` MUST interpret traversal order via
     `major="col"` or `major="row"`, without changing their per-mode tile dispatch.
     Overlapping modes in `complement` MUST remain rejected as `NotProjectable`.
+  - `tile_view_layout` and `tile_inner_type` MUST receive operand-axis tile
+    `counts` projected from the caller's validated instruction repeat, rather
+    than infer them from whole and tile shape ratios. Prefix extraction MUST
+    retain the existing grouped and flat mode boundaries and remap `Split`
+    axes to the retained modes. An absent prefix or a removed sharded axis
+    MUST retain its existing diagnostic. Count-one axes MUST retain symbolic
+    extents without requiring division or a static extent.

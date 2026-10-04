@@ -115,6 +115,8 @@ class MmaAtom:
         whole_types: tuple[TensorType, ...],
         frame: Mesh,
         axes: tuple[tuple[int, ...], ...],
+        *,
+        repeat: tuple[int, ...],
     ) -> tuple[tuple[TensorType, ...], tuple[tuple[int, int] | None, ...]]:
         """Return the operand tiles and declared adjacent-issue properties."""
         shapes = self.operand_shapes()
@@ -122,8 +124,10 @@ class MmaAtom:
             selected_pattern(self.role(role), self.bindings) for role in ("C", "A", "B")
         )
         tiles = []
-        for whole, shape, pattern in zip(whole_types, shapes, patterns, strict=True):
-            layout = tile_view_layout(whole, shape, participant=frame)
+        for whole, shape, pattern, mapped in zip(whole_types, shapes, patterns, axes, strict=True):
+            layout = tile_view_layout(
+                whole, shape, counts=tuple(repeat[axis] for axis in mapped), participant=frame
+            )
             if (
                 isinstance(pattern, TensorPattern)
                 and isinstance(pattern.layout, ShardLayoutPattern)

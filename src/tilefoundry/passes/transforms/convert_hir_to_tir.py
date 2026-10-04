@@ -943,7 +943,7 @@ class Lowering(ExprVisitor[Expr]):
         for frame, lows in groups:
             frame = self._physical_frame(frame)
             try:
-                desired, declared_rows = atom.operand_tiles(logical, frame, axes)
+                desired, declared_rows = atom.operand_tiles(logical, frame, axes, repeat=repeat)
             except ValueError as error:
                 raise LoweringError(f"{_label(call)} {error}") from error
             rows = [1] * len(whole)
