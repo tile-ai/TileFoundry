@@ -155,7 +155,7 @@ class PerformanceChecker:
         """Ask nothing of any single occurrence."""
 
 
-def _program_dim_vars(module: Module, function: Function) -> dict[str, object]:
+def program_dim_vars(module: Module, function: Function) -> dict[str, object]:
     """Dimension declarations reached through program values and execution geometry."""
     found: dict[str, object] = dict(dim_vars_reached(function))
     for owner in _reached_owners(module, function):
@@ -189,7 +189,7 @@ def resolve_program_geometry(
                 f"integer extent, got {extent!r}"
             )
 
-    declared = _program_dim_vars(module, function)
+    declared = program_dim_vars(module, function)
     function_names = _function_dimension_names(function)
     geometry_only = set(declared) - function_names
     try:
@@ -655,5 +655,6 @@ __all__ = [
     "InlineCloner",
     "PerformanceChecker",
     "check_program",
+    "program_dim_vars",
     "validate_call_context",
 ]

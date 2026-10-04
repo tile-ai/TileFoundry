@@ -73,32 +73,20 @@ def shard_layout_of(layout: object) -> "ShardLayout | None":
     return None
 
 
-def _structural_quotient(value, divisor):
-    """Return an exact integer or structural product quotient, if decidable."""
-    from tilefoundry.ir.core.expr import Call, Constant  # noqa: PLC0415
-    from tilefoundry.ir.types.dim import DimMul  # noqa: PLC0415
-
-    if isinstance(value, int) and isinstance(divisor, int):
-        return value // divisor if divisor != 0 and value % divisor == 0 else None
-    if value == divisor:
-        return 1
-    if isinstance(value, Call) and isinstance(value.target, DimMul) and divisor in value.args:
-        left, right = value.args
-        quotient = right if left == divisor else left
-        return quotient.value if isinstance(quotient, Constant) else quotient
-    return None
-
-
 def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "ShardLayout":
     """Bind logical axes to mesh axes in the canonical factored layout.
 
-    Static splits produce mesh-sized positions plus a residual; dynamic
-    single-axis splits remain whole. Dynamic multi-axis splits divide by each
-    mesh extent structurally. Attributes are remapped to factored positions;
-    strides are rebuilt in C order when static.
+    Static splits produce mesh positions plus a residual; dynamic single-axis
+    splits remain whole, while multi-axis splits divide structurally. Remap
+    attributes to factored positions and rebuild static strides in C order.
+
+    Defer exact_quotient: core.op loads types.storage and staged shard_layout
+    exports before core.expr defines Call, which dim needs during import.
 
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
+    from .dim import exact_quotient  # noqa: PLC0415
+
     mesh_shape = flatten(mesh.layout).shape
     bindings: dict[int, list[int]] = {}
     for mesh_axis, attr in enumerate(attrs):
@@ -122,7 +110,7 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
             residual = axis_size
             for mesh_axis in splitting_mesh_axes:
                 extent = mesh_shape[mesh_axis]
-                quotient = _structural_quotient(residual, extent)
+                quotient = exact_quotient(residual, extent)
                 if quotient is None:
                     raise ValueError(
                         f"canonical_shard_layout: logical axis {logical_axis} size "
@@ -175,14 +163,18 @@ def shard_layout_local_shape(
 ) -> tuple:
     """Derive one shard's local shape from its global layout.
 
-    Splits divide their layout position by the mesh extent. Equal symbolic
-    extents yield one; a product containing the mesh extent yields its other
-    factor. Other symbolic splits are undecidable. Non-Split attributes do not
-    consume positions. ``require_static=False`` permits unconsumed symbolic
-    extents during type inference; lowering and codegen require concrete shapes.
+    Splits divide by mesh extents: equal symbols yield one, matching products
+    yield their other factor, and other symbolic splits are undecidable.
+    Non-Split attributes consume no positions. ``require_static=False`` permits
+    unconsumed symbols during inference; lowering and codegen require integers.
+
+    Defer exact_quotient: core.op loads types.storage and staged shard_layout
+    exports before core.expr defines Call, which dim needs during import.
 
     See [shard §7](docs/spec/shard.md#7-shardlayout).
     """
+    from .dim import exact_quotient  # noqa: PLC0415
+
     mesh_shape = flatten(sl.mesh.layout).shape
     local = list(sl.layout.shape)
     for mesh_axis_idx, attr in enumerate(sl.attrs):
@@ -197,7 +189,7 @@ def shard_layout_local_shape(
                 if mesh_ext != 0:
                     local[k] //= mesh_ext
             else:
-                quotient = _structural_quotient(local[k], mesh_ext)
+                quotient = exact_quotient(local[k], mesh_ext)
                 if quotient is None:
                     raise ValueError(
                         f"shard_layout_local_shape: layout dim {k} ({local[k]!r}) "
@@ -224,6 +216,9 @@ def layout_axis_to_tensor_axis(layout_shape: tuple, tensor_shape: tuple) -> list
     Positions are consumed left-to-right until their product reaches each
     tensor extent. Singleton tensor axes claim one singleton position; trailing
     positions attach to the final tensor axis.
+
+    Defer static_dim_value: utils imports shard_layout at module load, before
+    its layout definitions and canonicalization functions have been initialized.
 
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """

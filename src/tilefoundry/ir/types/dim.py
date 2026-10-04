@@ -288,6 +288,23 @@ def ceildiv(a, b) -> Expr:
     return simplify_dim(DimFloorDiv, (num, b))
 
 
+def exact_quotient(value, divisor):
+    """Return an exact integer or structural product quotient, if decidable.
+
+    A shard Split divides a logical axis by its mesh extent. Literal integer
+    divisibility, identical dimensions, and either factor of DimMul determine
+    the quotient; other relations return None for the caller to diagnose.
+    """
+    if isinstance(value, int) and isinstance(divisor, int):
+        return value // divisor if divisor != 0 and value % divisor == 0 else None
+    if value == divisor:
+        return 1
+    if isinstance(value, Call) and isinstance(value.target, DimMul) and divisor in value.args:
+        left, right = value.args
+        quotient = right if left == divisor else left
+        return quotient.value if isinstance(quotient, Constant) else quotient
+    return None
+
 __all__ = [
     "DimConst",
     "DimVar",
@@ -305,4 +322,5 @@ __all__ = [
     "dim_min",
     "dim_max",
     "ceildiv",
+    "exact_quotient",
 ]

@@ -412,9 +412,9 @@ _PROBE = 128
 
 def _probe_dims(owner: Module, function: Function) -> "Mapping[str, int] | None":
     """One concrete extent per open dimension, from its own declared range."""
-    from tilefoundry.analysis.check import _program_dim_vars
+    from tilefoundry.analysis.check import program_dim_vars
 
-    declared = _program_dim_vars(owner, function)
+    declared = program_dim_vars(owner, function)
     if not declared:
         return None
     return {

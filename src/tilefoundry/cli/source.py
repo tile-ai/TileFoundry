@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from tilefoundry.analysis.check import _program_dim_vars
+from tilefoundry.analysis.check import program_dim_vars
 from tilefoundry.ir.core.module import Module, select
 from tilefoundry.ir.hir.function import Function
 
@@ -397,7 +397,7 @@ def require_bound_dims(
     stated = {} if dims is None else dims
     unbound = [
         (name, dim_var)
-        for name, dim_var in _program_dim_vars(module, function).items()
+        for name, dim_var in program_dim_vars(module, function).items()
         if name not in stated
     ]
     if unbound:
