@@ -115,6 +115,19 @@ Both use the one `IslParamValues` dictionary, from isl parameter name to IR valu
 - The current interpretation is canonical regroup: linearize first
   along the logical shape's row-major order, then reinterpret along
   the layout domain's row-major order.
+- `layout_to_isl_map` ([types §4](./types.md#4-dim--symbolic-shape-dimensions))
+  implements this regroup for a `ShardLayout`. A logical axis whose extent is
+  the product of consecutive layout positions maps onto them alone, so a
+  symbolic extent stays representable; any other regroup goes through the flat
+  index and needs static extents.
+- A reader with no topology level addresses logical coordinates. A reader at a
+  named topology level addresses the positions one unit of that level holds:
+  a position cut by mesh axes at that level or coarser is split into digits,
+  the cutting axes outermost first in mesh-axis order and then the residual,
+  and each such digit is that unit's mesh coordinate.
+- A mesh coordinate is an isl parameter while the placement is built. The
+  access relation service fixes it to the requested unit, 0 on every mesh axis
+  unless stated, and removes it before any boundary is counted.
 
 ### 3.2 Relation-driven shard propagation
 

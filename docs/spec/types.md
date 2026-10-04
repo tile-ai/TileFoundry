@@ -579,6 +579,18 @@ def ceildiv(a, b) -> Expr:
   - A conversion MUST raise `ValueError` when a name in `values` is also the
     name of a coordinate of the result, rather than read that parameter as the
     coordinate.
+  - `layout_to_isl_map(shape, layout, values, *, divided)` MUST return the map
+    from a value's logical coordinates to the layout positions one unit holds,
+    by the regroup of
+    [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
+    `layout` MUST be a `ShardLayout` or a static-offset view of one; any other
+    layout is a `TypeError`. `divided` names the mesh axes whose `Split` the
+    unit holds one part of; each such axis's coordinate is a `MeshCoord`
+    parameter named into `values`, ranging over the axis. A regroup across
+    logical axes with a symbolic extent, logical and layout sizes that differ,
+    a divided position or mesh extent that is not static, and mesh extents that
+    do not divide their position MUST raise `ValueError`. A size-zero shape
+    yields an empty map.
   - `dim_range(value)` MUST return conservative half-open bounds from
     `RangeMetadata` before attempting structural dimension arithmetic. A value
     with neither stored nor structurally derivable bounds returns `None`.
