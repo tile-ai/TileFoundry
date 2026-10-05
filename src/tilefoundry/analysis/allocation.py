@@ -593,8 +593,8 @@ def _first_fit(
     """Place alias components in *order*, each at the lowest address its conflicts leave.
 
     A component holding a pinned value takes that address; every other one starts
-    at *floor* or above. None when the components cannot share a pinned address
-    or one would end past *limit*.
+    at *floor*, aligned to the component, or above. None when the components
+    cannot share a pinned address or one would end past *limit*.
     """
     placed: list[tuple[set[int], int, int]] = []
     addresses = [0] * len(values)
@@ -614,14 +614,15 @@ def _first_fit(
         pins = {pinned[index] for index in component if index in pinned}
         if len(pins) > 1:
             return None
+        lowest = aligned(floor, alignment)
         candidates = sorted(
             pins
             or {
-                floor,
+                lowest,
                 *(
                     aligned(address + held, alignment)
                     for other, address, held in blocked
-                    if other and aligned(address + held, alignment) >= floor
+                    if other and aligned(address + held, alignment) >= lowest
                 ),
             }
         )
@@ -681,15 +682,15 @@ def calculate_starts(
     *,
     pinned: dict[int, int] | None = None,
     floor: int = 0,
-) -> tuple[tuple[int, ...], int]:
-    """Construct a complete aligned seed with every required alias merged.
+) -> tuple[tuple[int, ...], int] | None:
+    """A complete aligned seed with every required alias merged, or None.
 
-    Alias components are placed first-fit in two fixed orders: by first
-    definition, the original seed, and largest first, which holds persistent
-    values at their pinned addresses. Each seed is checked against every address
-    constraint the solver states, and the most compact one that meets them all
-    is kept; the first order wins a tie, and stands alone when neither does.
-    The solver still stops at its first feasible assignment from this hint.
+    Alias components are placed first-fit by first definition -- the original
+    seed, then again holding persistent values at their pinned addresses -- and
+    largest first. Each seed is checked against every address constraint the
+    solver states, and the most compact one that meets them all is kept, the
+    earlier attempt winning a tie. None when none does: a heuristic that fails
+    proves nothing about the model, so it must not bound the search.
     """
     pinned = pinned or {}
     roots = alias_components(len(values), aliased)
@@ -705,21 +706,19 @@ def calculate_starts(
 
     by_definition = sorted(components.values(), key=lambda c: (first(c), -size(c)))
     largest_first = sorted(components.values(), key=lambda c: (-size(c), first(c)))
-    original = _first_fit(by_definition, values, interference, alignments, limit, {}, 0)
+    attempts = (
+        (by_definition, {}, 0),
+        (by_definition, pinned, floor),
+        (largest_first, pinned, floor),
+    )
     seeds = [
         seed
-        for seed in (
-            original,
-            _first_fit(largest_first, values, interference, alignments, limit, pinned, floor),
-        )
-        if seed is not None
+        for order, pins, lowest in attempts
+        if (seed := _first_fit(order, values, interference, alignments, limit, pins, lowest))
+        is not None
         and _satisfies(seed[0], values, interference, alignments, limit, pinned, floor)
     ]
-    if seeds:
-        return min(seeds, key=lambda seed: seed[1])
-    if original is None:
-        raise AnalysisError("allocation: failed to construct a bounded feasible seed")
-    return original
+    return min(seeds, key=lambda seed: seed[1]) if seeds else None
 
 
 def find_aliases(
@@ -820,7 +819,7 @@ def solve_allocation(
         ).only_enforce_if(right_before)
         model.add_bool_or(left_before, right_before)
 
-    address_hints, peak_hint = calculate_starts(
+    seed = calculate_starts(
         values,
         context.aliased,
         interference,
@@ -829,15 +828,17 @@ def solve_allocation(
         pinned=pinned,
         floor=persistent_end,
     )
-    model.add(peak <= peak_hint)
-    for address, suggested in zip(addresses, address_hints, strict=True):
-        model.add_hint(address, suggested)
-    for (left, right), (left_before, right_before) in order_choices.items():
-        left_end = address_hints[left] + values[left].lifetime.bytes
-        right_end = address_hints[right] + values[right].lifetime.bytes
-        model.add_hint(left_before, int(left_end <= address_hints[right]))
-        model.add_hint(right_before, int(right_end <= address_hints[left]))
-    model.add_hint(peak, peak_hint)
+    if seed is not None:
+        address_hints, peak_hint = seed
+        model.add(peak <= peak_hint)
+        for address, suggested in zip(addresses, address_hints, strict=True):
+            model.add_hint(address, suggested)
+        for (left, right), (left_before, right_before) in order_choices.items():
+            left_end = address_hints[left] + values[left].lifetime.bytes
+            right_end = address_hints[right] + values[right].lifetime.bytes
+            model.add_hint(left_before, int(left_end <= address_hints[right]))
+            model.add_hint(right_before, int(right_end <= address_hints[left]))
+        model.add_hint(peak, peak_hint)
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = options.timeout_seconds
