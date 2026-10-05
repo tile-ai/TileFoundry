@@ -508,3 +508,30 @@ def test_local_pricing_requires_compute_rates_and_uses_available_memory_rates() 
         local_duration_ns(ComputeCostMetadata(), throughput, priced, moved=crossed, level="cta")
         == 8
     )
+
+
+_SCALE_GROUP = 8
+
+
+@module(entry="stage", target=_H200, topologies=(Topology("cta", 1),))
+class _GroupSliceBound:
+    """A slice bound written as a loop index times a constant."""
+
+    @func
+    def stage(scale: Tensor[(256, 56), "f32"]) -> Tensor[(256, _SCALE_GROUP), "f32"]:
+        acc = tf.zeros(Tensor[(256, _SCALE_GROUP), "f32", "smem"])
+        for group in range(56 // _SCALE_GROUP):
+            window = scale[:, group * _SCALE_GROUP:group * _SCALE_GROUP + _SCALE_GROUP]
+            acc = acc + tf.reshard(window, (256, _SCALE_GROUP), "smem")
+        return tf.reshard(acc, (256, _SCALE_GROUP), "gmem")
+
+
+def test_dimension_arithmetic_in_a_slice_bound_is_integer_work() -> None:
+    result = analyze(
+        _GroupSliceBound, _GroupSliceBound.entry_function(), analysis=_ALL_FAMILIES
+    )
+    cost = get_metadata(result.function, ComputeCostMetadata)
+    assert cost is not None
+    integer_ops = cost.other_ops.of("integer")
+    assert integer_ops is not None
+    assert integer_ops.total == 56 // _SCALE_GROUP
