@@ -11,6 +11,8 @@ one mesh axis, or a non-commuting ``Partial`` are errors rather than a pick.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 
@@ -31,7 +33,9 @@ from tilefoundry.ir.types import (
     make_shard_tensor_type,
     make_tensor_type,
 )
+from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.shard_layout import (
+    Broadcast,
     Partial,
     Split,
 )
@@ -105,6 +109,22 @@ COST_CASES = [
             TrafficBytes(read=4 * 2 * 4),
             TrafficBytes(read=3 * 2 * 4),
             TrafficBytes(write=4 * 3 * 4),
+        ),
+        topology_level="cta",
+        topologies=(_CTA,),
+    ),
+    CostCase(
+        name="replicated_rectangular_projection_counts_the_whole_result",
+        op=_MM,
+        inputs=(
+            make_shard_tensor_type((4, 2), mesh=_CTA_MESH, attrs=(Broadcast(),), dtype=DType.f32),
+            make_shard_tensor_type((2, 6), mesh=_CTA_MESH, attrs=(Broadcast(),), dtype=DType.f32),
+        ),
+        flops={DType.f32: 2 * 4 * 6 * 2},
+        traffic=(
+            TrafficBytes(read=4 * 2 * 4),
+            TrafficBytes(read=2 * 6 * 4),
+            TrafficBytes(write=4 * 6 * 4),
         ),
         topology_level="cta",
         topologies=(_CTA,),
@@ -265,6 +285,13 @@ CARRIES = [
         (Split(axis=2),),
         id="lower_rank_batched_rhs_split_maps_to_output",
     ),
+    pytest.param(
+        _sharded((16, 8), (Broadcast(),)),
+        _sharded((8, 32), (Broadcast(),)),
+        (16, 32),
+        (Broadcast(),),
+        id="replicated_operands_give_a_replicated_result_of_its_own_shape",
+    ),
 ]
 
 
@@ -274,6 +301,9 @@ def test_a_sharded_operand_carries_to_the_output(lhs, rhs, shape, attrs):
 
     assert out.shape == shape
     assert out.layout.attrs == attrs
+    assert math.prod(flatten(out.layout.shape)) == math.prod(shape), (
+        "the result's layout domain holds the result, not an operand"
+    )
 
 
 @pytest.mark.parametrize(

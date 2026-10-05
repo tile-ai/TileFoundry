@@ -12,8 +12,14 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
+from tilefoundry.ir.types import Layout, TensorType
+from tilefoundry.ir.types.shard_layout import (
+    ShardLayout,
+    canonical_shard_layout,
+    shard_layout_of,
+    split_target_axes,
+)
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -78,6 +84,21 @@ def _elements(shape: tuple) -> int:
     return counted
 
 
+def _unsharded_layout(lhs: TensorType, out_shape: tuple):
+    """The result's layout when no operand is split or partial.
+
+    The result is not the lhs: it has its own shape, so it takes the lhs's
+    mesh and replicated attributes over a layout of that shape rather than the
+    lhs's domain, which describes a different number of elements.
+    """
+    held = shard_layout_of(lhs.layout) or lhs.layout
+    if isinstance(held, ShardLayout):
+        return canonical_shard_layout(out_shape, held.mesh, held.attrs)
+    if held is None or tuple(held.shape) == tuple(out_shape):
+        return held
+    return Layout(shape=out_shape, strides=try_compact_major(out_shape))
+
+
 @register_typeinfer(MatMul)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     lhs = ctx.type_of(call.args[0])
@@ -122,7 +143,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
     except ValueError as e:
         ctx.error(call, str(e))
-    layout = shard if shard is not None else (shard_layout_of(lhs.layout) or lhs.layout)
+    layout = shard if shard is not None else _unsharded_layout(lhs, out_shape)
     storage = resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
     return TensorType(shape=out_shape, dtype=lhs.dtype, layout=layout, storage=storage)
 

@@ -117,7 +117,7 @@ Both use the one `IslParamValues` dictionary, from isl parameter name to IR valu
   the layout domain's row-major order.
 - `layout_to_isl_map` ([types §4](./types.md#4-dim--symbolic-shape-dimensions))
   implements this regroup for a `ShardLayout`. A logical axis whose extent is
-  the product of consecutive layout positions maps onto them alone, so a
+  the product of consecutive flattened layout positions maps onto them, so a
   symbolic extent stays representable; any other regroup goes through the flat
   index and needs static extents.
 - A reader with no topology level addresses logical coordinates. A reader at a

@@ -30,6 +30,7 @@ from .types.dim import (
     DimMul,
     DimSub,
     DimVar,
+    simplify_dim,
 )
 from .types.dtype import IntegerDType
 from .types.int_tuple import flatten as flatten_tuple
@@ -493,38 +494,41 @@ def shape_to_isl_set(shape: tuple, values: IslParamValues) -> "isl.set":
     return isl.set(prefix + f"{{ [{', '.join(dims)}] : {' and '.join(constraints)} }}")
 
 
+def _same_extent(a, b) -> bool:
+    """Whether two extents are provably equal."""
+    if a is b or a == b:
+        return True
+    if static_dim_value(a) is not None and static_dim_value(b) is not None:
+        return False
+    try:
+        return normalize_dim(simplify_dim(DimSub, (a, b))) == 0
+    except (TypeError, ValueError, NotImplementedError):
+        return False
+
+
 def _congruent_groups(shape: tuple, extents: tuple) -> list[list[int]] | None:
     """Which layout positions each logical axis owns, when they line up in order.
 
-    Each logical axis takes the next positions whose product is its extent; a
-    symbolic axis takes one position equal to it. Anything else -- an axis
-    spread over a boundary, or positions left over that hold more than one --
-    is not congruent, and None says so.
+    Each logical axis takes the next positions whose product is provably its
+    extent. Anything else -- an axis spread over a boundary, or positions left
+    over that hold more than one -- is not congruent, and None says so.
     """
     groups: list[list[int]] = []
     position = 0
     for extent in shape:
         group: list[int] = []
-        whole = static_dim_value(extent)
-        if whole is None:
-            while position < len(extents) and static_dim_value(extents[position]) == 1:
-                group.append(position)
-                position += 1
-            if position >= len(extents) or extents[position] != extent:
+        product = 1
+        while not _same_extent(product, extent):
+            if position >= len(extents):
                 return None
+            held = extents[position]
+            product = held if product == 1 else simplify_dim(DimMul, (product, held))
+            if static_dim_value(product) is not None and static_dim_value(extent) is not None:
+                product = static_dim_value(product)
+                if product > static_dim_value(extent):
+                    return None
             group.append(position)
             position += 1
-        else:
-            product = 1
-            while product < whole:
-                held = static_dim_value(extents[position]) if position < len(extents) else None
-                if held is None:
-                    return None
-                product *= held
-                group.append(position)
-                position += 1
-            if product != whole:
-                return None
         groups.append(group)
     if any(static_dim_value(extent) != 1 for extent in extents[position:]):
         return None
@@ -534,23 +538,21 @@ def _congruent_groups(shape: tuple, extents: tuple) -> list[list[int]] | None:
 def _regrouped(shape: tuple, extents: tuple, coords: list[str]) -> list[str]:
     """Each layout position's coordinate, by the row-major regroup of *coords*.
 
-    The outermost position of a run is not reduced modulo its extent, so a
-    coordinate past the value is not folded back onto one inside it.
+    A position of extent 1 is 0. The outermost of the rest is not reduced
+    modulo its extent, so a coordinate past the value is not folded back onto
+    one inside it; every other divisor and modulus has to be a number.
     """
     image = ["0"] * len(extents)
     groups = _congruent_groups(shape, extents)
     if groups is not None:
-        runs = [(coord, group) for coord, group in zip(coords, groups, strict=True)]
+        runs = list(zip(coords, groups, strict=True))
     else:
         whole = [static_dim_value(extent) for extent in shape]
-        held = [static_dim_value(extent) for extent in extents]
-        if None in whole or None in held:
+        if None in whole or any(static_dim_value(extent) is None for extent in extents):
             raise ValueError(
                 f"shape {shape} regroups onto layout positions {extents} across axes, "
                 "which needs static extents on both sides"
             )
-        if math.prod(whole) != math.prod(held):
-            raise ValueError(f"shape {shape} and layout positions {extents} differ in size")
         terms = []
         stride = 1
         for coord, extent in reversed(list(zip(coords, whole))):
@@ -558,10 +560,11 @@ def _regrouped(shape: tuple, extents: tuple, coords: list[str]) -> list[str]:
             stride *= extent
         runs = [(f"({' + '.join(reversed(terms)) or '0'})", list(range(len(extents))))]
     for coord, group in runs:
+        held = [position for position in group if static_dim_value(extents[position]) != 1]
         inner = 1
-        for position in reversed(group):
+        for position in reversed(held):
             term = coord if inner == 1 else f"floor({coord}/{inner})"
-            if position == group[0]:
+            if position == held[0]:
                 image[position] = term
                 break
             extent = static_dim_value(extents[position])
@@ -597,55 +600,67 @@ def _mesh_coordinate(mesh, axis: int, values: IslParamValues) -> str:
 
 
 def layout_to_isl_map(
-    shape: tuple, layout: LayoutBase, values: IslParamValues, *, divided: Collection[int]
+    shape: tuple,
+    layout: LayoutBase,
+    values: IslParamValues,
+    *,
+    divided: Callable[[ShardLayout], Collection[int]],
 ) -> "isl.map":
     """Where each logical coordinate of a *shape* value sits among one unit's positions.
 
-    The coordinates regroup row-major onto the layout's positions
+    The coordinates regroup row-major onto the flattened layout positions
     ([semantic-analysis §3.1](docs/spec/semantic-analysis.md#31-logical-shape-to-layout-domain)).
-    A position *divided* mesh axes cut is split into digits, cutting axes
-    outermost first, then the residual: a divided digit is that unit's
-    coordinate, a ``MeshCoord`` parameter named into *values*, and the rest is
-    the position within. Only a ``ShardLayout``, direct or under a static-offset
-    view, has positions to place on.
+    A position cut by the mesh axes ``divided(layer)`` names, layer by layer
+    from the innermost, is split into digits -- cutting axes outermost first,
+    then the residual: a divided digit is that unit's ``MeshCoord``, a parameter
+    named into *values*, and the rest is the position within.
     """
-    shard = shard_layout_of(layout)
-    if shard is None:
+    layers = [shard_layout_of(layout)]
+    if layers[0] is None:
         raise TypeError(f"layout_to_isl_map places a ShardLayout, not {type(layout).__name__}")
-    if isinstance(shard.layout, ShardLayout):
-        raise ValueError("layout_to_isl_map: a ShardLayout nested in another has no placement")
-    extents = tuple(
-        math.prod(flatten_tuple(mode)) if isinstance(mode, tuple) else mode
-        for mode in shard.layout.shape
-    )
+    while isinstance(layers[-1].layout, ShardLayout):
+        layers.append(layers[-1].layout)
+    extents = tuple(flatten_tuple(layers[0].shape))
     coords = [f"c{axis}" for axis in range(len(shape))]
     clash = set(values) & set(coords)
     if clash:
         raise ValueError(f"{sorted(clash)} name both a parameter and a coordinate")
     domain = ", ".join(coords)
-    if any(static_dim_value(extent) == 0 for extent in (*shape, *extents)):
-        positions = ", ".join(f"p{index}" for index in range(len(extents)))
-        return isl.map(f"{{ [{domain}] -> [{positions}] : 1 = 0 }}")
+    sizes = [static_dim_value(extent) for extent in (*shape, *extents)]
+    if None not in sizes:
+        logical, held = math.prod(sizes[: len(shape)]), math.prod(sizes[len(shape) :])
+        if logical != held:
+            raise ValueError(
+                f"shape {shape} and layout positions {extents} differ in size, "
+                f"{logical} against {held}"
+            )
+        if logical == 0:
+            positions = ", ".join(f"p{index}" for index in range(len(extents)))
+            return isl.map(f"{{ [{domain}] -> [{positions}] : 1 = 0 }}")
     image = _regrouped(tuple(shape), extents, coords)
-    mesh_extents = flatten(shard.mesh.layout).shape
-    cutting: dict[int, list[int]] = {}
-    for mesh_axis, attr in enumerate(shard.attrs):
-        if not isinstance(attr, Split):
-            continue
-        if not 0 <= attr.axis < len(extents) or mesh_axis >= len(mesh_extents):
-            raise ValueError(f"{shard!r} splits a layout position or mesh axis it does not have")
-        cutting.setdefault(attr.axis, []).append(mesh_axis)
+    cutting: dict[int, list[tuple[ShardLayout, int, bool]]] = {}
+    for layer in reversed(layers):
+        mesh_extents = flatten(layer.mesh.layout).shape
+        cuts = divided(layer)
+        for mesh_axis, attr in enumerate(layer.attrs):
+            if not isinstance(attr, Split):
+                continue
+            if not 0 <= attr.axis < len(extents) or mesh_axis >= len(mesh_extents):
+                raise ValueError(
+                    f"{layer!r} splits a layout position or mesh axis it does not have"
+                )
+            cutting.setdefault(attr.axis, []).append((layer, mesh_axis, mesh_axis in cuts))
     params: list[str] = []
     guards: list[str] = []
-    for position, axes in cutting.items():
-        if not any(mesh_axis in divided for mesh_axis in axes):
+    for position, cuts in cutting.items():
+        if not any(cut for _layer, _axis, cut in cuts):
             continue
         whole = static_dim_value(extents[position])
-        parts = [static_dim_value(mesh_extents[mesh_axis]) for mesh_axis in axes]
+        parts = [static_dim_value(flatten(layer.mesh.layout).shape[a]) for layer, a, _ in cuts]
         if whole is None or any(part is None or part <= 0 for part in parts):
             raise ValueError(
-                f"layout position {position} of {shape} is split by mesh extents "
-                f"{tuple(mesh_extents[a] for a in axes)}; placing one unit needs them static"
+                f"layout position {position} of {shape} is split by mesh axes; placing "
+                "one unit needs the position and every mesh extent cutting it static"
             )
         if whole % math.prod(parts):
             raise ValueError(
@@ -656,13 +671,13 @@ def layout_to_isl_map(
         coordinate = image[position]
         stride = whole
         kept: list[tuple[str, int]] = []
-        for order, (mesh_axis, part) in enumerate(zip(axes, parts)):
+        for order, ((layer, mesh_axis, cut), part) in enumerate(zip(cuts, parts)):
             stride //= part
             digit = f"floor(({coordinate})/{stride})"
             if order:
                 digit = f"({digit}) mod {part}"
-            if mesh_axis in divided:
-                name = _mesh_coordinate(shard.mesh, mesh_axis, values)
+            if cut:
+                name = _mesh_coordinate(layer.mesh, mesh_axis, values)
                 if name not in params:
                     params.append(name)
                     guards.append(f"0 <= {name} < {part}")

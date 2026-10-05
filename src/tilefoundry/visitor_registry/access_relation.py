@@ -235,9 +235,13 @@ def projected(
         shard = shard_layout_of(getattr(value, "layout", None))
         if level is None or not isinstance(value, TensorType) or shard is None:
             return None
-        divided = divided_mesh_axes(shard, topology_level=level, topologies=ctx.topologies)
         placed_at = layout_to_isl_map(
-            tuple(value.shape), value.layout, coordinates, divided=divided
+            tuple(value.shape),
+            value.layout,
+            coordinates,
+            divided=lambda layer: divided_mesh_axes(
+                layer, topology_level=level, topologies=ctx.topologies
+            ),
         )
         return _at_device(placed_at, coordinates, device or {})
 
@@ -252,7 +256,7 @@ def projected(
 
     placed = {
         side: tuple(
-            _placed(boundary, *views(index, side), side, index, call, placement)
+            _placed(boundary, *views(index, side), side, index, call, placement, bindings)
             for index, boundary in enumerate(boundaries)
         )
         for side, boundaries in (("input", relations.inputs), ("output", relations.outputs))
@@ -470,14 +474,22 @@ def _at_device(placement: "isl.map", coordinates: IslParamValues, device: Mappin
 
 
 def _placed(
-    boundary: "BoundaryRelation", local, logical, side: str, index: int, call, placement
+    boundary: "BoundaryRelation",
+    local,
+    logical,
+    side: str,
+    index: int,
+    call,
+    placement,
+    bindings: IslParamValues,
 ) -> "isl.map":
     """One boundary's image carried from logical axes onto the positions it has.
 
     Held to the positions this participant was given, so which iterations are
     its own follows from the placement rather than from a relation that may
-    reach past what it was handed. A value with no placement is addressed at
-    its own coordinates.
+    reach past what it was handed. A coordinate past the logical value is cut
+    before placing, since a regroup would fold it onto a position it does not
+    name. A value with no placement is addressed at its own coordinates.
     """
     relation = relation_of(boundary.pattern)
     if (
@@ -496,6 +508,7 @@ def _placed(
     placed_at = placement(logical)
     if placed_at is None:
         return _within_positions(relation, local)
+    relation = relation.intersect_range(shape_to_isl_set(tuple(logical.shape), bindings))
     if placed_at.dim(isl.dim_type.OUT) != len(local.shape):
         raise ValueError(
             f"{type(call.target).__name__} places {side} {index} at "

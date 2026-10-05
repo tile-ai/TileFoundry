@@ -580,17 +580,21 @@ def ceildiv(a, b) -> Expr:
     name of a coordinate of the result, rather than read that parameter as the
     coordinate.
   - `layout_to_isl_map(shape, layout, values, *, divided)` MUST return the map
-    from a value's logical coordinates to the layout positions one unit holds,
-    by the regroup of
+    from a value's logical coordinates to the flattened layout positions one
+    unit holds, by the regroup of
     [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
     `layout` MUST be a `ShardLayout` or a static-offset view of one; any other
-    layout is a `TypeError`. `divided` names the mesh axes whose `Split` the
+    layout is a `TypeError`. A `ShardLayout` whose `layout` is itself a
+    `ShardLayout` is placed layer by layer, each layer once, the innermost
+    layer's cuts outermost, as [§2.1](#21-recursive-local-projection) projects
+    it. `divided(layer)` names the mesh axes of that layer whose `Split` the
     unit holds one part of; each such axis's coordinate is a `MeshCoord`
-    parameter named into `values`, ranging over the axis. A regroup across
-    logical axes with a symbolic extent, logical and layout sizes that differ,
-    a divided position or mesh extent that is not static, and mesh extents that
-    do not divide their position MUST raise `ValueError`. A size-zero shape
-    yields an empty map.
+    parameter named into `values`, ranging over the axis.
+  - `layout_to_isl_map` MUST raise `ValueError` for static logical and layout
+    sizes that differ, checked before a size-zero shape yields an empty map; a
+    regroup that needs a symbolic divisor or modulus; a divided position or
+    mesh extent that is not static; and mesh extents that do not divide their
+    position.
   - `dim_range(value)` MUST return conservative half-open bounds from
     `RangeMetadata` before attempting structural dimension arithmetic. A value
     with neither stored nor structurally derivable bounds returns `None`.

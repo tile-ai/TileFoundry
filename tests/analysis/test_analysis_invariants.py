@@ -56,6 +56,7 @@ from tilefoundry.ir.types import (
     make_shard_tensor_type,
     make_tensor_type,
 )
+from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import is_literal_shape, tensor_bytes
@@ -132,33 +133,63 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
         relations_of(call, TypeInferContext())
 
 
-def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed() -> None:
+_CTA2 = Topology("cta", 2)
+_CTA2_MESH = Mesh((_CTA2,), Layout((2,), (1,)), ("c",))
+_I64 = make_tensor_type((), DType.i64)
+
+
+@pytest.mark.parametrize(
+    ("destination", "update", "offsets", "before", "own"),
+    [
+        pytest.param(
+            make_shard_tensor_type((8,), mesh=_CTA2_MESH, attrs=(ShardSplit(0),), dtype=DType.f32),
+            make_shard_tensor_type((4,), mesh=_CTA2_MESH, attrs=(ShardSplit(0),), dtype=DType.f32),
+            Constant(type=_I64, value=2),
+            "{ [c0] : c0 < 0 }",
+            "{ [d0] : 2 <= d0 <= 3 }",
+            id="split_axis",
+        ),
+        pytest.param(
+            make_tensor_type((2, 8), DType.f32),
+            TensorType(
+                shape=(2, 4),
+                dtype=DType.f32,
+                layout=ShardLayout(Layout((8,), (1,)), (ShardSplit(0),), _CTA2_MESH),
+                storage=StorageKind.GMEM,
+            ),
+            Tuple(
+                type=TupleType(fields=(_I64, _I64)),
+                elements=(Constant(type=_I64, value=0), Constant(type=_I64, value=2)),
+            ),
+            "{ [c0, c1] : c1 < 0 }",
+            "{ [0, d1] : 2 <= d1 <= 5 }",
+            id="axes_regrouped_onto_one_position",
+        ),
+    ],
+)
+def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed(
+    destination, update, offsets, before, own
+) -> None:
     """A relation may be written past its value; a projected one never reaches there.
 
     An insert reads its update at the coordinate the window shifted back to, and
     for the coordinates before the window that is a negative one. Every
     projected boundary is held to the positions this participant was given, so
     what it reaches is inside them and which iterations are its own follows from
-    that rather than from a read nobody could perform.
+    that rather than from a read nobody could perform. Where two logical axes
+    regroup onto one position, a read past one axis would land on a position the
+    next row holds; it is cut as the logical coordinate it is, not placed there.
     """
-    cta = Topology("cta", 2)
-    mesh = Mesh((cta,), Layout((2,), (1,)), ("c",))
-    destination = make_shard_tensor_type((8,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32)
-    update = make_shard_tensor_type((4,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32)
     call = Call(
         type=destination,
         target=InsertSlice(),
-        args=(
-            Var(type=destination, name="dst"),
-            Var(type=update, name="update"),
-            Constant(type=make_tensor_type((), DType.i64), value=2),
-        ),
+        args=(Var(type=destination, name="dst"), Var(type=update, name="update"), offsets),
     )
-    ctx = CostContext(topology_level="cta", topologies=(cta,))
+    ctx = CostContext(topology_level="cta", topologies=(_CTA2,))
 
     stated = relations_of(call, ctx)
     reads = relation_of(stated.inputs[1].pattern)
-    assert not reads.intersect_range(isl.set("{ [c0] : c0 < 0 }")).is_empty(), (
+    assert not reads.intersect_range(isl.set(before)).is_empty(), (
         "the window's own read runs before its operand begins"
     )
 
@@ -176,11 +207,9 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed() ->
         assert reached.is_subset(box), (
             f"a boundary reached {reached} outside the {tuple(view.shape)} it was given"
         )
-    assert (
-        relation_of(relations.inputs[1].pattern)
-        .domain()
-        .is_equal(isl.set("{ [d0] : 2 <= d0 <= 3 }"))
-    ), "so the iterations left are the ones whose read this participant holds"
+    assert relation_of(relations.inputs[1].pattern).domain().is_equal(isl.set(own)), (
+        "so the iterations left are the ones whose read this participant holds"
+    )
 
 
 def _assert_shape(text: str, declared: object) -> None:
