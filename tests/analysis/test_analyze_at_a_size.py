@@ -78,45 +78,15 @@ API_INVENTORY = frozenset(
 CLI_INVENTORY = [param for param in INVENTORY if param.id not in API_INVENTORY]
 assert API_INVENTORY <= {case.id for case in CASES}
 
-_GQA_MATERIAL_TRANSPOSE_GMEM = 282_624
-_PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 245_760
-_QWEN_LOOP_INVARIANT_VALUES_GMEM = 154_289_168
+_GQA_MATERIAL_TRANSPOSE_GMEM = 280_632
+_PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 214_016
+_QWEN_LOOP_INVARIANT_VALUES_GMEM = 152_712_464
 _MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING = 5_245_008
 _MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_195_376
 _MHA_SHORTER_GMEM_WITH_28_BYTES_ALIGNMENT_PADDING = 2_098_224
 _MHA_SINGLE_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 8_392_752
 
-KNOWN_OVER_BOUND = {
-    (
-        "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]",
-        "gmem",
-    ): (
-        "LEFTOVERS #14: first-solution allocator exceeds the aligned live-byte upper "
-        "bound once loop-invariant captures stay live across the loop"
-    ),
-    (
-        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]",
-        "gmem",
-    ): (
-        "LEFTOVERS #14: first-solution allocator exceeds the aligned live-byte upper "
-        "bound once loop-invariant captures stay live across the loop"
-    ),
-    (
-        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]",
-        "gmem",
-    ): (
-        "LEFTOVERS #14: first-solution allocator exceeds the aligned live-byte upper "
-        "bound once loop-invariant captures stay live across the loop"
-    ),
-    (
-        "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]",
-        "smem",
-    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
-    (
-        "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]",
-        "gmem",
-    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
-}
+KNOWN_OVER_BOUND: dict[tuple[str, str], str] = {}
 
 
 @dataclass(frozen=True)
@@ -134,7 +104,7 @@ EXPECTED_MEMORY_PEAKS = {
     "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]": {
         "gmem": 526_464,
         "rmem": 8,
-        "smem": 83_744,
+        "smem": 66_580,
     },
     "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 128},
     "fused_boundary.FusedBoundary.inner.scale[static]": {"rmem": 256},
@@ -185,7 +155,7 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 24_576,
     },
     "gqa_decode.GqaOnline._ctx_combine[static]": {"gmem": 291_968},
-    "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": {"gmem": 5_531_648},
+    "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": {"gmem": 4_483_072},
     "gqa_decode.GqaOnline.gqa_online_attend[ctx_len=128]": {
         "gmem": _GQA_MATERIAL_TRANSPOSE_GMEM,
         "rmem": 0,
@@ -253,7 +223,7 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 49_672,
         "smem": 16_384,
     },
-    "moe_mega_kernel.MoEMegaKernel.experts[static]": {"gmem": 64_256},
+    "moe_mega_kernel.MoEMegaKernel.experts[static]": {"gmem": 64_000},
     "moe_mega_kernel.MoEMegaKernel.routed_expert[static]": {"gmem": 61_696},
     "moe_mega_kernel.MoEMegaKernel.shared_expert[static]": {"gmem": 64_000},
     "nested_twin.Weighted.scaled[static]": {"gmem": 1_348, "rmem": 4},
@@ -275,12 +245,12 @@ EXPECTED_MEMORY_PEAKS = {
     "persistent_gemm_flat.PersistentGemmFlat.gemm[static]": {
         "gmem": 130_940_928,
         "rmem": 16_384,
-        "smem": 12_288,
+        "smem": 24_576,
     },
     "persistent_gemm_tiled.PersistentGemmTiled.gemm[static]": {
         "gmem": 130_940_928,
         "rmem": 16_384,
-        "smem": 12_288,
+        "smem": 24_576,
     },
     "prefill_decode_attention.PrefillDecodeAttention.attend[ctx=128,seq=128]": {
         "gmem": 1_310_720,
@@ -303,12 +273,12 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 131_072,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]": {
-        "gmem": 4_611_717_152,
+        "gmem": 4_611_694_880,
         "rmem": 1_036,
         "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]": {
-        "gmem": 4_611_717_152,
+        "gmem": 4_611_694_880,
         "rmem": 1_036,
         "smem": 65_792,
     },

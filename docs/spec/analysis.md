@@ -571,6 +571,13 @@ class MemoryLevelPeak:
     `AnalysisError` and leave no record. The solver MUST stop at its first
     feasible assignment rather than prove a minimum. Capacity MUST NOT restrict
     the address space.
+  - The search MUST start from a seed that meets every address constraint the
+    solver states: shared addresses for each alias component, alignment,
+    disjoint addresses for interfering values, pinned persistent addresses, and
+    the address limit. Alias components are placed first-fit in two fixed
+    orders, by first definition and largest first; the more compact seed that
+    meets them is the hint, and the first order wins a tie. This does not
+    promise a minimum peak.
   - A solved explicit-level peak exceeding capacity MUST add a non-fatal
     `errors` entry, preserve the complete result, and MUST NOT fail the call.
 

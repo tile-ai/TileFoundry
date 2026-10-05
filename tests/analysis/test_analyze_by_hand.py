@@ -443,6 +443,8 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression() -> None:
     Each step multiplies an ``(BM, BK)`` by a ``(BK, BN)`` bf16 tile into a
     ``(BM, BN)`` one: ``BM * BN * 2`` bytes written and ``2 * BM * BN * BK``
     flops by the CTA that runs it, whatever layout the operands were staged in.
+    The operand tiles die into the product and the product into its f32 cast,
+    so placing them needs the larger of those two live sets and no more.
     """
     data = _report(PersistentGemmTiled, analysis=("memory", "compute-cost"))
     memory = data["function_records"]["memory"]
@@ -465,6 +467,11 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression() -> None:
     assert product["memory"]["operands"][-1]["write"] == tile_bytes
     flops = product["compute-cost"]["flops"]["bf16"]["per_unit"]
     assert flops == [2 * tiled.BM * tiled.BN * tiled.BK]
+    operands = (tiled.BM * tiled.BK * 2, tiled.BK * tiled.BN * 2)
+    widened = tiled.BM * tiled.BN * 4
+    largest_live = max(sum(operands) + tile_bytes, tile_bytes + widened)
+    peaks = {peak["memory_level"]: peak["peak_bytes"] for peak in memory["peaks"]}
+    assert peaks["smem"] == largest_live, "the tiles fit in the most bytes ever live at once"
 
 
 def test_persistent_flat_states_its_precision() -> None:

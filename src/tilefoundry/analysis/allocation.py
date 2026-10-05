@@ -581,30 +581,25 @@ def aligned(value: int, alignment: int) -> int:
     return -(-value // alignment) * alignment
 
 
-def calculate_starts(
+def _first_fit(
+    order: list[set[int]],
     values: tuple[AllocationValue, ...],
-    aliased: set[tuple[int, int]],
     interference: set[tuple[int, int]],
     alignments: tuple[int, ...],
     limit: int,
-) -> tuple[tuple[int, ...], int]:
-    """Construct a complete aligned seed with every required alias merged."""
-    roots = alias_components(len(values), aliased)
-    components: dict[int, set[int]] = defaultdict(set)
-    for index in range(len(values)):
-        components[roots[index]].add(index)
+    pinned: dict[int, int],
+    floor: int,
+) -> tuple[tuple[int, ...], int] | None:
+    """Place alias components in *order*, each at the lowest address its conflicts leave.
 
-    ordered = sorted(
-        components.values(),
-        key=lambda component: (
-            min(values[index].lifetime.defined_at for index in component),
-            -max(values[index].lifetime.bytes for index in component),
-        ),
-    )
+    A component holding a pinned value takes that address; every other one starts
+    at *floor* or above. None when the components cannot share a pinned address
+    or one would end past *limit*.
+    """
     placed: list[tuple[set[int], int, int]] = []
     addresses = [0] * len(values)
     peak = 0
-    for component in ordered:
+    for component in order:
         size = max(values[index].lifetime.bytes for index in component)
         alignment = max(alignments[index] for index in component)
 
@@ -616,28 +611,115 @@ def calculate_starts(
             )
 
         blocked = tuple(item for item in placed if conflicts(item[0]))
+        pins = {pinned[index] for index in component if index in pinned}
+        if len(pins) > 1:
+            return None
         candidates = sorted(
-            {
-                0,
-                *(aligned(address + held, alignment) for other, address, held in blocked if other),
+            pins
+            or {
+                floor,
+                *(
+                    aligned(address + held, alignment)
+                    for other, address, held in blocked
+                    if other and aligned(address + held, alignment) >= floor
+                ),
             }
         )
         address = next(
-            candidate
-            for candidate in candidates
-            if all(
-                candidate + size <= other_address or other_address + other_size <= candidate
-                for other, other_address, other_size in blocked
-                if other
-            )
+            (
+                candidate
+                for candidate in candidates
+                if all(
+                    candidate + size <= other_address or other_address + other_size <= candidate
+                    for other, other_address, other_size in blocked
+                    if other
+                )
+            ),
+            None,
         )
-        if address + size > limit:
-            raise AnalysisError("allocation: failed to construct a bounded feasible seed")
+        if address is None or address + size > limit:
+            return None
         for index in component:
             addresses[index] = address
         placed.append((component, address, size))
         peak = max(peak, address + size)
     return tuple(addresses), peak
+
+
+def _satisfies(
+    addresses: tuple[int, ...],
+    values: tuple[AllocationValue, ...],
+    interference: set[tuple[int, int]],
+    alignments: tuple[int, ...],
+    limit: int,
+    pinned: dict[int, int],
+    floor: int,
+) -> bool:
+    """Whether a seed meets every constraint the solver states about addresses."""
+    for index, (address, item, alignment) in enumerate(
+        zip(addresses, values, alignments, strict=True)
+    ):
+        if address % alignment or address + item.lifetime.bytes > limit:
+            return False
+        if index in pinned and address != pinned[index]:
+            return False
+        if index not in pinned and address < floor:
+            return False
+    return all(
+        addresses[left] + values[left].lifetime.bytes <= addresses[right]
+        or addresses[right] + values[right].lifetime.bytes <= addresses[left]
+        for left, right in interference
+    )
+
+
+def calculate_starts(
+    values: tuple[AllocationValue, ...],
+    aliased: set[tuple[int, int]],
+    interference: set[tuple[int, int]],
+    alignments: tuple[int, ...],
+    limit: int,
+    *,
+    pinned: dict[int, int] | None = None,
+    floor: int = 0,
+) -> tuple[tuple[int, ...], int]:
+    """Construct a complete aligned seed with every required alias merged.
+
+    Alias components are placed first-fit in two fixed orders: by first
+    definition, the original seed, and largest first, which holds persistent
+    values at their pinned addresses. Each seed is checked against every address
+    constraint the solver states, and the most compact one that meets them all
+    is kept; the first order wins a tie, and stands alone when neither does.
+    The solver still stops at its first feasible assignment from this hint.
+    """
+    pinned = pinned or {}
+    roots = alias_components(len(values), aliased)
+    components: dict[int, set[int]] = defaultdict(set)
+    for index in range(len(values)):
+        components[roots[index]].add(index)
+
+    def size(component: set[int]) -> int:
+        return max(values[index].lifetime.bytes for index in component)
+
+    def first(component: set[int]) -> int:
+        return min(values[index].lifetime.defined_at for index in component)
+
+    by_definition = sorted(components.values(), key=lambda c: (first(c), -size(c)))
+    largest_first = sorted(components.values(), key=lambda c: (-size(c), first(c)))
+    original = _first_fit(by_definition, values, interference, alignments, limit, {}, 0)
+    seeds = [
+        seed
+        for seed in (
+            original,
+            _first_fit(largest_first, values, interference, alignments, limit, pinned, floor),
+        )
+        if seed is not None
+        and _satisfies(seed[0], values, interference, alignments, limit, pinned, floor)
+    ]
+    if seeds:
+        return min(seeds, key=lambda seed: seed[1])
+    if original is None:
+        raise AnalysisError("allocation: failed to construct a bounded feasible seed")
+    return original
 
 
 def find_aliases(
@@ -698,11 +780,15 @@ def solve_allocation(
         model.add_modulo_equality(0, address, alignment).with_name(f"align_{index}")
 
     persistent_end = 0
-    for address, item, alignment in zip(addresses, values, alignments, strict=True):
+    pinned: dict[int, int] = {}
+    for index, (address, item, alignment) in enumerate(
+        zip(addresses, values, alignments, strict=True)
+    ):
         if not item.lifetime.persistent:
             continue
         persistent_end = aligned(persistent_end, alignment)
         model.add(address == persistent_end)
+        pinned[index] = persistent_end
         persistent_end += item.lifetime.bytes
     for address, item in zip(addresses, values, strict=True):
         if not item.lifetime.persistent:
@@ -735,7 +821,13 @@ def solve_allocation(
         model.add_bool_or(left_before, right_before)
 
     address_hints, peak_hint = calculate_starts(
-        values, context.aliased, interference, alignments, limit
+        values,
+        context.aliased,
+        interference,
+        alignments,
+        limit,
+        pinned=pinned,
+        floor=persistent_end,
     )
     model.add(peak <= peak_hint)
     for address, suggested in zip(addresses, address_hints, strict=True):
