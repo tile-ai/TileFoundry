@@ -65,7 +65,7 @@ def _copy_access(call: "Call", ctx) -> AccessRelations:
     ``src``'s coordinates. Anything else is elementwise.
     """
     src, dst = ctx.type_of(call.args[0]), ctx.type_of(call.args[1])
-    if src.shape == dst.shape or not _is_copyable_shard(src, dst):
+    if not _is_copyable_shard(src, dst) or src.shape == dst.shape:
         return identity_relations(call, ctx)
     rank = len(src.shape)
     return iterating(
