@@ -121,6 +121,18 @@ def _replicated(shape: tuple, storage: str = "rmem"):
             id="not_rank_one",
         ),
         pytest.param(
+            (UnitType(), _replicated((1, 8)), _replicated((4,), "smem")),
+            (0,),
+            r"src is UnitType",
+            id="source_not_a_tensor",
+        ),
+        pytest.param(
+            (_split((128, 8), 0), _replicated((1, 8)), UnitType()),
+            (0,),
+            r"workspace is UnitType",
+            id="workspace_not_a_tensor",
+        ),
+        pytest.param(
             (_split((128, 8), 0), _replicated((1, 8)), _replicated((128,), "smem")),
             (0,),
             None,

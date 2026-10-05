@@ -343,12 +343,12 @@ def verify_operands(call, ctx) -> None:
             else param.pattern
         )
         if not matcher.match(pattern, value):
-            ctx.error(
-                call,
-                f"{label} {param.name} is {tuple(value.shape)} "
-                f"{value.dtype.name} storage={value.storage}: "
-                f"{printer.refusal(matcher.refusal)}",
+            held = (
+                f"{tuple(value.shape)} {value.dtype.name} storage={value.storage}"
+                if isinstance(value, TensorType)
+                else type(value).__name__
             )
+            ctx.error(call, f"{label} {param.name} is {held}: {printer.refusal(matcher.refusal)}")
     if not matcher.solve():
         ctx.error(call, f"{label}: {printer.refusal(matcher.refusal)}")
 

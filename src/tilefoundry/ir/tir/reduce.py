@@ -20,7 +20,7 @@ from tilefoundry.ir.pattern import (
 )
 from tilefoundry.ir.pattern import predicates as P
 from tilefoundry.ir.tir.sync import WARP_SIZE
-from tilefoundry.ir.types import DType, ShardLayout, StorageKind, UnitType
+from tilefoundry.ir.types import DType, ShardLayout, StorageKind, TensorType, UnitType
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
@@ -164,10 +164,15 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
     op = call.target
     if not isinstance(op.kind, ReduceKind):
         ctx.error(call, f"Reduce: kind must be ReduceKind enum, got {type(op.kind)}")
-    source = ctx.type_of(call.args[0])
-    if len(call.args) <= 2 or not isinstance(source.layout, ShardLayout):
+    if len(call.args) <= 2:
         return
-    workspace = ctx.type_of(call.args[2])
+    source, workspace = ctx.type_of(call.args[0]), ctx.type_of(call.args[2])
+    if not (
+        isinstance(source, TensorType)
+        and isinstance(source.layout, ShardLayout)
+        and isinstance(workspace, TensorType)
+    ):
+        return
     try:
         slots = _workspace_slots(source)
     except ValueError as error:
