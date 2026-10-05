@@ -563,6 +563,12 @@ class Copy(Op):
   - `src` declares `READ`; `dst` declares `WRITE`.
   - both operands are whole-byte tensors in gmem, smem, or rmem, with equal
     dtype. Their storages MAY be equal; same-storage copy is still a byte move.
+  - with equal storage, `src` and `dst` have equal shapes, or both carry a
+    `ShardLayout` with the same `layout`. Then both shapes regroup row-major onto
+    that per-thread buffer ([semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain)),
+    and `dst` receives each element of `src` at the same linear index: its access
+    relation walks `src` and reaches `dst` at the row-major reshape of each
+    coordinate.
   - `execution_mesh` is the mesh declaration shared by every rmem operand's
     `ShardLayoutPattern.mesh`. `rmem_layout` and `smem_layout` optionally state
     the author's landing arrangements.

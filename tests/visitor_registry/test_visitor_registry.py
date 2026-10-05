@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 
+import isl
 import pytest
 
 import tilefoundry
@@ -22,8 +23,23 @@ from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    Mesh,
+    ShardLayout,
+    TensorType,
+    Topology,
+    UnitType,
+)
+from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.access_relation import (
+    local_relations_of,
+    reached_elements,
+    relation_of,
+    relations_of,
+)
 from tilefoundry.visitor_registry.contexts import (
     CostContext,
     FunctionScope,
@@ -67,19 +83,62 @@ def test_every_real_op_has_typeinfer_value_and_cost() -> None:
     assert {name: gaps for name, gaps in missing.items() if gaps} == {}
 
 
-def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough() -> None:
+_THREAD = Topology("thread", 32)
+_BUFFER = ShardLayout(
+    Layout((8,), (1,)), (Broadcast(),), Mesh((_THREAD,), Layout((32,), (1,)), ("t",))
+)
+
+
+def _copied(shape: tuple, layout=None) -> TensorType:
+    return TensorType(shape=shape, dtype=DType.f32, layout=layout, storage="rmem")
+
+
+@pytest.mark.parametrize(
+    ("src", "dst", "reached"),
+    [
+        pytest.param(_copied((4,)), _copied((8,)), None, id="plain_shapes_differ"),
+        pytest.param(
+            _copied((2, 4), _BUFFER),
+            _copied((8,), _BUFFER),
+            "{ [d0, d1] -> [4d0 + d1] : 0 <= d0 < 2 and 0 <= d1 < 4 }",
+            id="one_buffer_rows_onto_a_line",
+        ),
+        pytest.param(
+            _copied((8,), _BUFFER),
+            _copied((2, 4), _BUFFER),
+            "{ [d0] -> [floor(d0/4), d0 mod 4] : 0 <= d0 < 8 }",
+            id="one_buffer_a_line_onto_rows",
+        ),
+    ],
+)
+def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough(
+    src, dst, reached
+) -> None:
     """``Evaluate(Copy, ...)`` dispatches verify on Op class.
 
-    ``Evaluate(Copy, ...)`` dispatches verify on Op class;
-    unregistered structural Stmts (Return / LetStmt) pass through silently.
+    A Copy between shapes that differ is refused unless both describe one
+    per-thread buffer; then ``dst`` is reached where the same buffer position
+    holds it, the row-major reshape of ``src``'s coordinates, and each thread
+    reads and writes that whole buffer once. Unregistered structural Stmts
+    (Return / LetStmt) pass through silently.
     """
-    src = Var(type=TensorType(shape=(4,), dtype=DType.f32, layout=None, storage="rmem"), name="src")
-    dst = Var(type=TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="rmem"), name="dst")
-    stmt = Evaluate(callable=Copy(), args=(src, dst))
+    src_var, dst_var = Var(type=src, name="src"), Var(type=dst, name="dst")
+    stmt = Evaluate(callable=Copy(), args=(src_var, dst_var))
 
-    ctx = VerifyContext()
-    with pytest.raises(VerifyError, match=r"^Copy: "):
-        VerifyVisitor(ctx).visit(stmt)
+    if reached is None:
+        with pytest.raises(VerifyError, match=r"^Copy: "):
+            VerifyVisitor(VerifyContext()).visit(stmt)
+    else:
+        VerifyVisitor(VerifyContext()).visit(stmt)
+        call = Call(type=UnitType(), target=Copy(), args=(src_var, dst_var))
+        written = relations_of(call, TypeInferContext()).inputs[1]
+        assert relation_of(written.pattern).is_equal(isl.map(reached))
+        held = local_relations_of(call, CostContext(topology_level="thread", topologies=(_THREAD,)))
+        read_at, written_at = (relation_of(boundary.pattern) for boundary in held.inputs)
+        assert read_at.is_equal(written_at), "each iteration reads and writes one position"
+        assert written_at.range().is_equal(isl.set("{ [p] : 0 <= p < 8 }"))
+        assert [reached_elements(boundary.pattern) * 4 for boundary in held.inputs] == [32, 32]
+        assert all(not boundary.pattern.values for boundary in (*held.inputs, *held.outputs))
 
     VerifyVisitor(VerifyContext()).visit(Return())
     VerifyVisitor(VerifyContext()).visit(
