@@ -555,59 +555,10 @@ def ceildiv(a, b) -> Expr:
   - `ceildiv(a, b)` MUST compose the existing add, subtract, and floor-divide
     operations; it does not introduce a distinct Op.
   - `ir.types.dim` MUST own dimension IR definitions, construction, and
-    structural predicates without depending on isl. `ir.isl_interop` MUST own
-    conversion between dimension and shape IR values and isl, affine
-    normalization, shape-domain construction, and conservative value-range
-    queries.
-  - Every IR-to-isl conversion in `ir.isl_interop` MUST be named
-    `XX_to_isl_YY`, where `YY` is the isl type it returns, and MUST take the one
-    parameter dictionary `IslParamValues` (isl parameter name to IR value). Every
-    isl-to-IR conversion MUST be named `isl_to_XX` and read the same dictionary.
-    A conversion MUST look a leaf up by object identity, reuse the name it
-    already has, and name a new leaf into the dictionary with a name no other
-    value or coordinate has. A new name MUST be the fixed prefix `p` and a
-    number, never read off the value's own name or a mesh axis name: the name
-    carries no meaning, and a reader MUST NOT expect a particular number. Two
-    distinct values sharing a `DimVar` name are two parameters. A parameter's
-    stated range MUST be a constraint on the returned isl object, not a second
-    record.
-  - `dim_to_isl_pw_aff(dim, values, *, coords)` MUST return one dimension
-    expression as an `isl.pw_aff`. `coords` maps the identity of a value that is
-    a coordinate of the space, such as an induction variable, to that dimension's
-    name; those values are dimensions of the result, not parameters.
-    `isl_to_dim` MUST decode an isl affine expression using `values`.
-    `shape_to_isl_set(shape, values)` MUST return one shape's coordinate set over
-    dimensions `d0` to `d{rank-1}`; every `Call` extent, dimension arithmetic
-    such as `P // 4` included, is one opaque parameter for the whole extent. A
-    negative static extent is an empty set and a boolean extent is a
-    `TypeError`.
-  - A conversion MUST raise `ValueError` when a name in `values` is also the
-    name of a coordinate of the result, rather than read that parameter as the
-    coordinate.
-  - `layout_to_isl_map(shape, layout, values, *, divided)` MUST return the map
-    from a value's logical coordinates to the flattened layout positions one
-    unit holds, by the regroup of
-    [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
-    `layout` MUST be a `ShardLayout` or a static-offset view of one; any other
-    layout is a `TypeError`. A `ShardLayout` whose `layout` is itself a
-    `ShardLayout`, directly or as the outer of a static-offset
-    `ComposedLayout(inner=None, ...)`, is placed layer by layer, each layer
-    once, the innermost layer's cuts outermost, as
-    [§2.1](#21-recursive-local-projection) projects it. `divided(layer)` names the mesh axes of that layer whose `Split` the
-    unit holds one part of; each such axis's coordinate is a `MeshCoord`
-    parameter named into `values`, ranging over the axis.
-  - `layout_to_isl_map` MUST raise `ValueError` for static logical and layout
-    sizes that differ, checked before a size-zero shape yields an empty map; a
-    regroup that needs a symbolic divisor or modulus; a divided position or
-    mesh extent that is not static; and mesh extents that do not divide their
-    position.
-  - `dim_range(value)` MUST return conservative half-open bounds from
-    `RangeMetadata` before attempting structural dimension arithmetic. A value
-    with neither stored nor structurally derivable bounds returns `None`.
-    Unsupported symbolic divisors remain an error rather than an unknown range.
-  - A bounded non-dimension `Expr` leaf in dimension arithmetic MUST become one
-    identity-deduplicated isl parameter carrying its stored bounds. An unbounded
-    leaf remains an unconstrained parameter for consumers that permit one.
+    structural predicates without depending on isl. Conversion between
+    dimension and shape IR values and isl, affine normalization, shape-domain
+    construction, and conservative value-range queries belong to
+    `ir.isl_interop` ([§11](#11-isl-interoperability)).
 
 ---
 
@@ -796,3 +747,64 @@ TensorType.umat_tensor(shape, dtype)   # ranked: a shape vector
   - An operand carrying `UMAT` MUST NOT be charged to a memory level by the
     residency of its own type alone; what charges it is where it is consumed
     ([analysis §1.2.1](./analysis.md#121-compute-cost)).
+
+---
+
+## 11. ISL interoperability
+
+`ir.isl_interop` is where IR values become isl objects and come back. Every
+analysis service that reasons about coordinates goes through it, so one value
+is one isl parameter everywhere and its name says nothing about what it is.
+The values a parameter stands for travel in one dictionary,
+`IslParamValues`, from isl parameter name to IR value.
+
+- constraints:
+  - Every IR-to-isl conversion in `ir.isl_interop` MUST be named
+    `XX_to_isl_YY`, where `YY` is the isl type it returns, and MUST take the one
+    parameter dictionary `IslParamValues` (isl parameter name to IR value). Every
+    isl-to-IR conversion MUST be named `isl_to_XX` and read the same dictionary.
+    A conversion MUST look a leaf up by object identity, reuse the name it
+    already has, and name a new leaf into the dictionary with a name no other
+    value or coordinate has. A new name MUST be the fixed prefix `p` and a
+    number, never read off the value's own name or a mesh axis name: the name
+    carries no meaning, and a reader MUST NOT expect a particular number. Two
+    distinct values sharing a `DimVar` name are two parameters. A parameter's
+    stated range MUST be a constraint on the returned isl object, not a second
+    record.
+  - `dim_to_isl_pw_aff(dim, values, *, coords)` MUST return one dimension
+    expression as an `isl.pw_aff`. `coords` maps the identity of a value that is
+    a coordinate of the space, such as an induction variable, to that dimension's
+    name; those values are dimensions of the result, not parameters.
+    `isl_to_dim` MUST decode an isl affine expression using `values`.
+    `shape_to_isl_set(shape, values)` MUST return one shape's coordinate set over
+    dimensions `d0` to `d{rank-1}`; every `Call` extent, dimension arithmetic
+    such as `P // 4` included, is one opaque parameter for the whole extent. A
+    negative static extent is an empty set and a boolean extent is a
+    `TypeError`.
+  - A conversion MUST raise `ValueError` when a name in `values` is also the
+    name of a coordinate of the result, rather than read that parameter as the
+    coordinate.
+  - `layout_to_isl_map(shape, layout, values, *, divided)` MUST return the map
+    from a value's logical coordinates to the flattened layout positions one
+    unit holds, by the regroup of
+    [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
+    `layout` MUST be a `ShardLayout` or a static-offset view of one; any other
+    layout is a `TypeError`. A `ShardLayout` whose `layout` is itself a
+    `ShardLayout`, directly or as the outer of a static-offset
+    `ComposedLayout(inner=None, ...)`, is placed layer by layer, each layer
+    once, the innermost layer's cuts outermost, as
+    [§2.1](#21-recursive-local-projection) projects it. `divided(layer)` names the mesh axes of that layer whose `Split` the
+    unit holds one part of; each such axis's coordinate is a `MeshCoord`
+    parameter named into `values`, ranging over the axis.
+  - `layout_to_isl_map` MUST raise `ValueError` for static logical and layout
+    sizes that differ, checked before a size-zero shape yields an empty map; a
+    regroup that needs a symbolic divisor or modulus; a divided position or
+    mesh extent that is not static; and mesh extents that do not divide their
+    position.
+  - `dim_range(value)` MUST return conservative half-open bounds from
+    `RangeMetadata` before attempting structural dimension arithmetic. A value
+    with neither stored nor structurally derivable bounds returns `None`.
+    Unsupported symbolic divisors remain an error rather than an unknown range.
+  - A bounded non-dimension `Expr` leaf in dimension arithmetic MUST become one
+    identity-deduplicated isl parameter carrying its stored bounds. An unbounded
+    leaf remains an unconstrained parameter for consumers that permit one.

@@ -571,6 +571,11 @@ class MemoryLevelPeak:
     `AnalysisError` and leave no record. The solver MUST stop at its first
     feasible assignment rather than prove a minimum. Capacity MUST NOT restrict
     the address space.
+  - A seed is a complete candidate placement that analysis builds for itself
+    before solving: a starting byte address for every placed value and the peak
+    byte extent that placement reaches. It is not an input and not a random
+    seed. The solver takes its addresses as a hint and its peak as an upper
+    bound on the search; with no seed it solves from nothing.
   - A seed that hints or bounds the search MUST meet every address constraint
     the solver states: one address per alias component, alignment, disjoint
     addresses for interfering values, pinned persistent addresses, and the

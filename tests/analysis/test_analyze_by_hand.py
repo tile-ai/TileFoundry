@@ -7,7 +7,7 @@ from dataclasses import replace
 import isl
 import pytest
 
-from tests.fixtures.placed import persistent_gemm_tiled as tiled
+from tests.fixtures.placed import persistent_gemm_tiled
 from tests.fixtures.placed.gemm_schedules import (
     WAVE_BK,
     WAVE_BM,
@@ -464,18 +464,23 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression(
         for call in data["calls"]
         if [operand["type"] for operand in call["memory"]["operands"]]
         == [
-            f"bf16[{tiled.BM},{tiled.BK}] smem",
-            f"bf16[{tiled.BK},{tiled.BN}] smem",
-            f"bf16[{tiled.BM},{tiled.BN}] smem",
+            f"bf16[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BK}] smem",
+            f"bf16[{persistent_gemm_tiled.BK},{persistent_gemm_tiled.BN}] smem",
+            f"bf16[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BN}] smem",
         ]
     )
-    tile_bytes = tiled.BM * tiled.BN * 2
+    tile_bytes = persistent_gemm_tiled.BM * persistent_gemm_tiled.BN * 2
     assert product["memory"]["buffer_bytes"] == tile_bytes
     assert product["memory"]["operands"][-1]["write"] == tile_bytes
     flops = product["compute-cost"]["flops"]["bf16"]["per_unit"]
-    assert flops == [2 * tiled.BM * tiled.BN * tiled.BK]
-    operands = (tiled.BM * tiled.BK * 2, tiled.BK * tiled.BN * 2)
-    widened = tiled.BM * tiled.BN * 4
+    assert flops == [
+        2 * persistent_gemm_tiled.BM * persistent_gemm_tiled.BN * persistent_gemm_tiled.BK
+    ]
+    operands = (
+        persistent_gemm_tiled.BM * persistent_gemm_tiled.BK * 2,
+        persistent_gemm_tiled.BK * persistent_gemm_tiled.BN * 2,
+    )
+    widened = persistent_gemm_tiled.BM * persistent_gemm_tiled.BN * 4
     largest_live = max(sum(operands) + tile_bytes, tile_bytes + widened)
     peaks = {peak["memory_level"]: peak["peak_bytes"] for peak in memory["peaks"]}
     if seeded:

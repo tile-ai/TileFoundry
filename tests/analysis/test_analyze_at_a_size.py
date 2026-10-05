@@ -117,7 +117,7 @@ EXPECTED_MEMORY_PEAKS = {
     "gemm_schedules.Gemm_MNK_NT128x128x64_w17x8.gemm[static]": {
         "gmem": 52_428_800,
         "rmem": 32_768,
-        "smem": 65_536,
+        "smem": 128 * 64 * 2 + 64 * 128 * 2 + 128 * 128 * 2,
     },
     "gemm_schedules.Gemm_MK_NN64x128x32_w1x132.gemm[static]": {
         "gmem": 3_244_032,

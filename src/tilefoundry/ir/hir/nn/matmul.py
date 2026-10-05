@@ -84,21 +84,6 @@ def _elements(shape: tuple) -> int:
     return counted
 
 
-def _unsharded_layout(lhs: TensorType, out_shape: tuple):
-    """The result's layout when no operand is split or partial.
-
-    The result is not the lhs: it has its own shape, so it takes the lhs's
-    mesh and replicated attributes over a layout of that shape rather than the
-    lhs's domain, which describes a different number of elements.
-    """
-    held = shard_layout_of(lhs.layout) or lhs.layout
-    if isinstance(held, ShardLayout):
-        return canonical_shard_layout(out_shape, held.mesh, held.attrs)
-    if held is None or tuple(held.shape) == tuple(out_shape):
-        return held
-    return Layout(shape=out_shape, strides=try_compact_major(out_shape))
-
-
 @register_typeinfer(MatMul)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     lhs = ctx.type_of(call.args[0])
@@ -143,7 +128,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
     except ValueError as e:
         ctx.error(call, str(e))
-    layout = shard if shard is not None else _unsharded_layout(lhs, out_shape)
+    layout = shard
+    if layout is None:
+        held = shard_layout_of(lhs.layout) or lhs.layout
+        if isinstance(held, ShardLayout):
+            layout = canonical_shard_layout(out_shape, held.mesh, held.attrs)
+        elif held is None or tuple(held.shape) == tuple(out_shape):
+            layout = held
+        else:
+            layout = Layout(shape=out_shape, strides=try_compact_major(out_shape))
     storage = resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
     return TensorType(shape=out_shape, dtype=lhs.dtype, layout=layout, storage=storage)
 

@@ -87,7 +87,7 @@ relation.
 ### 2.1 IR to isl conversion
 
 Every analysis service converts IR values to isl through the functions that
-[types §4](./types.md#4-dim--symbolic-shape-dimensions) owns, and every
+[types §11](./types.md#11-isl-interoperability) owns, and every
 boundary carries what its parameters stand for in the `values` of its
 `AccessRelation` ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation)).
 Both use the one `IslParamValues` dictionary, from isl parameter name to IR value.
@@ -116,7 +116,7 @@ Both use the one `IslParamValues` dictionary, from isl parameter name to IR valu
 - The current interpretation is canonical regroup: linearize first
   along the logical shape's row-major order, then reinterpret along
   the layout domain's row-major order.
-- `layout_to_isl_map` ([types §4](./types.md#4-dim--symbolic-shape-dimensions))
+- `layout_to_isl_map` ([types §11](./types.md#11-isl-interoperability))
   implements this regroup for a `ShardLayout`. A logical axis whose extent is
   the product of consecutive flattened layout positions maps onto them, so a
   symbolic extent stays representable; any other regroup goes through the flat
