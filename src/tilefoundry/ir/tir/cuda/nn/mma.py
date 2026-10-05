@@ -31,8 +31,10 @@ from tilefoundry.visitor_registry.contexts import TypeInferContext
 from .mma_atom import AtomPattern, FromAtom, MmaAtom, physical_frames_match
 from .sm80_mma import Mma as _Sm80Mma
 from .wgmma import Wgmma
+from .wgmma_fp8 import WgmmaFp8
 
 _FP_ACC_WIDEN = {
+    (DType.fp8e4m3, DType.f32),
     (DType.f16, DType.f32),
     (DType.bf16, DType.f32),
     (DType.f16, DType.f16),
@@ -68,6 +70,11 @@ class TiledMma(Op):
             attribute="atom",
         ),
         OpCapability(
+            WgmmaFp8.capability,
+            declaration=WgmmaFp8,
+            attribute="atom",
+        ),
+        OpCapability(
             _Sm80Mma.capability,
             declaration=_Sm80Mma,
             attribute="atom",
@@ -88,7 +95,7 @@ class TiledMma(Op):
     atom = ParamDef(
         kind="attribute",
         annotation=MmaAtom,
-        pattern=AtomPattern(Wgmma, _Sm80Mma),
+        pattern=AtomPattern(Wgmma, WgmmaFp8, _Sm80Mma),
     )
     execution_mesh = ParamDef(
         kind="attribute",
@@ -131,7 +138,10 @@ def operand_relations(
 
 @register_schedule_eval(TiledMma)
 def _eval_scheduled_mma(ctx):
+    """``acc + lhs @ rhs``; FP8 operands multiply their exact f32 values."""
     acc, lhs, rhs = (arg.data for arg in ctx.args)
+    if lhs.dtype == torch.float8_e4m3fn:
+        lhs, rhs = lhs.float(), rhs.float()
     return TensorValue(data=acc + torch.matmul(lhs, rhs), type=ctx.result_type)
 
 

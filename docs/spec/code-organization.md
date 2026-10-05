@@ -147,8 +147,8 @@ compilation target nests as `ir/{dialect}/{target}/{category}/<name>.py`;
 target-neutral abstractions stay at `ir/{dialect}/{category}/`. For
 example the whole MMA surface is target-owned — `mma.py` defines the `TiledMma`
 op, `mma_atom.py` defines `MmaAtom` / `AtomPattern`, and `sm80_mma.py` /
-`wgmma.py` define the CUDA instruction declarations. All four live under
-`ir/tir/cuda/nn/`.
+`wgmma.py` / `wgmma_fp8.py` define the CUDA instruction declarations. All five
+live under `ir/tir/cuda/nn/`.
 The backend-bound construction stays in TIR: HIR is the checking reference
 side, and carrying the instruction name in that reference would make two GPU
 targets require different HIR references. (`codegen/` and `runtime/` are

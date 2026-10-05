@@ -20,6 +20,8 @@ target nvidia.h200_sxm
                   n=64, form=SS
                   n=128, form=SS
                   n=256, form=SS
+    refused     T.cuda.sm90.WgmmaFp8: lhs dtype=bf16, reads dtype=fp8e4m3
+    refused     T.cuda.sm90.WgmmaFp8: rhs dtype=bf16, reads dtype=fp8e4m3
     refused     T.cuda.sm80.Mma: lhs storage=smem, reads storage=rmem
     refused     T.cuda.sm80.Mma: rhs storage=smem, reads storage=rmem
   v6:37  tf.cast  per cta  x=Tensor[(128, 256), "bf16", "smem"]  result=Tensor[(128, 256), "f32", "smem"]

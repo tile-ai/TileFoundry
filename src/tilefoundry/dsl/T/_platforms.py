@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Form, Major, Wgmma
+from tilefoundry.ir.tir.cuda.nn.wgmma_fp8 import WgmmaFp8
 
 
 class _Sm80Namespace:
@@ -12,6 +13,7 @@ class _Sm80Namespace:
 
 class _Sm90Namespace:
     Wgmma = Wgmma
+    WgmmaFp8 = WgmmaFp8
     Form = Form
     Major = Major
 

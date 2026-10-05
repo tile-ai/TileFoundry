@@ -977,10 +977,14 @@ class MmaAtom:
     for an instruction family does not itself state an engine rate.
 
 The public declarations are `T.cuda.sm80.Mma()` (BF16 `16x8x16`, F32
-accumulator, register A/B/C over one warp) and
+accumulator, register A/B/C over one warp),
 `T.cuda.sm90.Wgmma(n=..., form=..., a_major=..., mesh=...)` (BF16
-`64 x n x 16` over one warpgroup). `Form` and `Major` live beside `Wgmma`
-under `T.cuda.sm90`.
+`64 x n x 16` over one warpgroup), and `T.cuda.sm90.WgmmaFp8(n=..., mesh=...)`
+(e4m3 `64 x n x 32` over one warpgroup, F32 accumulator). `WgmmaFp8` reads A
+and B from shared memory, both K-major: B's `(K, n)` tile runs contiguously
+along K, which is how a row-major `(N, K)` weight presents its `(K, N)` view.
+Its schedule evaluation multiplies the operands' exact f32 values. `Form` and
+`Major` live beside `Wgmma` under `T.cuda.sm90`.
 
 ##### Calling convention
 

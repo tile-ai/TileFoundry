@@ -14,7 +14,11 @@ from tilefoundry.target import Target
 def _family_capability(
     capabilities: tuple[OpCapability, ...],
 ) -> str | tuple[str, ...] | None:
-    names = tuple(capability.name for capability in capabilities if capability.name is not None)
+    names = tuple(
+        dict.fromkeys(
+            capability.name for capability in capabilities if capability.name is not None
+        )
+    )
     if not names:
         return None
     return names[0] if len(names) == 1 else names

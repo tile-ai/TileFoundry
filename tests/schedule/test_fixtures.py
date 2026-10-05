@@ -59,6 +59,7 @@ from tilefoundry.ir.tir.cuda.memory.copy_async_tensor import CopyAsyncTensor
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
+from tilefoundry.ir.tir.cuda.nn.wgmma_fp8 import WgmmaFp8
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.ir.types import (
@@ -94,6 +95,7 @@ PLAIN_DIMS = {"chunk_rmsnorm": {"chunks": 16}}
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
+WGMMA_FP8_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "WgmmaFp8.facts.txt"
 CANDIDATE_GOLDEN = (
     Path(__file__).parents[1]
     / "fixtures"
@@ -135,6 +137,7 @@ SMEM_GOLDEN = {
     "wgmma_cp_async_loads": 6_144,
     "wgmma_cta_grid_4x17": 13_824,
     "wgmma_explicit_windows": 6_144,
+    "wgmma_fp8_k_major": 6_144,
     "wgmma_k_slices_of_wide_run": 12_288,
     "wgmma_one_tile_of_larger_output": 6_144,
     "wgmma_repeat_along_k": 36_864,
@@ -178,6 +181,12 @@ RMEM_EXPECTED = {
         "thread@0:64#0": _RmemExpectation(1_280, "parent envelope of accumulator/fragments"),
     },
     "wgmma_a_k_major": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_fp8_k_major": {
         "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
         "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
         "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
@@ -702,6 +711,23 @@ def test_schedule_mma_evaluates_like_matmul_plus_accumulator() -> None:
     assert torch.equal(scheduled, acc + product)
 
 
+def test_schedule_fp8_mma_evaluates_the_operands_exact_f32_product() -> None:
+    acc_type = TensorType((64, 32), DType.f32, None, StorageKind.RMEM)
+    lhs_type = TensorType((64, 32), DType.fp8e4m3, None, StorageKind.SMEM)
+    rhs_type = TensorType((32, 32), DType.fp8e4m3, None, StorageKind.SMEM)
+    acc = torch.arange(64 * 32, dtype=torch.float32).reshape(64, 32)
+    lhs = ((torch.arange(64 * 32).reshape(64, 32) % 7) / 4).to(torch.float8_e4m3fn)
+    rhs = ((torch.arange(32 * 32).reshape(32, 32) % 5) / 8).to(torch.float8_e4m3fn)
+
+    scheduled = _evaluate_call(
+        ScheduleOp(op=TiledMma(atom=WgmmaFp8(n=32))),
+        ((acc_type, acc), (lhs_type, lhs), (rhs_type, rhs)),
+        acc_type,
+    )
+
+    assert torch.equal(scheduled, acc + lhs.float() @ rhs.float())
+
+
 def test_single_issue_schedule_preserves_instruction_relations() -> None:
     schedule = _copy_schedule_call(repeat=(1,), order=(0,))
     source = schedule.args[0]
@@ -886,6 +912,28 @@ def test_schedule_facts_writes_wgmma_declaration(
     )
     assert capsys.readouterr() == ("", "")
     assert out.read_bytes() == WGMMA_FACTS.read_bytes()
+
+
+def test_schedule_facts_writes_fp8_wgmma_declaration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "facts.txt"
+
+    assert (
+        cli_main(
+            [
+                "schedule",
+                "facts",
+                "T.cuda.sm90.WgmmaFp8",
+                "--target",
+                "nvidia.h200_sxm",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr() == ("", "")
+    assert out.read_bytes() == WGMMA_FP8_FACTS.read_bytes()
 
 
 def test_schedule_facts_lists_target_instructions_as_text_and_json(
