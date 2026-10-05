@@ -16,6 +16,7 @@ from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.rank import Rank
 from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
+from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.ir.types.layout import EMPTY_LAYOUT
 from tilefoundry.ir.types.storage import StorageKind
@@ -52,21 +53,26 @@ COST_CASES = [
 def test_shape_metadata_cost(case):
     """Metadata reads no element and moves nothing; a template's elements are not read.
 
-    Each boundary of a metadata Op is an empty relation at the rank of the value
-    it describes: the result's own rank, not the operand's, on the output side.
+    Each boundary is a relation at the rank of the value it describes: the
+    result's own rank, not the operand's, on the output side. Every input is
+    reached nowhere; a metadata result is reached nowhere, and a filled one at
+    every coordinate it has, once.
     """
     run_cost_case(case)
-    if not isinstance(case.op, (Rank, ShapeOf)):
-        return
     args = tuple(Var(type=type_, name=f"x{i}") for i, type_ in enumerate(case.inputs))
     call = Call(type=case.inputs[0], target=case.op, args=args)
     call = replace(call, type=TypeInferVisitor().visit(call, TypeInferContext()))
     relations = relations_of(call, TypeInferContext())
     values = (*case.inputs, call.type)
     for boundary, value in zip((*relations.inputs, *relations.outputs), values, strict=True):
-        relation = relation_of(boundary.pattern)
-        assert relation.dim(isl.dim_type.OUT) == len(value.shape)
-        assert relation.is_empty()
+        assert relation_of(boundary.pattern).dim(isl.dim_type.OUT) == len(value.shape)
+    for boundary in relations.inputs:
+        assert relation_of(boundary.pattern).is_empty()
+    (written,) = (relation_of(boundary.pattern) for boundary in relations.outputs)
+    if isinstance(case.op, FullLike):
+        assert written.is_equal(shape_to_isl_set(tuple(call.type.shape), {}).identity())
+    else:
+        assert written.is_empty()
 
 
 def test_shape_metadata_uses_runtime_shape_and_host_types() -> None:
