@@ -490,7 +490,9 @@ def _structure(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(FullLike)
 def _full_like(call: Call, ctx: CostContext) -> Cost:
-    return Cost({}, _traffic(_input_types(call, ctx), _output_type(call, ctx)))
+    """The template gives its Type and none of its elements; one full write."""
+    output = _output_type(call, ctx)
+    return Cost({}, (TrafficBytes(), TrafficBytes(write=tensor_bytes(output))))
 
 
 @register_cost_evaluator(Arange)

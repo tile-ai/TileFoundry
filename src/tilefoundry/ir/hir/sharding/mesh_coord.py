@@ -16,7 +16,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    measures_without_reading,
+    readnone_relations,
     register_access_relation,
 )
 from tilefoundry.visitor_registry.contexts import TypeInferResults
@@ -78,7 +78,7 @@ def _eval_mesh_coord(ctx):
     )
 
 
-register_access_relation(MeshCoord)(measures_without_reading)
+register_access_relation(MeshCoord)(readnone_relations(lambda types: ()))
 
 
 __all__ = ["MeshCoord"]

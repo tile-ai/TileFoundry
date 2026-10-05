@@ -1296,33 +1296,37 @@ def matmul_relations(
     )
 
 
-def measures_without_reading(call, ctx) -> AccessRelations:
-    """An Op that answers from a value's Type rather than from its elements.
+def unread_access(domain_rank: int, rank: int) -> "AffineAccess":
+    """No coordinate of a rank-*rank* value is reached from a rank-*domain_rank* space."""
+    domain = ", ".join(f"d{index}" for index in range(domain_rank))
+    reads = ", ".join(f"i{index}" for index in range(rank))
+    return AffineAccess(isl.map(f"{{ [{domain}] -> [{reads}] : 1 = 0 }}"))
 
-    A rank, a shape, a name for the same value at another level: the answer is
-    already in the Type, so no coordinate is read. The relation says that -- an
-    empty map, nothing crossing -- rather than an identity claiming a read the
-    Op never performs.
+
+def readnone_relations(result_shape: Callable[[tuple], tuple]) -> Callable[..., AccessRelations]:
+    """Handler for an Op that answers from its operands' Types, not their elements.
+
+    A rank, a shape, a view of the same value: the answer is in the Types, so no
+    coordinate is read and nothing crosses. *result_shape* derives the result's
+    shape from the operand Types alone, because type inference asks this before
+    the Call has a Type of its own.
     """
-    result = ctx.type_of(call.args[0]) if call.args else None
-    out_rank = len(result.shape) if hasattr(result, "shape") else 0
 
-    def _empty(arg) -> "AffineAccess":
-        type_ = ctx.type_of(arg)
-        in_rank = len(type_.shape) if hasattr(type_, "shape") else 0
-        reads = ", ".join(f"i{index}" for index in range(in_rank))
-        domain = ", ".join(f"d{index}" for index in range(out_rank))
-        return AffineAccess(isl.map(f"{{ [{domain}] -> [{reads}] : 1 = 0 }}"))
-
-    return iterating(
-        getattr(result, "shape", ()) or (),
-        AccessRelations(
-            inputs=tuple(BoundaryRelation(_empty(arg)) for arg in call.args),
-            outputs=(
-                BoundaryRelation(_empty(call.args[0]) if call.args else identity_access(out_rank)),
+    def _handler(call, ctx) -> AccessRelations:
+        types = tuple(ctx.type_of(arg) for arg in call.args)
+        shape = tuple(result_shape(types))
+        return iterating(
+            shape,
+            AccessRelations(
+                inputs=tuple(
+                    BoundaryRelation(unread_access(len(shape), len(getattr(type_, "shape", ()))))
+                    for type_ in types
+                ),
+                outputs=(BoundaryRelation(unread_access(len(shape), len(shape))),),
             ),
-        ),
-    )
+        )
+
+    return _handler
 
 
 def linearized_view(out_shape: tuple, in_shape: tuple) -> "AffineAccess":
@@ -1418,6 +1422,7 @@ __all__ = [
     "boundary_maps",
     "projected",
     "projected_axes",
+    "readnone_relations",
     "leaves_of",
     "reached_elements",
     "reached_leaves",
@@ -1429,5 +1434,6 @@ __all__ = [
     "settled",
     "shape_from_relation",
     "static_bytes",
+    "unread_access",
     "window_source",
 ]

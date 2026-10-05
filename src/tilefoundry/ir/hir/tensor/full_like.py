@@ -19,8 +19,12 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
+    AccessRelations,
+    BoundaryRelation,
+    identity_access,
+    iterating,
     register_access_relation,
+    unread_access,
 )
 
 
@@ -44,4 +48,15 @@ def _eval_full_like(ctx):
     return TensorValue(data=data, type=ctx.result_type)
 
 
-register_access_relation(FullLike)(identity_relations)
+@register_access_relation(FullLike)
+def _full_like_access(call: "Call", ctx) -> AccessRelations:
+    """The template's Type is read and none of its elements; every result element is written."""
+    shape = tuple(ctx.type_of(call.args[0]).shape)
+    rank = len(shape)
+    return iterating(
+        shape,
+        AccessRelations(
+            inputs=(BoundaryRelation(unread_access(rank, rank)),),
+            outputs=(BoundaryRelation(identity_access(rank)),),
+        ),
+    )

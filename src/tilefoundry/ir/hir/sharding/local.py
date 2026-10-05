@@ -12,7 +12,7 @@ from tilefoundry.ir.types.shard_layout import ShardLayout, Split
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    measures_without_reading,
+    readnone_relations,
     register_access_relation,
 )
 
@@ -24,26 +24,30 @@ class Local(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
 
 
+def _local_shape(x_ty: TensorType) -> tuple:
+    """The extents one participant holds: each static Split extent divided by its mesh."""
+    layout = x_ty.layout
+    if not isinstance(layout, ShardLayout):
+        return tuple(x_ty.shape)
+    new_shape = list(x_ty.shape)
+    for mesh_axis, attr in enumerate(layout.attrs):
+        if isinstance(attr, Split):
+            mesh_extent = flatten(layout.mesh.layout).shape[mesh_axis]
+            v = static_dim_value(new_shape[attr.axis])
+            if v is not None:
+                new_shape[attr.axis] = v // mesh_extent
+    return tuple(new_shape)
+
+
 @register_typeinfer(Local)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     if not isinstance(x_ty.layout, ShardLayout):
         ctx.error(call, "Local() input must have ShardLayout")
-
-    sl = x_ty.layout
-    new_shape = list(x_ty.shape)
-    for mesh_axis, attr in enumerate(sl.attrs):
-        if isinstance(attr, Split):
-            mesh_extent = flatten(sl.mesh.layout).shape[mesh_axis]
-            dim = new_shape[attr.axis]
-            v = static_dim_value(dim)
-            if v is not None:
-                new_shape[attr.axis] = v // mesh_extent
-
     return TensorType(
-        shape=tuple(new_shape),
+        shape=_local_shape(x_ty),
         dtype=x_ty.dtype,
-        layout=sl.layout,
+        layout=x_ty.layout.layout,
         storage=x_ty.storage,
     )
 
@@ -60,4 +64,4 @@ def _eval_local(ctx):
     return ctx.args[0]
 
 
-register_access_relation(Local)(measures_without_reading)
+register_access_relation(Local)(readnone_relations(lambda types: _local_shape(types[0])))

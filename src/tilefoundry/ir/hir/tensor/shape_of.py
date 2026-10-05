@@ -12,7 +12,7 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    measures_without_reading,
+    readnone_relations,
     register_access_relation,
 )
 
@@ -35,4 +35,4 @@ def _eval_shape_of(ctx):
     return TensorValue(data=data, type=ctx.result_type)
 
 
-register_access_relation(ShapeOf)(measures_without_reading)
+register_access_relation(ShapeOf)(readnone_relations(lambda types: (len(types[0].shape),)))

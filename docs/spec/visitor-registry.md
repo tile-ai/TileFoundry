@@ -400,6 +400,14 @@ def register_access_relation(op_cls: type): ...
     and holds every boundary to the iterations this participant performs. A
     value nobody divided is addressed whole by every participant, so leaving one
     boundary unheld would charge one participant what all of them read.
+  - A boundary whose value is not read or written at any coordinate MUST be
+    stated as an empty relation at that value's own rank; `unread_access`
+    builds one. An Op whose result follows from its operands' Types alone --
+    a rank, a shape, a view of the same value -- MUST register
+    `readnone_relations(result_shape)`, where `result_shape` derives the
+    result's shape from the operand Types; every boundary of it is then empty
+    at the rank of the value it describes, the result's own rank on the output
+    side.
 
 ## 5. Instance 2 — `verify`
 

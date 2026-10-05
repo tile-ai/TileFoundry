@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import isl
+
 from tilefoundry import func, module
 from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.analysis.api import analyze
@@ -11,7 +13,8 @@ from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.types import Layout
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
-from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry.visitor_registry.access_relation import relation_of, relations_of
+from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 
 
 @module(
@@ -36,6 +39,12 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
     )
     assert local.type.shape == (2,)
     assert isinstance(local.type.layout, Layout)
+    relations = relations_of(local, TypeInferContext())
+    values = (local.args[0].type, local.type)
+    for boundary, value in zip((*relations.inputs, *relations.outputs), values, strict=True):
+        relation = relation_of(boundary.pattern)
+        assert relation.dim(isl.dim_type.OUT) == len(value.shape)
+        assert relation.is_empty(), "a view of the same value reads and writes no element"
 
     for topology_level in ("cta", "thread"):
         result = analyze(
