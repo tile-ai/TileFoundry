@@ -56,6 +56,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     pos_ty = ctx.type_of(call.args[4])
     if not q_ty.shape or not k_ty.shape:
         ctx.error(call, "q and k must be at least rank-1")
+    if len(q_ty.shape) != len(k_ty.shape):
+        ctx.error(call, f"q rank {len(q_ty.shape)} != k rank {len(k_ty.shape)}")
     head_dim_q = q_ty.shape[-1]
     head_dim_k = k_ty.shape[-1]
     if isinstance(head_dim_q, int) and head_dim_q % 2 != 0:

@@ -2,9 +2,9 @@
 
 The rotated (q, k) value oracle lives in the model References: every corpus
 decoder applies ``rope`` on its decode step, so a wrong rotation fails there.
-What those models never build is an odd or mismatched head_dim, or a
-``Partial``-carrying operand -- ``sum`` commutes with the rotation because it is
-linear in q and k, ``max`` does not.
+What those models never build is an odd or mismatched head_dim, a q and k of
+different ranks, or a ``Partial``-carrying operand -- ``sum`` commutes with the
+rotation because it is linear in q and k, ``max`` does not.
 """
 
 from __future__ import annotations
@@ -55,6 +55,12 @@ CASES = [
         RoPE(),
         _rope_inputs((1, 32, 128), (1, 4, 64)),
         ExpectedError(match="!= k head_dim"),
+    ),
+    TypeInferCase(
+        "mismatched_ranks",
+        RoPE(),
+        _rope_inputs((1, 32, 128), (32, 128)),
+        ExpectedError(match="q rank 3 != k rank 2"),
     ),
     TypeInferCase(
         "partial_sum_q_passes",
