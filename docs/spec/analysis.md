@@ -575,7 +575,8 @@ class MemoryLevelPeak:
     before solving: a starting byte address for every placed value and the peak
     byte extent that placement reaches. It is not an input and not a random
     seed. The solver takes its addresses as a hint and its peak as an upper
-    bound on the search; with no seed it solves from nothing.
+    bound on the search. With no seed it solves the same model, every
+    constraint kept, without those hints or that seed-derived upper bound.
   - A seed that hints or bounds the search MUST meet every address constraint
     the solver states: one address per alias component, alignment, disjoint
     addresses for interfering values, pinned persistent addresses, and the

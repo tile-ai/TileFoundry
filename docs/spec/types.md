@@ -753,10 +753,12 @@ TensorType.umat_tensor(shape, dtype)   # ranked: a shape vector
 ## 11. ISL interoperability
 
 `ir.isl_interop` is where IR values become isl objects and come back. Every
-analysis service that reasons about coordinates goes through it, so one value
-is one isl parameter everywhere and its name says nothing about what it is.
-The values a parameter stands for travel in one dictionary,
-`IslParamValues`, from isl parameter name to IR value.
+analysis service that reasons about coordinates goes through it. Within one
+conversion or normalization context -- one `IslParamValues` dictionary, or one
+Op's relations lined up by `iterating` -- one value is represented by one isl
+parameter; two independent dictionaries may name the same value differently,
+and a parameter's name says nothing about what it is. The values a parameter
+stands for travel in that dictionary, from isl parameter name to IR value.
 
 - constraints:
   - Every IR-to-isl conversion in `ir.isl_interop` MUST be named
