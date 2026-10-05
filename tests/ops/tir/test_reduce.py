@@ -5,6 +5,7 @@ See [runtime §2.6](docs/spec/runtime.md#26-cudaops).
 
 from __future__ import annotations
 
+import isl
 import pytest
 import torch
 
@@ -12,8 +13,9 @@ import tilefoundry
 import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.core import Var, VerifyError
+from tilefoundry.ir.core import Call, Var, VerifyError
 from tilefoundry.ir.core.kinds import ReduceKind
+from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.reduce import Reduce
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
@@ -26,10 +28,14 @@ from tilefoundry.ir.types import (
     Split,
     Swizzle,
     Topology,
+    UnitType,
     make_tensor_type,
 )
 from tilefoundry.ir.types.shard_layout import Broadcast
+from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.visitor_registry.access_relation import relation_of, relations_of
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
@@ -53,7 +59,7 @@ def _sharded(
     )
 
 
-def _pf(*types) -> PrimFunction:
+def _pf(*types, axes: tuple = (0,)) -> PrimFunction:
     args = tuple(Var(type=type_, name=f"a{index}") for index, type_ in enumerate(types))
     return PrimFunction(
         name="fn",
@@ -61,7 +67,7 @@ def _pf(*types) -> PrimFunction:
         body=Sequential(
             body=(
                 Evaluate(
-                    callable=Reduce(axes=(0,), keepdim=True, kind=ReduceKind.MEAN),
+                    callable=Reduce(axes=axes, keepdim=True, kind=ReduceKind.MEAN),
                     args=args,
                 ),
                 Return(),
@@ -70,9 +76,82 @@ def _pf(*types) -> PrimFunction:
     )
 
 
-def test_refuses_a_workspace_outside_shared_memory() -> None:
-    with pytest.raises(VerifyError, match=r"workspace .* does not match StorageKind.SMEM"):
-        verify_prim_function(_pf(_sharded(8), _sharded(1), _sharded(4, storage="rmem")))
+_THREADS_128 = Mesh((Topology("thread", 128),), Layout((128,), (1,)), ("t",))
+
+
+def _split(shape: tuple, axis: int):
+    """A source cut along *axis* over the 128-thread mesh."""
+    strides = (shape[1], 1)
+    return make_tensor_type(
+        shape,
+        DType.f32,
+        storage="rmem",
+        layout=ShardLayout(Layout(shape, strides), (Split(axis),), _THREADS_128),
+    )
+
+
+def _replicated(shape: tuple, storage: str = "rmem"):
+    return make_tensor_type(
+        shape,
+        DType.f32,
+        storage=storage,
+        layout=ShardLayout(Layout(shape, compact_row_major(shape)), (Broadcast(),), _THREADS_128),
+    )
+
+
+@pytest.mark.parametrize(
+    ("operands", "axes", "refused"),
+    [
+        pytest.param(
+            (_sharded(8), _sharded(1), _sharded(4, storage="rmem")),
+            (0,),
+            r"workspace .* does not match StorageKind.SMEM",
+            id="outside_shared_memory",
+        ),
+        pytest.param(
+            (_split((128, 8), 0), _replicated((1, 8)), _replicated((2,), "smem")),
+            (0,),
+            r"workspace \(2,\) must be rank-1 with at least 4 slots",
+            id="fewer_slots_than_warps",
+        ),
+        pytest.param(
+            (_split((128, 8), 0), _replicated((1, 8)), _replicated((2, 2), "smem")),
+            (0,),
+            r"workspace \(2, 2\) must be rank-1",
+            id="not_rank_one",
+        ),
+        pytest.param(
+            (_split((128, 8), 0), _replicated((1, 8)), _replicated((128,), "smem")),
+            (0,),
+            None,
+            id="split_axis_0_wider_workspace",
+        ),
+        pytest.param(
+            (_split((8, 128), 1), _replicated((8, 1)), _replicated((4,), "smem")),
+            (1,),
+            None,
+            id="split_axis_1",
+        ),
+    ],
+)
+def test_a_workspace_holds_one_slot_per_warp(operands, axes, refused) -> None:
+    """A workspace is shared memory with one slot per warp of the source's mesh.
+
+    What every source coordinate reaches there is those slots, all of them and
+    no others, however wide the workspace was allocated: which warp posts its
+    partial where is the runtime's choice, not a coordinate of the source.
+    """
+    function = _pf(*operands, axes=axes)
+    if refused is not None:
+        with pytest.raises(VerifyError, match=refused):
+            verify_prim_function(function)
+        return
+    verify_prim_function(function)
+    (statement,) = (stmt for stmt in function.body.body if isinstance(stmt, Evaluate))
+    call = Call(type=UnitType(), target=statement.callable, args=statement.args)
+    reached = relation_of(relations_of(call, TypeInferContext()).inputs[2].pattern)
+    source = shape_to_isl_set(tuple(operands[0].shape), {})
+    assert reached.is_equal(isl.map.from_domain_and_range(source, isl.set("{ [s] : 0 <= s < 4 }")))
 
 
 def test_refuses_a_dtype_that_does_not_fold_in_float() -> None:

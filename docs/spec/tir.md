@@ -683,6 +683,10 @@ class Reduce(Op):
     and no offset.
   - `Reduce` carries no dispatch parameter; runtime selects the strategy.
   - `workspace` is present only when lowering sizes cross-warp staging.
+  - `workspace` is rank 1 and holds at least one slot per warp of `src`'s thread
+    mesh, `ceil(threads / 32)` over the mesh's static positive extents. Its access
+    relation reaches slots `[0, ceil(threads / 32))` from every iteration; which
+    warp uses which slot is the runtime's choice.
   - All forms lower to the single public runtime entry
     `tilefoundry::ops::reduce<Op, Axes>(src, dst[, workspace])`.
   - Sharded extents and tiers are derived inside the runtime; this TIR declaration does not expose

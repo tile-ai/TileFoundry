@@ -19,7 +19,10 @@ from tilefoundry.ir.pattern import (
     utils,
 )
 from tilefoundry.ir.pattern import predicates as P
-from tilefoundry.ir.types import DType, StorageKind, UnitType
+from tilefoundry.ir.tir.sync import WARP_SIZE
+from tilefoundry.ir.types import DType, ShardLayout, StorageKind, UnitType
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -101,16 +104,32 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
+def _workspace_slots(source) -> int:
+    """One slot per warp of the thread mesh ``source`` is sharded over.
+
+    The runtime posts each warp's partial at its warp index and reads its group
+    back (`cta_combine_via_workspace`); which warp takes which slot is its choice.
+    """
+    threads = 1
+    for extent in flatten(source.layout.mesh.layout).shape:
+        value = static_dim_value(extent)
+        if value is None or value <= 0:
+            raise ValueError(
+                f"Reduce workspace needs a static positive thread mesh, got extent {extent!r}"
+            )
+        threads *= value
+    return -(-threads // WARP_SIZE)
+
+
 @register_access_relation(Reduce)
 def _reduce_access(call: "Call", ctx) -> AccessRelations:
-    """Walk the source coordinates and collapse reduced axes into ``dst``."""
+    """Walk the source coordinates and collapse reduced axes into ``dst``.
+
+    The workspace is reached at every warp slot from every source coordinate:
+    which coordinate's partial lands in which slot is the runtime's choice.
+    """
+    op = call.target
     source = ctx.type_of(call.args[0])
-    workspace = ctx.type_of(call.args[2]) if len(call.args) > 2 else None
-    return _reduce_relations(call.target, source, workspace)
-
-
-def _reduce_relations(op, source, workspace=None) -> AccessRelations:
-    """Build Reduce relations from declared axes and keepdim."""
     rank = len(source.shape)
     axes = _reduced_axes(op, rank)
     out_shape = _result_shape(op, source)
@@ -129,15 +148,10 @@ def _reduce_relations(op, source, workspace=None) -> AccessRelations:
         AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}"))
     )
     inputs = [BoundaryRelation(identity_access(rank)), destination_access]
-    if workspace is not None:
-        workspace_rank = len(workspace.shape)
-        workspace_coords = ", ".join(
-            f"d{axis}" if axis < rank else "0" for axis in range(workspace_rank)
-        )
+    if len(call.args) > 2:
+        slots = _workspace_slots(source)
         inputs.append(
-            BoundaryRelation(
-                AffineAccess(isl.map(f"{{ [{domain}] -> [{workspace_coords}] }}"))
-            )
+            BoundaryRelation(AffineAccess(isl.map(f"{{ [{domain}] -> [s] : 0 <= s < {slots} }}")))
         )
     return iterating(
         source.shape,
@@ -150,5 +164,18 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
     op = call.target
     if not isinstance(op.kind, ReduceKind):
         ctx.error(call, f"Reduce: kind must be ReduceKind enum, got {type(op.kind)}")
-    src_ty = ctx.type_of(call.args[0])  # noqa: F841
-    dst_ty = ctx.type_of(call.args[1])  # noqa: F841
+    source = ctx.type_of(call.args[0])
+    if len(call.args) <= 2 or not isinstance(source.layout, ShardLayout):
+        return
+    workspace = ctx.type_of(call.args[2])
+    try:
+        slots = _workspace_slots(source)
+    except ValueError as error:
+        ctx.error(call, str(error))
+    held = static_dim_value(workspace.shape[0]) if len(workspace.shape) == 1 else None
+    if held is None or held < slots:
+        ctx.error(
+            call,
+            f"Reduce workspace {tuple(workspace.shape)} must be rank-1 with at least "
+            f"{slots} slots, one per warp of the source mesh",
+        )

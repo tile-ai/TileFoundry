@@ -17,7 +17,7 @@ from tilefoundry.ir.types.layout_algebra import size as _size
 from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
-_WARP_SIZE = 32
+WARP_SIZE = 32
 
 
 @register_op(dialect="T", category="sync")
@@ -207,8 +207,8 @@ def participation(mesh: Mesh) -> Participation:
         raise VerifyError("T.sync: participant range exceeds the block thread domain")
 
     full_cta = base == 0 and count == domain
-    single_warp = count <= _WARP_SIZE and (base // _WARP_SIZE == (base + count - 1) // _WARP_SIZE)
-    lane_mask = (((1 << count) - 1) << (base % _WARP_SIZE)) & 0xFFFFFFFF if single_warp else 0
+    single_warp = count <= WARP_SIZE and (base // WARP_SIZE == (base + count - 1) // WARP_SIZE)
+    lane_mask = (((1 << count) - 1) << (base % WARP_SIZE)) & 0xFFFFFFFF if single_warp else 0
     return Participation(
         base=base,
         count=count,
@@ -232,10 +232,10 @@ def classify(mesh: Mesh) -> SyncBarrier:
         return SyncBarrier.GRID
     p = participation(mesh)
     if p.full_cta:
-        return SyncBarrier.SYNCWARP if p.count == _WARP_SIZE else SyncBarrier.SYNCTHREADS
+        return SyncBarrier.SYNCWARP if p.count == WARP_SIZE else SyncBarrier.SYNCTHREADS
     if p.single_warp:
         return SyncBarrier.SYNCWARP
-    if p.base % _WARP_SIZE != 0 or p.count % _WARP_SIZE != 0:
+    if p.base % WARP_SIZE != 0 or p.count % WARP_SIZE != 0:
         raise VerifyError(
             "T.sync: a cross-warp subset must be warp-aligned — both the base "
             "and the count must be multiples of 32"
@@ -249,4 +249,5 @@ __all__ = [
     "Participation",
     "participation",
     "classify",
+    "WARP_SIZE",
 ]
