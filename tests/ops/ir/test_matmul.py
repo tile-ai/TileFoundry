@@ -114,6 +114,20 @@ COST_CASES = [
         topologies=(_CTA,),
     ),
     CostCase(
+        name="fp8_products_cost_fp8_and_write_f32",
+        op=MatMul(b_layout="NK"),
+        inputs=(
+            make_tensor_type((64, 128), DType.fp8e4m3),
+            make_tensor_type((32, 128), DType.fp8e4m3),
+        ),
+        flops={DType.fp8e4m3: 2 * 64 * 32 * 128},
+        traffic=(
+            TrafficBytes(read=64 * 128),
+            TrafficBytes(read=32 * 128),
+            TrafficBytes(write=64 * 32 * 4),
+        ),
+    ),
+    CostCase(
         name="replicated_rectangular_projection_counts_the_whole_result",
         op=_MM,
         inputs=(
@@ -186,6 +200,14 @@ def test_matmul_layouts_evaluate(op, lhs_shape, rhs_shape):
     run_eval_case(EvalCase("matmul_layout", op, (lhs, rhs), logical_lhs @ logical_rhs))
 
 
+def test_fp8_matmul_evaluates_in_f32():
+    lhs = (torch.arange(12, dtype=torch.float32).reshape(3, 4) / 4).to(torch.float8_e4m3fn)
+    rhs = (torch.arange(8, dtype=torch.float32).reshape(2, 4) / 8).to(torch.float8_e4m3fn)
+    expected = lhs.float() @ rhs.float().T
+
+    run_eval_case(EvalCase("fp8_matmul", MatMul(b_layout="NK"), (lhs, rhs), expected))
+
+
 def _sharded(shape, attrs):
     return make_shard_tensor_type(shape, mesh=_M, attrs=attrs, dtype=DType.bf16)
 
@@ -196,6 +218,15 @@ CASES = [
         op=_MM,
         inputs=(make_tensor_type((16, 8), DType.bf16), make_tensor_type((8, 32), DType.f32)),
         expected=ExpectedError(match="dtype mismatch"),
+    ),
+    TypeInferCase(
+        name="fp8_products_accumulate_in_f32",
+        op=MatMul(b_layout="NK"),
+        inputs=(
+            make_tensor_type((64, 128), DType.fp8e4m3),
+            make_tensor_type((32, 128), DType.fp8e4m3),
+        ),
+        expected=make_tensor_type((64, 32), DType.f32),
     ),
     TypeInferCase(
         name="empty_m",

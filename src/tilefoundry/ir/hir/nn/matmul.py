@@ -12,7 +12,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import Layout, TensorType
+from tilefoundry.ir.types import DType, Layout, TensorType
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     canonical_shard_layout,
@@ -30,6 +30,17 @@ from tilefoundry.visitor_registry.access_relation import (
     shape_from_relation,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+
+_ACCUMULATOR_OF = {DType.fp8e4m3: DType.f32}
+
+
+def matmul_result_dtype(operand: DType) -> DType:
+    """The dtype a product of two *operand* tensors is summed and returned in.
+
+    No MMA accumulates in fp8e4m3, so its products are summed and returned in f32
+    (docs/spec/hir.md MatMul); every other dtype is its own result dtype.
+    """
+    return _ACCUMULATOR_OF.get(operand, operand)
 
 
 @register_op
@@ -138,7 +149,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         else:
             layout = Layout(shape=out_shape, strides=try_compact_major(out_shape))
     storage = resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
-    return TensorType(shape=out_shape, dtype=lhs.dtype, layout=layout, storage=storage)
+    return TensorType(
+        shape=out_shape, dtype=matmul_result_dtype(lhs.dtype), layout=layout, storage=storage
+    )
 
 
 @register_eval(MatMul)
@@ -149,5 +162,7 @@ def _eval_matmul(ctx):
         lhs = lhs.transpose(-1, -2)
     if ctx.op.b_layout == "NK":
         rhs = rhs.transpose(-1, -2)
+    if ctx.result_type.dtype != ctx.args[0].type.dtype:
+        lhs, rhs = lhs.float(), rhs.float()
     out = torch.matmul(lhs, rhs)
     return TensorValue(data=out, type=ctx.result_type)
