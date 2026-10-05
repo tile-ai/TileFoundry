@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import itertools
 import math
-import re
 from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 
@@ -61,15 +60,14 @@ def _is_const(node) -> bool:
     return isinstance(node, int) or isinstance(node, Constant)
 
 
-def _fresh_name(value, values: IslParamValues, taken: set[str], hint: str | None = None) -> str:
-    """A parameter name no value in *values* and no coordinate in *taken* has."""
-    if hint is None and isinstance(value, (DimVar, Var)):
-        hint = getattr(value, "name", None)
-    hint = re.sub(r"\W", "_", hint, flags=re.ASCII) if isinstance(hint, str) and hint else "rt"
-    if hint[0].isdigit():
-        hint = f"_{hint}"
+def _fresh_name(values: IslParamValues, taken: set[str]) -> str:
+    """A parameter name no value in *values* and no coordinate in *taken* has.
+
+    The name carries no meaning, so it is a fixed prefix and a number rather than
+    anything read off the value: what a parameter stands for is in *values*.
+    """
     while True:
-        name = f"{hint}_{next(_COUNTER)}"
+        name = f"p{next(_COUNTER)}"
         if name not in values and name not in taken:
             return name
 
@@ -185,7 +183,7 @@ def _dim_visitor_type():
                 """The name *value* has here, naming it into ``values`` if it has none."""
                 name = self.known.get(id(value))
                 if name is None:
-                    name = _fresh_name(value, self.values, self.coord_names)
+                    name = _fresh_name(self.values, self.coord_names)
                     self.known[id(value)] = name
                     self.values[name] = value
                     self.bounds[name] = _leaf_bound(value)
@@ -464,7 +462,7 @@ def shape_to_isl_set(shape: tuple, values: IslParamValues) -> "isl.set":
     def bind(extent, bound) -> str:
         name = known.get(id(extent))
         if name is None:
-            name = _fresh_name(extent, values, set(dims))
+            name = _fresh_name(values, set(dims))
             known[id(extent)] = name
             values[name] = extent
         names.setdefault(name, bound)
@@ -593,8 +591,7 @@ def _mesh_coordinate(mesh, axis: int, values: IslParamValues) -> str:
     coordinate = Call(
         type=TensorType.umat_scalar(), target=MeshCoord(mesh=mesh), args=(i64_const(axis),)
     )
-    named = mesh.names[axis] if axis < len(mesh.names) and mesh.names[axis] else str(axis)
-    name = _fresh_name(coordinate, values, set(), hint=f"u_{named}")
+    name = _fresh_name(values, set())
     values[name] = coordinate
     return name
 

@@ -10,6 +10,7 @@ relations, so there is one place to be right and nothing to keep in step.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import reduce
@@ -663,7 +664,8 @@ def _by_identity(relations: tuple[AccessRelation, ...], rank: int) -> tuple[Acce
     the values': one object is one parameter across the Op, two objects are two,
     and a name a value already has is kept unless another value has it too or it
     names a coordinate -- of a boundary, or of the *rank*-dimensional space the
-    Op is about to be held to.
+    Op is about to be held to. A value that cannot keep its name gets the first
+    ``p<number>`` nothing here uses; the name carries no meaning of its own.
     """
     reserved = {f"d{index}" for index in range(rank)}
     owners: dict[str, set[int]] = {}
@@ -675,16 +677,14 @@ def _by_identity(relations: tuple[AccessRelation, ...], rank: int) -> tuple[Acce
         for name, value in access.values.items():
             owners.setdefault(name, set()).add(id(value))
     taken = set(owners) | reserved
+    fresh = (f"p{number}" for number in itertools.count())
     canonical: dict[int, str] = {}
     for access in relations:
         for name, value in access.values.items():
             if id(value) in canonical:
                 continue
             if len(owners[name]) > 1 or name in reserved:
-                suffix = 1
-                while f"{name}_{suffix}" in taken:
-                    suffix += 1
-                name = f"{name}_{suffix}"
+                name = next(candidate for candidate in fresh if candidate not in taken)
                 taken.add(name)
             canonical[id(value)] = name
 

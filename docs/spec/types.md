@@ -565,9 +565,12 @@ def ceildiv(a, b) -> Expr:
     isl-to-IR conversion MUST be named `isl_to_XX` and read the same dictionary.
     A conversion MUST look a leaf up by object identity, reuse the name it
     already has, and name a new leaf into the dictionary with a name no other
-    value or coordinate has. Two distinct values sharing a `DimVar` name are two
-    parameters. A parameter's stated range MUST be a constraint on the returned
-    isl object, not a second record.
+    value or coordinate has. A new name MUST be the fixed prefix `p` and a
+    number, never read off the value's own name or a mesh axis name: the name
+    carries no meaning, and a reader MUST NOT expect a particular number. Two
+    distinct values sharing a `DimVar` name are two parameters. A parameter's
+    stated range MUST be a constraint on the returned isl object, not a second
+    record.
   - `dim_to_isl_pw_aff(dim, values, *, coords)` MUST return one dimension
     expression as an `isl.pw_aff`. `coords` maps the identity of a value that is
     a coordinate of the space, such as an induction variable, to that dimension's

@@ -29,6 +29,7 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.utils.isl_utils import cardinality
+from tilefoundry.visitor_registry.access_relation import AccessRelation, iterating
 
 P = DimVar("P", 2048, 1_048_576)
 Q = DimVar("Q", 2, 32)
@@ -199,7 +200,13 @@ def test_shape_to_isl_set_encoding():
 
 
 def test_shape_to_isl_set_names_each_value_once():
-    """One object is one parameter; two DimVars sharing a name are two."""
+    """One object is one parameter; two DimVars sharing a name are two.
+
+    A name is a fixed prefix and a number, whatever the value is called, and
+    skips any name already taken. An Op's relations are lined up by identity
+    the same way, into new relations: one stated relation reused by two Ops
+    leaves both its map and its values as they were.
+    """
     narrow, wide = DimVar("S", 1, 7), DimVar("S", 1, 15)
     values = {}
     dom = shape_to_isl_set((narrow, wide), values)
@@ -210,6 +217,59 @@ def test_shape_to_isl_set_names_each_value_once():
     assert again.dim(isl.dim_type.PARAM) == 1
     assert values[again.get_dim_name(isl.dim_type.PARAM, 0)] is wide
     assert len(values) == 2
+
+    def fixed(name: str) -> bool:
+        return name[0] == "p" and name[1:].isdigit()
+
+    unspellable = DimVar("1 seq-len/ä", 1, 9)
+    probe: dict = {}
+    shape_to_isl_set((unspellable,), probe)
+    (named,) = probe
+    assert fixed(named), f"{named!r} is read off the value's own name"
+    assert shape_to_isl_set((unspellable,), probe).dim_max_val(0).get_num_si() == 8
+    following = int(named[1:]) + 1
+    taken = {f"p{following}": narrow, f"p{following + 1}": wide}
+    shape_to_isl_set((DimVar("S", 1, 3),), taken)
+    (fresh,) = set(taken) - {f"p{following}", f"p{following + 1}"}
+    assert fixed(fresh) and taken[f"p{following}"] is narrow and taken[f"p{following + 1}"] is wide
+
+    walk = "0 <= d0 < 8"
+    n, other_n, s = DimVar("N", 1, 64), DimVar("N", 1, 32), DimVar("S", 1, 4)
+    shared = AccessRelation(isl.map(f"[N] -> {{ [d0] -> [d0 + N] : {walk} }}"), {"N": n})
+    renamed = AccessRelation(isl.map(f"[M] -> {{ [d0] -> [d0 - M] : {walk} }}"), {"M": n})
+    homonym = AccessRelation(isl.map(f"[N] -> {{ [d0] -> [N] : {walk} }}"), {"N": other_n})
+    twice = AccessRelation(
+        isl.map(f"[A, B] -> {{ [d0] -> [d0 + A - B] : {walk} }}"), {"A": n, "B": n}
+    )
+    on_coordinate = AccessRelation(isl.map(f"[d0] -> {{ [i] -> [i + d0] : {walk} }}"), {"d0": s})
+    swapped = (
+        AccessRelation(isl.map(f"[p0, p1] -> {{ [d0] -> [p0, p1] : {walk} }}"), {"p0": n, "p1": s}),
+        AccessRelation(isl.map(f"[p0, p1] -> {{ [d0] -> [p0, p1] : {walk} }}"), {"p0": s, "p1": n}),
+    )
+    stated = (shared, renamed, homonym, twice, on_coordinate, *swapped)
+    before = [(access.relation, dict(access.values)) for access in stated]
+    for op in (stated, (shared, homonym, shared)):
+        held = iterating((8,), op)
+        names: dict[int, str] = {}
+        for access in held:
+            for name, value in access.values.items():
+                assert names.setdefault(id(value), name) == name, "one value, one name"
+        assert len(set(names.values())) == len(names), "two values, two names"
+        assert all(name == "N" or fixed(name) for name in names.values())
+        assert names[id(n)] != names[id(other_n)]
+    held = iterating((8,), stated)
+    one = held[3].values
+    assert len(one) == 1 and next(iter(one.values())) is n, "two names for one value merge"
+    assert held[3].relation.is_equal(
+        isl.map(f"[{next(iter(one))}] -> {{ [d0] -> [d0] : {walk} }}")
+    ), "and merging equates them rather than dropping one"
+    first, second = (dict(map(reversed, access.values.items())) for access in held[5:])
+    assert first == second, "a swap captures neither name"
+    assert held[5].relation.is_equal(
+        isl.map(f"[{first[n]}, {first[s]}] -> {{ [d0] -> [{first[n]}, {first[s]}] : {walk} }}")
+    )
+    for access, (relation, values) in zip(stated, before, strict=True):
+        assert access.relation is relation and access.values == values
 
 
 def test_shape_to_isl_set_literal_shapes():

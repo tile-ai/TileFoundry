@@ -369,10 +369,14 @@ def register_access_relation(op_cls: type): ...
     name bound to two values. A handler MAY name each boundary's parameters on
     its own; `iterating` MUST first rename them by object identity, so one value
     is one name and two values are two, equating and merging two names one
-    boundary gives one value, without a rename capturing another name. A
-    relation composed or restricted from others MUST carry exactly the
-    parameters it names, taken from those `values`; the caller that composes it
-    picks them, and construction refuses a parameter left without one.
+    boundary gives one value, without a rename capturing another name. A value
+    that cannot keep its name gets a fresh `p<number>` that no parameter and no
+    coordinate of the Op uses. Renaming MUST return new relations and leave the
+    stated ones, and their `values`, as they were, since one relation can be
+    reused by another Op. A relation composed or restricted from others MUST
+    carry exactly the parameters it names, taken from those `values`; the
+    caller that composes it picks them, and construction refuses a parameter
+    left without one.
   - The tuple has one relation per argument, in argument order, and then one
     per result: one for a single value, one per field of a `TupleType` result,
     in field order. Position is the only record of where the arguments end, so
