@@ -117,6 +117,7 @@ ANALYSES = (
     ("performance", PerformanceSummaryMetadata),
 )
 _TENSOR_CLOCK_HZ = 1_830_000_000
+_SHARED_BYTES_PER_CLOCK = 128
 
 
 @dataclass(frozen=True)
@@ -584,21 +585,23 @@ def test_schedule_memory_report_carries_allocations(
             assert offset + allocation["buffer_bytes"] <= peaks[storage]
 
 @pytest.mark.parametrize(
-    ("fixture", "n"),
+    ("fixture", "n", "bound_by"),
     (
-        ("wgmma_rs_a_from_accumulator", 16),
-        ("wgmma_repeat_along_n_order", 64),
-        ("gemm_8192x17408x5120_register_store", 256),
+        ("wgmma_rs_a_from_accumulator", 16, "smem"),
+        ("wgmma_repeat_along_n_order", 64, "tensor"),
+        ("gemm_8192x17408x5120_register_store", 256, "tensor"),
     ),
 )
-def test_wgmma_performance_prices_n_over_two_tensor_clocks(fixture: str, n: int) -> None:
-    """Price real timeline output against an independent tensor-clock reference.
+def test_wgmma_performance_prices_the_slower_of_tensor_clocks_and_shared_reads(
+    fixture: str, n: int, bound_by: str
+) -> None:
+    """Price real timeline output against independent tensor-clock and smem references.
 
-    The 1.83 GHz value comes from the stage2c instruction-throughput research
-    section 2, not from the peak under test. Its 0.0071% difference from the
-    peak-implied 1,830,129,912 Hz leaves 0.63, 0.11, and 0.44 ns before the three
-    ceil boundaries. A future case crossing one boundary needs its expected
-    integer time checked before treating the one-ns change as a bug.
+    An issue takes ``n / 2`` tensor clocks; its shared tiles cross at 128 bytes
+    per SM clock (SM90 microbenchmark, arXiv 2402.13499), both at the 1.83 GHz
+    of the stage2c throughput research rather than the peaks under test. The
+    slower one is the time. The n=16 call reads 2560 shared bytes for 8 clocks of
+    work, so shared reads decide it; the wider calls stay tensor-bound.
     """
     path = next(path for path in HIR if path.stem == fixture)
     program = _module_in(path)
@@ -616,10 +619,17 @@ def test_wgmma_performance_prices_n_over_two_tensor_clocks(fixture: str, n: int)
     flops_per_issue = spread.logical // issues
     timeline = get_metadata(schedule, PerformanceMetadata).timeline
     duration_ns = timeline.end_ns - timeline.start_ns
-    expected_ns = -(-(n * issues * 1_000_000_000) // (2 * _TENSOR_CLOCK_HZ))
+    shared_bytes = sum(
+        prod(operand.type.shape) * operand.type.dtype.bit_width // 8
+        for operand in schedule.args
+        if operand.type.storage is StorageKind.SMEM
+    )
+    tensor_ns = -(-(n * issues * 1_000_000_000) // (2 * _TENSOR_CLOCK_HZ))
+    shared_ns = -(-(shared_bytes * 1_000_000_000) // (_SHARED_BYTES_PER_CLOCK * _TENSOR_CLOCK_HZ))
 
     assert flops_per_issue == 2 * 64 * n * 16
-    assert duration_ns == expected_ns
+    assert (shared_ns > tensor_ns) == (bound_by == "smem")
+    assert duration_ns == max(tensor_ns, shared_ns)
 
 
 def _copy_schedule_call(
