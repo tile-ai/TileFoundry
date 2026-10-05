@@ -55,9 +55,11 @@ from tilefoundry.ir.pattern import (
 )
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
+from tilefoundry.ir.tir.cuda.memory.copy_async_tensor import CopyAsyncTensor
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
+from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.ir.types import (
     ComposedLayout,
@@ -431,6 +433,16 @@ def test_scheduled_hir_program_has_analysis_metadata(
             elif isinstance(expr.target, Transpose):
                 assert record.buffer_bytes == prod(expr.type.shape) * expr.type.dtype.bit_width // 8
                 assert record.offsets
+            if isinstance(expr.target, ScheduleOp) and isinstance(
+                expr.target.op, (Copy, CopyAsync, CopyAsyncTensor)
+            ):
+                tile = prod(expr.type.shape) * expr.type.dtype.bit_width // 8
+                assert record.operands[-1].write == tile, "a copy writes its whole tile"
+            if isinstance(expr.target, ScheduleOp) and isinstance(expr.target.op, TiledMma):
+                for operand, moved in zip(expr.args, record.operands, strict=False):
+                    if operand.type.storage is StorageKind.SMEM:
+                        tile = prod(operand.type.shape) * operand.type.dtype.bit_width // 8
+                        assert moved.read == tile, "an mma reads its whole shared tile"
 
     if analysis == "compute-cost":
         schedules = (

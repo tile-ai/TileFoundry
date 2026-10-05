@@ -134,7 +134,7 @@ EXPECTED_MEMORY_PEAKS = {
     "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]": {
         "gmem": 526_464,
         "rmem": 8,
-        "smem": 83_616,
+        "smem": 83_744,
     },
     "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 128},
     "fused_boundary.FusedBoundary.inner.scale[static]": {"rmem": 256},
@@ -147,32 +147,32 @@ EXPECTED_MEMORY_PEAKS = {
     "gemm_schedules.Gemm_MNK_NT128x128x64_w17x8.gemm[static]": {
         "gmem": 52_428_800,
         "rmem": 32_768,
-        "smem": 49_152,
+        "smem": 65_536,
     },
     "gemm_schedules.Gemm_MK_NN64x128x32_w1x132.gemm[static]": {
         "gmem": 3_244_032,
         "rmem": 16_384,
-        "smem": 16_384,
+        "smem": 28_672,
     },
     "gemm_schedules.Gemm_MNK_NN128x128x64_w12x11_k4096.gemm[static]": {
         "gmem": 67_108_864,
         "rmem": 32_768,
-        "smem": 49_152,
+        "smem": 65_536,
     },
     "gemm_schedules.Gemm_MNK_NN128x128x64_w12x11_k16384.gemm[static]": {
         "gmem": 268_435_456,
         "rmem": 32_768,
-        "smem": 49_152,
+        "smem": 65_536,
     },
     "gemm_schedules.Gemm_MNK_NN64x128x32_w11x12.gemm[static]": {
         "gmem": 3_244_032,
         "rmem": 16_384,
-        "smem": 16_384,
+        "smem": 28_672,
     },
     "gemm_schedules.Gemm_MNK_NN64x128x32_w12x11.gemm[static]": {
         "gmem": 3_244_032,
         "rmem": 16_384,
-        "smem": 16_384,
+        "smem": 28_672,
     },
     "gemm_schedules.Gemm_MNK_NN128.gemm[static]": {
         "gmem": 131_072,

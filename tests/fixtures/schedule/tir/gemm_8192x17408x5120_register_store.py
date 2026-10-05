@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=GEMM_8192X17408X5120_REGISTER_STORE function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r250.00MB/w544.00MB@logical,r15.94GB/w544.00MB@total,r15.94GB/w544.00MB@cta,r15.94GB/w273.06MB@thread;rmem:r43.30GB/w42.77GB@logical,r43.31GB/w43.30GB@total,r43.31GB/w43.30GB@cta,r183.88MB/w173.19MB@thread;smem:r127.50MB/w1.91MB@logical,r127.50MB/w127.50MB@total,r127.50MB/w127.50MB@cta,r43.83MB/w127.50MB@thread footprint=a:16.00KB;b:32.00KB;v10:83:64.00KB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:192.00KB persistent=gmem:250.00MB
+# memory traffic=gmem:r250.00MB/w544.00MB@logical,r15.94GB/w544.00MB@total,r15.94GB/w544.00MB@cta,r15.94GB/w273.06MB@thread;rmem:r43.30GB/w42.77GB@logical,r43.31GB/w43.30GB@total,r43.31GB/w43.30GB@cta,r183.88MB/w173.19MB@thread;smem:r15.94GB/w250.00MB@logical,r15.94GB/w15.94GB@total,r15.94GB/w15.94GB@cta,r2.74GB/w15.94GB@thread footprint=a:16.00KB;b:32.00KB;v10:83:64.00KB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:192.00KB persistent=gmem:250.00MB
 #   buffer=b holds=175.50MB time=m space=none reuse=10.46GB fits=no precision=exact
 #   buffer=a holds=3.81MB time=n space=none reuse=83.75MB fits=yes precision=exact
 #   error="l2 reuse window m holds 175.50MB at a 1-unit wave, exceeding capacity 47.68MB"

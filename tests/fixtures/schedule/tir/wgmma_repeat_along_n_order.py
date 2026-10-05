@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=WGMMA_REPEAT_ALONG_N_ORDER function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r24.00KB/w0@logical,r24.00KB/w0@total,r24.00KB/w0@cta,r24.00KB/w0@thread;rmem:r384.06KB/w448.00KB@logical,r384.06KB/w448.00KB@total,r384.06KB/w448.00KB@cta,r1.56KB/w1.75KB@thread;smem:r576B/w576B@logical,r576B/w576B@total,r576B/w576B@cta,r96B/w576B@thread footprint=a:4.00KB;b:8.00KB footprint-precision=exact peak=gmem:24.00KB;rmem:128.00KB;smem:24.00KB persistent=gmem:24.00KB
+# memory traffic=gmem:r24.00KB/w0@logical,r24.00KB/w0@total,r24.00KB/w0@cta,r24.00KB/w0@thread;rmem:r384.06KB/w448.00KB@logical,r384.06KB/w448.00KB@total,r384.06KB/w448.00KB@cta,r1.56KB/w1.75KB@thread;smem:r24.00KB/w24.00KB@logical,r24.00KB/w24.00KB@total,r24.00KB/w24.00KB@cta,r1.50KB/w24.00KB@thread footprint=a:4.00KB;b:8.00KB footprint-precision=exact peak=gmem:24.00KB;rmem:128.00KB;smem:24.00KB persistent=gmem:24.00KB
 
 from __future__ import annotations
 

@@ -7,6 +7,7 @@ from dataclasses import replace
 import isl
 import pytest
 
+from tests.fixtures.placed import persistent_gemm_tiled as tiled
 from tests.fixtures.placed.gemm_schedules import (
     WAVE_BK,
     WAVE_BM,
@@ -437,11 +438,33 @@ def test_capacity_exceeded_matches_the_written_ratio(
 
 
 def test_persistent_tiled_holds_the_loop_at_its_start_expression() -> None:
-    memory = _memory_record(PersistentGemmTiled)
+    """The footprint is held at the loop start; one tile product is its own size.
+
+    Each step multiplies an ``(BM, BK)`` by a ``(BK, BN)`` bf16 tile into a
+    ``(BM, BN)`` one: ``BM * BN * 2`` bytes written and ``2 * BM * BN * BK``
+    flops by the CTA that runs it, whatever layout the operands were staged in.
+    """
+    data = _report(PersistentGemmTiled, analysis=("memory", "compute-cost"))
+    memory = data["function_records"]["memory"]
 
     assert _footprint_bytes(memory, "a") == 12 * 64 * 32 * 2
     assert _footprint_bytes(memory, "b") == 11 * 32 * 64 * 2
     assert memory["footprint"]["precision"] == "exact"
+    (product,) = (
+        call
+        for call in data["calls"]
+        if [operand["type"] for operand in call["memory"]["operands"]]
+        == [
+            f"bf16[{tiled.BM},{tiled.BK}] smem",
+            f"bf16[{tiled.BK},{tiled.BN}] smem",
+            f"bf16[{tiled.BM},{tiled.BN}] smem",
+        ]
+    )
+    tile_bytes = tiled.BM * tiled.BN * 2
+    assert product["memory"]["buffer_bytes"] == tile_bytes
+    assert product["memory"]["operands"][-1]["write"] == tile_bytes
+    flops = product["compute-cost"]["flops"]["bf16"]["per_unit"]
+    assert flops == [2 * tiled.BM * tiled.BN * tiled.BK]
 
 
 def test_persistent_flat_states_its_precision() -> None:
