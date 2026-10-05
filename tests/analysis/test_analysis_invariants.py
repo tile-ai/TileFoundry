@@ -47,6 +47,7 @@ from tilefoundry.ir.hir.tensor.slice import Slice as SliceOp
 from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import (
+    ComposedLayout,
     DType,
     Layout,
     Mesh,
@@ -56,7 +57,7 @@ from tilefoundry.ir.types import (
     make_shard_tensor_type,
     make_tensor_type,
 )
-from tilefoundry.ir.types.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import is_literal_shape, tensor_bytes
@@ -136,10 +137,27 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
 _CTA2 = Topology("cta", 2)
 _CTA2_MESH = Mesh((_CTA2,), Layout((2,), (1,)), ("c",))
 _I64 = make_tensor_type((), DType.i64)
+_CTA4, _THREAD2 = Topology("cta", 4), Topology("thread", 2)
+
+
+def _nested(extent: int, *, wrapped: bool) -> TensorType:
+    """A thread Split under a replicated cta layer, directly or through an offset view."""
+    inner = ShardLayout(
+        Layout((extent,), (1,)),
+        (ShardSplit(0),),
+        Mesh((_THREAD2,), Layout((2,), (1,)), ("t",)),
+    )
+    held = ComposedLayout(inner=None, offset=1, outer=inner) if wrapped else inner
+    return TensorType(
+        shape=(extent,),
+        dtype=DType.f32,
+        layout=ShardLayout(held, (Broadcast(),), Mesh((_CTA4,), Layout((4,), (1,)), ("c",))),
+        storage=StorageKind.GMEM,
+    )
 
 
 @pytest.mark.parametrize(
-    ("destination", "update", "offsets", "before", "own"),
+    ("destination", "update", "offsets", "before", "own", "level"),
     [
         pytest.param(
             make_shard_tensor_type((8,), mesh=_CTA2_MESH, attrs=(ShardSplit(0),), dtype=DType.f32),
@@ -147,6 +165,7 @@ _I64 = make_tensor_type((), DType.i64)
             Constant(type=_I64, value=2),
             "{ [c0] : c0 < 0 }",
             "{ [d0] : 2 <= d0 <= 3 }",
+            "cta",
             id="split_axis",
         ),
         pytest.param(
@@ -163,29 +182,42 @@ _I64 = make_tensor_type((), DType.i64)
             ),
             "{ [c0, c1] : c1 < 0 }",
             "{ [0, d1] : 2 <= d1 <= 5 }",
+            "cta",
             id="axes_regrouped_onto_one_position",
+        ),
+        *(
+            pytest.param(
+                _nested(8, wrapped=wrapped),
+                _nested(4, wrapped=wrapped),
+                Constant(type=_I64, value=2),
+                "{ [c0] : c0 < 0 }",
+                "{ [d0] : 2 <= d0 <= 3 }",
+                "thread",
+                id=f"nested_{'through_an_offset_view' if wrapped else 'directly'}",
+            )
+            for wrapped in (False, True)
         ),
     ],
 )
 def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed(
-    destination, update, offsets, before, own
+    destination, update, offsets, before, own, level
 ) -> None:
     """A relation may be written past its value; a projected one never reaches there.
 
-    An insert reads its update at the coordinate the window shifted back to, and
-    for the coordinates before the window that is a negative one. Every
-    projected boundary is held to the positions this participant was given, so
-    what it reaches is inside them and which iterations are its own follows from
-    that rather than from a read nobody could perform. Where two logical axes
-    regroup onto one position, a read past one axis would land on a position the
-    next row holds; it is cut as the logical coordinate it is, not placed there.
+    An insert reads its update at the coordinate the window shifted back to,
+    before the window a negative one. Every projected boundary is held to the
+    positions this participant was given, and its own iterations follow from
+    that. A read past one of two axes regrouped onto one position is cut as the
+    logical coordinate it is, not placed on the next row's position; a nested
+    layer cuts once whether held directly or through an offset view.
     """
     call = Call(
         type=destination,
         target=InsertSlice(),
         args=(Var(type=destination, name="dst"), Var(type=update, name="update"), offsets),
     )
-    ctx = CostContext(topology_level="cta", topologies=(_CTA2,))
+    topologies = (_CTA4, _THREAD2) if level == "thread" else (_CTA2,)
+    ctx = CostContext(topology_level=level, topologies=topologies)
 
     stated = relations_of(call, ctx)
     reads = relation_of(stated.inputs[1].pattern)

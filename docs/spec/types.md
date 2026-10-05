@@ -146,7 +146,9 @@ def local_type_of(
   - Without `topology_level`, every `Split` MUST divide, the returned tensor layout MUST
     be `None`, and the tensor's logical rank MUST remain unchanged. This form
     is the logical-axis projection used by relation construction.
-  - Each resolved nested `ShardLayout` MUST be applied exactly once per layer.
+  - Each resolved nested `ShardLayout` MUST be applied exactly once per layer,
+    whether it is held directly or as the outer of a static-offset
+    `ComposedLayout(inner=None, ...)`.
     Every mesh axis MUST state its own extent, and local projection MUST use
     that extent without substituting a target or topology capacity. A stated
     static extent that does not divide the split dimension MUST raise. A
@@ -585,9 +587,10 @@ def ceildiv(a, b) -> Expr:
     [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
     `layout` MUST be a `ShardLayout` or a static-offset view of one; any other
     layout is a `TypeError`. A `ShardLayout` whose `layout` is itself a
-    `ShardLayout` is placed layer by layer, each layer once, the innermost
-    layer's cuts outermost, as [§2.1](#21-recursive-local-projection) projects
-    it. `divided(layer)` names the mesh axes of that layer whose `Split` the
+    `ShardLayout`, directly or as the outer of a static-offset
+    `ComposedLayout(inner=None, ...)`, is placed layer by layer, each layer
+    once, the innermost layer's cuts outermost, as
+    [§2.1](#21-recursive-local-projection) projects it. `divided(layer)` names the mesh axes of that layer whose `Split` the
     unit holds one part of; each such axis's coordinate is a `MeshCoord`
     parameter named into `values`, ranging over the axis.
   - `layout_to_isl_map` MUST raise `ValueError` for static logical and layout

@@ -586,9 +586,10 @@ def _require_concrete(shape: tuple | list) -> None:
 def _nested_layout_shape(
     layout: object, *, selected_topology_level: int, topologies: tuple[Topology, ...]
 ) -> tuple:
-    if isinstance(layout, ShardLayout):
+    shard = shard_layout_of(layout)
+    if shard is not None:
         return _local_layout_shape(
-            layout, selected_topology_level=selected_topology_level, topologies=topologies
+            shard, selected_topology_level=selected_topology_level, topologies=topologies
         )
     if isinstance(layout, (Layout, ComposedLayout)):
         return tuple(layout.shape)
