@@ -44,6 +44,7 @@ from tilefoundry.analysis import (
     ComputeCostMetadata,
     MemoryMetadata,
     PerformanceMetadata,
+    allocation,
     analyze,
 )
 from tilefoundry.analysis import footprint as footprint_analysis
@@ -437,15 +438,21 @@ def test_capacity_exceeded_matches_the_written_ratio(
     assert memory["advisories"] == (diagnosis if category == "advisories" else [])
 
 
-def test_persistent_tiled_holds_the_loop_at_its_start_expression() -> None:
+@pytest.mark.parametrize("seeded", (True, False), ids=("seeded", "no_seed"))
+def test_persistent_tiled_holds_the_loop_at_its_start_expression(
+    seeded: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The footprint is held at the loop start; one tile product is its own size.
 
     Each step multiplies an ``(BM, BK)`` by a ``(BK, BN)`` bf16 tile into a
     ``(BM, BN)`` one: ``BM * BN * 2`` bytes written and ``2 * BM * BN * BK``
     flops by the CTA that runs it, whatever layout the operands were staged in.
     The operand tiles die into the product and the product into its f32 cast,
-    so placing them needs the larger of those two live sets and no more.
+    so placing them needs the larger of those two live sets and no more. A seed
+    nobody could build bounds nothing: the solver still finds a placement.
     """
+    if not seeded:
+        monkeypatch.setattr(allocation, "_first_fit", lambda *args, **kwargs: None)
     data = _report(PersistentGemmTiled, analysis=("memory", "compute-cost"))
     memory = data["function_records"]["memory"]
 
@@ -471,7 +478,12 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression() -> None:
     widened = tiled.BM * tiled.BN * 4
     largest_live = max(sum(operands) + tile_bytes, tile_bytes + widened)
     peaks = {peak["memory_level"]: peak["peak_bytes"] for peak in memory["peaks"]}
-    assert peaks["smem"] == largest_live, "the tiles fit in the most bytes ever live at once"
+    if seeded:
+        assert peaks["smem"] == largest_live, "the tiles fit in the most bytes ever live at once"
+    else:
+        (offset,) = product["memory"]["offsets"]
+        assert offset % 16 == 0 and offset + tile_bytes <= peaks["smem"]
+        assert peaks["smem"] >= largest_live
 
 
 def test_persistent_flat_states_its_precision() -> None:
