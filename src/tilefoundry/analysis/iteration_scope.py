@@ -20,7 +20,7 @@ from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
+    AccessRelation,
     access_relation_registry,
     projected,
     relations_of,
@@ -75,15 +75,15 @@ class IterationScope:
     domain_params: dict[str, object] = field(default_factory=dict)
     accesses: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
     outputs: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
-    relations: dict[int, tuple[Call, AccessRelations]] = field(default_factory=dict)
-    projections: dict[tuple[int, str | None], tuple[Call, AccessRelations]] = field(
+    relations: dict[int, tuple[Call, tuple[AccessRelation, ...]]] = field(default_factory=dict)
+    projections: dict[tuple[int, str | None], tuple[Call, tuple[AccessRelation, ...]]] = field(
         default_factory=dict
     )
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
     topologies: tuple[Topology, ...] = ()
     _variance: dict[int, frozenset[int]] = field(default_factory=dict, repr=False)
 
-    def projected_relations(self, call: Call, ctx: TypeInferContext) -> AccessRelations:
+    def projected_relations(self, call: Call, ctx: TypeInferContext) -> tuple[AccessRelation, ...]:
         """Return *call*'s relations in *ctx*'s topology window, projecting it once.
 
         Cache on the scope that recorded the call's stated relations, keyed by
@@ -273,9 +273,7 @@ class ScopeBuilder:
         for view in self.views:
             narrow = view == "narrow"
             built: list[Access] = []
-            for index, boundary in enumerate(local_relations.inputs):
-                if index >= len(expr.args):
-                    continue
+            for index, boundary in enumerate(local_relations[: len(expr.args)]):
                 access = resolve_access(
                     expr.args[index],
                     boundary,
@@ -288,7 +286,7 @@ class ScopeBuilder:
                     built.append(access)
             scope.accesses.setdefault(view, {})[id(expr)] = (expr, tuple(built))
             written: list[Access] = []
-            for output_index, boundary in enumerate(local_relations.outputs):
+            for output_index, boundary in enumerate(local_relations[len(expr.args) :]):
                 access = resolve_access(
                     expr,
                     boundary,

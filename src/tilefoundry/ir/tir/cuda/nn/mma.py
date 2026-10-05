@@ -21,7 +21,7 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.types import DType, Mesh, TensorType, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
+    AccessRelation,
     matmul_relations,
     register_access_relation,
     relations_of,
@@ -105,18 +105,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 @register_access_relation(TiledMma)
-def _tiled_mma_access_relation(call: "Call", ctx) -> AccessRelations:
+def _tiled_mma_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     acc, lhs, rhs = (ctx.type_of(arg) for arg in call.args)
-    contraction = matmul_relations(lhs.shape, rhs.shape, (-2, -1, -1, -2))
-    return AccessRelations(
-        inputs=(contraction.outputs[0], *contraction.inputs),
-        outputs=(contraction.outputs[0],),
-    )
+    *operands, accumulated = matmul_relations(lhs.shape, rhs.shape, (-2, -1, -1, -2))
+    return (accumulated, *operands, accumulated)
 
 
 def operand_relations(
     op: TiledMma, operand_types: tuple[TensorType, ...]
-) -> AccessRelations:
+) -> tuple[AccessRelation, ...]:
     """Return the registered operand relations for these concrete types."""
     args = tuple(
         Var(name=f"operand{index}", type=type_)

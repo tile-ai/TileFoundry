@@ -37,7 +37,6 @@ from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
     local_relations_of,
     reached_elements,
-    relation_of,
     relations_of,
 )
 from tilefoundry.visitor_registry.contexts import (
@@ -131,14 +130,15 @@ def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough(
     else:
         VerifyVisitor(VerifyContext()).visit(stmt)
         call = Call(type=UnitType(), target=Copy(), args=(src_var, dst_var))
-        written = relations_of(call, TypeInferContext()).inputs[1]
-        assert relation_of(written.pattern).is_equal(isl.map(reached))
+        written = relations_of(call, TypeInferContext())[1]
+        assert written.relation.is_equal(isl.map(reached))
         held = local_relations_of(call, CostContext(topology_level="thread", topologies=(_THREAD,)))
-        read_at, written_at = (relation_of(boundary.pattern) for boundary in held.inputs)
+        operands = held[: len(call.args)]
+        read_at, written_at = (boundary.relation for boundary in operands)
         assert read_at.is_equal(written_at), "each iteration reads and writes one position"
         assert written_at.range().is_equal(isl.set("{ [p] : 0 <= p < 8 }"))
-        assert [reached_elements(boundary.pattern) * 4 for boundary in held.inputs] == [32, 32]
-        assert all(not boundary.pattern.values for boundary in (*held.inputs, *held.outputs))
+        assert [reached_elements(boundary) * 4 for boundary in operands] == [32, 32]
+        assert all(not boundary.values for boundary in held)
 
     VerifyVisitor(VerifyContext()).visit(Return())
     VerifyVisitor(VerifyContext()).visit(

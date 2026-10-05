@@ -99,14 +99,14 @@ def _reached_bytes(
     """
     total = 0
     by_memory_level: dict[str, int] = {}
-    for held, pattern in boundaries:
+    for held, access in boundaries:
         leaves = leaves_of(held)
         if not leaves:
             return None
         if len(leaves) == 1:
-            taken = {0: _bytes_for(leaves[0], reached_elements(pattern))}
+            taken = {0: _bytes_for(leaves[0], reached_elements(access))}
         else:
-            reached = reached_leaves(pattern, len(leaves))
+            reached = reached_leaves(access, len(leaves))
             if reached is None:
                 return None
             taken = {index: static_bytes(leaves[index]) for index in sorted(reached)}
@@ -182,21 +182,22 @@ def _movement(
         )
         result = ctx.local_type_of(call)
         fields = result.fields if isinstance(result, TupleType) else (result,)
-        if len(fields) > len(local_relations.outputs):
+        outputs = local_relations[len(call.args) :]
+        if len(fields) > len(outputs):
             raise AnalysisError(
-                f"{describe_expr(call)}: states {len(local_relations.outputs)} output "
+                f"{describe_expr(call)}: states {len(outputs)} output "
                 f"boundaries for a result of {len(fields)} fields"
             )
         amounts, charged = [], []
         for index, moved in enumerate(cost.traffic):
             if index == len(call.args):
                 asked = tuple(
-                    (field_, local_relations.outputs[position].pattern)
+                    (field_, outputs[position])
                     for position, field_ in enumerate(fields)
                 )
                 memory_level = None
             else:
-                asked = ((types[index], local_relations.inputs[index].pattern),)
+                asked = ((types[index], local_relations[index]),)
                 memory_level = _UMAT_CONSUMPTION_LEVEL
             answer = _reached_bytes(asked, memory_level)
             if answer is None:

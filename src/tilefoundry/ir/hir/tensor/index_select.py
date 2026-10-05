@@ -19,8 +19,7 @@ from tilefoundry.ir.types.shard_layout import (
 from tilefoundry.ir.types.stride import compact_col_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     reached_at,
@@ -105,7 +104,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_access_relation(IndexSelect)
-def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
+def _index_select_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """GLOBAL level: IndexSelect pulls one source slice per index element.
 
     Every boundary is asked about the same coordinates, the result's own, so the
@@ -126,16 +125,10 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
     carried = {position: f"d{position}" for position in range(rank)}
     return iterating(
         out_shape,
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(
-                    reached_at(rank, source_ty, logical_source, carried, free=(axis,))
-                ),
-                BoundaryRelation(
-                    reached_at(rank, index_ty, logical_index, {0: carried.get(axis, "0")})
-                ),
-            ),
-            outputs=(BoundaryRelation(identity_access(rank)),),
+        (
+            reached_at(rank, source_ty, logical_source, carried, free=(axis,)),
+            reached_at(rank, index_ty, logical_index, {0: carried.get(axis, "0")}),
+            identity_access(rank),
         ),
     )
 

@@ -19,9 +19,7 @@ from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import i64_const, static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     iterating,
     register_access_relation,
     relations_of,
@@ -317,7 +315,7 @@ def _eval_conv2d(ctx):
 
 
 @register_access_relation(Conv2D)
-def _conv2d_access(call: "Call", ctx) -> AccessRelations:
+def _conv2d_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """The receptive field, as one affine relation over the space it walks.
 
     Where a window sits moves affinely with the output coordinate, so this is a
@@ -348,23 +346,15 @@ def _conv2d_access(call: "Call", ctx) -> AccessRelations:
     guard = " and ".join((f"0 <= {height} < {x.shape[2]}", f"0 <= {width} < {x.shape[3]}"))
     per_group_out = max(weight.shape[0] // op.groups, 1) if op.groups != 1 else 1
     channel = "ci" if op.groups == 1 else f"floor(co/{per_group_out})*{contraction}+ci"
-    reached = AffineAccess(
+    reached = AccessRelation(
         isl.map(f"{{ [{domain}] -> [n, {channel}, {height}, {width}] : {guard} }}")
     )
     return iterating(
         (*result, contraction, k_h, k_w),
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(reached),
-                BoundaryRelation(
-                    AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}"))
-                ),
-                BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [co] }}"))),
-            ),
-            outputs=(
-                BoundaryRelation(
-                    AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}"))
-                ),
-            ),
+        (
+            reached,
+            AccessRelation(isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}")),
+            AccessRelation(isl.multi_aff(f"{{ [{domain}] -> [co] }}")),
+            AccessRelation(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}")),
         ),
     )

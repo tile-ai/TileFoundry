@@ -26,9 +26,7 @@ from tilefoundry.ir.types import TupleType
 from tilefoundry.ir.types.utils import is_literal_shape
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     iterating,
     logical_coordinates,
     reached_at,
@@ -85,7 +83,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
 
 
 @register_access_relation(RoPE)
-def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
+def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[AccessRelation, ...]:
     """GLOBAL level: a rotation per element, read out of a table by position.
 
     Rotating Q and rotating K are instances of the same work, so the space this
@@ -107,7 +105,7 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     grouped = isl.map(f"{{ [{walked}] -> [{own}] : d{rank} = 1 }}")
     if is_literal_shape(k_ty.shape):
         grouped = grouped.intersect_range(shape_to_isl_set(tuple(k_ty.shape), {}))
-    value, grouped = AffineAccess(value), AffineAccess(grouped)
+    value, grouped = AccessRelation(value), AccessRelation(grouped)
     positions = ctx.type_of(call.args[4])
     tables = []
     for operand in (2, 3):
@@ -115,37 +113,29 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
         logical_table = ctx.type_of(call.args[operand])
         rows = len(logical_table.shape) - 1
         tables.append(
-            BoundaryRelation(
-                reached_at(
-                    rank + 1,
-                    table,
-                    logical_table,
-                    {rows: carried.get(head_dim, "0")},
-                    free=tuple(range(rows)),
-                )
+            reached_at(
+                rank + 1,
+                table,
+                logical_table,
+                {rows: carried.get(head_dim, "0")},
+                free=tuple(range(rows)),
             )
         )
     return iterating(
         (*q_ty.shape, 2),
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(value),
-                BoundaryRelation(grouped),
-                *tables,
-                BoundaryRelation(
-                    reached_at(
-                        rank + 1,
-                        positions,
-                        ctx.type_of(call.args[4]),
-                        {},
-                        free=tuple(range(len(ctx.type_of(call.args[4]).shape))),
-                    )
-                ),
+        (
+            value,
+            grouped,
+            *tables,
+            reached_at(
+                rank + 1,
+                positions,
+                ctx.type_of(call.args[4]),
+                {},
+                free=tuple(range(len(ctx.type_of(call.args[4]).shape))),
             ),
-            outputs=(
-                BoundaryRelation(value),
-                BoundaryRelation(grouped),
-            ),
+            value,
+            grouped,
         ),
     )
 

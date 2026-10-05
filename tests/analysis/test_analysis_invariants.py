@@ -62,12 +62,9 @@ from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import is_literal_shape, tensor_bytes
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     access_relation_registry,
     local_relations_of,
-    relation_of,
     relations_of,
 )
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
@@ -123,6 +120,9 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
     default, because a default would be a second answer about where an Op reads
     and would be wrong for whichever Op it was invented for. Every Op the
     surface can call states one, so this asks with an Op the surface cannot.
+    One that states them in any other form than one relation per argument and
+    then per result is refused the same way: before its Type, a tuple of them
+    with something produced; once the Type is known, one per field at its rank.
     """
 
     class Unstated(Op):
@@ -132,6 +132,25 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
     call = Call(type=held, target=Unstated(), args=(Var(type=held, name="x"),))
     with pytest.raises(ValueError, match="Unstated states no access relations"):
         relations_of(call, TypeInferContext())
+
+    walked = AccessRelation(isl.map("{ [d0] -> [d0] : 0 <= d0 < 4 }"))
+    for stated, asked, message in (
+        ([walked, walked], relations_of, "one AccessRelation each, in a tuple"),
+        ((walked, walked.relation), relations_of, "one AccessRelation each, in a tuple"),
+        ((walked,), relations_of, "then what it produces"),
+        ((walked, walked, walked), local_relations_of, "2 output boundaries of a call with 1"),
+        (
+            (walked, AccessRelation(isl.map("{ [d0] -> [d0, 0] : 0 <= d0 < 4 }"))),
+            local_relations_of,
+            "reads output 0 at 2 coordinates",
+        ),
+    ):
+        access_relation_registry.register(Unstated, lambda call, ctx, stated=stated: stated)
+        try:
+            with pytest.raises(ValueError, match=message):
+                asked(call, TypeInferContext())
+        finally:
+            del access_relation_registry._map[Unstated]
 
 
 _CTA2 = Topology("cta", 2)
@@ -220,7 +239,7 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed(
     ctx = CostContext(topology_level=level, topologies=topologies)
 
     stated = relations_of(call, ctx)
-    reads = relation_of(stated.inputs[1].pattern)
+    reads = stated[1].relation
     assert not reads.intersect_range(isl.set(before)).is_empty(), (
         "the window's own read runs before its operand begins"
     )
@@ -230,8 +249,8 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed(
         *(ctx.local_type_of(arg) for arg in call.args),
         ctx.local_type_of(call),
     )
-    for boundary, view in zip((*relations.inputs, *relations.outputs), held, strict=True):
-        reached = relation_of(boundary.pattern).range()
+    for boundary, view in zip(relations, held, strict=True):
+        reached = boundary.relation.range()
         if not isinstance(view, TensorType) or reached.is_empty():
             continue
         assert is_literal_shape(view.shape), f"{tuple(view.shape)} is not a literal shape"
@@ -239,7 +258,7 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed(
         assert reached.is_subset(box), (
             f"a boundary reached {reached} outside the {tuple(view.shape)} it was given"
         )
-    assert relation_of(relations.inputs[1].pattern).domain().is_equal(isl.set(own)), (
+    assert relations[1].relation.domain().is_equal(isl.set(own)), (
         "so the iterations left are the ones whose read this participant holds"
     )
 
@@ -303,17 +322,11 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
     )
     honest = access_relation_registry.lookup(SliceOp)
 
-    def reads_the_second_number(one, ctx) -> AccessRelations:
+    def reads_the_second_number(one, ctx) -> tuple[AccessRelation, ...]:
         """A window that reads the second of its numbers and not the first."""
-        relations = honest(one, ctx)
-        held = relation_of(relations.inputs[1].pattern)
-        return AccessRelations(
-            inputs=(
-                relations.inputs[0],
-                BoundaryRelation(AffineAccess(held.intersect_range(isl.set("{ [l] : l = 1 }")))),
-            ),
-            outputs=relations.outputs,
-        )
+        source, numbers, *result = honest(one, ctx)
+        held = numbers.relation.intersect_range(isl.set("{ [l] : l = 1 }"))
+        return (source, AccessRelation(held), *result)
 
     def measured():
         return call_traffic(call, CostContext(), {"cta": CostContext()})
@@ -346,12 +359,9 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
         "one CTA is the only unit, so its share is the whole"
     )
 
-    written = AccessRelations(
-        inputs=(),
-        outputs=(
-            BoundaryRelation(AffineAccess(isl.map("{ [d0] -> [c0] : c0 = d0 and 0 <= d0 < 2 }"))),
-            BoundaryRelation(AffineAccess(isl.map("{ [d0] -> [c0] : c0 = 0 and 0 <= d0 < 2 }"))),
-        ),
+    written = (
+        AccessRelation(isl.map("{ [d0] -> [c0] : c0 = d0 and 0 <= d0 < 2 }")),
+        AccessRelation(isl.map("{ [d0] -> [c0] : c0 = 0 and 0 <= d0 < 2 }")),
     )
     result = TupleType(
         fields=(
@@ -359,10 +369,7 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
             make_tensor_type((2,), DType.i64, storage=StorageKind.RMEM),
         )
     )
-    asked = tuple(
-        (field_, boundary.pattern)
-        for field_, boundary in zip(result.fields, written.outputs, strict=True)
-    )
+    asked = tuple(zip(result.fields, written, strict=True))
     assert _reached_bytes(asked, None) == (16, {"gmem": 8, "rmem": 8}), (
         "a field written in part owes that part, at that field's own level"
     )

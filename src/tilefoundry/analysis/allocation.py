@@ -19,7 +19,7 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.utils import is_literal_shape, local_type_of, tensor_types
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
-from tilefoundry.visitor_registry.access_relation import relation_of, renaming_relation
+from tilefoundry.visitor_registry.access_relation import renaming_relation
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
@@ -97,9 +97,9 @@ def storage_owners(root: IterationScope, liveness: Liveness) -> dict[int, Expr]:
         if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
             operand = value.args[position]
             ctx = TypeInferContext()
-            relation = relation_of(
-                renaming_relation(value, ctx, declarations[key].projected_relations(value, ctx))
-            )
+            relation = renaming_relation(
+                value, ctx, declarations[key].projected_relations(value, ctx)
+            ).relation
             box = (
                 shape_to_isl_set(tuple(operand.type.shape), {})
                 if is_literal_shape(operand.type.shape)

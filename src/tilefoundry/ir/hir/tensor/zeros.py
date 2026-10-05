@@ -13,8 +13,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     register_access_relation,
@@ -42,7 +41,7 @@ def _eval_zeros(ctx):
 
 
 @register_access_relation(Zeros)
-def _zeros_access(call: "Call", ctx) -> AccessRelations:
+def _zeros_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """Nothing is read; every element of the result is written.
 
     A zero has no source, so there is no input boundary to describe -- which is
@@ -52,10 +51,5 @@ def _zeros_access(call: "Call", ctx) -> AccessRelations:
     allocated = call.target.type
     return iterating(
         allocated.shape,
-        AccessRelations(
-            inputs=(),
-            outputs=(
-                BoundaryRelation(identity_access(len(allocated.shape))),
-            ),
-        ),
+        (identity_access(len(allocated.shape)),),
     )

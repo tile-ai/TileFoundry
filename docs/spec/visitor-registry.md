@@ -317,34 +317,22 @@ family asks it how much crossed each boundary. There is no second registry and
 no fallback: a boundary nobody can price is a boundary nobody can measure.
 
 ```python
-class AffineAccess:
+class AccessRelation:
     """One boundary's relation, together with what its parameters are.
 
     Attributes:
-        relation: attribute; Which coordinates of its own value it reaches.
+        relation: attribute; The relation from the Op's iteration space to the coordinates of its own value it reaches.
         values: attribute; Each isl parameter name mapped to the operand element or dimension it is.
     """
 
     relation: "isl.map"
     values: IslParamValues = {}
 
-class BoundaryRelation:
-    """One boundary, as the coordinates it reaches and nothing else.
-
-    Attributes:
-        pattern: attribute; The relation from the Op's iteration space to that value's coordinates.
-    """
-
-    pattern: AffineAccess
-
-class AccessRelations:
-    """One `BoundaryRelation` per boundary value, in boundary order."""
-
-    inputs: tuple[BoundaryRelation, ...]
-    outputs: tuple[BoundaryRelation, ...]
-
-def coordinates_of(call, ctx) -> AccessRelations: ...
-def relations_of(call, ctx) -> AccessRelations: ...
+def relations_of(call, ctx) -> tuple[AccessRelation, ...]: ...
+def local_relations_of(call, ctx) -> tuple[AccessRelation, ...]: ...
+def projected(relations, call, ctx, *, device=None) -> tuple[AccessRelation, ...]: ...
+def iterating(extents, relations: tuple[AccessRelation, ...]) -> tuple[AccessRelation, ...]: ...
+def shape_from_relation(access: AccessRelation, extents) -> tuple: ...
 ```
 
 Registry + decorator:
@@ -355,17 +343,19 @@ def register_access_relation(op_cls: type): ...
 ```
 
 - constraints:
-  - A handler has the shape `(call, ctx) -> AccessRelations`. It MUST NOT read
+  - A handler has the shape `(call, ctx) -> tuple[AccessRelation, ...]`. It MUST NOT read
     the Call's own Type: typeinfer asks it in order to derive that Type, so a
     handler that asked back would be asking for its own answer. It MAY read its
     operands' Types, its Op's attributes, and the values its parameters bind.
-  - `AffineAccess` is the only carrier. A boundary MUST NOT take a bare
+  - `AccessRelation` is the only carrier, and an Op's relations are one flat
+    tuple of them with no record around it. A boundary MUST NOT be a bare
     `isl.map` or `isl.multi_aff`: those say where a boundary reaches and nothing
     about what its parameters stand for, so whoever restricts one guesses.
-    Construction MUST refuse them, and every helper that builds a boundary hands
-    one over already stated. A function handed to `AffineAccess` is kept as the
+    `relations_of` MUST refuse a handler answer that is not a tuple of
+    `AccessRelation`, and every helper that builds a boundary hands one over
+    already stated. A function handed to `AccessRelation` is kept as the
     relation it is.
-  - Every `BoundaryRelation.pattern` is a relation from the Op's **whole
+  - Every `AccessRelation.relation` is a relation from the Op's **whole
     iteration space** to the coordinates that boundary reaches, stated in the
     axes the value was written in. Every boundary of one Op shares that space; a
     boundary MAY be partial in it, which is one relation empty somewhere rather
@@ -381,25 +371,32 @@ def register_access_relation(op_cls: type): ...
     is one name and two values are two, equating and merging two names one
     boundary gives one value, without a rename capturing another name. A
     relation composed or restricted from others MUST carry exactly the
-    parameters it names, taken from those `values`.
-  - `inputs` has one entry per input arg in argument order; `outputs` has one
-    per output, which for a `TupleType` result is one per field. `coordinates_of`
-    holds the input count, each input image's rank against the supplied Type,
-    the shared iteration arity, boundedness once parameters are bound, and
-    parameter closure -- all before any Type is derived. `relations_of` adds
-    what needs the derived Type: one boundary per output field, at that field's
-    rank in this view.
+    parameters it names, taken from those `values`; the caller that composes it
+    picks them, and construction refuses a parameter left without one.
+  - The tuple has one relation per argument, in argument order, and then one
+    per result: one for a single value, one per field of a `TupleType` result,
+    in field order. Position is the only record of where the arguments end, so
+    a reader that holds the Call takes the first `len(call.args)` as the
+    arguments' and the rest as the result's; a reader without a Call is handed
+    that count by its caller. Before any Type is derived, construction holds
+    parameter closure, `iterating` the shared iteration arity, and
+    `relations_of` the tuple form and at least one relation after the
+    arguments. Projection adds what needs the derived Type: one relation per
+    result field, each image at the rank its value was written in, and each
+    projected relation reaching a countable number of elements.
   - How much a boundary moves MUST NOT be a second field. It is what the
     relation reaches over the coordinates its Op iterates, counted from the
     relation's own image; reaching the same element from many coordinates is one
     element moved, so an inner iteration axis costs nothing. A projection or a
     count that cannot be derived MUST fail closed rather than fall back on a
     stated number.
-  - `relations_of` carries every boundary from logical axes onto the positions
-    the reader addresses, by composing with the layout the value ended up with,
-    and holds every boundary to the iterations this participant performs. A
-    value nobody divided is addressed whole by every participant, so leaving one
-    boundary unheld would charge one participant what all of them read.
+  - `relations_of` answers in logical axes only. `projected` carries every
+    boundary from logical axes onto the positions the reader addresses, by
+    composing with the layout the value ended up with, and holds every boundary
+    to the iterations this participant performs; `local_relations_of` is
+    `projected` over `relations_of`. A value nobody divided is addressed whole
+    by every participant, so leaving one boundary unheld would charge one
+    participant what all of them read.
   - A boundary whose value is not read or written at any coordinate MUST be
     stated as an empty relation at that value's own rank; `unread_access`
     builds one. An Op whose result follows from its operands' Types alone --

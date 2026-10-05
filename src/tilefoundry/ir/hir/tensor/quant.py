@@ -31,9 +31,7 @@ from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     iterating,
     register_access_relation,
 )
@@ -211,7 +209,7 @@ def _eval_quant(ctx):
 
 
 @register_access_relation(Quant)
-def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
+def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[AccessRelation, ...]:
     """GLOBAL black-box quant.
 
     - input ``x`` is read element-wise → identity multi_aff over the rank-N
@@ -225,7 +223,7 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
     group = call.target.group
 
     dims = ", ".join(f"i{k}" for k in range(rank))
-    ident = AffineAccess(isl.map(f"{{ [{dims}] -> [{dims}] }}"))
+    ident = AccessRelation(isl.map(f"{{ [{dims}] -> [{dims}] }}"))
 
     if rank == 0:
         scale_rel = ident  # pragma: no cover
@@ -233,17 +231,11 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
         outer = ", ".join(f"i{k}" for k in range(rank - 1))
         last = f"i{rank - 1}"
         out_dims = (outer + ", ") if outer else ""
-        scale_rel = AffineAccess(isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}"))
+        scale_rel = AccessRelation(isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}"))
 
     return iterating(
         x_ty.shape,
-        AccessRelations(
-            inputs=(BoundaryRelation(ident),),
-            outputs=(
-                BoundaryRelation(ident),
-                BoundaryRelation(scale_rel),
-            ),
-        ),
+        (ident, ident, scale_rel),
     )
 
 

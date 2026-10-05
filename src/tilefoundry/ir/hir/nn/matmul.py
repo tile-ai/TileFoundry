@@ -22,7 +22,7 @@ from tilefoundry.ir.types.shard_layout import (
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
+    AccessRelation,
     broadcast_shapes,
     matmul_relations,
     register_access_relation,
@@ -69,7 +69,7 @@ def _k_split_axes(t, k_tensor_axis: int) -> "frozenset[int]":
 
 
 @register_access_relation(MatMul)
-def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
+def _matmul_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """Every coordinate of each operand a contraction reaches, read once."""
     lhs = ctx.type_of(call.args[0])
     rhs = ctx.type_of(call.args[1])
@@ -131,7 +131,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     out_batch = broadcast_shapes(lhs.shape[:-2], rhs.shape[:-2], raising=False)
     out_shape = shape_from_relation(
-        relation, (*out_batch, lhs.shape[a_m], rhs.shape[b_n], lhs.shape[a_k])
+        relation[len(call.args)], (*out_batch, lhs.shape[a_m], rhs.shape[b_n], lhs.shape[a_k])
     )
     k_domain_dim = len(out_shape)
     try:

@@ -32,16 +32,13 @@ from tilefoundry.visitor_registry import (
     verify_stmt_registry,
 )
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    BoundaryRelation,
+    AccessRelation,
     iteration_universe,
     projected,
     projected_axes,
     reached_elements,
     register_access_relation,
-    relation_of,
     relations_of,
-    restricted_access,
 )
 from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes, VerifyContext
 from tilefoundry.visitor_registry.verify import verify_between
@@ -89,7 +86,9 @@ class _RelationContext:
         return self._types[id(expr)]
 
 
-def _single_issue_relations(op: Op, operand_types: tuple[TensorType, ...]) -> AccessRelations:
+def _single_issue_relations(
+    op: Op, operand_types: tuple[TensorType, ...]
+) -> tuple[AccessRelation, ...]:
     """Ask the selected instruction's registry entry about one issue."""
     args = tuple(
         Var(name=f"operand{index}", type=type_) for index, type_ in enumerate(operand_types)
@@ -108,7 +107,7 @@ def _declared_shape(pattern: TensorPattern | None, bindings: dict) -> tuple | No
     return declared_shape(pattern, bindings)
 
 
-def _iteration_shape(relations: AccessRelations) -> tuple[int, ...]:
+def _iteration_shape(relations: tuple[AccessRelation, ...]) -> tuple[int, ...]:
     space = iteration_universe(relations)
     if space is None:
         raise ValueError("instruction access relations state no iteration space")
@@ -167,25 +166,26 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
         op, tuple(whole.get(param.name, UnitType()) for param in params)
     )
     whole_shape = _iteration_shape(whole_relations)
+    operands = whole_relations[: len(params)]
     read_boundaries = tuple(
         boundary
-        for param, boundary in zip(params, whole_relations.inputs, strict=True)
+        for param, boundary in zip(params, operands, strict=True)
         if param.effect & MemoryEffect.READ
     )
     write_boundaries = tuple(
         boundary
-        for param, boundary in zip(params, whole_relations.inputs, strict=True)
+        for param, boundary in zip(params, operands, strict=True)
         if param.effect & MemoryEffect.WRITE
     )
     collapsed = frozenset(range(len(whole_shape))) - set().union(
-        *(involved_dims(boundary.pattern.relation) for boundary in write_boundaries)
+        *(involved_dims(boundary.relation) for boundary in write_boundaries)
     )
     if fragments and getattr(op, "atom", None) is None:
         for type_, boundary in zip(whole.values(), read_boundaries, strict=True):
             layout = shard_layout_of(type_.layout)
             if layout is None:
                 continue
-            axes = projected_axes(boundary.pattern)
+            axes = projected_axes(boundary)
             if any(
                 axis is not None and axes[axis] in collapsed
                 for axis in split_target_axes(layout, type_.shape)
@@ -201,7 +201,7 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
                 pattern,
                 whole,
                 ctx.current_mesh,
-                AccessRelations(read_boundaries, (write_boundaries[writes.index(param)],)),
+                (*read_boundaries, write_boundaries[writes.index(param)]),
                 collapsed,
             )
     whole.update(outputs)
@@ -254,7 +254,7 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
                 shape,
                 counts=tuple(
                     1 if axis is None else repeat[axis]
-                    for axis in projected_axes(boundary.pattern)
+                    for axis in projected_axes(boundary)
                 ),
                 participant=participant,
                 enclosing=ctx.current_mesh,
@@ -265,7 +265,7 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
                 ),
             )
             for param, type_, shape, pattern, boundary in zip(
-                params, whole_types, shapes, patterns, single.inputs, strict=True
+                params, whole_types, shapes, patterns, single[: len(params)], strict=True
             )
         )
         if fragments
@@ -275,11 +275,11 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
 
 
 def _outer_band(
-    relations: AccessRelations,
+    relations: tuple[AccessRelation, ...],
     repeat: tuple[int, ...],
     order: tuple[int, ...],
     single_shape: tuple[int, ...],
-) -> AccessRelations:
+) -> tuple[AccessRelation, ...]:
     """Compose repeat coordinates with one issue's affine coordinate equations."""
     if all(count == 1 for count in repeat):
         return relations
@@ -297,30 +297,32 @@ def _outer_band(
         f"{{ [{', '.join(domain)}] -> [{', '.join(global_)}] : {' and '.join(constraints)} }}"
     )
 
-    def lifted(boundary: BoundaryRelation) -> BoundaryRelation:
-        pattern = boundary.pattern
-        relation = band.apply_range(relation_of(pattern).affine_hull())
-        return BoundaryRelation(restricted_access(relation, pattern.values))
+    def lifted(access: AccessRelation) -> AccessRelation:
+        relation = band.apply_range(access.relation.affine_hull())
+        names = (
+            relation.get_dim_name(isl.dim_type.PARAM, index)
+            for index in range(relation.dim(isl.dim_type.PARAM))
+        )
+        return AccessRelation(
+            relation, {name: access.values[name] for name in names if name in access.values}
+        )
 
-    return AccessRelations(
-        inputs=tuple(lifted(boundary) for boundary in relations.inputs),
-        outputs=tuple(lifted(boundary) for boundary in relations.outputs),
-    )
+    return tuple(lifted(access) for access in relations)
 
 
 @register_access_relation(ScheduleOp)
-def _schedule_access_relation(call: Call, ctx) -> AccessRelations:
+def _schedule_access_relation(call: Call, ctx) -> tuple[AccessRelation, ...]:
     op, params, _reads, _writes, _patterns, inner, repeat, order, shape = _instruction_view(
         call, ctx, fragments=False
     )
     scheduled = _outer_band(_single_issue_relations(op, inner), repeat, order, shape)
-    return AccessRelations(
-        inputs=tuple(
+    return (
+        *(
             boundary
-            for param, boundary in zip(params, scheduled.inputs, strict=True)
+            for param, boundary in zip(params, scheduled[: len(params)], strict=True)
             if param.effect & MemoryEffect.READ
         ),
-        outputs=scheduled.outputs,
+        *scheduled[len(params) :],
     )
 
 
@@ -329,12 +331,11 @@ def _schedule_cost(call: Call, ctx) -> Cost:
     stated = relations_of(call, ctx)
     local = projected(stated, call, ctx)
     types = (*(ctx.local_type_of(arg) for arg in call.args), ctx.local_output_type(call))
-    boundaries = (*local.inputs, *local.outputs)
     moved = []
-    for index, (type_, boundary) in enumerate(zip(types, boundaries, strict=True)):
+    for index, (type_, boundary) in enumerate(zip(types, local, strict=True)):
         if not isinstance(type_, TensorType):
             raise ValueError("ScheduleOp cost requires tensor operands and output")
-        elements = reached_elements(boundary.pattern)
+        elements = reached_elements(boundary)
         if elements is None:
             raise ValueError(f"ScheduleOp boundary {index} has no finite traffic")
         amount = -(-(elements * type_.dtype.bit_width) // 8)

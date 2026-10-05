@@ -15,8 +15,7 @@ from tilefoundry.ir.types.utils import is_literal_shape, local_type_of, static_d
 from tilefoundry.ir.visitor import ExprCloner
 from tilefoundry.utils.isl_utils import cardinality, has_unbounded_param
 from tilefoundry.visitor_registry.access_relation import (
-    BoundaryRelation,
-    relation_of,
+    AccessRelation,
     renaming_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
@@ -182,7 +181,7 @@ def eliminate_parameters(
 
 def resolve_access(
     operand: Expr,
-    boundary: BoundaryRelation,
+    boundary: AccessRelation,
     scope: "IterationScope",
     ctx: TypeInferContext,
     *,
@@ -191,7 +190,7 @@ def resolve_access(
     narrow: bool,
 ) -> Access | None:
     """Resolve one declared boundary into an access from its iteration scope."""
-    relation = relation_of(boundary.pattern)
+    relation = boundary.relation
     loops = scope.enclosing_loops()
     relation = relation.insert_dims(isl.dim_type.IN, 0, len(loops))
     scope_domain = scope.domain.insert_dims(
@@ -200,7 +199,7 @@ def resolve_access(
     relation = relation.intersect_domain(scope_domain)
     relation, precision = eliminate_parameters(
         relation,
-        boundary.pattern.values,
+        boundary.values,
         scope,
         operand.type,
         narrow=narrow,
@@ -214,7 +213,7 @@ def resolve_access(
     operand = scope.capture_root(operand)
     while isinstance(operand, Call) and (position := aliased_operand(operand)) is not None:
         folded = renaming_relation(operand, ctx, scope.projected_relations(operand, ctx))
-        relation = relation.apply_range(relation_of(folded))
+        relation = relation.apply_range(folded.relation)
         operand = scope.capture_root(operand.args[position])
         relation, folded_precision = eliminate_parameters(
             relation,

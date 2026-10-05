@@ -261,7 +261,7 @@ def declared_write_type(
         derive_output_shard_layout,
     )
 
-    shape = shape_from_relation(relations, source.shape)
+    shape = shape_from_relation(relations[-1], source.shape)
     stated_dtype = getattr(op, "dtype", None)
     dtype = (
         stated_dtype

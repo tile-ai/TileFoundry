@@ -15,8 +15,7 @@ from tilefoundry.ir.types.dim import is_dim_expr
 from tilefoundry.ir.types.tensor_type import ShapeDim
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     register_access_relation,
@@ -33,7 +32,7 @@ class Arange(Op):
 
 
 @register_access_relation(Arange)
-def _arange_access(call: "Call", ctx) -> AccessRelations:
+def _arange_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """A sequence made from its own attributes: nothing read, every index written.
 
     The length is the Op's, not an operand's -- there are no operands -- so the
@@ -41,7 +40,7 @@ def _arange_access(call: "Call", ctx) -> AccessRelations:
     """
     return iterating(
         call.target.type.shape,
-        AccessRelations(inputs=(), outputs=(BoundaryRelation(identity_access(1)),)),
+        (identity_access(1),),
     )
 
 

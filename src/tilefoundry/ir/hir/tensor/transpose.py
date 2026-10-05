@@ -13,9 +13,7 @@ from tilefoundry.ir.types import Layout, TensorType
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     register_access_relation,
@@ -30,7 +28,7 @@ class Transpose(Op):
     perm = ParamDef(kind="attribute", annotation=tuple)
 
 @register_access_relation(Transpose)
-def _transpose_relations(call: "Call", ctx) -> AccessRelations:
+def _transpose_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """Result axis k is source axis perm[k], stated in both sides' positions.
 
     A permutation walks what it reads, so the source's own axes are the
@@ -44,13 +42,9 @@ def _transpose_relations(call: "Call", ctx) -> AccessRelations:
     domain = ", ".join(f"d{index}" for index in range(rank))
     return iterating(
         source.shape,
-        AccessRelations(
-            (BoundaryRelation(identity_access(rank)),),
-            (
-                BoundaryRelation(
-                    AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}"))
-                ),
-            ),
+        (
+            identity_access(rank),
+            AccessRelation(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}")),
         ),
     )
 

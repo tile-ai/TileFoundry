@@ -24,7 +24,6 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.utils.isl_utils import as_multi_aff, equates, involved_dims
-from tilefoundry.visitor_registry.access_relation import boundary_maps
 
 
 def partial_reductions_by_axis(
@@ -242,7 +241,7 @@ def derive_output_shard_layout(
     mesh = sharded[0][1].mesh
     mesh_rank = len(flatten(mesh.layout).shape)
 
-    *input_maps, output_map = boundary_maps(relations)
+    *input_maps, output_map = (access.relation for access in relations)
     out_access = _result_access(output_map, folded=True)
     domain_to_out_axis = {
         d: o for o, (kind, d) in out_access.items() if kind == "proj"

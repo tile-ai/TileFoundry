@@ -41,9 +41,7 @@ from tilefoundry.ir.types.tensor_type import ShapeDim
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     iterating,
     register_access_relation,
     relations_of,
@@ -219,7 +217,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
 
 
 @register_access_relation(TopK)
-def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
+def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[AccessRelation, ...]:
     """One selection per kept position, scanning the whole axis it selects from.
 
     The axis a selection lands on is not a view of the axis it came from -- which
@@ -242,14 +240,11 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     scanned = dims[rank]
     reads = ", ".join(scanned if index == axis else dims[index] for index in range(rank))
     kept = ", ".join(dims[:rank])
-    written = BoundaryRelation(AffineAccess(isl.map(f"{{ [{walked}] -> [{kept}] }}")))
+    written = AccessRelation(isl.map(f"{{ [{walked}] -> [{kept}] }}"))
     out_shape = (*x_ty.shape[:axis], picked, *x_ty.shape[axis + 1 :])
     return iterating(
         (*out_shape, x_ty.shape[axis]),
-        AccessRelations(
-            inputs=(BoundaryRelation(AffineAccess(isl.map(f"{{ [{walked}] -> [{reads}] }}"))),),
-            outputs=(written, written),
-        ),
+        (AccessRelation(isl.map(f"{{ [{walked}] -> [{reads}] }}")), written, written),
     )
 
 

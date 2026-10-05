@@ -21,7 +21,7 @@ from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.ir.types.layout import EMPTY_LAYOUT
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.visitor_registry.access_relation import relation_of, relations_of
+from tilefoundry.visitor_registry.access_relation import relations_of
 from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
@@ -64,11 +64,10 @@ def test_shape_metadata_cost(case):
     call = replace(call, type=TypeInferVisitor().visit(call, TypeInferContext()))
     relations = relations_of(call, TypeInferContext())
     values = (*case.inputs, call.type)
-    for boundary, value in zip((*relations.inputs, *relations.outputs), values, strict=True):
-        assert relation_of(boundary.pattern).dim(isl.dim_type.OUT) == len(value.shape)
-    for boundary in relations.inputs:
-        assert relation_of(boundary.pattern).is_empty()
-    (written,) = (relation_of(boundary.pattern) for boundary in relations.outputs)
+    for boundary, value in zip(relations, values, strict=True):
+        assert boundary.relation.dim(isl.dim_type.OUT) == len(value.shape)
+    *inputs, written = (boundary.relation for boundary in relations)
+    assert all(relation.is_empty() for relation in inputs)
     if isinstance(case.op, FullLike):
         assert written.is_equal(shape_to_isl_set(tuple(call.type.shape), {}).identity())
     else:

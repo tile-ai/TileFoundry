@@ -25,9 +25,7 @@ from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     register_access_relation,
@@ -122,7 +120,7 @@ def _workspace_slots(source) -> int:
 
 
 @register_access_relation(Reduce)
-def _reduce_access(call: "Call", ctx) -> AccessRelations:
+def _reduce_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """Walk the source coordinates and collapse reduced axes into ``dst``.
 
     The workspace is reached at every warp slot from every source coordinate:
@@ -144,19 +142,12 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
         for axis in range(len(out_shape))
     ]
     domain = ", ".join(f"d{axis}" for axis in range(rank))
-    destination_access = BoundaryRelation(
-        AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}"))
-    )
-    inputs = [BoundaryRelation(identity_access(rank)), destination_access]
+    destination_access = AccessRelation(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}"))
+    inputs = [identity_access(rank), destination_access]
     if len(call.args) > 2:
         slots = _workspace_slots(source)
-        inputs.append(
-            BoundaryRelation(AffineAccess(isl.map(f"{{ [{domain}] -> [s] : 0 <= s < {slots} }}")))
-        )
-    return iterating(
-        source.shape,
-        AccessRelations(inputs=tuple(inputs), outputs=(destination_access,)),
-    )
+        inputs.append(AccessRelation(isl.map(f"{{ [{domain}] -> [s] : 0 <= s < {slots} }}")))
+    return iterating(source.shape, (*inputs, destination_access))
 
 
 @register_verify_stmt(Reduce)

@@ -23,9 +23,7 @@ from tilefoundry.ir.types.utils import i64_const
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     control_read,
     identity_access,
     iterating,
@@ -188,7 +186,7 @@ def _slice_view(call: "Call", ctx) -> tuple:
     rank = len(sizes) or len(logical_source.shape)
     domain = ", ".join(f"d{index}" for index in range(rank))
     return (
-        AffineAccess(
+        AccessRelation(
             isl.map(f"{prefix}{{ [{domain}] -> [{', '.join(reads)}]{where} }}"),
             values,
         ),
@@ -197,17 +195,11 @@ def _slice_view(call: "Call", ctx) -> tuple:
 
 
 @register_access_relation(Slice)
-def _slice_relations(call: "Call", ctx) -> AccessRelations:
+def _slice_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     reads, writes = _slice_view(call, ctx)
     return iterating(
         call.target.sizes,
-        AccessRelations(
-            (
-                BoundaryRelation(reads),
-                BoundaryRelation(control_read(len(call.target.sizes), ctx, call.args[1])),
-            ),
-            (BoundaryRelation(writes),),
-        ),
+        (reads, control_read(len(call.target.sizes), ctx, call.args[1]), writes),
     )
 
 

@@ -13,8 +13,7 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    BoundaryRelation,
+    AccessRelation,
     control_read,
     iterating,
     logical_coordinates,
@@ -55,7 +54,7 @@ def _offset_axes(call: "Call", rank: int) -> tuple:
 
 
 @register_access_relation(InsertSlice)
-def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
+def _insert_slice_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """The result is dst with a window replaced, so every index reads itself.
 
     The window is exactly the update's own shape wherever it lands, so both
@@ -75,13 +74,11 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     read_update = window_source(offsets, rank, update, update, logical_coordinates(result, result))
     return iterating(
         result.shape,
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(complement),
-                BoundaryRelation(read_update),
-                *(BoundaryRelation(control_read(rank, ctx, arg)) for arg in call.args[2:]),
-            ),
-            outputs=(BoundaryRelation(written),),
+        (
+            complement,
+            read_update,
+            *(control_read(rank, ctx, arg) for arg in call.args[2:]),
+            written,
         ),
     )
 

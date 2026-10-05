@@ -14,9 +14,7 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     iterating,
     logical_axes_of,
     normalised_rows,
@@ -103,7 +101,7 @@ def _eval_layer_norm(ctx):
 
 
 @register_access_relation(LayerNorm)
-def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
+def _layer_norm_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """One row normalised per iteration; the parameters read across the suffix.
 
     Normalising needs the whole suffix before any of it can be written, so those
@@ -119,20 +117,13 @@ def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
     rows, names, guards = normalised_rows(x, x, axis)
     domain = ", ".join(f"d{index}" for index in range(len(rows)))
     where = f" : {' and '.join(guards)}" if guards else ""
-    row = AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"))
+    row = AccessRelation(isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"))
     belongs = logical_axes_of(x, x)
     suffix = (
         ", ".join(names[position] for position, owner in enumerate(belongs) if owner >= axis) or "0"
     )
-    across = AffineAccess(isl.map(f"{{ [{domain}] -> [{suffix}]{where} }}"))
+    across = AccessRelation(isl.map(f"{{ [{domain}] -> [{suffix}]{where} }}"))
     return iterating(
         rows,
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(row),
-                BoundaryRelation(across),
-                BoundaryRelation(across),
-            ),
-            outputs=(BoundaryRelation(row),),
-        ),
+        (row, across, across, row),
     )

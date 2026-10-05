@@ -13,9 +13,7 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     register_access_relation,
@@ -75,7 +73,7 @@ def _eval_repeat_interleave(ctx):
 
 
 @register_access_relation(RepeatInterleave)
-def _repeat_interleave_access(call: "Call", ctx) -> AccessRelations:
+def _repeat_interleave_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """Several result coordinates read one source coordinate, which is read once.
 
     The pattern is many-to-one and the amount is its image. That three output
@@ -100,12 +98,8 @@ def _repeat_interleave_access(call: "Call", ctx) -> AccessRelations:
         produced *= extent if isinstance(extent, int) else 1
     return iterating(
         out_shape,
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(
-                    AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
-                ),
-            ),
-            outputs=(BoundaryRelation(identity_access(rank)),),
+        (
+            AccessRelation(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")),
+            identity_access(rank),
         ),
     )

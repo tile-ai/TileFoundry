@@ -63,32 +63,33 @@ relation service ([visitor-registry §4.1](./visitor-registry.md#41-access-relat
 The access relation is the boundary model shared by relation-derived type
 behavior, shard propagation, dependence and movement: per boundary, an affine
 access map from the Op's own iteration space to a tensor's index space. Its
-carrier `AccessRelations` and the registry that produces it are both defined in
+carrier `AccessRelation`, the tuple of them one Op states, and the registry
+that produces it are all defined in
 [visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation).
 The rule reads only the access maps' affine structure (which domain dim each
 axis uses), never the domain bounds, so it is size-agnostic and identical for
 static and dynamic shapes.
 
-An effect-form TIR instruction uses the same carrier even though its call is
-unit-typed. Its boundary order is derived from its input `ParamDef`s:
+An effect-form TIR instruction uses the same tuple even though its call is
+unit-typed:
 
-- `AccessRelations.inputs` contains every parameter whose `effect` includes
-  `READ`, in parameter order.
-- `AccessRelations.outputs` contains every parameter whose `effect` includes
-  `WRITE`, in parameter order.
-- A `READ | WRITE` parameter appears on both sides.
+- One relation per input `ParamDef`, in parameter order, comes first, whether
+  that operand is read, written or both.
+- Its relations after those are its Unit result's, as for any Op.
+- Which operands are read and which are written is each parameter's `effect`,
+  not its position: the argument prefix is not the set of reads.
 
-These output boundaries describe written operands, not SSA results of the TIR
-call. An HIR consumer such as [`tf.schedule`](./schedule.md) may use them to
-derive its own value result. Instructions selected by such a consumer MUST
-register their relation explicitly; there is no fallback relation.
+An HIR consumer such as [`tf.schedule`](./schedule.md) may use the relations
+of written operands to derive its own value result. Instructions selected by
+such a consumer MUST register their relation explicitly; there is no fallback
+relation.
 
 ### 2.1 IR to isl conversion
 
 Every analysis service converts IR values to isl through the functions that
 [types §4](./types.md#4-dim--symbolic-shape-dimensions) owns, and every
 boundary carries what its parameters stand for in the `values` of its
-`AffineAccess` ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation)).
+`AccessRelation` ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation)).
 Both use the one `IslParamValues` dictionary, from isl parameter name to IR value.
 
 - constraints:

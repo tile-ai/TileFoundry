@@ -11,9 +11,7 @@ from tilefoundry.ir.pattern import is_ranked_tensor, is_scalar_tensor
 from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     control_read,
     identity_access,
     iterating,
@@ -36,7 +34,7 @@ class TupleGetItem(Op):
 
 
 @register_access_relation(TupleGetItem)
-def _access_relations(call: "Call", ctx: "AccessContext") -> AccessRelations:
+def _access_relations(call: "Call", ctx: "AccessContext") -> tuple[AccessRelation, ...]:
     held = ctx.type_of(call.args[0])
     if not isinstance(held, TupleType):
         raise ValueError("TupleGetItem access requires a TupleType operand")
@@ -59,16 +57,12 @@ def _access_relations(call: "Call", ctx: "AccessContext") -> AccessRelations:
     walks = getattr(result, "shape", ()) or ()
     rank = len(walks)
     coordinates = ", ".join(f"d{axis}" for axis in range(rank))
-    reads = AffineAccess(isl.map(f"{{ [{coordinates}] -> [l] : {begin} <= l < {begin + count} }}"))
+    reads = AccessRelation(
+        isl.map(f"{{ [{coordinates}] -> [l] : {begin} <= l < {begin + count} }}")
+    )
     return iterating(
         walks,
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(reads),
-                BoundaryRelation(control_read(rank, ctx, index)),
-            ),
-            outputs=(BoundaryRelation(identity_access(rank)),),
-        ),
+        (reads, control_read(rank, ctx, index), identity_access(rank)),
     )
 
 

@@ -147,7 +147,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
     try:
         relation = relations_of(call, ctx)
-        out_shape = shape_from_relation(relation, broadcast_shapes(lhs_ty.shape, rhs_ty.shape))
+        out_shape = shape_from_relation(
+            relation[len(call.args)], broadcast_shapes(lhs_ty.shape, rhs_ty.shape)
+        )
         shard = None
         if shard_layout_of(la) is not None or shard_layout_of(lb) is not None:
             shard = derive_output_shard_layout((lhs_ty, rhs_ty), relation, out_shape)

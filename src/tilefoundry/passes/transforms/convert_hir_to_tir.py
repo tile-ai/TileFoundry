@@ -903,7 +903,7 @@ class Lowering(ExprVisitor[Expr]):
         shapes = atom.operand_shapes()
         try:
             relations = operand_relations(op, logical)
-            projected = tuple(projected_axes(boundary.pattern) for boundary in relations.inputs)
+            projected = tuple(projected_axes(boundary) for boundary in relations[: len(logical)])
             if any(axis is None for mapped in projected for axis in mapped):
                 raise ValueError(
                     f"{atom.reference_name} access relation does not project every operand axis"

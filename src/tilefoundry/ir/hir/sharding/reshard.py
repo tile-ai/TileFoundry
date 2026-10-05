@@ -18,8 +18,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     register_access_relation,
@@ -167,7 +166,7 @@ class Reshard(Op):
 
 
 @register_access_relation(Reshard)
-def _reshard_access(call: "Call", ctx) -> AccessRelations:
+def _reshard_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """Every logical index reads itself. Where those bytes go is a separate fact.
 
     A reshard moves a value between storages or redistributes it across
@@ -180,10 +179,7 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     reads = identity_access(rank)
     return iterating(
         logical.shape,
-        AccessRelations(
-            inputs=(BoundaryRelation(reads),),
-            outputs=(BoundaryRelation(identity_access(rank)),),
-        ),
+        (reads, identity_access(rank)),
     )
 
 

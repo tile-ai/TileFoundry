@@ -17,8 +17,7 @@ from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    BoundaryRelation,
+    AccessRelation,
     control_read,
     iterating,
     logical_axes_of,
@@ -86,7 +85,7 @@ def _row_limit(offsets: tuple, extents: tuple, limit: int | None) -> tuple:
 
 
 @register_access_relation(CacheUpdate)
-def _cache_update_access(call: "Call", ctx) -> AccessRelations:
+def _cache_update_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """The result is the cache with ``s`` rows replaced at ``cur_pos``.
 
     How many rows move is ``s`` and where they land is ``cur_pos``; only the
@@ -112,24 +111,20 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     complement, reached = placed_window(offsets, extents, rank, ceilings, cache)
     return iterating(
         cache,
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(complement),
-                BoundaryRelation(control_read(rank, ctx, call.args[1])),
-                BoundaryRelation(control_read(rank, ctx, call.args[2])),
-                BoundaryRelation(
-                    window_source(
-                        offsets,
-                        rank,
-                        logical_new,
-                        logical_new,
-                        {axis: f"d{axis}" for axis in range(rank)},
-                        (None, rows),
-                        ceilings,
-                    )
-                ),
+        (
+            complement,
+            control_read(rank, ctx, call.args[1]),
+            control_read(rank, ctx, call.args[2]),
+            window_source(
+                offsets,
+                rank,
+                logical_new,
+                logical_new,
+                {axis: f"d{axis}" for axis in range(rank)},
+                (None, rows),
+                ceilings,
             ),
-            outputs=(BoundaryRelation(reached),),
+            reached,
         ),
     )
 

@@ -13,8 +13,7 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     logical_coordinates,
@@ -57,7 +56,7 @@ __all__ = ["IndexCopy"]
 
 
 @register_access_relation(IndexCopy)
-def _index_copy_access(call: "Call", ctx) -> AccessRelations:
+def _index_copy_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """The rows the index names are replaced; the container around them is kept.
 
     Two questions, and the index answers only one. Which rows are reached its
@@ -81,12 +80,5 @@ def _index_copy_access(call: "Call", ctx) -> AccessRelations:
     payload = reached_at(rank, src, ctx.type_of(call.args[2]), carried, free=(dim,))
     return iterating(
         dst.shape,
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(identity),
-                BoundaryRelation(named),
-                BoundaryRelation(payload),
-            ),
-            outputs=(BoundaryRelation(rows),),
-        ),
+        (identity, named, payload, rows),
     )

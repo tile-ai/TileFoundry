@@ -583,9 +583,9 @@ def moving_boundaries(
                 if unit_relations is not None:
                     try:
                         if access.input_index is not None:
-                            boundary = unit_relations.inputs[access.input_index]
+                            boundary = unit_relations[access.input_index]
                             operand = call.args[access.input_index]
-                            local_rank = boundary.pattern.relation.dim(isl.dim_type.OUT)
+                            local_rank = boundary.relation.dim(isl.dim_type.OUT)
                             logical_rank = (
                                 len(operand.type.shape)
                                 if isinstance(operand.type, TensorType)
@@ -604,8 +604,8 @@ def moving_boundaries(
                                     or access
                                 )
                         elif access.output_index is not None:
-                            boundary = unit_relations.outputs[access.output_index]
-                            local_rank = boundary.pattern.relation.dim(isl.dim_type.OUT)
+                            boundary = unit_relations[len(call.args) + access.output_index]
+                            local_rank = boundary.relation.dim(isl.dim_type.OUT)
                             logical_rank = (
                                 len(held.shape)
                                 if isinstance(held, TensorType)

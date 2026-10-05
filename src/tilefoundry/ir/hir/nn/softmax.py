@@ -13,9 +13,7 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     iterating,
     normalised_rows,
     register_access_relation,
@@ -29,7 +27,7 @@ class SoftMax(Op):
 
 
 @register_access_relation(SoftMax)
-def _softmax_access(call: "Call", ctx) -> AccessRelations:
+def _softmax_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """One row normalised per iteration, read whole and written whole.
 
     Every element of a row needs the row's own maximum and sum before any of it
@@ -45,13 +43,10 @@ def _softmax_access(call: "Call", ctx) -> AccessRelations:
     rows, names, guards = normalised_rows(x_ty, logical_x, axis)
     domain = ", ".join(f"d{index}" for index in range(len(rows)))
     where = f" : {' and '.join(guards)}" if guards else ""
-    row = AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"))
+    row = AccessRelation(isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"))
     return iterating(
         rows,
-        AccessRelations(
-            inputs=(BoundaryRelation(row),),
-            outputs=(BoundaryRelation(row),),
-        ),
+        (row, row),
     )
 
 

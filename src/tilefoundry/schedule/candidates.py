@@ -40,7 +40,6 @@ from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     projected_axes,
-    relation_of,
     relations_of,
 )
 from tilefoundry.visitor_registry.candidates import (
@@ -101,10 +100,9 @@ def _site_types(
         raise ValueError(f"{type(call.target).__name__} candidate site is not tensor-valued")
     relations = relations_of(call, ctx)
     same_coordinates = (
-        len(reads) == len(relations.inputs) == len(relations.outputs) == 1
-        and relation_of(relations.inputs[0].pattern).is_equal(
-            relation_of(relations.outputs[0].pattern)
-        )
+        len(reads) == 1
+        and len(relations) == 2
+        and relations[0].relation.is_equal(relations[1].relation)
     )
     if same_coordinates:
         shape = tuple(
@@ -151,8 +149,7 @@ def _sites(module, function, ctx: TypeInferContext) -> tuple[_Site, ...]:
 
 
 def _relation_shape(boundary) -> tuple[int, tuple[int | None, ...]]:
-    relation = relation_of(boundary.pattern)
-    return relation.dim(isl.dim_type.IN), projected_axes(boundary.pattern)
+    return boundary.relation.dim(isl.dim_type.IN), projected_axes(boundary)
 
 
 def _site_relation_shape(site: _Site) -> tuple:
@@ -160,8 +157,8 @@ def _site_relation_shape(site: _Site) -> tuple:
     call = Call(target=site.call.target, args=args, type=site.leaves[0][1])
     relations = relations_of(call, TypeInferContext())
     return (
-        tuple(_relation_shape(boundary) for boundary in relations.inputs),
-        tuple(_relation_shape(boundary) for boundary in relations.outputs),
+        tuple(_relation_shape(boundary) for boundary in relations[: len(args)]),
+        tuple(_relation_shape(boundary) for boundary in relations[len(args) :]),
     )
 
 
@@ -194,14 +191,15 @@ def _instruction_relation_shape(site: _Site, op) -> tuple | None:
     call = Call(target=op, args=args, type=UnitType())
     relations = relations_of(call, TypeInferContext())
     params = _input_params(type(op), len(site.reads))
+    operands = relations[: len(args)]
     reads = tuple(
         _relation_shape(boundary)
-        for param, boundary in zip(params, relations.inputs, strict=True)
+        for param, boundary in zip(params, operands, strict=True)
         if param.effect & MemoryEffect.READ and not param.effect & MemoryEffect.WRITE
     )
     writes = tuple(
         _relation_shape(boundary)
-        for param, boundary in zip(params, relations.inputs, strict=True)
+        for param, boundary in zip(params, operands, strict=True)
         if param.effect & MemoryEffect.WRITE
     )
     return reads, writes

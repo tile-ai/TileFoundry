@@ -74,9 +74,7 @@ from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
     access_relation_registry,
-    boundary_maps,
     identity_relations,
     relations_of,
 )
@@ -714,16 +712,14 @@ def test_single_issue_schedule_preserves_instruction_relations() -> None:
         type=UnitType(),
     )
     ctx = TypeInferContext()
-    scheduled = boundary_maps(relations_of(schedule, ctx))
-    instruction_relations = relations_of(instruction, ctx)
-    single = boundary_maps(
-        AccessRelations(
-            inputs=(instruction_relations.inputs[0],),
-            outputs=instruction_relations.outputs,
-        )
-    )
+    scheduled = relations_of(schedule, ctx)
+    source, _destination, *result = relations_of(instruction, ctx)
+    single = (source, *result)
     assert len(scheduled) == len(single)
-    assert all(left.is_equal(right) for left, right in zip(scheduled, single, strict=True))
+    assert all(
+        left.relation.is_equal(right.relation)
+        for left, right in zip(scheduled, single, strict=True)
+    )
 
 
 @pytest.mark.parametrize(

@@ -24,9 +24,7 @@ from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     iterating,
     register_access_relation,
     relations_of,
@@ -61,7 +59,7 @@ def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
 
 
 @register_access_relation(Concat)
-def _concat_access(call: "Call", ctx) -> AccessRelations:
+def _concat_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """Each input reads its own segment of the result; the result is read whole.
 
     The segments are the same arithmetic the forward relation states, so the two
@@ -83,7 +81,7 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
         if offset:
             reads[axis] = f"d{axis} - {offset}"
         inputs.append(
-            AffineAccess(
+            AccessRelation(
                 isl.map(
                     f"{{ [{domain_text}] -> [{', '.join(reads)}] : "
                     f"{offset} <= d{axis} < {offset + extent} }}"
@@ -98,14 +96,7 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
     )
     return iterating(
         out_shape,
-        AccessRelations(
-            inputs=tuple(BoundaryRelation(item) for item, type_ in zip(inputs, types)),
-            outputs=(
-                BoundaryRelation(
-                    AffineAccess(isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"))
-                ),
-            ),
-        ),
+        (*inputs, AccessRelation(isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"))),
     )
 
 

@@ -21,9 +21,7 @@ from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     register_access_relation,
@@ -98,7 +96,7 @@ def _eval_stack(ctx):
 
 
 @register_access_relation(Stack)
-def _stack_access(call: "Call", ctx) -> AccessRelations:
+def _stack_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """Each input writes one position of the new axis, and is read whole.
 
     The result has one more axis than its inputs, so an input's relation drops
@@ -115,17 +113,11 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
     domain = ", ".join(dims)
     reads = ", ".join(dim for index, dim in enumerate(dims) if index != axis)
     inputs = tuple(
-        AffineAccess(
+        AccessRelation(
             isl.map(f"{{ [{domain}] -> [{reads}] : d{axis} = {position} }}")
             if rank > 1
             else isl.map(f"{{ [{domain}] -> [] : d{axis} = {position} }}")
         )
         for position in range(len(call.args))
     )
-    return iterating(
-        out_shape,
-        AccessRelations(
-            inputs=tuple(BoundaryRelation(item) for item, arg in zip(inputs, call.args)),
-            outputs=(BoundaryRelation(identity_access(rank)),),
-        ),
-    )
+    return iterating(out_shape, (*inputs, identity_access(rank)))

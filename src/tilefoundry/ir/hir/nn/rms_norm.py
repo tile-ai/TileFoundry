@@ -20,9 +20,7 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     factored_image,
     iterating,
     logical_term,
@@ -33,9 +31,9 @@ from tilefoundry.visitor_registry.access_relation import (
 
 def _identity(rank: int) -> "isl.multi_aff":
     if rank == 0:
-        return AffineAccess(isl.map("{ [] -> [] }"))
+        return AccessRelation(isl.map("{ [] -> [] }"))
     dims = ", ".join(f"i{i}" for i in range(rank))
-    return AffineAccess(isl.map(f"{{ [{dims}] -> [{dims}] }}"))
+    return AccessRelation(isl.map(f"{{ [{dims}] -> [{dims}] }}"))
 
 
 @register_op(name="rms_norm")
@@ -64,7 +62,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_access_relation(RMSNorm)
-def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
+def _rms_norm_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """GLOBAL level: one row normalised per iteration, read whole.
 
     A normalisation is asked once per row, because every element of a row needs
@@ -90,12 +88,10 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
     )
     return iterating(
         rows,
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(AffineAccess(isl.map(element))),
-                BoundaryRelation(AffineAccess(isl.map(f"{{ [{domain}] -> [{across}]{where} }}"))),
-            ),
-            outputs=(BoundaryRelation(AffineAccess(isl.map(element))),),
+        (
+            AccessRelation(isl.map(element)),
+            AccessRelation(isl.map(f"{{ [{domain}] -> [{across}]{where} }}")),
+            AccessRelation(isl.map(element)),
         ),
     )
 

@@ -23,9 +23,7 @@ from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     register_access_relation,
@@ -128,7 +126,7 @@ def _eval_split(ctx):
 
 
 @register_access_relation(Split)
-def _split_access(call: "Call", ctx) -> AccessRelations:
+def _split_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """One space, the source's, with each part written on its own run of it.
 
     Every element of the source becomes an element of exactly one part, so the
@@ -156,7 +154,7 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
         if begin:
             writes[axis] = f"d{axis} - {begin}"
         written.append(
-            AffineAccess(
+            AccessRelation(
                 isl.map(
                     f"{{ [{domain}] -> [{', '.join(writes)}] : "
                     f"{begin} <= d{axis} < {begin + chunk} }}"
@@ -164,10 +162,4 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
             )
         )
 
-    return iterating(
-        source.shape,
-        AccessRelations(
-            inputs=(BoundaryRelation(identity_access(rank)),),
-            outputs=tuple(BoundaryRelation(item) for item in written),
-        ),
-    )
+    return iterating(source.shape, (identity_access(rank), *written))

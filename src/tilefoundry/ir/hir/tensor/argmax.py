@@ -27,9 +27,7 @@ from tilefoundry.ir.types.shard_layout import (
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     register_access_relation,
@@ -104,7 +102,7 @@ def _eval_argmax(ctx):
 
 
 @register_access_relation(ArgMax)
-def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
+def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[AccessRelation, ...]:
     """A scan walks what it reads, and collapses the axis it scanned on the way out.
 
     The coordinates are the source's own, because reading every element of the
@@ -121,10 +119,7 @@ def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRela
     kept = ", ".join(dim for index, dim in enumerate(dims) if index != axis)
     return iterating(
         x_ty.shape,
-        AccessRelations(
-            inputs=(BoundaryRelation(identity_access(rank)),),
-            outputs=(BoundaryRelation(AffineAccess(isl.map(f"{{ [{walked}] -> [{kept}] }}"))),),
-        ),
+        (identity_access(rank), AccessRelation(isl.map(f"{{ [{walked}] -> [{kept}] }}"))),
     )
 
 

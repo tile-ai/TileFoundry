@@ -18,8 +18,7 @@ from tilefoundry.ir.types import LayoutBase, UnitType
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     identity_relations,
     iterating,
@@ -56,7 +55,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 @register_access_relation(Copy)
-def _copy_access(call: "Call", ctx) -> AccessRelations:
+def _copy_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """Walk ``src``; ``dst`` is reached where the same per-thread buffer holds it.
 
     Two shapes over one per-thread buffer both regroup row-major onto it
@@ -70,12 +69,10 @@ def _copy_access(call: "Call", ctx) -> AccessRelations:
     rank = len(src.shape)
     return iterating(
         src.shape,
-        AccessRelations(
-            inputs=(
-                BoundaryRelation(identity_access(rank)),
-                BoundaryRelation(linearized_view(tuple(src.shape), tuple(dst.shape))),
-            ),
-            outputs=(BoundaryRelation(identity_access(rank)),),
+        (
+            identity_access(rank),
+            linearized_view(tuple(src.shape), tuple(dst.shape)),
+            identity_access(rank),
         ),
     )
 

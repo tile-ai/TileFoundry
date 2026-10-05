@@ -18,9 +18,7 @@ from tilefoundry.ir.types.shard_layout import canonical_shard_layout, shard_layo
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
+    AccessRelation,
     identity_access,
     iterating,
     register_access_relation,
@@ -172,7 +170,7 @@ def _kept(shape: tuple) -> int:
 
 
 @register_access_relation(Reduce)
-def _reduce_access(call: "Call", ctx) -> AccessRelations:
+def _reduce_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """Every source coordinate feeding a result coordinate, read once.
 
     A reduction walks what it reads, so the source's own positions are the
@@ -203,10 +201,5 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
     domain = ", ".join(f"d{index}" for index in range(rank))
     return iterating(
         source.shape,
-        AccessRelations(
-            inputs=(BoundaryRelation(identity_access(rank)),),
-            outputs=(
-                BoundaryRelation(AffineAccess(isl.map(f"{{ [{domain}] -> [{collapses}] }}"))),
-            ),
-        ),
+        (identity_access(rank), AccessRelation(isl.map(f"{{ [{domain}] -> [{collapses}] }}"))),
     )
