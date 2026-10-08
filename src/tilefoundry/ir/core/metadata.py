@@ -143,6 +143,7 @@ def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr":
 __all__ = [
     "IRMetadata",
     "BindingMetadata",
+    "ParsedAnnotationMetadata",
     "RangeMetadata",
     "SourceSpanMetadata",
     "binding_name",

@@ -306,6 +306,15 @@ class SourceSpanMetadata(IRMetadata):
     column: int
     end_line: int | None = None
     end_column: int | None = None
+
+class ParsedAnnotationMetadata(IRMetadata):
+    """Describe a region parameter's type before any owner's Target typed it.
+
+    Attributes:
+        type: attribute; The type the parameter was parsed with.
+    """
+
+    type: Type
 ```
 
 - constraints:
@@ -321,6 +330,11 @@ class SourceSpanMetadata(IRMetadata):
     Its file, line, and start column identify the physical authored file position;
     the start column is one-based. `end_column`, when present, is the physical
     source-file offset using Python AST's exclusive-end convention.
+  - `ParsedAnnotationMetadata` is kept on a region parameter of a child Module's
+    function the first time a root's Target types it ([§1](#1-module)). Every
+    later typing of that parameter, by this owner or another owner's copy, is
+    checked against this type; the parameter's own type is the one its current
+    owner gives it.
 
 ```python
 class Expr:

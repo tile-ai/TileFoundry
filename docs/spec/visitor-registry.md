@@ -221,7 +221,11 @@ nothing of that kind rather than guessing.
     resolved Target, or `None` without a scope or when no Module on the owner
     chain declares one. The parser's context, which reads a function before its
     Module exists, MUST answer with the Target that function is parsed under
-    when it has no scope; once a scope exists, the scope Module's Target wins.
+    when it has no scope. With a scope, the scope Module's owner chain answers
+    first; only a child the `@module` being built will hold, whose chain has no
+    Target yet, answers with the Target that build declares, and any other
+    scope without a Target answers `None`
+    ([parser §1.4](./parser.md#14-context-and-diagnostics)).
   - `memo` is the current scope's identity-pinned type table. Crossing a
     Function boundary creates a fresh context table; a region keeps its scope
     and seeds a nested visitor table from the enclosing one.

@@ -267,6 +267,7 @@ def test_a_held_child_takes_its_own_owners_target_types():
     """
     from tests._source import import_dsl  # noqa: PLC0415
     from tests.fixtures.placed.child_matmul_target import (  # noqa: PLC0415
+        K_LEN,
         ChildMatmul,
         ChildMatmulDirect,
         ChildMatmulRoot,
@@ -301,7 +302,7 @@ def test_a_held_child_takes_its_own_owners_target_types():
 
     @module(entry="gemm", target=CpuTarget(), topologies=(Topology("cta", 1),))
     class _CpuRoot:
-        child, direct = held[0], held[1]
+        child, direct, staged = held
 
         @func
         def gemm(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]):
@@ -311,8 +312,12 @@ def test_a_held_child_takes_its_own_owners_target_types():
         def gemm_on_chip(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]):
             return direct(a, b)  # noqa: F821 -- class-body binding
 
+        @func
+        def gemm_staged(a: Tensor[(M, K_LEN), "bf16"], b: Tensor[(K_LEN, N), "bf16"]):
+            return staged(a, b)  # noqa: F821 -- class-body binding
+
     copies = _CpuRoot.modules
-    for copy_, original in zip(copies, held, strict=False):
+    for copy_, original in zip(copies, held, strict=True):
         assert copy_ is not original and copy_._parent is _CpuRoot and copy_.target is None
         assert storages(copy_) == [StorageKind.SMEM] * 3
         assert storages(original) == [StorageKind.RMEM] * 3
