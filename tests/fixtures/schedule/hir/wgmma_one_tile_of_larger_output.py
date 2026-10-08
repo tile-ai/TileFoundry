@@ -51,7 +51,7 @@ class WGMMA_ONE_TILE_OF_LARGER_OUTPUT:
                 names=("role", "participant"),
             ) as threads:
                 wgmma = T.cuda.sm90.Wgmma(
-                    n=32, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
+                    n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
                 out = tf.zeros(Tensor[(OUT_M, OUT_N), "bf16"])
 

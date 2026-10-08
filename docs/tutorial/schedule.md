@@ -181,13 +181,13 @@ single registered operations that lowering will select by default.
 ```bash
 set -euo pipefail
 tilefoundry schedule candidates grid.py candidates.txt
-grep -E 'tf.matmul|candidate   T.cuda.sm90.Wgmma|n=256, form=SS|tf.binary|tf.cast.*x=.*rmem|default' candidates.txt
+grep -E 'tf.matmul|candidate   T.cuda.sm90.Wgmma|n=256, dtype=bf16, form=SS|tf.binary|tf.cast.*x=.*rmem|default' candidates.txt
 ```
 
 ```text
   v10:33  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", "smem"]  rhs=Tensor[(64, 256), "bf16", "smem"]
     candidate   T.cuda.sm90.Wgmma  needs thread p0:p0+256, p0 % 128 = 0
-                  n=256, form=SS
+                  n=256, dtype=bf16, form=SS
   v12:34  tf.binary  per cta  lhs=Tensor[(128, 256), "f32", "rmem"]  rhs=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "f32", "rmem"]
     default     T.binary
   v13:35  tf.cast  per cta  x=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "bf16", "rmem"]
@@ -201,7 +201,7 @@ one registered operation whose required attributes come from the HIR, so they sa
 ```bash
 set -euo pipefail
 tilefoundry schedule facts T.cuda.sm90.Wgmma --target nvidia.h200_sxm Wgmma.facts.txt
-sed -n '1,21p' Wgmma.facts.txt
+sed -n '1,24p' Wgmma.facts.txt
 ```
 
 ```text
@@ -218,6 +218,9 @@ T.cuda.sm90.Wgmma
                predicates:
                  8 <= n <= 256
                  n % 8 == 0
+    dtype    any value
+               predicates:
+                 dtype in {bf16, f16}
     form     any value
                predicates:
                  form in {Form.SS, Form.RS}
@@ -235,7 +238,7 @@ The complete program below makes the structural decisions explicit:
 - `Topology("cta", 132)` plus `g / bn / mi` states persistent G=16 traversal.
 - `buffers=3` on the two `T.copy_async_tensor` loads states the BK64 TMA ring.
 - `threads[0, :32]` is the producer; `threads[1:3, :]` are two consumers.
-- `Wgmma(n=256, form=SS, a_major=K)` with `repeat=(2, 1, 4)` states eight K16 atoms.
+- `Wgmma(n=256, dtype=bf16, form=SS, a_major=K)` with `repeat=(2, 1, 4)` states eight K16 atoms.
 - `T.copy(smem_layout=OUT_SMEM)` keeps the 64 KiB output staging tile outside all six
   load-ring slots, then `T.copy_async_tensor` writes it to global memory.
 
@@ -298,7 +301,7 @@ class GEMM_8192X17408X5120_OPTIMAL:
                 names=("warpgroup", "participant"),
             ) as threads:
                 wgmma = T.cuda.sm90.Wgmma(
-                    n=256, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
+                    n=256, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
                 out = tf.zeros(Tensor[(M, N), "bf16"])
                 for g in range(GM // GROUP_M):

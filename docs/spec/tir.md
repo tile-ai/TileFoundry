@@ -961,6 +961,20 @@ class MmaAtom:
     unknown binding and a value refused by its `ParamDef.pattern`; an omitted
     parameter MUST take the value implied by earlier bindings or its declared
     default, and otherwise construction MUST fail.
+  - A string bound to a `DType` parameter MUST resolve through
+    `DType.from_name` at construction, so `dtype="bf16"` and `DType.bf16` bind
+    the same value.
+  - `configurations(defaulted=..., values=...)` MUST return every binding of
+    the parameters, in declaration order, that their patterns admit under the
+    earlier bindings. Enum and `DType` parameters take every member; `values`
+    supplies the others, which stay unbound without it. A parameter with a
+    default is varied only when `defaulted` is true. A declaration with no
+    parameters has one empty configuration. `schedule candidates` calls it with
+    `defaulted=False` and binds `int` parameters to `1..` the site's largest
+    extent.
+  - The written form states only the bindings that earlier ones do not imply.
+    The printer writes an Enum as `<namespace>.<Enum>.<member>` and any other
+    value through its canonical value form, so a `DType` prints as its name.
   - `role("A")`, `role("B")`, and `role("C")` MUST resolve the declaration's
     role pattern under the instance bindings. The logical TIR orientation is
     always A `(M,K)`, B `(K,N)`, C `(M,N)`; each role pattern separately states
@@ -978,9 +992,10 @@ class MmaAtom:
 
 The public declarations are `T.cuda.sm80.Mma()` (BF16 `16x8x16`, F32
 accumulator, register A/B/C over one warp) and
-`T.cuda.sm90.Wgmma(n=..., form=..., a_major=..., mesh=...)` (BF16
-`64 x n x 16` over one warpgroup). `Form` and `Major` live beside `Wgmma`
-under `T.cuda.sm90`.
+`T.cuda.sm90.Wgmma(n=..., dtype=..., form=..., a_major=..., mesh=...)`
+(`dtype` is `bf16` or `f16`; `64 x n x k` over one warpgroup with an F32
+accumulator, where `k` is 32 bytes of `dtype`). `dtype` has no default.
+`Form` and `Major` live beside `Wgmma` under `T.cuda.sm90`.
 
 ##### Calling convention
 

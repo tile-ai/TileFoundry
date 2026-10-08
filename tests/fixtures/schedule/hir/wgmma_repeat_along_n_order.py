@@ -45,7 +45,7 @@ class WGMMA_REPEAT_ALONG_N_ORDER:
                 names=("warpgroup", "participant"),
             ) as threads:
                 wgmma = T.cuda.sm90.Wgmma(
-                    n=64, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
+                    n=64, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
                 with threads[1:3, :] as _compute:
                     acc = tf.zeros(Tensor[(M, N), "f32", ACC, "rmem"])

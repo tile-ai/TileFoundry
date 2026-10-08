@@ -205,21 +205,16 @@ def _instruction_relation_shape(site: _Site, op) -> tuple | None:
     return reads, writes
 
 
-def _parameter_values(param: ParamDef, site: _Site) -> tuple:
-    if param.has_default:
+def _int_values(param: ParamDef, site: _Site) -> tuple:
+    if param.annotation is not int:
         return ()
-    annotation = param.annotation
-    if isinstance(annotation, type) and issubclass(annotation, Enum):
-        return tuple(annotation)
-    if annotation is int:
-        largest = max(
-            extent
-            for _name, type_ in (*site.reads, *site.leaves)
-            for extent in type_.shape
-            if isinstance(extent, int) and not isinstance(extent, bool)
-        )
-        return tuple(range(1, largest + 1))
-    return ()
+    largest = max(
+        extent
+        for _name, type_ in (*site.reads, *site.leaves)
+        for extent in type_.shape
+        if isinstance(extent, int) and not isinstance(extent, bool)
+    )
+    return tuple(range(1, largest + 1))
 
 
 def _variant_instances(
@@ -231,17 +226,9 @@ def _variant_instances(
         instruction = instruction_from_hir(site.call.target, op_type)
         return () if instruction is None else ((instruction, {}),)
     declaration = capability.declaration
-    states: tuple[dict, ...] = ({},)
-    for param in declaration.parameters:
-        if param.has_default:
-            continue
-        held = []
-        for state in states:
-            for value in _parameter_values(param, site):
-                matcher = PatternMatcher(state)
-                if matcher.match(param.pattern, value) and matcher.solve():
-                    held.append({**state, param.name: value})
-        states = tuple(held)
+    states = declaration.configurations(
+        defaulted=False, values=lambda param: _int_values(param, site)
+    )
     variants = []
     for state in states:
         try:

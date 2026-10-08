@@ -50,7 +50,7 @@ class GEMM_8192X17408X5120_REGISTER_STORE:
                 names=("warpgroup", "participant"),
             ) as threads:
                 wgmma = T.cuda.sm90.Wgmma(
-                    n=256, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
+                    n=256, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
                 out = tf.zeros(Tensor[(M, N), "bf16"])
                 for m in tile(M, BM):

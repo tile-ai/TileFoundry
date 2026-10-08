@@ -48,7 +48,7 @@ class WGMMA_A_MN_MAJOR:
                 ("thread",), layout=(2, 128),
                 names=("role", "participant"),
             ) as threads:
-                wgmma = T.cuda.sm90.Wgmma(n=32, form=T.cuda.sm90.Form.SS)
+                wgmma = T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.SS)
 
                 with threads[1, :] as _compute:
                     acc = tf.zeros(Tensor[(M, N), "f32", ACC, "rmem"])

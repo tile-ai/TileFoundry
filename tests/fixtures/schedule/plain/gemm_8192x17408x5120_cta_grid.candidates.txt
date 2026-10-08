@@ -14,12 +14,12 @@ target nvidia.h200_sxm
     refused     T.ldmatrix: src storage=gmem, reads storage=smem
   v5:36  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", "smem"]  rhs=Tensor[(64, 256), "bf16", "smem"]
     candidate   T.cuda.sm90.Wgmma  needs thread p0:p0+256, p0 % 128 = 0
-                  n=8, form=SS
-                  n=16, form=SS
-                  n=32, form=SS
-                  n=64, form=SS
-                  n=128, form=SS
-                  n=256, form=SS
+                  n=8, dtype=bf16, form=SS
+                  n=16, dtype=bf16, form=SS
+                  n=32, dtype=bf16, form=SS
+                  n=64, dtype=bf16, form=SS
+                  n=128, dtype=bf16, form=SS
+                  n=256, dtype=bf16, form=SS
     refused     T.cuda.sm80.Mma: lhs storage=smem, reads storage=rmem
     refused     T.cuda.sm80.Mma: rhs storage=smem, reads storage=rmem
   v6:37  tf.reshard  per cta  x=Tensor[(128, 256), "f32", "smem"]  result=Tensor[(128, 256), "f32", "rmem"]

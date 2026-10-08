@@ -132,7 +132,9 @@ def operand_relations(
 @register_schedule_eval(TiledMma)
 def _eval_scheduled_mma(ctx):
     acc, lhs, rhs = (arg.data for arg in ctx.args)
-    return TensorValue(data=acc + torch.matmul(lhs, rhs), type=ctx.result_type)
+    return TensorValue(
+        data=acc + torch.matmul(lhs.to(acc.dtype), rhs.to(acc.dtype)), type=ctx.result_type
+    )
 
 
 @register_verify_stmt(TiledMma)

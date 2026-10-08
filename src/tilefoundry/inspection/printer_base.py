@@ -413,8 +413,18 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
         return f'P("{value.reduction}")'
 
     def atom_reference(self, value: MmaAtom, ctx=None) -> str:
-        mesh = None if value.mesh is None else self.visit(value.mesh, ctx)
-        return value.written(mesh)
+        stated = [
+            f"{name}={self._atom_value(value, held, ctx)}" for name, held in value.stated_bindings()
+        ]
+        if value.mesh is not None:
+            stated.append(f"mesh={self.visit(value.mesh, ctx)}")
+        return f"{value.reference_name}({', '.join(stated)})"
+
+    def _atom_value(self, atom: MmaAtom, value, ctx=None) -> str:
+        """An Enum beside its atom keeps the ``T.cuda.sm90.Form.SS`` spelling."""
+        if isinstance(value, enum.Enum):
+            return f"{atom.namespace}.{type(value).__name__}.{value.name}"
+        return self.render_value(value, ctx)
 
     def render_value(self, value, ctx=None, indent: str = "") -> str:
         """Render a non-expression attribute through the same visitor when possible."""

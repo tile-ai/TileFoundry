@@ -41,7 +41,6 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
 from tilefoundry.ir.hir.tensor.reshape import Reshape
@@ -680,26 +679,27 @@ def test_schedule_copy_evaluates_to_the_source_value() -> None:
 
 
 def test_schedule_mma_evaluates_like_matmul_plus_accumulator() -> None:
+    """Products are summed in the accumulator dtype, not rounded to bf16 first.
+
+    Column 0 of lhs holds 2**-8, so each sum carries bits a bf16 result drops.
+    """
     acc_type = TensorType((16, 8), DType.f32, None, StorageKind.RMEM)
     lhs_type = TensorType((16, 16), DType.bf16, None, StorageKind.RMEM)
     rhs_type = TensorType((16, 8), DType.bf16, None, StorageKind.RMEM)
-    product_type = TensorType((16, 8), DType.bf16, None, StorageKind.RMEM)
     acc = torch.arange(16 * 8, dtype=torch.float32).reshape(16, 8)
-    lhs = (torch.arange(16 * 16).reshape(16, 16) % 5).to(torch.bfloat16)
+    lhs = (torch.arange(16 * 16).reshape(16, 16) % 5).float()
+    lhs[:, 0] = 2.0**-8
+    lhs = lhs.to(torch.bfloat16)
     rhs = (torch.arange(16 * 8).reshape(16, 8) % 3).to(torch.bfloat16)
 
-    product = _evaluate_call(
-        MatMul(),
-        ((lhs_type, lhs), (rhs_type, rhs)),
-        product_type,
-    )
     scheduled = _evaluate_call(
         ScheduleOp(op=TiledMma(atom=Mma())),
         ((acc_type, acc), (lhs_type, lhs), (rhs_type, rhs)),
         acc_type,
     )
 
-    assert torch.equal(scheduled, acc + product)
+    assert torch.equal(scheduled, acc + lhs.float() @ rhs.float())
+    assert not torch.equal(scheduled, acc + (lhs @ rhs).float())
 
 
 def test_single_issue_schedule_preserves_instruction_relations() -> None:

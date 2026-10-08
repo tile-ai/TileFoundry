@@ -49,7 +49,7 @@ class WGMMA_RS_A_FROM_SMEM:
                 ("thread",), layout=(2, 128),
                 names=("role", "participant"),
             ) as threads:
-                register = T.cuda.sm90.Wgmma(n=32, form=T.cuda.sm90.Form.RS)
+                register = T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.RS)
 
                 with threads[1, :] as _compute:
                     acc = tf.zeros(Tensor[(M, N), "f32", ACC, "rmem"])

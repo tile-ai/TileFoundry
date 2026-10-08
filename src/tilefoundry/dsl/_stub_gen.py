@@ -221,7 +221,10 @@ def _platform_namespace_stub(dialect: str) -> str | None:
     def constructor(name: str, declaration: type[MmaAtom]) -> str:
         params = []
         for param in declaration.parameters:
-            annotation = getattr(param.annotation, "__name__", "Any")
+            if param.annotation is DType:
+                annotation, _name = _annotation_type(param)
+            else:
+                annotation = getattr(param.annotation, "__name__", "Any")
             rendered = f"{param.name}: {annotation}"
             if param.has_default:
                 rendered += " = ..."

@@ -52,8 +52,8 @@ class WGMMA_RS_A_FROM_ACCUMULATOR:
                 names=("role", "participant"),
             ) as threads:
                 shared = T.cuda.sm90.Wgmma(
-                    n=16, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
-                register = T.cuda.sm90.Wgmma(n=32, form=T.cuda.sm90.Form.RS)
+                    n=16, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
+                register = T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.RS)
 
                 with threads[1, :] as _compute:
                     p = tf.zeros(Tensor[(M, N0), "f32", P_REG, "rmem"])

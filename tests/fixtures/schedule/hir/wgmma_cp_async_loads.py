@@ -50,7 +50,7 @@ class WGMMA_CP_ASYNC_LOADS:
                 names=("role", "participant"),
             ) as threads:
                 wgmma = T.cuda.sm90.Wgmma(
-                    n=32, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
+                    n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
                 with threads[1, :] as _compute:
                     acc = tf.zeros(Tensor[(M, N), "f32", ACC, "rmem"])

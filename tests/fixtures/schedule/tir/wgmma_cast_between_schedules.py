@@ -160,7 +160,7 @@ def gemm(
                                         acc_view,
                                         lhs_view,
                                         rhs_view,
-                                        atom=T.cuda.sm90.Wgmma(n=32, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_5),
+                                        atom=T.cuda.sm90.Wgmma(n=32, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_5),
                                     )
             with scope[1:] as scope_4:
                 with Mesh(

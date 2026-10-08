@@ -52,37 +52,124 @@ n, b, W, p, r, l, s, c = (
 )
 n_extent = n
 bb, Wb, rb, lb, sb = (WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb"))
-RUN = P.Table((8, 16, 32, 64))[b]
+SWIZZLE_BYTES = (16, 32, 64, 128)
+DTYPES = (DType.bf16, DType.f16)
 BROADCAST = (Broadcast(), Broadcast(), Broadcast())
 PER_THREAD = (Split(2), Split(0), Split(4))
 
-a_mn = ComposedLayoutPattern(
-    SwizzlePattern(b, 4, 3),
-    0,
-    LayoutPattern(((r, W), (2, 8)), ((l, 1), (s, W))),
-    predicates=(W == RUN, r * W == 64, l == 16 * W, s == 8 * W),
-)
-a_k_whole = ComposedLayoutPattern(
-    SwizzlePattern(b, 4, 3),
-    0,
-    LayoutPattern(((8, 8), (r, W)), ((l, W), (s, 1))),
-    predicates=(W == RUN, b <= 1, r * W == 16, l == 16 * W, s == 8 * W),
-)
-a_k_sliced = ComposedLayoutPattern(
-    SwizzlePattern(b, 4, 3),
-    p,
-    LayoutPattern(((8, 8), 16), ((l, W), 1)),
-    predicates=(W == RUN, b >= 2, l == 8 * W, p % 16 == 0, 0 <= p, p < W),
-    issues_per_row=lambda captures: (1, captures["W"] // 16),
-)
+
+def run(swizzle: WildcardPattern, e: int):
+    """Elements in one swizzled row for an operand of *e* bytes."""
+    return P.Table(tuple(width // e for width in SWIZZLE_BYTES))[swizzle]
+
+
+def k_extent(e: int) -> int:
+    """One issue reads 32 bytes of K."""
+    return 32 // e
+
+
+def a_mn(e: int) -> ComposedLayoutPattern:
+    return ComposedLayoutPattern(
+        SwizzlePattern(b, 4, 3),
+        0,
+        LayoutPattern(((r, W), (2, 8)), ((l, 1), (s, W))),
+        predicates=(W == run(b, e), r * W == 64, l == 16 * W, s == 8 * W),
+    )
+
+
+def a_k_whole(e: int) -> ComposedLayoutPattern:
+    return ComposedLayoutPattern(
+        SwizzlePattern(b, 4, 3),
+        0,
+        LayoutPattern(((8, 8), (r, W)), ((l, W), (s, 1))),
+        predicates=(W == run(b, e), b <= 1, r * W == k_extent(e), l == 16 * W, s == 8 * W),
+    )
+
+
+def a_k_sliced(e: int) -> ComposedLayoutPattern:
+    k = k_extent(e)
+    return ComposedLayoutPattern(
+        SwizzlePattern(b, 4, 3),
+        p,
+        LayoutPattern(((8, 8), k), ((l, W), 1)),
+        predicates=(W == run(b, e), b >= 2, l == 8 * W, p % k == 0, 0 <= p, p < W),
+        issues_per_row=lambda captures: (1, captures["W"] // k),
+    )
+
+
+def rs_fragment(e: int) -> LayoutPattern:
+    """A's register fragment; each thread holds 4 bytes of K per pair of rows."""
+    v = 4 // e
+    return LayoutPattern((8, 2, 4, v, 4, 2), (1, 8, 16, 64, 64 * v, 256 * v))
+
+
+def b_mn(e: int) -> ComposedLayoutPattern:
+    return ComposedLayoutPattern(
+        SwizzlePattern(bb, 4, 3),
+        0,
+        LayoutPattern(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1))),
+        predicates=(
+            Wb == run(bb, e),
+            rb * Wb == n_extent,
+            lb == 16 * Wb,
+            sb == 8 * Wb,
+        ),
+    )
+
+
 fragment = LayoutPattern((8, 2, 4, 2, 4, c), (1, 8, 16, 64, 128, 512))
 
 
 N = DimVar("n", 8, 256)
 
 
+def _a_role(dtype: DType) -> SwitchPattern:
+    e = dtype.bit_width // 8
+    return SwitchPattern(
+        "form",
+        {
+            Form.SS: TensorPattern(
+                shape=(64, k_extent(e)),
+                dtype=dtype,
+                storage=S.SMEM,
+                layout=ShardLayoutPattern(
+                    SwitchPattern(
+                        "a_major",
+                        {
+                            Major.MN: a_mn(e),
+                            Major.K: OrPattern(a_k_whole(e), a_k_sliced(e)),
+                        },
+                    ),
+                    BROADCAST,
+                    execution_mesh_pattern(WARPGROUP),
+                ),
+            ),
+            Form.RS: TensorPattern(
+                shape=(64, k_extent(e)),
+                dtype=dtype,
+                storage=S.RMEM,
+                layout=ShardLayoutPattern(
+                    rs_fragment(e),
+                    PER_THREAD,
+                    execution_mesh_pattern(WARPGROUP),
+                ),
+            ),
+        },
+    )
+
+
+def _b_role(dtype: DType) -> TensorPattern:
+    e = dtype.bit_width // 8
+    return TensorPattern(
+        shape=(k_extent(e), N),
+        dtype=dtype,
+        storage=S.SMEM,
+        layout=ShardLayoutPattern(b_mn(e), BROADCAST, execution_mesh_pattern(WARPGROUP)),
+    )
+
+
 class Wgmma(MmaAtom):
-    """A BF16 warpgroup MMA, 64 x n x 16, accumulating in F32."""
+    """A warpgroup MMA, 64 x n x k, accumulating in F32; k is 32 bytes of the operand dtype."""
 
     namespace = "T.cuda.sm90"
     execution_mesh = WARPGROUP
@@ -99,6 +186,11 @@ class Wgmma(MmaAtom):
                 WildcardPattern("n") % 8 == 0,
             ),
         ),
+    )
+    dtype = ParamDef(
+        kind="attribute",
+        annotation=DType,
+        pattern=WildcardPattern("dtype", predicates=(OrPattern(*DTYPES),)),
     )
     form = ParamDef(
         kind="attribute",
@@ -132,60 +224,8 @@ class Wgmma(MmaAtom):
         ),
         predicates=(8 * c == n_extent,),
     )
-    A = SwitchPattern(
-        "form",
-        {
-            Form.SS: TensorPattern(
-                shape=(64, 16),
-                dtype=DType.bf16,
-                storage=S.SMEM,
-                layout=ShardLayoutPattern(
-                    SwitchPattern(
-                        "a_major",
-                        {
-                            Major.MN: a_mn,
-                            Major.K: OrPattern(a_k_whole, a_k_sliced),
-                        },
-                    ),
-                    BROADCAST,
-                    execution_mesh_pattern(WARPGROUP),
-                ),
-            ),
-            Form.RS: TensorPattern(
-                shape=(64, 16),
-                dtype=DType.bf16,
-                storage=S.RMEM,
-                layout=ShardLayoutPattern(
-                    LayoutPattern(
-                        (8, 2, 4, 2, 4, 2),
-                        (1, 8, 16, 64, 128, 512),
-                    ),
-                    PER_THREAD,
-                    execution_mesh_pattern(WARPGROUP),
-                ),
-            ),
-        },
-    )
-    B = TensorPattern(
-        shape=(16, N),
-        dtype=DType.bf16,
-        storage=S.SMEM,
-        layout=ShardLayoutPattern(
-            ComposedLayoutPattern(
-                SwizzlePattern(bb, 4, 3),
-                0,
-                LayoutPattern(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1))),
-                predicates=(
-                    Wb == P.Table((8, 16, 32, 64))[bb],
-                    rb * Wb == n_extent,
-                    lb == 16 * Wb,
-                    sb == 8 * Wb,
-                ),
-            ),
-            BROADCAST,
-            execution_mesh_pattern(WARPGROUP),
-        ),
-    )
+    A = SwitchPattern("dtype", {dtype: _a_role(dtype) for dtype in DTYPES})
+    B = SwitchPattern("dtype", {dtype: _b_role(dtype) for dtype in DTYPES})
 
 
 __all__ = [

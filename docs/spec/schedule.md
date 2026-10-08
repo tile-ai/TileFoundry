@@ -178,8 +178,9 @@ explicit destination.
 
 The copy, asynchronous-copy, tensor-map-copy, and matrix-load instructions
 produce the source tensor's logical data with the schedule result type. A tiled
-MMA produces `acc + torch.matmul(lhs, rhs)`. It performs no explicit dtype
-conversion, so promotion follows torch just as it does for HIR `MatMul`.
+MMA produces `acc + torch.matmul(lhs.to(acc.dtype), rhs.to(acc.dtype))`: the
+operands widen to the accumulator dtype first, as the instruction does, so no
+product or partial sum is rounded to the operand dtype.
 `repeat`, `order`, and `buffers` describe execution and storage rather than a
 second logical computation over the whole scheduled operands.
 

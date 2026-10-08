@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
+from enum import Enum
 
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.pattern import (
@@ -21,7 +23,7 @@ from tilefoundry.ir.pattern import (
     predicates as P,
 )
 from tilefoundry.ir.pattern.utils import declared_shape, matched_row_issues, selected_pattern
-from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, ShardLayout, TensorType
+from tilefoundry.ir.types import ComposedLayout, DType, Layout, Mesh, ShardLayout, TensorType
 from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.types.utils import tile_view_layout
@@ -70,9 +72,12 @@ class MmaAtom:
         held = {}
         for param in self.parameters:
             value = bindings[param.name] if param.name in bindings else self._implied(param, held)
+            if param.annotation is DType and isinstance(value, str):
+                value = DType.from_name(value)
             if matched(param.pattern, value, held) is None:
+                shown = value.name if isinstance(value, DType) else repr(value)
                 raise ValueError(
-                    f"{self.reference_name}: {param.name}={value!r} is not one "
+                    f"{self.reference_name}: {param.name}={shown} is not one "
                     f"it takes{self._where(held)}; it takes {param.name} "
                     f"{param.pattern!r}"
                 )
@@ -162,7 +167,8 @@ class MmaAtom:
     def on(self, mesh: Mesh) -> MmaAtom:
         return type(self)(mesh=mesh, **self.bindings)
 
-    def written(self, mesh: str | None = None) -> str:
+    def stated_bindings(self) -> tuple[tuple[str, object], ...]:
+        """The bindings a reader must see: those earlier ones do not imply."""
         stated, held = [], {}
         for param in self.parameters:
             value = self.bindings[param.name]
@@ -171,21 +177,48 @@ class MmaAtom:
             except ValueError:
                 implied = None
             if implied is None or implied != value:
-                stated.append(f"{param.name}={self.written_value(value)}")
+                stated.append((param.name, value))
             held[param.name] = value
-        if mesh is not None:
-            stated.append(f"mesh={mesh}")
-        return f"{self.reference_name}({', '.join(stated)})"
+        return tuple(stated)
 
     @classmethod
-    def written_value(cls, value) -> str:
-        if type(value) is int:
-            return str(value)
-        return f"{cls.namespace}.{type(value).__name__}.{value.name}"
+    def configurations(
+        cls,
+        *,
+        defaulted: bool,
+        values: Callable[[ParamDef], tuple] | None = None,
+    ) -> tuple[dict, ...]:
+        """Every binding of this declaration's parameters that its patterns admit.
 
-    @property
-    def reference(self) -> str:
-        return self.written()
+        Enum and DType parameters take every member their pattern admits;
+        ``values`` supplies the others, and without it they stay unbound.
+        ``defaulted`` also varies parameters that have a default. Shared by
+        ``schedule candidates`` and HIR typeinfer.
+        """
+        states: tuple[dict, ...] = ({},)
+        for param in cls.parameters:
+            if param.has_default and not defaulted:
+                continue
+            options = cls._options(param, values)
+            if options is None:
+                continue
+            held = []
+            for state in states:
+                for value in options:
+                    matcher = PatternMatcher(state)
+                    if matcher.match(param.pattern, value) and matcher.solve():
+                        held.append({**state, param.name: value})
+            states = tuple(held)
+        return states
+
+    @staticmethod
+    def _options(param: ParamDef, values) -> tuple | None:
+        annotation = param.annotation
+        if isinstance(annotation, type) and issubclass(annotation, Enum):
+            return tuple(annotation)
+        if annotation is DType:
+            return tuple(DType._members().values())
+        return None if values is None else values(param)
 
     def __eq__(self, other):
         return (
@@ -198,7 +231,9 @@ class MmaAtom:
         return hash((type(self), tuple(self.bindings.items()), self.mesh))
 
     def __repr__(self):
-        return self.written(None if self.mesh is None else repr(self.mesh))
+        from tilefoundry.inspection.printer_base import PythonPrinter  # noqa: PLC0415
+
+        return PythonPrinter().atom_reference(self)
 
 
 @dataclass(frozen=True, init=False)
