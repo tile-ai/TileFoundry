@@ -103,12 +103,42 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 0,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
+    "child_matmul_target.ChildMatmulDirect.direct[static]": {
+        "gmem": 64 * 64 * 2 + 64 * 32 * 2,
+        "rmem": 0,
+        "smem": 64 * 16 * 2 + 16 * 32 * 2,
+    },
     "child_matmul_target.ChildMatmulRoot.child.run[static]": {
         "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
         "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
+    "child_matmul_target.ChildMatmulRoot.direct.direct[static]": {
+        "gmem": 64 * 64 * 2 + 64 * 32 * 2,
+        "rmem": 64 * 32 * 4,
+        "smem": 64 * 16 * 2 + 16 * 32 * 2,
+    },
     "child_matmul_target.ChildMatmulRoot.gemm[static]": {
+        "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
+        "rmem": 64 * 32 * 4,
+        "smem": 64 * 16 * 2 + 16 * 32 * 2,
+    },
+    "child_matmul_target.ChildMatmulRoot.gemm_on_chip[static]": {
+        "gmem": 64 * 64 * 2 + 64 * 32 * 2,
+        "rmem": 64 * 32 * 4,
+        "smem": 64 * 16 * 2 + 16 * 32 * 2,
+    },
+    "child_matmul_target.ChildMatmulRoot.gemm_staged[k_len=64]": {
+        "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
+        "rmem": 64 * 32 * 4,
+        "smem": 64 * 16 * 2 + 16 * 32 * 2,
+    },
+    "child_matmul_target.ChildMatmulRoot.staged.staged[k_len=64]": {
+        "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
+        "rmem": 64 * 32 * 4,
+        "smem": 64 * 16 * 2 + 16 * 32 * 2,
+    },
+    "child_matmul_target.ChildMatmulStaged.staged[k_len=64]": {
         "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
         "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,

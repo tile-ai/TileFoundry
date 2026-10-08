@@ -904,6 +904,18 @@ class ParserChildModuleResolver:
                 return child
         return None
 
+    def will_hold(self, module: object) -> bool:
+        """Whether *module* is in a child subtree the Module being built will hold."""
+        if self.module_scope is None:
+            return False
+        pending = [child for _name, child in self.module_scope.items()]
+        while pending:
+            node = pending.pop()
+            if node is module:
+                return True
+            pending.extend(getattr(node, "modules", ()))
+        return False
+
 
 @dataclass
 class ParserTypeInferContext(TypeInferContext):
@@ -913,10 +925,23 @@ class ParserTypeInferContext(TypeInferContext):
     parser_target: object | None = None
 
     def resolve_target(self):
-        """The current Module's Target once a scope names one, else the parsed function's."""
-        if self.scope is not None:
-            return super().resolve_target()
-        return self.parser_target
+        """The Target whose rules apply while parsing.
+
+        A scope whose owner chain declares a Target answers with it. A child the
+        Module being built will hold has no Target of its own yet, so it takes
+        the one this build will give it; any other scope without a Target has
+        none. Outside a scope, the parsed function's Target applies.
+        """
+        if self.scope is None:
+            return self.parser_target
+        target = super().resolve_target()
+        if (
+            target is None
+            and self.child_resolver is not None
+            and self.child_resolver.will_hold(self.scope.module)
+        ):
+            return self.parser_target
+        return target
 
     def child_for(self, callee: object):
         if self.child_resolver is not None:
@@ -1135,7 +1160,7 @@ class ModuleBuildContext:
             if name.startswith("__") and name.endswith("__"):
                 continue
             if isinstance(value, runtime.Module):
-                child = _unshared(value) if value.name == name else value.renamed(name)
+                child = _unshared(value, name)
                 modules.append(child)
                 module_bindings[name] = child
             elif (
@@ -1143,7 +1168,7 @@ class ModuleBuildContext:
                 and value
                 and all(isinstance(item, runtime.Module) for item in value)
             ):
-                children = tuple(_unshared(item) for item in value)
+                children = tuple(_unshared(item, item.name) for item in value)
                 modules.extend(children)
                 for child in children:
                     module_bindings[child.name] = child
@@ -1223,13 +1248,27 @@ class ModuleBuildContext:
         return result
 
 
-def _unshared(child):
-    """A child another owner already holds, as an independent copy.
+def _unshared(child, name: str):
+    """The child this build will hold, independent of any other owner.
 
     The owner being built re-types its children's bodies under its own Target,
-    which must not reach into a subtree the first owner resolves.
+    which must not reach into a subtree another owner resolves. A child another
+    owner already holds is therefore copied, detached from that owner, and
+    returned to its parsed region constraints before this build reads it; the
+    copy keeps the ownership inside its own subtree.
     """
-    return child if child._parent is None else child.cloned()
+    placed = child if child.name == name else child.renamed(name)
+    if child._parent is None:
+        return placed
+    if placed is child:
+        placed = child.cloned()
+    placed._parent = None
+    from tilefoundry.visitor_registry.typeinfer import (  # noqa: PLC0415
+        restore_parsed_annotations,
+    )
+
+    restore_parsed_annotations(placed)
+    return placed
 
 
 _MODULE_CONTEXTS: list[ModuleBuildContext] = []

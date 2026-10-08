@@ -58,7 +58,10 @@ statement span and their carry binding name.
 `FuncParserContext` carries the dialect, Function role, closure, topology scope, target, and
 optional base/key for one parse. Call types inferred while parsing use that target's rules
 ([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)), so in a Module that
-declares its Target a type the parser records is the type the built Module later infers. `FunctionRole` is `ROOT`, `VARIANT`, or `CONVERTER`.
+declares its Target a type the parser records is the type the built Module later infers. A
+callee's own owner chain answers first; a child the Module being built will hold has no
+Target of its own yet, so it is typed with the Target that Module declares, and any other
+scope without a Target is typed with none. `FunctionRole` is `ROOT`, `VARIANT`, or `CONVERTER`.
 `ParseError` is the single authored-source diagnostic type and includes source location and
 recursive parse situation. These are the only public parser symbols.
 

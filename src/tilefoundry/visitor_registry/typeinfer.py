@@ -6,9 +6,11 @@ from dataclasses import replace
 
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.metadata import (
+    ParsedAnnotationMetadata,
     RangeMetadata,
     attach_metadata,
     detach_metadata,
+    get_metadata,
 )
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -243,7 +245,8 @@ class TypeInferVisitor(ExprVisitor[Type]):
         """
         memo = self._region_memo(expr, ctx)
         mesh = make_mesh(ctx.current_mesh, expr.mesh) if ctx.current_mesh else expr.mesh
-        return self.visit(expr.body, replace(ctx, current_mesh=mesh, memo=memo))
+        inner = TypeInferVisitor(memo=memo, owns_body=self._owns_body, ranges=self._ranges)
+        return inner.visit(expr.body, replace(ctx, current_mesh=mesh, memo=memo))
 
     def visit_Function(self, fn: Function, ctx: TypeInferContext) -> Type:
         """Refresh one complete function after binding its parameter types."""
@@ -287,29 +290,74 @@ def inference_type(
     )
 
 
+def _region_params(function: Function) -> list[Var]:
+    """Every region parameter in *function* and its specialization variants."""
+    functions, params = [function], []
+    for current in functions:
+        functions.extend(current.variants)
+        if current.body is not None:
+            params.extend(
+                param
+                for expr in collect_exprs(current.body)
+                if isinstance(expr, (LoopRegion, MeshRegion))
+                for param in expr.params
+            )
+    return params
+
+
+def _parsed_annotation(param: Var) -> Type:
+    held = get_metadata(param, ParsedAnnotationMetadata)
+    return param.type if held is None else held.type
+
+
+def restore_parsed_annotations(module) -> None:
+    """Return every region parameter in *module*'s subtree to its parsed type."""
+    for function in module.functions:
+        if isinstance(function, Function):
+            for param in _region_params(function):
+                param.type = _parsed_annotation(param)
+    for child in module.modules:
+        restore_parsed_annotations(child)
+
+
 def retype_children(owner) -> None:
     """Write the types *owner*'s Target gives into the bodies of the children it holds.
 
     A child declares no Target, so its body was typed before it had one. Once a
-    root that declares a Target holds it, every function in the child subtree is
-    typed again in its owned scope and the result is stored on the IR.
+    root that declares a Target holds it, every function in the child subtree,
+    variants included, is typed again in its owned scope against each region
+    parameter's parsed type, and the result is stored on the IR. A function that
+    fails to type leaves every parameter as it found it.
     """
     for child in owner.modules:
         for function in child.functions:
-            if isinstance(function, Function):
-                params = [
-                    param
-                    for expr in collect_exprs(function.body)
-                    if isinstance(expr, (LoopRegion, MeshRegion))
-                    for param in expr.params
-                ]
-                annotations = [param.type for param in params]
-                TypeInferVisitor(owns_body=True).visit(
-                    function, TypeInferContext(scope=FunctionScope(child, function))
-                )
-                for param, annotation in zip(params, annotations, strict=True):
-                    param.type = annotation
+            if not isinstance(function, Function):
+                continue
+            params = _region_params(function)
+            entered = [param.type for param in params]
+            recorded = [
+                param for param in params if get_metadata(param, ParsedAnnotationMetadata) is None
+            ]
+            scope = FunctionScope(child, function)
+            try:
+                for param in recorded:
+                    attach_metadata(param, ParsedAnnotationMetadata(param.type))
+                for param in params:
+                    param.type = _parsed_annotation(param)
+                TypeInferVisitor(owns_body=False).visit(function, TypeInferContext(scope=scope))
+            except Exception:
+                for param, held in zip(params, entered, strict=True):
+                    param.type = held
+                for param in recorded:
+                    detach_metadata(param, ParsedAnnotationMetadata)
+                raise
+            TypeInferVisitor(owns_body=True).visit(function, TypeInferContext(scope=scope))
         retype_children(child)
 
 
-__all__ = ["TypeInferVisitor", "inference_type", "retype_children"]
+__all__ = [
+    "TypeInferVisitor",
+    "inference_type",
+    "restore_parsed_annotations",
+    "retype_children",
+]

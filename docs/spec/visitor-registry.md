@@ -302,8 +302,10 @@ def inference_type(expr: Expr, ctx: TypeInferContext | None = None, *, ranges=Fa
     ([hir §1.2](./hir.md#12-loopregion)). It overrides the complete node
     visit; the base has no per-kind operand hook.
   - `visit_MeshRegion` composes the region mesh with the enclosing HIR
-    `current_mesh`, checks the resulting topology, and visits the body in a
-    replaced child context. The region result type is the body's type.
+    `current_mesh`, checks the resulting topology, and visits the body with a
+    new visitor seeded from the region's entry bindings, in a replaced child
+    context, so a rule reading `ctx.type_of` inside the body sees the types
+    derived in it. The region result type is the body's type.
   - `visit_leaf_ShapeOf` returns the node's declared rank-0 i32 type.
   - `inference_type` creates a fresh non-owning visitor and returns the inferred
     type without writing it to `expr.type` by default. With `ranges=True`, it
