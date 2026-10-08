@@ -190,56 +190,57 @@ def test_matmul_layouts_share_shape_and_cost(op, lhs_shape, rhs_shape):
     )
 
 
-@pytest.mark.parametrize(("op", "lhs_shape", "rhs_shape"), LAYOUT_CASES)
-def test_matmul_layouts_evaluate(op, lhs_shape, rhs_shape):
+def _layout_eval_case(param) -> EvalCase:
+    op, lhs_shape, rhs_shape = param.values
     lhs = torch.arange(6, dtype=torch.float32).reshape(lhs_shape)
     rhs = torch.arange(12, dtype=torch.float32).reshape(rhs_shape)
     logical_lhs = lhs.transpose(-1, -2) if op.a_layout == "KM" else lhs
     logical_rhs = rhs.transpose(-1, -2) if op.b_layout == "NK" else rhs
-
-    run_eval_case(EvalCase("matmul_layout", op, (lhs, rhs), logical_lhs @ logical_rhs))
-
-
-_FP8_SIXTEENS = (torch.full((2, 3), 16.0), torch.full((3, 4), 16.0))
+    return EvalCase(param.id, op, (lhs, rhs), logical_lhs @ logical_rhs, atol=0, rtol=0)
 
 
-@pytest.mark.parametrize(
-    ("op", "inputs", "expected"),
-    (
-        pytest.param(
-            MatMul(out_dtype="f32"),
-            tuple(t.to(torch.float8_e4m3fn) for t in _FP8_SIXTEENS),
-            _FP8_SIXTEENS[0] @ _FP8_SIXTEENS[1],
-            id="fp8_into_f32",
-        ),
-        pytest.param(
-            MatMul(out_dtype=DType.f32),
-            (
-                torch.tensor([[1.0, 2.0**-8]], dtype=torch.bfloat16),
-                torch.tensor([[1.0], [1.0]], dtype=torch.bfloat16),
-            ),
-            torch.tensor([[1.0 + 2.0**-8]]),
-            id="bf16_into_f32_keeps_bits_bf16_would_drop",
-        ),
-        pytest.param(
-            MatMul(out_dtype=None),
-            (
-                torch.tensor([[1.0, 2.0**-8]], dtype=torch.bfloat16),
-                torch.tensor([[1.0], [1.0]], dtype=torch.bfloat16),
-            ),
-            torch.tensor([[1.0, 2.0**-8]], dtype=torch.bfloat16)
-            @ torch.tensor([[1.0], [1.0]], dtype=torch.bfloat16),
-            id="bf16_without_out_dtype_is_unchanged",
-        ),
+_SIXTEENS = (torch.full((2, 3), 16.0), torch.full((3, 4), 16.0))
+_BF16_LHS = torch.tensor([[1.0, 2.0**-8]], dtype=torch.bfloat16)
+_BF16_RHS = torch.tensor([[1.0], [1.0]], dtype=torch.bfloat16)
+
+
+EVAL_CASES = [
+    *(_layout_eval_case(param) for param in LAYOUT_CASES),
+    EvalCase(
+        "fp8_into_f32",
+        MatMul(out_dtype="f32"),
+        tuple(t.to(torch.float8_e4m3fn) for t in _SIXTEENS),
+        _SIXTEENS[0] @ _SIXTEENS[1],
+        atol=0,
+        rtol=0,
     ),
-)
-def test_matmul_out_dtype_evaluates(op, inputs, expected):
-    """The result is rounded once, to ``out_dtype``.
+    EvalCase(
+        "bf16_into_f32_keeps_bits_bf16_would_drop",
+        MatMul(out_dtype=DType.f32),
+        (_BF16_LHS, _BF16_RHS),
+        torch.tensor([[1.0 + 2.0**-8]]),
+        atol=0,
+        rtol=0,
+    ),
+    EvalCase(
+        "bf16_without_out_dtype_is_unchanged",
+        MatMul(out_dtype=None),
+        (_BF16_LHS, _BF16_RHS),
+        _BF16_LHS @ _BF16_RHS,
+        atol=0,
+        rtol=0,
+    ),
+]
+
+
+@pytest.mark.parametrize("case", EVAL_CASES, ids=lambda c: c.name)
+def test_matmul_evaluates(case):
+    """Each layout reads its operands' logical axes; the result is rounded once.
 
     16 * 16 summed over K = 3 is 768, past e4m3's largest finite value (448),
     so an fp8 result rounded to fp8 before it is widened cannot match.
     """
-    run_eval_case(EvalCase("matmul_out_dtype", op, inputs, expected, atol=0, rtol=0))
+    run_eval_case(case)
 
 
 def _sharded(shape, attrs):
@@ -274,22 +275,22 @@ def test_matmul_typeinfer(case):
 
 
 @pytest.mark.parametrize(
-    "op",
-    (MatMul(a_layout="bad"), MatMul(b_layout="bad")),
-    ids=("invalid_a_layout", "invalid_b_layout"),
+    ("attrs", "match"),
+    (
+        ({"a_layout": "bad"}, "layout must be"),
+        ({"b_layout": "bad"}, "layout must be"),
+        ({"out_dtype": "f99"}, "DType: unknown value 'f99'"),
+    ),
+    ids=("invalid_a_layout", "invalid_b_layout", "unknown_out_dtype"),
 )
-def test_matmul_rejects_invalid_layouts(op):
-    run_typeinfer_case(
-        TypeInferCase(
-            name="invalid_layout",
-            op=op,
-            inputs=(
-                make_tensor_type((2, 3), DType.f32),
-                make_tensor_type((4, 3), DType.f32),
-            ),
-            expected=ExpectedError(match="layout must be"),
+def test_matmul_rejects_invalid_attributes(attrs, match):
+    """A bad layout fails in typeinfer; an unknown dtype name fails at construction."""
+    with pytest.raises(ValueError, match=match):
+        infer_call(
+            MatMul(**attrs),
+            make_tensor_type((2, 3), DType.f32),
+            make_tensor_type((4, 3), DType.f32),
         )
-    )
 
 
 def test_lhs_splits_k_rhs_unsplit_is_invalid():

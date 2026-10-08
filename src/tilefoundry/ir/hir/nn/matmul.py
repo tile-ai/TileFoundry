@@ -12,7 +12,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, Layout, TensorType
+from tilefoundry.ir.types import DType, FloatDType, Layout, TensorType
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     canonical_shard_layout,
@@ -153,8 +153,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 def _eval_matmul(ctx):
     """Multiply in the operand dtype, or widen to f32 and round once.
 
-    The operand-dtype product serves when the result keeps that dtype and torch
-    has a matmul for it; 8-bit operands and a differing result dtype widen.
+    The operand-dtype product serves when the result keeps that dtype and the
+    operand is not an 8-bit float, which torch cannot multiply.
     """
     lhs = ctx.args[0].data
     rhs = ctx.args[1].data
@@ -162,7 +162,9 @@ def _eval_matmul(ctx):
         lhs = lhs.transpose(-1, -2)
     if ctx.op.b_layout == "NK":
         rhs = rhs.transpose(-1, -2)
-    if ctx.result_type.dtype == ctx.args[0].type.dtype and lhs.element_size() > 1:
+    operand = ctx.args[0].type.dtype
+    fp8 = isinstance(operand, FloatDType) and operand.bit_width == 8
+    if ctx.result_type.dtype == operand and not fp8:
         out = torch.matmul(lhs, rhs)
     else:
         out = torch.matmul(lhs.float(), rhs.float()).to(to_torch_dtype(ctx.result_type.dtype))
