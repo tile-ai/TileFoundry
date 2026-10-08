@@ -972,7 +972,9 @@ def variants(
     default, and otherwise construction MUST fail.
   - A string bound to a `DType` parameter MUST resolve through
     `DType.from_name` at construction, so `dtype="bf16"` and `DType.bf16` bind
-    the same value.
+    the same value; whether that dtype is one the declaration takes is still its
+    `ParamDef.pattern`'s answer. An Enum parameter takes only its Enum members;
+    no string spelling of a member is accepted.
   - `variants(declaration.parameters, vary_defaulted=..., values=...)` MUST
     return every binding of the parameters, in declaration order, that their
     patterns admit under the earlier bindings. It enumerates bindings; it does
@@ -990,9 +992,13 @@ def variants(
     an Enum as `<namespace>.<Enum>.<member>`, and hands every other value, the
     mesh included, to the caller's `printer.render_value(value, ctx)`, so a
     `DType` prints as its name and imports land in the caller's context. The
-    atom never builds a printer; a printer renders any value exposing a
-    callable `written` through it and does not name `MmaAtom`. `repr(atom)` is
-    a local diagnostic with the same bindings and is not an import surface.
+    atom never builds a printer. A printer renders a value that implements this
+    `written(printer, ctx)` protocol by handing itself to it, without naming
+    `MmaAtom`; a method that merely shares the name, such as a constraint's
+    `written()` or `PatternPrinter.written(pattern)`, is not this protocol. A
+    value with no Python form still fails explicitly, though not necessarily
+    with the same exception as before. `repr(atom)` is a local diagnostic with
+    the same bindings and is not an import surface.
   - `role("A")`, `role("B")`, and `role("C")` MUST resolve the declaration's
     role pattern under the instance bindings. The logical TIR orientation is
     always A `(M,K)`, B `(K,N)`, C `(M,N)`; each role pattern separately states

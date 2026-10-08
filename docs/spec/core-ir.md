@@ -331,10 +331,20 @@ class ParsedAnnotationMetadata(IRMetadata):
     the start column is one-based. `end_column`, when present, is the physical
     source-file offset using Python AST's exclusive-end convention.
   - `ParsedAnnotationMetadata` is kept on a region parameter of a child Module's
-    function the first time a root's Target types it ([§1](#1-module)). Every
-    later typing of that parameter, by this owner or another owner's copy, is
-    checked against this type; the parameter's own type is the one its current
-    owner gives it.
+    function the first time a root's Target types it ([§1](#1-module)). A region
+    parameter's own type is both the constraint its entry value is checked
+    against and the type analysis reads for the carried value, and a child needs
+    the two to differ: the constraint is what the child was parsed with (`umat`
+    for an on-chip `MatMul` result typed without a Target, or the author's own
+    concrete type), while the carried value's type is what its current owner
+    gives it (`rmem` under CUDA, `smem` under CPU). The metadata keeps the
+    first; the parameter's type holds the second. Every later typing by this
+    owner, or of another owner's copy, which is restored to it before that
+    owner's class body is parsed, checks against the metadata; a typing that
+    fails leaves both as they were. Only the owner re-typing reads it; other
+    type inference reads the parameter's type, and a `Module` that is not built
+    by a `@module` class body is never re-typed. Without it, a child placed
+    under a second owner would be checked against the first owner's final type.
 
 ```python
 class Expr:

@@ -211,7 +211,11 @@ def _platform_namespace_stub(dialect: str) -> str | None:
 
     These are compile-time descriptor surfaces, not OpSchema-backed ops, so the
     schema walk never sees them. Each constructor signature is reflected from
-    the declaration's ``ParamDef`` fields.
+    the declaration's ``ParamDef`` fields. A ``DType`` parameter reuses the
+    schema walk's annotation renderer, ``Literal[<dtype names>] | DType``,
+    because the atom resolves a dtype name at construction; which dtypes it
+    takes is still its pattern's answer. Other Enum parameters stay their Enum
+    type, since no string spelling of them is accepted.
     """
     if dialect != "T":
         return None
