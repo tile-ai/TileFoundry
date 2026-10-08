@@ -992,10 +992,13 @@ class MmaAtom:
 
 The public declarations are `T.cuda.sm80.Mma()` (BF16 `16x8x16`, F32
 accumulator, register A/B/C over one warp) and
-`T.cuda.sm90.Wgmma(n=..., dtype=..., form=..., a_major=..., mesh=...)`
-(`dtype` is `bf16` or `f16`; `64 x n x k` over one warpgroup with an F32
-accumulator, where `k` is 32 bytes of `dtype`). `dtype` has no default.
-`Form` and `Major` live beside `Wgmma` under `T.cuda.sm90`.
+`T.cuda.sm90.Wgmma(n=..., dtype=..., form=..., a_major=..., b_major=..., mesh=...)`
+(`dtype` is `bf16`, `f16` or `fp8e4m3`; `64 x n x k` over one warpgroup with
+an F32 accumulator, where `k` is 32 bytes of `dtype`). `dtype` has no default.
+`a_major` and `b_major` default to `Major.MN`. A 16-bit B may be either major
+and a 16-bit A read from registers is K-major; an `fp8e4m3` A and B are
+K-major only, so that `dtype` implies both and an explicit `Major.MN` is
+refused. `Form` and `Major` live beside `Wgmma` under `T.cuda.sm90`.
 
 ##### Calling convention
 

@@ -13,12 +13,18 @@ T.cuda.sm90.Wgmma
                  n % 8 == 0
     dtype    any value
                predicates:
-                 dtype in {bf16, f16}
+                 dtype in {bf16, f16, fp8e4m3}
     form     any value
                predicates:
                  form in {Form.SS, Form.RS}
-    a_major  form=SS  a_major in {Major.MN, Major.K} (default Major.MN)
-             form=RS  Major.K
+    a_major  dtype=bf16, form=SS  a_major in {Major.MN, Major.K} (default Major.MN)
+             dtype=bf16, form=RS  Major.K
+             dtype=f16, form=SS   a_major in {Major.MN, Major.K}
+             dtype=f16, form=RS   Major.K
+             dtype=fp8e4m3        Major.K
+    b_major  dtype=bf16     b_major in {Major.MN, Major.K} (default Major.MN)
+             dtype=f16      b_major in {Major.MN, Major.K}
+             dtype=fp8e4m3  Major.K
   operands
     C  shape=(64, n) dtype=f32 storage=rmem, held in 1 arrangement:
          ShardLayout(Layout((8, 2, 4, 2, 4, c), (1, 8, 16, 64, 128, 512)), (S(2), S(0), S(4)), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
@@ -27,65 +33,138 @@ T.cuda.sm90.Wgmma
            each top-level mode reaches each of its own slots exactly once
            p0 % 128 == 0
            8 * c == n
-    A  dtype=bf16, form=SS  shape=(64, 16) dtype=bf16 storage=smem, held in 3 arrangements:
-                              a_major=MN  ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((r, W), (2, 8)), ((l, 1), (s, W)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
-                                            predicates:
-                                              r * W == 64
-                                              l == 16 * W
-                                              s == 8 * W
-                              a_major=K   ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((8, 8), (r, W)), ((l, W), (s, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
-                                            predicates:
-                                              a_swizzle <= 1
-                                              r * W == 16
-                                              l == 16 * W
-                                              s == 8 * W
-                              a_major=K   ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), k0, Layout(((8, 8), 16), ((l, W), 1))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
-                                            predicates:
-                                              a_swizzle >= 2
-                                              l == 8 * W
-                                              k0 % 16 == 0
-                                              k0 >= 0
-                                              k0 < W
-                              predicates:
-                                W == (8, 16, 32, 64)[a_swizzle]
-       dtype=bf16, form=RS  shape=(64, 16) dtype=bf16 storage=rmem, held in 1 arrangement:
-                              ShardLayout(Layout((8, 2, 4, 2, 4, 2), (1, 8, 16, 64, 128, 512)), (S(2), S(0), S(4)), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
-       dtype=f16, form=SS   shape=(64, 16) dtype=f16 storage=smem, held in 3 arrangements:
-                              a_major=MN  ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((r, W), (2, 8)), ((l, 1), (s, W)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
-                                            predicates:
-                                              r * W == 64
-                                              l == 16 * W
-                                              s == 8 * W
-                              a_major=K   ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((8, 8), (r, W)), ((l, W), (s, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
-                                            predicates:
-                                              a_swizzle <= 1
-                                              r * W == 16
-                                              l == 16 * W
-                                              s == 8 * W
-                              a_major=K   ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), k0, Layout(((8, 8), 16), ((l, W), 1))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
-                                            predicates:
-                                              a_swizzle >= 2
-                                              l == 8 * W
-                                              k0 % 16 == 0
-                                              k0 >= 0
-                                              k0 < W
-                              predicates:
-                                W == (8, 16, 32, 64)[a_swizzle]
-       dtype=f16, form=RS   shape=(64, 16) dtype=f16 storage=rmem, held in 1 arrangement:
-                              ShardLayout(Layout((8, 2, 4, 2, 4, 2), (1, 8, 16, 64, 128, 512)), (S(2), S(0), S(4)), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+    A  dtype=bf16, form=SS     shape=(64, 16) dtype=bf16 storage=smem, held in 3 arrangements:
+                                 a_major=MN  ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((r, W), (2, 8)), ((l, 1), (s, W)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                               predicates:
+                                                 r * W == 64
+                                                 l == 16 * W
+                                                 s == 8 * W
+                                 a_major=K   ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((8, 8), (r, W)), ((l, W), (s, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                               predicates:
+                                                 a_swizzle <= 1
+                                                 r * W == 16
+                                                 l == 16 * W
+                                                 s == 8 * W
+                                 a_major=K   ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), k0, Layout(((8, 8), 16), ((l, W), 1))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                               predicates:
+                                                 a_swizzle >= 2
+                                                 l == 8 * W
+                                                 k0 % 16 == 0
+                                                 k0 >= 0
+                                                 k0 < W
+                                 predicates:
+                                   W == (8, 16, 32, 64)[a_swizzle]
+       dtype=bf16, form=RS     shape=(64, 16) dtype=bf16 storage=rmem, held in 1 arrangement:
+                                 ShardLayout(Layout((8, 2, 4, 2, 4, 2), (1, 8, 16, 64, 128, 512)), (S(2), S(0), S(4)), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+       dtype=f16, form=SS      shape=(64, 16) dtype=f16 storage=smem, held in 3 arrangements:
+                                 a_major=MN  ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((r, W), (2, 8)), ((l, 1), (s, W)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                               predicates:
+                                                 r * W == 64
+                                                 l == 16 * W
+                                                 s == 8 * W
+                                 a_major=K   ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((8, 8), (r, W)), ((l, W), (s, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                               predicates:
+                                                 a_swizzle <= 1
+                                                 r * W == 16
+                                                 l == 16 * W
+                                                 s == 8 * W
+                                 a_major=K   ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), k0, Layout(((8, 8), 16), ((l, W), 1))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                               predicates:
+                                                 a_swizzle >= 2
+                                                 l == 8 * W
+                                                 k0 % 16 == 0
+                                                 k0 >= 0
+                                                 k0 < W
+                                 predicates:
+                                   W == (8, 16, 32, 64)[a_swizzle]
+       dtype=f16, form=RS      shape=(64, 16) dtype=f16 storage=rmem, held in 1 arrangement:
+                                 ShardLayout(Layout((8, 2, 4, 2, 4, 2), (1, 8, 16, 64, 128, 512)), (S(2), S(0), S(4)), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+       dtype=fp8e4m3, form=SS  shape=(64, 32) dtype=fp8e4m3 storage=smem, held in 2 arrangements:
+                                 a_major=K  ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((8, 8), (r, W)), ((l, W), (s, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                              predicates:
+                                                a_swizzle <= 1
+                                                r * W == 32
+                                                l == 16 * W
+                                                s == 8 * W
+                                 a_major=K  ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), k0, Layout(((8, 8), 32), ((l, W), 1))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                              predicates:
+                                                a_swizzle >= 2
+                                                l == 8 * W
+                                                k0 % 32 == 0
+                                                k0 >= 0
+                                                k0 < W
+                                 predicates:
+                                   W == (16, 32, 64, 128)[a_swizzle]
+       dtype=fp8e4m3, form=RS  shape=(64, 32) dtype=fp8e4m3 storage=rmem, held in 1 arrangement:
+                                 ShardLayout(Layout((8, 2, 4, 4, 4, 2), (1, 8, 16, 64, 256, 1024)), (S(2), S(0), S(4)), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
          predicates:
            each top-level mode has no backward step
            each top-level mode reaches each of its own slots exactly once
            p0 % 128 == 0
-    B  dtype=bf16  shape=(16, n) dtype=bf16 storage=smem, held in 1 arrangement:
-                     ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), 0, Layout(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
-       dtype=f16   shape=(16, n) dtype=f16 storage=smem, held in 1 arrangement:
-                     ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), 0, Layout(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+    B  dtype=bf16     shape=(16, n) dtype=bf16 storage=smem, held in 3 arrangements:
+                        b_major=MN  ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), 0, Layout(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                      predicates:
+                                        rb * Wb == n
+                                        lb == 16 * Wb
+                                        sb == 8 * Wb
+                        b_major=K   ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), 0, Layout(((rb, Wb), (gb, 8)), ((sb, 1), (lb, Wb)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                      predicates:
+                                        b_swizzle <= 1
+                                        rb * Wb == 16
+                                        8 * gb == n
+                                        lb == 16 * Wb
+                                        sb == 8 * Wb
+                        b_major=K   ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), k0b, Layout((16, (gb, 8)), (1, (lb, Wb)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                      predicates:
+                                        b_swizzle >= 2
+                                        8 * gb == n
+                                        lb == 8 * Wb
+                                        k0b % 16 == 0
+                                        k0b >= 0
+                                        k0b < Wb
+                        predicates:
+                          Wb == (8, 16, 32, 64)[b_swizzle]
+       dtype=f16      shape=(16, n) dtype=f16 storage=smem, held in 3 arrangements:
+                        b_major=MN  ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), 0, Layout(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                      predicates:
+                                        rb * Wb == n
+                                        lb == 16 * Wb
+                                        sb == 8 * Wb
+                        b_major=K   ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), 0, Layout(((rb, Wb), (gb, 8)), ((sb, 1), (lb, Wb)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                      predicates:
+                                        b_swizzle <= 1
+                                        rb * Wb == 16
+                                        8 * gb == n
+                                        lb == 16 * Wb
+                                        sb == 8 * Wb
+                        b_major=K   ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), k0b, Layout((16, (gb, 8)), (1, (lb, Wb)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                      predicates:
+                                        b_swizzle >= 2
+                                        8 * gb == n
+                                        lb == 8 * Wb
+                                        k0b % 16 == 0
+                                        k0b >= 0
+                                        k0b < Wb
+                        predicates:
+                          Wb == (8, 16, 32, 64)[b_swizzle]
+       dtype=fp8e4m3  shape=(32, n) dtype=fp8e4m3 storage=smem, held in 2 arrangements:
+                        b_major=K  ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), 0, Layout(((rb, Wb), (gb, 8)), ((sb, 1), (lb, Wb)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                     predicates:
+                                       b_swizzle <= 1
+                                       rb * Wb == 32
+                                       lb == 16 * Wb
+                                       sb == 8 * Wb
+                        b_major=K  ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), k0b, Layout((32, (gb, 8)), (1, (lb, Wb)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                                     predicates:
+                                       b_swizzle >= 2
+                                       lb == 8 * Wb
+                                       k0b % 32 == 0
+                                       k0b >= 0
+                                       k0b < Wb
+                        predicates:
+                          Wb == (16, 32, 64, 128)[b_swizzle]
+                          8 * gb == n
          predicates:
-           Wb == (8, 16, 32, 64)[b_swizzle]
-           rb * Wb == n
-           lb == 16 * Wb
-           sb == 8 * Wb
            each top-level mode has no backward step
            each top-level mode reaches each of its own slots exactly once
            p0 % 128 == 0

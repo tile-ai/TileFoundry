@@ -33,6 +33,7 @@ from .sm80_mma import Mma as _Sm80Mma
 from .wgmma import Wgmma
 
 _FP_ACC_WIDEN = {
+    (DType.fp8e4m3, DType.f32),
     (DType.f16, DType.f32),
     (DType.bf16, DType.f32),
     (DType.f16, DType.f16),

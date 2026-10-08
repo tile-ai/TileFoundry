@@ -3,10 +3,10 @@
 ``for m in tile(M, BM)`` binds ``m`` to a window and ``a[m, k]`` is that window
 read back.  An author who wants the offsets in their own hands writes the loop
 as a ``range`` and the window as a slice --- ``a[m:m + BM, k]`` --- which names
-the counter a second time, in a second ``Var`` equal to the loop's own.  What
-this fixture holds fixed is that the second mention is read as the counter it
-is: the emitted kernel is the tiled one, plus the seed for the output, which no
-longer has a tiled write covering every element of it.
+the counter a second time, in a second ``Var`` equal to the loop's own, and
+that mention is read as the counter it is: the emitted kernel is the tiled one,
+plus the seed for the output. B is the (K, N) view of a row-major (N, K)
+weight, so its windows have K at stride one and the atom states ``b_major=K``.
 """
 
 from tilefoundry import func, module
@@ -29,7 +29,8 @@ _COMPUTE = ThreadMesh((Topology("thread", 256),),
                       ComposedLayout(None, 128, Layout((4, 8, 4), (32, 4, 1))),
                       ("warp", "lane8", "lane4"))
 A_SMEM = Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))
-B_SMEM = Layout(((2, 8), (4, 8)), ((64, 8), (128, 1)))
+B_SMEM = Layout(((2, 8), (4, 8)), ((64, 1), (128, 8)))
+WEIGHT_VIEW = Layout((K, N), (1, K))
 ACC = ShardLayout(Layout((8, 2, 4, 2, 4, 4),
                          (1, 8, 16, 64, 128, 512)),
                   (Split(2), Split(0), Split(4)), _COMPUTE)
@@ -44,7 +45,7 @@ class WGMMA_EXPLICIT_WINDOWS:
     @func
     def gemm(
         a: Tensor[(M, K), "bf16"],
-        b: Tensor[(K, N), "bf16"],
+        b: Tensor[(K, N), "bf16", WEIGHT_VIEW],
     ) -> Tensor[(M, N), "bf16"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
@@ -52,7 +53,8 @@ class WGMMA_EXPLICIT_WINDOWS:
                 names=("role", "participant"),
             ) as threads:
                 wgmma = T.cuda.sm90.Wgmma(
-                    n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
+                    n=32, dtype="bf16", form=T.cuda.sm90.Form.SS,
+                    a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K)
 
                 out = tf.zeros(Tensor[(M, N), "bf16"])
                 for m in range(0, M, BM):

@@ -51,9 +51,11 @@ n, b, W, p, r, l, s, c = (
     WildcardPattern(name) for name in ("n", "a_swizzle", "W", "k0", "r", "l", "s", "c")
 )
 n_extent = n
-bb, Wb, rb, lb, sb = (WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb"))
+bb, Wb, rb, lb, sb, pb, gb = (
+    WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb", "k0b", "gb")
+)
 SWIZZLE_BYTES = (16, 32, 64, 128)
-DTYPES = (DType.bf16, DType.f16)
+DTYPES = (DType.bf16, DType.f16, DType.fp8e4m3)
 BROADCAST = (Broadcast(), Broadcast(), Broadcast())
 PER_THREAD = (Split(2), Split(0), Split(4))
 
@@ -117,10 +119,54 @@ def b_mn(e: int) -> ComposedLayoutPattern:
     )
 
 
+def b_k_whole(e: int) -> ComposedLayoutPattern:
+    """``a_k_whole`` on B's ``(K, N)`` axes, with ``n / 8`` core-matrix groups along N."""
+    return ComposedLayoutPattern(
+        SwizzlePattern(bb, 4, 3),
+        0,
+        LayoutPattern(((rb, Wb), (gb, 8)), ((sb, 1), (lb, Wb))),
+        predicates=(
+            Wb == run(bb, e),
+            bb <= 1,
+            rb * Wb == k_extent(e),
+            8 * gb == n_extent,
+            lb == 16 * Wb,
+            sb == 8 * Wb,
+        ),
+    )
+
+
+def b_k_sliced(e: int) -> ComposedLayoutPattern:
+    """``a_k_sliced`` on B's ``(K, N)`` axes, with ``n / 8`` core-matrix groups along N."""
+    k = k_extent(e)
+    return ComposedLayoutPattern(
+        SwizzlePattern(bb, 4, 3),
+        pb,
+        LayoutPattern((k, (gb, 8)), (1, (lb, Wb))),
+        predicates=(
+            Wb == run(bb, e),
+            bb >= 2,
+            8 * gb == n_extent,
+            lb == 8 * Wb,
+            pb % k == 0,
+            0 <= pb,
+            pb < Wb,
+        ),
+        issues_per_row=lambda captures: (0, captures["Wb"] // k),
+    )
+
+
 fragment = LayoutPattern((8, 2, 4, 2, 4, c), (1, 8, 16, 64, 128, 512))
 
 
 N = DimVar("n", 8, 256)
+
+
+def _by_major(mn, k_major, e: int) -> dict:
+    """Shared-memory arrangements by major; only 16-bit operands may be MN-major."""
+    arrangements = {Major.MN: mn(e)} if e == 2 else {}
+    arrangements[Major.K] = OrPattern(*(factory(e) for factory in k_major))
+    return arrangements
 
 
 def _a_role(dtype: DType) -> SwitchPattern:
@@ -133,13 +179,7 @@ def _a_role(dtype: DType) -> SwitchPattern:
                 dtype=dtype,
                 storage=S.SMEM,
                 layout=ShardLayoutPattern(
-                    SwitchPattern(
-                        "a_major",
-                        {
-                            Major.MN: a_mn(e),
-                            Major.K: OrPattern(a_k_whole(e), a_k_sliced(e)),
-                        },
-                    ),
+                    SwitchPattern("a_major", _by_major(a_mn, (a_k_whole, a_k_sliced), e)),
                     BROADCAST,
                     execution_mesh_pattern(WARPGROUP),
                 ),
@@ -164,8 +204,15 @@ def _b_role(dtype: DType) -> TensorPattern:
         shape=(k_extent(e), N),
         dtype=dtype,
         storage=S.SMEM,
-        layout=ShardLayoutPattern(b_mn(e), BROADCAST, execution_mesh_pattern(WARPGROUP)),
+        layout=ShardLayoutPattern(
+            SwitchPattern("b_major", _by_major(b_mn, (b_k_whole, b_k_sliced), e)),
+            BROADCAST,
+            execution_mesh_pattern(WARPGROUP),
+        ),
     )
+
+
+_A_MAJOR_16 = SwitchPattern("form", {Form.SS: OrPattern(*tuple(Major)), Form.RS: Major.K})
 
 
 class Wgmma(MmaAtom):
@@ -204,10 +251,24 @@ class Wgmma(MmaAtom):
         kind="attribute",
         annotation=Major,
         pattern=SwitchPattern(
-            "form",
+            "dtype",
             {
-                Form.SS: OrPattern(*tuple(Major)),
-                Form.RS: Major.K,
+                DType.bf16: _A_MAJOR_16,
+                DType.f16: _A_MAJOR_16,
+                DType.fp8e4m3: Major.K,
+            },
+        ),
+        default=Major.MN,
+    )
+    b_major = ParamDef(
+        kind="attribute",
+        annotation=Major,
+        pattern=SwitchPattern(
+            "dtype",
+            {
+                DType.bf16: OrPattern(*tuple(Major)),
+                DType.f16: OrPattern(*tuple(Major)),
+                DType.fp8e4m3: Major.K,
             },
         ),
         default=Major.MN,

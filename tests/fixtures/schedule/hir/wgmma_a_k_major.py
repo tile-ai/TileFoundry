@@ -1,11 +1,10 @@
-"""Run a two-stage 64x32 WGMMA with a K-major A descriptor.
+"""Run a two-stage 64x32 FP8 WGMMA with K-major A and B descriptors.
 
-Binding ``a_major`` selects a descriptor whose core matrix runs along K, so
-the staged A tile and its source both have K at stride one. In each k iteration,
-the loader copies only that iteration's (BK, M) input window into a compact
-(M, BK) gmem tile before TMA. The 64x16 fragment
-uses two core-matrix offsets while B remains MN-major and the accumulator keeps
-the standard 64x32 register arrangement.
+FP8 admits only K-major descriptors, so ``dtype="fp8e4m3"`` implies ``a_major``
+and ``b_major``. Each k iteration copies A's (BK, M) window into a compact
+(M, BK) gmem tile before TMA; B is the (K, N) view of a row-major (N, K)
+weight, so TMA reads its window with K at stride one. One issue reads 32 bytes
+of K: the 64x32 A and 32x32 B fragments each use two core-matrix offsets.
 """
 
 from tilefoundry import func, module
@@ -17,12 +16,13 @@ from tilefoundry.target import CudaTarget
 
 M = 64
 N = 32
-K = 32
-BK = 16
+K = 64
+BK = 32
 STAGES = 2
 
-A_SMEM = Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))
-B_SMEM = Layout(((2, 8), (4, 8)), ((64, 8), (128, 1)))
+A_SMEM = Layout(((8, 8), (2, 16)), ((256, 16), (128, 1)))
+B_SMEM = Layout(((2, 16), (4, 8)), ((128, 1), (256, 16)))
+WEIGHT_VIEW = Layout((K, N), (1, K))
 ACC = ShardLayout(
     Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)),
     (Split(2), Split(0), Split(4)),
@@ -40,16 +40,15 @@ ACC = ShardLayout(
 class WGMMA_A_K_MAJOR:
     @func
     def gemm(
-        at: Tensor[(K, M), "bf16"],
-        b: Tensor[(K, N), "bf16"],
+        at: Tensor[(K, M), "fp8e4m3"],
+        b: Tensor[(K, N), "fp8e4m3", WEIGHT_VIEW],
     ) -> Tensor[(M, N), "bf16", "umat"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
                 ("thread",), layout=(2, 128),
                 names=("role", "participant"),
             ) as threads:
-                wgmma = T.cuda.sm90.Wgmma(
-                    n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
+                wgmma = T.cuda.sm90.Wgmma(n=32, dtype="fp8e4m3", form=T.cuda.sm90.Form.SS)
 
                 with threads[1, :] as _compute:
                     acc = tf.zeros(Tensor[(M, N), "f32", ACC, "rmem"])

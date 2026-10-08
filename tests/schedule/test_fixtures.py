@@ -33,6 +33,7 @@ from tilefoundry.analysis.metadata import (
 )
 from tilefoundry.cli import main as cli_main
 from tilefoundry.evaluator import EvalError, evaluate
+from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.inspection import PatternPrinter, as_script
 from tilefoundry.ir.core import Call, Op, OpCapability, Var, detach_metadata, get_metadata
 from tilefoundry.ir.core.op_registry import iter_schemas
@@ -57,7 +58,7 @@ from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.cuda.memory.copy_async_tensor import CopyAsyncTensor
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
-from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
+from tilefoundry.ir.tir.cuda.nn.wgmma import Form, Wgmma
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.ir.types import (
@@ -678,28 +679,43 @@ def test_schedule_copy_evaluates_to_the_source_value() -> None:
     assert torch.equal(result, source)
 
 
-def test_schedule_mma_evaluates_like_matmul_plus_accumulator() -> None:
-    """Products are summed in the accumulator dtype, not rounded to bf16 first.
+@pytest.mark.parametrize(
+    ("atom", "dtype", "shape"),
+    (
+        pytest.param(Mma(), DType.bf16, (16, 16, 8), id="sm80_bf16"),
+        pytest.param(
+            Wgmma(n=8, dtype="fp8e4m3", form=Form.SS), DType.fp8e4m3, (64, 32, 8), id="fp8_ss"
+        ),
+        pytest.param(
+            Wgmma(n=8, dtype="fp8e4m3", form=Form.RS), DType.fp8e4m3, (64, 32, 8), id="fp8_rs"
+        ),
+    ),
+)
+def test_schedule_mma_evaluates_like_matmul_plus_accumulator(atom, dtype, shape) -> None:
+    """Products are summed in the accumulator dtype, not rounded to the operand dtype first.
 
-    Column 0 of lhs holds 2**-8, so each sum carries bits a bf16 result drops.
+    Column 0 of lhs holds 2**-8, so each sum carries bits an operand-dtype result drops.
     """
-    acc_type = TensorType((16, 8), DType.f32, None, StorageKind.RMEM)
-    lhs_type = TensorType((16, 16), DType.bf16, None, StorageKind.RMEM)
-    rhs_type = TensorType((16, 8), DType.bf16, None, StorageKind.RMEM)
-    acc = torch.arange(16 * 8, dtype=torch.float32).reshape(16, 8)
-    lhs = (torch.arange(16 * 16).reshape(16, 16) % 5).float()
+    m, k, n = shape
+    operand = to_torch_dtype(dtype)
+    acc_type = TensorType((m, n), DType.f32, None, StorageKind.RMEM)
+    lhs_type = TensorType((m, k), dtype, None, StorageKind.RMEM)
+    rhs_type = TensorType((k, n), dtype, None, StorageKind.RMEM)
+    acc = torch.arange(m * n, dtype=torch.float32).reshape(m, n)
+    lhs = (torch.arange(m * k).reshape(m, k) % 5).float()
     lhs[:, 0] = 2.0**-8
-    lhs = lhs.to(torch.bfloat16)
-    rhs = (torch.arange(16 * 8).reshape(16, 8) % 3).to(torch.bfloat16)
+    lhs = lhs.to(operand)
+    rhs = (torch.arange(k * n).reshape(k, n) % 3).to(operand)
 
     scheduled = _evaluate_call(
-        ScheduleOp(op=TiledMma(atom=Mma())),
+        ScheduleOp(op=TiledMma(atom=atom)),
         ((acc_type, acc), (lhs_type, lhs), (rhs_type, rhs)),
         acc_type,
     )
 
-    assert torch.equal(scheduled, acc + lhs.float() @ rhs.float())
-    assert not torch.equal(scheduled, acc + (lhs @ rhs).float())
+    exact = lhs.float() @ rhs.float()
+    assert torch.equal(scheduled, acc + exact)
+    assert not torch.equal(scheduled, acc + exact.to(operand).float())
 
 
 def test_single_issue_schedule_preserves_instruction_relations() -> None:
