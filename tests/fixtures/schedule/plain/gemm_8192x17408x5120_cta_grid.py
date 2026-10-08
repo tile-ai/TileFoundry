@@ -33,6 +33,6 @@ class GEMM_8192X17408X5120_CTA_GRID:
             for k in tile(K, BK):
                 at = tf.reshard(a[:, k], (M @ cta.bm, BK), "smem")
                 bt = tf.reshard(b[k, :], (BK, N @ cta.bn), "smem")
-                part = tf.matmul(at, bt)
-                acc = acc + tf.reshard(tf.cast(part, "f32"), (M @ cta.bm, N @ cta.bn), "rmem")
+                part = tf.matmul(at, bt, out_dtype="f32")
+                acc = acc + tf.reshard(part, (M @ cta.bm, N @ cta.bn), "rmem")
             return tf.reshard(tf.cast(acc, "bf16"), (M, N), "gmem")

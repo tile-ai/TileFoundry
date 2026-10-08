@@ -1351,6 +1351,15 @@ Consensus torch.nn.functional ops.
     `(M, K)` and `(K, N)` before deriving the output, contraction ownership, and
     `Partial(sum)` state. Its cost is `2 * numel(local_output) * local_K`, where
     `local_K` is reconstructed from that same logical-axis mapping.
+  - `MatMul` requires one common operand dtype. `MatMul.out_dtype` names the
+    result dtype; it defaults to `None`, which means the operand dtype, and a
+    dtype name is resolved at construction, so an unknown name fails there.
+    `out_dtype` states where the result is rounded, not which dtype hardware
+    accumulates in. The flops cost stays keyed by the operand dtype; the
+    result's traffic uses the result dtype. Evaluation with a result dtype equal
+    to the operand dtype and a non-8-bit operand is `torch.matmul` on the
+    operands; otherwise it is `torch.matmul` on the operands widened to `f32`,
+    then cast once to the result dtype.
   - `Conv2D` requires rank-4 NCHW input and OIHW weight, a rank-1 bias, and one
     common operand dtype. `stride` and `dilation` are positive length-2 tuples,
     `padding` is a non-negative length-2 tuple, and `groups` is positive. Input

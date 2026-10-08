@@ -5,14 +5,14 @@ from typing import Literal
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
+from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import Layout, TensorType
+from tilefoundry.ir.types import DType, Layout, TensorType
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     canonical_shard_layout,
@@ -40,6 +40,13 @@ class MatMul(Op):
     rhs = ParamDef(kind="input", pattern=is_ranked_tensor())
     a_layout = ParamDef(kind="attribute", annotation=Literal["MK", "KM"], default="MK")
     b_layout = ParamDef(kind="attribute", annotation=Literal["NK", "KN"], default="KN")
+    out_dtype = ParamDef(kind="attribute", annotation=DType, optional=True, default=None)
+
+    def __init__(self, **attrs) -> None:
+        out_dtype = attrs.get("out_dtype")
+        if isinstance(out_dtype, str):
+            attrs["out_dtype"] = DType.from_name(out_dtype)
+        super().__init__(**attrs)
 
 
 def matmul_axes(op: MatMul) -> tuple[int, int, int, int]:
@@ -138,16 +145,25 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         else:
             layout = Layout(shape=out_shape, strides=try_compact_major(out_shape))
     storage = resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
-    return TensorType(shape=out_shape, dtype=lhs.dtype, layout=layout, storage=storage)
+    dtype = lhs.dtype if call.target.out_dtype is None else call.target.out_dtype
+    return TensorType(shape=out_shape, dtype=dtype, layout=layout, storage=storage)
 
 
 @register_eval(MatMul)
 def _eval_matmul(ctx):
+    """Multiply in the operand dtype, or widen to f32 and round once.
+
+    The operand-dtype product serves when the result keeps that dtype and torch
+    has a matmul for it; 8-bit operands and a differing result dtype widen.
+    """
     lhs = ctx.args[0].data
     rhs = ctx.args[1].data
     if ctx.op.a_layout == "KM":
         lhs = lhs.transpose(-1, -2)
     if ctx.op.b_layout == "NK":
         rhs = rhs.transpose(-1, -2)
-    out = torch.matmul(lhs, rhs)
+    if ctx.result_type.dtype == ctx.args[0].type.dtype and lhs.element_size() > 1:
+        out = torch.matmul(lhs, rhs)
+    else:
+        out = torch.matmul(lhs.float(), rhs.float()).to(to_torch_dtype(ctx.result_type.dtype))
     return TensorValue(data=out, type=ctx.result_type)

@@ -23,6 +23,7 @@ _DTYPE_OF = {
     torch.float32: DType.f32,
     torch.float16: DType.f16,
     torch.bfloat16: DType.bf16,
+    torch.float8_e4m3fn: DType.fp8e4m3,
     torch.int32: DType.i32,
     torch.int64: DType.i64,
     torch.bool: DType.bool,

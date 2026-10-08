@@ -129,6 +129,20 @@ COST_CASES = [
         topology_level="cta",
         topologies=(_CTA,),
     ),
+    CostCase(
+        name="fp8_operands_count_their_flops_and_write_the_wider_result",
+        op=MatMul(out_dtype="f32"),
+        inputs=(
+            make_tensor_type((2, 3), DType.fp8e4m3),
+            make_tensor_type((3, 4), DType.fp8e4m3),
+        ),
+        flops={DType.fp8e4m3: 2 * 2 * 3 * 4},
+        traffic=(
+            TrafficBytes(read=2 * 3 * 1),
+            TrafficBytes(read=3 * 4 * 1),
+            TrafficBytes(write=2 * 4 * 4),
+        ),
+    ),
 ]
 
 
@@ -186,6 +200,48 @@ def test_matmul_layouts_evaluate(op, lhs_shape, rhs_shape):
     run_eval_case(EvalCase("matmul_layout", op, (lhs, rhs), logical_lhs @ logical_rhs))
 
 
+_FP8_SIXTEENS = (torch.full((2, 3), 16.0), torch.full((3, 4), 16.0))
+
+
+@pytest.mark.parametrize(
+    ("op", "inputs", "expected"),
+    (
+        pytest.param(
+            MatMul(out_dtype="f32"),
+            tuple(t.to(torch.float8_e4m3fn) for t in _FP8_SIXTEENS),
+            _FP8_SIXTEENS[0] @ _FP8_SIXTEENS[1],
+            id="fp8_into_f32",
+        ),
+        pytest.param(
+            MatMul(out_dtype=DType.f32),
+            (
+                torch.tensor([[1.0, 2.0**-8]], dtype=torch.bfloat16),
+                torch.tensor([[1.0], [1.0]], dtype=torch.bfloat16),
+            ),
+            torch.tensor([[1.0 + 2.0**-8]]),
+            id="bf16_into_f32_keeps_bits_bf16_would_drop",
+        ),
+        pytest.param(
+            MatMul(out_dtype=None),
+            (
+                torch.tensor([[1.0, 2.0**-8]], dtype=torch.bfloat16),
+                torch.tensor([[1.0], [1.0]], dtype=torch.bfloat16),
+            ),
+            torch.tensor([[1.0, 2.0**-8]], dtype=torch.bfloat16)
+            @ torch.tensor([[1.0], [1.0]], dtype=torch.bfloat16),
+            id="bf16_without_out_dtype_is_unchanged",
+        ),
+    ),
+)
+def test_matmul_out_dtype_evaluates(op, inputs, expected):
+    """The result is rounded once, to ``out_dtype``.
+
+    16 * 16 summed over K = 3 is 768, past e4m3's largest finite value (448),
+    so an fp8 result rounded to fp8 before it is widened cannot match.
+    """
+    run_eval_case(EvalCase("matmul_out_dtype", op, inputs, expected, atol=0, rtol=0))
+
+
 def _sharded(shape, attrs):
     return make_shard_tensor_type(shape, mesh=_M, attrs=attrs, dtype=DType.bf16)
 
@@ -202,6 +258,12 @@ CASES = [
         op=_MM,
         inputs=(make_tensor_type((0, 16), DType.bf16), make_tensor_type((16, 8), DType.bf16)),
         expected=make_tensor_type((0, 8), DType.bf16),
+    ),
+    TypeInferCase(
+        name="fp8_out_dtype_names_the_result",
+        op=MatMul(out_dtype="f32"),
+        inputs=(make_tensor_type((16, 8), DType.fp8e4m3), make_tensor_type((8, 32), DType.fp8e4m3)),
+        expected=make_tensor_type((16, 32), DType.f32),
     ),
 ]
 
