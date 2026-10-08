@@ -67,15 +67,23 @@ class FlashSplitKDecode:
                     (1, BLOCK, HEADS @ cta.head, HEAD_DIM),
                     "smem",
                 )
-                keys = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
-                values = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
-                scores = tf.matmul(scaled, keys)
+                keys = tf.transpose(kb, perm=(0, 2, 3, 1))
+                values = tf.transpose(vb, perm=(0, 2, 1, 3))
+                scores = tf.reshard(
+                    tf.matmul(tf.cast(scaled, dtype="bf16"), keys, out_dtype="f32"),
+                    (1, HEADS @ cta.head, 1, BLOCK),
+                    "smem",
+                )
                 block_m = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
                 next_m = tf.max(m, block_m)
                 correction = tf.exp(m - next_m)
                 weights = tf.exp(scores - next_m)
                 l = l * correction + tf.reduce(weights, axes=(-1,), keepdim=True, kind="sum")
-                acc = acc * correction + tf.matmul(weights, values)
+                acc = acc * correction + tf.reshard(
+                    tf.matmul(tf.cast(weights, dtype="bf16"), values, out_dtype="f32"),
+                    (WORKERS @ cta.w, HEADS @ cta.head, 1, HEAD_DIM),
+                    "smem",
+                )
                 m = next_m
 
             all_m = tf.reshard(m, (WORKERS, HEADS @ cta.head, 1, 1), "smem")

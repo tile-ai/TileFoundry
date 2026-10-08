@@ -73,6 +73,15 @@ class TypeInferContext:
         child = self.child_for(callee)
         return FunctionScope(child or self.scope.module, callee)
 
+    def resolve_target(self):
+        """The Target whose rules apply here, or None where no Module in scope declares one."""
+        if self.scope is None:
+            return None
+        try:
+            return self.scope.module.resolve_target()
+        except ValueError:
+            return None
+
     def for_callee(self, callee: object) -> TypeInferContext:
         """Move to *callee* with a fresh scope memo and the shared call cache.
 

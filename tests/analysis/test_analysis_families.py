@@ -269,7 +269,7 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
 
     literal_service, literal_local, literal_roofline, literal_performance = observed["literal"]
     symbolic_service, symbolic_local, symbolic_roofline, symbolic_performance = observed["symbolic"]
-    assert literal_roofline == symbolic_roofline == 418_219
+    assert literal_roofline == symbolic_roofline == 439_331
     assert symbolic_local - literal_local == 6 * 32
     assert symbolic_service - literal_service == 6 * 32 * 128
     assert symbolic_performance - literal_performance == 6 * 32
@@ -307,7 +307,7 @@ class _SplitLastAxis:
         with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
             rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem")
             strip = tf.reshard(w[0:_SPLIT_BLOCK, :], (_SPLIT_BLOCK, _SPLIT_OUT @ mesh.unit), "smem")
-            return tf.matmul(rows, strip)
+            return tf.matmul(rows, strip, out_dtype="f32")
 
 
 @module(entry="strip_major", target=_H200, topologies=(Topology("cta", _SPLIT_GRID),))
@@ -326,7 +326,7 @@ class _SplitStripMajor:
                 (_SPLIT_GRID @ mesh.unit, _SPLIT_BLOCK, _SPLIT_PER),
                 "smem",
             )
-            return tf.matmul(rows, strip)
+            return tf.matmul(rows, strip, out_dtype="f32")
 
 
 def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:

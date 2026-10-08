@@ -44,7 +44,7 @@ class TiledQKVProjection:
                     for k in tile(K, BK):  # noqa: F405
                         lhs = tf.reshard(x[m, k], (BM, BK), "smem")
                         rhs = tf.reshard(weight[k, n], (BK, BN), "smem")
-                        product = tf.cast(tf.matmul(lhs, rhs), dtype="f32")
+                        product = tf.matmul(lhs, rhs, out_dtype="f32")
                         acc = acc + tf.reshard(product, (BM, BN), "rmem")
                     result = tf.insert_slice(
                         result,
@@ -80,7 +80,9 @@ class GroupedMoEGEMM:
                         (HIDDEN, HIDDEN),
                         "smem",
                     )
-                    product = tf.matmul(lhs, rhs)
+                    product = tf.matmul(
+                        tf.cast(lhs, dtype="bf16"), tf.cast(rhs, dtype="bf16"), out_dtype="f32"
+                    )
                     result = tf.insert_slice(
                         result,
                         tf.reshape(

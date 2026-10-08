@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from enum import Enum
+
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.types import (
     ComposedLayout,
@@ -16,7 +18,7 @@ from tilefoundry.ir.types.stride import compact_row_major
 
 from . import predicates as P
 from .constraint import DistinctConstraint
-from .match import between_rules, evaluated
+from .match import PatternMatcher, between_rules, evaluated
 from .pattern import (
     AndPattern,
     ComposedLayoutPattern,
@@ -180,6 +182,35 @@ def matched_row_issues(pattern, matcher) -> tuple[int, int] | None:
     return find(pattern)
 
 
+def _field_name(value) -> str:
+    return getattr(value, "name", str(value)).lower()
+
+
+def field_refusals(
+    name: str,
+    pattern: TensorPattern,
+    type_: TensorType,
+    bindings: dict,
+) -> list[str]:
+    """Say which of *type_*'s dtype and storage *pattern* refuses under *bindings*."""
+    from tilefoundry.inspection.pattern_printer import PatternPrinter  # noqa: PLC0415
+
+    printer = PatternPrinter()
+    refused = []
+    for field in ("dtype", "storage"):
+        wanted = getattr(pattern, field)
+        actual = getattr(type_, field)
+        matcher = PatternMatcher(bindings)
+        if matcher.match(wanted, actual) and matcher.solve():
+            continue
+        if isinstance(wanted, Enum) or hasattr(wanted, "name") and not hasattr(wanted, "match"):
+            written = _field_name(wanted)
+        else:
+            written = printer.written(wanted, field)
+        refused.append(f"{name} {field}={_field_name(actual)}, reads {field}={written}")
+    return refused
+
+
 def fixed_pattern_value(value, bindings: dict):
     """Resolve one declaration value when every symbolic leaf is bound."""
     if isinstance(value, tuple):
@@ -337,6 +368,7 @@ __all__ = [
     "_mangle_variant_name",
     "declared_execution_mesh",
     "dtype_place",
+    "field_refusals",
     "locate_dim_var",
     "operand_tile",
     "storage_place",

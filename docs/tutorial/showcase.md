@@ -423,8 +423,8 @@ print(report.partition("\n\n")[0].rstrip())
 ```text
 # analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:2833728@logical,2833728@total,354216@cta other-ops=special:14528@logical,14528@total,1816@cta precision=exact
-# memory traffic=gmem:r5.31MB/w3.55MB@logical,r30.03MB/w28.39MB@total,r3.75MB/w3.55MB@cta;smem:r9.15MB/w9.04MB@logical,r9.15MB/w9.04MB@total,r1.14MB/w1.13MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:227.12KB;v13:228:1.77MB;v14:227:1.77MB;v22:220:256B;v24:223:227.12KB;v25:231:1.77MB;v26:230:1.77MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.53MB;smem:461.22KB persistent=gmem:1.76MB
+# compute-cost flops=bf16:2203264@logical,4503744@total,562968@cta;f32:44352@logical,44352@total,5544@cta other-ops=special:14528@logical,14528@total,1816@cta precision=exact
+# memory traffic=gmem:r5.31MB/w3.55MB@logical,r30.03MB/w28.39MB@total,r3.75MB/w3.55MB@cta;rmem:r315.19KB/w201.69KB@logical,r315.19KB/w201.69KB@total,r39.40KB/w25.21KB@cta;smem:r3.55MB/w3.55MB@logical,r3.55MB/w3.55MB@total,r454.62KB/w454.62KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v12:221:128B;v13:222:227.12KB;v14:228:1.77MB;v15:227:1.77MB;v23:220:256B;v25:223:227.12KB;v26:231:1.77MB;v27:230:1.77MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.53MB;rmem:10.77KB;smem:227.12KB persistent=gmem:1.76MB
 #   buffer=cos_cache holds=8.85MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=sin_cache holds=8.85MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=w_q holds=8.85MB time=none space=cta.head reuse=896.00KB fits=yes precision=upper_bound
@@ -435,7 +435,7 @@ print(report.partition("\n\n")[0].rstrip())
 #   buffer=pos_ids holds=8.85MB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 #   buffer=cur_pos holds=8.85MB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 #   buffer=write_len holds=8.85MB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
-#   error="smem placement peak 461.22KB exceeds capacity 227.00KB"
+#   error="smem placement peak 227.12KB exceeds capacity 227.00KB"
 # roofline ideal-ns=1935 bound-by=memory
 ```
 
@@ -459,8 +459,8 @@ print(report.partition("\n\n")[0].rstrip())
 ```text
 # analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:2839968@logical,2839968@total,354996@cta other-ops=special:14560@logical,14560@total,1820@cta precision=exact
-# memory traffic=gmem:r5.31MB/w3.56MB@logical,r30.07MB/w28.45MB@total,r3.76MB/w3.56MB@cta;smem:r9.17MB/w9.06MB@logical,r9.17MB/w9.06MB@total,r1.15MB/w1.13MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:227.62KB;v13:228:1.78MB;v14:227:1.78MB;v22:220:256B;v24:223:227.62KB;v25:231:1.78MB;v26:230:1.78MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.53MB;smem:462.23KB persistent=gmem:1.76MB
+# compute-cost flops=bf16:2207392@logical,4507872@total,563484@cta;f32:44448@logical,44448@total,5556@cta other-ops=special:14560@logical,14560@total,1820@cta precision=exact
+# memory traffic=gmem:r5.31MB/w3.56MB@logical,r30.07MB/w28.45MB@total,r3.76MB/w3.56MB@cta;rmem:r315.88KB/w202.12KB@logical,r315.88KB/w202.12KB@total,r39.48KB/w25.27KB@cta;smem:r3.56MB/w3.56MB@logical,r3.56MB/w3.56MB@total,r455.62KB/w455.62KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v12:221:128B;v13:222:227.62KB;v14:228:1.78MB;v15:227:1.78MB;v23:220:256B;v25:223:227.62KB;v26:231:1.78MB;v27:230:1.78MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.53MB;rmem:10.79KB;smem:227.62KB persistent=gmem:1.76MB
 #   buffer=cos_cache holds=8.87MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=sin_cache holds=8.87MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=w_q holds=8.87MB time=none space=cta.head reuse=896.00KB fits=yes precision=upper_bound
@@ -471,7 +471,7 @@ print(report.partition("\n\n")[0].rstrip())
 #   buffer=pos_ids holds=8.87MB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 #   buffer=cur_pos holds=8.87MB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 #   buffer=write_len holds=8.87MB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
-#   error="smem placement peak 462.23KB exceeds capacity 227.00KB"
+#   error="smem placement peak 227.62KB exceeds capacity 227.00KB"
 # roofline ideal-ns=1938 bound-by=memory
 ```
 
@@ -528,14 +528,14 @@ class Stage2_Sharded:
                 v_heads, (1, QUERY_HEADS @ cta.head, CTX, HEAD_DIM), "smem"
             )
             queries = tf.transpose(tf.cast(q_sh, dtype="f32"), perm=(0, 2, 1, 3))
-            keys = tf.transpose(tf.cast(k_sh, dtype="f32"), perm=(0, 1, 3, 2))
-            values = tf.transpose(tf.cast(v_sh, dtype="f32"), perm=(0, 1, 2, 3))
+            keys = tf.transpose(k_sh, perm=(0, 1, 3, 2))
+            values = tf.transpose(v_sh, perm=(0, 1, 2, 3))
             scaled_q = queries * tf.full_like(queries, value=SCALE)
-            scores = tf.matmul(scaled_q, keys)
+            scores = tf.matmul(tf.cast(scaled_q, dtype="bf16"), keys, out_dtype="f32")
             peak = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
             weights = tf.exp(scores - peak)
             normalizer = tf.reduce(weights, axes=(-1,), keepdim=True, kind="sum")
-            weighted = tf.matmul(weights, values)
+            weighted = tf.matmul(tf.cast(weights, dtype="bf16"), values, out_dtype="f32")
             attended = tf.transpose(
                 tf.cast(weighted / normalizer, dtype="bf16"), perm=(0, 2, 1, 3)
             )
@@ -593,14 +593,18 @@ for line in report.splitlines():
 ```
 
 ```text
-# compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:200448@logical,200448@total,25056@cta other-ops=special:1024@logical,1024@total,128@cta precision=exact
-# memory traffic=gmem:r1.60MB/w258.62KB@logical,r11.90MB/w2.02MB@total,r1.49MB/w258.19KB@cta;smem:r667.56KB/w659.56KB@logical,r667.56KB/w659.56KB@total,r83.45KB/w82.45KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:16.12KB;v13:228:128.00KB;v14:227:128.00KB;v22:220:256B;v24:223:16.12KB;v25:231:128.00KB;v26:230:128.00KB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:1.47MB;smem:32.62KB persistent=gmem:1.34MB
+# compute-cost flops=bf16:461248@logical,2761728@total,345216@cta;f32:3840@logical,3840@total,480@cta other-ops=special:1024@logical,1024@total,128@cta precision=exact
+# memory traffic=gmem:r1.60MB/w258.62KB@logical,r11.90MB/w2.02MB@total,r1.49MB/w258.19KB@cta;rmem:r25.06KB/w17.06KB@logical,r25.06KB/w17.06KB@total,r3.13KB/w2.13KB@cta;smem:r261.00KB/w261.00KB@logical,r261.00KB/w261.00KB@total,r32.62KB/w32.62KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v12:221:128B;v13:222:16.12KB;v14:228:128.00KB;v15:227:128.00KB;v23:220:256B;v25:223:16.12KB;v26:231:128.00KB;v27:230:128.00KB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:1.47MB;rmem:896B;smem:16.12KB persistent=gmem:1.34MB
 # roofline ideal-ns=404 bound-by=memory
 ```
 
-The f32 work and special work divide by the eight head CTAs. The small bf16 difference is
-placement and gather overhead that is not head-shardable. `ideal-ns` also changes because
-the authored storage choices change the traffic seen by the roofline calculation.
+The two attention contractions read bf16 operands into f32 results (`out_dtype="f32"`),
+so their work is bf16 work: each head CTA adds `2 * 2 * 128 * 32 = 16384` matmul flops
+plus 160 for the two casts that narrow their f32 inputs. Only the softmax arithmetic stays
+in f32, 480 flops per CTA, and the special work divides by the eight head CTAs. The remaining bf16 work
+is the projection, placement and gather work that is not head-shardable. `ideal-ns` also
+changes because the authored storage choices change the traffic seen by the roofline
+calculation.
 
 ## 4. Keep the scan state on chip
 
@@ -677,9 +681,13 @@ class Stage3_Fused:
                     (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
                     "smem",
                 )
-                keys = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
-                values = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
-                scores = tf.matmul(scaled, keys)
+                keys = tf.transpose(kb, perm=(0, 2, 3, 1))
+                values = tf.transpose(vb, perm=(0, 2, 1, 3))
+                scores = tf.reshard(
+                    tf.matmul(tf.cast(scaled, dtype="bf16"), keys, out_dtype="f32"),
+                    (1, QUERY_HEADS @ cta.head, 1, BLOCK),
+                    "smem",
+                )
                 block_m = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
                 next_m = tf.max(m, block_m)
                 correction = tf.exp(m - next_m)
@@ -687,7 +695,11 @@ class Stage3_Fused:
                 l = l * correction + tf.reduce(
                     weights, axes=(-1,), keepdim=True, kind="sum"
                 )
-                acc = acc * correction + tf.matmul(weights, values)
+                acc = acc * correction + tf.reshard(
+                    tf.matmul(tf.cast(weights, dtype="bf16"), values, out_dtype="f32"),
+                    (WORKERS @ cta.worker, QUERY_HEADS @ cta.head, 1, HEAD_DIM),
+                    "smem",
+                )
                 m = next_m
 
             all_m = tf.reshard(
@@ -739,8 +751,8 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 ```text
 # analysis target=nvidia.h200_sxm module=Stage3_Fused function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:328896@logical,4392896@total,328672@cta;f32:3239808@logical,6418944@total,200592@cta other-ops=integer:9@logical,512@total,16@cta;special:33056@logical,33152@total,1036@cta precision=exact
-# memory traffic=gmem:r3.32MB/w4.00MB@logical,r10.21MB/w4.02MB@total,r2.44MB/w4.00MB@cta;rmem:r656B/w72B@logical,r24.00KB/w4.00KB@total,r768B/w128B@cta;smem:r5.56MB/w5.40MB@logical,r20.82MB/w20.53MB@total,r666.21KB/w656.91KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_heads:2.06MB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:276:1.00KB;v11:282:512.12KB;v2:278:256B;v4:280:640B;v5:280:128B;v63:356:1.00KB;v65:359:512B;v6:281:512.12KB;v9:279:256B;v_heads:2.06MB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:6.81MB;rmem:8B;smem:32.77KB persistent=gmem:2.31MB
+# compute-cost flops=bf16:2983360@logical,8628160@total,461024@cta;f32:94080@logical,127488@total,3984@cta other-ops=integer:9@logical,512@total,16@cta;special:33056@logical,33152@total,1036@cta precision=exact
+# memory traffic=gmem:r3.32MB/w4.00MB@logical,r10.21MB/w4.02MB@total,r2.44MB/w4.00MB@cta;rmem:r64.64KB/w64.07KB@logical,r184.00KB/w164.00KB@total,r5.75KB/w5.12KB@cta;smem:r2.62MB/w2.46MB@logical,r8.90MB/w8.61MB@total,r284.71KB/w275.41KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_heads:2.06MB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:276:1.00KB;v11:282:512.12KB;v2:278:256B;v4:280:640B;v5:280:128B;v65:364:1.00KB;v67:367:512B;v6:281:512.12KB;v9:279:256B;v_heads:2.06MB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:6.81MB;rmem:512B;smem:16.77KB persistent=gmem:2.31MB
 #   buffer=w_o holds=6.44MB time=none space=cta.head,cta.worker reuse=3.88MB fits=yes precision=upper_bound
 # roofline ideal-ns=1599 bound-by=memory
 
@@ -789,9 +801,9 @@ class Stage4_WeightPrepared:
                 w_v, (1, HIDDEN, KV_DIM @ cta.head), "smem"
             )
             hidden_local = tf.reshard(hidden, (1, 1, HIDDEN), "smem")
-            q_projected = tf.matmul(hidden_local, wq_local)
-            k_projected = tf.matmul(hidden_local, wk_local)
-            v_projected = tf.matmul(hidden_local, wv_local)
+            q_projected = tf.cast(tf.matmul(hidden_local, wq_local, out_dtype="f32"), dtype="bf16")
+            k_projected = tf.cast(tf.matmul(hidden_local, wk_local, out_dtype="f32"), dtype="bf16")
+            v_projected = tf.cast(tf.matmul(hidden_local, wv_local, out_dtype="f32"), dtype="bf16")
             q_projected = tf.reshard(q_projected, (1, 1, HIDDEN), "gmem")
             k_projected = tf.reshard(k_projected, (1, 1, KV_DIM), "gmem")
             v_projected = tf.reshard(v_projected, (1, 1, KV_DIM), "gmem")
@@ -838,8 +850,8 @@ class Stage4_WeightPrepared:
                 (1, 1, HIDDEN),
                 "smem",
             )
-            output_local = tf.matmul(
-                attended_local, w_o_local
+            output_local = tf.cast(
+                tf.matmul(attended_local, w_o_local, out_dtype="f32"), dtype="bf16"
             )
             return tf.reshard(output_local, (1, 1, HIDDEN), "gmem")
 
@@ -876,8 +888,8 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 ```text
 # analysis target=nvidia.h200_sxm module=Stage4_WeightPrepared function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:328896@logical,337408@total,42176@cta;f32:6390528@logical,51124224@total,6390528@cta other-ops=special:32768@logical,262144@total,32768@cta precision=exact
-# memory traffic=gmem:r26.94MB/w24.38MB@logical,r213.37MB/w195.05MB@total,r26.67MB/w24.38MB@cta;smem:r323.25KB/w322.25KB@logical,r337.25KB/w329.25KB@total,r42.16KB/w41.16KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v10:404:512B;v11:415:2.00KB;v12:418:1.00KB;v13:418:2.00KB;v15:404:128B;v16:405:512.12KB;v17:408:4.00MB;v18:407:4.00MB;v19:416:8.00MB;v21:428:8.00MB;v22:428:256.00KB;v23:429:64B;v24:430:256.00KB;v25:430:256.00KB;v28:398:256B;v30:406:512.12KB;v31:412:4.00MB;v32:411:4.00MB;v33:417:8.00MB;v35:432:8.00MB;v36:432:2.00KB;v37:431:64B;v38:433:2.00KB;v39:433:1.00KB;v3:396:1.00KB;v44:445:512B;v7:397:256B;v9:404:640B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:10.44MB;smem:16.56KB persistent=gmem:2.31MB
+# compute-cost flops=bf16:329536@logical,338048@total,42256@cta;f32:6390528@logical,51124224@total,6390528@cta other-ops=special:32768@logical,262144@total,32768@cta precision=exact
+# memory traffic=gmem:r26.94MB/w24.38MB@logical,r213.37MB/w195.05MB@total,r26.67MB/w24.38MB@cta;rmem:r3.75KB/w3.75KB@logical,r3.75KB/w3.75KB@total,r480B/w480B@cta;smem:r322.00KB/w321.00KB@logical,r336.00KB/w328.00KB@total,r42.00KB/w41.00KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v11:412:640B;v12:412:512B;v13:423:2.00KB;v14:426:1.00KB;v15:426:2.00KB;v17:412:128B;v18:413:512.12KB;v19:416:4.00MB;v20:415:4.00MB;v21:424:8.00MB;v23:436:8.00MB;v24:436:256.00KB;v25:437:64B;v26:438:256.00KB;v27:438:256.00KB;v31:406:256B;v33:414:512.12KB;v34:420:4.00MB;v35:419:4.00MB;v36:425:8.00MB;v38:440:8.00MB;v39:440:2.00KB;v40:439:64B;v41:441:2.00KB;v42:441:1.00KB;v48:453:512B;v4:404:1.00KB;v9:405:256B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:10.44MB;rmem:128B;smem:16.50KB persistent=gmem:2.31MB
 #   buffer=cos_cache holds=51.08MB time=none space=cta.head reuse=3.50MB fits=no precision=upper_bound
 #   buffer=sin_cache holds=51.08MB time=none space=cta.head reuse=3.50MB fits=no precision=upper_bound
 #   buffer=hidden holds=51.08MB time=none space=cta.head reuse=3.50KB fits=no precision=upper_bound
@@ -888,10 +900,10 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # roofline ideal-ns=11158 bound-by=memory
 
     v1 = reshard(w_q, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost precision=exact; memory traffic=gmem:r128.00KB/w0@logical,r128.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w16.00KB@cta footprint=w_q:128.00KB footprint-precision=exact operands=0:r128.00KB/w0;result:r0/w128.00KB; roofline ideal-ns=28 bound-by=memory
-    v2 = matmul(v0, v1, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta precision=exact; memory traffic=smem:r128.50KB/w512B@logical,r132.00KB/w512B@total,r16.50KB/w64B@cta footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=1 bound-by=compute
+    v2 = matmul(v0, v1, a_layout="MK", b_layout="KN", out_dtype="f32")  # Tensor[(1, 1, 256), "f32", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "rmem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta precision=exact; memory traffic=rmem:r0/w1.00KB@logical,r0/w1.00KB@total,r0/w128B@cta;smem:r128.50KB/w0@logical,r132.00KB/w0@total,r16.50KB/w0@cta footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w1.00KB; roofline ideal-ns=1 bound-by=compute
 
-    v42 = reshard(w_o, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost precision=exact; memory traffic=gmem:r128.00KB/w0@logical,r128.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w16.00KB@cta footprint=w_o:128.00KB footprint-precision=exact operands=0:r128.00KB/w0;result:r0/w128.00KB; roofline ideal-ns=28 bound-by=memory
-    v43 = matmul(v41, v42, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta precision=exact; memory traffic=smem:r128.50KB/w512B@logical,r132.00KB/w512B@total,r16.50KB/w64B@cta footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=1 bound-by=compute
+    v45 = reshard(w_o, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost precision=exact; memory traffic=gmem:r128.00KB/w0@logical,r128.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w16.00KB@cta footprint=w_o:128.00KB footprint-precision=exact operands=0:r128.00KB/w0;result:r0/w128.00KB; roofline ideal-ns=28 bound-by=memory
+    v46 = matmul(v44, v45, a_layout="MK", b_layout="KN", out_dtype="f32")  # Tensor[(1, 1, 256), "f32", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "rmem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta precision=exact; memory traffic=rmem:r0/w1.00KB@logical,r0/w1.00KB@total,r0/w128B@cta;smem:r128.50KB/w0@logical,r132.00KB/w0@total,r16.50KB/w0@cta footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w1.00KB; roofline ideal-ns=1 bound-by=compute
 ```
 
 ## 6. Stream the KV cache
@@ -960,9 +972,13 @@ class Stage5_CachePrepared:
                     (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
                     "smem",
                 )
-                keys = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
-                values = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
-                scores = tf.matmul(scaled, keys)
+                keys = tf.transpose(kb, perm=(0, 2, 3, 1))
+                values = tf.transpose(vb, perm=(0, 2, 1, 3))
+                scores = tf.reshard(
+                    tf.matmul(tf.cast(scaled, dtype="bf16"), keys, out_dtype="f32"),
+                    (1, QUERY_HEADS @ cta.head, 1, BLOCK),
+                    "smem",
+                )
                 block_m = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
                 next_m = tf.max(m, block_m)
                 correction = tf.exp(m - next_m)
@@ -970,7 +986,11 @@ class Stage5_CachePrepared:
                 l = l * correction + tf.reduce(
                     weights, axes=(-1,), keepdim=True, kind="sum"
                 )
-                acc = acc * correction + tf.matmul(weights, values)
+                acc = acc * correction + tf.reshard(
+                    tf.matmul(tf.cast(weights, dtype="bf16"), values, out_dtype="f32"),
+                    (1, QUERY_HEADS @ cta.head, 1, HEAD_DIM),
+                    "smem",
+                )
                 m = next_m
 
             k_current = tf.repeat_interleave(
@@ -985,19 +1005,23 @@ class Stage5_CachePrepared:
             v_current = tf.reshard(
                 v_current, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
             )
-            current_keys = tf.transpose(
-                tf.cast(k_current, dtype="f32"), perm=(0, 2, 3, 1)
+            current_keys = tf.transpose(k_current, perm=(0, 2, 3, 1))
+            current_values = tf.transpose(v_current, perm=(0, 2, 1, 3))
+            current_scores = tf.reshard(
+                tf.matmul(tf.cast(scaled, dtype="bf16"), current_keys, out_dtype="f32"),
+                (1, QUERY_HEADS @ cta.head, 1, 1),
+                "smem",
             )
-            current_values = tf.transpose(
-                tf.cast(v_current, dtype="f32"), perm=(0, 2, 1, 3)
-            )
-            current_scores = tf.matmul(scaled, current_keys)
             current_m = tf.max(m, current_scores)
             current_correction = tf.exp(m - current_m)
             current_weights = tf.exp(current_scores - current_m)
             l = l * current_correction + current_weights
-            acc = acc * current_correction + tf.matmul(
-                current_weights, current_values
+            acc = acc * current_correction + tf.reshard(
+                tf.matmul(
+                    tf.cast(current_weights, dtype="bf16"), current_values, out_dtype="f32"
+                ),
+                (1, QUERY_HEADS @ cta.head, 1, HEAD_DIM),
+                "smem",
             )
 
             attended = tf.transpose(
@@ -1034,8 +1058,8 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 ```text
 # analysis target=nvidia.h200_sxm module=Stage5_CachePrepared function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:328896@logical,1246400@total,328672@cta;f32:6410280@logical,6410280@total,801285@cta other-ops=integer:32@logical,256@total,32@cta;special:33040@logical,33040@total,4130@cta precision=exact
-# memory traffic=gmem:r7.32MB/w4.00MB@logical,r22.20MB/w32.02MB@total,r3.82MB/w4.00MB@cta;rmem:r2.50KB/w0@logical,r20.00KB/w0@total,r2.50KB/w0@cta;smem:r20.78MB/w20.49MB@logical,r20.78MB/w20.49MB@total,r2.60MB/w2.56MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_all:512.12KB;k_cache:16.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:469:1.00KB;v22:491:128.00KB;v2:471:256B;v38:500:128.00KB;v46:522:256B;v47:521:1.00KB;v4:473:640B;v58:525:256B;v59:524:1.00KB;v5:473:128B;v71:551:1.00KB;v73:554:512B;v8:472:256B;v_all:512.12KB;v_cache:16.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.38MB;rmem:0;smem:32.77KB persistent=gmem:2.31MB
+# compute-cost flops=bf16:4557512@logical,5482952@total,858241@cta;f32:117288@logical,117288@total,14661@cta other-ops=integer:32@logical,256@total,32@cta;special:33040@logical,33040@total,4130@cta precision=exact
+# memory traffic=gmem:r7.32MB/w4.00MB@logical,r22.20MB/w32.02MB@total,r3.82MB/w4.00MB@cta;rmem:r163.53KB/w161.03KB@logical,r181.03KB/w161.03KB@total,r22.63KB/w20.13KB@cta;smem:r8.82MB/w8.55MB@logical,r8.85MB/w8.57MB@total,r1.11MB/w1.07MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_all:512.12KB;k_cache:16.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:477:1.00KB;v23:499:128.00KB;v2:479:256B;v40:508:128.00KB;v49:538:256B;v4:481:640B;v50:537:1.00KB;v5:481:128B;v62:541:256B;v63:540:1.00KB;v75:571:1.00KB;v77:574:512B;v8:480:256B;v_all:512.12KB;v_cache:16.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.38MB;rmem:512B;smem:16.77KB persistent=gmem:2.31MB
 #   buffer=k_all holds=2.60MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=v_all holds=2.60MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=w_o holds=2.60MB time=none space=cta.head reuse=896.00KB fits=yes precision=upper_bound
@@ -1044,8 +1068,8 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 #   buffer=cur_pos holds=2.60MB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 # roofline ideal-ns=2473 bound-by=memory
 
-        v21 = slice(k_cache, (0, v20, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", Layout((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost precision=exact; memory traffic=rmem:r32B/w0@logical,r256B/w0@total,r32B/w0@cta footprint-precision=exact operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
-    v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;k_all:128B;v5:473:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
+        v22 = slice(k_cache, (0, v21, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", Layout((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost precision=exact; memory traffic=rmem:r32B/w0@logical,r256B/w0@total,r32B/w0@cta footprint-precision=exact operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
+    v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;k_all:128B;v5:481:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
 ```
 
 ```text

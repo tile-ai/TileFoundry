@@ -39,9 +39,11 @@ from tilefoundry.ir.types.shard_layout import (
     Partial,
     Split,
 )
+from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _MM = MatMul()
+_H200 = CudaTarget("nvidia.h200_sxm")
 
 
 _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
@@ -259,6 +261,64 @@ CASES = [
         op=_MM,
         inputs=(make_tensor_type((0, 16), DType.bf16), make_tensor_type((16, 8), DType.bf16)),
         expected=make_tensor_type((0, 8), DType.bf16),
+    ),
+    TypeInferCase(
+        name="cuda_on_chip_result_is_where_the_mma_writes_it",
+        op=MatMul(out_dtype="f32"),
+        inputs=(
+            make_tensor_type((64, 16), DType.bf16, "smem"),
+            make_tensor_type((16, 32), DType.bf16, "smem"),
+        ),
+        expected=make_tensor_type((64, 32), DType.f32, "rmem"),
+        target=_H200,
+    ),
+    TypeInferCase(
+        name="cuda_fp8_register_lhs_reads_like_rs",
+        op=MatMul(out_dtype="f32"),
+        inputs=(
+            make_tensor_type((64, 32), DType.fp8e4m3, "rmem"),
+            make_tensor_type((32, 32), DType.fp8e4m3, "smem"),
+        ),
+        expected=make_tensor_type((64, 32), DType.f32, "rmem"),
+        target=_H200,
+    ),
+    TypeInferCase(
+        name="cuda_on_chip_without_an_mma_is_refused",
+        op=_MM,
+        inputs=(
+            make_tensor_type((64, 16), DType.f32, "smem"),
+            make_tensor_type((16, 32), DType.f32, "smem"),
+        ),
+        expected=ExpectedError(
+            match="no nvidia.h200_sxm MMA reads lhs f32 smem and rhs f32 smem into f32"
+        ),
+        target=_H200,
+    ),
+    TypeInferCase(
+        name="cuda_logical_operands_keep_the_neutral_rule",
+        op=_MM,
+        inputs=(make_tensor_type((64, 16), DType.bf16), make_tensor_type((16, 32), DType.bf16)),
+        expected=make_tensor_type((64, 32), DType.bf16),
+        target=_H200,
+    ),
+    TypeInferCase(
+        name="on_chip_without_a_target_is_undecided",
+        op=MatMul(out_dtype="f32"),
+        inputs=(
+            make_tensor_type((64, 16), DType.bf16, "smem"),
+            make_tensor_type((16, 32), DType.bf16, "smem"),
+        ),
+        expected=make_tensor_type((64, 32), DType.f32, "umat"),
+    ),
+    TypeInferCase(
+        name="cpu_on_chip_keeps_the_neutral_rule",
+        op=_MM,
+        inputs=(
+            make_tensor_type((64, 16), DType.f32, "smem"),
+            make_tensor_type((16, 32), DType.f32, "smem"),
+        ),
+        expected=make_tensor_type((64, 32), DType.f32, "smem"),
+        target=CpuTarget(),
     ),
     TypeInferCase(
         name="fp8_out_dtype_names_the_result",

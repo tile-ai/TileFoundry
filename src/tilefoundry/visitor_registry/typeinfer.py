@@ -23,7 +23,7 @@ from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
 from tilefoundry.ir.types.utils import types_compatible
-from tilefoundry.ir.visitor import ExprVisitor, expr_children
+from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 
 from .contexts import FunctionScope, TypeInferContext, TypeInferResults
 from .registries import typeinfer_registry
@@ -119,10 +119,18 @@ class TypeInferVisitor(ExprVisitor[Type]):
         if isinstance(target, Function):
             return self._call_function(call, target, arg_types, ctx)
         op_cls = type(target)
-        fn = typeinfer_registry.lookup(op_cls)
+        fn = self._target_rule(op_cls, ctx) or typeinfer_registry.lookup(op_cls)
         if fn is None:
             ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
         return fn(call, ctx)
+
+    @staticmethod
+    def _target_rule(op_cls: type, ctx: TypeInferContext):
+        """The rule registered for this Op under the walk's Target, if any."""
+        target = ctx.resolve_target()
+        if target is None:
+            return None
+        return typeinfer_registry.lookup((type(target), op_cls))
 
     def _call_function(
         self,
@@ -279,4 +287,29 @@ def inference_type(
     )
 
 
-__all__ = ["TypeInferVisitor", "inference_type"]
+def retype_children(owner) -> None:
+    """Write the types *owner*'s Target gives into the bodies of the children it holds.
+
+    A child declares no Target, so its body was typed before it had one. Once a
+    root that declares a Target holds it, every function in the child subtree is
+    typed again in its owned scope and the result is stored on the IR.
+    """
+    for child in owner.modules:
+        for function in child.functions:
+            if isinstance(function, Function):
+                params = [
+                    param
+                    for expr in collect_exprs(function.body)
+                    if isinstance(expr, (LoopRegion, MeshRegion))
+                    for param in expr.params
+                ]
+                annotations = [param.type for param in params]
+                TypeInferVisitor(owns_body=True).visit(
+                    function, TypeInferContext(scope=FunctionScope(child, function))
+                )
+                for param, annotation in zip(params, annotations, strict=True):
+                    param.type = annotation
+        retype_children(child)
+
+
+__all__ = ["TypeInferVisitor", "inference_type", "retype_children"]

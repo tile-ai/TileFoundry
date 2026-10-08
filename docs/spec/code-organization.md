@@ -148,7 +148,9 @@ target-neutral abstractions stay at `ir/{dialect}/{category}/`. For
 example the whole MMA surface is target-owned — `mma.py` defines the `TiledMma`
 op, `mma_atom.py` defines `MmaAtom` / `AtomPattern`, and `sm80_mma.py` /
 `wgmma.py` define the CUDA instruction declarations. All four live under
-`ir/tir/cuda/nn/`.
+`ir/tir/cuda/nn/`. A target-specific rule for a target-neutral Op nests the
+same way: the CUDA `MatMul` type rule lives in `ir/hir/cuda/nn/matmul.py`
+beside no Op class of its own.
 The backend-bound construction stays in TIR: HIR is the checking reference
 side, and carrying the instruction name in that reference would make two GPU
 targets require different HIR references. (`codegen/` and `runtime/` are

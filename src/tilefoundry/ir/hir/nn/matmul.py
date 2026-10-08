@@ -12,7 +12,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, FloatDType, Layout, TensorType
+from tilefoundry.ir.types import DType, FloatDType, Layout, StorageKind, TensorType
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     canonical_shard_layout,
@@ -91,8 +91,17 @@ def _elements(shape: tuple) -> int:
     return counted
 
 
-@register_typeinfer(MatMul)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+def matmul_result_dtype(op: MatMul, lhs: TensorType) -> DType:
+    """The result dtype: ``out_dtype`` when stated, else the operand dtype."""
+    return lhs.dtype if op.out_dtype is None else op.out_dtype
+
+
+def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tuple:
+    """Check the operands against each other and derive the result shape and layout.
+
+    Every target's MatMul rule reads its shape and layout here; only the result
+    storage is the target's to decide.
+    """
     lhs = ctx.type_of(call.args[0])
     rhs = ctx.type_of(call.args[1])
     try:
@@ -144,9 +153,22 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             layout = held
         else:
             layout = Layout(shape=out_shape, strides=try_compact_major(out_shape))
-    storage = resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
-    dtype = lhs.dtype if call.target.out_dtype is None else call.target.out_dtype
-    return TensorType(shape=out_shape, dtype=dtype, layout=layout, storage=storage)
+    return out_shape, layout
+
+
+@register_typeinfer(MatMul)
+def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+    lhs = ctx.type_of(call.args[0])
+    rhs = ctx.type_of(call.args[1])
+    shape, layout = matmul_result_shape_and_layout(call, ctx)
+    on_chip = {lhs.storage, rhs.storage} & {StorageKind.SMEM, StorageKind.RMEM}
+    if on_chip and ctx.resolve_target() is None:
+        storage = StorageKind.UMAT
+    else:
+        storage = resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
+    return TensorType(
+        shape=shape, dtype=matmul_result_dtype(call.target, lhs), layout=layout, storage=storage
+    )
 
 
 @register_eval(MatMul)

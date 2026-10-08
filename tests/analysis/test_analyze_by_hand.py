@@ -444,12 +444,12 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression(
 ) -> None:
     """The footprint is held at the loop start; one tile product is its own size.
 
-    Each step multiplies an ``(BM, BK)`` by a ``(BK, BN)`` bf16 tile into a
-    ``(BM, BN)`` one: ``BM * BN * 2`` bytes written and ``2 * BM * BN * BK``
-    flops by the CTA that runs it, whatever layout the operands were staged in.
-    The operand tiles die into the product and the product into its f32 cast,
-    so placing them needs the larger of those two live sets and no more. A seed
-    nobody could build bounds nothing: the solver still finds a placement.
+    Each step multiplies an ``(BM, BK)`` by a ``(BK, BN)`` bf16 tile into an f32
+    ``(BM, BN)`` register tile: ``BM * BN * 4`` bytes written and
+    ``2 * BM * BN * BK`` bf16 flops by the CTA that runs it, whatever layout the
+    operands were staged in. Shared memory holds only the two operand tiles, so
+    placing them needs their sum and no more. A seed nobody could build bounds
+    nothing: the solver still finds a placement.
     """
     if not seeded:
         monkeypatch.setattr(allocation, "_first_fit", lambda *args, **kwargs: None)
@@ -466,11 +466,10 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression(
         == [
             f"bf16[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BK}] smem",
             f"bf16[{persistent_gemm_tiled.BK},{persistent_gemm_tiled.BN}] smem",
-            f"bf16[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BN}] smem",
+            f"f32[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BN}] rmem",
         ]
     )
-    tile_bytes = persistent_gemm_tiled.BM * persistent_gemm_tiled.BN * 2
-    assert product["memory"]["buffer_bytes"] == tile_bytes
+    tile_bytes = persistent_gemm_tiled.BM * persistent_gemm_tiled.BN * 4
     assert product["memory"]["operands"][-1]["write"] == tile_bytes
     flops = product["compute-cost"]["flops"]["bf16"]["per_unit"]
     assert flops == [
@@ -480,15 +479,11 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression(
         persistent_gemm_tiled.BM * persistent_gemm_tiled.BK * 2,
         persistent_gemm_tiled.BK * persistent_gemm_tiled.BN * 2,
     )
-    widened = persistent_gemm_tiled.BM * persistent_gemm_tiled.BN * 4
-    largest_live = max(sum(operands) + tile_bytes, tile_bytes + widened)
     peaks = {peak["memory_level"]: peak["peak_bytes"] for peak in memory["peaks"]}
     if seeded:
-        assert peaks["smem"] == largest_live, "the tiles fit in the most bytes ever live at once"
+        assert peaks["smem"] == sum(operands), "the tiles fit in the most bytes ever live at once"
     else:
-        (offset,) = product["memory"]["offsets"]
-        assert offset % 16 == 0 and offset + tile_bytes <= peaks["smem"]
-        assert peaks["smem"] >= largest_live
+        assert peaks["smem"] >= sum(operands)
 
 
 def test_persistent_flat_states_its_precision() -> None:

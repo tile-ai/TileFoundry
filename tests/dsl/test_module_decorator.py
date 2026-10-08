@@ -21,9 +21,12 @@ from tilefoundry import func, module, prim_func
 from tilefoundry.dsl import ConstTensor, T, Tensor, tf  # noqa: F401 — tf/T used by bodies
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
+from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.types import Layout, Mesh, Topology
+from tilefoundry.ir.hir.nn.matmul import MatMul
+from tilefoundry.ir.types import Layout, Mesh, StorageKind, Topology
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.runtime.resource import DictResource
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
@@ -246,6 +249,51 @@ def test_one_shared_child_binds_once_per_owner():
     assert loaded_left.modules[0].module is loaded_right.modules[0].module
     assert evaluate(loaded_left.leaf, ones).float().cpu().tolist() == [3.0, 3.0]
     assert evaluate(loaded_right.leaf, ones).float().cpu().tolist() == [10.0, 10.0]
+
+
+def test_a_held_child_takes_its_own_owners_target_types():
+    """A child is typed under the root that holds it, and only that root.
+
+    The child declares no Target, so its on-chip matmul is undecided (umat)
+    until a CUDA root holds it and it becomes an f32 register tile. Placing the
+    same held child under a CPU root types an independent copy, which the CPU
+    root's own call reaches; the CUDA root's subtree keeps its types.
+    """
+    from tests.fixtures.placed.child_matmul_target import (  # noqa: PLC0415
+        ChildMatmul,
+        ChildMatmulRoot,
+        K,
+        M,
+        N,
+    )
+
+    held = ChildMatmulRoot.modules[0]
+
+    @module(entry="gemm", target=CpuTarget(), topologies=(Topology("cta", 1),))
+    class _CpuRoot:
+        child = held
+
+        @func
+        def gemm(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]):
+            return child(a, b)  # noqa: F821 -- class-body binding
+
+    def matmul_storages(owner):
+        return [
+            expr.type.storage
+            for expr in collect_exprs(owner.functions[0].body)
+            if isinstance(expr, Call) and isinstance(expr.target, MatMul)
+        ]
+
+    copied = _CpuRoot.modules[0]
+    assert ChildMatmul.target is None and held.target is None and copied.target is None
+    assert matmul_storages(ChildMatmul) == [StorageKind.UMAT] * 2
+    assert matmul_storages(held) == [StorageKind.RMEM] * 2
+    assert copied is not held and copied._parent is _CpuRoot
+    assert matmul_storages(copied) == [StorageKind.SMEM] * 2
+    callees = [
+        expr.target for expr in collect_exprs(_CpuRoot.functions[0].body) if isinstance(expr, Call)
+    ]
+    assert copied.functions[0] in callees and held.functions[0] not in callees
 
 
 def test_forward_reference_sibling_fails_loudly():

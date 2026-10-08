@@ -96,7 +96,7 @@ class PrefillLayer:
                             (BK, BN),
                             "smem",
                         )
-                        mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                        mm = tf.matmul(xt, wt, out_dtype="f32")
                         acc = acc + tf.reshard(mm, (ROWS, BN), "rmem")
                     p = tf.insert_slice(p, tf.reshard(acc, (ROWS, BN), "gmem"), (m, n))
 
@@ -135,7 +135,7 @@ class PrefillLayer:
                                 "smem",
                             )
                             sc = tf.reshard(
-                                tf.cast(tf.matmul(qh, kh), dtype="f32"),
+                                tf.matmul(qh, kh, out_dtype="f32"),
                                 (ROWS, BKV),
                                 "rmem",
                             )
@@ -144,7 +144,7 @@ class PrefillLayer:
                             pr = tf.exp(sc - mn)
                             lr = lr * scale + tf.reduce(pr, axes=(1,), keepdim=True, kind="sum")
                             pb = tf.reshard(tf.cast(pr, dtype="bf16"), (ROWS, BKV), "smem")
-                            pv = tf.cast(tf.matmul(pb, vh), dtype="f32")
+                            pv = tf.matmul(pb, vh, out_dtype="f32")
                             acc = acc * scale + tf.reshard(pv, (ROWS, D), "rmem")
                             mx = mn
                         ah = tf.reshard(tf.cast(tf.div(acc, lr), dtype="bf16"), (ROWS, D), "gmem")
@@ -162,7 +162,7 @@ class PrefillLayer:
                             (BK, BN),
                             "smem",
                         )
-                        mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                        mm = tf.matmul(xt, wt, out_dtype="f32")
                         op = op + tf.reshard(mm, (ROWS, BN), "rmem")
                     xr = tf.reshard(x[m, n], (ROWS, BN), "rmem")
                     sm = tf.cast(tf.cast(xr, dtype="f32") + op, dtype="bf16")
@@ -177,7 +177,7 @@ class PrefillLayer:
                         wk = tf.reshape(w_gu[k, 0:1, n], (BK, BN))
                         xt = tf.reshard(xn1[0:ROWS, k], (ROWS, BK), "smem")
                         wt = tf.reshard(wk, (BK, BN), "smem")
-                        mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                        mm = tf.matmul(xt, wt, out_dtype="f32")
                         gv = gv + tf.reshard(mm, (ROWS, BN), "rmem")
                     gb = tf.insert_slice(
                         gb,
@@ -190,7 +190,7 @@ class PrefillLayer:
                         wk = tf.reshape(w_gu[k, 1:2, n], (BK, BN))
                         xt = tf.reshard(xn1[0:ROWS, k], (ROWS, BK), "smem")
                         wt = tf.reshard(wk, (BK, BN), "smem")
-                        mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                        mm = tf.matmul(xt, wt, out_dtype="f32")
                         gv = gv + tf.reshard(mm, (ROWS, BN), "rmem")
                     gb = tf.insert_slice(
                         gb,
@@ -217,7 +217,7 @@ class PrefillLayer:
                             (BK, BN),
                             "smem",
                         )
-                        mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                        mm = tf.matmul(xt, wt, out_dtype="f32")
                         dp = dp + tf.reshard(mm, (ROWS, BN), "rmem")
                     hr = tf.reshard(hb[m, n], (ROWS, BN), "rmem")
                     sm = tf.cast(tf.cast(hr, dtype="f32") + dp, dtype="bf16")
@@ -264,7 +264,7 @@ class PrefillLayer:
                         (BK, DN_QKV),
                         "smem",
                     )
-                    mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                    mm = tf.matmul(xt, wt, out_dtype="f32")
                     acc = acc + tf.reshard(mm, (1, DN_QKV), "rmem")
                 p = tf.insert_slice(p, tf.reshard(acc, (1, DN_QKV), "gmem"), (0, n))
 
@@ -298,13 +298,13 @@ class PrefillLayer:
                         vh = tf.reshard(
                             tf.reshape(vc2[0:1, c, kv, 0:D], (BKV, D)), (BKV, D), "smem"
                         )
-                        sc = tf.reshard(tf.cast(tf.matmul(qh, kh), dtype="f32"), (1, BKV), "rmem")
+                        sc = tf.reshard(tf.matmul(qh, kh, out_dtype="f32"), (1, BKV), "rmem")
                         mn = tf.maximum(mx, tf.reduce(sc, axes=(1,), keepdim=True, kind="max"))
                         scale = tf.exp(mx - mn)
                         pr = tf.exp(sc - mn)
                         lr = lr * scale + tf.reduce(pr, axes=(1,), keepdim=True, kind="sum")
                         pb = tf.reshard(tf.cast(pr, dtype="bf16"), (1, BKV), "smem")
-                        pv = tf.cast(tf.matmul(pb, vh), dtype="f32")
+                        pv = tf.matmul(pb, vh, out_dtype="f32")
                         acc = acc * scale + tf.reshard(pv, (1, D), "rmem")
                         mx = mn
                     ah = tf.reshard(tf.cast(tf.div(acc, lr), dtype="bf16"), (1, D), "gmem")
@@ -321,7 +321,7 @@ class PrefillLayer:
                         (BK, DN_O),
                         "smem",
                     )
-                    mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                    mm = tf.matmul(xt, wt, out_dtype="f32")
                     op = op + tf.reshard(mm, (1, DN_O), "rmem")
                 xr = tf.reshard(x[0:1, n], (1, DN_O), "rmem")
                 sm = tf.cast(tf.cast(xr, dtype="f32") + op, dtype="bf16")
@@ -338,7 +338,7 @@ class PrefillLayer:
                         (BK, DN_FFN),
                         "smem",
                     )
-                    mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                    mm = tf.matmul(xt, wt, out_dtype="f32")
                     gv = gv + tf.reshard(mm, (1, DN_FFN), "rmem")
                 gb = tf.insert_slice(
                     gb,
@@ -354,7 +354,7 @@ class PrefillLayer:
                         (BK, DN_FFN),
                         "smem",
                     )
-                    mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                    mm = tf.matmul(xt, wt, out_dtype="f32")
                     uv = uv + tf.reshard(mm, (1, DN_FFN), "rmem")
                 gb = tf.insert_slice(
                     gb,
@@ -379,7 +379,7 @@ class PrefillLayer:
                         (BK, DN_DOWN),
                         "smem",
                     )
-                    mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                    mm = tf.matmul(xt, wt, out_dtype="f32")
                     dp = dp + tf.reshard(mm, (1, DN_DOWN), "rmem")
                 xr = tf.reshard(hb[0:1, n], (1, DN_DOWN), "rmem")
                 sm = tf.cast(tf.cast(xr, dtype="f32") + dp, dtype="bf16")
@@ -502,7 +502,7 @@ class PrefillLayer:
                             (BK, BN),
                             "smem",
                         )
-                        mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                        mm = tf.matmul(xt, wt, out_dtype="f32")
                         acc = acc + tf.reshard(mm, (ROWS, BN), "rmem")
                     lg = tf.insert_slice(lg, tf.reshard(acc, (ROWS, BN), "gmem"), (m, n))
         return lg
@@ -576,7 +576,7 @@ class PrefillLayer:
                 for k in tile(HID, BK):  # noqa: F405
                     xt = tf.reshard(hf[0:1, k], (1, BK), "smem")
                     wt = tf.reshard(w_head[k, n], (BK, BN), "smem")
-                    mm = tf.cast(tf.matmul(xt, wt), dtype="f32")
+                    mm = tf.matmul(xt, wt, out_dtype="f32")
                     acc = acc + tf.reshard(mm, (1, BN), "rmem")
                 lg = tf.insert_slice(lg, tf.reshard(acc, (1, BN), "gmem"), (0, n))
         return lg

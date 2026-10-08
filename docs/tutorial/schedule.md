@@ -74,7 +74,7 @@ grep '^# performance root=' grid.txt
 ```
 
 ```text
-# performance root=GRID::gemm predicted-ns=265994652 waves=33
+# performance root=GRID::gemm predicted-ns=264231132 waves=33
 ```
 
 The target can keep 132 CTAs resident, so 4352 CTAs require 33 waves. That is a
@@ -145,8 +145,8 @@ sed -n '/^from __future__/q;p' persistent.txt
 # analysis target=nvidia.h200_sxm module=PERSISTENT function=gemm topology=cta wave=132/132
 # selection requested=compute-cost,memory,performance executed=compute-cost,memory,performance
 # compute-cost flops=bf16:21476933632@logical,2834955239424@total,21476933632@cta,21476933632@thread;f32:167772160@logical,22145925120@total,167772160@cta,167772160@thread other-ops=integer:65@logical,16896@total,128@cta,128@thread precision=upper_bound
-# memory traffic=gmem:r86.50MB/w280.00MB@logical,r31.45GB/w36.09GB@total,r244.00MB/w280.00MB@cta,r244.00MB/w280.00MB@thread;rmem:r1.26GB/w1.25GB@logical,r166.57GB/w166.55GB@total,r1.26GB/w1.26GB@cta,r1.26GB/w1.26GB@thread;smem:r880.00MB/w722.50MB@logical,r113.44GB/w113.44GB@total,r880.00MB/w880.00MB@cta,r880.00MB/w880.00MB@thread footprint=a:32.00KB;b:2.12MB;v20:38:128.00KB;v21:39:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:176.00KB persistent=gmem:250.00MB
-# performance root=PERSISTENT::gemm predicted-ns=21737429 waves=1
+# memory traffic=gmem:r86.50MB/w280.00MB@logical,r31.45GB/w36.09GB@total,r244.00MB/w280.00MB@cta,r244.00MB/w280.00MB@thread;rmem:r1.26GB/w1.25GB@logical,r166.57GB/w166.55GB@total,r1.26GB/w1.26GB@cta,r1.26GB/w1.26GB@thread;smem:r240.00MB/w82.50MB@logical,r30.94GB/w30.94GB@total,r240.00MB/w240.00MB@cta,r240.00MB/w240.00MB@thread footprint=a:32.00KB;b:2.12MB;v20:38:128.00KB;v21:39:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:48.00KB persistent=gmem:250.00MB
+# performance root=PERSISTENT::gemm predicted-ns=18317269 waves=1
 ```
 
 One wave replaces 33, and the model's prediction falls with it. These `predicted-ns`

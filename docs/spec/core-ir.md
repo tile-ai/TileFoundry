@@ -77,6 +77,13 @@ class Module:
     declares the `Target` and the ordered `Topology` hierarchy.
   - a `Module` owns its child subtree. Placing a child that already belongs to
     another owner MUST NOT change what the first owner's subtree resolves.
+  - a child declares no Target, so its bodies are typed before it has one. A
+    root built with a Target MUST type every function in its child subtree again
+    in its owned scope and store those types on the IR, keeping each region
+    parameter's parsed annotation. A `@module` class body that places a child
+    another owner already holds places an independent `cloned()` copy, so its
+    calls reach the copy and retyping it leaves the first owner's subtree as it
+    was.
   - `owns(function)` MUST use identity and accept the Module's direct functions
     and their specialization variants. With `derived=True`, it MUST also follow
     a rebuilt function's recorded origin

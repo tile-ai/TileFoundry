@@ -278,8 +278,8 @@ def test_placement_at_and_matmul_at_coexist_in_one_function() -> None:
         @func
         def placed_matmul(x: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]):
             with Mesh(("cta",), (2,), ("tile",)) as mesh:
-                x_local = tf.reshard(x, (2 @ mesh.tile, 4), "rmem")
-                b_local = tf.reshard(b, (4, 3), "rmem")
+                x_local = tf.reshard(x, (2 @ mesh.tile, 4), "gmem")
+                b_local = tf.reshard(b, (4, 3), "gmem")
                 return x_local @ b_local
 
     scope = PlacedMatMul.entry_function().body
@@ -367,10 +367,10 @@ def test_mesh_binding_does_not_escape_its_with_scope() -> None:
     [
         (
             "misspelled",
-            "matmul has no attribute 'a_layoutt'; its attributes are: a_layout, b_layout",
+            "matmul has no attribute 'a_layoutt'; its attributes are: a_layout, b_layout, out_dtype",
         ),
         ("few", "matmul takes 2 inputs, got 1"),
-        ("many", "matmul takes at most 4 positional arguments, got 5"),
+        ("many", "matmul takes at most 5 positional arguments, got 6"),
         ("twice", "attribute 'a_layout' is already bound by a positional argument"),
     ],
 )
@@ -393,7 +393,7 @@ def test_a_refused_call_states_what_was_wrong_with_it(program: str, message: str
 
             @func
             def refused(a: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]):
-                return tf.matmul(a, b, "MK", "KN", "KN")
+                return tf.matmul(a, b, "MK", "KN", "f32", "KN")
 
         else:
 

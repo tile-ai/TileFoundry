@@ -49,7 +49,7 @@ class _LiteralStoreOffset:
                         (_STRIP @ mesh.strip, _HEAD, _HEAD),
                         "smem",
                     )
-                    product = tf.matmul(rows, weights)
+                    product = tf.matmul(rows, weights, out_dtype="f32")
                     for head in range(1, _HEADS, 1):
                         head_index = head + 0
                         weight_base = head_index * _HEAD
@@ -67,8 +67,8 @@ class _LiteralStoreOffset:
                             (_STRIP @ mesh.strip, _HEAD, _HEAD),
                             "smem",
                         )
-                        product = product + tf.matmul(next_rows, next_weights)
-                    result = tf.insert_slice(result, product, (0, base, 0))
+                        product = product + tf.matmul(next_rows, next_weights, out_dtype="f32")
+                    result = tf.insert_slice(result, tf.cast(product, "bf16"), (0, base, 0))
             return result
 
 
@@ -101,7 +101,7 @@ class _SymbolicStoreOffset:
                         (_STRIP @ mesh.strip, _HEAD, _HEAD),
                         "smem",
                     )
-                    product = tf.matmul(rows, weights)
+                    product = tf.matmul(rows, weights, out_dtype="f32")
                     for head in range(1, _HEADS, 1):
                         head_index = head + 0
                         weight_base = head_index * _HEAD
@@ -119,6 +119,6 @@ class _SymbolicStoreOffset:
                             (_STRIP @ mesh.strip, _HEAD, _HEAD),
                             "smem",
                         )
-                        product = product + tf.matmul(next_rows, next_weights)
-                    result = tf.insert_slice(result, product, (store_base, base, 0))
+                        product = product + tf.matmul(next_rows, next_weights, out_dtype="f32")
+                    result = tf.insert_slice(result, tf.cast(product, "bf16"), (store_base, base, 0))
             return result

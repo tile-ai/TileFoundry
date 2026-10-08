@@ -36,6 +36,7 @@ from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.inspection import PatternPrinter, as_script
 from tilefoundry.ir.core import Call, Op, OpCapability, Var, detach_metadata, get_metadata
+from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef, collect_param_defs
 from tilefoundry.ir.core.register import register_op
@@ -91,6 +92,12 @@ PLAIN = (
     "gemm_relu_gemm_untiled",
 )
 PLAIN_DIMS = {"chunk_rmsnorm": {"chunks": 16}}
+PLAIN_REFUSED = {
+    "gemm_relu_gemm_smem_staged": (
+        r"no nvidia\.h200_sxm MMA reads lhs f32 smem and rhs f32 smem into f32"
+        r"(.|\n)*gemm_relu_gemm_smem_staged\.py:41:29"
+    ),
+}
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
@@ -360,6 +367,10 @@ def _direct_operand_matches(function: PrimFunction) -> list[tuple[object, str, d
 
 @pytest.mark.parametrize("name", PLAIN)
 def test_plain_program_is_analyzable(name: str) -> None:
+    if name in PLAIN_REFUSED:
+        with pytest.raises(VerifyError, match=PLAIN_REFUSED[name]):
+            importlib.import_module(f"tests.fixtures.schedule.plain.{name}")
+        return
     module = importlib.import_module(f"tests.fixtures.schedule.plain.{name}")
     program = next(value for value in vars(module).values() if type(value).__name__ == "Module")
     entry = program.entry_function()
@@ -1025,7 +1036,7 @@ def test_schedule_candidate_reports_cover_every_site(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     reports = []
-    for name in PLAIN:
+    for name in (name for name in PLAIN if name not in PLAIN_REFUSED):
         source = f"tests/fixtures/schedule/plain/{name}.py"
         out = tmp_path / f"{name}.json"
         dims = [f"--dim={key}={value}" for key, value in PLAIN_DIMS.get(name, {}).items()]
@@ -1037,7 +1048,7 @@ def test_schedule_candidate_reports_cover_every_site(
     assert all(row["candidates"] or row["refused"] for _name, row in sites)
     assert all(row["candidates"] for _name, row in sites if row["op"] == "tf.reshard")
     matmuls = [(name, row) for name, row in sites if row["op"] == "tf.matmul"]
-    assert len(matmuls) == 7
+    assert len(matmuls) == 5
     assert [name for name, row in matmuls if row["candidates"]] == ["gemm_8192x17408x5120_cta_grid"]
 
 
@@ -1047,7 +1058,6 @@ def test_schedule_candidate_reports_cover_every_site(
         ("chunk_rmsnorm", ("chunks=16",), 0, 7, 0),
         ("chunk_rmsnorm", ("chunks=32",), 0, 7, 0),
         ("gemm_8192x17408x5120_cta_grid", (), 1, 4, 1),
-        ("gemm_relu_gemm_smem_staged", (), 2, 6, 0),
         ("gemm_relu_gemm_tiled", (), 2, 2, 0),
         ("gemm_relu_gemm_untiled", (), 2, 0, 0),
     ),

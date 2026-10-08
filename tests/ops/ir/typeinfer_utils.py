@@ -14,10 +14,12 @@ import pytest
 
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
+from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import ShardLayout, Split, shard_layout_local_shape
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 
@@ -59,9 +61,18 @@ def make_call(op, input_types) -> Call:
     return Call(type=input_types[0], target=op, args=args)
 
 
-def infer_call(op, *input_types):
-    """Run ``op`` applied to ``input_types`` through the TypeInfer visitor."""
-    return TypeInferVisitor().visit(make_call(op, input_types), TypeInferContext())
+def infer_call(op, *input_types, target=None):
+    """Run ``op`` applied to ``input_types`` through the TypeInfer visitor.
+
+    With ``target``, the call is the body of a one-function Module declaring
+    that Target, and inference reads it from that Module's scope.
+    """
+    call = make_call(op, input_types)
+    if target is None:
+        return TypeInferVisitor().visit(call, TypeInferContext())
+    function = Function.build(name="case", params=call.args, body=call, return_type=input_types[0])
+    module = Module(name="Case", functions=(function,), entry="case", target=target)
+    return TypeInferVisitor().visit(call, TypeInferContext(scope=FunctionScope(module, function)))
 
 
 @dataclass(frozen=True)
@@ -93,6 +104,7 @@ class TypeInferCase:
     op: object
     inputs: tuple[TensorType, ...]
     expected: "TensorType | TupleType | ExpectedError"
+    target: object | None = None
 
 
 def _norm_shape(shape) -> tuple:
@@ -141,6 +153,6 @@ def run_typeinfer_case(case: TypeInferCase) -> None:
     """Run one ``TypeInferCase``: assert the output type or the error."""
     if isinstance(case.expected, ExpectedError):
         with pytest.raises(case.expected.exc, match=case.expected.match):
-            infer_call(case.op, *case.inputs)
+            infer_call(case.op, *case.inputs, target=case.target)
         return
-    assert_type(infer_call(case.op, *case.inputs), case.expected)
+    assert_type(infer_call(case.op, *case.inputs, target=case.target), case.expected)

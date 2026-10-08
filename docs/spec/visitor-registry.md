@@ -197,6 +197,7 @@ class TypeInferContext:
 
     def child_for(self, callee: Function) -> Module | None: ...
     def scope_for(self, callee: Function) -> FunctionScope | None: ...
+    def resolve_target(self) -> Target | None: ...
     def for_callee(self, callee: Function) -> TypeInferContext: ...
     def type_of(self, expr: Expr) -> Type: ...
     def local_type_of(self, expr: Expr) -> Type: ...
@@ -216,6 +217,11 @@ nothing of that kind rather than guessing.
     how the other is constructed.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
     subclass retains its analysis-specific state.
+  - `resolve_target` answers which Target's rules apply: the scope Module's
+    resolved Target, or `None` without a scope or when no Module on the owner
+    chain declares one. The parser's context, which reads a function before its
+    Module exists, MUST answer with the Target that function is parsed under
+    when it has no scope; once a scope exists, the scope Module's Target wins.
   - `memo` is the current scope's identity-pinned type table. Crossing a
     Function boundary creates a fresh context table; a region keeps its scope
     and seeds a nested visitor table from the enclosing one.
@@ -233,12 +239,15 @@ nothing of that kind rather than guessing.
 Registry + decorator:
 
 ```python
-typeinfer_registry: DispatchRegistry[type[Op]]   # module-level registry keyed by type[Op]
-def register_typeinfer(op_cls: type[Op]): ...     # decorator: register a typeinfer handler for one Op class
+typeinfer_registry: DispatchRegistry[type[Op] | tuple[type[Target], type[Op]]]
+def register_typeinfer(op_cls: type[Op], *, target: type[Target] | None = None): ...
 ```
 
 - constraints:
   - handler signature is `(call: Call, ctx: TypeInferContext) -> Type | TypeInferResults`.
+  - Without `target` a handler is keyed by its Op class and answers everywhere;
+    with `target` it is keyed `(target, op_cls)` and answers only where
+    `ctx.resolve_target()` is of that Target type.
     A bare `Type` states no value range; the decorator normalizes it to
     `TypeInferResults(type)` without changing the other registries.
 
@@ -279,6 +288,7 @@ def inference_type(expr: Expr, ctx: TypeInferContext | None = None, *, ranges=Fa
     subclass with no rule raises via `ctx.error` in `default_visit_leaf` rather
     than trusting a possibly-stale `Expr.type` field.
   - `visit_leaf_Call` branches on its target. An `Op` looks up
+    `(type(ctx.resolve_target()), type(target))` first, then
     `typeinfer_registry.lookup(type(target))`; an unregistered Op routes through
     `ctx.error`. Handlers read operand types through `ctx.type_of`, which sees
     the current scope's memo bindings. A `Function` binds parameters into a new visitor memo and walks

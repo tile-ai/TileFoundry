@@ -76,8 +76,8 @@ class PrefillDecodeAttention:
                     (1, BLOCK, HEADS @ cta.head, HEAD_DIM),
                     "smem",
                 )
-                kt = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
-                vt = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
+                kt = tf.transpose(kb, perm=(0, 2, 3, 1))
+                vt = tf.transpose(vb, perm=(0, 2, 1, 3))
                 query_positions = (
                     tf.reshape(tf.arange(Tensor[(SEQ,), "i64", "gmem"]), new_shape=(SEQ, 1))
                     + query_start
@@ -87,7 +87,11 @@ class PrefillDecodeAttention:
                     + window
                 )
                 keep = key_positions <= query_positions
-                raw_scores = tf.matmul(qs, kt)
+                raw_scores = tf.reshard(
+                    tf.matmul(tf.cast(qs, dtype="bf16"), kt, out_dtype="f32"),
+                    (1, HEADS @ cta.head, SEQ, BLOCK),
+                    "smem",
+                )
                 scores = tf.where(
                     keep,
                     raw_scores,
@@ -100,7 +104,11 @@ class PrefillDecodeAttention:
                 next_sum = running_sum * correction + tf.reduce(
                     probabilities, axes=(-1,), keepdim=True, kind="sum"
                 )
-                next_out = running_out * correction + tf.matmul(probabilities, vt)
+                next_out = running_out * correction + tf.reshard(
+                    tf.matmul(tf.cast(probabilities, dtype="bf16"), vt, out_dtype="f32"),
+                    (1, HEADS @ cta.head, SEQ, HEAD_DIM),
+                    "smem",
+                )
                 running_max = next_max
                 running_sum = next_sum
                 running_out = next_out
@@ -157,7 +165,7 @@ class PrefillDecodeAttention:
                         sizes=(1, BLOCK, HEADS, HEAD_DIM),
                         strides=(1, 1, 1, 1),
                     )
-                    values = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 1, 3))
+                    values = tf.transpose(kb, perm=(0, 2, 1, 3))
                     keys = tf.transpose(values, perm=(0, 1, 3, 2))
                     query_positions = (
                         tf.reshape(
@@ -174,7 +182,11 @@ class PrefillDecodeAttention:
                         + key_start
                     )
                     keep = key_positions <= query_positions
-                    raw_scores = tf.matmul(scaled, keys)
+                    raw_scores = tf.reshard(
+                        tf.matmul(tf.cast(scaled, dtype="bf16"), keys, out_dtype="f32"),
+                        (1, HEADS @ cta.head, BLOCK, BLOCK),
+                        "smem",
+                    )
                     scores = tf.where(
                         keep,
                         raw_scores,
@@ -190,7 +202,11 @@ class PrefillDecodeAttention:
                         keepdim=True,
                         kind="sum",
                     )
-                    next_out = running_out * correction + tf.matmul(probabilities, values)
+                    next_out = running_out * correction + tf.reshard(
+                        tf.matmul(tf.cast(probabilities, dtype="bf16"), values, out_dtype="f32"),
+                        (1, HEADS @ cta.head, BLOCK, HEAD_DIM),
+                        "smem",
+                    )
                     running_max = next_max
                     running_sum = next_sum
                     running_out = next_out

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from enum import Enum
 from math import prod
 from typing import Any, Mapping
 
@@ -30,6 +29,7 @@ from tilefoundry.ir.pattern import (
     between_rules,
     declared_execution_mesh,
 )
+from tilefoundry.ir.pattern.utils import field_refusals
 from tilefoundry.ir.types import TensorType, UnitType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.int_tuple import flatten
@@ -276,32 +276,6 @@ def _declared_shape(pattern: TensorPattern, bindings: dict) -> tuple[int, ...] |
     return tuple(shape)
 
 
-def _field_name(value) -> str:
-    return getattr(value, "name", str(value)).lower()
-
-
-def _field_refusals(
-    name: str,
-    pattern: TensorPattern,
-    type_: TensorType,
-    bindings: dict,
-) -> list[str]:
-    printer = PatternPrinter()
-    refused = []
-    for field in ("dtype", "storage"):
-        wanted = getattr(pattern, field)
-        actual = getattr(type_, field)
-        matcher = PatternMatcher(bindings)
-        if matcher.match(wanted, actual) and matcher.solve():
-            continue
-        if isinstance(wanted, Enum) or hasattr(wanted, "name") and not hasattr(wanted, "match"):
-            written = _field_name(wanted)
-        else:
-            written = printer.written(wanted, field)
-        refused.append(f"{name} {field}={_field_name(actual)}, reads {field}={written}")
-    return refused
-
-
 def _type_refusals(
     name: str,
     pattern: TensorPattern | None,
@@ -318,7 +292,7 @@ def _type_refusals(
     matcher = PatternMatcher(bindings)
     if matcher.match(simplified, single) and matcher.solve():
         return single, ()
-    refused = _field_refusals(name, simplified, single, bindings)
+    refused = field_refusals(name, simplified, single, bindings)
     if not refused:
         refused.append(f"{name}: {PatternPrinter().refusal(matcher.refusal)}")
     return single, tuple(refused)
@@ -357,7 +331,7 @@ def _pattern_refusals(site: _Site, op, variant) -> tuple[str, ...]:
             refused.append(f"{param.name} states no tensor pattern")
             continue
         simplified = replace(pattern, layout=None)
-        refused.extend(_field_refusals(param.name, simplified, whole, bindings))
+        refused.extend(field_refusals(param.name, simplified, whole, bindings))
         given[param.name] = whole
     for rule in between_rules(type(op)):
         if rule.field in ("storage", "dtype") and not rule.holds(given):
@@ -368,7 +342,7 @@ def _pattern_refusals(site: _Site, op, variant) -> tuple[str, ...]:
 def _asked(site: _Site, op) -> tuple[tuple[ParamDef, TensorType], ...] | None:
     params = _input_params(type(op), len(site.reads))
     read_params = tuple(param for param in params if param.effect == MemoryEffect.READ)
-    write_params = tuple(param for param in params if param.effect == MemoryEffect.WRITE)
+    write_params = tuple(param for param in params if param.effect & MemoryEffect.WRITE)
     if len(read_params) != len(site.reads) or len(write_params) > len(site.leaves):
         return None
     return (

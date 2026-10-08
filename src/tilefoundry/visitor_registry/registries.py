@@ -81,8 +81,12 @@ register_verify_stmt = verify_stmt_registry.decorator()
 register_cost_evaluator = cost_evaluator_registry.decorator()
 
 
-def register_typeinfer(cls: type) -> Callable[[Callable], Callable]:
-    """Register one type rule, normalizing its result without affecting peers."""
+def register_typeinfer(cls: type, *, target: type | None = None) -> Callable[[Callable], Callable]:
+    """Register one type rule, normalizing its result without affecting peers.
+
+    With ``target``, the rule answers for ``cls`` only inside a Module whose
+    resolved Target is of that type; it is keyed ``(target, cls)``.
+    """
     from .contexts import TypeInferResults  # noqa: PLC0415
 
     def decorator(fn: Callable) -> Callable:
@@ -90,7 +94,7 @@ def register_typeinfer(cls: type) -> Callable[[Callable], Callable]:
             result = fn(*args, **kwargs)
             return result if isinstance(result, TypeInferResults) else TypeInferResults(result)
 
-        typeinfer_registry.register(cls, wrapped)
+        typeinfer_registry.register(cls if target is None else (target, cls), wrapped)
         return fn
 
     return decorator

@@ -79,7 +79,7 @@ CLI_INVENTORY = [param for param in INVENTORY if param.id not in API_INVENTORY]
 assert API_INVENTORY <= {case.id for case in CASES}
 
 _GQA_MATERIAL_TRANSPOSE_GMEM = 280_632
-_PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 214_016
+_PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 197_632
 _QWEN_LOOP_INVARIANT_VALUES_GMEM = 152_712_464
 _MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING = 5_245_008
 _MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_195_376
@@ -98,13 +98,28 @@ class _PersistentScheduleExpectation:
 
 
 EXPECTED_MEMORY_PEAKS = {
+    "child_matmul_target.ChildMatmul.run[static]": {
+        "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
+        "rmem": 0,
+        "smem": 64 * 16 * 2 + 16 * 32 * 2,
+    },
+    "child_matmul_target.ChildMatmulRoot.child.run[static]": {
+        "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
+        "rmem": 64 * 32 * 4,
+        "smem": 64 * 16 * 2 + 16 * 32 * 2,
+    },
+    "child_matmul_target.ChildMatmulRoot.gemm[static]": {
+        "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
+        "rmem": 64 * 32 * 4,
+        "smem": 64 * 16 * 2 + 16 * 32 * 2,
+    },
     "derived_prefill.DerivedPrefill.prefill[prefill_n=64,topology_only=128]": {
         "gmem": 288,
     },
     "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]": {
         "gmem": 526_464,
-        "rmem": 8,
-        "smem": 66_580,
+        "rmem": 128 * 4,
+        "smem": 2 * 128 * 64 * 2 + 1_044,
     },
     "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 128},
     "fused_boundary.FusedBoundary.inner.scale[static]": {"rmem": 256},
@@ -116,43 +131,43 @@ EXPECTED_MEMORY_PEAKS = {
     "fused_boundary.FusedBoundary.stage[static]": {"smem": 64},
     "gemm_schedules.Gemm_MNK_NT128x128x64_w17x8.gemm[static]": {
         "gmem": 52_428_800,
-        "rmem": 32_768,
-        "smem": 128 * 64 * 2 + 64 * 128 * 2 + 128 * 128 * 2,
+        "rmem": 128 * 128 * 4,
+        "smem": 128 * 64 * 2 + 64 * 128 * 2,
     },
     "gemm_schedules.Gemm_MK_NN64x128x32_w1x132.gemm[static]": {
         "gmem": 3_244_032,
-        "rmem": 16_384,
-        "smem": 28_672,
+        "rmem": 64 * 128 * 4,
+        "smem": 64 * 32 * 2 + 32 * 128 * 2,
     },
     "gemm_schedules.Gemm_MNK_NN128x128x64_w12x11_k4096.gemm[static]": {
         "gmem": 67_108_864,
-        "rmem": 32_768,
-        "smem": 65_536,
+        "rmem": 128 * 128 * 4,
+        "smem": 128 * 64 * 2 + 64 * 128 * 2,
     },
     "gemm_schedules.Gemm_MNK_NN128x128x64_w12x11_k16384.gemm[static]": {
         "gmem": 268_435_456,
-        "rmem": 32_768,
-        "smem": 65_536,
+        "rmem": 128 * 128 * 4,
+        "smem": 128 * 64 * 2 + 64 * 128 * 2,
     },
     "gemm_schedules.Gemm_MNK_NN64x128x32_w11x12.gemm[static]": {
         "gmem": 3_244_032,
-        "rmem": 16_384,
-        "smem": 28_672,
+        "rmem": 64 * 128 * 4,
+        "smem": 64 * 32 * 2 + 32 * 128 * 2,
     },
     "gemm_schedules.Gemm_MNK_NN64x128x32_w12x11.gemm[static]": {
         "gmem": 3_244_032,
-        "rmem": 16_384,
-        "smem": 28_672,
+        "rmem": 64 * 128 * 4,
+        "smem": 64 * 32 * 2 + 32 * 128 * 2,
     },
     "gemm_schedules.Gemm_MNK_NN128.gemm[static]": {
         "gmem": 131_072,
-        "rmem": 32_768,
-        "smem": 98_304,
+        "rmem": 128 * 128 * 4,
+        "smem": 128 * 128 * 2 + 128 * 128 * 2,
     },
     "gemm_schedules.Gemm_MNK_NN64.gemm[static]": {
         "gmem": 131_072,
-        "rmem": 8_192,
-        "smem": 24_576,
+        "rmem": 64 * 64 * 4,
+        "smem": 64 * 64 * 2 + 64 * 64 * 2,
     },
     "gqa_decode.GqaOnline._ctx_combine[static]": {"gmem": 291_968},
     "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": {"gmem": 4_483_072},
@@ -244,17 +259,17 @@ EXPECTED_MEMORY_PEAKS = {
     "performance_findings.LocalTier.kernel[static]": {"gmem": 68_096, "rmem": 512},
     "persistent_gemm_flat.PersistentGemmFlat.gemm[static]": {
         "gmem": 130_940_928,
-        "rmem": 16_384,
-        "smem": 24_576,
+        "rmem": 64 * 64 * 4,
+        "smem": 64 * 32 * 2 + 32 * 64 * 2,
     },
     "persistent_gemm_tiled.PersistentGemmTiled.gemm[static]": {
         "gmem": 130_940_928,
-        "rmem": 16_384,
-        "smem": 24_576,
+        "rmem": 64 * 64 * 4,
+        "smem": 64 * 32 * 2 + 32 * 64 * 2,
     },
     "prefill_decode_attention.PrefillDecodeAttention.attend[ctx=128,seq=128]": {
         "gmem": 1_310_720,
-        "rmem": 0,
+        "rmem": 128 * 128 * 4,
         "smem": _PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM,
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]": {
@@ -265,12 +280,12 @@ EXPECTED_MEMORY_PEAKS = {
     "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]": {
         "gmem": 171_582_480,
         "rmem": 132_608,
-        "smem": 131_072,
+        "smem": 3 * 128 * 128 * 2,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=0,seq=512]": {
         "gmem": 5_269_475_856,
         "rmem": 132_608,
-        "smem": 131_072,
+        "smem": 3 * 128 * 128 * 2,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]": {
         "gmem": 4_611_694_880,
@@ -285,7 +300,7 @@ EXPECTED_MEMORY_PEAKS = {
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=512]": {
         "gmem": 5_269_475_856,
         "rmem": 132_608,
-        "smem": 131_072,
+        "smem": 3 * 128 * 128 * 2,
     },
     "region_boundaries.RegionBoundaries.helper[static]": {"gmem": 64, "rmem": 32},
     "region_boundaries.RegionBoundaries.run[static]": {

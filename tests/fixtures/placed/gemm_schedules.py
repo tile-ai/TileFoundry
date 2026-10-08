@@ -59,7 +59,7 @@ class Gemm_MNK_NN64:
                     for k in tile(TILE_K, 64):
                         lhs = tf.reshard(a[m, k], (64, 64), "smem")
                         rhs = tf.reshard(b[k, n], (64, 64), "smem")
-                        result = tf.reshard(tf.matmul(lhs, rhs), (64, 64), "rmem")
+                        result = tf.reshard(tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"), (64, 64), "rmem")
             return result
 
 
@@ -80,7 +80,7 @@ class Gemm_MNK_NN128:
                     for k in tile(TILE_K, 128):
                         lhs = tf.reshard(a[m, k], (128, 128), "smem")
                         rhs = tf.reshard(b[k, n], (128, 128), "smem")
-                        result = tf.reshard(tf.matmul(lhs, rhs), (128, 128), "rmem")
+                        result = tf.reshard(tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"), (128, 128), "rmem")
             return result
 
 
@@ -105,7 +105,7 @@ class Gemm_MK_NN64x128x32_w1x132:
                             b_columns[ki, yi, :], (WAVE_BK, WAVE_BN), "smem"
                         )
                         result = tf.reshard(
-                            tf.matmul(lhs, rhs), (WAVE_BM, WAVE_BN), "rmem"
+                            tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"), (WAVE_BM, WAVE_BN), "rmem"
                         )
             return result
 
@@ -145,7 +145,7 @@ class Gemm_MNK_NN64x128x32_w11x12:
                                     "smem",
                                 )
                                 result = tf.reshard(
-                                    tf.matmul(lhs, rhs),
+                                    tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"),
                                     (WAVE_BM, WAVE_BN),
                                     "rmem",
                                 )
@@ -187,7 +187,7 @@ class Gemm_MNK_NN64x128x32_w12x11:
                                     "smem",
                                 )
                                 result = tf.reshard(
-                                    tf.matmul(lhs, rhs),
+                                    tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"),
                                     (WAVE_BM, WAVE_BN),
                                     "rmem",
                                 )
@@ -246,7 +246,7 @@ class Gemm_MNK_NN128x128x64_w12x11_k4096:
                             "smem",
                         )
                         result = tf.reshard(
-                            tf.matmul(lhs, rhs),
+                            tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"),
                             (RESIDENT_BM, RESIDENT_BN),
                             "rmem",
                         )
@@ -305,7 +305,7 @@ class Gemm_MNK_NN128x128x64_w12x11_k16384:
                             "smem",
                         )
                         result = tf.reshard(
-                            tf.matmul(lhs, rhs),
+                            tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"),
                             (RESIDENT_BM, RESIDENT_BN),
                             "rmem",
                         )
@@ -365,7 +365,7 @@ class Gemm_MNK_NT128x128x64_w17x8:
                             "smem",
                         )
                         result = tf.reshard(
-                            tf.matmul(lhs, rhs, b_layout="NK"),
+                            tf.cast(tf.matmul(lhs, rhs, b_layout="NK", out_dtype="f32"), "bf16"),
                             (RESIDENT_BM, RESIDENT_BN),
                             "rmem",
                         )

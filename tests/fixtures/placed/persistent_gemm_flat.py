@@ -42,7 +42,7 @@ class PersistentGemmFlat:
                 for ki in tile(K, BK):
                     lhs = tf.reshard(a[mi : mi + BM, ki], (BM, BK), "smem")
                     rhs = tf.reshard(b[ki, ni : ni + BN], (BK, BN), "smem")
-                    product = tf.cast(tf.matmul(lhs, rhs), dtype="f32")
+                    product = tf.matmul(lhs, rhs, out_dtype="f32")
                     acc = acc + tf.reshard(product, (BM, BN), "rmem")
                 out = tf.insert_slice(
                     out,
