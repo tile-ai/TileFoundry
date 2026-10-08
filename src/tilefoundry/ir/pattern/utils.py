@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from enum import Enum
-
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.types import (
     ComposedLayout,
@@ -18,7 +16,7 @@ from tilefoundry.ir.types.stride import compact_row_major
 
 from . import predicates as P
 from .constraint import DistinctConstraint
-from .match import PatternMatcher, between_rules, evaluated
+from .match import PatternMatcher, Refusal, between_rules, evaluated
 from .pattern import (
     AndPattern,
     ComposedLayoutPattern,
@@ -182,33 +180,23 @@ def matched_row_issues(pattern, matcher) -> tuple[int, int] | None:
     return find(pattern)
 
 
-def _field_name(value) -> str:
-    return getattr(value, "name", str(value)).lower()
-
-
-def field_refusals(
-    name: str,
+def tensor_field_refusals(
     pattern: TensorPattern,
     type_: TensorType,
     bindings: dict,
-) -> list[str]:
-    """Say which of *type_*'s dtype and storage *pattern* refuses under *bindings*."""
-    from tilefoundry.inspection.pattern_printer import PatternPrinter  # noqa: PLC0415
+) -> tuple[tuple[str, Refusal | None], ...]:
+    """The dtype and storage fields of *type_* that *pattern* refuses under *bindings*.
 
-    printer = PatternPrinter()
+    Each field is matched on its own copy of *bindings*, so no capture leaks
+    between fields or into the caller's dict. A refused field comes back with
+    the matcher's evidence; an empty tuple means both fields match.
+    """
     refused = []
     for field in ("dtype", "storage"):
-        wanted = getattr(pattern, field)
-        actual = getattr(type_, field)
         matcher = PatternMatcher(bindings)
-        if matcher.match(wanted, actual) and matcher.solve():
-            continue
-        if isinstance(wanted, Enum) or hasattr(wanted, "name") and not hasattr(wanted, "match"):
-            written = _field_name(wanted)
-        else:
-            written = printer.written(wanted, field)
-        refused.append(f"{name} {field}={_field_name(actual)}, reads {field}={written}")
-    return refused
+        if not (matcher.match(getattr(pattern, field), getattr(type_, field)) and matcher.solve()):
+            refused.append((field, matcher.refusal))
+    return tuple(refused)
 
 
 def fixed_pattern_value(value, bindings: dict):
@@ -368,7 +356,7 @@ __all__ = [
     "_mangle_variant_name",
     "declared_execution_mesh",
     "dtype_place",
-    "field_refusals",
+    "tensor_field_refusals",
     "locate_dim_var",
     "operand_tile",
     "storage_place",

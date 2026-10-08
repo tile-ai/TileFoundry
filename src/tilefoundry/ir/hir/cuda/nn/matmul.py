@@ -17,7 +17,7 @@ from tilefoundry.ir.hir.nn.matmul import (
     matmul_result_shape_and_layout,
 )
 from tilefoundry.ir.pattern import PatternMatcher
-from tilefoundry.ir.pattern.utils import field_refusals, selected_pattern
+from tilefoundry.ir.pattern.utils import selected_pattern, tensor_field_refusals
 from tilefoundry.ir.types import DType, StorageKind, TensorType
 from tilefoundry.target import CudaTarget, Target
 from tilefoundry.visitor_registry import register_typeinfer
@@ -49,8 +49,8 @@ def _result_storages(
             )
             matcher = PatternMatcher(configuration)
             if (
-                not field_refusals("lhs", a, lhs, configuration)
-                and not field_refusals("rhs", b, rhs, configuration)
+                not tensor_field_refusals(a, lhs, configuration)
+                and not tensor_field_refusals(b, rhs, configuration)
                 and matcher.match(c.dtype, dtype)
                 and matcher.solve()
             ):

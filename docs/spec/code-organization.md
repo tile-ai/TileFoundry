@@ -116,6 +116,10 @@ license for unrelated helpers in the algebra modules.
 their stable responsibilities are owned by [core-ir](./core-ir.md),
 [parser](./parser.md), [visitor-registry](./visitor-registry.md), and [inspection](./inspection.md),
 respectively. Their internal file layout is not a per-Op contract.
+`ir/pattern/` MUST NOT import `inspection/`, not even inside a function: a match
+answers with data (which field it refused and the matcher's `Refusal`), and the
+consumer that reports a refusal turns that data into text with the inspection
+printers. `inspection/` may import `ir/pattern/`; the reverse edge does not exist.
 
 ## 2. File naming and content rules
 
