@@ -86,6 +86,7 @@ from tilefoundry.visitor_registry.verify import verify_prim_function
 
 PLAIN = (
     "chunk_rmsnorm",
+    "fp8_block_scaled_gemm",
     "gemm_8192x17408x5120_cta_grid",
     "gemm_relu_gemm_smem_staged",
     "gemm_relu_gemm_tiled",
@@ -101,12 +102,8 @@ PLAIN_REFUSED = {
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
-CANDIDATE_GOLDEN = (
-    Path(__file__).parents[1]
-    / "fixtures"
-    / "schedule"
-    / "plain"
-    / "gemm_8192x17408x5120_cta_grid.candidates.txt"
+CANDIDATE_GOLDENS = tuple(
+    sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "plain").glob("*.candidates.txt"))
 )
 ANALYZED_GOLDEN = (
     Path(__file__).parents[1]
@@ -133,6 +130,7 @@ class _RmemExpectation:
 
 SMEM_GOLDEN = {
     "scalar_binary": 0,
+    "fp8_block_scaled_gemm": 65_536,
     "gemm_8192x17408x5120_register_store": 196_608,
     "gemm_8192x17408x5120_tma_store": 212_992,
     "sm80_mma_ldmatrix": 1_536,
@@ -160,6 +158,15 @@ RMEM_EXPECTED = {
             "rhs literal materializes in rmem during lowering; the new result reuses "
             "the same register tile, so the HIR peak stays unchanged",
         ),
+    },
+    "fp8_block_scaled_gemm": {
+        "thread@128:256#0": _RmemExpectation(65_536, "128x128 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(
+            66_048,
+            "128x128 f32 block product and its scaled aliases plus the 512-byte 128x1 row scale",
+        ),
+        "thread@128:256#2": _RmemExpectation(65_536, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(66_048, "parent envelope of the block-scaling region"),
     },
     "gemm_8192x17408x5120_register_store": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
@@ -578,6 +585,8 @@ def test_schedule_memory_report_carries_allocations(
     assert memory["solver_status"] == "feasible"
     for row in report["calls"]:
         allocation = row["memory"]
+        if "operands" not in allocation:
+            continue
         result = next(
             operand for operand in allocation["operands"] if operand["arg"] == "result"
         )
@@ -727,6 +736,34 @@ def test_schedule_mma_evaluates_like_matmul_plus_accumulator(atom, dtype, shape)
     exact = lhs.float() @ rhs.float()
     assert torch.equal(scheduled, acc + exact)
     assert not torch.equal(scheduled, acc + exact.to(operand).float())
+
+
+def test_fp8_block_scaled_gemm_matches_its_block_scaled_reference() -> None:
+    """The scheduled program equals sum_kb (A_kb @ B_kb) * a_scale[:, kb] * b_scale[kb, :].
+
+    Each 128-wide K block's FP8 product is exact in f32, then scaled by that
+    block's own positive row and tile scales; the scales differ across blocks,
+    so scaling a running total instead of each block would not match.
+    """
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "fp8_block_scaled_gemm.py"
+    module = _module_in(source)
+    m, n, k, block = 128, 128, 512, 128
+    generator = torch.Generator().manual_seed(0)
+    a = torch.randn(m, k, generator=generator).to(torch.float8_e4m3fn)
+    weight = torch.randn(n, k, generator=generator).to(torch.float8_e4m3fn)
+    b = weight.t()
+    a_scale = torch.rand(m, k // block, generator=generator) + 0.5
+    b_scale = torch.rand(k // block, n // block, generator=generator) + 0.5
+
+    scheduled = evaluate(module.entry_function(), a, b, a_scale, b_scale)
+
+    reference = sum(
+        (a[:, kb * block : (kb + 1) * block].float() @ b[kb * block : (kb + 1) * block].float())
+        * a_scale[:, kb : kb + 1]
+        * b_scale[kb, :].repeat_interleave(block)
+        for kb in range(k // block)
+    ).to(torch.bfloat16)
+    torch.testing.assert_close(scheduled.float(), reference.float(), rtol=2**-7, atol=0)
 
 
 def test_single_issue_schedule_preserves_instruction_relations() -> None:
@@ -1020,16 +1057,17 @@ def test_schedule_facts_rejects_unknown_selection_without_output(
     assert not out.exists()
 
 
+@pytest.mark.parametrize("golden", CANDIDATE_GOLDENS, ids=lambda path: path.name)
 def test_schedule_candidates_writes_canonical_report(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    golden: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    name = CANDIDATE_GOLDEN.name.removesuffix(".candidates.txt")
+    name = golden.name.removesuffix(".candidates.txt")
     source = f"tests/fixtures/schedule/plain/{name}.py"
     out = tmp_path / "candidates.txt"
 
     assert cli_main(["schedule", "candidates", source, str(out)]) == 0
     assert capsys.readouterr() == ("", "")
-    assert out.read_bytes() == CANDIDATE_GOLDEN.read_bytes()
+    assert out.read_bytes() == golden.read_bytes()
 
 
 def test_schedule_candidate_reports_cover_every_site(
@@ -1048,8 +1086,11 @@ def test_schedule_candidate_reports_cover_every_site(
     assert all(row["candidates"] or row["refused"] for _name, row in sites)
     assert all(row["candidates"] for _name, row in sites if row["op"] == "tf.reshard")
     matmuls = [(name, row) for name, row in sites if row["op"] == "tf.matmul"]
-    assert len(matmuls) == 5
-    assert [name for name, row in matmuls if row["candidates"]] == ["gemm_8192x17408x5120_cta_grid"]
+    assert len(matmuls) == 6
+    assert [name for name, row in matmuls if row["candidates"]] == [
+        "fp8_block_scaled_gemm",
+        "gemm_8192x17408x5120_cta_grid",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1057,6 +1098,7 @@ def test_schedule_candidate_reports_cover_every_site(
     (
         ("chunk_rmsnorm", ("chunks=16",), 0, 7, 0),
         ("chunk_rmsnorm", ("chunks=32",), 0, 7, 0),
+        ("fp8_block_scaled_gemm", (), 1, 5, 1),
         ("gemm_8192x17408x5120_cta_grid", (), 1, 4, 1),
         ("gemm_relu_gemm_tiled", (), 2, 2, 0),
         ("gemm_relu_gemm_untiled", (), 2, 0, 0),
