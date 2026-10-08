@@ -120,6 +120,8 @@ respectively. Their internal file layout is not a per-Op contract.
 answers with data (which field it refused and the matcher's `Refusal`), and the
 consumer that reports a refusal turns that data into text with the inspection
 printers. `inspection/` may import `ir/pattern/`; the reverse edge does not exist.
+Likewise `ir/tir/cuda/` atoms never import `inspection/`: a printer hands itself
+to `atom.written(printer, ctx)`, and the printer does not import an atom class.
 
 ## 2. File naming and content rules
 

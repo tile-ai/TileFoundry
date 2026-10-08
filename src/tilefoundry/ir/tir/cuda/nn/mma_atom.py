@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import Enum
 
@@ -27,6 +26,7 @@ from tilefoundry.ir.types import ComposedLayout, DType, Layout, Mesh, ShardLayou
 from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.types.utils import tile_view_layout
+from tilefoundry.utils.python_source import PythonExpr
 
 _MISS = object()
 
@@ -181,44 +181,27 @@ class MmaAtom:
             held[param.name] = value
         return tuple(stated)
 
-    @classmethod
-    def configurations(
-        cls,
-        *,
-        defaulted: bool,
-        values: Callable[[ParamDef], tuple] | None = None,
-    ) -> tuple[dict, ...]:
-        """Every binding of this declaration's parameters that its patterns admit.
+    def written(self, printer, ctx=None) -> str:
+        """This atom as importable DSL source, written with *printer*.
 
-        Enum and DType parameters take every member their pattern admits;
-        ``values`` supplies the others, and without it they stay unbound.
-        ``defaulted`` also varies parameters that have a default. Shared by
-        ``schedule candidates`` and HIR typeinfer.
+        The atom states its own name, the bindings a reader must see and an
+        Enum's ``namespace`` spelling; every other value, the mesh included, is
+        written by *printer* in the same import context.
         """
-        states: tuple[dict, ...] = ({},)
-        for param in cls.parameters:
-            if param.has_default and not defaulted:
-                continue
-            options = cls._options(param, values)
-            if options is None:
-                continue
-            held = []
-            for state in states:
-                for value in options:
-                    matcher = PatternMatcher(state)
-                    if matcher.match(param.pattern, value) and matcher.solve():
-                        held.append({**state, param.name: value})
-            states = tuple(held)
-        return states
+        if ctx is not None:
+            ctx.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
+        stated = [
+            f"{name}={self._written_value(value, printer, ctx)}"
+            for name, value in self.stated_bindings()
+        ]
+        if self.mesh is not None:
+            stated.append(f"mesh={printer.render_value(self.mesh, ctx)}")
+        return f"{self.reference_name}({', '.join(stated)})"
 
-    @staticmethod
-    def _options(param: ParamDef, values) -> tuple | None:
-        annotation = param.annotation
-        if isinstance(annotation, type) and issubclass(annotation, Enum):
-            return tuple(annotation)
-        if annotation is DType:
-            return tuple(DType._members().values())
-        return None if values is None else values(param)
+    def _written_value(self, value, printer, ctx) -> str:
+        if isinstance(value, Enum):
+            return f"{self.namespace}.{type(value).__name__}.{value.name}"
+        return printer.render_value(value, ctx)
 
     def __eq__(self, other):
         return (
@@ -231,9 +214,17 @@ class MmaAtom:
         return hash((type(self), tuple(self.bindings.items()), self.mesh))
 
     def __repr__(self):
-        from tilefoundry.inspection.printer_base import PythonPrinter  # noqa: PLC0415
+        stated = [f"{name}={self._repr_value(value)}" for name, value in self.stated_bindings()]
+        if self.mesh is not None:
+            stated.append(f"mesh={self.mesh!r}")
+        return f"{self.reference_name}({', '.join(stated)})"
 
-        return PythonPrinter().atom_reference(self)
+    def _repr_value(self, value) -> str:
+        if isinstance(value, Enum):
+            return f"{self.namespace}.{type(value).__name__}.{value.name}"
+        if isinstance(value, DType):
+            return repr(value.name)
+        return repr(value)
 
 
 @dataclass(frozen=True, init=False)

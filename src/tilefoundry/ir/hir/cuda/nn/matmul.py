@@ -17,7 +17,7 @@ from tilefoundry.ir.hir.nn.matmul import (
     matmul_result_shape_and_layout,
 )
 from tilefoundry.ir.pattern import PatternMatcher
-from tilefoundry.ir.pattern.utils import selected_pattern, tensor_field_refusals
+from tilefoundry.ir.pattern.utils import selected_pattern, tensor_field_refusals, variants
 from tilefoundry.ir.types import DType, StorageKind, TensorType
 from tilefoundry.target import CudaTarget, Target
 from tilefoundry.visitor_registry import register_typeinfer
@@ -42,7 +42,7 @@ def _result_storages(
 ) -> set[StorageKind]:
     storages = set()
     for declaration in _mma_declarations(target):
-        for configuration in declaration.configurations(defaulted=True):
+        for configuration in variants(declaration.parameters, vary_defaulted=True):
             a, b, c = (
                 selected_pattern(getattr(declaration, role), configuration)
                 for role in ("A", "B", "C")

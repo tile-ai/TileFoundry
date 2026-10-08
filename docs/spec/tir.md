@@ -954,6 +954,15 @@ class MmaAtom:
 
     def role(self, role: str) -> TensorPattern: ...
     def execution_mesh_pattern(self) -> MeshPattern: ...
+    def stated_bindings(self) -> tuple[tuple[str, object], ...]: ...
+    def written(self, printer, ctx=None) -> str: ...
+
+def variants(
+    parameters: tuple[ParamDef, ...],
+    *,
+    vary_defaulted: bool,
+    values: Callable[[ParamDef], tuple] | None = None,
+) -> tuple[dict, ...]: ...  # ir/pattern/utils.py
 ```
 
 - constraints:
@@ -964,17 +973,26 @@ class MmaAtom:
   - A string bound to a `DType` parameter MUST resolve through
     `DType.from_name` at construction, so `dtype="bf16"` and `DType.bf16` bind
     the same value.
-  - `configurations(defaulted=..., values=...)` MUST return every binding of
-    the parameters, in declaration order, that their patterns admit under the
-    earlier bindings. Enum and `DType` parameters take every member; `values`
-    supplies the others, which stay unbound without it. A parameter with a
-    default is varied only when `defaulted` is true. A declaration with no
-    parameters has one empty configuration. `schedule candidates` calls it with
-    `defaulted=False` and binds `int` parameters to `1..` the site's largest
-    extent.
-  - The written form states only the bindings that earlier ones do not imply.
-    The printer writes an Enum as `<namespace>.<Enum>.<member>` and any other
-    value through its canonical value form, so a `DType` prints as its name.
+  - `variants(declaration.parameters, vary_defaulted=..., values=...)` MUST
+    return every binding of the parameters, in declaration order, that their
+    patterns admit under the earlier bindings. It enumerates bindings; it does
+    not build atoms or infer parameters from operand types. Enum parameters
+    take their members in declaration order and `DType` parameters every
+    declared dtype; `values` supplies the others, which stay unbound without it
+    or when it answers `None`, while an empty answer admits no binding. A
+    parameter with a default is varied only when `vary_defaulted` is true. No
+    parameters give one empty binding. `schedule candidates` calls it with
+    `vary_defaulted=False` and binds `int` parameters to `1..` the site's
+    largest extent; CUDA `MatMul` typing calls it with `vary_defaulted=True`
+    and leaves `int` parameters unbound.
+  - `written(printer, ctx)` is the atom's importable DSL source. It states only
+    the bindings that earlier ones do not imply (`stated_bindings()`), writes
+    an Enum as `<namespace>.<Enum>.<member>`, and hands every other value, the
+    mesh included, to the caller's `printer.render_value(value, ctx)`, so a
+    `DType` prints as its name and imports land in the caller's context. The
+    atom never builds a printer; a printer renders any value exposing a
+    callable `written` through it and does not name `MmaAtom`. `repr(atom)` is
+    a local diagnostic with the same bindings and is not an import surface.
   - `role("A")`, `role("B")`, and `role("C")` MUST resolve the declaration's
     role pattern under the instance bindings. The logical TIR orientation is
     always A `(M,K)`, B `(K,N)`, C `(M,N)`; each role pattern separately states

@@ -30,7 +30,7 @@ from tilefoundry.ir.pattern import (
     between_rules,
     declared_execution_mesh,
 )
-from tilefoundry.ir.pattern.utils import tensor_field_refusals
+from tilefoundry.ir.pattern.utils import tensor_field_refusals, variants
 from tilefoundry.ir.types import TensorType, UnitType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.int_tuple import flatten
@@ -252,16 +252,18 @@ def _variant_instances(
         instruction = instruction_from_hir(site.call.target, op_type)
         return () if instruction is None else ((instruction, {}),)
     declaration = capability.declaration
-    states = declaration.configurations(
-        defaulted=False, values=lambda param: _site_integer_parameter_values(param, site)
+    states = variants(
+        declaration.parameters,
+        vary_defaulted=False,
+        values=lambda param: _site_integer_parameter_values(param, site),
     )
-    variants = []
+    instances = []
     for state in states:
         try:
-            variants.append((declaration(**state), state))
+            instances.append((declaration(**state), state))
         except ValueError:
             continue
-    return tuple(variants)
+    return tuple(instances)
 
 
 def _instantiate(op_type: type, capability: OpCapability, variant):
@@ -478,10 +480,10 @@ def candidates(
         for op_type, capability in declared:
             if op_type not in site.instructions:
                 continue
-            variants = _variant_instances(op_type, capability, site)
-            if not variants:
+            instances = _variant_instances(op_type, capability, site)
+            if not instances:
                 continue
-            prototype, _binding = variants[0]
+            prototype, _binding = instances[0]
             op = _instantiate(op_type, capability, prototype)
             if _instruction_relation_shape(site, op) != site_shape:
                 continue
@@ -491,7 +493,7 @@ def candidates(
             ):
                 handed_result = True
             accepted, reasons, needs = [], [], []
-            for variant, binding in variants:
+            for variant, binding in instances:
                 held = _instantiate(op_type, capability, variant)
                 if not _whole_tiles(site, held, variant):
                     reasons.append(_pattern_refusals(site, held, variant))

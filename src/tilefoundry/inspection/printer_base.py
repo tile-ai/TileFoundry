@@ -11,7 +11,6 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.pattern import Pattern, RangePattern
-from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.types import DType, PointerType, TensorType, TupleType, UnitType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -412,20 +411,6 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             ctx.use(PythonExpr(("from tilefoundry.ir.types import P",), "P"))
         return f'P("{value.reduction}")'
 
-    def atom_reference(self, value: MmaAtom, ctx=None) -> str:
-        stated = [
-            f"{name}={self._atom_value(value, held, ctx)}" for name, held in value.stated_bindings()
-        ]
-        if value.mesh is not None:
-            stated.append(f"mesh={self.visit(value.mesh, ctx)}")
-        return f"{value.reference_name}({', '.join(stated)})"
-
-    def _atom_value(self, atom: MmaAtom, value, ctx=None) -> str:
-        """An Enum beside its atom keeps the ``T.cuda.sm90.Form.SS`` spelling."""
-        if isinstance(value, enum.Enum):
-            return f"{atom.namespace}.{type(value).__name__}.{value.name}"
-        return self.render_value(value, ctx)
-
     def render_value(self, value, ctx=None, indent: str = "") -> str:
         """Render a non-expression attribute through the same visitor when possible."""
         if isinstance(value, DType):
@@ -433,10 +418,8 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
         if isinstance(value, (TensorType, PointerType, Mesh, LayoutBase)):
             with self.type_surface(indent=indent):
                 return self.visit(value, ctx)
-        if isinstance(value, MmaAtom):
-            if ctx is not None:
-                ctx.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
-            return self.atom_reference(value, ctx)
+        if callable(getattr(value, "written", None)):
+            return value.written(self, ctx)
         if isinstance(value, enum.Enum):
             if ctx is not None:
                 ctx.use(
