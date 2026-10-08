@@ -205,7 +205,7 @@ def _instruction_relation_shape(site: _Site, op) -> tuple | None:
     return reads, writes
 
 
-def _int_values(param: ParamDef, site: _Site) -> tuple:
+def _site_integer_parameter_values(param: ParamDef, site: _Site) -> tuple:
     if param.annotation is not int:
         return ()
     largest = max(
@@ -227,7 +227,7 @@ def _variant_instances(
         return () if instruction is None else ((instruction, {}),)
     declaration = capability.declaration
     states = declaration.configurations(
-        defaulted=False, values=lambda param: _int_values(param, site)
+        defaulted=False, values=lambda param: _site_integer_parameter_values(param, site)
     )
     variants = []
     for state in states:

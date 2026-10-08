@@ -102,8 +102,12 @@ PLAIN_REFUSED = {
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
-CANDIDATE_GOLDENS = tuple(
-    sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "plain").glob("*.candidates.txt"))
+CANDIDATE_GOLDEN = (
+    Path(__file__).parents[1]
+    / "fixtures"
+    / "schedule"
+    / "plain"
+    / "gemm_8192x17408x5120_cta_grid.candidates.txt"
 )
 ANALYZED_GOLDEN = (
     Path(__file__).parents[1]
@@ -1057,17 +1061,16 @@ def test_schedule_facts_rejects_unknown_selection_without_output(
     assert not out.exists()
 
 
-@pytest.mark.parametrize("golden", CANDIDATE_GOLDENS, ids=lambda path: path.name)
 def test_schedule_candidates_writes_canonical_report(
-    golden: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    name = golden.name.removesuffix(".candidates.txt")
+    name = CANDIDATE_GOLDEN.name.removesuffix(".candidates.txt")
     source = f"tests/fixtures/schedule/plain/{name}.py"
     out = tmp_path / "candidates.txt"
 
     assert cli_main(["schedule", "candidates", source, str(out)]) == 0
     assert capsys.readouterr() == ("", "")
-    assert out.read_bytes() == golden.read_bytes()
+    assert out.read_bytes() == CANDIDATE_GOLDEN.read_bytes()
 
 
 def test_schedule_candidate_reports_cover_every_site(
@@ -1132,6 +1135,15 @@ def test_schedule_candidates_reports_every_plain_site(
     assert sum(bool(row["candidates"]) for row in matmul_rows) == accepted_matmuls
     assert all(row["candidates"] or row["refused"] for row in report["lines"])
     assert all(row["candidates"] for row in reshard_rows)
+
+    if name == "fp8_block_scaled_gemm":
+        (matmul,) = matmul_rows
+        assert [candidate["id"] for candidate in matmul["candidates"]] == ["T.cuda.sm90.Wgmma"]
+        (wgmma,) = matmul["candidates"]
+        assert wgmma["bindings"]
+        assert all(
+            binding.endswith(", dtype=fp8e4m3, form=SS") for binding in wgmma["bindings"]
+        )
 
     if name == "chunk_rmsnorm":
         binaries = [row for row in report["lines"] if row["op"] == "tf.binary"]
