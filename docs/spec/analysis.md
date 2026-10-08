@@ -217,6 +217,9 @@ Each reported Call's JSON projection is under its `compute-cost` key:
     The Function record MUST include authored-loop repetition and therefore is
     not the direct sum of the one-occurrence Call records.
   - An op with no registered cost evaluator MUST raise `AnalysisError`.
+  - Dim arithmetic (`DimAdd`, `DimSub`, `DimMul`, `DimFloorDiv`, `DimMod`,
+    `DimMin`, `DimMax`) is scalar address work, not tensor work: its evaluator
+    MUST state no flops, no service, and zero traffic in every operand slot.
   - Missing program geometry MUST NOT be replaced with a target capacity.
   - `logical` MUST multiply only the authored loop trip counts for loops whose
     induction variable or carried argument the Call transitively reads.
