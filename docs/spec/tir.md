@@ -954,7 +954,6 @@ class MmaAtom:
 
     def role(self, role: str) -> TensorPattern: ...
     def execution_mesh_pattern(self) -> MeshPattern: ...
-    def stated_bindings(self) -> tuple[tuple[str, object], ...]: ...
     def written(self, printer, ctx=None) -> str: ...
 
 def variants(
@@ -969,7 +968,8 @@ def variants(
   - `parameters` MUST preserve declaration order. Construction MUST reject an
     unknown binding and a value refused by its `ParamDef.pattern`; an omitted
     parameter MUST take the value implied by earlier bindings or its declared
-    default, and otherwise construction MUST fail.
+    default, and otherwise construction MUST fail. `bindings` then holds every
+    parameter, in declaration order.
   - A string bound to a `DType` parameter MUST resolve through
     `DType.from_name` at construction, so `dtype="bf16"` and `DType.bf16` bind
     the same value; whether that dtype is one the declaration takes is still its
@@ -987,11 +987,11 @@ def variants(
     `vary_defaulted=False` and binds `int` parameters to `1..` the site's
     largest extent; CUDA `MatMul` typing calls it with `vary_defaulted=True`
     and leaves `int` parameters unbound.
-  - `written(printer, ctx)` is the atom's importable DSL source. It states only
-    the bindings that earlier ones do not imply (`stated_bindings()`), writes
-    an Enum as `<namespace>.<Enum>.<member>`, and hands every other value, the
-    mesh included, to the caller's `printer.render_value(value, ctx)`, so a
-    `DType` prints as its name and imports land in the caller's context. The
+  - `written(printer, ctx)` is the atom's importable DSL source. It states every
+    binding in declaration order, implied ones included, writes an Enum as
+    `<namespace>.<Enum>.<member>`, and hands every other value, the mesh
+    included, to the caller's `printer.render_value(value, ctx)`, so a `DType`
+    prints as its name and imports land in the caller's context. The
     atom never builds a printer. A printer renders a value that implements this
     `written(printer, ctx)` protocol by handing itself to it, without naming
     `MmaAtom`; a method that merely shares the name, such as a constraint's

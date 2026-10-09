@@ -167,24 +167,10 @@ class MmaAtom:
     def on(self, mesh: Mesh) -> MmaAtom:
         return type(self)(mesh=mesh, **self.bindings)
 
-    def stated_bindings(self) -> tuple[tuple[str, object], ...]:
-        """The bindings a reader must see: those earlier ones do not imply."""
-        stated, held = [], {}
-        for param in self.parameters:
-            value = self.bindings[param.name]
-            try:
-                implied = self._implied(param, held)
-            except ValueError:
-                implied = None
-            if implied is None or implied != value:
-                stated.append((param.name, value))
-            held[param.name] = value
-        return tuple(stated)
-
     def written(self, printer, ctx=None) -> str:
         """This atom as importable DSL source, written with *printer*.
 
-        The atom states its own name, the bindings a reader must see and an
+        The atom states its own name, every binding in parameter order and an
         Enum's ``namespace`` spelling; every other value, the mesh included, is
         written by *printer* in the same import context.
         """
@@ -192,7 +178,7 @@ class MmaAtom:
             ctx.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
         stated = [
             f"{name}={self._written_value(value, printer, ctx)}"
-            for name, value in self.stated_bindings()
+            for name, value in self.bindings.items()
         ]
         if self.mesh is not None:
             stated.append(f"mesh={printer.render_value(self.mesh, ctx)}")
@@ -214,7 +200,7 @@ class MmaAtom:
         return hash((type(self), tuple(self.bindings.items()), self.mesh))
 
     def __repr__(self):
-        stated = [f"{name}={self._repr_value(value)}" for name, value in self.stated_bindings()]
+        stated = [f"{name}={self._repr_value(value)}" for name, value in self.bindings.items()]
         if self.mesh is not None:
             stated.append(f"mesh={self.mesh!r}")
         return f"{self.reference_name}({', '.join(stated)})"

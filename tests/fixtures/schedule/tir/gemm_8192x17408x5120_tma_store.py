@@ -160,7 +160,7 @@ def gemm(
                                                 acc_view,
                                                 lhs_view,
                                                 rhs_view,
-                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_3),
+                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_3),
                                             )
                                             acc_view_1 = T.tensor_view(
                                                 T.ptr_of(acc[o_m:o_m + 64, o_n:o_n + 256]),
@@ -197,7 +197,7 @@ def gemm(
                                                 acc_view_1,
                                                 lhs_view_1,
                                                 rhs_view_1,
-                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_3),
+                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_3),
                                             )
                                             acc_view_2 = T.tensor_view(
                                                 T.ptr_of(acc[o_m:o_m + 64, o_n:o_n + 256]),
@@ -234,7 +234,7 @@ def gemm(
                                                 acc_view_2,
                                                 lhs_view_2,
                                                 rhs_view_2,
-                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_3),
+                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_3),
                                             )
                                             acc_view_3 = T.tensor_view(
                                                 T.ptr_of(acc[o_m:o_m + 64, o_n:o_n + 256]),
@@ -271,7 +271,7 @@ def gemm(
                                                 acc_view_3,
                                                 lhs_view_3,
                                                 rhs_view_3,
-                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_3),
+                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_3),
                                             )
                             with Mesh(
                                 (Topology("thread", 384),), ComposedLayout(
@@ -318,7 +318,7 @@ def gemm(
                                                 acc_view_4,
                                                 lhs_view_4,
                                                 rhs_view_4,
-                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_4),
+                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_4),
                                             )
                                             acc_view_5 = T.tensor_view(
                                                 T.ptr_of(acc[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 256]),
@@ -355,7 +355,7 @@ def gemm(
                                                 acc_view_5,
                                                 lhs_view_5,
                                                 rhs_view_5,
-                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_4),
+                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_4),
                                             )
                                             acc_view_6 = T.tensor_view(
                                                 T.ptr_of(acc[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 256]),
@@ -392,7 +392,7 @@ def gemm(
                                                 acc_view_6,
                                                 lhs_view_6,
                                                 rhs_view_6,
-                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_4),
+                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_4),
                                             )
                                             acc_view_7 = T.tensor_view(
                                                 T.ptr_of(acc[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 256]),
@@ -429,7 +429,7 @@ def gemm(
                                                 acc_view_7,
                                                 lhs_view_7,
                                                 rhs_view_7,
-                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_4),
+                                                atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_4),
                                             )
                     with scope[1:] as scope_3:
                         with Mesh(

@@ -117,7 +117,7 @@ def gemm(
                                         acc_view,
                                         lhs_view,
                                         rhs_view,
-                                        atom=T.cuda.sm90.Wgmma(n=32, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_3),
+                                        atom=T.cuda.sm90.Wgmma(n=32, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_3),
                                     )
                                     acc_view_1 = T.tensor_view(
                                         T.ptr_of(acc[o_m:o_m + 64, o_n:o_n + 32]),
@@ -150,7 +150,7 @@ def gemm(
                                         acc_view_1,
                                         lhs_view_1,
                                         rhs_view_1,
-                                        atom=T.cuda.sm90.Wgmma(n=32, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_3),
+                                        atom=T.cuda.sm90.Wgmma(n=32, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_3),
                                     )
             with scope[1:] as scope_3:
                 with Mesh(
