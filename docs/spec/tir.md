@@ -941,7 +941,7 @@ instance binds the parameters for one call; it does not carry a second copy of
 concrete fragment layouts that could drift from those patterns.
 
 ```python
-class MmaAtom:
+class MmaAtom(Printable):
     namespace: str
     execution_mesh: Mesh
     capability: str
@@ -954,7 +954,7 @@ class MmaAtom:
 
     def role(self, role: str) -> TensorPattern: ...
     def execution_mesh_pattern(self) -> MeshPattern: ...
-    def written(self, printer, ctx=None) -> str: ...
+    def print(self, printer: PrinterBase, ctx=None) -> str: ...
 
 def variants(
     parameters: tuple[ParamDef, ...],
@@ -987,18 +987,14 @@ def variants(
     `vary_defaulted=False` and binds `int` parameters to `1..` the site's
     largest extent; CUDA `MatMul` typing calls it with `vary_defaulted=True`
     and leaves `int` parameters unbound.
-  - `written(printer, ctx)` is the atom's importable DSL source. It states every
+  - `MmaAtom` is `Printable` ([core-ir §2.4](./core-ir.md#24-printable-and-printerbase)):
+    `print(printer, ctx)` is the atom's importable DSL source. It states every
     binding in declaration order, implied ones included, writes an Enum as
     `<namespace>.<Enum>.<member>`, and hands every other value, the mesh
-    included, to the caller's `printer.render_value(value, ctx)`, so a `DType`
-    prints as its name and imports land in the caller's context. The
-    atom never builds a printer. A printer renders a value that implements this
-    `written(printer, ctx)` protocol by handing itself to it, without naming
-    `MmaAtom`; a method that merely shares the name, such as a constraint's
-    `written()` or `PatternPrinter.written(pattern)`, is not this protocol. A
-    value with no Python form still fails explicitly, though not necessarily
-    with the same exception as before. `repr(atom)` is a local diagnostic with
-    the same bindings and is not an import surface.
+    included, to `printer.print(value, ctx)`, so a `DType` prints as its name
+    and imports land in the caller's context. The atom never builds a printer.
+    A value with no Python form fails explicitly. `repr(atom)` is a local
+    diagnostic with the same bindings and is not an import surface.
   - `role("A")`, `role("B")`, and `role("C")` MUST resolve the declaration's
     role pattern under the instance bindings. The logical TIR orientation is
     always A `(M,K)`, B `(K,N)`, C `(M,N)`; each role pattern separately states

@@ -606,6 +606,33 @@ readable value (`UnitType`, [types §6](./types.md#6-unittype)); in Stmt positio
 it appears as `Evaluate(op, args)`
 ([tir §1.4](./tir.md#14-evaluate)).
 
+### 2.4 `Printable` and `PrinterBase`
+
+```python
+class PrinterBase(ABC):
+    """A printer: the one entry that writes a value as source text."""
+
+    @abstractmethod
+    def print(self, value, ctx=None, indent: str = "") -> str: ...
+
+class Printable(ABC):
+    """A value that writes itself, handing the values it holds to *printer*."""
+
+    @abstractmethod
+    def print(self, printer: PrinterBase, ctx=None) -> str: ...
+```
+
+- constraints:
+  - Both live in `ir/core/inspection.py` and import no printer, so an IR value
+    can print itself without an `ir` to `inspection` dependency, and a concrete
+    printer depends on these interfaces rather than on the value's class.
+  - `PrinterBase.print` is a printer's one public entry. A printer hands a
+    `Printable` itself and the caller's `ctx`; it does not recognise a value by
+    a method name it happens to have.
+  - `Printable.print` writes the value and prints every value it holds with
+    `printer.print(value, ctx)`, so imports and names land in the caller's
+    context.
+
 ## 3. `Pattern`
 
 `Pattern` is the reusable predicate carrier shared by parser dispatch

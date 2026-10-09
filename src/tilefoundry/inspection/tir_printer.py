@@ -129,7 +129,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
                 value = getattr(target, param.name, None)
                 if value is not None:
                     args.append(
-                        f"{param.name}={self.render_value(value, self.context, self.indent + '    ')}"
+                        f"{param.name}={self.print(value, self.context, self.indent + '    ')}"
                     )
         self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
         return f"T.{name}({', '.join(args)})"
@@ -177,7 +177,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
 
     def _wrapped_alloc(self, stmt) -> list[str]:
         target = stmt.value.target
-        tensor = self.render_value(target.tensor_type, self.context)
+        tensor = self.print(target.tensor_type, self.context)
         argument = f"tensor_type={tensor}"
         continuation = f"{self.indent}    {argument}"
         if len(continuation) + 4 <= _LINE_LENGTH:
@@ -311,7 +311,7 @@ def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
         value = getattr(target, p.name, None)
         if value is None:
             continue
-        rendered = printer.render_value(value, printer.context, printer.indent + "    ")
+        rendered = printer.print(value, printer.context, printer.indent + "    ")
         attrs.append(rendered if op_name == "sync" and p.name == "mesh" else f"{p.name}={rendered}")
     rendered_args = [printer.visit(arg) for arg in args]
     head = printer.visit_Op(target)

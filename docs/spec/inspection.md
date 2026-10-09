@@ -52,6 +52,16 @@ Python file and import it, and the real authoring decorators MUST produce a
 structurally equivalent IR. Printing that rebuilt value MUST reproduce the
 same canonical text.
 
+`PythonPrinter.print(value, ctx=None, indent="")` is the printer's one public
+entry ([core-ir §2.4](./core-ir.md#24-printable-and-printerbase)); callers do not
+call `visit`, which is the printers' own dispatch. It writes a `DType` as its
+name, a tensor, pointer, mesh or layout type at `indent`, a `Printable` by
+handing it the printer, an Enum, a `Target` through its `to_python()`, a tuple
+item by item, a Python scalar as itself, and any other IR node through the
+visitor, joining statement lines into one text. A value with no Python form
+raises `NotImplementedError`. `HirPrinter.print(fn, options=...)` writes a whole
+HIR function and prints any other value the same way.
+
 ### 2.1 Function printer
 
 ```python

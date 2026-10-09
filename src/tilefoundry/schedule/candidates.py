@@ -470,9 +470,9 @@ def candidates(
                         }
                     )
         operands = [
-            *(f"{name}={type_printer.visit(type_)}" for name, type_ in site.reads),
+            *(f"{name}={type_printer.print(type_)}" for name, type_ in site.reads),
             *(
-                f"{name}={type_printer.visit(type_)}"
+                f"{name}={type_printer.print(type_)}"
                 for name, type_ in site.leaves
                 if handed_result
             ),

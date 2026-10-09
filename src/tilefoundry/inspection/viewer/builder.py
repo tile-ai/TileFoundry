@@ -125,8 +125,7 @@ def _type_text(ty, context=None) -> str:
     printer = PythonPrinter()
     if context is None:
         context = HirPrintContext()
-    with printer.type_surface():
-        return printer.visit(ty, context)
+    return printer.print(ty, context)
 
 
 def _pretty_attr_value(value, *, context=None) -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 # ruff: noqa: I001 -- curated re-export order; alphabetical sort breaks staged imports.
 
 from .errors import VerifyError
+from .inspection import Printable, PrinterBase
 from .expr import Call, Constant, Expr, Tuple, Var
 from .metadata import (
     BindingMetadata,
@@ -78,4 +79,6 @@ __all__ = [
     "FunctionScope",
     "TypeInferContext",
     "VerifyError",
+    "Printable",
+    "PrinterBase",
 ]

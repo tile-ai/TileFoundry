@@ -25,8 +25,7 @@ def _op_display_name(target) -> str:
 def _type_lines(ty, printer: PythonPrinter, ctx: HirPrintContext) -> list[str]:
     if not isinstance(ty, TensorType):
         return [str(ty)]
-    with printer.type_surface():
-        return printer.visit(ty, ctx).split("\n")
+    return printer.print(ty, ctx).split("\n")
 
 
 def _escape_dot(s: str) -> str:

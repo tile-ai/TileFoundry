@@ -118,9 +118,11 @@ their stable responsibilities are owned by [core-ir](./core-ir.md),
 respectively. Their internal file layout is not a per-Op contract.
 `ir/pattern/` MUST NOT import `inspection/`, not even inside a function: a failed
 match answers with the matcher's `Refusal`, and the consumer that reports it
-turns that data into text with `PatternPrinter.refusal`. `inspection/` may import `ir/pattern/`; the reverse edge does not exist.
-Likewise `ir/tir/cuda/` atoms never import `inspection/`: a printer hands itself
-to `atom.written(printer, ctx)`, and the printer does not import an atom class.
+turns that data into text with `PatternPrinter.refusal`. `inspection/` may
+import `ir/pattern/`; the reverse edge does not exist. Likewise `ir/tir/cuda/`
+atoms never import `inspection/`: an atom is a `Printable` from `ir/core/`, a
+printer hands itself to `atom.print(printer, ctx)`, and the printer does not
+import an atom class.
 
 ## 2. File naming and content rules
 

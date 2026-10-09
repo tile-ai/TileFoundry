@@ -6,7 +6,7 @@ import enum
 import json
 from contextlib import contextmanager
 
-from tilefoundry.ir.core import Call, Constant, Tuple, Var
+from tilefoundry.ir.core import Call, Constant, Printable, PrinterBase, Tuple, Var
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.mesh_scope import device_layout
@@ -46,7 +46,7 @@ _DIM_FUNC_OPS: dict[type, str] = {
 }
 
 
-class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
+class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
     """Render the Python DSL with one dispatch root for expressions and types."""
 
     def __init__(self) -> None:
@@ -411,15 +411,19 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             ctx.use(PythonExpr(("from tilefoundry.ir.types import P",), "P"))
         return f'P("{value.reduction}")'
 
-    def render_value(self, value, ctx=None, indent: str = "") -> str:
-        """Render a non-expression attribute through the same visitor when possible."""
+    def print(self, value, ctx=None, indent: str = "") -> str:
+        """*value* as canonical Python source: the one entry callers print through.
+
+        A ``Printable`` writes itself with this printer; IR nodes and types go
+        through the visitor, and statement lines are joined into one text.
+        """
         if isinstance(value, DType):
             return repr(value.name)
         if isinstance(value, (TensorType, PointerType, Mesh, LayoutBase)):
             with self.type_surface(indent=indent):
                 return self.visit(value, ctx)
-        if callable(getattr(value, "written", None)):
-            return value.written(self, ctx)
+        if isinstance(value, Printable):
+            return value.print(self, ctx)
         if isinstance(value, enum.Enum):
             if ctx is not None:
                 ctx.use(
@@ -432,11 +436,12 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             rendered = value.to_python()
             return ctx.use(rendered) if ctx is not None else rendered.text
         if isinstance(value, tuple):
-            rendered = ", ".join(self.render_value(item, ctx, indent) for item in value)
+            rendered = ", ".join(self.print(item, ctx, indent) for item in value)
             return f"({rendered}{',' if len(value) == 1 else ''})"
         if value is None or isinstance(value, (str, int, float, bool)):
             return repr(value)
-        raise NotImplementedError(f"no canonical Python form for {type(value).__name__}")
+        printed = self.visit(value, ctx)
+        return "\n".join(printed) if isinstance(printed, list) else printed
 
     def render_pattern(self, pattern: Pattern, ctx=None) -> str:
         if isinstance(pattern, RangePattern):

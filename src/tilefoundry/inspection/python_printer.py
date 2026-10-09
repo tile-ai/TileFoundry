@@ -78,8 +78,11 @@ class HirPrinter(PythonPrinter):
         self._child_entries: dict[int, str] = {}
         self._moved_window = lambda start, size, stride: None
 
-    def print(self, fn: HirFunction, *, options=None) -> str:
-        return self.render(fn, options=options).source
+    def print(self, value, ctx=None, indent: str = "", *, options=None) -> str:
+        """A whole HIR function under *options*; any other value as ``PythonPrinter`` does."""
+        if isinstance(value, HirFunction):
+            return self.render(value, options=options).source
+        return super().print(value, ctx, indent)
 
     def render(self, fn: HirFunction, *, options=None) -> _PythonRendering:
         return _render_hir_function(fn, options=options)

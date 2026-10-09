@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum
 
+from tilefoundry.ir.core.inspection import Printable, PrinterBase
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
@@ -44,7 +45,7 @@ def execution_mesh_pattern(execution_mesh: Mesh) -> MeshPattern:
     return MeshPattern((topology.name,), layout)
 
 
-class MmaAtom:
+class MmaAtom(Printable):
     """One instruction declaration; an instance binds its authored parameters."""
 
     namespace: str
@@ -167,27 +168,27 @@ class MmaAtom:
     def on(self, mesh: Mesh) -> MmaAtom:
         return type(self)(mesh=mesh, **self.bindings)
 
-    def written(self, printer, ctx=None) -> str:
+    def print(self, printer: PrinterBase, ctx=None) -> str:
         """This atom as importable DSL source, written with *printer*.
 
         The atom states its own name, every binding in parameter order and an
         Enum's ``namespace`` spelling; every other value, the mesh included, is
-        written by *printer* in the same import context.
+        printed by *printer* in the same import context.
         """
         if ctx is not None:
             ctx.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
         stated = [
-            f"{name}={self._written_value(value, printer, ctx)}"
+            f"{name}={self._printed_value(value, printer, ctx)}"
             for name, value in self.bindings.items()
         ]
         if self.mesh is not None:
-            stated.append(f"mesh={printer.render_value(self.mesh, ctx)}")
+            stated.append(f"mesh={printer.print(self.mesh, ctx)}")
         return f"{self.reference_name}({', '.join(stated)})"
 
-    def _written_value(self, value, printer, ctx) -> str:
+    def _printed_value(self, value, printer: PrinterBase, ctx) -> str:
         if isinstance(value, Enum):
             return f"{self.namespace}.{type(value).__name__}.{value.name}"
-        return printer.render_value(value, ctx)
+        return printer.print(value, ctx)
 
     def __eq__(self, other):
         return (
