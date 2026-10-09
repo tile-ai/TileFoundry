@@ -43,16 +43,17 @@ from .registries import DispatchRegistry
 class AccessRelation:
     """One boundary's relation, together with what its parameters are.
 
-    A coordinate an Op only learns at run time is a parameter rather than a hole:
-    *values* maps each parameter's name in *relation* to the operand element or
-    dimension it is, so whoever restricts the relation binds it rather than
-    guessing. A relation with no parameters states none, and a function handed in
-    is kept as the relation it is. How much crossed here is what the relation
-    reaches, so it is derived rather than declared alongside.
+    A coordinate an Op only learns at run time is a parameter: *values* maps each
+    parameter's name in *relation* to the operand element or dimension it is, so
+    whoever restricts the relation binds it. How much crossed here is what the
+    relation reaches. A *lookup* relation reaches, from each coordinate, every
+    element a data value could name, though it reads only the one the value names:
+    its image is where it may read, and it reads at most one element per coordinate.
     """
 
     relation: "isl.map"
     values: IslParamValues = field(default_factory=dict)
+    lookup: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.relation, isl.multi_aff):
@@ -215,8 +216,8 @@ def projected(
     )
     share = _own_iterations(relations, placed, answered, ninputs)
     carried = tuple(
-        _addressed(relation, view[0], bindings, label, call)
-        for relation, view, label in zip(placed, views, where, strict=True)
+        _addressed(relation, view[0], bindings, label, call, access.lookup)
+        for access, relation, view, label in zip(relations, placed, views, where, strict=True)
     )
     if share is None:
         return carried
@@ -296,7 +297,9 @@ def _iterating_over(
             f"{share} this participant performs: {error}"
         ) from error
     names = _parameter_names(held)
-    return AccessRelation(held, {name: bindings[name] for name in names if name in bindings})
+    return AccessRelation(
+        held, {name: bindings[name] for name in names if name in bindings}, access.lookup
+    )
 
 
 def renaming_relation(call, ctx, local_relations: tuple[AccessRelation, ...]) -> AccessRelation:
@@ -441,7 +444,7 @@ def _within_positions(relation: "isl.map", local) -> "isl.map":
 
 
 def _addressed(
-    relation: "isl.map", local, bindings: IslParamValues, where: str, call
+    relation: "isl.map", local, bindings: IslParamValues, where: str, call, lookup: bool = False
 ) -> AccessRelation:
     """One placed boundary, held to the coordinates the value actually has.
 
@@ -451,7 +454,7 @@ def _addressed(
     held = _within_positions(relation, local)
     names = _parameter_names(held)
     return _held_countable(
-        AccessRelation(held, {name: bindings[name] for name in names if name in bindings}),
+        AccessRelation(held, {name: bindings[name] for name in names if name in bindings}, lookup),
         where,
         call,
     )
@@ -693,6 +696,7 @@ def _by_identity(relations: tuple[AccessRelation, ...], rank: int) -> tuple[Acce
         return AccessRelation(
             _renamed(access.relation, targets, taken),
             {canonical[id(value)]: value for value in access.values.values()},
+            access.lookup,
         )
 
     return tuple(renamed(access) for access in relations)
@@ -739,7 +743,9 @@ def _held_to(access: AccessRelation, domain: "isl.set", values: IslParamValues) 
         )
     held = relation.intersect_domain(domain)
     names = _parameter_names(held)
-    return AccessRelation(held, {name: values[name] for name in names if name in values})
+    return AccessRelation(
+        held, {name: values[name] for name in names if name in values}, access.lookup
+    )
 
 
 def projected_axes(access: AccessRelation) -> tuple[int | None, ...]:
@@ -831,12 +837,23 @@ def reached_elements(
     many dependences, so an inner iteration axis costs nothing; and reaching
     past the coordinates the operand has is not reaching at all. This is one
     occurrence, so a parameter nobody bound settles at its first legal binding:
-    how many crossings a loop performs is the footprint family's question.
+    how many crossings a loop performs is the footprint family's question. A
+    lookup reads one element per coordinate, whichever its data names, so it
+    reached no more elements than it has coordinates reaching any.
     """
     image = _reached_image(access, box, within)
     if image.dim(isl.dim_type.PARAM):
         return None
-    return cardinality(image)
+    reached = cardinality(image)
+    if not access.lookup or reached is None:
+        return reached
+    relation = settled(access)
+    if within is not None:
+        relation = relation.intersect_domain(within)
+    if box is not None and box.tuple_dim() == relation.range().tuple_dim():
+        relation = relation.intersect_range(box)
+    asking = cardinality(relation.domain())
+    return reached if asking is None else min(reached, asking)
 
 
 def control_leaves(type_: "Type") -> int:
@@ -927,8 +944,8 @@ def reached_at(
     positions holding it. An axis named `free` is one whose coordinate is a value
     nobody has here -- the element a lookup read decides it -- so the relation
     covers every coordinate that axis could legally name instead of guessing one.
-    That keeps the answer bounded, and countable, without a carrier a reader has
-    to special-case.
+    That keeps where it may read bounded and countable; the relation is marked a
+    lookup, so how much it read stays one element per coordinate.
     """
     belongs = logical_axes_of(local, logical)
     stated = [reads.get(axis, "0") for axis in range(len(logical.shape))]
@@ -947,7 +964,9 @@ def reached_at(
     domain = ", ".join(f"d{index}" for index in range(rank))
     where = f" : {' and '.join(guards)}" if guards else ""
     return AccessRelation(
-        isl.map(f"{_declared(values)}{{ [{domain}] -> [{', '.join(image)}]{where} }}"), values
+        isl.map(f"{_declared(values)}{{ [{domain}] -> [{', '.join(image)}]{where} }}"),
+        values,
+        bool(guards),
     )
 
 

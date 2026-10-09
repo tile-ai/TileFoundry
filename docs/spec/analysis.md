@@ -333,6 +333,11 @@ anything; it does not say how much, and an Op with no relation fails closed.
     sharded projects to the whole of itself: that is what makes a broadcast
     operand cost its own size and a `Reshard` the distinct coordinates it
     reaches rather than a full source per participant.
+  - A boundary whose coordinate on some axis is a data value -- the row an index
+    names -- states every coordinate that value could name, and is marked a
+    lookup. Its footprint is that whole reach; its traffic is one element per
+    coordinate asking, never more than the reach: a gather of four rows moves four
+    rows, wherever they lie.
   - Each leaf's bytes are charged at the level that leaf sits at. A `UMAT` leaf
     in `Call.args` charges its own bytes at `rmem` and one appearing only in an
     Op attribute charges nothing, so a whole traffic amount and an `operands`

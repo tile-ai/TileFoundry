@@ -1095,9 +1095,10 @@ operation and is not an HIR op.
     `x`'s rank, dtype, and storage; `shape[dim]` becomes `index.shape[0]` and all
     other extents are unchanged.
   - `IndexSelect` produces a natural contiguous internal `Layout` for a
-    `ShardLayout` input. `Broadcast` and `Partial` states carry through; a
-    `Split` on `dim` becomes `Partial(sum)`, and a `Split` on another dim keeps
-    its target. Multiple `Split`s including `dim`, or a composed shard layout,
+    `ShardLayout` input, and a row-major `Layout` over its own shape for a plain
+    `Layout` input: the source's arrangement does not cross the shape change.
+    `Broadcast` and `Partial` states carry through; a `Split` on `dim` becomes
+    `Partial(sum)`, and a `Split` on another dim keeps its target. Multiple `Split`s including `dim`, or a composed shard layout,
     MUST fail closed.
   - HIR-to-TIR lowers `IndexSelect` as a view only when `index.shape == (1,)`
     and every input extent before `dim` is `1`. Other forms require a

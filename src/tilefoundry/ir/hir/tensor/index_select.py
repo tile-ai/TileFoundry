@@ -16,7 +16,7 @@ from tilefoundry.ir.types.shard_layout import (
     Split,
     split_target_axes,
 )
-from tilefoundry.ir.types.stride import compact_col_major
+from tilefoundry.ir.types.stride import compact_col_major, compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -49,11 +49,14 @@ def _norm_dim(dim: int, rank: int, ctx=None, call=None) -> int:
 def _index_select_shard_layout(call, ctx, x_ty, dim: int, out_shape: tuple):
     """Derive a natural contiguous shard layout for a whole-slice selection.
 
-    Broadcast and Partial states carry through. A Split on the selected dim
-    becomes ``Partial(sum)``. Composed or ambiguous multi-Split layouts fail
-    closed.
+    A plain layout gives a row-major one over the result's own shape: the selection
+    is a new value, and the source's arrangement describes the source. Broadcast and
+    Partial states carry through. A Split on the selected dim becomes
+    ``Partial(sum)``. Composed or ambiguous multi-Split layouts fail closed.
     """
     sl = x_ty.layout
+    if isinstance(sl, Layout):
+        return Layout(shape=out_shape, strides=compact_row_major(out_shape))
     if not isinstance(sl, ShardLayout):
         return sl
     if not isinstance(sl.layout, Layout):
