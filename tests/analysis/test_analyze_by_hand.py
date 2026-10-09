@@ -39,6 +39,7 @@ from tests.fixtures.placed.hand_checked import (
 )
 from tests.fixtures.placed.persistent_gemm_flat import PersistentGemmFlat
 from tests.fixtures.placed.persistent_gemm_tiled import PersistentGemmTiled
+from tilefoundry import func, module
 from tilefoundry.analysis import (
     AnalysisPrecision,
     ComputeCostMetadata,
@@ -53,10 +54,11 @@ from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
 from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
 from tilefoundry.analysis.report import report_data
+from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.ir.core import get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, Topology
 from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
 
 
@@ -239,6 +241,31 @@ def test_sliced_view_counts_against_the_final_source() -> None:
 
     assert _footprint_bytes(memory, "x") == 8 * 4
     assert set(memory["footprint"]["buffers"]) == {"x"}
+
+
+@module(entry="read", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2),))
+class DataStartedWindow:
+    """Each CTA reads a window whose start is a value it loads.
+
+    A CTA's start is one i64 scalar, ``8 B``, read into registers; the window it
+    starts is 4 f32 elements, ``4 * 4 = 16 B``, so one CTA reads ``24 B`` and two
+    read ``48 B``. Where a window lands is data, so the footprint of ``x`` is
+    only bounded.
+    """
+
+    @func
+    def read(x: Tensor[(16,), "f32"], starts: Tensor[(2,), "i64"]):
+        with Mesh(("cta",), layout=(2,), names=("c",)) as cta:
+            at = tf.reshard(tf.reshape(starts[cta.c : cta.c + 1], new_shape=()), (), "rmem")
+            return tf.reshard(x[at : at + 4], (4,), "smem")
+
+
+def test_a_window_started_by_loaded_data_is_counted() -> None:
+    memory = _memory_record(DataStartedWindow)
+    traffic = memory["traffic"]["storage"]["gmem"]
+
+    assert traffic["total"] == {"read": 2 * (8 + 4 * 4), "write": 0}
+    assert memory["footprint"]["precision"] != "exact"
 
 
 def test_store_only_still_occupies_the_cache() -> None:
