@@ -417,10 +417,15 @@ Each structured region exposes its invariant bindings through `captures()`.
 parameters and arguments. Analysis stores those pairs on its iteration-scope
 tree, so capture resolution does not need to inspect the region kind.
 
-Type inference derives every argument outside the loop and checks compatibility
-with its parameter annotation. It seeds the inner visitor with the induction
-binding and all parameter types, then derives the body and yields. A carry
-result is read from the first `k` parameter bindings.
+Type inference derives every argument outside the loop and binds each
+parameter to its argument's type; a region parameter has no type of its own,
+so a type stored on it by an earlier inference does not constrain the entry
+value. It seeds the inner visitor with the induction binding and all parameter
+bindings, then derives the body and yields. Every yield MUST satisfy
+`types_compatible(entry_type, yield_type)` for the parameter it carries into,
+and `k > len(params)` is an error. The carry result is the entry type of the
+first `k` parameters: a more specific yield does not narrow it, and a loop that
+runs no iteration has that type. There is no fixed-point iteration.
 
 `LoopRegion.type` is `TensorType` (single carry) or `TupleType`
 (multi-carry); the value is the Expr itself, not a `Call`.
@@ -446,6 +451,8 @@ class MeshRegion(Expr):
   - `params` and `args` have equal length. The body may reference each captured
     value only through its corresponding parameter; an argument is never read
     directly from the body. This is the same binding boundary as `Function`.
+    Each parameter takes its argument's current type, as for `LoopRegion`
+    ([§1.2](#12-loopregion)).
   - The region result is reachable through the values that escape its lexical
     body. A single escaping value is the region's `body`; multiple escaping
     values are carried by a `Tuple` and read through `TupleGetItem` projections.

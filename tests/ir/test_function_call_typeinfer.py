@@ -60,36 +60,80 @@ def test_plain_formal_specializes_per_call_site():
     assert infer_call(f, _PLAIN).layout is None
 
 
-def test_carrying_loop_propagates_split():
+_SPLIT8 = make_shard_tensor_type((8,), mesh=_M, attrs=(Split(0),))
+_UMAT8 = make_tensor_type((8,), storage="umat")
+_RMEM8 = make_tensor_type((8,), storage="rmem")
+
+
+@pytest.mark.parametrize(
+    ("entry", "yielded", "extent", "yields", "error"),
+    [
+        (_SPLIT8, _SPLIT8, 8, 1, None),
+        (_UMAT8, _RMEM8, 8, 1, None),
+        (_UMAT8, _RMEM8, 0, 1, None),
+        (
+            _RMEM8,
+            make_tensor_type((8,), storage="smem"),
+            8,
+            1,
+            "LoopRegion yield 0 type mismatch for param 'acc'",
+        ),
+        (
+            make_tensor_type((8,)),
+            make_tensor_type((8,), DType.f16),
+            8,
+            1,
+            "yield 0 type mismatch",
+        ),
+        (make_tensor_type((8,)), make_tensor_type((4,)), 8, 1, "yield 0 type mismatch"),
+        (
+            _SPLIT8,
+            make_shard_tensor_type((8,), mesh=_M, attrs=(Broadcast(),)),
+            8,
+            1,
+            "yield 0 type mismatch",
+        ),
+        (make_tensor_type((8,)), make_tensor_type((8,)), 8, 4, "yields 4 values but has 3 params"),
+    ],
+)
+def test_carrying_loop_propagates_split(entry, yielded, extent, yields, error):
     """Test carrying loop propagates split.
 
-    A callee whose body is a single-carry loop-phi ``LoopRegion``
-    (``acc = x + x`` before the loop, ``acc = acc + x`` inside it): the loop-phi's
-    own type must re-derive from the elaborated init value
-    ([hir §1.2](docs/spec/hir.md#12-loopregion)), not retain the callee's
-    parse-time unsharded type.
+    A callee whose body is a loop-phi ``LoopRegion`` carrying ``acc`` from the
+    entry ``x`` and yielding the captured ``y``: every region parameter takes
+    its type from the current entry value, not the type stamped on it when it
+    was parsed, and the loop's result is the entry type even when no iteration
+    runs ([hir §1.2](docs/spec/hir.md#12-loopregion)). A yield must fit the
+    entry it carries into, and a more specific yield does not narrow it.
     """
-    param_type = make_tensor_type((8,), _F)
-    x = Var(type=param_type, name="x")
-    init = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(x, x))
-    phi = Var(type=param_type, name="acc")
-    iv = Var(type=make_tensor_type((), DType.i64), name="i")
-    captured_x = Var(type=param_type, name="x")
-    body = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(phi, captured_x))
+    stamped = make_tensor_type((8,), _F)
+    x = Var(type=entry, name="x")
+    y = Var(type=yielded, name="y")
+    acc = Var(type=stamped, name="acc")
+    captured_y = Var(type=stamped, name="y")
+    unused = Var(type=stamped, name="unused")
     grid = LoopRegion(
-        type=param_type,
-        induction_var=iv,
-        params=(phi, captured_x),
-        args=(init, x),
-        body=body,
-        yield_values=(body,),
-        extent=8,
+        type=stamped,
+        induction_var=Var(type=make_tensor_type((), DType.i64), name="i"),
+        params=(acc, captured_y, unused),
+        args=(x, y, x),
+        body=captured_y,
+        yield_values=(captured_y,) * yields,
+        extent=extent,
         step=1,
     )
-    f = Function.build(name="carry", params=(x,), body=grid, return_type=param_type)
+    f = Function.build(name="carry", params=(x, y), body=grid, return_type=stamped)
+    region = (acc, captured_y, unused, grid)
 
-    split = make_shard_tensor_type((8,), mesh=_M, attrs=(Split(0),))
-    assert infer_call(f, split) == split
+    if error is not None:
+        with pytest.raises(VerifyError, match=error):
+            infer_call(f, entry, yielded)
+        assert all(expr.type is stamped for expr in region)
+        return
+    assert infer_call(f, entry, yielded) == entry
+    assert all(expr.type is stamped for expr in region)
+    TypeInferVisitor().visit(f, TypeInferContext())
+    assert [expr.type for expr in region] == [entry, yielded, entry, entry]
 
 
 def test_explicit_sharded_formal_constrains_its_actual():

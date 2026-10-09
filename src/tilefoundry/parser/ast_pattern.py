@@ -1253,8 +1253,7 @@ def _unshared(child, name: str):
 
     The owner being built re-types its children's bodies under its own Target,
     which must not reach into a subtree another owner resolves. A child another
-    owner already holds is therefore copied, detached from that owner, and
-    returned to its parsed region constraints before this build reads it; the
+    owner already holds is therefore copied and detached from that owner; the
     copy keeps the ownership inside its own subtree.
     """
     placed = child if child.name == name else child.renamed(name)
@@ -1263,11 +1262,6 @@ def _unshared(child, name: str):
     if placed is child:
         placed = child.cloned()
     placed._parent = None
-    from tilefoundry.visitor_registry.typeinfer import (  # noqa: PLC0415
-        restore_parsed_annotations,
-    )
-
-    restore_parsed_annotations(placed)
     return placed
 
 

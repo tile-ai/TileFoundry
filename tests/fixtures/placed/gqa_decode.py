@@ -17,7 +17,7 @@ from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by the @func body
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op names for the @func body
 from tilefoundry.ir.pattern import RangePattern
-from tilefoundry.ir.types import Broadcast, Layout, Mesh, ShardLayout, Topology
+from tilefoundry.ir.types import Broadcast, Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.dim import DimVar
 
 HEAD_DIM = 128
@@ -57,6 +57,11 @@ _CACHE_LAYOUT = ShardLayout(
 _TOKEN_LAYOUT = ShardLayout(
     Layout((1, S, _HKV, _D)),
     (Broadcast(),),
+    _CTA_MESH,
+)
+_GROUPED_LAYOUT = ShardLayout(
+    Layout((1, S, _G, _HKV, _D), (S * _G * _HKV * _D, _G * _HKV * _D, _HKV * _D, _D, 1)),
+    (Split(2),),
     _CTA_MESH,
 )
 
@@ -101,7 +106,7 @@ class GqaOnline:
             tmpl = tf.reduce(q_groups, axes=(-1,), keepdim=True, kind="sum")
             m = tf.full_like(tmpl, value=-1e30)
             l = tf.full_like(tmpl, value=0.0)
-            o = tf.full_like(q_groups, value=0.0)
+            o = tf.zeros(Tensor[(1, S, _G, _HKV, _D), "f32", _GROUPED_LAYOUT])
             for i in range(C):
                 i_sh = reshard(
                     tf.reshape(i, new_shape=(1,)),

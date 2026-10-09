@@ -12,7 +12,7 @@ import math
 from tilefoundry import func, module
 from tilefoundry.dsl import DimVar, Mesh, RangePattern, Tensor, ceildiv, tf
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare tile() in authored bodies
-from tilefoundry.ir.types import Topology
+from tilefoundry.ir.types import Layout, ShardLayout, Split, Topology
 from tilefoundry.target import CudaTarget
 
 SEQ = DimVar("seq", 1, 4096)
@@ -22,6 +22,11 @@ HEADS = 16
 HEAD_DIM = 64
 BLOCK = 128
 SCALE = 1.0 / math.sqrt(HEAD_DIM)
+_BLOCK_LAYOUT = ShardLayout(
+    Layout((1, HEADS, BLOCK, HEAD_DIM), (HEADS * BLOCK * HEAD_DIM, BLOCK * HEAD_DIM, HEAD_DIM, 1)),
+    (Split(1),),
+    Mesh((Topology("cta", HEADS),), Layout((HEADS,), (1,)), ("head",)),
+)
 
 
 @module(
@@ -63,7 +68,7 @@ class PrefillDecodeAttention:
             template = tf.reduce(qt, axes=(-1,), keepdim=True, kind="sum")
             running_max = tf.full_like(template, value=-1e30)
             running_sum = tf.full_like(template, value=0.0)
-            running_out = tf.full_like(qt, value=0.0)
+            running_out = tf.zeros(Tensor[(1, HEADS @ cta.head, SEQ, HEAD_DIM), "f32", "smem"])
 
             for window in tile(ceildiv(CTX, BLOCK) * BLOCK, BLOCK):
                 kb = tf.reshard(
@@ -156,7 +161,9 @@ class PrefillDecodeAttention:
                 template = tf.reduce(queries, axes=(-1,), keepdim=True, kind="sum")
                 running_max = tf.full_like(template, value=-1e30)
                 running_sum = tf.full_like(template, value=0.0)
-                running_out = tf.full_like(queries, value=0.0)
+                running_out = tf.zeros(
+                    Tensor[(1, HEADS, BLOCK, HEAD_DIM), "f32", _BLOCK_LAYOUT, "smem"]
+                )
 
                 for key_start in range(0, ceildiv(SEQ, BLOCK) * BLOCK, BLOCK):
                     kb = tf.slice(

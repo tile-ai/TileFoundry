@@ -6,11 +6,9 @@ from dataclasses import replace
 
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.metadata import (
-    ParsedAnnotationMetadata,
     RangeMetadata,
     attach_metadata,
     detach_metadata,
-    get_metadata,
 )
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -25,7 +23,7 @@ from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
 from tilefoundry.ir.types.utils import types_compatible
-from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
+from tilefoundry.ir.visitor import ExprVisitor, expr_children
 
 from .contexts import FunctionScope, TypeInferContext, TypeInferResults
 from .registries import typeinfer_registry
@@ -193,17 +191,20 @@ class TypeInferVisitor(ExprVisitor[Type]):
     def _region_memo(
         self, region: LoopRegion | MeshRegion, ctx: TypeInferContext
     ) -> dict[int, tuple[Expr, Type]]:
-        """Infer arguments and bind compatible entry parameters for an isolated region."""
+        """Infer arguments and bind each region parameter to its argument's type.
+
+        A region parameter has no type of its own: it is the value its argument
+        takes as the region is entered, so a type stored on it by an earlier
+        walk does not constrain this one. A walk that owns the body stores the
+        entry type on every parameter, captures the body never reads included.
+        """
         arg_types = tuple(self.visit(arg, ctx) for arg in region.args)
         from .verify import verify_region_isolated  # noqa: PLC0415
 
         verify_region_isolated(region, ctx)
-        for index, (param, arg_type) in enumerate(zip(region.params, arg_types, strict=True)):
-            if not types_compatible(param.annotation, arg_type):
-                ctx.error(
-                    region,
-                    f"{type(region).__name__} arg {index} type mismatch for param {param.name!r}",
-                )
+        if self._owns_body:
+            for param, arg_type in zip(region.params, arg_types, strict=True):
+                param.type = arg_type
         return {
             **ctx.memo,
             **{
@@ -213,10 +214,22 @@ class TypeInferVisitor(ExprVisitor[Type]):
         }
 
     def visit_LoopRegion(self, region: LoopRegion, ctx: TypeInferContext) -> Type:
-        """Infer a loop after binding its induction and carried variables."""
+        """Infer a loop after binding its induction and carried variables.
+
+        The entry values give the carried types and the result, so a loop that
+        runs no iteration has the type it was entered with. Each yielded value
+        must fit the entry type of the parameter it carries into; a yield that
+        is more specific does not change that type.
+        """
         for bound in (region.start, region.extent, region.step):
             if isinstance(bound, Expr):
                 self.visit(bound, ctx)
+        if len(region.yield_values) > len(region.params):
+            ctx.error(
+                region,
+                f"LoopRegion yields {len(region.yield_values)} values but has "
+                f"{len(region.params)} params",
+            )
         memo = self._region_memo(region, ctx)
         memo[id(region.induction_var)] = (region.induction_var, region.induction_var.annotation)
         inner = TypeInferVisitor(
@@ -225,9 +238,14 @@ class TypeInferVisitor(ExprVisitor[Type]):
             ranges=self._ranges,
         )
         body_type = inner.visit(region.body, ctx)
-        for y in region.yield_values:
-            inner.visit(y, ctx)
         carried = region.params[: len(region.yield_values)]
+        for index, (phi, y) in enumerate(zip(carried, region.yield_values, strict=True)):
+            entry_type = memo[id(phi)][1]
+            if not types_compatible(entry_type, inner.visit(y, ctx)):
+                ctx.error(
+                    region,
+                    f"LoopRegion yield {index} type mismatch for param {phi.name!r}",
+                )
         if not carried:
             return body_type
         if len(carried) == 1:
@@ -290,67 +308,21 @@ def inference_type(
     )
 
 
-def _region_params(function: Function) -> list[Var]:
-    """Every region parameter in *function* and its specialization variants."""
-    functions, params = [function], []
-    for current in functions:
-        functions.extend(current.variants)
-        if current.body is not None:
-            params.extend(
-                param
-                for expr in collect_exprs(current.body)
-                if isinstance(expr, (LoopRegion, MeshRegion))
-                for param in expr.params
-            )
-    return params
-
-
-def _parsed_annotation(param: Var) -> Type:
-    held = get_metadata(param, ParsedAnnotationMetadata)
-    return param.type if held is None else held.type
-
-
-def restore_parsed_annotations(module) -> None:
-    """Return every region parameter in *module*'s subtree to its parsed type."""
-    for function in module.functions:
-        if isinstance(function, Function):
-            for param in _region_params(function):
-                param.type = _parsed_annotation(param)
-    for child in module.modules:
-        restore_parsed_annotations(child)
-
-
 def retype_children(owner) -> None:
     """Write the types *owner*'s Target gives into the bodies of the children it holds.
 
     A child declares no Target, so its body was typed before it had one. Once a
     root that declares a Target holds it, every function in the child subtree,
-    variants included, is typed again in its owned scope against each region
-    parameter's parsed type, and the result is stored on the IR. A function that
-    fails to type leaves every parameter as it found it.
+    variants included, is typed again in its owned scope from its entry values,
+    and the result is stored on the IR. Each function is typed first without
+    storing anything, so a function that fails to type is left as it was.
     """
     for child in owner.modules:
         for function in child.functions:
             if not isinstance(function, Function):
                 continue
-            params = _region_params(function)
-            entered = [param.type for param in params]
-            recorded = [
-                param for param in params if get_metadata(param, ParsedAnnotationMetadata) is None
-            ]
             scope = FunctionScope(child, function)
-            try:
-                for param in recorded:
-                    attach_metadata(param, ParsedAnnotationMetadata(param.type))
-                for param in params:
-                    param.type = _parsed_annotation(param)
-                TypeInferVisitor(owns_body=False).visit(function, TypeInferContext(scope=scope))
-            except Exception:
-                for param, held in zip(params, entered, strict=True):
-                    param.type = held
-                for param in recorded:
-                    detach_metadata(param, ParsedAnnotationMetadata)
-                raise
+            TypeInferVisitor(owns_body=False).visit(function, TypeInferContext(scope=scope))
             TypeInferVisitor(owns_body=True).visit(function, TypeInferContext(scope=scope))
         retype_children(child)
 
@@ -358,6 +330,5 @@ def retype_children(owner) -> None:
 __all__ = [
     "TypeInferVisitor",
     "inference_type",
-    "restore_parsed_annotations",
     "retype_children",
 ]

@@ -98,7 +98,7 @@ def test_nested_tile_windows_capture_and_transform_the_outer_window() -> None:
     )
     slices = [
         expr
-        for expr in collect_exprs(NestedScaledTileWindows.entry_function().body)
+        for expr in collect_exprs(inner.body)
         if isinstance(expr, Call)
         and isinstance(expr.target, Slice)
         and expr.target.strides == (2, 1)

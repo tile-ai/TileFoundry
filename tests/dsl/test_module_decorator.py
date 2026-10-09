@@ -24,9 +24,9 @@ from tilefoundry.evaluator.value import EvalError
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.metadata import ParsedAnnotationMetadata, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import Layout, Mesh, StorageKind, Topology
 from tilefoundry.ir.visitor import collect_exprs
@@ -353,7 +353,22 @@ def test_a_held_child_takes_its_own_owners_target_types():
                     )
                 return tf.reshard(acc, (M, N), "gmem")
 
-    parsed = storages(_Refused)
+    def stored_types(owner):
+        exprs = [
+            expr
+            for function in owner.functions
+            for variant in (function, *function.variants)
+            for expr in collect_exprs(variant.body)
+        ]
+        params = [
+            param
+            for expr in exprs
+            if isinstance(expr, (LoopRegion, MeshRegion))
+            for param in expr.params
+        ]
+        return [(expr, expr.type) for expr in (*exprs, *params)]
+
+    parsed = stored_types(_Refused)
     refused = _Refused
     with pytest.raises(VerifyError, match="no nvidia.h200_sxm MMA reads lhs f32 smem"):
 
@@ -361,13 +376,8 @@ def test_a_held_child_takes_its_own_owners_target_types():
         class _RefusingRoot:
             _Refused = refused
 
-    assert storages(_Refused) == parsed == [StorageKind.UMAT] * 3
-    assert not any(
-        get_metadata(param, ParsedAnnotationMetadata) is not None
-        for expr in collect_exprs(_Refused.functions[0].body)
-        if isinstance(expr, LoopRegion)
-        for param in expr.params
-    )
+    assert storages(_Refused) == [StorageKind.UMAT] * 3
+    assert all(expr.type is held for expr, held in parsed)
 
 
 def test_forward_reference_sibling_fails_loudly():

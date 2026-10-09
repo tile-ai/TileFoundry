@@ -80,17 +80,16 @@ class Module:
   - a child declares no Target, so its bodies are typed before it has one. When
     a `@module` class body that declares a Target is built, every function in its
     child subtree, specialization variants included, MUST be typed again in its
-    owned scope and those types stored on the IR. Each region parameter is
-    typed against the type it was parsed with, which the first such typing keeps
-    as `ParsedAnnotationMetadata`; the parameter's own type is then the one its
-    owner gives it. A function that fails to type MUST leave every region
-    parameter and its metadata as they were. A `Module` built any other way is
-    not typed again.
+    owned scope and those types stored on the IR. Region parameters are typed
+    from their current entry values ([hir §1.2](./hir.md#12-loopregion)), so a
+    type an earlier typing stored on them does not constrain this one. Each
+    function is typed once without storing types before it is typed again to
+    store them; a function that fails to type MUST leave every `Expr.type` as it
+    was. A `Module` built any other way is not typed again.
   - a `@module` class body that places a child another owner already holds
-    places an independent `cloned()` copy, detached from that owner and with its
-    region parameters back at their parsed types before the class body is
-    parsed, so its calls reach the copy and typing it leaves the first owner's
-    subtree as it was. The copy keeps the ownership inside its own subtree.
+    places an independent `cloned()` copy, detached from that owner, so its
+    calls reach the copy and typing it leaves the first owner's subtree as it
+    was. The copy keeps the ownership inside its own subtree.
   - `owns(function)` MUST use identity and accept the Module's direct functions
     and their specialization variants. With `derived=True`, it MUST also follow
     a rebuilt function's recorded origin
@@ -306,15 +305,6 @@ class SourceSpanMetadata(IRMetadata):
     column: int
     end_line: int | None = None
     end_column: int | None = None
-
-class ParsedAnnotationMetadata(IRMetadata):
-    """Describe a region parameter's type before any owner's Target typed it.
-
-    Attributes:
-        type: attribute; The type the parameter was parsed with.
-    """
-
-    type: Type
 ```
 
 - constraints:
@@ -330,21 +320,6 @@ class ParsedAnnotationMetadata(IRMetadata):
     Its file, line, and start column identify the physical authored file position;
     the start column is one-based. `end_column`, when present, is the physical
     source-file offset using Python AST's exclusive-end convention.
-  - `ParsedAnnotationMetadata` is kept on a region parameter of a child Module's
-    function the first time a root's Target types it ([§1](#1-module)). A region
-    parameter's own type is both the constraint its entry value is checked
-    against and the type analysis reads for the carried value, and a child needs
-    the two to differ: the constraint is what the child was parsed with (`umat`
-    for an on-chip `MatMul` result typed without a Target, or the author's own
-    concrete type), while the carried value's type is what its current owner
-    gives it (`rmem` under CUDA, `smem` under CPU). The metadata keeps the
-    first; the parameter's type holds the second. Every later typing by this
-    owner, or of another owner's copy, which is restored to it before that
-    owner's class body is parsed, checks against the metadata; a typing that
-    fails leaves both as they were. Only the owner re-typing reads it; other
-    type inference reads the parameter's type, and a `Module` that is not built
-    by a `@module` class body is never re-typed. Without it, a child placed
-    under a second owner would be checked against the first owner's final type.
 
 ```python
 class Expr:

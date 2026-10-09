@@ -300,11 +300,16 @@ def inference_type(expr: Expr, ctx: TypeInferContext | None = None, *, ranges=Fa
     callee with equal argument types reuse the result in `instantiated_memo`.
   - `visit_leaf_Tuple` derives a structural `TupleType` directly from its
     already-derived operands, never the Tuple node's stamped `.type`.
-  - `visit_LoopRegion` derives all `args` outside the region, verifies isolation
-    and parameter compatibility, then seeds a new visitor with induction and all
-    entry bindings before body/yields are visited
-    ([hir §1.2](./hir.md#12-loopregion)). It overrides the complete node
-    visit; the base has no per-kind operand hook.
+  - `visit_LoopRegion` and `visit_MeshRegion` derive all `args` outside the
+    region, verify isolation, and bind each parameter to its argument's type; a
+    type stored on a parameter is never read as a constraint. An owning visitor
+    stores that type on every parameter, including captures the body does not
+    read; a non-owning one stores nothing.
+  - `visit_LoopRegion` rejects more yields than parameters, seeds a new visitor
+    with induction and all entry bindings, visits body and yields once, and
+    checks each yield with `types_compatible(entry_type, yield_type)`. The
+    result is the carried entry types ([hir §1.2](./hir.md#12-loopregion)). It
+    overrides the complete node visit; the base has no per-kind operand hook.
   - `visit_MeshRegion` composes the region mesh with the enclosing HIR
     `current_mesh`, checks the resulting topology, and visits the body with a
     new visitor seeded from the region's entry bindings, in a replaced child

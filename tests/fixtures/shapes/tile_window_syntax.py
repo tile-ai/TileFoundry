@@ -33,7 +33,7 @@ _CTA = (Topology("cta", 1),)
 class NestedScaledTileWindows:
     @func
     def windows(x: Tensor[(10, 6), "f32"]):
-        out = x[1:3, 0:2]
+        out = x[1:5:2, 0:2]
         for m in tile(1, 5, 2):
             for n in tile(1, 5, 2):
                 out = (
