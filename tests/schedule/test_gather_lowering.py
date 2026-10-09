@@ -64,3 +64,50 @@ def test_a_scheduled_row_lands_in_its_row_of_the_staged_tile() -> None:
     assert "T.ptr_of(tile[r:r + 1, 0:0 + 64])" in text
     assert "T.copy_async(tile_3, window)" in text
     assert "T.copy(out, tile)" not in text
+
+
+@module(
+    entry="gather",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 1), Topology("thread", 32)),
+)
+class GuardedGather:
+    @func
+    def gather(
+        table: Tensor[(ROWS, WIDTH), "bf16"],
+        index: Tensor[(PICKED,), "i32"],
+        first: Tensor[(PICKED, WIDTH), "bf16"],
+    ) -> Tensor[(PICKED, WIDTH), "bf16", "umat"]:
+        with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
+            with Mesh(("thread",), layout=(32,), names=("lane",)) as _warp:
+                tile = tf.schedule((first[:, :],), op=T.copy_async(smem_layout=TILE_SMEM))
+                for r in range(PICKED):
+                    at = tf.cast(
+                        tf.schedule(
+                            (tf.reshape(index[r : r + 1], new_shape=()),),
+                            op=T.copy(rmem_layout=SCALAR),
+                        ),
+                        "i64",
+                    )
+                    live = tf.logical_and(tf.cmp_ge(at, 0), tf.cmp_lt(at, ROWS))
+                    start = at * tf.cast(live, "i64")
+                    row = tf.schedule(
+                        (table[start : start + 1, :],), op=T.copy_async(smem_layout=ROW_SMEM)
+                    )
+                    tile = tf.insert_slice(tile, row, (r, 0))
+                return tf.schedule((tile,), op=T.copy_async_tensor())
+
+
+def test_a_guard_on_a_loaded_index_is_computed_and_the_row_lands_in_a_loaded_tile() -> None:
+    """Whether a row is live is a register computation, not address arithmetic.
+
+    The tile was loaded, not zeroed, and each row still lands in it, not in the output.
+    """
+    function = finalize(GuardedGather)
+    verify_prim_function(function)
+    text = as_script(function)
+
+    assert "kind=BinaryKind.AND" in text
+    assert "T.ptr_of(table[value_2 * value_4:value_2 * value_4 + 1, 0:0 + 64])" in text
+    assert "T.ptr_of(tile[r:r + 1, 0:0 + 64])" in text
+    assert "T.copy_async_tensor(tile, value_1)" in text

@@ -701,6 +701,11 @@ second presentation of the result.
   loop's window by a compile-time offset. That start is an address computed where
   it is read, not a value some op produces, so a walk over compute ops MUST leave
   it alone.
+- A start MAY also be a rank-0 value some op produces -- a row index loaded into
+  a register, or arithmetic over one. Lowering computes it where the window is
+  read: integer arithmetic stays address arithmetic over the registers, and any
+  other scalar op, such as the comparison and logical op that guard a selected
+  row, lowers to an instruction.
 - A plain-layout `Slice` with static starts MUST produce a `ComposedLayout`: its
   offset is the source offset plus the starts multiplied by the source strides,
   and its outer layout carries the sliced shape and retained strides (multiplied

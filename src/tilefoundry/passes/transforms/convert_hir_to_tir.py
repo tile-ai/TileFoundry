@@ -571,6 +571,8 @@ class Lowering(ExprVisitor[Expr]):
             )
         if isinstance(value, Call) and isinstance(value.target, HirBinary):
             dim_op = _DIM_BINARY.get(value.target.kind)
+            if dim_op is None and cursor is not None and id(value) not in self._memo:
+                return self.visit(value, cursor)
             if dim_op is None or not isinstance(value.type, TensorType) or value.type.shape != ():
                 raise LoweringError(
                     f"dimension uses unsupported binary operation {value.target.kind}"
@@ -649,8 +651,17 @@ class Lowering(ExprVisitor[Expr]):
         return self._dim(call)
 
     def visit_Binary(self, call: Call, cursor: _Cursor) -> Expr:
-        if isinstance(call.type, TensorType) and call.type.shape == ():
-            return self._dim(call)
+        """Scalar address arithmetic is a dimension; any other binary is an instruction.
+
+        A scalar logical or comparison on a loaded index -- whether a selected row is
+        live -- has no dimension form, so it is computed like a tensor binary.
+        """
+        if (
+            isinstance(call.type, TensorType)
+            and call.type.shape == ()
+            and call.target.kind in _DIM_BINARY
+        ):
+            return self._dim(call, cursor)
         return self._lower_automatic_instruction(call, cursor)
 
     def visit_TupleGetItem(self, call: Call, cursor: _Cursor) -> Expr:
@@ -762,9 +773,8 @@ class Lowering(ExprVisitor[Expr]):
         destination = call.args[0]
         destination_root = self._material_root(destination)
         if (
-            isinstance(destination_root, Call)
-            and isinstance(destination_root.target, Zeros)
-            and destination_root.type.storage is not StorageKind.GMEM
+            isinstance(destination.type, TensorType)
+            and destination.type.storage is not StorageKind.GMEM
         ):
             return self._insert_into_staged(call, cursor)
         if (

@@ -56,6 +56,15 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import DType, IntegerDType, ShardLayout, TensorType, Type
+from tilefoundry.ir.types.dim import (
+    DimAdd,
+    DimFloorDiv,
+    DimMax,
+    DimMin,
+    DimMod,
+    DimMul,
+    DimSub,
+)
 from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import ComposedLayout, flatten
 from tilefoundry.ir.types.shard_layout import (
@@ -505,6 +514,15 @@ def _arange(call: Call, ctx: CostContext) -> Cost:
 def _mesh_coord(call: Call, ctx: CostContext) -> Cost:
     """Which unit this is costs nothing: the machine already knows."""
     return Cost({}, _idle(call))
+
+
+def _dim_arithmetic(call: Call, ctx: CostContext) -> Cost:
+    """Where a window starts is index arithmetic, as free as the indices it combines."""
+    return Cost({}, _idle(call))
+
+
+for _dim_op in (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax):
+    register_cost_evaluator(_dim_op)(_dim_arithmetic)
 
 
 @register_cost_evaluator(Zeros)
