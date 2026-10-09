@@ -92,6 +92,14 @@ do not require an execution scope. A function-level `mesh=` covers the whole bod
 HIR functions that open no mesh remain logical programs; TIR is unaffected by
 this restriction.
 
+A function call inside a mesh supplies that execution scope to its callee.
+The callee may omit its own mesh or declare a region that composes with the
+call-site scope ([hir §1.1](./hir.md#11-function)). The parser checks authored
+call sites lexically; it does not exempt an unscoped function call because its
+callee contains a mesh. Authors may place the orchestration calls inside a
+mesh and keep each helper's operations in the inherited or explicitly declared
+scope.
+
 When a captured name denotes a tile window `slice(iv, iv + step, 1)`, the parser
 captures the induction Expr and reconstructs the window with its new parameter.
 Tile windows support `window ± c` (translate start/stop), `window * c`, and `c * window`

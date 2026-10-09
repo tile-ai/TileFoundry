@@ -170,7 +170,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         if callee.body is None or callee.variants:
             return callee.return_type
 
-        key = (id(callee), arg_types)
+        key = (id(callee), arg_types, ctx.current_mesh)
         cached = ctx.instantiated_memo.get(key)
         if cached is not None:
             return cached
