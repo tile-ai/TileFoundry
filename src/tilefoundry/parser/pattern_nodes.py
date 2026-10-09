@@ -3492,11 +3492,19 @@ def _read_before_bound(statements):
     """Return names a block reads before it binds them, in statement order.
 
     A name a block reads on its way to binding it came from outside the block:
-    an accumulator reads what the last round left before it writes this one.
+    an accumulator reads what the last round left before it writes this one. A
+    nested loop is read the same way, so a temporary its body binds and then reads
+    is not a read from outside.
     """
     bound: set[str] = set()
     live: set[str] = set()
     for statement in statements:
+        if isinstance(statement, (ast.For, ast.AsyncFor)):
+            targets = {name.id for name in ast.walk(statement.target) if isinstance(name, ast.Name)}
+            live.update(_loaded_names((statement.iter,)) - bound)
+            live.update(_read_before_bound(statement.body) - bound - targets)
+            bound.update(_rebound_names((statement,)))
+            continue
         live.update(_loaded_names((statement,)) - bound)
         bound.update(_directly_bound_names((statement,)))
     return frozenset(live)

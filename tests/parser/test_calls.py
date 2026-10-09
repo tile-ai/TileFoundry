@@ -369,6 +369,29 @@ def test_a_name_only_a_loop_rebinds_escapes_the_mesh_scope() -> None:
     assert isinstance(scoped.body, LoopRegion)
 
 
+def test_a_temporary_an_inner_loop_binds_does_not_escape_a_repeated_scope() -> None:
+    """A name a nested loop binds before it reads it stays inside the loop's mesh scope."""
+
+    @module(
+        entry="temporaries",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 2),),
+    )
+    class LoopTemporaries:
+        @func
+        def temporaries(x: Tensor[(2,), "f32"]):
+            with Mesh(("cta",), layout=(2,), names=("tile",)) as mesh:
+                value = tf.relu(x)
+                for _outer in tile(4, 1):  # noqa: F821
+                    with mesh[:] as _all:
+                        for _inner in range(2):
+                            step = tf.relu(value)
+                            value = value + step
+                return value
+
+    assert isinstance(LoopTemporaries.entry_function().body, MeshRegion)
+
+
 def test_mesh_binding_does_not_escape_its_with_scope() -> None:
     """A mesh alias is removed with its lexical frame after the with body."""
     with pytest.raises(ParseError, match="'mesh' is not a lexical Mesh binding"):
