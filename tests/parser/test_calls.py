@@ -9,6 +9,7 @@ import pytest
 
 from tilefoundry import func, module, prim_func
 from tilefoundry.dsl import Mesh, Tensor, tf
+from tilefoundry.inspection.python_printer import as_script
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
@@ -390,6 +391,61 @@ def test_a_temporary_an_inner_loop_binds_does_not_escape_a_repeated_scope() -> N
                 return value
 
     assert isinstance(LoopTemporaries.entry_function().body, MeshRegion)
+
+
+def test_temporaries_two_scopes_bind_in_their_own_loops_stay_inside() -> None:
+    """A later scope binding a temporary before reading it leaves an earlier one's alone."""
+
+    @module(
+        entry="two_fills",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 2),),
+    )
+    class TwoFills:
+        @func
+        def two_fills(x: Tensor[(2,), "f32"]):
+            with Mesh(("cta",), layout=(2,), names=("tile",)) as mesh:
+                left = tf.relu(x)
+                right = tf.relu(x)
+                for _outer in tile(4, 1):  # noqa: F821
+                    with mesh[:] as _all:
+                        for _inner in range(2):
+                            step = tf.exp(left)
+                            left = left + step
+                    with mesh[:] as _all:
+                        for _inner in range(2):
+                            step = tf.exp(right)
+                            right = right + step
+                return left + right
+
+    assert isinstance(TwoFills.entry_function().body, MeshRegion)
+
+
+def test_a_later_scope_that_only_rebinds_a_carry_keeps_it() -> None:
+    """A loop carry an earlier scope reads and a later one rebinds leaves that later scope."""
+
+    @module(
+        entry="later_carry",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 2),),
+    )
+    class LaterCarry:
+        @func
+        def later_carry(x: Tensor[(2,), "f32"]):
+            with Mesh(("cta",), layout=(2,), names=("tile",)) as mesh:
+                with mesh[:] as _all:
+                    peak = tf.relu(x)
+                for _outer in tile(4, 1):  # noqa: F821
+                    with mesh[:] as _all:
+                        seen = tf.maximum(peak, x)
+                    with mesh[:] as _all:
+                        last = tf.exp(seen)
+                        peak = last
+                return peak
+
+    text = as_script(LaterCarry.entry_function())
+    assert "last = exp(seen)" in text
+    assert "peak = last" in text
 
 
 def test_mesh_binding_does_not_escape_its_with_scope() -> None:

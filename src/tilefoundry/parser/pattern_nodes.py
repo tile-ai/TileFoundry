@@ -3493,17 +3493,34 @@ def _read_before_bound(statements):
 
     A name a block reads on its way to binding it came from outside the block:
     an accumulator reads what the last round left before it writes this one. A
-    nested loop is read the same way, so a temporary its body binds and then reads
-    is not a read from outside.
+    nested loop or `with` is read the same way, so a temporary its body binds and
+    then reads is not a read from outside; a loop header's `tile` or `range` names
+    the loop form, not a value.
     """
     bound: set[str] = set()
     live: set[str] = set()
     for statement in statements:
         if isinstance(statement, (ast.For, ast.AsyncFor)):
             targets = {name.id for name in ast.walk(statement.target) if isinstance(name, ast.Name)}
-            live.update(_loaded_names((statement.iter,)) - bound)
+            header = statement.iter
+            parts = (*header.args, *header.keywords) if isinstance(header, ast.Call) else (header,)
+            live.update(_loaded_names(tuple(ast.Expr(part) for part in parts)) - bound)
             live.update(_read_before_bound(statement.body) - bound - targets)
             bound.update(_rebound_names((statement,)))
+            continue
+        if isinstance(statement, ast.With):
+            targets = {
+                name.id
+                for item in statement.items
+                if item.optional_vars is not None
+                for name in ast.walk(item.optional_vars)
+                if isinstance(name, ast.Name)
+            }
+            live.update(
+                _loaded_names(tuple(ast.Expr(item.context_expr) for item in statement.items)) - bound
+            )
+            live.update(_read_before_bound(statement.body) - bound - targets)
+            bound.update(targets | _rebound_names(statement.body))
             continue
         live.update(_loaded_names((statement,)) - bound)
         bound.update(_directly_bound_names((statement,)))
@@ -3515,9 +3532,13 @@ def _block_escaping_names(statements, *, repeated: bool = False):
 
     A block that repeats carries what it reads on its way to binding it, so a
     `with` that both reads and binds a name states that name's next value and
-    the region it is bound through is what the round after reads.
+    the region it is bound through is what the round after reads. The round
+    after reads it even when an earlier `with` reads it and a later one only
+    binds it, so every name the whole block reads before binding counts as read
+    after its last statement. Scanning back, a statement's sure bindings stop
+    being read from before it, and its reads before binding start to be.
     """
-    read_after: set[str] = set()
+    read_after: set[str] = set(_read_before_bound(statements)) if repeated else set()
     escaping: dict[int, Mapping[str, object]] = {}
     for index in range(len(statements) - 1, -1, -1):
         statement = statements[index]
@@ -3527,8 +3548,20 @@ def _block_escaping_names(statements, *, repeated: bool = False):
             if repeated:
                 reached.update(_read_before_bound(statement.body))
             escaping[index] = {"escaping_names": frozenset(bound & reached)}
-        read_after.update(_loaded_names((statement,)))
+        read_after.difference_update(_surely_bound(statement))
+        read_after.update(_read_before_bound((statement,)))
     return escaping
+
+
+def _surely_bound(statement):
+    """Names a statement binds every time it runs.
+
+    A `with` body runs once; a loop body may run no time at all, so a loop binds
+    nothing for sure.
+    """
+    if isinstance(statement, ast.With):
+        return _directly_bound_names(statement.body)
+    return _directly_bound_names((statement,))
 
 
 def _enter_mesh_scope(context, mesh, match):
