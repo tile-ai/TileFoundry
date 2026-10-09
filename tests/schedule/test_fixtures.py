@@ -872,6 +872,22 @@ def test_instruction_requires_an_execution_mesh_declaration() -> None:
         declared_execution_mesh(_UnstatedInstruction)
 
 
+def test_schedule_facts_writes_the_tiled_mma_declaration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The op every WGMMA schedule names states its facts, its operands read from its atom."""
+    out = tmp_path / "facts.txt"
+
+    assert (
+        cli_main(["schedule", "facts", "T.tiled_mma", "--target", "nvidia.h200_sxm", str(out)])
+        == 0
+    )
+    assert capsys.readouterr() == ("", "")
+    text = out.read_text()
+    assert text.startswith("T.tiled_mma\n")
+    assert "rhs  the B operand of its atom" in text
+
+
 def test_schedule_facts_writes_wgmma_declaration(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

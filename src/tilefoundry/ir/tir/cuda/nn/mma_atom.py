@@ -203,12 +203,17 @@ class MmaAtom:
 
 @dataclass(frozen=True, init=False)
 class AtomPattern(Pattern):
-    """An instance of any declared atom class."""
+    """An instance of any declared atom class.
+
+    Its own ``__init__`` replaces the generated one, so it sets the ``predicates``
+    field its Pattern base declares as well.
+    """
 
     declarations: tuple[type[MmaAtom], ...]
 
     def __init__(self, *declarations):
         object.__setattr__(self, "declarations", tuple(declarations))
+        object.__setattr__(self, "predicates", ())
 
 
 @dataclass(frozen=True)
