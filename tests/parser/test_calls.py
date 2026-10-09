@@ -345,6 +345,30 @@ def test_valueful_mesh_region_also_wraps_escaping_bindings() -> None:
     assert isinstance(scoped.body.body, Call)
 
 
+def test_a_name_only_a_loop_rebinds_escapes_the_mesh_scope() -> None:
+    """A name bound before a with and rebound only by a loop inside it leaves through it."""
+
+    @module(
+        entry="carried_escape",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 2),),
+    )
+    class CarriedEscape:
+        @func
+        def carried_escape(x: Tensor[(2,), "f32"]):
+            value = tf.relu(x)
+            with Mesh(("cta",), layout=(2,), names=("tile",)) as _mesh:
+                for _index in tile(2, 1):  # noqa: F821
+                    value = tf.relu(value)
+            return tf.add(value, x)
+
+    body = CarriedEscape.entry_function().body
+    assert isinstance(body, Call)
+    scoped = body.args[0]
+    assert isinstance(scoped, MeshRegion)
+    assert isinstance(scoped.body, LoopRegion)
+
+
 def test_mesh_binding_does_not_escape_its_with_scope() -> None:
     """A mesh alias is removed with its lexical frame after the with body."""
     with pytest.raises(ParseError, match="'mesh' is not a lexical Mesh binding"):
