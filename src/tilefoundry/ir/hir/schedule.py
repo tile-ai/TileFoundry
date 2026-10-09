@@ -86,10 +86,10 @@ class _RelationContext:
         return self._types[id(expr)]
 
 
-def _single_issue_relations(
+def operand_relations(
     op: Op, operand_types: tuple[TensorType, ...]
 ) -> tuple[AccessRelation, ...]:
-    """Ask the selected instruction's registry entry about one issue."""
+    """The registered access relations of *op* over operands of these types."""
     args = tuple(
         Var(name=f"operand{index}", type=type_) for index, type_ in enumerate(operand_types)
     )
@@ -162,7 +162,7 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
             raise ValueError(
                 f"{type(op).__name__} {param.name} is write-only and declares no result shape"
             )
-    whole_relations = _single_issue_relations(
+    whole_relations = operand_relations(
         op, tuple(whole.get(param.name, UnitType()) for param in params)
     )
     whole_shape = _iteration_shape(whole_relations)
@@ -214,7 +214,7 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
         TensorType(shape, type_.dtype, type_.layout, type_.storage)
         for shape, type_ in zip(shapes, whole_types, strict=True)
     )
-    single = _single_issue_relations(op, provisional)
+    single = operand_relations(op, provisional)
     single_shape = _iteration_shape(single)
     if len(whole_shape) != len(single_shape):
         raise ValueError("single-issue and scheduled iteration ranks differ")
@@ -315,7 +315,7 @@ def _schedule_access_relation(call: Call, ctx) -> tuple[AccessRelation, ...]:
     op, params, _reads, _writes, _patterns, inner, repeat, order, shape = _instruction_view(
         call, ctx, fragments=False
     )
-    scheduled = _outer_band(_single_issue_relations(op, inner), repeat, order, shape)
+    scheduled = _outer_band(operand_relations(op, inner), repeat, order, shape)
     return (
         *(
             boundary
@@ -407,4 +407,4 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
     return inner[params.index(result)]
 
 
-__all__ = ["ScheduleOp"]
+__all__ = ["ScheduleOp", "operand_relations"]

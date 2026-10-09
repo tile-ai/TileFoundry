@@ -21,7 +21,7 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
-from tilefoundry.ir.hir.schedule import _single_issue_relations
+from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.pattern import (
     PatternMatcher,
     SwitchPattern,
@@ -154,7 +154,7 @@ def _relation_shape(boundary) -> tuple[int, tuple[int | None, ...]]:
 
 def _site_relation_shape(site: _Site) -> tuple:
     reads = tuple(type_ for _name, type_ in site.reads)
-    relations = _single_issue_relations(site.call.target, reads)
+    relations = operand_relations(site.call.target, reads)
     return (
         tuple(_relation_shape(boundary) for boundary in relations[: len(reads)]),
         tuple(_relation_shape(boundary) for boundary in relations[len(reads) :]),
@@ -186,7 +186,7 @@ def _instruction_relation_shape(site: _Site, op) -> tuple | None:
     types = _instruction_operands(site, op)
     if types is None:
         return None
-    relations = _single_issue_relations(op, types)
+    relations = operand_relations(op, types)
     params = _input_params(type(op), len(site.reads))
     operands = relations[: len(types)]
     reads = tuple(
