@@ -16,6 +16,9 @@ T.cuda.sm90.Wgmma
                  form in {Form.SS, Form.RS}
     a_major  form=SS  a_major in {Major.MN, Major.K} (default Major.MN)
              form=RS  Major.K
+    b_major  any value (default Major.MN)
+               predicates:
+                 b_major in {Major.MN, Major.K}
   operands
     C  shape=(64, n) dtype=f32 storage=rmem, held in 1 arrangement:
          ShardLayout(Layout((8, 2, 4, 2, 4, c), (1, 8, 16, 64, 128, 512)), (S(2), S(0), S(4)), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
@@ -28,7 +31,8 @@ T.cuda.sm90.Wgmma
                   a_major=MN  ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((r, W), (2, 8)), ((l, 1), (s, W)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
                                 predicates:
                                   r * W == 64
-                                  l == 16 * W
+                                  l >= 16 * W
+                                  l % (8 * W) == 0
                                   s == 8 * W
                   a_major=K   ShardLayout(ComposedLayout(Swizzle(a_swizzle, 4, 3), 0, Layout(((8, 8), (r, W)), ((l, W), (s, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
                                 predicates:
@@ -51,13 +55,30 @@ T.cuda.sm90.Wgmma
            each top-level mode has no backward step
            each top-level mode reaches each of its own slots exactly once
            p0 % 128 == 0
-    B  shape=(16, n) dtype=bf16 storage=smem, held in 1 arrangement:
-         ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), 0, Layout(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+    B  shape=(16, n) dtype=bf16 storage=smem, held in 3 arrangements:
+         b_major=MN  ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), 0, Layout(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                       predicates:
+                         rb * Wb == n
+                         lb >= 16 * Wb
+                         lb % (8 * Wb) == 0
+                         sb == 8 * Wb
+         b_major=K   ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), 0, Layout(((rb, Wb), (nb, 8)), ((sb, 1), (lb, Wb)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                       predicates:
+                         b_swizzle <= 1
+                         rb * Wb == 16
+                         8 * nb == n
+                         lb == 16 * Wb
+                         sb == 8 * Wb
+         b_major=K   ShardLayout(ComposedLayout(Swizzle(b_swizzle, 4, 3), bk0, Layout((16, (nb, 8)), (1, (lb, Wb)))), (B(), B(), B()), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+                       predicates:
+                         b_swizzle >= 2
+                         8 * nb == n
+                         lb == 8 * Wb
+                         bk0 % 16 == 0
+                         bk0 >= 0
+                         bk0 < Wb
          predicates:
            Wb == (8, 16, 32, 64)[b_swizzle]
-           rb * Wb == n
-           lb == 16 * Wb
-           sb == 8 * Wb
            each top-level mode has no backward step
            each top-level mode reaches each of its own slots exactly once
            p0 % 128 == 0

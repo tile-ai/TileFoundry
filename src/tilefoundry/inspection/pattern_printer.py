@@ -553,11 +553,29 @@ class PatternPrinter:
                 "floordiv": "//",
                 "mod": "%",
             }[value.op]
+            left, right = value.args
             return (
-                f"{self._written_expression(value.args[0])} {symbol} "
-                f"{self._written_expression(value.args[1])}"
+                f"{self._term_operand(left, value.op, right=False)} {symbol} "
+                f"{self._term_operand(right, value.op, right=True)}"
             )
         return repr(value)
+
+    _TERM_PRECEDENCE = {"add": 1, "sub": 1, "mul": 2, "floordiv": 2, "mod": 2}
+
+    def _term_operand(self, operand, parent: str, *, right: bool) -> str:
+        """An operand of a written binary term, parenthesized where Python would regroup it.
+
+        `l % (8 * W)` is not `l % 8 * W`: a right operand binding no tighter than its
+        parent, or a left one binding looser, keeps its parentheses.
+        """
+        written = self._written_expression(operand)
+        inner = self._TERM_PRECEDENCE.get(getattr(operand, "op", None))
+        if inner is None or type(operand).__name__ != "Term":
+            return written
+        outer = self._TERM_PRECEDENCE[parent]
+        if inner < outer or (right and inner == outer):
+            return f"({written})"
+        return written
 
     def alternatives_Pattern(self, pattern, bindings) -> tuple:
         return ((bindings, pattern),)

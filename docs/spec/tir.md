@@ -978,9 +978,12 @@ class MmaAtom:
 
 The public declarations are `T.cuda.sm80.Mma()` (BF16 `16x8x16`, F32
 accumulator, register A/B/C over one warp) and
-`T.cuda.sm90.Wgmma(n=..., form=..., a_major=..., mesh=...)` (BF16
+`T.cuda.sm90.Wgmma(n=..., form=..., a_major=..., b_major=..., mesh=...)` (BF16
 `64 x n x 16` over one warpgroup). `Form` and `Major` live beside `Wgmma`
-under `T.cuda.sm90`.
+under `T.cuda.sm90`. `a_major` and `b_major` each name which axis of a shared
+operand runs contiguously; both default to `Major.MN`. A K-major B is stored as
+`n` rows of K, the arrangement of a K-major A with N in place of M, so a tile read
+as the right operand of `x @ y^T` is used as it was staged.
 
 ##### Calling convention
 

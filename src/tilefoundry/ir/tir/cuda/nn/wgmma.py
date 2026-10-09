@@ -1,4 +1,11 @@
-"""The parameterized SM90 warpgroup MMA declaration."""
+"""The parameterized SM90 warpgroup MMA declaration.
+
+An MN-major operand steps between its W-wide MN runs by any whole number of 8-row
+swizzle atoms past the 16 rows one issue reads, so a tile with more K rows than 16
+keeps its own rows together. A K-major B is stored as N rows of K: A's K-major
+arrangements with M renamed N and the two axes swapped, so a key tile read for
+``Q @ K^T`` is used as it was loaded.
+"""
 
 from __future__ import annotations
 
@@ -52,6 +59,7 @@ n, b, W, p, r, l, s, c = (
 )
 n_extent = n
 bb, Wb, rb, lb, sb = (WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb"))
+nb, pb = WildcardPattern("nb"), WildcardPattern("bk0")
 RUN = P.Table((8, 16, 32, 64))[b]
 BROADCAST = (Broadcast(), Broadcast(), Broadcast())
 PER_THREAD = (Split(2), Split(0), Split(4))
@@ -60,7 +68,7 @@ a_mn = ComposedLayoutPattern(
     SwizzlePattern(b, 4, 3),
     0,
     LayoutPattern(((r, W), (2, 8)), ((l, 1), (s, W))),
-    predicates=(W == RUN, r * W == 64, l == 16 * W, s == 8 * W),
+    predicates=(W == RUN, r * W == 64, l >= 16 * W, l % (8 * W) == 0, s == 8 * W),
 )
 a_k_whole = ComposedLayoutPattern(
     SwizzlePattern(b, 4, 3),
@@ -74,6 +82,46 @@ a_k_sliced = ComposedLayoutPattern(
     LayoutPattern(((8, 8), 16), ((l, W), 1)),
     predicates=(W == RUN, b >= 2, l == 8 * W, p % 16 == 0, 0 <= p, p < W),
     issues_per_row=lambda captures: (1, captures["W"] // 16),
+)
+b_mn = ComposedLayoutPattern(
+    SwizzlePattern(bb, 4, 3),
+    0,
+    LayoutPattern(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1))),
+    predicates=(
+        Wb == P.Table((8, 16, 32, 64))[bb],
+        rb * Wb == n_extent,
+        lb >= 16 * Wb,
+        lb % (8 * Wb) == 0,
+        sb == 8 * Wb,
+    ),
+)
+b_k_whole = ComposedLayoutPattern(
+    SwizzlePattern(bb, 4, 3),
+    0,
+    LayoutPattern(((rb, Wb), (nb, 8)), ((sb, 1), (lb, Wb))),
+    predicates=(
+        Wb == P.Table((8, 16, 32, 64))[bb],
+        bb <= 1,
+        rb * Wb == 16,
+        8 * nb == n_extent,
+        lb == 16 * Wb,
+        sb == 8 * Wb,
+    ),
+)
+b_k_sliced = ComposedLayoutPattern(
+    SwizzlePattern(bb, 4, 3),
+    pb,
+    LayoutPattern((16, (nb, 8)), (1, (lb, Wb))),
+    predicates=(
+        Wb == P.Table((8, 16, 32, 64))[bb],
+        bb >= 2,
+        8 * nb == n_extent,
+        lb == 8 * Wb,
+        pb % 16 == 0,
+        0 <= pb,
+        pb < Wb,
+    ),
+    issues_per_row=lambda captures: (0, captures["Wb"] // 16),
 )
 fragment = LayoutPattern((8, 2, 4, 2, 4, c), (1, 8, 16, 64, 128, 512))
 
@@ -118,6 +166,12 @@ class Wgmma(MmaAtom):
                 Form.RS: Major.K,
             },
         ),
+        default=Major.MN,
+    )
+    b_major = ParamDef(
+        kind="attribute",
+        annotation=Major,
+        pattern=WildcardPattern("b_major", predicates=(OrPattern(*tuple(Major)),)),
         default=Major.MN,
     )
 
@@ -171,16 +225,12 @@ class Wgmma(MmaAtom):
         dtype=DType.bf16,
         storage=S.SMEM,
         layout=ShardLayoutPattern(
-            ComposedLayoutPattern(
-                SwizzlePattern(bb, 4, 3),
-                0,
-                LayoutPattern(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1))),
-                predicates=(
-                    Wb == P.Table((8, 16, 32, 64))[bb],
-                    rb * Wb == n_extent,
-                    lb == 16 * Wb,
-                    sb == 8 * Wb,
-                ),
+            SwitchPattern(
+                "b_major",
+                {
+                    Major.MN: b_mn,
+                    Major.K: OrPattern(b_k_whole, b_k_sliced),
+                },
             ),
             BROADCAST,
             execution_mesh_pattern(WARPGROUP),
@@ -199,5 +249,8 @@ __all__ = [
     "a_k_sliced",
     "a_k_whole",
     "a_mn",
+    "b_k_sliced",
+    "b_k_whole",
+    "b_mn",
     "fragment",
 ]

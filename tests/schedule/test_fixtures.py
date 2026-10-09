@@ -131,6 +131,7 @@ SMEM_GOLDEN = {
     "sm80_mma_ldmatrix": 1_536,
     "wgmma_a_k_major": 6_144,
     "wgmma_a_mn_major": 6_144,
+    "wgmma_b_k_major": 12_288,
     "wgmma_cast_between_schedules": 6_144,
     "wgmma_cp_async_loads": 6_144,
     "wgmma_cta_grid_4x17": 13_824,
@@ -181,6 +182,11 @@ RMEM_EXPECTED = {
         "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
         "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
         "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_b_k_major": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 mma result/bf16 cast alias"),
         "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
     },
     "wgmma_a_mn_major": {

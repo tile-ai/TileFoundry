@@ -201,7 +201,7 @@ one registered operation whose required attributes come from the HIR, so they sa
 ```bash
 set -euo pipefail
 tilefoundry schedule facts T.cuda.sm90.Wgmma --target nvidia.h200_sxm Wgmma.facts.txt
-sed -n '1,21p' Wgmma.facts.txt
+sed -n '1,24p' Wgmma.facts.txt
 ```
 
 ```text
@@ -223,6 +223,9 @@ T.cuda.sm90.Wgmma
                  form in {Form.SS, Form.RS}
     a_major  form=SS  a_major in {Major.MN, Major.K} (default Major.MN)
              form=RS  Major.K
+    b_major  any value (default Major.MN)
+               predicates:
+                 b_major in {Major.MN, Major.K}
   operands
     C  shape=(64, n) dtype=f32 storage=rmem, held in 1 arrangement:
          ShardLayout(Layout((8, 2, 4, 2, 4, c), (1, 8, 16, 64, 128, 512)), (S(2), S(0), S(4)), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
