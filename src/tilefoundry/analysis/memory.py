@@ -546,6 +546,7 @@ def analyze_value_lifetimes(
     """Project checked structural SSA liveness into memory residency."""
     liveness = analyze_liveness(function)
     facts = module.resolve_target().get_facts(MemoryHierarchyFacts)
+    analyzed = AnalyzeContext(module, module.resolve_target(), None, None)
     local = CostContext(
         scope=FunctionScope(module, function),
         topology_level=topology_level,
@@ -556,7 +557,7 @@ def analyze_value_lifetimes(
         frozenset(id(parameter) for parameter in function.params),
         facts,
         local,
-        storage_owners(build_scopes(module, function), liveness),
+        storage_owners(build_scopes(module, function, ctx=analyzed), liveness, analyzed),
     )
     return tuple(item.lifetime for item in projected)
 
@@ -752,7 +753,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     )
     footprint_labels = dict(zip(distinct, value_labels(label_values), strict=True))
     liveness = analyze_liveness(function)
-    owners = storage_owners(context.root, liveness)
+    owners = storage_owners(context.root, liveness, context)
     reuse = (
         reuse_windows(
             context.root,

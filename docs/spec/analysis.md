@@ -1447,8 +1447,14 @@ class AnalyzeContext:
     target: Target
     topology_level: str | None
     options: object | None
-    root: IterationScope
-    current: IterationScope
+    root: IterationScope | None = None
+    current: IterationScope | None = None
+    current_mesh: Mesh | None = None
+
+    @property
+    def topologies(self) -> tuple[Topology, ...]: ...
+    def type_of(self, expr: Expr) -> Type: ...
+    def local_type_of(self, expr: Expr) -> Type: ...
 
 
 AnalysisCallable = Callable[
@@ -1495,6 +1501,14 @@ class Target:
     caller options, and the shared root/current `IterationScope` view. The
     `topology_level` MAY be `None` only when the Module declares no topology;
     options MAY be `None`.
+  - The same `AnalyzeContext` is what analysis reads types and access relations
+    through. It is created before the scope tree, which reads relations through
+    it with no topology level, and its `root`/`current` are bound to that tree
+    before any analysis runs. `type_of` returns the `Expr.type` that
+    `check_program` stored on the analyzed copy; `local_type_of` projects it to
+    `topology_level` over the Module's topologies, or returns it whole without
+    one. `current_mesh` is `None`: relations are asked outside any execution
+    mesh.
   - Analyze MUST obtain every root and dependency from the same exact Target
     instance through `get_analyzer`.
   - A Target subclass MUST inherit its base Analyzers through normal Python

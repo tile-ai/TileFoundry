@@ -13,6 +13,7 @@ from tilefoundry import func
 from tilefoundry.dsl import DimVar, Tensor, tf
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Var
+from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.rank import Rank
 from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
@@ -21,8 +22,7 @@ from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.ir.types.layout import EMPTY_LAYOUT
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.visitor_registry.access_relation import relations_of
-from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
+from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _S = DimVar("runtime_shape", 1, 8)
@@ -62,7 +62,7 @@ def test_shape_metadata_cost(case):
     args = tuple(Var(type=type_, name=f"x{i}") for i, type_ in enumerate(case.inputs))
     call = Call(type=case.inputs[0], target=case.op, args=args)
     call = replace(call, type=TypeInferVisitor().visit(call, TypeInferContext()))
-    relations = relations_of(call, CostContext())
+    relations = operand_relations(case.op, tuple(case.inputs))
     values = (*case.inputs, call.type)
     for boundary, value in zip(relations, values, strict=True):
         assert boundary.relation.dim(isl.dim_type.OUT) == len(value.shape)

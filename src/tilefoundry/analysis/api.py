@@ -158,8 +158,8 @@ def analyze(
 
     function = check_program(module, function, topology_level=topology_level, analyzers=closure)
     functions = (function,)
-    scope = ScopeBuilder(module, function).build()
-    context = AnalyzeContext(module, target, topology_level, options, root=scope, current=scope)
+    context = AnalyzeContext(module, target, topology_level, options)
+    context.root = context.current = ScopeBuilder(module, function, ctx=context).build()
 
     order: list[type[IRMetadata]] = []
     written_records: set[tuple[int, type]] = set()

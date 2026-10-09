@@ -241,7 +241,7 @@ nothing of that kind rather than guessing.
     traversal or infers a type on demand. Only a caller that runs a typeinfer
     rule itself binds that rule's inputs in `memo`. A shared access relation
     asks the context it is given: inference passes its own, and code that reads
-    typed IR passes its stage's context (analysis a `CostContext`).
+    typed IR passes its stage's context (analysis its `AnalyzeContext`).
   - `VerifyContext.type_of` and `CostContext.type_of` read IR that is already
     typed, so they return `expr.type`; `CostContext` reads a selected type
     first.

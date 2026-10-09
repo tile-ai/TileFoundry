@@ -42,6 +42,7 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.op import Op
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.slice import Slice as SliceOp
 from tilefoundry.ir.isl_interop import shape_to_isl_set
@@ -131,7 +132,7 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
     held = make_tensor_type((4,), DType.f32)
     call = Call(type=held, target=Unstated(), args=(Var(type=held, name="x"),))
     with pytest.raises(ValueError, match="Unstated states no access relations"):
-        relations_of(call, CostContext())
+        operand_relations(Unstated(), (held,))
 
     walked = AccessRelation(isl.map("{ [d0] -> [d0] : 0 <= d0 < 4 }"))
     for stated, asked, message in (

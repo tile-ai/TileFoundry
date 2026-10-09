@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import isl
 
@@ -25,12 +25,13 @@ from tilefoundry.visitor_registry.access_relation import (
     projected,
     relations_of,
 )
-from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .access import Access, resolve_access
 from .errors import AnalysisError
 from .loop_domain import induction_name, iteration_domain
 from .precision import AnalysisPrecision
+from .visitor import AnalyzeContext
 
 
 def _positions_at(mesh: Mesh, unit: str, topologies: tuple[Topology, ...]) -> int:
@@ -236,7 +237,11 @@ class IterationScope:
 
 
 class ScopeBuilder:
-    """Build one IterationScope tree and its access views for a Function."""
+    """Build one IterationScope tree and its access views for a Function.
+
+    Scopes record each call's logical relations, whatever level the caller's
+    context reports, so the builder reads through that context without a level.
+    """
 
     def __init__(
         self,
@@ -244,11 +249,16 @@ class ScopeBuilder:
         graph: Function,
         *,
         views: Sequence[str] = ("narrow", "device"),
+        ctx: AnalyzeContext | None = None,
     ) -> None:
         self.graph = graph
         self.topologies = module.effective_topologies()
         self.views = tuple(views)
-        self.type_ctx = CostContext(scope=FunctionScope(module, graph))
+        self.type_ctx = (
+            AnalyzeContext(module, module.resolve_target(), None, None)
+            if ctx is None
+            else replace(ctx, topology_level=None)
+        )
         self.seeds: dict[int, IterationScope]
         self.variance: dict[int, frozenset[int]]
         self.seen: set[int]
@@ -394,9 +404,10 @@ def build_scopes(
     graph: Function,
     *,
     views: Sequence[str] = ("narrow", "device"),
+    ctx: AnalyzeContext | None = None,
 ) -> IterationScope:
     """Build the iteration-scope tree and access views in one normalized walk."""
-    return ScopeBuilder(module, graph, views=views).build()
+    return ScopeBuilder(module, graph, views=views, ctx=ctx).build()
 
 
 def walk_scopes(root: IterationScope) -> Iterator[IterationScope]:

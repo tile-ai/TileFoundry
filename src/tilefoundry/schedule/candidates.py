@@ -10,6 +10,7 @@ import isl
 
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
+from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.inspection import PatternPrinter, PythonPrinter
 from tilefoundry.ir.core import (
     Call,
@@ -47,7 +48,6 @@ from tilefoundry.visitor_registry.candidates import (
     instruction_from_hir,
     sole_candidate,
 )
-from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 
 
 @dataclass(frozen=True)
@@ -87,7 +87,7 @@ def _input_params(op_type: type, operand_count: int | None = None) -> tuple[Para
 
 
 def _site_types(
-    call: Call, ctx: CostContext
+    call: Call, ctx: AnalyzeContext
 ) -> tuple[tuple[TensorType, ...], TensorType]:
     def candidate_type(type_):
         """Project a site unless it is already one indivisible scheduled issue."""
@@ -114,8 +114,8 @@ def _site_types(
     return reads, output
 
 
-def _sites(module, function, ctx: CostContext) -> tuple[_Site, ...]:
-    root = build_scopes(module, function)
+def _sites(module, function, ctx: AnalyzeContext) -> tuple[_Site, ...]:
+    root = build_scopes(module, function, ctx=ctx)
     owners = {identity: scope for scope in walk_scopes(root) for identity in scope.relations}
     sites = []
     for expr in collect_exprs(function.body):
@@ -410,7 +410,7 @@ def candidates(
 ) -> dict[str, Any]:
     """Report instruction candidates for every unscheduled supported HIR site."""
     result = analyze(module, entry, analysis=("memory",), dims=dims)
-    ctx = CostContext(scope=FunctionScope(result.module, result.function))
+    ctx = AnalyzeContext(result.module, result.module.resolve_target(), None, None)
     sites = _sites(result.module, result.function, ctx)
     if not sites:
         raise ValueError("source has no unscheduled candidate site")

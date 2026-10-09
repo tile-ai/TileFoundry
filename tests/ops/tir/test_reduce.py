@@ -13,8 +13,9 @@ import tilefoundry
 import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.core import Call, Var, VerifyError
+from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.kinds import ReduceKind
+from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.reduce import Reduce
@@ -34,8 +35,6 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.target import CpuTarget, CudaTarget
-from tilefoundry.visitor_registry.access_relation import relations_of
-from tilefoundry.visitor_registry.contexts import CostContext
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
@@ -160,8 +159,8 @@ def test_a_workspace_holds_one_slot_per_warp(operands, axes, refused) -> None:
         return
     verify_prim_function(function)
     (statement,) = (stmt for stmt in function.body.body if isinstance(stmt, Evaluate))
-    call = Call(type=UnitType(), target=statement.callable, args=statement.args)
-    reached = relations_of(call, CostContext())[2].relation
+    types = tuple(arg.type for arg in statement.args)
+    reached = operand_relations(statement.callable, types)[2].relation
     source = shape_to_isl_set(tuple(operands[0].shape), {})
     assert reached.is_equal(isl.map.from_domain_and_range(source, isl.set("{ [s] : 0 <= s < 4 }")))
 

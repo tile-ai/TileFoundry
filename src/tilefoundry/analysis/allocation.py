@@ -21,7 +21,6 @@ from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
 from tilefoundry.visitor_registry.access_relation import renaming_relation
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.contexts import CostContext
 
 from .access import Access
 from .errors import AnalysisError
@@ -29,6 +28,7 @@ from .iteration_scope import IterationScope, walk_scopes
 from .liveness import Liveness, storage_source
 from .metadata import ValueLifetime
 from .precision import AnalysisPrecision
+from .visitor import AnalyzeContext
 
 
 class SolverOptions(Protocol):
@@ -84,8 +84,11 @@ class AllocationModel:
     aliased: set[tuple[int, int]] = field(default_factory=set)
 
 
-def storage_owners(root: IterationScope, liveness: Liveness) -> dict[int, Expr]:
+def storage_owners(
+    root: IterationScope, liveness: Liveness, ctx: AnalyzeContext
+) -> dict[int, Expr]:
     """Resolve storage once per value and prove each registered alias once."""
+    logical = replace(ctx, topology_level=None)
     declarations = {key: scope for scope in walk_scopes(root) for key in scope.relations}
     owners: dict[int, Expr] = {}
 
@@ -96,9 +99,8 @@ def storage_owners(root: IterationScope, liveness: Liveness) -> dict[int, Expr]:
         following = storage_source(value, liveness.bindings)
         if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
             operand = value.args[position]
-            ctx = CostContext()
             relation = renaming_relation(
-                value, ctx, declarations[key].projected_relations(value, ctx)
+                value, logical, declarations[key].projected_relations(value, logical)
             ).relation
             box = (
                 shape_to_isl_set(tuple(operand.type.shape), {})

@@ -43,7 +43,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp
+from tilefoundry.ir.hir.schedule import ScheduleOp, operand_relations
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -69,7 +69,6 @@ from tilefoundry.ir.types import (
     ShardLayout,
     StorageKind,
     TensorType,
-    UnitType,
 )
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import levels, starts
@@ -80,7 +79,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
@@ -774,14 +773,12 @@ def test_single_issue_schedule_preserves_instruction_relations() -> None:
     schedule = _copy_schedule_call(repeat=(1,), order=(0,))
     source = schedule.args[0]
     destination_type = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.SMEM)
-    instruction = Call(
-        target=schedule.target.op,
-        args=(source, Var(name="dst", type=destination_type)),
-        type=UnitType(),
+    inferred = TypeInferContext()
+    inference_type(schedule, inferred)
+    scheduled = relations_of(schedule, inferred)
+    source, _destination, *result = operand_relations(
+        schedule.target.op, (source.type, destination_type)
     )
-    ctx = CostContext()
-    scheduled = relations_of(schedule, ctx)
-    source, _destination, *result = relations_of(instruction, ctx)
     single = (source, *result)
     assert len(scheduled) == len(single)
     assert all(

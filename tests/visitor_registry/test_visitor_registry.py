@@ -21,6 +21,7 @@ from tilefoundry.evaluator import eval_registry
 from tilefoundry.ir.core import Call, Constant, Op, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.op_registry import iter_schemas
+from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
 from tilefoundry.ir.types import (
@@ -37,7 +38,6 @@ from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
     local_relations_of,
     reached_elements,
-    relations_of,
 )
 from tilefoundry.visitor_registry.contexts import (
     CostContext,
@@ -130,7 +130,7 @@ def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough(
     else:
         VerifyVisitor(VerifyContext()).visit(stmt)
         call = Call(type=UnitType(), target=Copy(), args=(src_var, dst_var))
-        written = relations_of(call, CostContext())[1]
+        written = operand_relations(Copy(), (src, dst))[1]
         assert written.relation.is_equal(isl.map(reached))
         held = local_relations_of(call, CostContext(topology_level="thread", topologies=(_THREAD,)))
         operands = held[: len(call.args)]

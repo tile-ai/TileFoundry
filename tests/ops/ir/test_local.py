@@ -9,12 +9,12 @@ from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.analysis.api import analyze
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.types import Layout
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
-from tilefoundry.visitor_registry.access_relation import relations_of
-from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
+from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 
 @module(
@@ -39,7 +39,7 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
     )
     assert local.type.shape == (2,)
     assert isinstance(local.type.layout, Layout)
-    relations = relations_of(local, CostContext())
+    relations = operand_relations(local.target, tuple(arg.type for arg in local.args))
     values = (local.args[0].type, local.type)
     for boundary, value in zip(relations, values, strict=True):
         relation = boundary.relation
