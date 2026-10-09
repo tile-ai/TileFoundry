@@ -141,8 +141,8 @@ class TruncatedWaveReuse:
 
     @func
     def view(x: Tensor[(32,), "bf16"]):
-        viewed = x[16:32]
         with Mesh(("thread",), layout=(2,), names=("lane",)) as thread:
+            viewed = x[16:32]
             for _lane in range(thread.lane, thread.lane + 1):
                 viewed = x[0:16]
             return viewed

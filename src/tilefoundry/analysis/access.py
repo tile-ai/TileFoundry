@@ -170,8 +170,7 @@ def eliminate_parameters(
         if term is not None:
             term = term.add_dims(isl.dim_type.IN, rank - term.dim(isl.dim_type.IN))
             inputs = ", ".join(f"i{index}" for index in range(rank))
-            space = f"[{inputs}] -> [{name}]" if rank else f"[{name}]"
-            named = isl.pw_aff(f"[{name}] -> {{ {space} }}")
+            named = isl.pw_aff(f"[{name}] -> {{ [{inputs}] -> [{name}] }}")
             relation = relation.intersect_domain(named.eq_set(term))
         precision = precision.join(resolved_precision)
         param_index = relation.find_dim_by_name(isl.dim_type.PARAM, name)

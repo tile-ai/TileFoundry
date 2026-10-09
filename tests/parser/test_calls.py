@@ -304,11 +304,11 @@ def test_value_less_mesh_region_exposes_multiple_values_through_a_tuple() -> Non
             with Mesh(("cta",), layout=(2,), names=("tile",)) as _mesh:
                 first = tf.relu(x)
                 second = tf.relu(first)
-            return tf.add(first, second)
+            return first, second
 
     body = MultiEscape.entry_function().body
-    assert isinstance(body, Call)
-    first, second = body.args
+    assert isinstance(body, Tuple)
+    first, second = body.elements
     assert isinstance(first, Call) and isinstance(second, Call)
     assert isinstance(first.target, TupleGetItem)
     assert isinstance(second.target, TupleGetItem)
@@ -335,11 +335,9 @@ def test_valueful_mesh_region_also_wraps_escaping_bindings() -> None:
                 value = tf.relu(x)
                 for _index in tile(2, 1):  # noqa: F821
                     value = tf.relu(value)
-            return tf.add(value, x)
+            return value
 
-    body = ValuefulEscape.entry_function().body
-    assert isinstance(body, Call)
-    scoped = body.args[0]
+    scoped = ValuefulEscape.entry_function().body
     assert isinstance(scoped, MeshRegion)
     assert isinstance(scoped.body, LoopRegion)
     assert isinstance(scoped.body.body, Call)

@@ -21,7 +21,7 @@ import pytest
 from tests.fixtures.placed.gqa_decode import GqaOnline
 from tests.fixtures.placed.mha_decode_paged import LongerCache, ShorterCache
 from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
-from tests.models.corpus import ConcreteCase, placed_cases
+from tests.models.corpus import CapabilityGate, ConcreteCase, placed_cases
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import (
     AnalysisPrecision,
@@ -62,9 +62,21 @@ DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 _ALLOCATION_ALIGNMENT = 16
 CASES = placed_cases()
-INVENTORY = [pytest.param(case, id=case.id) for case in CASES]
+_ANALYSIS_GATES = {
+    "data_started_window.MeshStart.probe[static]": CapabilityGate(
+        outcome="BLOCKED", reason="DimMul: no cost evaluator registered for DimMul",
+    ),
+}
+INVENTORY = [
+    pytest.param(
+        case, id=case.id,
+        marks=_ANALYSIS_GATES.get(case.id, CapabilityGate()).expected_failure(expect=AnalysisError),
+    )
+    for case in CASES
+]
 API_INVENTORY = frozenset(
     {
+        "data_started_window.MeshStart.probe[static]",
         "persistent_gemm_tiled.PersistentGemmTiled.gemm[static]",
         "persistent_gemm_flat.PersistentGemmFlat.gemm[static]",
         "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]",
@@ -143,6 +155,8 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
+    "data_started_window.DataStart.probe[static]": {"gmem": 4_384, "rmem": 8, "smem": 256},
+    "data_started_window.MeshStart.probe[static]": {"gmem": 4_384, "rmem": 8, "smem": 256},
     "derived_prefill.DerivedPrefill.prefill[prefill_n=64,topology_only=128]": {
         "gmem": 288,
     },
@@ -674,7 +688,11 @@ def test_every_concrete_program_predicts_coherently(
 def test_every_internal_record_agrees(case: ConcreteCase) -> None:
     """API cases check the same report and the invariants that require scopes."""
     owner, function = case.program()
-    result = analyze(owner, function, analysis=FAMILIES, dims=case.dims)
+    result = _ANALYSIS_GATES.get(case.id, CapabilityGate()).hold(
+        lambda: analyze(owner, function, analysis=FAMILIES, dims=case.dims),
+        expect=AnalysisError,
+        label=case.id,
+    )
     assert result.module is owner
     report = report_data(
         module=result.module,

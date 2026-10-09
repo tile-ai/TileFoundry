@@ -17,6 +17,7 @@ from tilefoundry.ir.core import Call, VerifyError, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.visitor import collect_exprs, expr_children
+from tilefoundry.parser import ParseError
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
@@ -26,6 +27,82 @@ _DIAGNOSTICS = Path(__file__).parents[1] / "fixtures" / "diagnostics"
 
 def _diagnostic(name: str) -> str:
     return (_DIAGNOSTICS / f"{name}.py").read_text()
+
+
+def test_unscoped_initialization_is_rejected_at_the_authored_call() -> None:
+    source = _diagnostic("unscoped_call_loop")
+    line = next(i for i, text in enumerate(source.splitlines(), 1) if "out = tf.zeros" in text)
+    with pytest.raises(ParseError, match="runs outside every mesh scope") as raised:
+        import_dsl(source, "EscapedRebindInLoop")
+    assert f"source.py:{line}:" in str(raised.value)
+    assert "tf.zeros" in str(raised.value)
+    assert "inside with Mesh(...)" in str(raised.value)
+
+
+@pytest.mark.parametrize("after_mesh", (False, True), ids=("before-mesh", "after-mesh"))
+@pytest.mark.parametrize(
+    "expression",
+    ("tf.add(x, x)", "helper(x)", "x + x", "-x", "x @ x", "x[:, :]",
+     "pair[0]", "1 + 2"),
+)
+def test_authored_runtime_expressions_require_a_mesh_scope(
+    expression: str, after_mesh: bool,
+) -> None:
+    outside = f"        result = {expression}\n"
+    mesh = ('        with Mesh(("cta",), (1,), names=("unit",)) as _mesh:\n'
+            '            value = x\n')
+    source = (
+        'from tilefoundry import func, module\n'
+        'from tilefoundry.dsl import Mesh, Tensor, Topology, tf\n'
+        '@func\n'
+        'def helper(x: Tensor[(4, 4), "f32"]):\n'
+        '    return x\n'
+        '@module(entry="run", topologies=(Topology("cta", 1),))\n'
+        'class Unscoped:\n'
+        '    @func\n'
+        '    def run(x: Tensor[(4, 4), "f32"], '
+        'pair: tuple[Tensor[(4, 4), "f32"], Tensor[(4, 4), "f32"]]):\n'
+        + (mesh + outside if after_mesh else outside + mesh)
+        + '        return result\n'
+    )
+    line = next(i for i, text in enumerate(source.splitlines(), 1) if "result =" in text)
+    with pytest.raises(ParseError, match="runs outside every mesh scope") as raised:
+        import_dsl(source, "Unscoped")
+    assert f"source.py:{line}:" in str(raised.value)
+
+
+def test_a_return_expression_after_a_mesh_requires_a_scope() -> None:
+    with pytest.raises(ParseError, match="runs outside every mesh scope"):
+        @module(entry="run", topologies=(Topology("cta", 1),))
+        class UnscopedReturn:
+            @func
+            def run(x: Tensor[(4,), "f32"]):
+                with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+                    value = x
+                return tf.add(value, value)
+
+
+def test_logical_hir_and_tir_calls_remain_unscoped() -> None:
+    logical = import_dsl(
+        'from tilefoundry import func\n'
+        'from tilefoundry.dsl import Tensor, tf\n'
+        '@func\n'
+        'def run(x: Tensor[(4,), "f32"]):\n'
+        '    return tf.add(x, x)\n',
+        "run",
+    )
+    tir = import_dsl(
+        'from tilefoundry import prim_func\n'
+        'from tilefoundry.dsl import Mesh, Tensor, Topology, T\n'
+        '@prim_func\n'
+        'def run(x: Tensor[(4,), "f32"]):\n'
+        '    ptr = T.ptr_of(x)\n'
+        '    with Mesh((Topology("thread", 1),), (1,), names=("unit",)) as _mesh:\n'
+        '        value = T.ptr_of(x)\n'
+        '    ptr2 = T.ptr_of(x)\n',
+        "run",
+    )
+    assert logical.body is not None and tir.body is not None
 
 
 def test_a_layout_finer_than_the_running_scope_is_rejected() -> None:

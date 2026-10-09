@@ -81,6 +81,17 @@ inside either a MeshRegion or LoopRegion but bound outside it are captured as
 carry slots first and excludes its own induction and carry names from captures.
 Capture is performed one region boundary at a time, so nested regions pass a
 value through each door.
+
+In an authored HIR function that opens a mesh, every authored runtime Call
+runs inside a mesh scope. This includes operation and function calls, operator
+expressions, tensor slices, and explicit tuple subscripts, even for UMAT scalar
+results. An unscoped Call raises `ParseError` at its source expression and directs
+the author to move it inside `with Mesh(...)`. Function parameters, Python
+constants, compile-time mesh declarations, and parser-generated result projections
+do not require an execution scope. A function-level `mesh=` covers the whole body.
+HIR functions that open no mesh remain logical programs; TIR is unaffected by
+this restriction.
+
 When a captured name denotes a tile window `slice(iv, iv + step, 1)`, the parser
 captures the induction Expr and reconstructs the window with its new parameter.
 Tile windows support `window ± c` (translate start/stop), `window * c`, and `c * window`
