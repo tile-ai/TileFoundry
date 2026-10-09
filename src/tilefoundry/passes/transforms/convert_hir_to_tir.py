@@ -250,6 +250,7 @@ class Lowering(ExprVisitor[Expr]):
         self.owner_cursors: dict[int, _Cursor] = {}
         self.bindings: dict[int, Expr] = {}
         self.output_windows: dict[int, Call] = {}
+        self.insert_targets: dict[int, Expr] = {}
         self.output_seed: Call | None = None
         self.output_initialized = False
         self.authored_values: dict[int, Expr] = {}
@@ -545,7 +546,14 @@ class Lowering(ExprVisitor[Expr]):
             result = Tuple(init, type=TupleType(tuple(value.type for value in init)))
         return result
 
-    def _dim(self, value) -> Expr:
+    def _dim(self, value, cursor: _Cursor | None = None) -> Expr:
+        """One dimension or address term as TIR.
+
+        Constants, mesh coordinates and dim arithmetic are addresses computed where they
+        are read. A value some op produces -- an index loaded into a register -- is
+        lowered like any other value when a cursor is given, so the term reads the
+        register that holds it rather than the authored expression that made it.
+        """
         number = static_dim_value(value)
         if number is not None:
             return i64_const(number)
@@ -566,9 +574,13 @@ class Lowering(ExprVisitor[Expr]):
                 raise LoweringError(
                     f"dimension uses unsupported binary operation {value.target.kind}"
                 )
-            return simplify_dim(dim_op, tuple(self._dim(arg) for arg in value.args))
+            return simplify_dim(dim_op, tuple(self._dim(arg, cursor) for arg in value.args))
         if isinstance(value, Call) and is_dim_op_call(value):
-            return Call(value.target, tuple(self._dim(arg) for arg in value.args), type=value.type)
+            return Call(
+                value.target, tuple(self._dim(arg, cursor) for arg in value.args), type=value.type
+            )
+        if isinstance(value, Call) and cursor is not None and id(value) not in self._memo:
+            return self.visit(value, cursor)
         if isinstance(value, Expr):
             return self._known(value)
         raise LoweringError(f"dimension {value!r} is not lowerable")
@@ -630,9 +642,9 @@ class Lowering(ExprVisitor[Expr]):
         base = self.visit(call.args[0], cursor)
         starts_arg = call.args[1]
         starts = (
-            tuple(self._dim(value) for value in starts_arg.elements)
+            tuple(self._dim(value, cursor) for value in starts_arg.elements)
             if isinstance(starts_arg, Tuple)
-            else (self._dim(starts_arg),)
+            else (self._dim(starts_arg, cursor),)
         )
         if any(stride != 1 for stride in call.target.strides):
             raise LoweringError(f"{_label(call)} has a strided Slice, which is not contiguous")
@@ -719,6 +731,12 @@ class Lowering(ExprVisitor[Expr]):
         if (
             isinstance(destination_root, Call)
             and isinstance(destination_root.target, Zeros)
+            and destination_root.type.storage is not StorageKind.GMEM
+        ):
+            return self._insert_into_staged(call, cursor)
+        if (
+            isinstance(destination_root, Call)
+            and isinstance(destination_root.target, Zeros)
             and destination_root.type.storage is StorageKind.GMEM
         ):
             self._ensure_output_seed(destination_root)
@@ -762,6 +780,43 @@ class Lowering(ExprVisitor[Expr]):
             desired=desired,
         )
         return self.output
+
+    def _insert_into_staged(self, call: Call, cursor: _Cursor) -> Expr:
+        """Write one update into its window of a staged (smem or rmem) buffer.
+
+        A scheduled transfer producing the update writes straight into that window,
+        as one producing a slice of the function output does; any other update is
+        copied there. The buffer is the result, so a loop carrying it keeps one.
+        """
+        target = self.visit(call.args[0], cursor)
+        update_root = self._material_root(call.args[1])
+        if (
+            update_root is call.args[1]
+            and isinstance(update_root, Call)
+            and isinstance(update_root.target, ScheduleOp)
+            and isinstance(update_root.type, TensorType)
+            and update_root.type.storage is target.type.storage
+        ):
+            self.insert_targets[id(call)] = target
+            self.output_windows[id(update_root)] = call
+            self.visit(call.args[1], cursor)
+            return target
+        update = self.visit(call.args[1], cursor)
+        self._emit_copy(
+            update,
+            target,
+            cursor,
+            starts=self._insert_starts(call, target, cursor),
+            sizes=tuple(update.type.shape),
+            desired=replace(update.type, storage=target.type.storage),
+        )
+        return target
+
+    def _insert_starts(self, write: Call, target: Expr, cursor: _Cursor) -> tuple[Expr, ...]:
+        offsets = write.args[2]
+        if isinstance(offsets, Tuple):
+            return tuple(self._dim(value, cursor) for value in offsets.elements)
+        return (self._dim(offsets, cursor), *(i64_const(0) for _ in target.type.shape[1:]))
 
     def _insert_target(
         self,
@@ -852,6 +907,16 @@ class Lowering(ExprVisitor[Expr]):
 
     def _output_window(self, write: Call, desired: TensorType, cursor: _Cursor) -> Expr:
         assert self.output is not None
+        staged = self.insert_targets.get(id(write))
+        if staged is not None:
+            return self._window(
+                staged,
+                self._insert_starts(write, staged, cursor),
+                tuple(desired.shape),
+                replace(desired, storage=staged.type.storage),
+                cursor,
+                "window",
+            )
         offsets = write.args[2]
         starts_ = (
             tuple(self._dim(value) for value in offsets.elements)
