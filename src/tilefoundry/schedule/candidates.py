@@ -98,7 +98,9 @@ def _site_types(
     output = candidate_type(call.type)
     if not all(isinstance(type_, TensorType) for type_ in (*reads, output)):
         raise ValueError(f"{type(call.target).__name__} candidate site is not tensor-valued")
-    relations = relations_of(call, ctx)
+    relations = relations_of(
+        call, replace(ctx, memo={id(arg): (arg, arg.type) for arg in call.args})
+    )
     same_coordinates = (
         len(reads) == 1
         and len(relations) == 2
@@ -155,7 +157,9 @@ def _relation_shape(boundary) -> tuple[int, tuple[int | None, ...]]:
 def _site_relation_shape(site: _Site) -> tuple:
     args = tuple(Var(name=name, type=type_) for name, type_ in site.reads)
     call = Call(target=site.call.target, args=args, type=site.leaves[0][1])
-    relations = relations_of(call, TypeInferContext())
+    relations = relations_of(
+        call, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in args})
+    )
     return (
         tuple(_relation_shape(boundary) for boundary in relations[: len(args)]),
         tuple(_relation_shape(boundary) for boundary in relations[len(args) :]),
@@ -189,7 +193,9 @@ def _instruction_relation_shape(site: _Site, op) -> tuple | None:
         return None
     args = tuple(Var(name=f"operand{index}", type=type_) for index, type_ in enumerate(types))
     call = Call(target=op, args=args, type=UnitType())
-    relations = relations_of(call, TypeInferContext())
+    relations = relations_of(
+        call, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in args})
+    )
     params = _input_params(type(op), len(site.reads))
     operands = relations[: len(args)]
     reads = tuple(

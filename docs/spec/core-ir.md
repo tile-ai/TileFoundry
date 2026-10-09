@@ -77,19 +77,16 @@ class Module:
     declares the `Target` and the ordered `Topology` hierarchy.
   - a `Module` owns its child subtree. Placing a child that already belongs to
     another owner MUST NOT change what the first owner's subtree resolves.
-  - a child declares no Target, so its bodies are typed before it has one. When
-    a `@module` class body that declares a Target is built, every function in its
-    child subtree, specialization variants included, MUST be typed again in its
-    owned scope and those types stored on the IR. Region parameters are typed
-    from their current entry values ([hir §1.2](./hir.md#12-loopregion)), so a
-    type an earlier typing stored on them does not constrain this one. Each
-    function is typed once without storing types before it is typed again to
-    store them; a function that fails to type MUST leave every `Expr.type` as it
-    was. A `Module` built any other way is not typed again.
+  - a child declares no Target, so its bodies are typed without one, and
+    holding it does not type them again. A call of a child function is typed
+    from the callee body under the caller's effective Target with the call's
+    own argument types ([hir §1.1](./hir.md#11-function)); that writes the
+    caller's `Call.type` and nothing in the child.
   - a `@module` class body that places a child another owner already holds
     places an independent `cloned()` copy, detached from that owner, so its
-    calls reach the copy and typing it leaves the first owner's subtree as it
-    was. The copy keeps the ownership inside its own subtree.
+    calls reach the copy and the child resolves this owner's Target without
+    changing what the first owner's subtree resolves. The copy keeps the
+    ownership inside its own subtree.
   - `owns(function)` MUST use identity and accept the Module's direct functions
     and their specialization variants. With `derived=True`, it MUST also follow
     a rebuilt function's recorded origin

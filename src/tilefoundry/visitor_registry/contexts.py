@@ -97,9 +97,16 @@ class TypeInferContext:
         )
 
     def type_of(self, expr: Expr) -> Type:
-        """Read a bound type from this scope, falling back to the node type."""
+        """The type this inference derived or bound for *expr*.
+
+        Inference reads only its own memo: a type stored on the node by an
+        earlier walk is not an input, so a value this walk never reached is an
+        error rather than a stale answer.
+        """
         hit = self.memo.get(id(expr))
-        return hit[1] if hit is not None else expr.type
+        if hit is None:
+            self.error(expr, "this inference has no type for the value; it was not visited")
+        return hit[1]
 
     def local_type_of(self, expr: Expr) -> Type:
         """Read an expression type without topology projection."""
@@ -135,6 +142,10 @@ class VerifyContext(TypeInferContext):
 
     mesh_scope: tuple = ()
 
+    def type_of(self, expr: Expr) -> Type:
+        """The type the checked IR already holds: a check reads, it does not infer."""
+        return expr.type
+
 
 @dataclass
 class CostContext(TypeInferContext):
@@ -152,7 +163,7 @@ class CostContext(TypeInferContext):
 
     def type_of(self, expr: Expr) -> Type:
         selected = self.selected_types.get(id(expr))
-        return selected if selected is not None else super().type_of(expr)
+        return selected if selected is not None else expr.type
 
     def local_type_of(self, expr: Expr) -> Type:
         """Return ``expr``'s Type in this context's topology window."""

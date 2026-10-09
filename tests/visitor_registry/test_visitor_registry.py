@@ -130,7 +130,9 @@ def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough(
     else:
         VerifyVisitor(VerifyContext()).visit(stmt)
         call = Call(type=UnitType(), target=Copy(), args=(src_var, dst_var))
-        written = relations_of(call, TypeInferContext())[1]
+        written = relations_of(
+            call, TypeInferContext(memo={id(a): (a, a.type) for a in call.args})
+        )[1]
         assert written.relation.is_equal(isl.map(reached))
         held = local_relations_of(call, CostContext(topology_level="thread", topologies=(_THREAD,)))
         operands = held[: len(call.args)]

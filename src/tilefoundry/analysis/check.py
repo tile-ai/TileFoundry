@@ -47,7 +47,7 @@ from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
-from tilefoundry.visitor_registry.typeinfer import inference_type
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts
@@ -586,10 +586,8 @@ def check_program(
             f"inlining {function.name!r} needs a non-negative integer node budget, got {budget!r}"
         )
     derived = InlineCloner(module, function, budget).clone()
-    inference_type(
-        derived,
-        TypeInferContext(scope=FunctionScope(module, derived)),
-        ranges=True,
+    TypeInferVisitor(ranges=True).visit(
+        derived, TypeInferContext(scope=FunctionScope(module, derived))
     )
     _require_concrete_geometry(module, derived, error_type=AnalysisError)
     target = module.resolve_target()

@@ -1106,7 +1106,9 @@ class Lowering(ExprVisitor[Expr]):
             (base, keys),
             type=cut_type,
         )
-        inferred = typeinfer_registry.lookup(Slice)(cut, TypeInferContext())
+        inferred = typeinfer_registry.lookup(Slice)(
+            cut, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in (base, *starts)})
+        )
         cut.type = getattr(inferred, "type", inferred)
         pointer = Call(PtrOf(), (cut,), type=PointerType(held.dtype, held.storage))
         view = Call(

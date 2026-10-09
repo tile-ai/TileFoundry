@@ -235,8 +235,14 @@ nothing of that kind rather than guessing.
     a derived Function into the IR.
   - The two tables have opposite lifetimes: `memo` is replaced at a Function
     boundary, while `instantiated_memo` is shared by the complete traversal.
-  - `type_of` only looks up `memo` and otherwise returns `expr.type`; it never
-    starts a traversal or infers a type on demand.
+  - `TypeInferContext.type_of` only looks up `memo`: a type stored on the node
+    by an earlier walk is never an input, and a value this inference has not
+    visited or bound is an error through `ctx.error`. It never starts a
+    traversal or infers a type on demand. A caller that hands a rule or an
+    access relation already typed IR binds those inputs in `memo` itself.
+  - `VerifyContext.type_of` and `CostContext.type_of` read IR that is already
+    typed, so they return `expr.type`; `CostContext` reads a selected type
+    first.
   - `local_type_of` is the same read in a context without a topology window;
     contexts with a window override it to project the read type.
 

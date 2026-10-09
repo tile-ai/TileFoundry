@@ -100,12 +100,12 @@ class _PersistentScheduleExpectation:
 EXPECTED_MEMORY_PEAKS = {
     "child_matmul_target.ChildMatmul.run[static]": {
         "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
-        "rmem": 0,
+        "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
     "child_matmul_target.ChildMatmulDirect.direct[static]": {
         "gmem": 64 * 64 * 2 + 64 * 32 * 2,
-        "rmem": 0,
+        "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
     "child_matmul_target.ChildMatmulRoot.child.run[static]": {
@@ -151,11 +151,11 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 128 * 4,
         "smem": 2 * 128 * 64 * 2 + 1_044,
     },
-    "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 128},
+    "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 8 * 2 + 8 * 2},
     "fused_boundary.FusedBoundary.inner.scale[static]": {"rmem": 256},
     "fused_boundary.FusedBoundary.root[static]": {
         "gmem": 512,
-        "rmem": 128,
+        "rmem": 8 * 2 + 8 * 4,
         "smem": 32,
     },
     "fused_boundary.FusedBoundary.stage[static]": {"smem": 64},

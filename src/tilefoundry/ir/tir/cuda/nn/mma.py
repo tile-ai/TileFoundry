@@ -122,7 +122,9 @@ def operand_relations(
     )
     call = Call(target=op, args=args, type=UnitType())
     try:
-        relations = relations_of(call, TypeInferContext())
+        relations = relations_of(
+            call, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in args})
+        )
     except ValueError as error:
         raise ValueError(
             f"{op.atom.reference_name} has no registered operand access relation: {error}"

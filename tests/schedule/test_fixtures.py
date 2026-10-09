@@ -779,7 +779,9 @@ def test_single_issue_schedule_preserves_instruction_relations() -> None:
         args=(source, Var(name="dst", type=destination_type)),
         type=UnitType(),
     )
-    ctx = TypeInferContext()
+    ctx = TypeInferContext(
+        memo={id(a): (a, a.type) for a in (*schedule.args, *instruction.args)}
+    )
     scheduled = relations_of(schedule, ctx)
     source, _destination, *result = relations_of(instruction, ctx)
     single = (source, *result)

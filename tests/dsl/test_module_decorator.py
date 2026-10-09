@@ -255,15 +255,14 @@ def test_one_shared_child_binds_once_per_owner():
 
 
 def test_a_held_child_takes_its_own_owners_target_types():
-    """A child is typed under the root that holds it, and only that root.
+    """A root types its own calls of a child under its Target; the child keeps its body.
 
-    The children declare no Target, so each on-chip matmul and the accumulator
-    it carries round the loop, in a plain function or a specialization variant,
-    are undecided (umat) until a CUDA root holds them as f32 register tiles; a
-    root call that receives the tile directly is typed the same. Placing the
-    held children under a CPU root types independent copies that the CPU root's
-    own calls reach, and the CUDA root's subtree keeps its types. Printing the
-    CUDA root and importing it back keeps the inherited Target and the storage.
+    The children declare no Target, so their matmuls and loop accumulators,
+    variants included, stay umat wherever they are held. A CUDA root's call of
+    the direct child is an f32 register tile and a CPU root's, on its own copy,
+    shared memory; neither writes into a child. A roundtrip keeps the inherited
+    Target and the call's storage, and a call the Target refuses fails where the
+    root makes it, leaving the child's types as they were.
     """
     from tests._source import import_dsl  # noqa: PLC0415
     from tests.fixtures.placed.child_matmul_target import (  # noqa: PLC0415
@@ -288,6 +287,21 @@ def test_a_held_child_takes_its_own_owners_target_types():
                         found.extend(p.type.storage for p in expr.params if p.name == "acc")
         return found
 
+    def stored_types(owner):
+        exprs = [
+            expr
+            for function in owner.functions
+            for variant in (function, *function.variants)
+            for expr in collect_exprs(variant.body)
+        ]
+        params = [
+            param
+            for expr in exprs
+            if isinstance(expr, (LoopRegion, MeshRegion))
+            for param in expr.params
+        ]
+        return [(expr, expr.type) for expr in (*exprs, *params)]
+
     def call_storage(owner, name):
         (function,) = (function for function in owner.functions if function.name == name)
         return function.body.type.storage
@@ -297,8 +311,9 @@ def test_a_held_child_takes_its_own_owners_target_types():
     held = ChildMatmulRoot.modules
     for child in held:
         assert child.target is None and child.resolve_target() is ChildMatmulRoot.target
-        assert storages(child) == [StorageKind.RMEM] * 3
+        assert storages(child) == [StorageKind.UMAT] * 3
     assert call_storage(ChildMatmulRoot, "gemm_on_chip") is StorageKind.RMEM
+    before = [stored_types(child) for child in held]
 
     @module(entry="gemm", target=CpuTarget(), topologies=(Topology("cta", 1),))
     class _CpuRoot:
@@ -317,11 +332,12 @@ def test_a_held_child_takes_its_own_owners_target_types():
             return staged(a, b)  # noqa: F821 -- class-body binding
 
     copies = _CpuRoot.modules
-    for copy_, original in zip(copies, held, strict=True):
+    for copy_, original, types in zip(copies, held, before, strict=True):
         assert copy_ is not original and copy_._parent is _CpuRoot and copy_.target is None
-        assert storages(copy_) == [StorageKind.SMEM] * 3
-        assert storages(original) == [StorageKind.RMEM] * 3
+        assert storages(copy_) == [StorageKind.UMAT] * 3
+        assert all(expr.type is stored for expr, stored in types)
     assert call_storage(_CpuRoot, "gemm_on_chip") is StorageKind.SMEM
+    assert call_storage(ChildMatmulRoot, "gemm_on_chip") is StorageKind.RMEM
     callees = [
         expr.target
         for function in _CpuRoot.functions
@@ -334,7 +350,7 @@ def test_a_held_child_takes_its_own_owners_target_types():
     imported = import_dsl(as_script(ChildMatmulRoot), "ChildMatmulRoot")
     for child in imported.modules:
         assert child.target is None and child.resolve_target() == ChildMatmulRoot.target
-        assert storages(child) == [StorageKind.RMEM] * 3
+        assert storages(child) == [StorageKind.UMAT] * 3
     assert call_storage(imported, "gemm_on_chip") is StorageKind.RMEM
 
     @module(entry="run", topologies=(Topology("cta", 1),))
@@ -353,31 +369,24 @@ def test_a_held_child_takes_its_own_owners_target_types():
                     )
                 return tf.reshard(acc, (M, N), "gmem")
 
-    def stored_types(owner):
-        exprs = [
-            expr
-            for function in owner.functions
-            for variant in (function, *function.variants)
-            for expr in collect_exprs(variant.body)
-        ]
-        params = [
-            param
-            for expr in exprs
-            if isinstance(expr, (LoopRegion, MeshRegion))
-            for param in expr.params
-        ]
-        return [(expr, expr.type) for expr in (*exprs, *params)]
-
     parsed = stored_types(_Refused)
     refused = _Refused
     with pytest.raises(VerifyError, match="no nvidia.h200_sxm MMA reads lhs f32 smem"):
 
-        @module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+        @module(
+            entry="call",
+            target=CudaTarget("nvidia.h200_sxm"),
+            topologies=(Topology("cta", 1),),
+        )
         class _RefusingRoot:
-            _Refused = refused
+            child = refused
+
+            @func
+            def call(a: Tensor[(M, K), "f32"], b: Tensor[(K, N), "f32"]):
+                return child(a, b)  # noqa: F821 -- class-body binding
 
     assert storages(_Refused) == [StorageKind.UMAT] * 3
-    assert all(expr.type is held for expr, held in parsed)
+    assert all(expr.type is stored for expr, stored in parsed)
 
 
 def test_forward_reference_sibling_fails_loudly():

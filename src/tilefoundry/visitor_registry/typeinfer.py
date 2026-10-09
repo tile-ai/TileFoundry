@@ -308,27 +308,7 @@ def inference_type(
     )
 
 
-def retype_children(owner) -> None:
-    """Write the types *owner*'s Target gives into the bodies of the children it holds.
-
-    A child declares no Target, so its body was typed before it had one. Once a
-    root that declares a Target holds it, every function in the child subtree,
-    variants included, is typed again in its owned scope from its entry values,
-    and the result is stored on the IR. Each function is typed first without
-    storing anything, so a function that fails to type is left as it was.
-    """
-    for child in owner.modules:
-        for function in child.functions:
-            if not isinstance(function, Function):
-                continue
-            scope = FunctionScope(child, function)
-            TypeInferVisitor(owns_body=False).visit(function, TypeInferContext(scope=scope))
-            TypeInferVisitor(owns_body=True).visit(function, TypeInferContext(scope=scope))
-        retype_children(child)
-
-
 __all__ = [
     "TypeInferVisitor",
     "inference_type",
-    "retype_children",
 ]

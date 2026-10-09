@@ -1227,7 +1227,6 @@ class ModuleBuildContext:
             topologies=self.topologies,
             methods=methods,
         )
-        from tilefoundry.visitor_registry.typeinfer import retype_children  # noqa: PLC0415
         from tilefoundry.visitor_registry.verify import (  # noqa: PLC0415
             verify_function,
             verify_prim_function,
@@ -1243,16 +1242,14 @@ class ModuleBuildContext:
                 )
             elif isinstance(function, runtime.PrimFunction):
                 verify_prim_function(function, module_fns=result)
-        if result.target is not None:
-            retype_children(result)
         return result
 
 
 def _unshared(child, name: str):
     """The child this build will hold, independent of any other owner.
 
-    The owner being built re-types its children's bodies under its own Target,
-    which must not reach into a subtree another owner resolves. A child another
+    A child resolves its Target through the owner that holds it, and placing it
+    here must not change what another owner's subtree resolves. A child another
     owner already holds is therefore copied and detached from that owner; the
     copy keeps the ownership inside its own subtree.
     """

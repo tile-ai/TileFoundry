@@ -161,7 +161,8 @@ def test_a_workspace_holds_one_slot_per_warp(operands, axes, refused) -> None:
     verify_prim_function(function)
     (statement,) = (stmt for stmt in function.body.body if isinstance(stmt, Evaluate))
     call = Call(type=UnitType(), target=statement.callable, args=statement.args)
-    reached = relations_of(call, TypeInferContext())[2].relation
+    inputs = TypeInferContext(memo={id(a): (a, a.type) for a in call.args})
+    reached = relations_of(call, inputs)[2].relation
     source = shape_to_isl_set(tuple(operands[0].shape), {})
     assert reached.is_equal(isl.map.from_domain_and_range(source, isl.set("{ [s] : 0 <= s < 4 }")))
 

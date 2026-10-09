@@ -1208,7 +1208,10 @@ class AnalysisCheckContext:
 - constraints:
   - The operation MUST infer types over the full reachable Function graph and
     validate its caller/callee execution context, and MUST NOT run an analysis
-    or attach derived Metadata to the authored IR.
+    or attach derived Metadata to the authored IR. The inlined view it returns
+    is its own copy: its types are inferred and stored on it under the
+    program's Target and arguments, so analyses read that view's `Expr.type`
+    rather than a stamp of a shared child body.
   - The reachable Function and Mesh geometry and every effective Module
     topology extent MUST be concrete before this operation runs. A public
     Analyze call with `dims` MUST resolve all three through one binding pass

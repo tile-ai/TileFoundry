@@ -99,9 +99,10 @@ def test_carrying_loop_propagates_split(formal, actual, yielded, extent, yields,
     A loop-phi ``acc`` starts at ``x + x`` and adds the captured ``x``, or
     carries the captured ``y`` when ``yielded`` is given. Region parameters take
     the current entry type, not their parse-time stamp, so a split actual for
-    the layout-free formal ``x`` reaches the phi and the call's result. The
-    entry type is the result even with no iteration; a yield must fit the entry
-    and does not narrow it ([hir §1.2](docs/spec/hir.md#12-loopregion)).
+    the layout-free formal ``x`` reaches the phi and the call's result; no
+    stamp, the entry's included, is read as an input. The entry type is the
+    result even with no iteration; a yield must fit the entry and does not
+    narrow it ([hir §1.2](docs/spec/hir.md#12-loopregion)).
     """
     stamped = make_tensor_type((8,), DType.i32)
     y_formal = formal if yielded is None else yielded
@@ -129,7 +130,7 @@ def test_carrying_loop_propagates_split(formal, actual, yielded, extent, yields,
         step=1,
     )
     f = Function.build(name="carry", params=(x, y), body=grid, return_type=formal)
-    region = (acc, captured_x, captured_y, unused, grid)
+    region = (init, acc, captured_x, captured_y, unused, grid)
     actual_y = actual if yielded is None else yielded
 
     if error is not None:
@@ -140,7 +141,7 @@ def test_carrying_loop_propagates_split(formal, actual, yielded, extent, yields,
     assert infer_call(f, actual, actual_y) == actual
     assert all(expr.type is stamped for expr in region)
     TypeInferVisitor().visit(f, TypeInferContext())
-    assert [expr.type for expr in region] == [formal, formal, y_formal, formal, formal]
+    assert [expr.type for expr in region] == [formal, formal, formal, y_formal, formal, formal]
 
 
 def test_explicit_sharded_formal_constrains_its_actual():

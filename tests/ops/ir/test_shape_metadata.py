@@ -62,7 +62,7 @@ def test_shape_metadata_cost(case):
     args = tuple(Var(type=type_, name=f"x{i}") for i, type_ in enumerate(case.inputs))
     call = Call(type=case.inputs[0], target=case.op, args=args)
     call = replace(call, type=TypeInferVisitor().visit(call, TypeInferContext()))
-    relations = relations_of(call, TypeInferContext())
+    relations = relations_of(call, TypeInferContext(memo={id(a): (a, a.type) for a in args}))
     values = (*case.inputs, call.type)
     for boundary, value in zip(relations, values, strict=True):
         assert boundary.relation.dim(isl.dim_type.OUT) == len(value.shape)

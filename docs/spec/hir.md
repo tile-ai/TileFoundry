@@ -133,7 +133,9 @@ consistent across construction sites.
 visitor memo with the actual argument types bound to the callee's formal
 parameters, then walking the callee body in a child context. This is type
 inference only: it does not rebuild a `Function`, mutate the target, or create
-a per-call instance.
+a per-call instance. The callee body is read under the caller's effective
+Target and none of its nodes is written; only a walk that owns the caller's
+body stores the result on the caller's `Call`.
 Caller-supplied layout (sharding) flowing into a layout-unconstrained
 parameter propagates through the body, including through a `Tuple` or
 `LoopRegion` return.

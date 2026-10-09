@@ -96,7 +96,7 @@ def storage_owners(root: IterationScope, liveness: Liveness) -> dict[int, Expr]:
         following = storage_source(value, liveness.bindings)
         if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
             operand = value.args[position]
-            ctx = TypeInferContext()
+            ctx = TypeInferContext(memo={id(arg): (arg, arg.type) for arg in value.args})
             relation = renaming_relation(
                 value, ctx, declarations[key].projected_relations(value, ctx)
             ).relation

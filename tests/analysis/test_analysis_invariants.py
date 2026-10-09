@@ -130,8 +130,9 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
 
     held = make_tensor_type((4,), DType.f32)
     call = Call(type=held, target=Unstated(), args=(Var(type=held, name="x"),))
+    typed = {id(expr): (expr, expr.type) for expr in (*call.args, call)}
     with pytest.raises(ValueError, match="Unstated states no access relations"):
-        relations_of(call, TypeInferContext())
+        relations_of(call, TypeInferContext(memo=typed))
 
     walked = AccessRelation(isl.map("{ [d0] -> [d0] : 0 <= d0 < 4 }"))
     for stated, asked, message in (
@@ -148,7 +149,7 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
         access_relation_registry.register(Unstated, lambda call, ctx, stated=stated: stated)
         try:
             with pytest.raises(ValueError, match=message):
-                asked(call, TypeInferContext())
+                asked(call, TypeInferContext(memo=typed))
         finally:
             del access_relation_registry._map[Unstated]
 

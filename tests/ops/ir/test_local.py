@@ -39,7 +39,7 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
     )
     assert local.type.shape == (2,)
     assert isinstance(local.type.layout, Layout)
-    relations = relations_of(local, TypeInferContext())
+    relations = relations_of(local, TypeInferContext(memo={id(a): (a, a.type) for a in local.args}))
     values = (local.args[0].type, local.type)
     for boundary, value in zip(relations, values, strict=True):
         relation = boundary.relation
