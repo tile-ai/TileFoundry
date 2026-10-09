@@ -60,80 +60,87 @@ def test_plain_formal_specializes_per_call_site():
     assert infer_call(f, _PLAIN).layout is None
 
 
+_PLAIN8 = make_tensor_type((8,), _F)
 _SPLIT8 = make_shard_tensor_type((8,), mesh=_M, attrs=(Split(0),))
 _UMAT8 = make_tensor_type((8,), storage="umat")
 _RMEM8 = make_tensor_type((8,), storage="rmem")
 
 
 @pytest.mark.parametrize(
-    ("entry", "yielded", "extent", "yields", "error"),
+    ("formal", "actual", "yielded", "extent", "yields", "error"),
     [
-        (_SPLIT8, _SPLIT8, 8, 1, None),
-        (_UMAT8, _RMEM8, 8, 1, None),
-        (_UMAT8, _RMEM8, 0, 1, None),
+        (_PLAIN8, _SPLIT8, None, 8, 1, None),
+        (_UMAT8, _UMAT8, _RMEM8, 8, 1, None),
+        (_UMAT8, _UMAT8, _RMEM8, 0, 1, None),
         (
+            _RMEM8,
             _RMEM8,
             make_tensor_type((8,), storage="smem"),
             8,
             1,
             "LoopRegion yield 0 type mismatch for param 'acc'",
         ),
+        (_PLAIN8, _PLAIN8, make_tensor_type((8,), DType.f16), 8, 1, "yield 0 type mismatch"),
+        (_PLAIN8, _PLAIN8, make_tensor_type((4,)), 8, 1, "yield 0 type mismatch"),
         (
-            make_tensor_type((8,)),
-            make_tensor_type((8,), DType.f16),
-            8,
-            1,
-            "yield 0 type mismatch",
-        ),
-        (make_tensor_type((8,)), make_tensor_type((4,)), 8, 1, "yield 0 type mismatch"),
-        (
+            _SPLIT8,
             _SPLIT8,
             make_shard_tensor_type((8,), mesh=_M, attrs=(Broadcast(),)),
             8,
             1,
             "yield 0 type mismatch",
         ),
-        (make_tensor_type((8,)), make_tensor_type((8,)), 8, 4, "yields 4 values but has 3 params"),
+        (_PLAIN8, _PLAIN8, _PLAIN8, 8, 5, "yields 5 values but has 4 params"),
     ],
 )
-def test_carrying_loop_propagates_split(entry, yielded, extent, yields, error):
+def test_carrying_loop_propagates_split(formal, actual, yielded, extent, yields, error):
     """Test carrying loop propagates split.
 
-    A callee whose body is a loop-phi ``LoopRegion`` carrying ``acc`` from the
-    entry ``x`` and yielding the captured ``y``: every region parameter takes
-    its type from the current entry value, not the type stamped on it when it
-    was parsed, and the loop's result is the entry type even when no iteration
-    runs ([hir §1.2](docs/spec/hir.md#12-loopregion)). A yield must fit the
-    entry it carries into, and a more specific yield does not narrow it.
+    A loop-phi ``acc`` starts at ``x + x`` and adds the captured ``x``, or
+    carries the captured ``y`` when ``yielded`` is given. Region parameters take
+    the current entry type, not their parse-time stamp, so a split actual for
+    the layout-free formal ``x`` reaches the phi and the call's result. The
+    entry type is the result even with no iteration; a yield must fit the entry
+    and does not narrow it ([hir §1.2](docs/spec/hir.md#12-loopregion)).
     """
-    stamped = make_tensor_type((8,), _F)
-    x = Var(type=entry, name="x")
-    y = Var(type=yielded, name="y")
+    stamped = make_tensor_type((8,), DType.i32)
+    y_formal = formal if yielded is None else yielded
+    x = Var(type=formal, name="x")
+    y = Var(type=y_formal, name="y")
+    init = Call(type=stamped, target=Binary(kind=BinaryKind.ADD), args=(x, x))
     acc = Var(type=stamped, name="acc")
+    captured_x = Var(type=stamped, name="x")
     captured_y = Var(type=stamped, name="y")
     unused = Var(type=stamped, name="unused")
+    if yielded is None:
+        body = Call(type=stamped, target=Binary(kind=BinaryKind.ADD), args=(acc, captured_x))
+        yield_values = (body,)
+    else:
+        body = captured_y
+        yield_values = (captured_y,) * yields
     grid = LoopRegion(
         type=stamped,
         induction_var=Var(type=make_tensor_type((), DType.i64), name="i"),
-        params=(acc, captured_y, unused),
-        args=(x, y, x),
-        body=captured_y,
-        yield_values=(captured_y,) * yields,
+        params=(acc, captured_x, captured_y, unused),
+        args=(init, x, y, x),
+        body=body,
+        yield_values=yield_values,
         extent=extent,
         step=1,
     )
-    f = Function.build(name="carry", params=(x, y), body=grid, return_type=stamped)
-    region = (acc, captured_y, unused, grid)
+    f = Function.build(name="carry", params=(x, y), body=grid, return_type=formal)
+    region = (acc, captured_x, captured_y, unused, grid)
+    actual_y = actual if yielded is None else yielded
 
     if error is not None:
         with pytest.raises(VerifyError, match=error):
-            infer_call(f, entry, yielded)
+            infer_call(f, actual, actual_y)
         assert all(expr.type is stamped for expr in region)
         return
-    assert infer_call(f, entry, yielded) == entry
+    assert infer_call(f, actual, actual_y) == actual
     assert all(expr.type is stamped for expr in region)
     TypeInferVisitor().visit(f, TypeInferContext())
-    assert [expr.type for expr in region] == [entry, yielded, entry, entry]
+    assert [expr.type for expr in region] == [formal, formal, y_formal, formal, formal]
 
 
 def test_explicit_sharded_formal_constrains_its_actual():
