@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from enum import Enum
 from math import prod
 from typing import Any, Mapping
 
@@ -30,7 +29,7 @@ from tilefoundry.ir.pattern import (
     between_rules,
     declared_execution_mesh,
 )
-from tilefoundry.ir.pattern.utils import tensor_field_refusals, variants
+from tilefoundry.ir.pattern.utils import variants
 from tilefoundry.ir.types import TensorType, UnitType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.int_tuple import flatten
@@ -206,31 +205,6 @@ def _instruction_relation_shape(site: _Site, op) -> tuple | None:
     return reads, writes
 
 
-def _field_name(value) -> str:
-    return getattr(value, "name", str(value)).lower()
-
-
-def _field_refusals(
-    name: str, pattern: TensorPattern, type_: TensorType, bindings: dict
-) -> tuple[str, ...]:
-    """Say which of *type_*'s dtype and storage *pattern* refuses, in report words.
-
-    The text names the whole field the declaration states, not the inner
-    pattern node the matcher stopped at.
-    """
-    printer = PatternPrinter()
-    refused = []
-    for field, _refusal in tensor_field_refusals(pattern, type_, bindings):
-        wanted = getattr(pattern, field)
-        if isinstance(wanted, Enum) or hasattr(wanted, "name") and not hasattr(wanted, "match"):
-            written = _field_name(wanted)
-        else:
-            written = printer.written(wanted, field)
-        actual = _field_name(getattr(type_, field))
-        refused.append(f"{name} {field}={actual}, reads {field}={written}")
-    return tuple(refused)
-
-
 def _site_integer_parameter_values(param: ParamDef, site: _Site) -> tuple:
     if param.annotation is not int:
         return ()
@@ -320,10 +294,7 @@ def _type_refusals(
     matcher = PatternMatcher(bindings)
     if matcher.match(simplified, single) and matcher.solve():
         return single, ()
-    refused = list(_field_refusals(name, simplified, single, bindings))
-    if not refused:
-        refused.append(f"{name}: {PatternPrinter().refusal(matcher.refusal)}")
-    return single, tuple(refused)
+    return single, (f"{name}: {PatternPrinter().refusal(matcher.refusal)}",)
 
 
 def _whole_tiles(site: _Site, op, variant) -> bool:
@@ -344,27 +315,6 @@ def _whole_tiles(site: _Site, op, variant) -> bool:
         ):
             return False
     return True
-
-
-def _pattern_refusals(site: _Site, op, variant) -> tuple[str, ...]:
-    bindings = dict(getattr(variant, "bindings", {}))
-    asked = _asked(site, op)
-    if asked is None:
-        return ("operand counts differ",)
-    given = {}
-    refused = []
-    for param, whole in asked:
-        pattern = _operand_pattern(param, op, bindings)
-        if pattern is None:
-            refused.append(f"{param.name} states no tensor pattern")
-            continue
-        simplified = replace(pattern, layout=None)
-        refused.extend(_field_refusals(param.name, simplified, whole, bindings))
-        given[param.name] = whole
-    for rule in between_rules(type(op)):
-        if rule.field in ("storage", "dtype") and not rule.holds(given):
-            refused.append(rule.refused(given))
-    return tuple(refused)
 
 
 def _asked(site: _Site, op) -> tuple[tuple[ParamDef, TensorType], ...] | None:
@@ -495,11 +445,8 @@ def candidates(
             accepted, reasons, needs = [], [], []
             for variant, binding in instances:
                 held = _instantiate(op_type, capability, variant)
-                if not _whole_tiles(site, held, variant):
-                    reasons.append(_pattern_refusals(site, held, variant))
-                    continue
                 rejected = _refusals(site, held, variant)
-                if rejected:
+                if rejected or not _whole_tiles(site, held, variant):
                     reasons.append(rejected)
                     continue
                 accepted.append(_written_bindings(binding))

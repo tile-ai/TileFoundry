@@ -17,7 +17,7 @@ from tilefoundry.ir.hir.nn.matmul import (
     matmul_result_shape_and_layout,
 )
 from tilefoundry.ir.pattern import PatternMatcher
-from tilefoundry.ir.pattern.utils import selected_pattern, tensor_field_refusals, variants
+from tilefoundry.ir.pattern.utils import selected_pattern, variants
 from tilefoundry.ir.types import DType, StorageKind, TensorType
 from tilefoundry.target import CudaTarget, Target
 from tilefoundry.visitor_registry import register_typeinfer
@@ -37,6 +37,11 @@ def _mma_declarations(target: Target) -> tuple[type, ...]:
     )
 
 
+def _matches(pattern, value, configuration: dict) -> bool:
+    matcher = PatternMatcher(configuration)
+    return bool(matcher.match(pattern, value) and matcher.solve())
+
+
 def _result_storages(
     target: Target, lhs: TensorType, rhs: TensorType, dtype: DType
 ) -> set[StorageKind]:
@@ -47,13 +52,14 @@ def _result_storages(
                 selected_pattern(getattr(declaration, role), configuration)
                 for role in ("A", "B", "C")
             )
-            matcher = PatternMatcher(configuration)
-            if (
-                not tensor_field_refusals(a, lhs, configuration)
-                and not tensor_field_refusals(b, rhs, configuration)
-                and matcher.match(c.dtype, dtype)
-                and matcher.solve()
-            ):
+            fields = (
+                (a.dtype, lhs.dtype),
+                (a.storage, lhs.storage),
+                (b.dtype, rhs.dtype),
+                (b.storage, rhs.storage),
+                (c.dtype, dtype),
+            )
+            if all(_matches(pattern, value, configuration) for pattern, value in fields):
                 storages.add(c.storage)
     return storages
 

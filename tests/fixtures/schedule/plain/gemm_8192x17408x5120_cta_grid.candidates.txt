@@ -4,14 +4,14 @@ target nvidia.h200_sxm
     candidate   T.copy_async
     candidate   T.copy_async_tensor  needs thread p0:p0+32, p0 % 32 = 0
     candidate   T.copy
-    refused     T.ldmatrix: dst storage=smem, reads storage=rmem
-    refused     T.ldmatrix: src storage=gmem, reads storage=smem
+    refused     T.ldmatrix: dst: <StorageKind.SMEM: 3> does not match StorageKind.RMEM
+    refused     T.ldmatrix: src: <StorageKind.GMEM: 2> does not match StorageKind.SMEM (dtype0=bf16)
   v4:35  tf.reshard  per cta  x=Tensor[(64, 256), "bf16"]  result=Tensor[(64, 256), "bf16", "smem"]
     candidate   T.copy_async
     candidate   T.copy_async_tensor  needs thread p0:p0+32, p0 % 32 = 0
     candidate   T.copy
-    refused     T.ldmatrix: dst storage=smem, reads storage=rmem
-    refused     T.ldmatrix: src storage=gmem, reads storage=smem
+    refused     T.ldmatrix: dst: <StorageKind.SMEM: 3> does not match StorageKind.RMEM
+    refused     T.ldmatrix: src: <StorageKind.GMEM: 2> does not match StorageKind.SMEM (dtype0=bf16)
   v5:36  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", "smem"]  rhs=Tensor[(64, 256), "bf16", "smem"]
     candidate   T.cuda.sm90.Wgmma  needs thread p0:p0+256, p0 % 128 = 0
                   n=8, dtype=bf16, form=SS
@@ -20,26 +20,26 @@ target nvidia.h200_sxm
                   n=64, dtype=bf16, form=SS
                   n=128, dtype=bf16, form=SS
                   n=256, dtype=bf16, form=SS
-    refused     T.cuda.sm80.Mma: lhs storage=smem, reads storage=rmem
-    refused     T.cuda.sm80.Mma: rhs storage=smem, reads storage=rmem
+    refused     T.cuda.sm80.Mma: lhs: <StorageKind.SMEM: 3> does not match StorageKind.RMEM
+    refused     T.cuda.sm80.Mma: rhs: <StorageKind.SMEM: 3> does not match StorageKind.RMEM
   v6:37  tf.reshard  per cta  x=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "f32", "rmem"]
     candidate   T.copy
-    refused     T.copy_async: dst storage=rmem, reads storage=smem
-    refused     T.copy_async: src storage=rmem, reads storage=gmem
+    refused     T.copy_async: dst: <StorageKind.RMEM: 4> does not match StorageKind.SMEM (dtype1=f32)
     refused     T.copy_async: src.storage=rmem dst.storage=rmem, reads src.storage != dst.storage
+    refused     T.copy_async: src: <StorageKind.RMEM: 4> does not match StorageKind.GMEM (dtype0=f32)
     refused     T.copy_async_tensor: dst: could not satisfy storage1 in {StorageKind.GMEM, StorageKind.SMEM} (dtype1=f32, storage1=RMEM)
     refused     T.copy_async_tensor: src.storage=rmem dst.storage=rmem, reads src.storage != dst.storage
     refused     T.copy_async_tensor: src: could not satisfy storage0 in {StorageKind.GMEM, StorageKind.SMEM} (dtype0=f32, storage0=RMEM)
-    refused     T.ldmatrix: dst dtype=f32, reads dtype=bf16
-    refused     T.ldmatrix: src storage=rmem, reads storage=smem
+    refused     T.ldmatrix: dst: FloatDType(name='f32', bit_width=32, exponent_bits=8, mantissa_bits=23) does not match bf16
+    refused     T.ldmatrix: src: <StorageKind.RMEM: 4> does not match StorageKind.SMEM (dtype0=f32)
   v7:37  tf.binary  per cta  lhs=Tensor[(128, 256), "f32", "rmem"]  rhs=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "f32", "rmem"]
     default     T.binary
   v8:38  tf.cast  per cta  x=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "bf16", "rmem"]
     default     T.cast
   v9:38  tf.reshard  per cta  x=Tensor[(128, 256), "bf16", "rmem"]  result=Tensor[(128, 256), "bf16"]
     candidate   T.copy
-    refused     T.copy_async: dst storage=gmem, reads storage=smem
-    refused     T.copy_async: src storage=rmem, reads storage=gmem
+    refused     T.copy_async: dst: <StorageKind.GMEM: 2> does not match StorageKind.SMEM (dtype1=bf16)
+    refused     T.copy_async: src: <StorageKind.RMEM: 4> does not match StorageKind.GMEM (dtype0=bf16)
     refused     T.copy_async_tensor: src: could not satisfy storage0 in {StorageKind.GMEM, StorageKind.SMEM} (dtype0=bf16, storage0=RMEM)
-    refused     T.ldmatrix: dst storage=gmem, reads storage=rmem
-    refused     T.ldmatrix: src storage=rmem, reads storage=smem
+    refused     T.ldmatrix: dst: <StorageKind.GMEM: 2> does not match StorageKind.RMEM
+    refused     T.ldmatrix: src: <StorageKind.RMEM: 4> does not match StorageKind.SMEM (dtype0=bf16)

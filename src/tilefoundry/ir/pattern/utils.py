@@ -20,7 +20,7 @@ from tilefoundry.ir.types.stride import compact_row_major
 
 from . import predicates as P
 from .constraint import DistinctConstraint
-from .match import PatternMatcher, Refusal, between_rules, evaluated
+from .match import PatternMatcher, between_rules, evaluated
 from .pattern import (
     AndPattern,
     ComposedLayoutPattern,
@@ -224,25 +224,6 @@ def _finite_options(param: ParamDef, values) -> tuple | None:
     return None if values is None else values(param)
 
 
-def tensor_field_refusals(
-    pattern: TensorPattern,
-    type_: TensorType,
-    bindings: dict,
-) -> tuple[tuple[str, Refusal | None], ...]:
-    """The dtype and storage fields of *type_* that *pattern* refuses under *bindings*.
-
-    Each field is matched on its own copy of *bindings*, so no capture leaks
-    between fields or into the caller's dict. A refused field comes back with
-    the matcher's evidence; an empty tuple means both fields match.
-    """
-    refused = []
-    for field in ("dtype", "storage"):
-        matcher = PatternMatcher(bindings)
-        if not (matcher.match(getattr(pattern, field), getattr(type_, field)) and matcher.solve()):
-            refused.append((field, matcher.refusal))
-    return tuple(refused)
-
-
 def fixed_pattern_value(value, bindings: dict):
     """Resolve one declaration value when every symbolic leaf is bound."""
     if isinstance(value, tuple):
@@ -400,7 +381,6 @@ __all__ = [
     "_mangle_variant_name",
     "declared_execution_mesh",
     "dtype_place",
-    "tensor_field_refusals",
     "variants",
     "locate_dim_var",
     "operand_tile",
