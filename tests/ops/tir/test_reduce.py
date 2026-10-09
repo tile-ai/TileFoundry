@@ -35,7 +35,7 @@ from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.visitor_registry.access_relation import relations_of
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import CostContext
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
@@ -161,8 +161,7 @@ def test_a_workspace_holds_one_slot_per_warp(operands, axes, refused) -> None:
     verify_prim_function(function)
     (statement,) = (stmt for stmt in function.body.body if isinstance(stmt, Evaluate))
     call = Call(type=UnitType(), target=statement.callable, args=statement.args)
-    inputs = TypeInferContext(memo={id(a): (a, a.type) for a in call.args})
-    reached = relations_of(call, inputs)[2].relation
+    reached = relations_of(call, CostContext())[2].relation
     source = shape_to_isl_set(tuple(operands[0].shape), {})
     assert reached.is_equal(isl.map.from_domain_and_range(source, isl.set("{ [s] : 0 <= s < 4 }")))
 

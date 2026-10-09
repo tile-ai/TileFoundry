@@ -14,7 +14,6 @@ from tilefoundry.inspection import PatternPrinter, PythonPrinter
 from tilefoundry.ir.core import (
     Call,
     OpCapability,
-    Var,
     get_metadata,
     op_identifier,
     value_label,
@@ -22,6 +21,7 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
+from tilefoundry.ir.hir.schedule import _single_issue_relations
 from tilefoundry.ir.pattern import (
     PatternMatcher,
     SwitchPattern,
@@ -30,7 +30,7 @@ from tilefoundry.ir.pattern import (
     declared_execution_mesh,
 )
 from tilefoundry.ir.pattern.utils import variants
-from tilefoundry.ir.types import TensorType, UnitType
+from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.utils import try_local_type_of
@@ -47,7 +47,7 @@ from tilefoundry.visitor_registry.candidates import (
     instruction_from_hir,
     sole_candidate,
 )
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 
 
 @dataclass(frozen=True)
@@ -87,7 +87,7 @@ def _input_params(op_type: type, operand_count: int | None = None) -> tuple[Para
 
 
 def _site_types(
-    call: Call, ctx: TypeInferContext
+    call: Call, ctx: CostContext
 ) -> tuple[tuple[TensorType, ...], TensorType]:
     def candidate_type(type_):
         """Project a site unless it is already one indivisible scheduled issue."""
@@ -98,9 +98,7 @@ def _site_types(
     output = candidate_type(call.type)
     if not all(isinstance(type_, TensorType) for type_ in (*reads, output)):
         raise ValueError(f"{type(call.target).__name__} candidate site is not tensor-valued")
-    relations = relations_of(
-        call, replace(ctx, memo={id(arg): (arg, arg.type) for arg in call.args})
-    )
+    relations = relations_of(call, ctx)
     same_coordinates = (
         len(reads) == 1
         and len(relations) == 2
@@ -116,7 +114,7 @@ def _site_types(
     return reads, output
 
 
-def _sites(module, function, ctx: TypeInferContext) -> tuple[_Site, ...]:
+def _sites(module, function, ctx: CostContext) -> tuple[_Site, ...]:
     root = build_scopes(module, function)
     owners = {identity: scope for scope in walk_scopes(root) for identity in scope.relations}
     sites = []
@@ -155,14 +153,11 @@ def _relation_shape(boundary) -> tuple[int, tuple[int | None, ...]]:
 
 
 def _site_relation_shape(site: _Site) -> tuple:
-    args = tuple(Var(name=name, type=type_) for name, type_ in site.reads)
-    call = Call(target=site.call.target, args=args, type=site.leaves[0][1])
-    relations = relations_of(
-        call, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in args})
-    )
+    reads = tuple(type_ for _name, type_ in site.reads)
+    relations = _single_issue_relations(site.call.target, reads)
     return (
-        tuple(_relation_shape(boundary) for boundary in relations[: len(args)]),
-        tuple(_relation_shape(boundary) for boundary in relations[len(args) :]),
+        tuple(_relation_shape(boundary) for boundary in relations[: len(reads)]),
+        tuple(_relation_shape(boundary) for boundary in relations[len(reads) :]),
     )
 
 
@@ -191,13 +186,9 @@ def _instruction_relation_shape(site: _Site, op) -> tuple | None:
     types = _instruction_operands(site, op)
     if types is None:
         return None
-    args = tuple(Var(name=f"operand{index}", type=type_) for index, type_ in enumerate(types))
-    call = Call(target=op, args=args, type=UnitType())
-    relations = relations_of(
-        call, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in args})
-    )
+    relations = _single_issue_relations(op, types)
     params = _input_params(type(op), len(site.reads))
-    operands = relations[: len(args)]
+    operands = relations[: len(types)]
     reads = tuple(
         _relation_shape(boundary)
         for param, boundary in zip(params, operands, strict=True)
@@ -419,7 +410,7 @@ def candidates(
 ) -> dict[str, Any]:
     """Report instruction candidates for every unscheduled supported HIR site."""
     result = analyze(module, entry, analysis=("memory",), dims=dims)
-    ctx = TypeInferContext(scope=FunctionScope(result.module, result.function))
+    ctx = CostContext(scope=FunctionScope(result.module, result.function))
     sites = _sites(result.module, result.function, ctx)
     if not sites:
         raise ValueError("source has no unscheduled candidate site")

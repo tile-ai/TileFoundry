@@ -14,7 +14,7 @@ from tilefoundry.ir.types import Layout
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import relations_of
-from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
+from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
 
 
 @module(
@@ -39,7 +39,7 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
     )
     assert local.type.shape == (2,)
     assert isinstance(local.type.layout, Layout)
-    relations = relations_of(local, TypeInferContext(memo={id(a): (a, a.type) for a in local.args}))
+    relations = relations_of(local, CostContext())
     values = (local.args[0].type, local.type)
     for boundary, value in zip(relations, values, strict=True):
         relation = boundary.relation

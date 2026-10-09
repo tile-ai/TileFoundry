@@ -18,14 +18,14 @@ from tilefoundry.ir.types.dim import DimSub, simplify_dim
 from tilefoundry.ir.types.layout import ComposedLayout, get, size
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.ir.visitor import collect_exprs, expr_children
+from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
     access_relation_registry,
     projected,
     relations_of,
 )
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
 
 from .access import Access, resolve_access
 from .errors import AnalysisError
@@ -248,10 +248,7 @@ class ScopeBuilder:
         self.graph = graph
         self.topologies = module.effective_topologies()
         self.views = tuple(views)
-        self.type_ctx = TypeInferContext(
-            scope=FunctionScope(module, graph),
-            memo={id(expr): (expr, expr.type) for expr in collect_exprs(graph.body)},
-        )
+        self.type_ctx = CostContext(scope=FunctionScope(module, graph))
         self.seeds: dict[int, IterationScope]
         self.variance: dict[int, frozenset[int]]
         self.seen: set[int]

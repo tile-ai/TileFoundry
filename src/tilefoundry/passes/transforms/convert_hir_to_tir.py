@@ -36,13 +36,12 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp
+from tilefoundry.ir.hir.schedule import ScheduleOp, _single_issue_relations
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor._view_layout import derive_view_layout
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
-from tilefoundry.ir.tir.cuda.nn.mma import operand_relations
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, For, LetStmt, MeshScope, Sequential
@@ -902,7 +901,7 @@ class Lowering(ExprVisitor[Expr]):
         logical = tuple(self.logical.get(id(value), value.type) for _, value in operands)
         shapes = atom.operand_shapes()
         try:
-            relations = operand_relations(op, logical)
+            relations = _single_issue_relations(op, logical)
             projected = tuple(projected_axes(boundary) for boundary in relations[: len(logical)])
             if any(axis is None for mapped in projected for axis in mapped):
                 raise ValueError(
@@ -916,7 +915,7 @@ class Lowering(ExprVisitor[Expr]):
                 replace(type_, shape=shape)
                 for type_, shape in zip(logical, shapes, strict=True)
             )
-            tile, _ = _iteration_geometry(operand_relations(op, single_types))
+            tile, _ = _iteration_geometry(_single_issue_relations(op, single_types))
         except ValueError as error:
             raise LoweringError(f"{_label(call)} {error}") from error
         if len(whole) != len(tile):

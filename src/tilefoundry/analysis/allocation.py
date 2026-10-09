@@ -21,7 +21,7 @@ from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
 from tilefoundry.visitor_registry.access_relation import renaming_relation
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import CostContext
 
 from .access import Access
 from .errors import AnalysisError
@@ -96,7 +96,7 @@ def storage_owners(root: IterationScope, liveness: Liveness) -> dict[int, Expr]:
         following = storage_source(value, liveness.bindings)
         if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
             operand = value.args[position]
-            ctx = TypeInferContext(memo={id(arg): (arg, arg.type) for arg in value.args})
+            ctx = CostContext()
             relation = renaming_relation(
                 value, ctx, declarations[key].projected_relations(value, ctx)
             ).relation

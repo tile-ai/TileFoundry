@@ -22,7 +22,7 @@ from tilefoundry.ir.types.layout import EMPTY_LAYOUT
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.access_relation import relations_of
-from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
+from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _S = DimVar("runtime_shape", 1, 8)
@@ -62,7 +62,7 @@ def test_shape_metadata_cost(case):
     args = tuple(Var(type=type_, name=f"x{i}") for i, type_ in enumerate(case.inputs))
     call = Call(type=case.inputs[0], target=case.op, args=args)
     call = replace(call, type=TypeInferVisitor().visit(call, TypeInferContext()))
-    relations = relations_of(call, TypeInferContext(memo={id(a): (a, a.type) for a in args}))
+    relations = relations_of(call, CostContext())
     values = (*case.inputs, call.type)
     for boundary, value in zip(relations, values, strict=True):
         assert boundary.relation.dim(isl.dim_type.OUT) == len(value.shape)

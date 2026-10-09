@@ -80,7 +80,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
@@ -779,9 +779,7 @@ def test_single_issue_schedule_preserves_instruction_relations() -> None:
         args=(source, Var(name="dst", type=destination_type)),
         type=UnitType(),
     )
-    ctx = TypeInferContext(
-        memo={id(a): (a, a.type) for a in (*schedule.args, *instruction.args)}
-    )
+    ctx = CostContext()
     scheduled = relations_of(schedule, ctx)
     source, _destination, *result = relations_of(instruction, ctx)
     single = (source, *result)

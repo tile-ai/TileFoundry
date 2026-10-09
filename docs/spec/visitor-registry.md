@@ -238,8 +238,10 @@ nothing of that kind rather than guessing.
   - `TypeInferContext.type_of` only looks up `memo`: a type stored on the node
     by an earlier walk is never an input, and a value this inference has not
     visited or bound is an error through `ctx.error`. It never starts a
-    traversal or infers a type on demand. A caller that hands a rule or an
-    access relation already typed IR binds those inputs in `memo` itself.
+    traversal or infers a type on demand. Only a caller that runs a typeinfer
+    rule itself binds that rule's inputs in `memo`. A shared access relation
+    asks the context it is given: inference passes its own, and code that reads
+    typed IR passes its stage's context (analysis a `CostContext`).
   - `VerifyContext.type_of` and `CostContext.type_of` read IR that is already
     typed, so they return `expr.type`; `CostContext` reads a selected type
     first.
