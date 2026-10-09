@@ -10,10 +10,13 @@ indexing layout positions with the tensor-axis permutation directly.
 
 from __future__ import annotations
 
+import pytest
+
 from tests.ops.ir.typeinfer_utils import (
     infer_call,
     raw_shard_tensor_type,
 )
+from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.types import (
     DType,
@@ -46,6 +49,26 @@ def test_plain_input_produces_a_compact_new_value():
 
     assert ty.layout == Layout(shape=(8, 16), strides=(16, 1))
     assert infer_call(_T10, make_tensor_type((16, 8), DType.bf16)).layout == ty.layout
+
+
+def test_a_view_of_staged_bytes_permutes_their_strides():
+    """A transposed view keeps the source's storage and reads it through permuted strides."""
+    source = make_tensor_type(
+        (64, 32), DType.bf16, layout=Layout(shape=(64, 32), strides=(32, 1)), storage="smem"
+    )
+    ty = infer_call(Transpose(perm=(1, 0), view=True), source)
+
+    assert tuple(ty.shape) == (32, 64)
+    assert ty.layout == Layout(shape=(32, 64), strides=(1, 32))
+    assert ty.storage == source.storage
+
+
+def test_a_view_of_a_register_value_is_refused():
+    """Register values have no addresses to re-address."""
+    source = make_tensor_type((64, 32), DType.bf16, storage="rmem")
+
+    with pytest.raises(VerifyError, match="re-addresses bytes"):
+        infer_call(Transpose(perm=(1, 0), view=True), source)
 
 
 def test_factorized_split_reorders_subaxes():

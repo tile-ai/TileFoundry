@@ -42,6 +42,7 @@ from tilefoundry.visitor_registry.access_relation import (
     projected_axes,
     relations_of,
 )
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import (
     candidate_ops,
     instruction_from_hir,
@@ -127,6 +128,8 @@ def _sites(module, function, ctx: TypeInferContext) -> tuple[_Site, ...]:
         if not instructions:
             continue
         if isinstance(expr.target, HirBinary) and expr.type.shape == ():
+            continue
+        if aliased_operand(expr) is not None:
             continue
         reads, output = _site_types(expr, ctx)
         schema = type(expr.target)._op_schema

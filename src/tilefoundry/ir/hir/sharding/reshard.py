@@ -23,6 +23,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias, same_addresses
 
 
 def _dim_mul(a, b):
@@ -218,6 +219,25 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         layout=new_layout,
         storage=new_storage,
     )
+
+
+def _moves_nothing(call) -> bool:
+    """Whether a shared-memory reshard only regroups its source's addresses.
+
+    Such a reshard is a view: a staged tile named in the grouping an instruction
+    asks for.
+    """
+    source, result = call.args[0].type, call.type
+    return (
+        isinstance(source, TensorType)
+        and isinstance(result, TensorType)
+        and source.storage is StorageKind.SMEM
+        and result.storage is StorageKind.SMEM
+        and same_addresses(tuple(result.shape), source.layout, result.layout)
+    )
+
+
+register_buffer_alias(Reshard, Reshard.x, when=_moves_nothing)
 
 
 @register_eval(Reshard)

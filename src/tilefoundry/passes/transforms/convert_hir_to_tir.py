@@ -77,6 +77,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iteration_universe,
     projected_axes,
 )
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import candidate_ops, sole_candidate
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.registries import typeinfer_registry
@@ -623,6 +624,27 @@ class Lowering(ExprVisitor[Expr]):
             )
         return self._lower_instruction(call, op, cursor)
 
+    def visit_Reshard(self, call: Call, cursor: _Cursor) -> Expr:
+        """A shared-memory reshard that moves no element is a view of its source.
+
+        That is a reshard to another grouping of the same addresses -- the form an
+        instruction pattern asks its operand in. Any other reshard is a transfer an
+        instruction must perform.
+        """
+        if aliased_operand(call) is not None:
+            source = self.visit(call.args[0], cursor)
+            view = self._window(
+                source,
+                tuple(i64_const(0) for _ in source.type.shape),
+                tuple(source.type.shape),
+                call.type,
+                cursor,
+                "view",
+            )
+            self.logical[id(view)] = call.type
+            return view
+        return self._lower_automatic_instruction(call, cursor)
+
     def visit_MeshCoord(self, call: Call, _cursor: _Cursor) -> Expr:
         return self._dim(call)
 
@@ -672,6 +694,17 @@ class Lowering(ExprVisitor[Expr]):
 
     def visit_Transpose(self, call: Call, cursor: _Cursor) -> Expr:
         source = self.visit(call.args[0], cursor)
+        if call.target.view:
+            view = self._window(
+                source,
+                tuple(i64_const(0) for _ in source.type.shape),
+                tuple(source.type.shape),
+                call.type,
+                cursor,
+                "view",
+            )
+            self.logical[id(view)] = call.type
+            return view
         result = self._declare(call, call.type, 1, cursor)
         source_type = self.logical.get(id(source), source.type)
         perm = call.target.perm

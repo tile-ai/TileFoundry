@@ -687,6 +687,12 @@ second presentation of the result.
   MUST remap its split positions through the registered relation with fresh
   strides. Lowering MUST copy the source's permuted-stride view into the new
   result storage.
+- `Transpose(view=True)` is the one exception: its result re-addresses the
+  source's bytes through the source's own strides, permuted, and keeps its
+  storage. Only an addressable (`smem` or `gmem`), undistributed source has bytes
+  to re-address; any other source MUST be refused. It moves no data, allocates
+  nothing, and lowers to a view, so one staged tile can be read in either
+  orientation -- a key tile as `K^T` by `Q @ K^T` and as `V` by `P @ V`.
 - `Slice` is normalized as `Slice(x, starts, sizes=..., strides=...)`.
   `starts` is a tuple of rank-0 integer operands; `sizes` and `strides` are
   `ShapeDim` attributes stored in the same IR normal form as every other dim.
@@ -1553,8 +1559,12 @@ dispatches on `(layout, storage)`:
 
 **Cost classification.** A Reshard whose source and destination storage are
 the same is a zero-copy view and reports zero traffic, including the
-`layout=None` no-op. A Reshard that changes storage is a copy and reports one
-full source read plus one full destination write. Layout changes alone do not
+`layout=None` no-op. In `smem`, a Reshard whose layout puts every coordinate at
+the address the source's layout puts it -- the same swizzle and base offset, the
+modes merely grouped another way -- is also an alias of the source: it allocates
+nothing and lowers to a view. That is how a staged tile is named in the grouping
+an instruction pattern matches. A Reshard that changes storage is a copy and
+reports one full source read plus one full destination write. Layout changes alone do not
 turn a same-storage view into traffic. This follows the same boundary as
 `Slice`, whose consumers account for the data they move, and `Arange`, whose
 coordinates remain synthesized metadata until a consumer materializes them.
