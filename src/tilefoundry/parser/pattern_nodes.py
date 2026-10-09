@@ -3463,6 +3463,21 @@ def _directly_bound_names(statements):
     return frozenset(names)
 
 
+def _rebound_names(statements):
+    """Return names a block leaves bound: its own assignments and its loops' carries.
+
+    A loop that rebinds a name binds it again in the block that holds the loop,
+    to the loop's result, so the block has rebound that name as surely as an
+    assignment would have.
+    """
+    names = set(_directly_bound_names(statements))
+    for statement in statements:
+        if isinstance(statement, (ast.For, ast.AsyncFor)):
+            targets = {name.id for name in ast.walk(statement.target) if isinstance(name, ast.Name)}
+            names.update(_rebound_names(statement.body) - targets)
+    return frozenset(names)
+
+
 def _loaded_names(statements):
     """Return names read in a sequence of following statements."""
     return frozenset(
@@ -3499,7 +3514,7 @@ def _block_escaping_names(statements, *, repeated: bool = False):
     for index in range(len(statements) - 1, -1, -1):
         statement = statements[index]
         if isinstance(statement, ast.With):
-            bound = _directly_bound_names(statement.body)
+            bound = _rebound_names(statement.body)
             reached = set(read_after)
             if repeated:
                 reached.update(_read_before_bound(statement.body))
