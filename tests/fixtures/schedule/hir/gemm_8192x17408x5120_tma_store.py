@@ -29,9 +29,6 @@ class GEMM_8192X17408X5120_TMA_STORE:
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "bf16"]:
-        a_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))))
-        b_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))))
-        out_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout((128, (4, 64)), (64, (8192, 1))))
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
                 ("thread",), layout=(3, 128),
@@ -50,12 +47,12 @@ class GEMM_8192X17408X5120_TMA_STORE:
                             with threads[0, :32] as _loader:
                                 lhs = tf.schedule(
                                     (a[m, k],),
-                                    op=T.copy_async_tensor(smem_layout=a_smem),
+                                    op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)),
                                     buffers=STAGES,
                                 )
                                 rhs = tf.schedule(
                                     (b[k, n],),
-                                    op=T.copy_async_tensor(smem_layout=b_smem),
+                                    op=T.copy_async_tensor(smem_layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3)),
                                     buffers=STAGES,
                                 )
 
@@ -68,7 +65,7 @@ class GEMM_8192X17408X5120_TMA_STORE:
 
                         with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
                             tile_out = tf.cast(acc, dtype="bf16")
-                            staged = tf.schedule((tile_out,), op=T.copy(smem_layout=out_smem))
+                            staged = tf.schedule((tile_out,), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
 
                         with threads[0, :32] as _storer:
                             tile = tf.schedule((staged,), op=T.copy_async_tensor())

@@ -271,7 +271,7 @@ def refine(selection: Mesh, layout: Layout, names: tuple[str, ...]) -> Mesh:
     coordinate_order = compact_row_major(shape)
     stated = layout.strides if layout.strides is not None else coordinate_order
     if len(stated) != len(shape):
-        raise ValueError("refined mesh layout must cover each selected position once")
+        raise ValueError("refined mesh strides must have the rank of its shape")
     if not all(isinstance(step, int) for step in stated):
         raise ValueError("refining a mesh requires static layout strides")
     indices = tuple(

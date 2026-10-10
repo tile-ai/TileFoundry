@@ -281,9 +281,6 @@ class GEMM_8192X17408X5120_OPTIMAL:
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "bf16"]:
-        a_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))))
-        b_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))))
-        out_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout((128, (4, 64)), (64, (8192, 1))))
         with Mesh(("cta",), layout=(CTAS,), names=("persistent",)) as cta:
             with Mesh(
                 ("thread",), layout=(3, 128),
@@ -306,12 +303,12 @@ class GEMM_8192X17408X5120_OPTIMAL:
                                 with threads[0, :32] as _loader:
                                     lhs = tf.schedule(
                                         (a[m:m + BM, k],),
-                                        op=T.copy_async_tensor(smem_layout=a_smem),
+                                        op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)),
                                         buffers=STAGES,
                                     )
                                     rhs = tf.schedule(
                                         (b[k, n:n + BN],),
-                                        op=T.copy_async_tensor(smem_layout=b_smem),
+                                        op=T.copy_async_tensor(smem_layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3)),
                                         buffers=STAGES,
                                     )
 
@@ -325,7 +322,7 @@ class GEMM_8192X17408X5120_OPTIMAL:
                             with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
                                 tile_out = tf.cast(acc, dtype="bf16")
                                 staged = tf.schedule(
-                                    (tile_out,), op=T.copy(smem_layout=out_smem)
+                                    (tile_out,), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3))
                                 )
 
                             with threads[0, :32] as _storer:
@@ -349,7 +346,7 @@ sed -n '1,114p' optimal_tir.py
 ```text
 # analysis target=nvidia.h200_sxm module=GEMM_8192X17408X5120_OPTIMAL function=gemm topology=cta wave=132/132
 # selection requested=memory executed=memory
-# memory traffic=gmem:r192.00MB/w306.00MB@logical,r133.68GB/w39.45GB@total,r1.01GB/w306.00MB@cta,r1.01GB/w306.00MB@thread;rmem:r2.71GB/w2.67GB@logical,r357.29GB/w357.20GB@total,r2.71GB/w2.71GB@cta,r11.51MB/w10.82MB@thread;smem:r1.01GB/w192.00MB@logical,r133.68GB/w133.68GB@total,r1.01GB/w1.01GB@cta,r192.31MB/w1020.07MB@thread footprint=a:256.00KB;b:288.00KB;v27:83:128.00KB;v28:84:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
+# memory traffic=gmem:r192.00MB/w306.00MB@logical,r133.68GB/w39.45GB@total,r1.01GB/w306.00MB@cta,r1.01GB/w306.00MB@thread;rmem:r2.71GB/w2.67GB@logical,r357.29GB/w357.20GB@total,r2.71GB/w2.71GB@cta,r11.51MB/w10.82MB@thread;smem:r1.01GB/w192.00MB@logical,r133.68GB/w133.68GB@total,r1.01GB/w1.01GB@cta,r192.31MB/w1020.07MB@thread footprint=a:256.00KB;b:288.00KB;v27:80:128.00KB;v28:81:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
 
 from __future__ import annotations
 
