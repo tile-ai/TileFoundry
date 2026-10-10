@@ -1094,14 +1094,15 @@ def test_schedule_candidate_reports_cover_every_site(
 
 
 @pytest.mark.parametrize(
-    ("name", "dims", "matmuls", "reshards", "accepted_matmuls"),
+    ("name", "dims", "matmuls", "reshards", "accepted_matmuls", "b_layout"),
     (
-        ("chunk_rmsnorm", ("chunks=16",), 0, 7, 0),
-        ("chunk_rmsnorm", ("chunks=32",), 0, 7, 0),
-        ("fp8_block_scaled_gemm", (), 1, 5, 1),
-        ("gemm_8192x17408x5120_cta_grid", (), 1, 4, 1),
-        ("gemm_relu_gemm_tiled", (), 2, 2, 0),
-        ("gemm_relu_gemm_untiled", (), 2, 0, 0),
+        ("chunk_rmsnorm", ("chunks=16",), 0, 7, 0, "KN"),
+        ("chunk_rmsnorm", ("chunks=32",), 0, 7, 0, "KN"),
+        ("fp8_block_scaled_gemm", (), 1, 5, 1, "KN"),
+        ("gemm_8192x17408x5120_cta_grid", (), 1, 4, 1, "KN"),
+        ("gemm_relu_gemm_tiled", (), 2, 2, 0, "KN"),
+        ("gemm_relu_gemm_untiled", (), 2, 0, 0, "KN"),
+        ("gemm_relu_gemm_untiled", (), 2, 0, 0, "NK"),
     ),
 )
 def test_schedule_candidates_reports_every_plain_site(
@@ -1110,10 +1111,19 @@ def test_schedule_candidates_reports_every_plain_site(
     matmuls: int,
     reshards: int,
     accepted_matmuls: int,
+    b_layout: str,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     source = f"tests/fixtures/schedule/plain/{name}.py"
+    if b_layout == "NK":
+        variant = tmp_path / f"{name}_nk.py"
+        variant.write_text(
+            Path(source).read_text()
+            .replace("tf.matmul(a, b)", 'tf.matmul(a, b, b_layout="NK")')
+            .replace("tf.matmul(y, c)", 'tf.matmul(y, c, b_layout="NK")')
+        )
+        source = str(variant)
     out = tmp_path / f"{name}.json"
 
     assert (
@@ -1132,6 +1142,16 @@ def test_schedule_candidates_reports_every_plain_site(
     assert sum(bool(row["candidates"]) for row in matmul_rows) == accepted_matmuls
     assert all(row["candidates"] or row["refused"] for row in report["lines"])
     assert all(row["candidates"] for row in reshard_rows)
+
+    if b_layout == "NK":
+        for row in matmul_rows:
+            assert row["refused"] == [
+                {
+                    "id": instruction,
+                    "refused": ["rhs axes=(d1, d2), reads axes=(d2, d1)"],
+                }
+                for instruction in ("T.cuda.sm90.Wgmma", "T.cuda.sm80.Mma")
+            ]
 
     if name == "fp8_block_scaled_gemm":
         (matmul,) = matmul_rows

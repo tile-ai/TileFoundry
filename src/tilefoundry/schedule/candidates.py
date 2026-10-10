@@ -205,6 +205,22 @@ def _instruction_relation_shape(site: _Site, op) -> tuple | None:
     return reads, writes
 
 
+def _axis_refusals(site: _Site, site_shape: tuple, instruction_shape: tuple) -> list[str]:
+    def axes(shape):
+        names = tuple("None" if axis is None else f"d{axis}" for axis in shape[1])
+        return "(" + ", ".join(names) + ("," if len(names) == 1 else "") + ")"
+
+    refused = []
+    for operands, actual, required, effect in zip(
+        (site.reads, site.leaves), site_shape, instruction_shape, ("reads", "writes"),
+        strict=True,
+    ):
+        for (name, _type), source, instruction in zip(operands, actual, required, strict=True):
+            if source != instruction:
+                refused.append(f"{name} axes={axes(source)}, {effect} axes={axes(instruction)}")
+    return refused
+
+
 def _site_integer_parameter_values(param: ParamDef, site: _Site) -> tuple:
     if param.annotation is not int:
         return ()
@@ -435,7 +451,16 @@ def candidates(
                 continue
             prototype, _binding = instances[0]
             op = _instantiate(op_type, capability, prototype)
-            if _instruction_relation_shape(site, op) != site_shape:
+            instruction_shape = _instruction_relation_shape(site, op)
+            if instruction_shape is None:
+                continue
+            if instruction_shape != site_shape:
+                refused.append(
+                    {
+                        "id": op_identifier(capability.declaration or op_type),
+                        "refused": _axis_refusals(site, site_shape, instruction_shape),
+                    }
+                )
                 continue
             if any(
                 param.effect == MemoryEffect.WRITE

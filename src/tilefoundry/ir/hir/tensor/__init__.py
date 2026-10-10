@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .arange import Arange
 from .argmax import ArgMax
+from .bitcast import Bitcast
 from .cache_update import CacheUpdate
 from .cast import Cast
 from .concat import Concat
@@ -28,6 +29,7 @@ from .zeros import Zeros
 __all__ = [
     "Arange",
     "ArgMax",
+    "Bitcast",
     "CacheUpdate",
     "Cast",
     "Concat",

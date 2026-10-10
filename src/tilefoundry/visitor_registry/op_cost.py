@@ -33,6 +33,7 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
+from tilefoundry.ir.hir.tensor.bitcast import Bitcast
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.hir.tensor.concat import Concat
@@ -546,6 +547,11 @@ def _reshape(call: Call, ctx: CostContext) -> Cost:
 def _transpose(call: Call, ctx: CostContext) -> Cost:
     moved = tensor_bytes(_output_type(call, ctx))
     return Cost({}, (TrafficBytes(read=moved), TrafficBytes(write=moved)))
+
+
+@register_cost_evaluator(Bitcast)
+def _bitcast(call: Call, ctx: CostContext) -> Cost:
+    return Cost({}, _idle(call))
 
 
 def _split_axes(type_) -> "dict[int, int] | None":

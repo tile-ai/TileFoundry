@@ -699,6 +699,21 @@ second presentation of the result.
   MUST remap its split positions through the registered relation with fresh
   strides. Lowering MUST copy the source's permuted-stride view into the new
   result storage.
+- `Bitcast(x, layout)` reinterprets the same bytes with a new shape and layout,
+  preserving the input dtype and storage. `layout` is a `LayoutBase`; the result
+  shape is the product of the nested sizes in each top-level layout mode.
+  Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
+  components, with strides stated in every `Layout` component. Both shapes MUST
+  be literal and have the same element count. Both address functions MUST be
+  injective, and every result address MUST belong to the source address set,
+  using the complete colex address functions including composed swizzles.
+  Type inference MUST reject violations and identify the failing end and rule.
+  Broadcast or overlapping layouts MUST NOT be bitcast. The result-to-source
+  coordinate relation MUST pair equal addresses, forming a bijection. Bitcast
+  MUST alias the source buffer, incur zero traffic, lower to a tensor view,
+  and have no instruction candidate. Evaluation MUST reorder values by these
+  same address functions. For a row-major `(N, K)` tensor, a bitcast with
+  `Layout((K, N), (1, K))` expresses the same bytes as `(K, N)` for `Q @ K^T`.
 - `Slice` is normalized as `Slice(x, starts, sizes=..., strides=...)`.
   `starts` is a tuple of rank-0 integer operands; `sizes` and `strides` are
   `ShapeDim` attributes stored in the same IR normal form as every other dim.

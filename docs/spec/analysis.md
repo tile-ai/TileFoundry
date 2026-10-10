@@ -490,6 +490,10 @@ are monotonic across the whole Function, including nested and sibling regions.
     two layouts map every colex coordinate to the same address. An
     address-changing, storage-changing, or sharded Reshard MUST
     retain its independent lifetime.
+  - Bitcast MUST alias its source and allocate no independent buffer. Its
+    declared access relation MUST bijectively map result coordinates to source
+    coordinates with the same physical address, preserving the source's
+    lifetime and recording zero traffic.
   - A caller-owned parameter MUST NOT be reused. Donation is a contract with
     the caller, not a conclusion this family may draw.
 
