@@ -40,8 +40,8 @@ class GpuPlacedRows:
     def copy_rows_device(a: Tensor[(ROWS, COLS), "f32"], out: Tensor[(ROWS, COLS), "f32"]):
         with Mesh(
             (Topology("gpu", GPUS), Topology("cta", CTAS), Topology("thread", THREADS)),
-            Layout(shape=(GPUS, CTAS, THREADS), strides=(CTAS * THREADS, THREADS, 1)),
-            ("g", "c", "t"),
+            layout=(GPUS, CTAS, THREADS),
+            names=("g", "c", "t"),
         ) as m:
             rows = _split_rows(m)
             source = T.tensor_view(T.ptr_of(a), layout=rows)

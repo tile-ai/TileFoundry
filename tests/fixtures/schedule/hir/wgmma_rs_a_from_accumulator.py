@@ -41,7 +41,7 @@ class WGMMA_RS_A_FROM_ACCUMULATOR:
                     n=16, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
                 register = T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.RS)
 
-                with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                     p = tf.zeros(Tensor[(M, N0), "f32", ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 2), (1, 8, 16, 64, 128, 512)), "rmem"])
 
                 for k in tf.tile(K, BK):
@@ -57,13 +57,13 @@ class WGMMA_RS_A_FROM_ACCUMULATOR:
                             buffers=STAGES,
                         )
 
-                    with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                    with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                         p = tf.schedule(
                             (p, lhs, rhs),
                             op=T.tiled_mma(atom=shared),
                         )
 
-                with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                     value = tf.cast(p, dtype="bf16")
                     acc = tf.zeros(Tensor[(M, N1), "f32", ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 4), (1, 8, 16, 64, 128, 512)), "rmem"])
 
@@ -75,12 +75,12 @@ class WGMMA_RS_A_FROM_ACCUMULATOR:
                             buffers=STAGES,
                         )
 
-                    with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                    with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                         acc = tf.schedule(
                             (acc, value, rhs),
                             op=T.tiled_mma(atom=register),
                         )
 
-                with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                     result = tf.cast(acc, dtype="bf16")
                 return result

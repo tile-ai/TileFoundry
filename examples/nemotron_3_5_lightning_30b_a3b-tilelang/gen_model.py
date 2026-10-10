@@ -451,7 +451,6 @@ from tilefoundry import func, module
 from tilefoundry.dsl import (  # noqa: F401
     ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf,
 )
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare op bindings
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 

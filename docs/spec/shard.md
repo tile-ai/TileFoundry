@@ -281,25 +281,6 @@ the ones they are XORed onto
 
 ## 5. `Mesh`
 
-In a kernel, `with Mesh(selection, layout=shape, names=names) as selected`
-rearranges a lexical mesh selection into new axes. The selection may be a
-constant slice and MUST name one topology level. The new shape MUST hold the
-same number of positions. Positions are numbered in the selection's row-major
-order, and each new axis MUST advance by one fixed physical stride throughout
-that selection. Noncontiguous selections are allowed when this condition holds.
-The topology and selection offset are preserved. Physical strides are computed
-by `composition(selection_layout, layout, major="row")`. `layout=(shape, strides)` specifies
-strides in the selection's row-major numbering, rather than physical strides.
-Omitted strides use row-major numbering. Stated strides MUST have the rank of
-the shape, or parsing reports `mesh selection strides must have the rank of its shape`.
-The layout MUST cover each index in
-`[0, size)` exactly once, or parsing reports
-`mesh selection layout must cover each selected position once`. Every new axis
-MUST still map to a fixed physical stride. Extent-one axes may be omitted.
-Selection composition requires static positive extents and static selection strides.
-The resulting mesh remains lexical and uses a `ComposedLayout`; slicing that
-mesh retains the existing already-sliced-mesh rejection.
-
 ```python
 class Topology:
     """Describe one parallel-resource level.
@@ -367,6 +348,10 @@ Field meanings:
   constant slice (`m[...]`) replaces it with a `ComposedLayout` recording the
   sub-box ([tir §1.5](./tir.md#15-sync))
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
+
+In a kernel, `with Mesh(selection, layout=shape, names=names)` rearranges a lexical, single-level selection.
+`layout=(shape, strides)` states selection-local numbering (row-major by default); it MUST cover every selected position once, with one fixed physical stride per axis.
+Composition preserves topology and offset; slicing the resulting composed mesh is rejected.
 
 Every mesh MUST state one arrangement per level it names, each in that level's
 own numbering, as one nested `Layout` whose mode `i` is level `i` -- a mesh

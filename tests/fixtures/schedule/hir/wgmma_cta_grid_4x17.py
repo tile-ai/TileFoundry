@@ -36,7 +36,7 @@ class WGMMA_CTA_GRID_4X17:
                 wgmma = T.cuda.sm90.Wgmma(
                     n=16, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
-                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                     acc = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 2), (1024, 1, 8, 16, 64, 128, 512)), "rmem"])
 
                 for k in tf.tile(K, BK):
@@ -52,12 +52,12 @@ class WGMMA_CTA_GRID_4X17:
                             buffers=STAGES,
                         )
 
-                    with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
+                    with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                         acc = tf.schedule(
                             (acc, lhs, rhs),
                             op=T.tiled_mma(atom=wgmma),
                         )
 
-                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                     result = tf.cast(acc, dtype="bf16")
                 return result

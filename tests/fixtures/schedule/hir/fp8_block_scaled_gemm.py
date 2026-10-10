@@ -29,7 +29,7 @@ class FP8_BLOCK_SCALED_GEMM:
     @func
     def gemm(
         a: Tensor[(M, K), "fp8e4m3"],
-        b: Tensor[(K, N), "fp8e4m3", Layout((K, N), (1, K))],
+        b: Tensor[(K, N), "fp8e4m3", ((K, N), (1, K))],
         a_scale: Tensor[(M, K_BLOCKS), "f32"],
         b_scale: Tensor[(K_BLOCKS, N_BLOCKS), "f32"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
@@ -40,7 +40,7 @@ class FP8_BLOCK_SCALED_GEMM:
             ) as threads:
                 wgmma = T.cuda.sm90.Wgmma(n=128, dtype="fp8e4m3", form=T.cuda.sm90.Form.SS)
 
-                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                     acc = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 16), (8192, 1, 8, 16, 64, 128, 512)), "rmem"])
 
                 for kb in range(K_BLOCKS):
@@ -56,7 +56,7 @@ class FP8_BLOCK_SCALED_GEMM:
                             buffers=STAGES,
                         )
 
-                    with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
+                    with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                         part = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 16), (8192, 1, 8, 16, 64, 128, 512)), "rmem"])
                         part = tf.schedule(
                             (part, lhs, rhs),
@@ -67,10 +67,10 @@ class FP8_BLOCK_SCALED_GEMM:
                             (a_scale[:, kb:kb + 1],), op=T.copy(rmem_layout=((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp), (64, 1, 8, 16)))
                         )
                         tile_scale = tf.schedule(
-                            (b_scale[kb:kb + 1, :],), op=T.copy(rmem_layout=((1, 1), (1, 1), {_compute.group @ B()}))
+                            (b_scale[kb:kb + 1, :],), op=T.copy(rmem_layout=((1, 1), {}))
                         )
                         acc = acc + part * row_scale * tile_scale
 
-                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                     result = tf.cast(acc, dtype="bf16")
                 return result

@@ -21,9 +21,9 @@ class ScalarBinary:
     def gemm(x: Tensor[(32,), "f32"], lhs: Tensor[(1,), "f32"]) -> Tensor[(32,), "f32", "rmem"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(32,), names=("lane",)) as _threads:
-                held = tf.schedule((x,), op=T.copy(rmem_layout=((32,), (1,), {_threads.lane @ B()})))
+                held = tf.schedule((x,), op=T.copy(rmem_layout=((32,), {})))
                 shifted = tf.schedule((held, 0.25), op=T.binary(kind=BinaryKind.ADD))
                 offset = 1.0 - shifted
                 scaled = offset * 0.5
-                left = tf.schedule((lhs,), op=T.copy(rmem_layout=((1,), (1,), {_threads.lane @ B()})))
+                left = tf.schedule((lhs,), op=T.copy(rmem_layout=((1,), {})))
                 return tf.schedule((left, scaled), op=T.binary(kind=BinaryKind.MUL))

@@ -30,7 +30,7 @@ class WGMMA_EXPLICIT_WINDOWS:
     @func
     def gemm(
         a: Tensor[(M, K), "bf16"],
-        b: Tensor[(K, N), "bf16", Layout((K, N), (1, K))],
+        b: Tensor[(K, N), "bf16", ((K, N), (1, K))],
     ) -> Tensor[(M, N), "bf16"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
@@ -44,7 +44,7 @@ class WGMMA_EXPLICIT_WINDOWS:
                 out = tf.zeros(Tensor[(M, N), "bf16"])
                 for m in range(0, M, BM):
                     for n in range(0, N, BN):
-                        with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                        with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                             acc = tf.zeros(Tensor[(BM, BN), "f32", ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 4), (1, 8, 16, 64, 128, 512)), "rmem"])
 
                         for k in tf.tile(K, BK):
@@ -60,13 +60,13 @@ class WGMMA_EXPLICIT_WINDOWS:
                                     buffers=STAGES,
                                 )
 
-                            with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                            with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                                 acc = tf.schedule(
                                     (acc, lhs, rhs),
                                     op=T.tiled_mma(atom=wgmma),
                                 )
 
-                        with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                        with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                             tile_out = tf.cast(acc, dtype="bf16")
                             out = tf.insert_slice(out, tile_out, (m, n))
                 return out
