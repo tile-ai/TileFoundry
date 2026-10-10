@@ -810,8 +810,13 @@ def test_sparse_decode_guards_the_dsa_findings() -> None:
     report = candidates(plain, plain.entry_function())
     sites = report["lines"]
     indexed = next(row for row in sites if row["op"] == "tf.index_select")
-    assert indexed["candidates"][0]["id"] == "T.copy_async", "F7: indexed copy candidate"
-    assert '"smem"' in indexed["candidates"][0]["lands"][0], "D36: gather lands in smem"
+    assert not indexed["candidates"] and [
+        item["id"] for item in indexed["refused"]
+    ] == ["T.copy_async"], "gather keeps its gmem result"
+    assert any(
+        "dst:" in reason and "StorageKind.GMEM" in reason and "StorageKind.SMEM" in reason
+        for reason in indexed["refused"][0]["refused"]
+    ), "copy_async requires an smem destination"
     matmuls = [row for row in sites if row["op"] == "tf.matmul"]
     assert len(matmuls) == 2, "D37: Q K^T and P V both have consumers"
     assert all(
