@@ -3491,6 +3491,7 @@ class _MeshSelection:
     selection: Mesh
     layout: Layout
     names: tuple[str, ...]
+    outer: Layout | None = None
 
 
 def _finish_mesh_context(mesh, match, context):
@@ -3564,6 +3565,8 @@ class SelectionCoverRule:
 
 @dataclass(frozen=True)
 class SelectionStrideRule:
+    """Composition uses AssertionError to reject indivisible mode strides."""
+
     STATEMENT: ClassVar[str] = "Each new mesh selection axis maps to one fixed physical stride."
 
     def apply(self, value, *, match, context):
@@ -3580,9 +3583,23 @@ class SelectionStrideRule:
             raise ParseError.from_node(
                 match.node, context, "a mesh selection axis does not map to one stride of the selection"
             )
+        return dataclasses.replace(value, outer=outer)
+
+
+@dataclass(frozen=True)
+class SelectionConstructionRule:
+    STATEMENT: ClassVar[str] = (
+        "A checked selection constructs a Mesh with its topology and offset, "
+        "enters its execution scope, and defines its lexical binding."
+    )
+
+    def apply(self, value, *, match, context):
+        if not isinstance(value, _MeshSelection):
+            return value
+        assert value.outer is not None
         mesh = runtime.Mesh(
             value.selection.topologies,
-            ComposedLayout(None, starts(value.selection)[0], outer),
+            ComposedLayout(None, starts(value.selection)[0], value.outer),
             value.names,
         )
         return _finish_mesh_context(mesh, match, context)
@@ -3792,6 +3809,7 @@ class MeshContextPattern(ElementPattern):
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         SelectionLevelRule(), SelectionSizeRule(), SelectionCoverRule(), SelectionStrideRule(),
+        SelectionConstructionRule(),
     )
 
 
