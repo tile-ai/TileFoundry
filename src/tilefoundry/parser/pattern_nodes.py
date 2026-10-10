@@ -25,6 +25,7 @@ from tilefoundry.ir.clause import (
 from tilefoundry.ir.clause.layout import _LAYOUT_WILDCARD
 from tilefoundry.ir.core import (
     BindingMetadata,
+    Op,
     RangeMetadata,
     attach_metadata,
     get_metadata,
@@ -32,9 +33,18 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.pattern import _mangle_variant_name
 from tilefoundry.ir.tir.launch import launch_call
-from tilefoundry.ir.types import Broadcast, Layout, Partial, Split, TensorType
+from tilefoundry.ir.types import (
+    Broadcast,
+    ComposedLayout,
+    Layout,
+    Partial,
+    Split,
+    Swizzle,
+    TensorType,
+)
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.mesh import refine
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
 
@@ -854,6 +864,88 @@ class PlacedLayoutPattern(ElementPattern):
     )
 
 
+class ComposedLayoutSugarPattern(ElementPattern):
+    """Compose an unplaced layout only in a layout grammar position."""
+
+    element_name = "composed_layout"
+    syntax = LazyPattern(
+        lambda: BindPattern(
+            AstNodePattern(
+                ast.BinOp,
+                FieldPattern(
+                    "op", ChoicePattern(AstNodePattern(ast.Add), AstNodePattern(ast.BitOr))
+                ),
+            ),
+            ComposedLayoutSugarPattern._bind,
+        )
+    )
+
+    @staticmethod
+    def _bind(node, context, matched):
+        outer = node
+        inner = None
+        offset = None
+        if isinstance(outer.op, ast.BitOr):
+            inner = outer.right
+            outer = outer.left
+            if isinstance(inner, ast.BinOp) and isinstance(inner.op, ast.Add):
+                return PatternFailure(
+                    "composed_layout", inner, "offset belongs before '|': write L + off | inner"
+                )
+        if isinstance(outer, ast.BinOp) and isinstance(outer.op, ast.Add):
+            offset = outer.right
+            outer = outer.left
+            if isinstance(outer, ast.BinOp) and isinstance(outer.op, ast.Add):
+                return PatternFailure("composed_layout", outer, "write one offset: L + (a + b)")
+        if any(isinstance(part, ast.MatMult) for part in ast.walk(outer)):
+            return PatternFailure(
+                "composed_layout",
+                outer,
+                "composed layout outer must be a Layout without mesh placement",
+            )
+        children = [
+            AstChild(
+                "outer",
+                ChoicePattern(PlacedLayoutPattern(), PlainLayoutPattern(), StaticValuePattern()),
+                outer,
+                "mesh_layout",
+                "layout",
+            )
+        ]
+        if offset is not None:
+            children.append(AstChild("offset", DimExprPattern(), offset, "layout_offset"))
+        if inner is not None:
+            children.append(AstChild("inner", StaticValuePattern(), inner, "static_layout"))
+        return dataclasses.replace(
+            matched,
+            branch_id="composed_layout",
+            pattern_id="tensor.layout.composed",
+            children=tuple(children),
+        )
+
+    @staticmethod
+    def construct(match, children, context):
+        outer = children["outer"]
+        if isinstance(outer, PlacedLayout):
+            outer = outer.layout
+        if not isinstance(outer, Layout):
+            raise ParseError.from_node(
+                match.node,
+                context,
+                "composed layout outer must be a Layout without mesh placement",
+            )
+        inner = children.get("inner")
+        if "inner" in children and not isinstance(inner, (Swizzle, runtime.LayoutBase)):
+            raise ParseError.from_node(
+                match.node,
+                context,
+                f"composed layout inner must be a Swizzle or a layout, got {type(inner).__name__}",
+            )
+        return ComposedLayout(inner, children.get("offset", 0), outer)
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
 class LayoutPattern(ElementPattern):
     element_name = "layout"
     syntax = LazyPattern(
@@ -887,6 +979,7 @@ class LayoutPattern(ElementPattern):
             ),
             PlacedLayoutPattern(),
             PlainLayoutPattern(),
+            ComposedLayoutSugarPattern(),
         )
     )
 
@@ -2137,7 +2230,9 @@ class CallBindingRule:
 
 @dataclass(frozen=True)
 class AuthoredCallScopeRule:
-    STATEMENT: ClassVar[str] = "An authored HIR call must run inside a mesh if its function opens one."
+    STATEMENT: ClassVar[str] = (
+        "An authored HIR call must run inside a mesh if its function opens one."
+    )
 
     def apply(self, value, *, match, context):
         _note_authored_call(match.node, context)
@@ -2369,6 +2464,74 @@ class CallVariadicInputFormRule:
         return value
 
 
+class OpValuePattern(ElementPattern):
+    """Construct an op attribute with its own schema's attribute grammar."""
+
+    element_name = "op_value"
+    syntax = LazyPattern(lambda: BindPattern(AstNodePattern(ast.Call), OpValuePattern._bind))
+
+    def match(self, node, context):
+        matched = super().match(node, context)
+        return StaticValuePattern().match(node, context) if matched is None else matched
+
+    @staticmethod
+    def _bind(node, context, matched):
+        try:
+            callee = _resolve_reference(node.func, context)
+        except ParseError:
+            return None
+        schema = (
+            callee if isinstance(callee, runtime.OpSchema) else getattr(callee, "_op_schema", None)
+        )
+        if not isinstance(schema, runtime.OpSchema):
+            return None
+        if node.args:
+            return PatternFailure("op_value", node, "op attributes take keyword arguments")
+        attrs = {param.name: param for param in schema.signature if param.kind == "attribute"}
+        children = []
+        bound = set()
+        for keyword in node.keywords:
+            param = attrs.get(keyword.arg)
+            if param is None:
+                return PatternFailure(
+                    "op_value", node, f"{ast.unparse(node.func)} has no attribute {keyword.arg!r}"
+                )
+            if keyword.arg in bound:
+                return PatternFailure(
+                    "op_value", node, f"keyword given more than once: {keyword.arg}"
+                )
+            bound.add(keyword.arg)
+            children.append(
+                AstChild(
+                    keyword.arg,
+                    CallPattern._pattern_for_param(param, keyword.value),
+                    keyword.value,
+                    "call_attribute",
+                    param.name,
+                )
+            )
+        return dataclasses.replace(
+            matched,
+            pattern_id="call.op_value",
+            branch_id="op_value",
+            captures={**matched.captures, "schema": schema},
+            children=tuple(children),
+        )
+
+    @staticmethod
+    def construct(match, children, context):
+        try:
+            attrs = {
+                name: value.layout if isinstance(value, PlacedLayout) else value
+                for name, value in children.items()
+            }
+            return match.captures["schema"].builder(**attrs)
+        except (TypeError, ValueError) as error:
+            raise ParseError.from_node(match.node, context, str(error)) from error
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
 class CallPattern(ElementPattern):
     element_name = "op_call"
     syntax = LazyPattern(
@@ -2411,6 +2574,8 @@ class CallPattern(ElementPattern):
             return StoragePattern()
         if annotation in (runtime.Layout, runtime.ShardLayout, runtime.LayoutBase):
             return LayoutPattern()
+        if annotation is Op and isinstance(node, ast.Call):
+            return OpValuePattern()
         return StaticValuePattern()
 
     @staticmethod
@@ -3355,8 +3520,22 @@ class MeshContextPattern(ElementPattern):
         node: object, context: MatchContext, matched: AstMatch[Any]
     ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Call)
-        if not node.args or not isinstance(node.args[0], ast.Tuple):
+        if not node.args:
             return None
+        refining = not isinstance(node.args[0], ast.Tuple)
+        if refining:
+            reference = node.args[0]
+            if isinstance(reference, ast.Subscript):
+                reference = reference.value
+            if (
+                not isinstance(reference, ast.Name)
+                or context.lexical_scope.lookup_mesh(reference.id) is None
+            ):
+                return PatternFailure(
+                    "mesh",
+                    node.args[0],
+                    f"{ast.unparse(reference)!r} is not a lexical Mesh binding",
+                )
         positional = list(node.args[1:])
         keywords = {keyword.arg: keyword.value for keyword in node.keywords}
         layout_node = keywords.get("layout")
@@ -3384,7 +3563,7 @@ class MeshContextPattern(ElementPattern):
             return PatternFailure("mesh", node, "a mesh requires a `layout`")
         children = [
             AstChild(
-                "topology_names",
+                "selection" if refining else "topology_names",
                 StaticValuePattern(),
                 node.args[0],
                 "mesh_topologies",
@@ -3405,7 +3584,7 @@ class MeshContextPattern(ElementPattern):
         return dataclasses.replace(
             matched,
             pattern_id="mesh.context",
-            branch_id="mesh_context",
+            branch_id="mesh_refine" if refining else "mesh_context",
             children=tuple(children),
         )
 
@@ -3413,7 +3592,15 @@ class MeshContextPattern(ElementPattern):
     def construct(match, children, context):
         if context.function is None:
             raise ParseError.from_node(match.node, context, "Mesh requires function context")
-        if match.branch_id == "mesh_context":
+        if match.branch_id == "mesh_refine":
+            try:
+                layout = children["layout"]
+                if isinstance(layout, PlacedLayout):
+                    layout = layout.layout
+                mesh = refine(children["selection"], layout, children.get("names", ()))
+            except (TypeError, ValueError) as error:
+                raise ParseError.from_node(match.node, context, str(error)) from error
+        elif match.branch_id == "mesh_context":
             topology_names = children["topology_names"]
             if not isinstance(topology_names, tuple):
                 raise ParseError.from_node(
@@ -3609,8 +3796,7 @@ def _region_captures(node, context, excluded=frozenset()):
                     if isinstance(item.optional_vars, ast.Name):
                         nested_bound.add(item.optional_vars.id)
                 nested_bound.update(
-                    _directly_bound_names(statement.body)
-                    - _read_before_bound(statement.body)
+                    _directly_bound_names(statement.body) - _read_before_bound(statement.body)
                 )
                 for child in statement.body:
                     visit(child, frozenset(nested_bound))
@@ -4032,7 +4218,19 @@ class LoopIteratorPattern(ElementPattern):
                     ast.Call,
                     FieldPattern(
                         "func",
-                        AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("tile"))),
+                        ChoicePattern(
+                            AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("tile"))),
+                            AstNodePattern(
+                                ast.Attribute,
+                                FieldPattern(
+                                    "value",
+                                    AstNodePattern(
+                                        ast.Name, FieldPattern("id", LiteralPattern("tf"))
+                                    ),
+                                ),
+                                FieldPattern("attr", LiteralPattern("tile")),
+                            ),
+                        ),
                     ),
                     FieldPattern("keywords", SequencePattern()),
                     FieldPattern(
@@ -4146,9 +4344,17 @@ class LoopHeaderPattern(ElementPattern):
         if (
             isinstance(node, ast.For)
             and isinstance(node.iter, ast.Call)
-            and isinstance(node.iter.func, ast.Name)
+            and (
+                isinstance(node.iter.func, ast.Name)
+                or (
+                    isinstance(node.iter.func, ast.Attribute)
+                    and isinstance(node.iter.func.value, ast.Name)
+                    and node.iter.func.value.id == "tf"
+                    and node.iter.func.attr == "tile"
+                )
+            )
         ):
-            kind = node.iter.func.id
+            kind = node.iter.func.id if isinstance(node.iter.func, ast.Name) else "tile"
             count = len(node.iter.args)
             if kind not in {"tile", "range"}:
                 return PatternFailure(
@@ -4173,8 +4379,7 @@ class LoopHeaderPattern(ElementPattern):
         assert isinstance(node, ast.For)
         assert isinstance(node.target, ast.Name)
         assert isinstance(node.iter, ast.Call)
-        assert isinstance(node.iter.func, ast.Name)
-        kind = node.iter.func.id
+        kind = node.iter.func.id if isinstance(node.iter.func, ast.Name) else "tile"
         count = len(node.iter.args)
         if node.iter.keywords:
             return PatternFailure(

@@ -67,6 +67,22 @@ recursive parse situation. These are the only public parser symbols.
 
 ### 1.5 Mesh declarations and region captures
 
+Layout-typed op attributes, including attributes inside `op=T.copy(...)`, MUST
+use the same layout grammar as `tf.reshard(layout=...)`. An op value's callee is
+resolved statically, and its schema selects each keyword's grammar. Keywords
+MUST name attributes of that schema. Callees without an op schema retain Python
+static-call evaluation. In a mesh body, a plain tuple denotes a broadcast
+`ShardLayout`; `Layout(...)` explicitly denotes a plain `Layout`.
+
+In a layout position, `L + off`, `L | inner`, and `L + off | inner` denote
+`ComposedLayout(None, off, L)`, `ComposedLayout(inner, 0, L)`, and
+`ComposedLayout(inner, off, L)`. `L` MUST denote a plain `Layout` without mesh
+placement: a flat shape tuple, shape/stride tuple, layout reference, or
+`Layout(...)` call. Hierarchical shapes require `Layout(...)`. `off` MUST be an
+integer or dimension expression; a compound offset is written `L + (a + b)`.
+`inner` MUST be a `Swizzle` or `LayoutBase`. Offsets precede `|`. These operators
+are parser syntax and do not change Python evaluation of layout constructors.
+
 Mesh declarations are values. `Mesh(...)` constructs the compile-time domain
 object used by layout sugar and by a `MeshRegion`; it is not itself a runtime
 expression in the HIR value graph. A `with Mesh(...)` statement uses that value
@@ -81,6 +97,13 @@ inside either a MeshRegion or LoopRegion but bound outside it are captured as
 carry slots first and excludes its own induction and carry names from captures.
 Capture is performed one region boundary at a time, so nested regions pass a
 value through each door.
+
+`with Mesh(selection, layout=shape, names=names) as refined` reshapes a lexical
+mesh or its constant slice in row-major selection order. It preserves the
+selected positions and derives physical strides and offset from that selection.
+The selection MUST name one topology level and hold exactly `size(shape)`
+positions. Each new axis MUST map to one constant physical stride; contiguous
+positions are not required. See [shard §5](shard.md#5-mesh).
 
 In an authored HIR function that opens a mesh, every authored runtime Call
 runs inside a mesh scope. This includes operation and function calls, operator
@@ -191,6 +214,14 @@ layout                ::= None
                           | call
                           | placed-layout
                           | plain-layout
+                          | composed-layout
+layout-outer          ::= plain-layout
+                          | '(' layout-dims ',' layout-strides ')'
+                          | primary
+                          | call
+composed-layout       ::= layout-outer '+' dim-expr
+                          | layout-outer '|' static-item
+                          | layout-outer '+' dim-expr '|' static-item
 storage               ::= string-literal
                           | primary
 tensor-optional-slot  ::= layout
@@ -209,7 +240,7 @@ signature             ::= (name ':' type-annotation (',' name ':' type-annotatio
 return-type           ::= type-annotation
 if                    ::= if cond-node block (block)?
 while                 ::= while cond-node block
-loop-iterator         ::= 'tile' '(' expression ',' expression (',' expression)? ')'
+loop-iterator         ::= ('tf.tile' | 'tile') '(' expression ',' expression (',' expression)? ')'
                           | 'range' '(' (expression | expression ',' expression | expression ','
                             expression ',' expression) ')'
 loop-carry-statement  ::= expression '=' expression
