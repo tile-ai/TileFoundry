@@ -37,14 +37,10 @@ def gemm(
             for k in range(0, 64, 32):
                 with scope[:1, :32] as scope_1:
                     tile = T.tensor_view(
-                        T.ptr_of(at[k:k + 32, 0:0 + 64]),
-                        layout=((32, 64), (64, 1)),
-                        shape=(32, 64),
+                        T.ptr_of(at[k:k + 32, 0:0 + 64]), layout=(32, 64), shape=(32, 64)
                     )
                     a_1 = T.tensor_view(
-                        T.ptr_of(scratch[0:0 + 2048]),
-                        layout=((64, 32), (32, 1)),
-                        shape=(64, 32),
+                        T.ptr_of(scratch[0:0 + 2048]), layout=(64, 32), shape=(64, 32)
                     )
                     tile_1 = T.tensor_view(
                         T.ptr_of(tile[0:0 + 32, 0:0 + 64]),
@@ -109,7 +105,7 @@ def gemm(
                     )
                     T.cast(src_frame, dst_frame, dtype="bf16")
         with Mesh(
-            (Topology("thread", 256),), layout=((4, 8, 4), (32, 4, 1)) + 128, names=("d0", "d1", "d2")
+            (Topology("thread", 256),), layout=(4, 8, 4) + 128, names=("d0", "d1", "d2")
         ) as threads_6:
             result_view = T.tensor_view(
                 T.ptr_of(result[0:0 + 64, 0:0 + 32]),

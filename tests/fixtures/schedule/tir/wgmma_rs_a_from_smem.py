@@ -105,7 +105,7 @@ def gemm(
                     )
                     T.cast(src_frame, dst_frame_1, dtype="bf16")
         with Mesh(
-            (Topology("thread", 256),), layout=((4, 8, 4), (32, 4, 1)) + 128, names=("d0", "d1", "d2")
+            (Topology("thread", 256),), layout=(4, 8, 4) + 128, names=("d0", "d1", "d2")
         ) as threads_6:
             result_view = T.tensor_view(
                 T.ptr_of(result[0:0 + 64, 0:0 + 32]),

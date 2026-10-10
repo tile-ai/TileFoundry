@@ -54,9 +54,7 @@ def gemm(
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_1:
                         T.copy_async_tensor(tile, lhs_stages[(k // 16) % 2])
                     tile_1 = T.tensor_view(
-                        T.ptr_of(b[k:k + 16, 0:0 + 16]),
-                        layout=((16, 16), (16, 1)),
-                        shape=(16, 16),
+                        T.ptr_of(b[k:k + 16, 0:0 + 16]), layout=(16, 16), shape=(16, 16)
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
                         T.copy_async_tensor(tile_1, rhs_stages[(k // 16) % 2])
@@ -115,9 +113,7 @@ def gemm(
             for j in range(0, 16, 16):
                 with scope[:1, :32] as scope_4:
                     tile_2 = T.tensor_view(
-                        T.ptr_of(b1[j:j + 16, 0:0 + 32]),
-                        layout=((16, 32), (32, 1)),
-                        shape=(16, 32),
+                        T.ptr_of(b1[j:j + 16, 0:0 + 32]), layout=(16, 32), shape=(16, 32)
                     )
                     with Mesh(scope_4, layout=(32,), names=("d0",)) as threads_6:
                         T.copy_async_tensor(tile_2, rhs_1_stages[(j // 16) % 2])
@@ -165,7 +161,7 @@ def gemm(
                     )
                     T.cast(src_frame_1, dst_frame_1, dtype="bf16")
         with Mesh(
-            (Topology("thread", 256),), layout=((4, 8, 4), (32, 4, 1)) + 128, names=("d0", "d1", "d2")
+            (Topology("thread", 256),), layout=(4, 8, 4) + 128, names=("d0", "d1", "d2")
         ) as threads_9:
             result_view = T.tensor_view(
                 T.ptr_of(result[0:0 + 64, 0:0 + 32]),

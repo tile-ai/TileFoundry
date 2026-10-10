@@ -18,10 +18,8 @@ def gemm(
                 (64, 32), "f32", ((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
         )
-        b = T.alloc_tensor(tensor_type=Tensor[(16, 32), "bf16", ((32, 16), (16, 1)), "rmem"])
-        b_tile = T.alloc_tensor(
-            tensor_type=Tensor[(16, 32), "f32", ((32, 16), (16, 1)), "rmem"]
-        )
+        b = T.alloc_tensor(tensor_type=Tensor[(16, 32), "bf16", (32, 16), "rmem"])
+        b_tile = T.alloc_tensor(tensor_type=Tensor[(16, 32), "f32", (32, 16), "rmem"])
         result = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 1), "bf16", ((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)), "rmem"
@@ -72,9 +70,7 @@ def gemm(
                     with scope_1 as threads_1:
                         T.copy_async_tensor(tile, lhs_stages[(k // 16) % 2])
                     tile_1 = T.tensor_view(
-                        T.ptr_of(b_f32[k:k + 16, 0:0 + 32]),
-                        layout=((16, 32), (32, 1)),
-                        shape=(16, 32),
+                        T.ptr_of(b_f32[k:k + 16, 0:0 + 32]), layout=(16, 32), shape=(16, 32)
                     )
                     with scope_1 as threads_2:
                         dst_frame = T.tensor_view(
@@ -231,7 +227,7 @@ def gemm(
                     )
                     T.cast(src_frame_5, dst_frame_8, dtype="bf16")
         with Mesh(
-            (Topology("thread", 256),), layout=((4, 8, 4), (32, 4, 1)) + 128, names=("d0", "d1", "d2")
+            (Topology("thread", 256),), layout=(4, 8, 4) + 128, names=("d0", "d1", "d2")
         ) as threads_13:
             result_view = T.tensor_view(
                 T.ptr_of(result[0:0 + 64, 0:0 + 1]),

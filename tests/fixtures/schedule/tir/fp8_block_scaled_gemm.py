@@ -56,7 +56,7 @@ def gemm(
         row_scale = T.alloc_tensor(
             tensor_type=Tensor[(128, 1), "f32", ((2, 8, 2, 4), (64, 1, 8, 16)), "rmem"]
         )
-        tile_scale = T.alloc_tensor(tensor_type=Tensor[(1, 1), "f32", ((1, 1), (1, 1)), "rmem"])
+        tile_scale = T.alloc_tensor(tensor_type=Tensor[(1, 1), "f32", (1, 1), "rmem"])
         result = T.alloc_tensor(
             tensor_type=Tensor[
                 (128, 128),
@@ -436,9 +436,7 @@ def gemm(
                         )
                         T.binary(lhs_frame, rhs_frame, dst_frame_1, kind=BinaryKind.MUL)
                     tile_3 = T.tensor_view(
-                        T.ptr_of(b_scale[kb:kb + 1, 0:0 + 1]),
-                        layout=((1, 1), (1, 1)),
-                        shape=(1, 1),
+                        T.ptr_of(b_scale[kb:kb + 1, 0:0 + 1]), layout=(1, 1), shape=(1, 1)
                     )
                     with scope_2 as threads_8:
                         dst_frame_2 = T.tensor_view(
@@ -501,7 +499,7 @@ def gemm(
                     )
                     T.cast(src_frame, dst_frame_5, dtype="bf16")
         with Mesh(
-            (Topology("thread", 384),), layout=((2, 4, 8, 4), (128, 32, 4, 1)) + 128, names=("d0", "d1", "d2", "d3")
+            (Topology("thread", 384),), layout=(2, 4, 8, 4) + 128, names=("d0", "d1", "d2", "d3")
         ) as threads_13:
             result_view = T.tensor_view(
                 T.ptr_of(result[0:0 + 128, 0:0 + 128]),
