@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import enum
+import math
 import operator
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -2824,6 +2825,18 @@ class BinaryExpressionPattern(ElementPattern):
     )
 
 
+@dataclass(frozen=True)
+class UnaryCallRule:
+    STATEMENT: ClassVar[str] = "An unfolded unary expression must obey the authored-call rules."
+
+    def apply(self, value, *, match, context):
+        if isinstance(value, runtime.Constant):
+            return value
+        for rule in (CallBindingRule(), AuthoredCallScopeRule(), CallTypeInferenceRule()):
+            value = rule.apply(value, match=match, context=context)
+        return value
+
+
 class UnaryExpressionPattern(ElementPattern):
     element_name = "unary_expression"
     syntax = LazyPattern(
@@ -2854,6 +2867,13 @@ class UnaryExpressionPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         operand = children["operand"]
+        if (
+            match.captures["kind"] == "NEG"
+            and isinstance(operand, runtime.Constant)
+            and isinstance(operand.value, float)
+            and math.isinf(operand.value)
+        ):
+            return runtime.Constant(type=operand.type, value=-operand.value)
         target = runtime.Unary(kind=runtime.UnaryKind[match.captures["kind"]])
         return runtime.Call(
             type=operand.type,
@@ -2861,11 +2881,7 @@ class UnaryExpressionPattern(ElementPattern):
             args=(operand,),
         )
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = (
-        CallBindingRule(),
-        AuthoredCallScopeRule(),
-        CallTypeInferenceRule(),
-    )
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (UnaryCallRule(),)
 
 
 class SliceEndpointBinaryPattern(ElementPattern):

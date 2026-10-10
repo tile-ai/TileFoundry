@@ -661,6 +661,20 @@ class Lowering(ExprVisitor[Expr]):
 
     def visit_Bitcast(self, call: Call, cursor: _Cursor) -> Expr:
         source = self.visit(call.args[0], cursor)
+        if isinstance(call.type.layout, ShardLayout):
+            frame = self._physical_frame(call.type.layout.mesh)
+            inner = _Cursor()
+            value = self._window(
+                source,
+                tuple(i64_const(0) for _ in source.type.shape),
+                tuple(source.type.shape),
+                _with_frame(call.type, frame),
+                inner,
+                "tile",
+            )
+            cursor.add(MeshScope(frame, Var(self.names.fresh("threads"), type=_BINDING), inner.build()))
+            self.logical[id(value)] = call.type
+            return value
         return self._window(
             source,
             tuple(i64_const(0) for _ in source.type.shape),
@@ -772,15 +786,17 @@ class Lowering(ExprVisitor[Expr]):
                 self.output_initialized = True
         target = self.visit(destination, cursor)
         update_root = self._material_root(call.args[1])
-        if (
+        direct_write = (
             isinstance(update_root, Call)
             and isinstance(update_root.target, ScheduleOp)
             and isinstance(update_root.type, TensorType)
             and update_root.type.storage is target.type.storage
-        ):
+            and id(update_root) not in self._memo
+        )
+        if direct_write:
             self.output_windows[id(update_root)] = call
         update = self.visit(call.args[1], cursor)
-        if id(update_root) in self.output_windows:
+        if direct_write:
             return target
         starts, desired = self._insert_window(call, target, update.type, cursor)
         self._emit_copy(

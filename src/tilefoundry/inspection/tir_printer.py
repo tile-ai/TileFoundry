@@ -90,7 +90,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         return expr.name
 
     def visit_Constant(self, expr: Constant, ctx=None) -> str:
-        return repr(expr.value)
+        return self.print(expr.value, ctx)
 
     def visit_SymbolRef(self, expr: SymbolRef, ctx=None) -> str:
         return _binding_name(expr.name)

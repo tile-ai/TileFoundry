@@ -71,7 +71,14 @@ def _insert_slice_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     complement, written = placed_window(
         offsets, tuple(update.shape), rank, within=tuple(result.shape)
     )
-    read_update = window_source(offsets, rank, update, update, logical_coordinates(result, result))
+    read_update = window_source(
+        offsets,
+        rank,
+        update,
+        update,
+        logical_coordinates(result, result),
+        extents=tuple(update.shape),
+    )
     return iterating(
         result.shape,
         (

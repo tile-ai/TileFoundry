@@ -701,9 +701,17 @@ second presentation of the result.
   result storage.
 - `Bitcast(x, layout)` reinterprets the same bytes with a new shape and layout,
   preserving the input dtype and storage. `layout` is a `LayoutBase`; the result
-  shape is the product of the nested sizes in each top-level layout mode.
+  shape for a plain layout is the product of the nested sizes in each top-level
+  layout mode. For an rmem `ShardLayout`, the result preserves `x.shape` and
+  changes only its layout. Its layout modes and `Split` positions MUST be valid
+  for that logical shape under the existing layout-position-to-tensor-axis rules.
   Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
-  components, with strides stated in every `Layout` component. Both shapes MUST
+  components, or both MUST be rmem `ShardLayout` on the same mesh containing
+  only `Split` attributes. Every `Layout` component MUST have stated strides.
+  For rmem shards, an address is the owning mesh coordinate paired with the
+  offset within that unit; the two address sets MUST be equal, so every element
+  stays in its original unit and register. `Broadcast` and `Partial` shards
+  MUST be rejected. The underlying layouts MUST be plain. Both shapes MUST
   be literal and have the same element count. Both address functions MUST be
   injective, and every result address MUST belong to the source address set,
   using the complete colex address functions including composed swizzles.

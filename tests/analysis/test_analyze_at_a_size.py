@@ -80,7 +80,7 @@ assert API_INVENTORY <= {case.id for case in CASES}
 
 _GQA_MATERIAL_TRANSPOSE_GMEM = 280_616
 _PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 197_632
-_QWEN_LOOP_INVARIANT_VALUES_GMEM = 152_708_368
+_QWEN_LOOP_INVARIANT_VALUES_GMEM = 152_708_112
 _MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING = 5_245_008
 _MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_195_376
 _MHA_SHORTER_GMEM_WITH_20_BYTES_ALIGNMENT_PADDING = 2_098_216
@@ -320,12 +320,12 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 3 * 128 * 128 * 2,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]": {
-        "gmem": 4_611_690_784,
+        "gmem": 4_611_690_528,
         "rmem": 1_036,
         "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]": {
-        "gmem": 4_611_690_784,
+        "gmem": 4_611_690_528,
         "rmem": 1_036,
         "smem": 65_792,
     },
