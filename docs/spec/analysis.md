@@ -313,10 +313,12 @@ class Traffic:
 Every traffic amount is what a boundary's own relation reaches. The Op's
 evaluator says which way each boundary moves and whether it materialises
 anything; it does not say how much, and an Op with no relation fails closed.
-For a data-dependent lookup, movement MUST be capped at the number of domain
-coordinates: each coordinate selects at most one element from the possible
-image. This applies to IndexSelect, IndexAdd, IndexCopy, and RoPE lookup
-boundaries. The footprint MUST retain the full possible image. Out-of-bounds
+When a boundary axis's coordinate is determined by data (`reached_at`'s `free`
+axes), that boundary is a lookup. Its movement MUST be capped at the number of
+domain coordinates when countable: each coordinate selects at most one element
+from the possible image. If the domain count is unknown, the countable image
+remains the movement upper bound. The footprint MUST retain the full possible
+image. Out-of-bounds
 IndexSelect indices with `fill_value` are not statically distinguished; traffic
 counts one slice per index as an upper bound.
 

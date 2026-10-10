@@ -325,7 +325,6 @@ def renaming_relation(call, ctx, local_relations: tuple[AccessRelation, ...]) ->
     return AccessRelation(
         folded,
         {name: bindings[name] for name in names if name in bindings},
-        local_relations[0].lookup,
     )
 
 
@@ -855,7 +854,7 @@ def reached_elements(
     if box is not None and box.tuple_dim() == relation.dim(isl.dim_type.OUT):
         relation = relation.intersect_range(box)
     coordinates = cardinality(relation.domain())
-    return None if coordinates is None else min(reached, coordinates)
+    return reached if coordinates is None else min(reached, coordinates)
 
 
 def control_leaves(type_: "Type") -> int:
