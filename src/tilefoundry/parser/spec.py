@@ -79,10 +79,17 @@ class _RuleVisitor:
             if key in self._seen_elements:
                 return
             self._seen_elements.add(key)
-            self._rows.update(_row(name, situation, rule) for rule in pattern.RULES)
+            self._rows.update(_row(name, situation, rule) for rule in (*pattern.BIND_RULES, *pattern.RULES))
             if pattern.syntax is None:
                 raise TypeError(f"{type(pattern).__name__} has no executable syntax")
             self.visit(pattern.syntax, situation)
+            for pattern_class in getattr(pattern, "ATTRIBUTE_PATTERNS", ()):
+                self.visit(pattern_class(), "call_attribute")
+            return
+        if isinstance(pattern, ReferencePattern):
+            self._rows.update(
+                _row("reference", situation, rule) for rule in pattern.REFERENCE_RULES
+            )
             return
         if isinstance(pattern, LazyPattern):
             self.visit(pattern.pattern, situation)
@@ -113,7 +120,7 @@ class _RuleVisitor:
             return
         if isinstance(
             pattern,
-            (CapturePattern, LiteralPattern, PredicatePattern, ReferencePattern),
+            (CapturePattern, LiteralPattern, PredicatePattern),
         ):
             return
         raise TypeError(f"unsupported executable pattern {type(pattern).__name__}")
