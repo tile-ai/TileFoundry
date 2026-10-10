@@ -82,9 +82,10 @@ carry slots first and excludes its own induction and carry names from captures.
 Capture is performed one region boundary at a time, so nested regions pass a
 value through each door.
 
-`with Mesh(selection, layout=shape, names=names) as refined` reshapes a lexical
+`with Mesh(selection, layout=shape, names=names) as selected` reshapes a lexical
 mesh or its constant slice in row-major selection order. It preserves the
-selected positions and derives physical strides and offset from that selection.
+selected positions and offset, using `composition(selection_layout, layout, major="row")`
+to derive physical strides.
 The selection MUST name one topology level and hold exactly `size(shape)`
 positions. Each new axis MUST map to one constant physical stride; contiguous
 positions are not required. `layout=(shape, strides)` may specify strides in
@@ -92,7 +93,7 @@ the selection's row-major numbering; omitting them uses row-major strides.
 The layout MUST cover each selection index in `[0, size)` exactly once.
 These strides are not physical strides, and the offset remains derived from
 the selection. Placement, `Layout(...)` calls, and composition sugar are not
-refinement syntax. See [shard §5](shard.md#5-mesh).
+selection composition syntax. See [shard §5](shard.md#5-mesh).
 
 Within a `with Mesh` body, a Mesh or mesh-bearing ShardLayout resolved from
 module scope or a closure MUST be rejected with

@@ -295,6 +295,10 @@ freeze** below).
   `return_type`: a variant specializes the body, not the signature. A variant
   runs in the same execution domain as its base because both are owned by the
   same `Module`.
+- `.specialize(pattern, *, mesh=None)` accepts an explicit function mesh with
+  the same semantics and Mesh type check as `@func(mesh=...)`. It does not
+  inherit the prototype's mesh; variant and base parameter and return types
+  MUST still match.
 - A variant carries exactly one `RangePattern` in `specializations`.
   The canonical signature is
   `";".join(f"{p.dim_var}${p.lo}_{p.hi}" for p in specializations)`

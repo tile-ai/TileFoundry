@@ -46,7 +46,10 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.mesh import axis_keys, refine
+from tilefoundry.ir.types.layout import size as layout_size
+from tilefoundry.ir.types.layout_algebra import composition
+from tilefoundry.ir.types.mesh import axis_keys, levels, starts
+from tilefoundry.ir.types.stride import compact_row_major, crd2idx, idx2crd
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
 
@@ -3483,6 +3486,108 @@ class ExpressionPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+@dataclass(frozen=True)
+class _MeshSelection:
+    selection: Mesh
+    layout: Layout
+    names: tuple[str, ...]
+
+
+def _finish_mesh_context(mesh, match, context):
+    binding = context.values.get("mesh_binding")
+    _enter_mesh_scope(context, mesh, match)
+    if isinstance(binding, str):
+        context.lexical_scope.define_mesh(binding, mesh)
+    context.function.state.mesh_stack.append(mesh)
+    return mesh
+
+
+@dataclass(frozen=True)
+class SelectionLevelRule:
+    STATEMENT: ClassVar[str] = "A mesh selection names exactly one topology level."
+
+    def apply(self, value, *, match, context):
+        if isinstance(value, _MeshSelection) and len(value.selection.topologies) != 1:
+            raise ParseError.from_node(match.node, context, "a mesh selection selects one topology level")
+        return value
+
+
+@dataclass(frozen=True)
+class SelectionSizeRule:
+    STATEMENT: ClassVar[str] = (
+        "A mesh selection layout has positive static extents, static strides, "
+        "matching shape/stride and name ranks, and the same size as its selection."
+    )
+
+    def apply(self, value, *, match, context):
+        if not isinstance(value, _MeshSelection):
+            return value
+        source = flatten(levels(value.selection)[0])
+        layout = value.layout
+        message = None
+        if layout_size(layout) != layout_size(source):
+            message = "mesh selection layout must hold the same number of positions as its selection"
+        elif not all(isinstance(one, int) and one > 0 for one in (*source.shape, *layout.shape)):
+            message = "a mesh selection requires positive static extents"
+        elif value.names and len(value.names) != len(layout.shape):
+            message = "mesh selection names must have the rank of its shape"
+        elif layout.strides is not None and len(layout.strides) != len(layout.shape):
+            message = "mesh selection strides must have the rank of its shape"
+        elif not all(isinstance(step, int) for step in (*(source.strides or ()), *(layout.strides or ()))):
+            message = "a mesh selection requires static strides"
+        if message is not None:
+            raise ParseError.from_node(match.node, context, message)
+        return dataclasses.replace(value, layout=Layout(
+            layout.shape, layout.strides if layout.strides is not None else compact_row_major(layout.shape)
+        ))
+
+
+@dataclass(frozen=True)
+class SelectionCoverRule:
+    STATEMENT: ClassVar[str] = "A mesh selection layout covers each selection-local index exactly once."
+
+    def apply(self, value, *, match, context):
+        if not isinstance(value, _MeshSelection):
+            return value
+        layout = value.layout
+        order = compact_row_major(layout.shape)
+        indices = {
+            crd2idx(idx2crd(index, layout.shape, order), layout.shape, layout.strides)
+            for index in range(layout_size(layout))
+        }
+        if indices != set(range(layout_size(layout))):
+            raise ParseError.from_node(
+                match.node, context, "mesh selection layout must cover each selected position once"
+            )
+        return value
+
+
+@dataclass(frozen=True)
+class SelectionStrideRule:
+    STATEMENT: ClassVar[str] = "Each new mesh selection axis maps to one fixed physical stride."
+
+    def apply(self, value, *, match, context):
+        if not isinstance(value, _MeshSelection):
+            return value
+        source = flatten(levels(value.selection)[0])
+        try:
+            outer = composition(source, value.layout, major="row")
+        except (AssertionError, ValueError, TypeError) as error:
+            raise ParseError.from_node(
+                match.node, context, "a mesh selection axis does not map to one stride of the selection"
+            ) from error
+        if outer.shape != value.layout.shape:
+            raise ParseError.from_node(
+                match.node, context, "a mesh selection axis does not map to one stride of the selection"
+            )
+        mesh = runtime.Mesh(
+            value.selection.topologies,
+            ComposedLayout(None, starts(value.selection)[0], outer),
+            value.names,
+        )
+        return _finish_mesh_context(mesh, match, context)
+
+
 class MeshContextPattern(ElementPattern):
     element_name = "mesh_context"
     syntax = LazyPattern(
@@ -3551,8 +3656,8 @@ class MeshContextPattern(ElementPattern):
         assert isinstance(node, ast.Call)
         if not node.args:
             return None
-        refining = not isinstance(node.args[0], ast.Tuple)
-        if refining:
+        selecting = not isinstance(node.args[0], ast.Tuple)
+        if selecting:
             reference = node.args[0]
             if isinstance(reference, ast.Subscript):
                 reference = reference.value
@@ -3591,7 +3696,7 @@ class MeshContextPattern(ElementPattern):
         if layout_node is None:
             return PatternFailure("mesh", node, "a mesh requires a `layout`")
         shape_node, strides_node = layout_node, None
-        if refining:
+        if selecting:
             shape_context = context.child(situation="mesh_shape", role="shape")
             if (
                 not isinstance(layout_node, ast.Tuple)
@@ -3609,23 +3714,23 @@ class MeshContextPattern(ElementPattern):
                     return PatternFailure(
                         "mesh",
                         layout_node,
-                        "a refined mesh layout is a shape tuple or (shape, strides) tuple",
+                        "a mesh selection layout is a shape tuple or (shape, strides) tuple",
                     )
                 shape_node, strides_node = layout_node.elts
         children = [
             AstChild(
-                "selection" if refining else "topology_names",
+                "selection" if selecting else "topology_names",
                 StaticValuePattern(),
                 node.args[0],
                 "mesh_topologies",
                 "topologies",
             ),
             AstChild(
-                "shape" if refining else "layout",
-                ShapePattern() if refining else LayoutPattern(),
-                shape_node if refining else layout_node,
-                "mesh_shape" if refining else "mesh_layout",
-                "shape" if refining else "layout",
+                "shape" if selecting else "layout",
+                ShapePattern() if selecting else LayoutPattern(),
+                shape_node if selecting else layout_node,
+                "mesh_shape" if selecting else "mesh_layout",
+                "shape" if selecting else "layout",
             ),
         ]
         if strides_node is not None:
@@ -3645,7 +3750,7 @@ class MeshContextPattern(ElementPattern):
         return dataclasses.replace(
             matched,
             pattern_id="mesh.context",
-            branch_id="mesh_refine" if refining else "mesh_context",
+            branch_id="mesh_selection" if selecting else "mesh_context",
             children=tuple(children),
         )
 
@@ -3653,15 +3758,9 @@ class MeshContextPattern(ElementPattern):
     def construct(match, children, context):
         if context.function is None:
             raise ParseError.from_node(match.node, context, "Mesh requires function context")
-        if match.branch_id == "mesh_refine":
-            try:
-                mesh = refine(
-                    children["selection"],
-                    runtime.Layout(children["shape"], children.get("strides")),
-                    children.get("names", ()),
-                )
-            except (TypeError, ValueError) as error:
-                raise ParseError.from_node(match.node, context, str(error)) from error
+        if match.branch_id == "mesh_selection":
+            layout = flatten(runtime.Layout(children["shape"], children.get("strides")))
+            return _MeshSelection(children["selection"], layout, children.get("names", ()))
         elif match.branch_id == "mesh_context":
             topology_names = children["topology_names"]
             if not isinstance(topology_names, tuple):
@@ -3689,14 +3788,11 @@ class MeshContextPattern(ElementPattern):
                 raise ParseError.from_node(match.node, context, "with context is not Mesh")
         else:
             raise RuntimeError(f"no constructor branch for {match.branch_id!r}")
-        binding = context.values.get("mesh_binding")
-        _enter_mesh_scope(context, mesh, match)
-        if isinstance(binding, str):
-            context.lexical_scope.define_mesh(binding, mesh)
-        context.function.state.mesh_stack.append(mesh)
-        return mesh
+        return _finish_mesh_context(mesh, match, context)
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (
+        SelectionLevelRule(), SelectionSizeRule(), SelectionCoverRule(), SelectionStrideRule(),
+    )
 
 
 def _parser_infer_context(context):

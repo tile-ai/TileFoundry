@@ -326,11 +326,11 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         return self._mesh_text(value, ctx)
 
     def mesh_context(self, value: Mesh, ctx) -> str:
-        """Render a with header, including a recoverable lexical refinement."""
+        """Render a with header, including a recoverable lexical selection."""
         alias = ctx.mesh_alias(value) or ctx.mesh_slice(value)
         if alias is not None:
             return alias
-        selection = ctx.mesh_refinement(value)
+        selection = ctx.mesh_selection(value)
         if selection is not None:
             selection, layout = selection
             shape = self.shape_tuple(layout.shape, ctx)
