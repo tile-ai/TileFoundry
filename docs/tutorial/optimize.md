@@ -63,7 +63,7 @@ class Naive:
                 rows = tf.cast(held, "f32")
                 mean = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
                 normed = tf.cast(rows * tf.rsqrt(mean + EPS), "bf16") * scaling
-                return tf.reshard(normed, (ROWS, H), "gmem")
+                return tf.reshard(normed, ((ROWS, H), (H, 1), {}), "gmem")
 
     @func
     def rms_norm_quant(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
@@ -75,8 +75,8 @@ class Naive:
                 scale = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX) * (1.0 / FP8_MAX)
                 quant = tf.cast(tf.clamp(blocks / scale, -FP8_MAX, FP8_MAX), "fp8e4m3")
                 return (
-                    tf.reshard(tf.reshape(quant, (ROWS, H)), (ROWS, H), "gmem"),
-                    tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), (ROWS, BLOCKS), "gmem"),
+                    tf.reshard(tf.reshape(quant, (ROWS, H)), ((ROWS, H), (H, 1), {}), "gmem"),
+                    tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), ((ROWS, BLOCKS), (BLOCKS, 1), {}), "gmem"),
                 )
 ```
 
@@ -119,8 +119,8 @@ class Fused:
                 scale = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX) * (1.0 / FP8_MAX)
                 quant = tf.cast(tf.clamp(blocks / scale, -FP8_MAX, FP8_MAX), "fp8e4m3")
                 return (
-                    tf.reshard(tf.reshape(quant, (ROWS, H)), (ROWS, H), "gmem"),
-                    tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), (ROWS, BLOCKS), "gmem"),
+                    tf.reshard(tf.reshape(quant, (ROWS, H)), ((ROWS, H), (H, 1), {}), "gmem"),
+                    tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), ((ROWS, BLOCKS), (BLOCKS, 1), {}), "gmem"),
                 )
 ```
 

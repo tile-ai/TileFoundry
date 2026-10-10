@@ -80,22 +80,22 @@ class PrefillLayer:
             xb = xn
             for m in tf.tile(SEQ, ROWS):  # noqa: F405
                 xr = tf.rms_norm(x[m, 0:HID], g_in)
-                xb = tf.insert_slice(xb, tf.reshard(xr, (ROWS, HID), "gmem"), (m, 0))
+                xb = tf.insert_slice(xb, tf.reshard(xr, ((ROWS, HID), (HID, 1), {}), "gmem"), (m, 0))
 
             p = qkv
             for m in tf.tile(SEQ, ROWS):  # noqa: F405
                 for n in tf.tile(QKV_N, BN):  # noqa: F405
-                    acc = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
+                    acc = tf.zeros(Tensor[(ROWS, BN), "f32", ((ROWS, BN), (BN, 1), {}), "rmem"])
                     for k in tf.tile(HID, BK):  # noqa: F405
-                        xt = tf.reshard(xb[m, k], (ROWS, BK), "smem")
+                        xt = tf.reshard(xb[m, k], ((ROWS, BK), (BK, 1), {}), "smem")
                         wt = tf.reshard(
                             tf.reshape(w_qkv[k, n], (BK, BN)),
-                            (BK, BN),
+                            ((BK, BN), (BN, 1), {}),
                             "smem",
                         )
                         mm = tf.matmul(xt, wt, out_dtype="f32")
-                        acc = acc + tf.reshard(mm, (ROWS, BN), "rmem")
-                    p = tf.insert_slice(p, tf.reshard(acc, (ROWS, BN), "gmem"), (m, n))
+                        acc = acc + tf.reshard(mm, ((ROWS, BN), (BN, 1), {}), "rmem")
+                    p = tf.insert_slice(p, tf.reshard(acc, ((ROWS, BN), (BN, 1), {}), "gmem"), (m, n))
 
             qb = q
             kc2 = kc
@@ -117,108 +117,108 @@ class PrefillLayer:
             for m in tf.tile(SEQ, ROWS):  # noqa: F405
                 for kv in tf.tile(HKV, 1):  # noqa: F405
                     for g in tf.tile(G, 1):  # noqa: F405
-                        qh = tf.reshard(tf.reshape(qb[m, kv, g, 0:D], (ROWS, D)), (ROWS, D), "smem")
-                        mx = tf.zeros(Tensor[(ROWS, 1), "f32", (ROWS, 1), "rmem"]) - 30000.0
-                        lr = tf.zeros(Tensor[(ROWS, 1), "f32", (ROWS, 1), "rmem"])
-                        acc = tf.zeros(Tensor[(ROWS, D), "f32", (ROWS, D), "rmem"])
+                        qh = tf.reshard(tf.reshape(qb[m, kv, g, 0:D], (ROWS, D)), ((ROWS, D), (D, 1), {}), "smem")
+                        mx = tf.zeros(Tensor[(ROWS, 1), "f32", ((ROWS, 1), (1, 1), {}), "rmem"]) - 30000.0
+                        lr = tf.zeros(Tensor[(ROWS, 1), "f32", ((ROWS, 1), (1, 1), {}), "rmem"])
+                        acc = tf.zeros(Tensor[(ROWS, D), "f32", ((ROWS, D), (D, 1), {}), "rmem"])
                         for c in tf.tile(CTX + SEQ, BKV):  # noqa: F405
                             khb = tf.reshard(
-                                tf.reshape(kc2[0:1, c, kv, 0:D], (BKV, D)), (BKV, D), "smem"
+                                tf.reshape(kc2[0:1, c, kv, 0:D], (BKV, D)), ((BKV, D), (D, 1), {}), "smem"
                             )
                             kh = tf.transpose(khb, perm=(1, 0))
                             vh = tf.reshard(
                                 tf.reshape(vc2[0:1, c, kv, 0:D], (BKV, D)),
-                                (BKV, D),
+                                ((BKV, D), (D, 1), {}),
                                 "smem",
                             )
                             sc = tf.reshard(
                                 tf.matmul(qh, kh, out_dtype="f32"),
-                                (ROWS, BKV),
+                                ((ROWS, BKV), (BKV, 1), {}),
                                 "rmem",
                             )
                             mn = tf.maximum(mx, tf.reduce(sc, axes=(1,), keepdim=True, kind="max"))
                             scale = tf.exp(mx - mn)
                             pr = tf.exp(sc - mn)
                             lr = lr * scale + tf.reduce(pr, axes=(1,), keepdim=True, kind="sum")
-                            pb = tf.reshard(tf.cast(pr, dtype="bf16"), (ROWS, BKV), "smem")
+                            pb = tf.reshard(tf.cast(pr, dtype="bf16"), ((ROWS, BKV), (BKV, 1), {}), "smem")
                             pv = tf.matmul(pb, vh, out_dtype="f32")
-                            acc = acc * scale + tf.reshard(pv, (ROWS, D), "rmem")
+                            acc = acc * scale + tf.reshard(pv, ((ROWS, D), (D, 1), {}), "rmem")
                             mx = mn
-                        ah = tf.reshard(tf.cast(tf.div(acc, lr), dtype="bf16"), (ROWS, D), "gmem")
+                        ah = tf.reshard(tf.cast(tf.div(acc, lr), dtype="bf16"), ((ROWS, D), (D, 1), {}), "gmem")
                         ab = tf.insert_slice(ab, tf.reshape(ah, (ROWS, 1, 1, D)), (m, kv, g, 0))
 
             af = tf.reshape(ab, (SEQ, QN))
             hb = h1
             for m in tf.tile(SEQ, ROWS):  # noqa: F405
                 for n in tf.tile(HID, BN):  # noqa: F405
-                    op = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
+                    op = tf.zeros(Tensor[(ROWS, BN), "f32", ((ROWS, BN), (BN, 1), {}), "rmem"])
                     for k in tf.tile(QN, BK):  # noqa: F405
-                        xt = tf.reshard(af[m, k], (ROWS, BK), "smem")
+                        xt = tf.reshard(af[m, k], ((ROWS, BK), (BK, 1), {}), "smem")
                         wt = tf.reshard(
                             tf.reshape(w_o[k, n], (BK, BN)),
-                            (BK, BN),
+                            ((BK, BN), (BN, 1), {}),
                             "smem",
                         )
                         mm = tf.matmul(xt, wt, out_dtype="f32")
-                        op = op + tf.reshard(mm, (ROWS, BN), "rmem")
-                    residual_tile = tf.reshard(x[m, n], (ROWS, BN), "rmem")
+                        op = op + tf.reshard(mm, ((ROWS, BN), (BN, 1), {}), "rmem")
+                    residual_tile = tf.reshard(x[m, n], ((ROWS, BN), (BN, 1), {}), "rmem")
                     sm = tf.cast(tf.cast(residual_tile, dtype="f32") + op, dtype="bf16")
-                    hb = tf.insert_slice(hb, tf.reshard(sm, (ROWS, BN), "gmem"), (m, n))
+                    hb = tf.insert_slice(hb, tf.reshard(sm, ((ROWS, BN), (BN, 1), {}), "gmem"), (m, n))
 
             gb = gu
             for m in tf.tile(SEQ, ROWS):  # noqa: F405
                 xn1 = tf.rms_norm(hb[m, 0:HID], g_post)
                 for n in tf.tile(FFN, BN):  # noqa: F405
-                    gv = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
+                    gv = tf.zeros(Tensor[(ROWS, BN), "f32", ((ROWS, BN), (BN, 1), {}), "rmem"])
                     for k in tf.tile(HID, BK):  # noqa: F405
                         wk = tf.reshape(w_gu[k, 0:1, n], (BK, BN))
-                        xt = tf.reshard(xn1[0:ROWS, k], (ROWS, BK), "smem")
-                        wt = tf.reshard(wk, (BK, BN), "smem")
+                        xt = tf.reshard(xn1[0:ROWS, k], ((ROWS, BK), (BK, 1), {}), "smem")
+                        wt = tf.reshard(wk, ((BK, BN), (BN, 1), {}), "smem")
                         mm = tf.matmul(xt, wt, out_dtype="f32")
-                        gv = gv + tf.reshard(mm, (ROWS, BN), "rmem")
+                        gv = gv + tf.reshard(mm, ((ROWS, BN), (BN, 1), {}), "rmem")
                     gb = tf.insert_slice(
                         gb,
-                        tf.reshape(tf.reshard(gv, (ROWS, BN), "gmem"), (ROWS, 1, BN)),
+                        tf.reshape(tf.reshard(gv, ((ROWS, BN), (BN, 1), {}), "gmem"), (ROWS, 1, BN)),
                         (m, 0, n),
                     )
                 for n in tf.tile(FFN, BN):  # noqa: F405
-                    gv = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
+                    gv = tf.zeros(Tensor[(ROWS, BN), "f32", ((ROWS, BN), (BN, 1), {}), "rmem"])
                     for k in tf.tile(HID, BK):  # noqa: F405
                         wk = tf.reshape(w_gu[k, 1:2, n], (BK, BN))
-                        xt = tf.reshard(xn1[0:ROWS, k], (ROWS, BK), "smem")
-                        wt = tf.reshard(wk, (BK, BN), "smem")
+                        xt = tf.reshard(xn1[0:ROWS, k], ((ROWS, BK), (BK, 1), {}), "smem")
+                        wt = tf.reshard(wk, ((BK, BN), (BN, 1), {}), "smem")
                         mm = tf.matmul(xt, wt, out_dtype="f32")
-                        gv = gv + tf.reshard(mm, (ROWS, BN), "rmem")
+                        gv = gv + tf.reshard(mm, ((ROWS, BN), (BN, 1), {}), "rmem")
                     gb = tf.insert_slice(
                         gb,
-                        tf.reshape(tf.reshard(gv, (ROWS, BN), "gmem"), (ROWS, 1, BN)),
+                        tf.reshape(tf.reshard(gv, ((ROWS, BN), (BN, 1), {}), "gmem"), (ROWS, 1, BN)),
                         (m, 1, n),
                     )
 
             acb = act
             for m in tf.tile(SEQ, ROWS):  # noqa: F405
                 for n in tf.tile(FFN, BN):  # noqa: F405
-                    gate = tf.reshard(tf.reshape(gb[m, 0:1, n], (ROWS, BN)), (ROWS, BN), "rmem")
-                    up = tf.reshard(tf.reshape(gb[m, 1:2, n], (ROWS, BN)), (ROWS, BN), "rmem")
+                    gate = tf.reshard(tf.reshape(gb[m, 0:1, n], (ROWS, BN)), ((ROWS, BN), (BN, 1), {}), "rmem")
+                    up = tf.reshard(tf.reshape(gb[m, 1:2, n], (ROWS, BN)), ((ROWS, BN), (BN, 1), {}), "rmem")
                     sw = tf.cast(tf.silu(gate) * up, dtype="bf16")
-                    acb = tf.insert_slice(acb, tf.reshard(sw, (ROWS, BN), "gmem"), (m, n))
+                    acb = tf.insert_slice(acb, tf.reshard(sw, ((ROWS, BN), (BN, 1), {}), "gmem"), (m, n))
 
             o = out
             for m in tf.tile(SEQ, ROWS):  # noqa: F405
                 for n in tf.tile(HID, BN):  # noqa: F405
-                    dp = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
+                    dp = tf.zeros(Tensor[(ROWS, BN), "f32", ((ROWS, BN), (BN, 1), {}), "rmem"])
                     for k in tf.tile(FFN, BK):  # noqa: F405
-                        xt = tf.reshard(acb[m, k], (ROWS, BK), "smem")
+                        xt = tf.reshard(acb[m, k], ((ROWS, BK), (BK, 1), {}), "smem")
                         wt = tf.reshard(
                             tf.reshape(w_down[k, n], (BK, BN)),
-                            (BK, BN),
+                            ((BK, BN), (BN, 1), {}),
                             "smem",
                         )
                         mm = tf.matmul(xt, wt, out_dtype="f32")
-                        dp = dp + tf.reshard(mm, (ROWS, BN), "rmem")
-                    hr = tf.reshard(hb[m, n], (ROWS, BN), "rmem")
+                        dp = dp + tf.reshard(mm, ((ROWS, BN), (BN, 1), {}), "rmem")
+                    hr = tf.reshard(hb[m, n], ((ROWS, BN), (BN, 1), {}), "rmem")
                     sm = tf.cast(tf.cast(hr, dtype="f32") + dp, dtype="bf16")
-                    o = tf.insert_slice(o, tf.reshard(sm, (ROWS, BN), "gmem"), (m, n))
+                    o = tf.insert_slice(o, tf.reshard(sm, ((ROWS, BN), (BN, 1), {}), "gmem"), (m, n))
         return o
 
     @func
@@ -249,21 +249,21 @@ class PrefillLayer:
     ) -> Tensor[(SEQ, HID), "bf16"]:
         with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as _cta:
             xr = tf.rms_norm(x[0:1, 0:HID], g_in)
-            xb = tf.insert_slice(xn, tf.reshard(xr, (1, HID), "gmem"), (0, 0))
+            xb = tf.insert_slice(xn, tf.reshard(xr, ((1, HID), (HID, 1), {}), "gmem"), (0, 0))
 
             p = qkv
             for n in tf.tile(QKV_N, DN_QKV):  # noqa: F405
-                acc = tf.zeros(Tensor[(1, DN_QKV), "f32", (1, DN_QKV), "rmem"])
+                acc = tf.zeros(Tensor[(1, DN_QKV), "f32", ((1, DN_QKV), (DN_QKV, 1), {}), "rmem"])
                 for k in tf.tile(HID, BK):  # noqa: F405
-                    xt = tf.reshard(xb[0:1, k], (1, BK), "smem")
+                    xt = tf.reshard(xb[0:1, k], ((1, BK), (BK, 1), {}), "smem")
                     wt = tf.reshard(
                         tf.reshape(w_qkv[k, n], (BK, DN_QKV)),
-                        (BK, DN_QKV),
+                        ((BK, DN_QKV), (DN_QKV, 1), {}),
                         "smem",
                     )
                     mm = tf.matmul(xt, wt, out_dtype="f32")
-                    acc = acc + tf.reshard(mm, (1, DN_QKV), "rmem")
-                p = tf.insert_slice(p, tf.reshard(acc, (1, DN_QKV), "gmem"), (0, n))
+                    acc = acc + tf.reshard(mm, ((1, DN_QKV), (DN_QKV, 1), {}), "rmem")
+                p = tf.insert_slice(p, tf.reshard(acc, ((1, DN_QKV), (DN_QKV, 1), {}), "gmem"), (0, n))
 
             q4 = tf.reshape(tf.cast(p[0:1, 0:QN], dtype="bf16"), (1, 1, HQ, D))
             k4 = tf.reshape(tf.cast(p[0:1, QN : QN + KN], dtype="bf16"), (1, 1, HKV, D))
@@ -283,104 +283,104 @@ class PrefillLayer:
             ab = attn
             for kv in tf.tile(HKV, 1):  # noqa: F405
                 for g in tf.tile(G, 1):  # noqa: F405
-                    qh = tf.reshard(tf.reshape(qb[0:1, kv, g, 0:D], (1, D)), (1, D), "smem")
-                    mx = tf.zeros(Tensor[(1, 1), "f32", (1, 1), "rmem"]) - 30000.0
-                    lr = tf.zeros(Tensor[(1, 1), "f32", (1, 1), "rmem"])
-                    acc = tf.zeros(Tensor[(1, D), "f32", (1, D), "rmem"])
+                    qh = tf.reshard(tf.reshape(qb[0:1, kv, g, 0:D], (1, D)), ((1, D), (D, 1), {}), "smem")
+                    mx = tf.zeros(Tensor[(1, 1), "f32", ((1, 1), (1, 1), {}), "rmem"]) - 30000.0
+                    lr = tf.zeros(Tensor[(1, 1), "f32", ((1, 1), (1, 1), {}), "rmem"])
+                    acc = tf.zeros(Tensor[(1, D), "f32", ((1, D), (D, 1), {}), "rmem"])
                     for c in tf.tile(CTX + SEQ, BKV):  # noqa: F405
                         khb = tf.reshard(
-                            tf.reshape(kc2[0:1, c, kv, 0:D], (BKV, D)), (BKV, D), "smem"
+                            tf.reshape(kc2[0:1, c, kv, 0:D], (BKV, D)), ((BKV, D), (D, 1), {}), "smem"
                         )
                         kh = tf.transpose(khb, perm=(1, 0))
                         vh = tf.reshard(
-                            tf.reshape(vc2[0:1, c, kv, 0:D], (BKV, D)), (BKV, D), "smem"
+                            tf.reshape(vc2[0:1, c, kv, 0:D], (BKV, D)), ((BKV, D), (D, 1), {}), "smem"
                         )
-                        sc = tf.reshard(tf.matmul(qh, kh, out_dtype="f32"), (1, BKV), "rmem")
+                        sc = tf.reshard(tf.matmul(qh, kh, out_dtype="f32"), ((1, BKV), (BKV, 1), {}), "rmem")
                         mn = tf.maximum(mx, tf.reduce(sc, axes=(1,), keepdim=True, kind="max"))
                         scale = tf.exp(mx - mn)
                         pr = tf.exp(sc - mn)
                         lr = lr * scale + tf.reduce(pr, axes=(1,), keepdim=True, kind="sum")
-                        pb = tf.reshard(tf.cast(pr, dtype="bf16"), (1, BKV), "smem")
+                        pb = tf.reshard(tf.cast(pr, dtype="bf16"), ((1, BKV), (BKV, 1), {}), "smem")
                         pv = tf.matmul(pb, vh, out_dtype="f32")
-                        acc = acc * scale + tf.reshard(pv, (1, D), "rmem")
+                        acc = acc * scale + tf.reshard(pv, ((1, D), (D, 1), {}), "rmem")
                         mx = mn
-                    ah = tf.reshard(tf.cast(tf.div(acc, lr), dtype="bf16"), (1, D), "gmem")
+                    ah = tf.reshard(tf.cast(tf.div(acc, lr), dtype="bf16"), ((1, D), (D, 1), {}), "gmem")
                     ab = tf.insert_slice(ab, tf.reshape(ah, (1, 1, 1, D)), (0, kv, g, 0))
 
             af = tf.reshape(ab, (SEQ, QN))
             hb = h1
             for n in tf.tile(HID, DN_O):  # noqa: F405
-                op = tf.zeros(Tensor[(1, DN_O), "f32", (1, DN_O), "rmem"])
+                op = tf.zeros(Tensor[(1, DN_O), "f32", ((1, DN_O), (DN_O, 1), {}), "rmem"])
                 for k in tf.tile(QN, BK):  # noqa: F405
-                    xt = tf.reshard(af[0:1, k], (1, BK), "smem")
+                    xt = tf.reshard(af[0:1, k], ((1, BK), (BK, 1), {}), "smem")
                     wt = tf.reshard(
                         tf.reshape(w_o[k, n], (BK, DN_O)),
-                        (BK, DN_O),
+                        ((BK, DN_O), (DN_O, 1), {}),
                         "smem",
                     )
                     mm = tf.matmul(xt, wt, out_dtype="f32")
-                    op = op + tf.reshard(mm, (1, DN_O), "rmem")
-                residual_tile = tf.reshard(x[0:1, n], (1, DN_O), "rmem")
+                    op = op + tf.reshard(mm, ((1, DN_O), (DN_O, 1), {}), "rmem")
+                residual_tile = tf.reshard(x[0:1, n], ((1, DN_O), (DN_O, 1), {}), "rmem")
                 sm = tf.cast(tf.cast(residual_tile, dtype="f32") + op, dtype="bf16")
-                hb = tf.insert_slice(hb, tf.reshard(sm, (1, DN_O), "gmem"), (0, n))
+                hb = tf.insert_slice(hb, tf.reshard(sm, ((1, DN_O), (DN_O, 1), {}), "gmem"), (0, n))
 
             gb = gu
             xn1 = tf.rms_norm(hb[0:1, 0:HID], g_post)
             for n in tf.tile(FFN, DN_FFN):  # noqa: F405
-                gv = tf.zeros(Tensor[(1, DN_FFN), "f32", (1, DN_FFN), "rmem"])
+                gv = tf.zeros(Tensor[(1, DN_FFN), "f32", ((1, DN_FFN), (DN_FFN, 1), {}), "rmem"])
                 for k in tf.tile(HID, BK):  # noqa: F405
-                    xt = tf.reshard(xn1[0:1, k], (1, BK), "smem")
+                    xt = tf.reshard(xn1[0:1, k], ((1, BK), (BK, 1), {}), "smem")
                     wt = tf.reshard(
                         tf.reshape(w_gu[k, 0:1, n], (BK, DN_FFN)),
-                        (BK, DN_FFN),
+                        ((BK, DN_FFN), (DN_FFN, 1), {}),
                         "smem",
                     )
                     mm = tf.matmul(xt, wt, out_dtype="f32")
-                    gv = gv + tf.reshard(mm, (1, DN_FFN), "rmem")
+                    gv = gv + tf.reshard(mm, ((1, DN_FFN), (DN_FFN, 1), {}), "rmem")
                 gb = tf.insert_slice(
                     gb,
-                    tf.reshape(tf.reshard(gv, (1, DN_FFN), "gmem"), (1, 1, DN_FFN)),
+                    tf.reshape(tf.reshard(gv, ((1, DN_FFN), (DN_FFN, 1), {}), "gmem"), (1, 1, DN_FFN)),
                     (0, 0, n),
                 )
             for n in tf.tile(FFN, DN_FFN):  # noqa: F405
-                uv = tf.zeros(Tensor[(1, DN_FFN), "f32", (1, DN_FFN), "rmem"])
+                uv = tf.zeros(Tensor[(1, DN_FFN), "f32", ((1, DN_FFN), (DN_FFN, 1), {}), "rmem"])
                 for k in tf.tile(HID, BK):  # noqa: F405
-                    xt = tf.reshard(xn1[0:1, k], (1, BK), "smem")
+                    xt = tf.reshard(xn1[0:1, k], ((1, BK), (BK, 1), {}), "smem")
                     wt = tf.reshard(
                         tf.reshape(w_gu[k, 1:2, n], (BK, DN_FFN)),
-                        (BK, DN_FFN),
+                        ((BK, DN_FFN), (DN_FFN, 1), {}),
                         "smem",
                     )
                     mm = tf.matmul(xt, wt, out_dtype="f32")
-                    uv = uv + tf.reshard(mm, (1, DN_FFN), "rmem")
+                    uv = uv + tf.reshard(mm, ((1, DN_FFN), (DN_FFN, 1), {}), "rmem")
                 gb = tf.insert_slice(
                     gb,
-                    tf.reshape(tf.reshard(uv, (1, DN_FFN), "gmem"), (1, 1, DN_FFN)),
+                    tf.reshape(tf.reshard(uv, ((1, DN_FFN), (DN_FFN, 1), {}), "gmem"), (1, 1, DN_FFN)),
                     (0, 1, n),
                 )
 
             acb = act
             for n in tf.tile(FFN, DN_FFN):  # noqa: F405
-                gate = tf.reshard(tf.reshape(gb[0:1, 0:1, n], (1, DN_FFN)), (1, DN_FFN), "rmem")
-                up = tf.reshard(tf.reshape(gb[0:1, 1:2, n], (1, DN_FFN)), (1, DN_FFN), "rmem")
+                gate = tf.reshard(tf.reshape(gb[0:1, 0:1, n], (1, DN_FFN)), ((1, DN_FFN), (DN_FFN, 1), {}), "rmem")
+                up = tf.reshard(tf.reshape(gb[0:1, 1:2, n], (1, DN_FFN)), ((1, DN_FFN), (DN_FFN, 1), {}), "rmem")
                 sw = tf.cast(tf.silu(gate) * up, dtype="bf16")
-                acb = tf.insert_slice(acb, tf.reshard(sw, (1, DN_FFN), "gmem"), (0, n))
+                acb = tf.insert_slice(acb, tf.reshard(sw, ((1, DN_FFN), (DN_FFN, 1), {}), "gmem"), (0, n))
 
             o = out
             for n in tf.tile(HID, DN_DOWN):  # noqa: F405
-                dp = tf.zeros(Tensor[(1, DN_DOWN), "f32", (1, DN_DOWN), "rmem"])
+                dp = tf.zeros(Tensor[(1, DN_DOWN), "f32", ((1, DN_DOWN), (DN_DOWN, 1), {}), "rmem"])
                 for k in tf.tile(FFN, BK):  # noqa: F405
-                    xt = tf.reshard(acb[0:1, k], (1, BK), "smem")
+                    xt = tf.reshard(acb[0:1, k], ((1, BK), (BK, 1), {}), "smem")
                     wt = tf.reshard(
                         tf.reshape(w_down[k, n], (BK, DN_DOWN)),
-                        (BK, DN_DOWN),
+                        ((BK, DN_DOWN), (DN_DOWN, 1), {}),
                         "smem",
                     )
                     mm = tf.matmul(xt, wt, out_dtype="f32")
-                    dp = dp + tf.reshard(mm, (1, DN_DOWN), "rmem")
-                residual_tile = tf.reshard(hb[0:1, n], (1, DN_DOWN), "rmem")
+                    dp = dp + tf.reshard(mm, ((1, DN_DOWN), (DN_DOWN, 1), {}), "rmem")
+                residual_tile = tf.reshard(hb[0:1, n], ((1, DN_DOWN), (DN_DOWN, 1), {}), "rmem")
                 sm = tf.cast(tf.cast(residual_tile, dtype="f32") + dp, dtype="bf16")
-                o = tf.insert_slice(o, tf.reshard(sm, (1, DN_DOWN), "gmem"), (0, n))
+                o = tf.insert_slice(o, tf.reshard(sm, ((1, DN_DOWN), (DN_DOWN, 1), {}), "gmem"), (0, n))
         return o
 
     @func
@@ -454,7 +454,7 @@ class PrefillLayer:
                     h,
                     tf.reshard(
                         tf.index_select(w_embed, ids[m], dim=0),
-                        (ROWS, HID),
+                        ((ROWS, HID), (HID, 1), {}),
                         "gmem",
                     ),
                     (m, 0),
@@ -491,17 +491,17 @@ class PrefillLayer:
             for m in tf.tile(SEQ, ROWS):  # noqa: F405
                 hf = tf.rms_norm(h[m, 0:HID], g_final)
                 for n in tf.tile(V, BN):  # noqa: F405
-                    acc = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
+                    acc = tf.zeros(Tensor[(ROWS, BN), "f32", ((ROWS, BN), (BN, 1), {}), "rmem"])
                     for k in tf.tile(HID, BK):  # noqa: F405
-                        xt = tf.reshard(hf[0:ROWS, k], (ROWS, BK), "smem")
+                        xt = tf.reshard(hf[0:ROWS, k], ((ROWS, BK), (BK, 1), {}), "smem")
                         wt = tf.reshard(
                             w_head[k, n],
-                            (BK, BN),
+                            ((BK, BN), (BN, 1), {}),
                             "smem",
                         )
                         mm = tf.matmul(xt, wt, out_dtype="f32")
-                        acc = acc + tf.reshard(mm, (ROWS, BN), "rmem")
-                    lg = tf.insert_slice(lg, tf.reshard(acc, (ROWS, BN), "gmem"), (m, n))
+                        acc = acc + tf.reshard(mm, ((ROWS, BN), (BN, 1), {}), "rmem")
+                    lg = tf.insert_slice(lg, tf.reshard(acc, ((ROWS, BN), (BN, 1), {}), "gmem"), (m, n))
         return lg
 
     @model.specialize(RangePattern("seq", 1, 1))  # noqa: F821
@@ -536,7 +536,7 @@ class PrefillLayer:
         logits: Tensor[(SEQ, V), "f32"],
     ) -> Tensor[(SEQ, V), "f32"]:
         with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as _cta:
-            e = tf.reshard(tf.index_select(w_embed, ids[0:1], dim=0), (1, HID), "gmem")
+            e = tf.reshard(tf.index_select(w_embed, ids[0:1], dim=0), ((1, HID), (HID, 1), {}), "gmem")
             h = tf.insert_slice(x, e, (0, 0))
 
             for i in tf.tile(L, 1):  # noqa: F405
@@ -569,11 +569,11 @@ class PrefillLayer:
             lg = logits
             hf = tf.rms_norm(h[0:1, 0:HID], g_final)
             for n in tf.tile(V, BN):  # noqa: F405
-                acc = tf.zeros(Tensor[(1, BN), "f32", (1, BN), "rmem"])
+                acc = tf.zeros(Tensor[(1, BN), "f32", ((1, BN), (BN, 1), {}), "rmem"])
                 for k in tf.tile(HID, BK):  # noqa: F405
-                    xt = tf.reshard(hf[0:1, k], (1, BK), "smem")
-                    wt = tf.reshard(w_head[k, n], (BK, BN), "smem")
+                    xt = tf.reshard(hf[0:1, k], ((1, BK), (BK, 1), {}), "smem")
+                    wt = tf.reshard(w_head[k, n], ((BK, BN), (BN, 1), {}), "smem")
                     mm = tf.matmul(xt, wt, out_dtype="f32")
-                    acc = acc + tf.reshard(mm, (1, BN), "rmem")
-                lg = tf.insert_slice(lg, tf.reshard(acc, (1, BN), "gmem"), (0, n))
+                    acc = acc + tf.reshard(mm, ((1, BN), (BN, 1), {}), "rmem")
+                lg = tf.insert_slice(lg, tf.reshard(acc, ((1, BN), (BN, 1), {}), "gmem"), (0, n))
         return lg

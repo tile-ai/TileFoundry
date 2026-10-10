@@ -40,7 +40,7 @@ class WithScope:
         with Mesh(("cta",), (2,), ("tile",)) as _cta:
             with Mesh(("thread",), (4,), ("t",)) as thread:
                 local = tf.reshard(x, (8, 16 @ thread.t), "rmem")
-                return tf.reshard(local + local, (8, 16), "gmem")
+                return tf.reshard(local + local, ((8, 16), (16, 1), {}), "gmem")
 
 
 @module(entry="f", target=_TARGET, topologies=_TOPOLOGIES)
@@ -50,7 +50,7 @@ class UnshardedInScope:
         with Mesh(("cta",), (2,), ("tile",)) as _cta:
             with Mesh(("thread",), (4,), ("t",)) as _thread:
                 local = tf.zeros(Tensor[(8, 16), "f32", "rmem"])
-                return tf.reshard(local + local, (8, 16), "gmem")
+                return tf.reshard(local + local, ((8, 16), (16, 1), {}), "gmem")
 
 
 def _cost(owner) -> tuple[int, int, int, int]:

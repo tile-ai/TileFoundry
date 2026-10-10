@@ -32,15 +32,15 @@ class PersistentGemmTiled:
             out = tf.zeros(Tensor[(M, N), "f32"])
             for mi in tf.tile(cta.x * (M // BX), (cta.x + 1) * (M // BX), BM):
                 for ni in tf.tile(cta.y * (N // BY), (cta.y + 1) * (N // BY), BN):
-                    acc = tf.zeros(Tensor[(BM, BN), "f32", (BM, BN), "rmem"])
+                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((BM, BN), (BN, 1), {}), "rmem"])
                     for ki in tf.tile(K, BK):
-                        lhs = tf.reshard(a[mi, ki], (BM, BK), "smem")
-                        rhs = tf.reshard(b[ki, ni], (BK, BN), "smem")
+                        lhs = tf.reshard(a[mi, ki], ((BM, BK), (BK, 1), {}), "smem")
+                        rhs = tf.reshard(b[ki, ni], ((BK, BN), (BN, 1), {}), "smem")
                         product = tf.matmul(lhs, rhs, out_dtype="f32")
-                        acc = acc + tf.reshard(product, (BM, BN), "rmem")
+                        acc = acc + tf.reshard(product, ((BM, BN), (BN, 1), {}), "rmem")
                     out = tf.insert_slice(
                         out,
-                        tf.reshard(acc, (BM, BN), "gmem"),
+                        tf.reshard(acc, ((BM, BN), (BN, 1), {}), "gmem"),
                         (mi, ni),
                     )
             return out

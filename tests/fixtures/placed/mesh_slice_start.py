@@ -17,15 +17,15 @@ class Fixed:
             acc = tf.full_like(tf.zeros(Tensor[(W @ m.w, 1, D), "f32", "smem"]), value=0.0)
             for t in tf.tile(N, BLK * W):
                 b0 = t
-                blk = tf.reshard(x[:, b0 : b0 + BLK, :], (1, BLK, D), "smem")
+                blk = tf.reshard(x[:, b0 : b0 + BLK, :], ((1, BLK, D), (D * BLK, D, 1), {}), "smem")
                 acc = acc + tf.cast(
                     tf.reduce(blk, axes=(1,), keepdim=True, kind="sum"), dtype="f32"
                 )
-            ga = tf.reshard(acc, (W, 1, D), "smem")
+            ga = tf.reshard(acc, ((W, 1, D), (D, D, 1), {}), "smem")
             return tf.reshape(
                 tf.reshard(
                     tf.reduce(ga, axes=(0,), keepdim=False, kind="sum"),
-                    (1, D),
+                    ((1, D), (D, 1), {}),
                     "gmem",
                 ),
                 new_shape=(1, D),
@@ -40,15 +40,15 @@ class Strided:
             acc = tf.full_like(tf.zeros(Tensor[(W @ m.w, 1, D), "f32", "smem"]), value=0.0)
             for t in tf.tile(N, BLK * W):
                 b0 = t + m.w * BLK
-                blk = tf.reshard(x[:, b0 : b0 + BLK, :], (1, BLK, D), "smem")
+                blk = tf.reshard(x[:, b0 : b0 + BLK, :], ((1, BLK, D), (D * BLK, D, 1), {}), "smem")
                 acc = acc + tf.cast(
                     tf.reduce(blk, axes=(1,), keepdim=True, kind="sum"), dtype="f32"
                 )
-            ga = tf.reshard(acc, (W, 1, D), "smem")
+            ga = tf.reshard(acc, ((W, 1, D), (D, D, 1), {}), "smem")
             return tf.reshape(
                 tf.reshard(
                     tf.reduce(ga, axes=(0,), keepdim=False, kind="sum"),
-                    (1, D),
+                    ((1, D), (D, 1), {}),
                     "gmem",
                 ),
                 new_shape=(1, D),
@@ -61,4 +61,4 @@ class OutOfWindow:
     def oob(x: Tensor[(1, N, D), "bf16"]) -> Tensor[(1, BLK, D), "bf16"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as _mesh:
             bad = x[:, N : N + BLK, :]
-            return tf.reshard(bad, (1, BLK, D), "gmem")
+            return tf.reshard(bad, ((1, BLK, D), (D * BLK, D, 1), {}), "gmem")

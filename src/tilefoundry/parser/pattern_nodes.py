@@ -38,6 +38,7 @@ from tilefoundry.ir.types import (
     Broadcast,
     ComposedLayout,
     Layout,
+    Mesh,
     Partial,
     Split,
     Swizzle,
@@ -353,17 +354,6 @@ class PlainLayoutPattern(ElementPattern):
             shape=shape,
             strides=runtime.compact_row_major(shape, mul=operator.mul),
         )
-        if (
-            context.situation != "mesh_layout"
-            and context.function is not None
-            and context.function.state.mesh_stack
-        ):
-            mesh = context.function.state.mesh_stack[-1]
-            return runtime.ShardLayout(
-                layout=layout,
-                attrs=tuple(runtime.Broadcast() for _ in flatten(mesh.layout).shape),
-                mesh=mesh,
-            )
         return layout
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
@@ -486,8 +476,8 @@ def _layout_strides() -> AstPattern[Any]:
 
 
 def _value_states() -> AstPattern[Any]:
-    """``{axis @ B(), axis @ P("sum")}`` — what unsplit mesh axes hold."""
-    pattern = AstNodePattern(
+    """Empty braces broadcast; nonempty braces state unsplit mesh-axis values."""
+    populated = AstNodePattern(
         ast.Set,
         FieldPattern(
             "elts",
@@ -534,6 +524,14 @@ def _value_states() -> AstPattern[Any]:
             ),
         ),
     )
+    pattern = ChoicePattern(
+        populated,
+        AstNodePattern(
+            ast.Dict,
+            FieldPattern("keys", SequencePattern()),
+            FieldPattern("values", SequencePattern()),
+        ),
+    )
     pattern.grammar_name = "value_states"
     return pattern
 
@@ -552,11 +550,14 @@ def _layout_sugar_parts(node: object):
     if not extras or not isinstance(head, ast.Tuple):
         return node, None, None
     strides: ast.Tuple | None = None
-    states: ast.Set | None = None
+    states: ast.Set | ast.Dict | None = None
     for extra in extras:
         if isinstance(extra, ast.Tuple) and strides is None and states is None:
             strides = extra
-        elif isinstance(extra, ast.Set) and states is None:
+        elif (
+            isinstance(extra, ast.Set)
+            or isinstance(extra, ast.Dict) and not extra.keys
+        ) and states is None:
             states = extra
         else:
             return None
@@ -586,6 +587,9 @@ class _PlacementCandidate:
     strides: tuple | None
     splits: tuple[tuple[object, int, int], ...]
     states: tuple[tuple[object, int, str, str | None], ...]
+    states_written: bool = False
+    mesh: Mesh | None = None
+    attrs: tuple[object, ...] = ()
 
 
 def _placement_meshes(value: _PlacementCandidate, context: MatchContext, match):
@@ -654,6 +658,70 @@ class MeshAxisBoundOnceRule:
         return value
 
 
+def _placement_scope(context):
+    if context.function is None or context.situation == "mesh_layout":
+        return None
+    return _parser_infer_context(context).current_mesh
+
+
+def _mesh_axis_keys(mesh):
+    """Identify each physical axis by topology level and authored axis name."""
+    layout = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+    keys = []
+    for topology, shape in zip(mesh.topologies, layout.shape, strict=True):
+        for _ in flatten(shape):
+            axis = len(keys)
+            name = mesh.names[axis] if axis < len(mesh.names) else None
+            keys.append((getattr(topology, "name", topology), name))
+    return tuple(keys)
+
+
+@dataclass(frozen=True)
+class EmptyStatesMeshRule:
+    STATEMENT: ClassVar[str] = (
+        "Empty braces broadcast over every axis of the current mesh scope, "
+        "or of the function mesh in a signature."
+    )
+
+    def apply(self, value, *, match, context):
+        if value.states_written and not value.states and _placement_scope(context) is None:
+            raise ParseError.from_node(
+                match.node, context, "empty braces require a current mesh scope"
+            )
+        return value
+
+
+@dataclass(frozen=True)
+class PlacementScopeRule:
+    STATEMENT: ClassVar[str] = (
+        "A placement covers the current mesh scope; each referenced axis must "
+        "map uniquely to an axis of that scope. Unstated axes are Broadcast."
+    )
+
+    def apply(self, value, *, match, context):
+        if not value.splits and not value.states and not value.states_written:
+            return value
+        mesh = _placement_scope(context)
+        if mesh is None:
+            raise ParseError.from_node(match.node, context, "placement requires a current mesh scope")
+        keys = _mesh_axis_keys(mesh)
+        attrs = [runtime.Broadcast() for _ in keys]
+        for source, source_axis, *state in (*value.splits, *value.states):
+            key = _mesh_axis_keys(source)[source_axis]
+            targets = [axis for axis, held in enumerate(keys) if held == key]
+            if len(targets) != 1:
+                raise ParseError.from_node(
+                    match.node, context, "placement axis does not map uniquely to the current mesh scope"
+                )
+            if len(state) == 1:
+                attr = runtime.Split(state[0])
+            else:
+                kind, reduction = state
+                attr = runtime.Broadcast() if kind == "B" else runtime.Partial(reduction)
+            attrs[targets[0]] = attr
+        return dataclasses.replace(value, mesh=mesh, attrs=tuple(attrs))
+
+
 @dataclass(frozen=True)
 class PlacementConstructionRule:
     """Materialize the candidate only after placement invariants have run."""
@@ -661,25 +729,12 @@ class PlacementConstructionRule:
     STATEMENT: ClassVar[str] = "A placement must construct a valid shard layout."
 
     def apply(self, value, *, match, context):
-        if not value.splits and not value.states:
+        if value.mesh is None:
             return PlacedLayout(
                 shape=value.shape, layout=runtime.Layout(shape=value.shape, strides=value.strides)
             )
-        meshes = _placement_meshes(value, context, match)
-        mesh = meshes[0] if len(meshes) == 1 else runtime.make_mesh(*meshes)
-        source_offsets: dict[int, int] = {}
-        offset = 0
-        for source in meshes:
-            source_offsets[id(source)] = offset
-            offset += len(flatten(source.layout).shape)
-        attrs: list[object] = [runtime.Broadcast() for _ in flatten(mesh.layout).shape]
-        for source, source_axis, tensor_axis in value.splits:
-            attrs[source_offsets[id(source)] + source_axis] = runtime.Split(tensor_axis)
-        for source, source_axis, kind, reduction in value.states:
-            target_axis = source_offsets[id(source)] + source_axis
-            attrs[target_axis] = runtime.Broadcast() if kind == "B" else runtime.Partial(reduction)
         try:
-            canonical = runtime.canonical_shard_layout(value.shape, mesh, tuple(attrs))
+            canonical = runtime.canonical_shard_layout(value.shape, value.mesh, value.attrs)
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
         if value.strides is not None and len(canonical.layout.shape) != len(value.strides):
@@ -806,7 +861,7 @@ class PlacedLayoutPattern(ElementPattern):
                     )
                 )
         if states_node is not None:
-            for index, item in enumerate(states_node.elts):
+            for index, item in enumerate(states_node.elts if isinstance(states_node, ast.Set) else ()):
                 state = _value_state_parts(item)
                 if state is None:
                     return None
@@ -819,7 +874,7 @@ class PlacedLayoutPattern(ElementPattern):
                 children.append(
                     AstChild(child_name, MeshAxisPattern(), axis_node, "mesh_axis", "mesh_axis")
                 )
-        if not found_placement and not states and strides_node is None:
+        if not found_placement and states_node is None and strides_node is None:
             return None
         return dataclasses.replace(
             matched,
@@ -831,6 +886,7 @@ class PlacedLayoutPattern(ElementPattern):
                 "stride_rank": None if strides_node is None else len(strides_node.elts),
                 "bindings": tuple(bindings),
                 "states": tuple(states),
+                "states_written": states_node is not None,
             },
             children=tuple(children),
         )
@@ -853,13 +909,15 @@ class PlacedLayoutPattern(ElementPattern):
             (*children[child_name], kind, reduction)
             for child_name, kind, reduction in match.captures.get("states", ())
         )
-        return _PlacementCandidate(shape, strides, splits, states)
+        return _PlacementCandidate(shape, strides, splits, states, match.captures["states_written"])
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         LayoutStrideRankRule(),
         MeshAxisBoundOnceRule(),
         PlacementMeshResolutionRule(),
         PlacementLevelRule(),
+        EmptyStatesMeshRule(),
+        PlacementScopeRule(),
         PlacementConstructionRule(),
         PlacementAnswerRule(),
     )
