@@ -399,6 +399,7 @@ class ElementPattern(CombinatorPattern, Generic[T]):
     """A named grammar production backed by one executable syntax graph."""
 
     syntax: ClassVar[AstPattern[Any] | None] = None
+    BIND_RULES: ClassVar[tuple[object, ...]] = ()
 
     def match(self, node: object, context: MatchContext) -> AstMatch[T] | None:
         syntax = type(self).syntax
@@ -503,7 +504,28 @@ class LiteralPattern(CombinatorPattern):
         return AstMatch(self, "literal", node, {"value": raw}, "literal")
 
 
+@dataclass(frozen=True)
+class LexicalMeshReferenceRule:
+    STATEMENT: ClassVar[str] = (
+        "Inside an open mesh scope, an external Mesh or mesh-bearing ShardLayout "
+        "cannot stand in for a lexical Mesh binding."
+    )
+
+    def apply(self, value, *, node, context):
+        state = getattr(context.function, "state", None)
+        if getattr(state, "mesh_stack", ()) and (
+            isinstance(value, Mesh)
+            or isinstance(value, ShardLayout) and value.mesh is not None
+        ):
+            raise ParseError.from_node(
+                node, context, f"layout mesh {node.id!r} is not a lexical Mesh binding"
+            )
+        return value
+
+
 class ReferencePattern(CombinatorPattern):
+    REFERENCE_RULES: ClassVar[tuple[object, ...]] = (LexicalMeshReferenceRule(),)
+
     def __init__(self, *, resolve: bool = False, expected: type | tuple[type, ...] | None = None):
         self.resolve = resolve
         self.expected = expected
@@ -1583,14 +1605,8 @@ def _decorator_name(node: ast.AST) -> str | None:
 
 def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
     def external_value(value):
-        state = getattr(context.function, "state", None)
-        if getattr(state, "mesh_stack", ()) and (
-            isinstance(value, Mesh)
-            or isinstance(value, ShardLayout) and value.mesh is not None
-        ):
-            raise ParseError.from_node(
-                node, context, f"layout mesh {node.id!r} is not a lexical Mesh binding"
-            )
+        for rule in ReferencePattern.REFERENCE_RULES:
+            value = rule.apply(value, node=node, context=context)
         return value
 
     if isinstance(node, ast.Name):

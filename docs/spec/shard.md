@@ -349,8 +349,10 @@ Field meanings:
   sub-box ([tir §1.5](./tir.md#15-sync))
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
 
-In a kernel, `with Mesh(selection, layout=shape, names=names)` rearranges a lexical, single-level selection.
-`layout=(shape, strides)` states selection-local numbering (row-major by default); it MUST cover every selected position once, with one fixed physical stride per axis.
+In a kernel, `with Mesh(selection, layout=shape, names=names)` rearranges a lexical,
+single-level selection.
+`layout=(shape, strides)` states selection-local numbering (row-major by default); it MUST
+cover every selected position once, with one fixed physical stride per axis.
 Composition preserves topology and offset; slicing the resulting composed mesh is rejected.
 
 Every mesh MUST state one arrangement per level it names, each in that level's
