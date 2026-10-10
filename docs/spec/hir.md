@@ -1014,6 +1014,8 @@ class Reshape(Op):
   - A plain C-order input reshapes to a C-order `Layout` over `new_shape`. An
     input with no assigned layout, or a non-contiguous plain input whose regroup
     cannot be expressed, has a `None` result layout.
+  - Removing only unit axes from a plain layout MUST preserve the strides of
+    the remaining axes, including when the input is a strided tensor window.
   - A bare, fully-`Broadcast` `ShardLayout` input (every attr `Broadcast`, no
     genuine sharding) carries that `ShardLayout` through `Reshape` when the
     input layout positions can express `new_shape` by the view rules below.
@@ -1091,6 +1093,7 @@ class IndexSelect(Op):
     x: Tensor
     index: Tensor
     dim: int = 0
+    fill_value: float | None = None
 ```
 
 These are pure value forms of torch's whole-slice indexing family
@@ -1106,6 +1109,11 @@ operation and is not an HIR op.
   - `IndexSelect.index` MUST be rank 1 with dtype i32 or i64. Its result has
     `x`'s rank, dtype, and storage; `shape[dim]` becomes `index.shape[0]` and all
     other extents are unchanged.
+  - A plain `Layout` input to `IndexSelect` MUST produce a row-major layout
+    over the result shape, independent of the source strides.
+  - When `IndexSelect.fill_value` is not `None`, indices below zero or at least
+    `x.shape[dim]` MUST produce slices filled with that value without reading
+    the source. With `None`, selection retains torch's bounds behavior.
   - `IndexSelect` produces a natural contiguous internal `Layout` for a
     `ShardLayout` input. `Broadcast` and `Partial` states carry through; a
     `Split` on `dim` becomes `Partial(sum)`, and a `Split` on another dim keeps

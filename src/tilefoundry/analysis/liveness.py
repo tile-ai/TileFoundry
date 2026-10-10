@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.core import Call, Expr, Tuple, Var
 from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 
@@ -22,22 +21,26 @@ def storage_source(value: Expr, bindings: dict[int, Expr]) -> Expr | None:
         return bound
     if isinstance(value, MeshRegion):
         return value.body
+    if isinstance(value, LoopRegion):
+        if not value.yield_values:
+            return value.body
+        return value.params[0] if len(value.yield_values) == 1 else None
     if isinstance(value, Call):
-        position = aliased_operand(value)
-        if position is not None:
-            return value.args[position]
-        if isinstance(value.target, TupleGetItem):
-            source = value.args[0]
-            while (following := storage_source(source, bindings)) is not None:
-                source = following
-            index = value.args[1]
-            if (
-                isinstance(source, Tuple)
-                and isinstance(index, Constant)
-                and type(index.value) is int
-                and 0 <= index.value < len(source.elements)
-            ):
-                return source.elements[index.value]
+        alias = aliased_operand(value)
+        if alias is not None:
+            source = value.args[alias.operand]
+            return source if alias.element is None else _element(source, alias.element, bindings)
+    return None
+
+
+def _element(source: Expr, index: int, bindings: dict[int, Expr]) -> Expr | None:
+    """Resolve a structural projection to the selected backing value."""
+    while (following := storage_source(source, bindings)) is not None:
+        source = following
+    if isinstance(source, Tuple) and 0 <= index < len(source.elements):
+        return source.elements[index]
+    if isinstance(source, LoopRegion) and 0 <= index < len(source.yield_values):
+        return source.params[index]
     return None
 
 

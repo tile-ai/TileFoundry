@@ -16,7 +16,7 @@ from tilefoundry.ir.types.shard_layout import (
     Split,
     split_target_axes,
 )
-from tilefoundry.ir.types.stride import compact_col_major
+from tilefoundry.ir.types.stride import compact_col_major, compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -34,6 +34,7 @@ class IndexSelect(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     index = ParamDef(kind="input", pattern=is_ranked_tensor())
     dim = ParamDef(kind="attribute", annotation=int, default=0)
+    fill_value = ParamDef(kind="attribute", annotation=float | None, default=None)
 
 
 def _norm_dim(dim: int, rank: int, ctx=None, call=None) -> int:
@@ -54,6 +55,8 @@ def _index_select_shard_layout(call, ctx, x_ty, dim: int, out_shape: tuple):
     closed.
     """
     sl = x_ty.layout
+    if isinstance(sl, Layout):
+        return Layout(shape=out_shape, strides=compact_row_major(out_shape))
     if not isinstance(sl, ShardLayout):
         return sl
     if not isinstance(sl.layout, Layout):
@@ -138,6 +141,15 @@ def _eval_index_select(ctx):
     x = ctx.args[0].data
     index = ctx.args[1].data
     dim = _norm_dim(ctx.op.dim, x.dim())
+    if ctx.op.fill_value is not None:
+        valid = (index >= 0) & (index < x.shape[dim])
+        shape = list(x.shape)
+        shape[dim] = index.numel()
+        data = torch.full(shape, ctx.op.fill_value, dtype=x.dtype, device=x.device)
+        selected = torch.index_select(x, dim, index[valid])
+        positions = torch.nonzero(valid, as_tuple=True)[0]
+        data.index_copy_(dim, positions, selected)
+        return TensorValue(data=data, type=ctx.result_type)
     return TensorValue(
         data=torch.index_select(x, dim, index),
         type=ctx.result_type,

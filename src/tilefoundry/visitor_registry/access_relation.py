@@ -53,6 +53,7 @@ class AccessRelation:
 
     relation: "isl.map"
     values: IslParamValues = field(default_factory=dict)
+    lookup: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.relation, isl.multi_aff):
@@ -215,8 +216,8 @@ def projected(
     )
     share = _own_iterations(relations, placed, answered, ninputs)
     carried = tuple(
-        _addressed(relation, view[0], bindings, label, call)
-        for relation, view, label in zip(placed, views, where, strict=True)
+        _addressed(relation, view[0], bindings, label, call, lookup=access.lookup)
+        for relation, view, label, access in zip(placed, views, where, relations, strict=True)
     )
     if share is None:
         return carried
@@ -296,7 +297,9 @@ def _iterating_over(
             f"{share} this participant performs: {error}"
         ) from error
     names = _parameter_names(held)
-    return AccessRelation(held, {name: bindings[name] for name in names if name in bindings})
+    return AccessRelation(
+        held, {name: bindings[name] for name in names if name in bindings}, access.lookup
+    )
 
 
 def renaming_relation(call, ctx, local_relations: tuple[AccessRelation, ...]) -> AccessRelation:
@@ -319,7 +322,11 @@ def renaming_relation(call, ctx, local_relations: tuple[AccessRelation, ...]) ->
     folded = written.reverse().apply_range(reads)
     bindings = _values_of(local_relations)
     names = _parameter_names(folded)
-    return AccessRelation(folded, {name: bindings[name] for name in names if name in bindings})
+    return AccessRelation(
+        folded,
+        {name: bindings[name] for name in names if name in bindings},
+        local_relations[0].lookup,
+    )
 
 
 def _values_of(relations: tuple[AccessRelation, ...]) -> IslParamValues:
@@ -441,7 +448,7 @@ def _within_positions(relation: "isl.map", local) -> "isl.map":
 
 
 def _addressed(
-    relation: "isl.map", local, bindings: IslParamValues, where: str, call
+    relation: "isl.map", local, bindings: IslParamValues, where: str, call, *, lookup=False
 ) -> AccessRelation:
     """One placed boundary, held to the coordinates the value actually has.
 
@@ -451,7 +458,7 @@ def _addressed(
     held = _within_positions(relation, local)
     names = _parameter_names(held)
     return _held_countable(
-        AccessRelation(held, {name: bindings[name] for name in names if name in bindings}),
+        AccessRelation(held, {name: bindings[name] for name in names if name in bindings}, lookup),
         where,
         call,
     )
@@ -693,6 +700,7 @@ def _by_identity(relations: tuple[AccessRelation, ...], rank: int) -> tuple[Acce
         return AccessRelation(
             _renamed(access.relation, targets, taken),
             {canonical[id(value)]: value for value in access.values.values()},
+            access.lookup,
         )
 
     return tuple(renamed(access) for access in relations)
@@ -739,7 +747,9 @@ def _held_to(access: AccessRelation, domain: "isl.set", values: IslParamValues) 
         )
     held = relation.intersect_domain(domain)
     names = _parameter_names(held)
-    return AccessRelation(held, {name: values[name] for name in names if name in values})
+    return AccessRelation(
+        held, {name: values[name] for name in names if name in values}, access.lookup
+    )
 
 
 def projected_axes(access: AccessRelation) -> tuple[int | None, ...]:
@@ -836,7 +846,16 @@ def reached_elements(
     image = _reached_image(access, box, within)
     if image.dim(isl.dim_type.PARAM):
         return None
-    return cardinality(image)
+    reached = cardinality(image)
+    if not access.lookup or reached is None:
+        return reached
+    relation = settled(access)
+    if within is not None:
+        relation = relation.intersect_domain(within)
+    if box is not None and box.tuple_dim() == relation.dim(isl.dim_type.OUT):
+        relation = relation.intersect_range(box)
+    coordinates = cardinality(relation.domain())
+    return None if coordinates is None else min(reached, coordinates)
 
 
 def control_leaves(type_: "Type") -> int:
@@ -947,7 +966,9 @@ def reached_at(
     domain = ", ".join(f"d{index}" for index in range(rank))
     where = f" : {' and '.join(guards)}" if guards else ""
     return AccessRelation(
-        isl.map(f"{_declared(values)}{{ [{domain}] -> [{', '.join(image)}]{where} }}"), values
+        isl.map(f"{_declared(values)}{{ [{domain}] -> [{', '.join(image)}]{where} }}"),
+        values,
+        lookup=bool(free),
     )
 
 

@@ -97,8 +97,12 @@ def storage_owners(
         if key in owners:
             return owners[key]
         following = storage_source(value, liveness.bindings)
-        if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
-            operand = value.args[position]
+        if (
+            isinstance(value, Call)
+            and (alias := aliased_operand(value)) is not None
+            and alias.element is None
+        ):
+            operand = value.args[alias.operand]
             relation = renaming_relation(
                 value, logical, declarations[key].projected_relations(value, logical)
             ).relation
@@ -116,7 +120,7 @@ def storage_owners(
                 param = tuple(
                     param for param in type(value.target)._op_schema.signature
                     if param.kind == "input"
-                )[position]
+                )[alias.operand]
                 raise AnalysisError(
                     f"{type(value.target).__name__} declares its result is {param.name}'s bytes, "
                     f"but its access relation {relation} is not single-valued, injective, "
@@ -460,8 +464,6 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
         ):
             self.tie(carried, initial, ctx)
             self.tie(yielded, carried, inner)
-        if len(node.yield_values) == 1:
-            self.tie(node, node.yield_values[0], inner)
 
     def tie(self, result_value: Expr, operand_value: Expr, ctx: AllocationModel) -> None:
         """Require the single backing buffer stated by one loop-carried slot."""

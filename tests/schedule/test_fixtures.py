@@ -480,7 +480,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
         smem = sorted(item.bytes for item in lifetimes if item.memory_level == "smem")
         rmem = sorted(item.bytes for item in lifetimes if item.memory_level == "rmem")
         assert smem == sorted((512 * 3, 4096 * 3))
-        assert rmem == [4096, 8192, 8192, 8192, 8192]
+        assert rmem == [4096, 8192, 8192, 8192]
 
     if analysis == "memory":
         placement = get_metadata(result.function, RegionMemoryMetadata)

@@ -313,6 +313,12 @@ class Traffic:
 Every traffic amount is what a boundary's own relation reaches. The Op's
 evaluator says which way each boundary moves and whether it materialises
 anything; it does not say how much, and an Op with no relation fails closed.
+For a data-dependent lookup, movement MUST be capped at the number of domain
+coordinates: each coordinate selects at most one element from the possible
+image. This applies to IndexSelect, IndexAdd, IndexCopy, and RoPE lookup
+boundaries. The footprint MUST retain the full possible image. Out-of-bounds
+IndexSelect indices with `fill_value` are not statically distinguished; traffic
+counts one slice per index as an upper bound.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
@@ -467,13 +473,13 @@ are monotonic across the whole Function, including nested and sibling regions.
 | `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
 
 - constraints:
-  - An op registered with `register_buffer_alias(Op, Op.param)` describes the
-    bytes of that input parameter, re-addressed. `Slice` and `Reshape` register
-    their `x` parameter and MUST NOT receive independent lifetimes. A result
-    reached only through a `MeshRegion` result binding edge and tuple
-    projections likewise describes
-    bytes already held by the region body and MUST NOT receive an independent
-    lifetime. Every other result, including `Transpose` or a result that overwrites
+  - An op registered with `@register_buffer_alias(Op)` returns `Alias(operand,
+    element=None)` or `None` for each Call. The alias describes that input's
+    bytes, optionally selecting one tuple element. `Slice` and `Reshape`
+    alias input zero and MUST NOT receive independent lifetimes. `Tuple`,
+    `MeshRegion`, and `LoopRegion` results and static tuple projections describe
+    bytes already held by their selected body or carry and MUST NOT receive an
+    independent lifetime. Every other result, including `Transpose` or a result that overwrites
     a destination, MUST allocate its own. Analysis MUST use operation semantics
     for this distinction rather than infer aliasing from layouts.
   - A caller-owned parameter MUST NOT be reused. Donation is a contract with
@@ -549,7 +555,9 @@ class MemoryLevelPeak:
     requirements are mandatory rather than optional placement choices.
   - Registered buffer aliases MUST follow their named operand to its storage
     owner and MUST NOT receive independent `buffer_bytes` or `offsets`. Analysis
-    MUST prove that the result-to-operand map is single-valued, injective, and
+    MUST resolve structural tuple projections to their selected element without
+    a coordinate-renaming proof. For other aliases, it MUST prove that the
+    result-to-operand map is single-valued, injective, and
     contained in the operand's index box, using the call's own unmodified
     declared access relation via `renaming_relation`, not its folded accesses.
     Failure to prove that declaration MUST raise `AnalysisError`. `Transpose`
@@ -557,7 +565,8 @@ class MemoryLevelPeak:
     and receives its own allocation under the ordinary conflict rules.
   - Liveness MUST propagate a use through the same storage-sharing edges used
     by `storage_owners`: registered buffer aliases to their source, mesh-region
-    results to their body, and tuple projections to their selected element.
+    results to their body, loop results to their body without carries or their
+    carry parameters otherwise, and tuple projections to their selected element.
     Chains MUST propagate to the final owner. Placement interference, register
     peaks, and in-place conflict checks MUST consume this liveness directly,
     without independently rebuilding shared-storage intervals.

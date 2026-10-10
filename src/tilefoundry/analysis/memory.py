@@ -406,7 +406,7 @@ def _allocation_intervals(
     for interval in liveness.intervals:
         value = interval.value
         owner = owners[id(value)]
-        if isinstance(value, (Call, Constant, LoopRegion)) and owner is value:
+        if isinstance(value, (Call, Constant)) and owner is value:
             resident.add(id(value))
         if isinstance(value, LoopRegion):
             resident.update(id(phi) for phi in value.params[: len(value.yield_values)])

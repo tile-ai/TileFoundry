@@ -55,7 +55,7 @@ from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.hir.tensor.zeros import Zeros
-from tilefoundry.ir.types import DType, IntegerDType, ShardLayout, TensorType, Type
+from tilefoundry.ir.types import DType, ShardLayout, TensorType, Type
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -75,7 +75,7 @@ from tilefoundry.ir.types.shard_layout import (
 from tilefoundry.ir.types.utils import numel, tensor_bytes
 from tilefoundry.visitor_registry.access_relation import logical_axes_of
 
-from .contexts import Cost, CostContext, TrafficBytes
+from .contexts import Cost, CostContext, TrafficBytes, work
 from .registries import register_cost_evaluator
 
 
@@ -119,7 +119,8 @@ def _elementwise(call: Call, ctx: CostContext, *, dtype: DType | None = None) ->
             result_dtype = next(
                 type.dtype for type in inputs if isinstance(type, TensorType)
             )
-    return Cost({result_dtype: numel(output)}, _traffic(inputs, output))
+    flops, service = work(result_dtype, numel(output))
+    return Cost(flops, _traffic(inputs, output), service)
 
 
 def _serviced(call: Call, ctx: CostContext, kind: str) -> Cost:
@@ -188,7 +189,8 @@ def _reduce(call: Call, ctx: CostContext) -> Cost:
     output = _output_type(call, ctx)
     if not isinstance(source, TensorType):
         raise ValueError("Reduce cost requires a tensor input")
-    return Cost({source.dtype: numel(source)}, _traffic((source,), output))
+    flops, service = work(source.dtype, numel(source))
+    return Cost(flops, _traffic((source,), output), service)
 
 
 @register_cost_evaluator(RMSNorm)
@@ -228,15 +230,7 @@ def _binary(call: Call, ctx: CostContext) -> Cost:
     kind = call.target.kind
     if kind in _PREDICATES:
         return _serviced(call, ctx, "predicate")
-    if _integral(call, ctx):
-        return _serviced(call, ctx, "integer")
     return _elementwise(call, ctx)
-
-
-def _integral(call: Call, ctx: CostContext) -> bool:
-    """Whether this operation's result is whole numbers rather than reals."""
-    output = _output_type(call, ctx)
-    return isinstance(output, TensorType) and isinstance(output.dtype, IntegerDType)
 
 
 _SPECIAL = frozenset(
@@ -260,8 +254,6 @@ def _unary(call: Call, ctx: CostContext) -> Cost:
         return _serviced(call, ctx, "special")
     if kind is UnaryKind.NOT:
         return _serviced(call, ctx, "predicate")
-    if _integral(call, ctx):
-        return _serviced(call, ctx, "integer")
     return _elementwise(call, ctx)
 
 
@@ -410,7 +402,8 @@ def _topk(call: Call, ctx: CostContext) -> Cost:
     output = _output_type(call, ctx)
     source = inputs[0]
     dtype = source.dtype if isinstance(source, TensorType) else DType.f32
-    return Cost({dtype: numel(source)}, _traffic(inputs, output))
+    flops, service = work(dtype, numel(source))
+    return Cost(flops, _traffic(inputs, output), service)
 
 
 @register_cost_evaluator(IndexSelect)
@@ -431,14 +424,16 @@ def _index_select(call: Call, ctx: CostContext) -> Cost:
 def _index_add(call: Call, ctx: CostContext) -> Cost:
     _, index, src = _input_types(call, ctx)
     touched = tensor_bytes(src)
+    flops, service = work(src.dtype, numel(src))
     return Cost(
-        {src.dtype: numel(src)},
+        flops,
         (
             TrafficBytes(read=touched),
             TrafficBytes(read=tensor_bytes(index)),
             TrafficBytes(read=touched),
             TrafficBytes(write=touched),
         ),
+        service,
     )
 
 
