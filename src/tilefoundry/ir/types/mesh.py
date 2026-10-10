@@ -48,7 +48,9 @@ class Mesh:
             not isinstance(topology, Topology) for topology in self.topologies
         ):
             raise ValueError("a multi-level Mesh requires Topology values")
-        topology_names = tuple(getattr(topology, "name", topology) for topology in self.topologies)
+        topology_names = tuple(
+            getattr(topology, "name", topology) for topology in self.topologies
+        )
         if len(set(topology_names)) != len(topology_names):
             raise ValueError(f"Mesh topology names must be unique, got {topology_names!r}")
         object.__setattr__(self, "layout", _nested(self.layout, tuple(self.topologies)))
@@ -240,7 +242,7 @@ def levels(mesh: Mesh) -> tuple[Layout, ...]:
     return tuple(get(stated, index) for index in range(_rank(stated)))
 
 
-def refine(selection: Mesh, layout: Layout, names: tuple[str, ...]) -> Mesh:
+def refine(selection: Mesh, shape: tuple[int, ...], names: tuple[str, ...]) -> Mesh:
     """Refactor a selection's row-major positions into equally spaced axes.
 
     Retain the selected topology and offset; derive each physical stride from
@@ -248,10 +250,10 @@ def refine(selection: Mesh, layout: Layout, names: tuple[str, ...]) -> Mesh:
     """
     if len(selection.topologies) != 1:
         raise ValueError(f"a refined mesh selects one topology level; got {_named(selection)!r}")
-    if not isinstance(layout, Layout):
-        raise ValueError("a refined mesh layout must be a Layout")
+    if not isinstance(shape, tuple) or any(isinstance(one, tuple) for one in shape):
+        raise ValueError("a refined mesh states its shape only; strides come from the selection")
     source = flatten(levels(selection)[0])
-    shape = tuple(flatten(layout.shape))
+    layout = Layout(shape)
     count = size(source)
     if size(layout) != count:
         raise ValueError(

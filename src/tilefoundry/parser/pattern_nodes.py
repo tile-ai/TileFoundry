@@ -897,12 +897,6 @@ class ComposedLayoutSugarPattern(ElementPattern):
             outer = outer.left
             if isinstance(outer, ast.BinOp) and isinstance(outer.op, ast.Add):
                 return PatternFailure("composed_layout", outer, "write one offset: L + (a + b)")
-        if any(isinstance(part, ast.MatMult) for part in ast.walk(outer)):
-            return PatternFailure(
-                "composed_layout",
-                outer,
-                "composed layout outer must be a Layout without mesh placement",
-            )
         children = [
             AstChild(
                 "outer",
@@ -2254,9 +2248,7 @@ class CallBindingRule:
 
 @dataclass(frozen=True)
 class AuthoredCallScopeRule:
-    STATEMENT: ClassVar[str] = (
-        "An authored HIR call must run inside a mesh if its function opens one."
-    )
+    STATEMENT: ClassVar[str] = "An authored HIR call must run inside a mesh if its function opens one."
 
     def apply(self, value, *, match, context):
         _note_authored_call(match.node, context)
@@ -3585,6 +3577,17 @@ class MeshContextPattern(ElementPattern):
             )
         if layout_node is None:
             return PatternFailure("mesh", node, "a mesh requires a `layout`")
+        if (
+            refining
+            and ShapePattern().match(
+                layout_node, context.child(situation="mesh_shape", role="shape")
+            ) is None
+        ):
+            return PatternFailure(
+                "mesh",
+                layout_node,
+                "a refined mesh states its shape only; strides come from the selection",
+            )
         children = [
             AstChild(
                 "selection" if refining else "topology_names",
@@ -3593,7 +3596,13 @@ class MeshContextPattern(ElementPattern):
                 "mesh_topologies",
                 "topologies",
             ),
-            AstChild("layout", LayoutPattern(), layout_node, "mesh_layout", "layout"),
+            AstChild(
+                "layout",
+                ShapePattern() if refining else LayoutPattern(),
+                layout_node,
+                "mesh_shape" if refining else "mesh_layout",
+                "shape" if refining else "layout",
+            ),
         ]
         if names_node is not None:
             children.append(
@@ -3618,10 +3627,7 @@ class MeshContextPattern(ElementPattern):
             raise ParseError.from_node(match.node, context, "Mesh requires function context")
         if match.branch_id == "mesh_refine":
             try:
-                layout = children["layout"]
-                if isinstance(layout, PlacedLayout):
-                    layout = layout.layout
-                mesh = refine(children["selection"], layout, children.get("names", ()))
+                mesh = refine(children["selection"], children["layout"], children.get("names", ()))
             except (TypeError, ValueError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
         elif match.branch_id == "mesh_context":
@@ -3818,7 +3824,8 @@ def _region_captures(node, context, excluded=frozenset()):
                     if isinstance(item.optional_vars, ast.Name):
                         nested_bound.add(item.optional_vars.id)
                 nested_bound.update(
-                    _directly_bound_names(statement.body) - _read_before_bound(statement.body)
+                    _directly_bound_names(statement.body)
+                    - _read_before_bound(statement.body)
                 )
                 for child in statement.body:
                     visit(child, frozenset(nested_bound))
@@ -4228,6 +4235,21 @@ class LoopCarryPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+def _loop_iterator_kind(call: ast.Call) -> str | None:
+    """Recognize the iterator surface shared by syntax and diagnostics."""
+    callee = call.func
+    if isinstance(callee, ast.Name) and callee.id in {"tile", "range"}:
+        return callee.id
+    if (
+        isinstance(callee, ast.Attribute)
+        and isinstance(callee.value, ast.Name)
+        and callee.value.id == "tf"
+        and callee.attr == "tile"
+    ):
+        return "tile"
+    return None
+
+
 class LoopIteratorPattern(ElementPattern):
     element_name = "loop_iterator"
     syntax = LazyPattern(
@@ -4236,21 +4258,8 @@ class LoopIteratorPattern(ElementPattern):
                 "tile",
                 AstNodePattern(
                     ast.Call,
-                    FieldPattern(
-                        "func",
-                        ChoicePattern(
-                            AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("tile"))),
-                            AstNodePattern(
-                                ast.Attribute,
-                                FieldPattern(
-                                    "value",
-                                    AstNodePattern(
-                                        ast.Name, FieldPattern("id", LiteralPattern("tf"))
-                                    ),
-                                ),
-                                FieldPattern("attr", LiteralPattern("tile")),
-                            ),
-                        ),
+                    PredicatePattern(
+                        "tile iterator", lambda node, context: _loop_iterator_kind(node) == "tile"
                     ),
                     FieldPattern("keywords", SequencePattern()),
                     FieldPattern(
@@ -4271,9 +4280,8 @@ class LoopIteratorPattern(ElementPattern):
                 "range",
                 AstNodePattern(
                     ast.Call,
-                    FieldPattern(
-                        "func",
-                        AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("range"))),
+                    PredicatePattern(
+                        "range iterator", lambda node, context: _loop_iterator_kind(node) == "range"
                     ),
                     FieldPattern("keywords", SequencePattern()),
                     FieldPattern(
@@ -4296,7 +4304,7 @@ class LoopIteratorPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        return match.branch_id
+        return _loop_iterator_kind(match.node)
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
@@ -4361,20 +4369,8 @@ class LoopHeaderPattern(ElementPattern):
         what the parser accepts. A shape mismatch alone would report only that
         the pattern did not match, so the specific reason is stated here first.
         """
-        if (
-            isinstance(node, ast.For)
-            and isinstance(node.iter, ast.Call)
-            and (
-                isinstance(node.iter.func, ast.Name)
-                or (
-                    isinstance(node.iter.func, ast.Attribute)
-                    and isinstance(node.iter.func.value, ast.Name)
-                    and node.iter.func.value.id == "tf"
-                    and node.iter.func.attr == "tile"
-                )
-            )
-        ):
-            kind = node.iter.func.id if isinstance(node.iter.func, ast.Name) else "tile"
+        if isinstance(node, ast.For) and isinstance(node.iter, ast.Call):
+            kind = _loop_iterator_kind(node.iter)
             count = len(node.iter.args)
             if kind not in {"tile", "range"}:
                 return PatternFailure(
@@ -4399,7 +4395,7 @@ class LoopHeaderPattern(ElementPattern):
         assert isinstance(node, ast.For)
         assert isinstance(node.target, ast.Name)
         assert isinstance(node.iter, ast.Call)
-        kind = node.iter.func.id if isinstance(node.iter.func, ast.Name) else "tile"
+        kind = _loop_iterator_kind(node.iter)
         count = len(node.iter.args)
         if node.iter.keywords:
             return PatternFailure(
