@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import cache
+from itertools import product
 from math import prod
 
 import isl
@@ -23,9 +24,11 @@ from tilefoundry.ir.types import (
     TensorType,
 )
 from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout import apply
+from tilefoundry.ir.types.layout import apply, get, rank
 from tilefoundry.ir.types.shard_layout import (
+    _positions,
     layout_axis_to_tensor_axis,
+    local_layout_and_offset,
     shard_layout_of,
     split_target_axes,
 )
@@ -49,50 +52,35 @@ class Bitcast(Op):
 
 
 def _addresses(layout, count: int):
-    """Pair a sharded element's owning mesh coordinate with its local offset.
+    """Enumerate each unit's local addresses using the shared shard definition.
 
-    Local views retain the whole layout's strides and composed address function.
+    Shard ownership uses the layout's factored domain, independently of its
+    grouping into logical tensor axes. Whole addresses identify colex elements.
     """
     if not isinstance(layout, ShardLayout):
         return tuple(apply(layout, coord) for coord in range(count))
-    shape = tuple(prod(flatten(mode)) for mode in layout.layout.shape)
-    mesh_shape = tuple(flatten(layout.mesh.layout.shape))
-    if len(layout.attrs) != len(mesh_shape):
-        raise ValueError("shard attributes must match the mesh axes")
-    divisors = [1] * len(shape)
-    for attr, extent in zip(layout.attrs, mesh_shape, strict=True):
-        if not isinstance(attr, Split):
-            raise ValueError("rmem layout must contain only Split attributes")
-        if not 0 <= attr.axis < len(shape):
-            raise ValueError("Split axis is outside the layout")
-        divisors[attr.axis] *= extent
-    if any(extent % divisor for extent, divisor in zip(shape, divisors, strict=True)):
-        raise ValueError("Split mesh extents must divide the layout modes")
-    addresses = []
-    for coord in range(count):
-        digits = _coordinates(coord, shape)
-        local = [
-            digit % (extent // divisor)
-            for digit, extent, divisor in zip(digits, shape, divisors, strict=True)
-        ]
-        unit = []
-        for mesh_axis, (attr, extent) in enumerate(zip(layout.attrs, mesh_shape, strict=True)):
-            inner = prod(
-                mesh_shape[other]
-                for other in range(mesh_axis + 1, len(mesh_shape))
-                if layout.attrs[other].axis == attr.axis
-            )
-            unit.append(
-                digits[attr.axis] // (shape[attr.axis] // divisors[attr.axis] * inner) % extent
-            )
-        origin = tuple(digit - held for digit, held in zip(digits, local, strict=True))
-        origin_coord = 0
-        stride = 1
-        for digit, extent in zip(origin, shape, strict=True):
-            origin_coord += digit * stride
-            stride *= extent
-        offset = apply(layout.layout, coord) - apply(layout.layout, origin_coord)
-        addresses.append((tuple(unit), offset))
+    whole = {apply(layout.layout, coord): coord for coord in range(count)}
+    if len(whole) != count:
+        raise ValueError(f"rmem layout address function is not injective: {layout!r}")
+    stated = layout.mesh.layout
+    if isinstance(stated, ComposedLayout):
+        stated = stated.outer
+    levels = tuple(get(stated, index) for index in range(rank(stated)))
+    addresses = [None] * count
+    for coordinates in product(*(range(prod(flatten(level.shape))) for level in levels)):
+        ids = tuple(apply(level, coord) for level, coord in zip(levels, coordinates, strict=True))
+        unit = tuple(_positions(layout, ids).values())
+        local, offset = local_layout_and_offset(layout, tuple(layout.layout.shape), ids)
+        for coord in range(prod(local.shape)):
+            held = apply(local, coord)
+            logical = whole.get(offset + held)
+            if logical is None:
+                raise ValueError(f"local shard addresses extend outside the rmem layout: {layout!r}")
+            if addresses[logical] is not None:
+                raise ValueError(f"local shards overlap in rmem layout: {layout!r}")
+            addresses[logical] = (unit, held)
+    if any(address is None for address in addresses):
+        raise ValueError(f"local shards do not cover the rmem layout: {layout!r}")
     return tuple(addresses)
 
 
@@ -134,6 +122,16 @@ def _(call: Call, ctx) -> TensorType:
             ctx.error(call, "source and result ShardLayout must use the same mesh")
     for end, held in (("source", source.layout), ("result", layout)):
         if sharded:
+            inner = held.layout
+            if (
+                not isinstance(inner, Layout)
+                or inner.strides is None
+                or any(isinstance(stride, tuple) for stride in inner.strides)
+            ):
+                ctx.error(
+                    call,
+                    f"{end} rmem layout requires an inner Layout with flat stated strides: {held!r}",
+                )
             if not all(isinstance(attr, Split) for attr in held.attrs):
                 ctx.error(call, f"{end} rmem layout must contain only Split attributes")
             try:

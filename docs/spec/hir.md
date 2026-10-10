@@ -711,8 +711,10 @@ second presentation of the result.
   For rmem shards, an address is the owning mesh coordinate paired with the
   offset within that unit; the two address sets MUST be equal, so every element
   stays in its original unit and register. `Broadcast` and `Partial` shards
-  MUST be rejected. The underlying layouts MUST be plain. Both shapes MUST
-  be literal and have the same element count. Both address functions MUST be
+  MUST be rejected. Rmem shards MUST have an underlying `Layout` with stated,
+  non-nested strides; composed underlying layouts MUST be rejected. Ownership
+  MUST use `local_layout_and_offset` on the layout's factored domain. Both shapes
+  MUST be literal and have the same element count. Both address functions MUST be
   injective, and every result address MUST belong to the source address set,
   using the complete colex address functions including composed swizzles.
   Type inference MUST reject violations and identify the failing end and rule.
