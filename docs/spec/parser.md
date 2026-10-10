@@ -73,9 +73,10 @@ expression in the HIR value graph. A `with Mesh(...)` statement uses that value
 to delimit an execution domain and does not describe the placement of its
 result. An `as name` binding is lexical: it is available inside the `with`
 body and expires when the statement ends. When a body changes a name visible
-before the `with`, or binds a new name read after it, each escaping name is
-rebound to the enclosing `MeshRegion` result (a tuple region with `TupleGetItem`
-projections when several names escape); unchanged captures and new names used
+before the `with`, or binds a new name in its live-out (the conservative set of
+names read after it), each escaping name is rebound to the enclosing `MeshRegion`
+result (a tuple region with `TupleGetItem` projections when several names escape);
+unchanged captures and new names used
 only inside the body remain local to the scope. Names read inside either a
 MeshRegion or LoopRegion but bound outside it are captured as `args`, with a
 fresh `params` binding used by the body. LoopRegion places
@@ -118,6 +119,9 @@ bound that is not a literal is read as the dimension arithmetic the loop was
 lowered from, so a bound naming a mesh coordinate reads back as it was printed.
 
 ## 2. Syntax and Rules
+
+Negative integer and floating-point literals are single `Constant` values.
+Negating a name or a runtime expression constructs a `Unary(NEG)` Call.
 
 Tuple subscripting lowers `stages[index]` to `TupleGetItem(stages, index)`.
 Literal negative indices are normalized against the tuple arity before lowering.

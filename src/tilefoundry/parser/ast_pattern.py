@@ -736,18 +736,18 @@ class BindPattern(CombinatorPattern):
     def __init__(
         self,
         pattern: AstPattern[Any],
-        binder: Callable[
+        enter: Callable[
             [object, MatchContext, AstMatch[Any]], AstMatch[Any] | MatchFailure | None
         ],
     ):
         self.pattern = pattern
-        self.binder = binder
+        self.enter = enter
 
     def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         matched = self.pattern.match(node, context)
         if not is_matched(matched):
             return matched
-        bound = self.binder(node, context, matched)
+        bound = self.enter(node, context, matched)
         return bound
 
 
@@ -824,6 +824,7 @@ class ParserState:
     mesh_coordinates: dict[tuple[int, int], object] = field(default_factory=dict)
     opened_mesh: bool = False
     unscoped_call: ast.AST | None = None
+    live_out: dict[ast.With, frozenset[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

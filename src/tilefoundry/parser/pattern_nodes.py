@@ -9,7 +9,6 @@ from __future__ import annotations
 import ast
 import dataclasses
 import enum
-import math
 import operator
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -726,7 +725,7 @@ class PlacedLayoutPattern(ElementPattern):
                 ),
                 _layout_dims(),
             ),
-            PlacedLayoutPattern._bind,
+            PlacedLayoutPattern.enter,
         )
     )
 
@@ -744,7 +743,7 @@ class PlacedLayoutPattern(ElementPattern):
         return extent, (*axes, *right_axes)
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def enter(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
         parts = _layout_sugar_parts(node)
         if parts is None:
             return None
@@ -1537,12 +1536,12 @@ class SignaturePattern(ElementPattern):
                 FieldPattern("kwarg", LiteralPattern(None)),
                 FieldPattern("defaults", SequencePattern()),
             ),
-            SignaturePattern._bind,
+            SignaturePattern.enter,
         )
     )
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def enter(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
         assert isinstance(node, ast.arguments)
         if context.function is None:
             return None
@@ -1730,12 +1729,12 @@ class StaticDictPattern(ElementPattern):
                 FieldPattern("keys", RepeatPattern(StaticValuePattern())),
                 FieldPattern("values", RepeatPattern(StaticValuePattern())),
             ),
-            StaticDictPattern._bind,
+            StaticDictPattern.enter,
         )
     )
 
     @staticmethod
-    def _bind(
+    def enter(
         node: object, context: MatchContext, matched: AstMatch[Any]
     ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Dict)
@@ -1885,12 +1884,12 @@ class StaticCallPattern(ElementPattern):
                     ),
                 ),
             ),
-            StaticCallPattern._bind,
+            StaticCallPattern.enter,
         )
     )
 
     @staticmethod
-    def _bind(
+    def enter(
         node: object, context: MatchContext, matched: AstMatch[Any]
     ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Call)
@@ -2073,13 +2072,37 @@ class NamePattern(ElementPattern):
 class ConstantPattern(ElementPattern):
     element_name = "constant"
     syntax = LazyPattern(
-        lambda: BranchPattern(
-            "constant",
-            AstNodePattern(
-                ast.Constant,
-                FieldPattern("value", LiteralPattern(value_type=(bool, int, float))),
+        lambda: ChoicePattern(
+            BranchPattern(
+                "constant",
+                AstNodePattern(
+                    ast.Constant,
+                    FieldPattern("value", LiteralPattern(value_type=(bool, int, float))),
+                ),
+                pattern_id="expression.constant",
             ),
-            pattern_id="expression.constant",
+            BranchPattern(
+                "signed_constant",
+                AstNodePattern(
+                    ast.UnaryOp,
+                    FieldPattern("op", AstNodePattern(ast.USub)),
+                    FieldPattern(
+                        "operand",
+                        AstNodePattern(
+                            ast.Constant,
+                            FieldPattern(
+                                "value",
+                                PredicatePattern(
+                                    "numeric-literal",
+                                    lambda value, context: type(value) in (int, float),
+                                ),
+                            ),
+                        ),
+                    ),
+                    CapturePattern("value", lambda node, context: ast.literal_eval(node)),
+                ),
+                pattern_id="expression.signed_constant",
+            ),
         )
     )
 
@@ -2192,7 +2215,7 @@ class VariadicInputsPattern(ElementPattern):
                             ),
                         ),
                     ),
-                    VariadicInputsPattern._bind_sequence,
+                    VariadicInputsPattern.enter_sequence,
                 ),
                 pattern_id="call.variadic.list",
             ),
@@ -2213,13 +2236,13 @@ class VariadicInputsPattern(ElementPattern):
                             ),
                         ),
                     ),
-                    VariadicInputsPattern._bind_sequence,
+                    VariadicInputsPattern.enter_sequence,
                 ),
                 pattern_id="call.variadic.tuple",
             ),
             BindPattern(
                 AstNodePattern(ast.ListComp),
-                VariadicInputsPattern._bind_comprehension,
+                VariadicInputsPattern.enter_comprehension,
             ),
             BranchPattern(
                 "generator_expression",
@@ -2235,7 +2258,7 @@ class VariadicInputsPattern(ElementPattern):
     )
 
     @staticmethod
-    def _bind_sequence(
+    def enter_sequence(
         node: object, context: MatchContext, matched: AstMatch[Any]
     ) -> AstMatch[Any]:
         assert isinstance(node, (ast.List, ast.Tuple))
@@ -2248,7 +2271,7 @@ class VariadicInputsPattern(ElementPattern):
         return matched
 
     @staticmethod
-    def _bind_comprehension(
+    def enter_comprehension(
         node: object, context: MatchContext, matched: AstMatch[Any]
     ) -> AstMatch[Any]:
         assert isinstance(node, ast.ListComp)
@@ -2395,7 +2418,7 @@ class CallPattern(ElementPattern):
                     ),
                 ),
             ),
-            CallPattern._bind,
+            CallPattern.enter,
         )
     )
 
@@ -2525,7 +2548,7 @@ class CallPattern(ElementPattern):
         return tuple(children)
 
     @staticmethod
-    def _bind(
+    def enter(
         node: object, context: MatchContext, matched: AstMatch[Any]
     ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Call)
@@ -2825,18 +2848,6 @@ class BinaryExpressionPattern(ElementPattern):
     )
 
 
-@dataclass(frozen=True)
-class UnaryCallRule:
-    STATEMENT: ClassVar[str] = "An unfolded unary expression must obey the authored-call rules."
-
-    def apply(self, value, *, match, context):
-        if isinstance(value, runtime.Constant):
-            return value
-        for rule in (CallBindingRule(), AuthoredCallScopeRule(), CallTypeInferenceRule()):
-            value = rule.apply(value, match=match, context=context)
-        return value
-
-
 class UnaryExpressionPattern(ElementPattern):
     element_name = "unary_expression"
     syntax = LazyPattern(
@@ -2867,13 +2878,6 @@ class UnaryExpressionPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         operand = children["operand"]
-        if (
-            match.captures["kind"] == "NEG"
-            and isinstance(operand, runtime.Constant)
-            and isinstance(operand.value, float)
-            and math.isinf(operand.value)
-        ):
-            return runtime.Constant(type=operand.type, value=-operand.value)
         target = runtime.Unary(kind=runtime.UnaryKind[match.captures["kind"]])
         return runtime.Call(
             type=operand.type,
@@ -2881,7 +2885,11 @@ class UnaryExpressionPattern(ElementPattern):
             args=(operand,),
         )
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = (UnaryCallRule(),)
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (
+        CallBindingRule(),
+        AuthoredCallScopeRule(),
+        CallTypeInferenceRule(),
+    )
 
 
 class SliceEndpointBinaryPattern(ElementPattern):
@@ -3208,12 +3216,12 @@ class MeshCoordinatePattern(ElementPattern):
                 FieldPattern("value", AstNodePattern(ast.Name)),
                 FieldPattern("attr", LiteralPattern(value_type=str)),
             ),
-            MeshCoordinatePattern._bind,
+            MeshCoordinatePattern.enter,
         )
     )
 
     @staticmethod
-    def _bind(
+    def enter(
         node: object, context: MatchContext, matched: AstMatch[Any]
     ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Attribute)
@@ -3279,10 +3287,10 @@ class ExpressionPattern(ElementPattern):
             SubscriptExpressionPattern(),
             MatMulExpressionPattern(),
             BinaryExpressionPattern(),
+            ConstantPattern(),
             UnaryExpressionPattern(),
             MeshCoordinatePattern(),
             NamePattern(),
-            ConstantPattern(),
             TupleExpressionPattern(),
             TensorPattern(),
             BranchPattern(
@@ -3342,7 +3350,7 @@ class MeshContextPattern(ElementPattern):
                         ),
                     ),
                 ),
-                MeshContextPattern._bind,
+                MeshContextPattern.enter,
             ),
             BranchPattern(
                 "mesh_reference",
@@ -3367,7 +3375,7 @@ class MeshContextPattern(ElementPattern):
     )
 
     @staticmethod
-    def _bind(
+    def enter(
         node: object, context: MatchContext, matched: AstMatch[Any]
     ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Call)
@@ -3543,17 +3551,23 @@ def _read_before_bound(statements):
     return frozenset(live)
 
 
-def _names_read_after(statements):
-    """Return, for each `with` child, the names the statements after it read."""
-    read_after: set[str] = set()
-    found: dict[int, Mapping[str, object]] = {}
-    for index in range(len(statements) - 1, -1, -1):
-        statement = statements[index]
+def live_out(
+    statements, after: frozenset[str] = frozenset()
+) -> dict[ast.With, frozenset[str]]:
+    """Each with's conservative live-out: names read by following statements."""
+    found: dict[ast.With, frozenset[str]] = {}
+    for statement in reversed(statements):
         if isinstance(statement, ast.With):
-            found[index] = {"read_after": frozenset(read_after)}
-        read_after.update(_loaded_names((statement,)))
+            found[statement] = after
+            found.update(live_out(statement.body, after))
+        elif isinstance(statement, (ast.For, ast.While)):
+            found.update(live_out(statement.body))
+            found.update(live_out(statement.orelse))
+        elif isinstance(statement, ast.If):
+            found.update(live_out(statement.body, after))
+            found.update(live_out(statement.orelse, after))
+        after |= _loaded_names((statement,))
     return found
-
 
 def _enter_mesh_scope(context, mesh, match):
     """Record the scope a `with` opens, before its body is built.
@@ -3748,12 +3762,12 @@ class WithPattern(ElementPattern):
                     ),
                 ),
             ),
-            WithPattern._bind,
+            WithPattern.enter,
         )
     )
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def enter(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
         assert isinstance(node, ast.With)
         item = node.items[0]
         assert isinstance(item.optional_vars, ast.Name)
@@ -3809,13 +3823,13 @@ class WithPattern(ElementPattern):
             body = children["body"]
             params = match.captures.get("region_params", ())
             entry = {param.name: param for param in params}
-            read_after = context.values.get("read_after", frozenset())
+            live = context.function.state.live_out[match.node]
             escaping = tuple(
                 name
                 for name, value in frame.items()
                 if isinstance(value, runtime.Expr)
                 and value is not entry.get(name)
-                and (context.lexical_scope.lookup(name) is not None or name in read_after)
+                and (context.lexical_scope.lookup(name) is not None or name in live)
             )
             args = match.captures.get("region_args", ())
             rebound = None
@@ -3841,10 +3855,10 @@ class LaunchPattern(ElementPattern):
     """TIR host launch statement lowered from the authored ``launch`` call."""
 
     element_name = "launch"
-    syntax = LazyPattern(lambda: BindPattern(AstNodePattern(ast.Call), LaunchPattern._bind))
+    syntax = LazyPattern(lambda: BindPattern(AstNodePattern(ast.Call), LaunchPattern.enter))
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]):
+    def enter(node: object, context: MatchContext, matched: AstMatch[Any]):
         assert isinstance(node, ast.Call)
         if not isinstance(node.func, ast.Name) or node.func.id != "launch":
             return None
@@ -4129,7 +4143,7 @@ class LoopHeaderPattern(ElementPattern):
                     ),
                 ),
             ),
-            LoopHeaderPattern._bind,
+            LoopHeaderPattern.enter,
         )
     )
 
@@ -4172,7 +4186,7 @@ class LoopHeaderPattern(ElementPattern):
         return super().match(node, context)
 
     @staticmethod
-    def _bind(
+    def enter(
         node: object, context: MatchContext, matched: AstMatch[Any]
     ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.For)
@@ -4312,56 +4326,34 @@ class LoopHeaderPattern(ElementPattern):
 class LoopBodyPattern(ElementPattern):
     element_name = "loop_body"
     syntax = LazyPattern(
-        lambda: BindPattern(
-            BranchPattern(
-                "loop_body",
-                AstNodePattern(
-                    ast.Module,
-                    PredicatePattern(
-                        "assignment-suite",
-                        lambda node, context: (
-                            not any(
-                                isinstance(statement, (ast.Return, ast.Expr, ast.Pass))
-                                for statement in node.body
-                            )
-                        ),
-                    ),
-                    FieldPattern(
-                        "body",
-                        RepeatPattern(
-                            ChildPattern(
-                                "statement_{index}",
-                                StatementPattern(),
-                                "loop_statement",
-                                "loop_statement",
-                            )
-                        ),
+        lambda: BranchPattern(
+            "loop_body",
+            AstNodePattern(
+                ast.Module,
+                PredicatePattern(
+                    "assignment-suite",
+                    lambda node, context: (
+                        not any(
+                            isinstance(statement, (ast.Return, ast.Expr, ast.Pass))
+                            for statement in node.body
+                        )
                     ),
                 ),
-                pattern_id="loop.body",
+                FieldPattern(
+                    "body",
+                    RepeatPattern(
+                        ChildPattern(
+                            "statement_{index}",
+                            StatementPattern(),
+                            "loop_statement",
+                            "loop_statement",
+                        )
+                    ),
+                ),
             ),
-            LoopBodyPattern._bind,
-        )
+            pattern_id="loop.body",
+        ),
     )
-
-    @staticmethod
-    def _bind(node, _context, matched):
-        """Pass following statements' reads to each `with` in this loop body.
-
-        Reads outside the loop are not inherited: new names stay loop-local.
-        """
-        assert isinstance(node, ast.Module)
-        read_after = _names_read_after(node.body)
-        child_values = {f"statement_{index}": values for index, values in read_after.items()}
-        return dataclasses.replace(
-            matched,
-            children=tuple(
-                dataclasses.replace(child, values={**child.values, **child_values[child.name]})
-                if child.name in child_values
-                else child
-                for child in matched.children
-            ),
-        )
 
     @staticmethod
     def construct(match, children, context):
@@ -4834,64 +4826,39 @@ class StatementPattern(ElementPattern):
 class BlockPattern(ElementPattern):
     element_name = "block"
     syntax = LazyPattern(
-        lambda: BindPattern(
-            BranchPattern(
-                "block",
-                AstNodePattern(
-                    ast.Module,
-                    CapturePattern(
-                        "pass_only",
-                        lambda node, context: (
-                            len(node.body) == 1 and isinstance(node.body[0], ast.Pass)
-                        ),
+        lambda: BranchPattern(
+            "block",
+            AstNodePattern(
+                ast.Module,
+                CapturePattern(
+                    "pass_only",
+                    lambda node, context: (
+                        len(node.body) == 1 and isinstance(node.body[0], ast.Pass)
                     ),
-                    CapturePattern(
-                        "terminal_children",
-                        lambda node, context: tuple(
-                            f"statement_{index}"
-                            for index, statement in enumerate(node.body)
-                            if isinstance(statement, (ast.Return, ast.With, ast.For))
-                        ),
+                ),
+                CapturePattern(
+                    "terminal_children",
+                    lambda node, context: tuple(
+                        f"statement_{index}"
+                        for index, statement in enumerate(node.body)
+                        if isinstance(statement, (ast.Return, ast.With, ast.For))
                     ),
-                    FieldPattern(
-                        "body",
-                        RepeatPattern(
-                            ChildPattern(
-                                "statement_{index}",
-                                StatementPattern(),
-                                "statement",
-                                "statement",
-                            ),
+                ),
+                FieldPattern(
+                    "body",
+                    RepeatPattern(
+                        ChildPattern(
+                            "statement_{index}",
+                            StatementPattern(),
+                            "statement",
+                            "statement",
                         ),
                     ),
                 ),
-                pattern_id="function.block",
             ),
-            BlockPattern._bind,
-        )
+            pattern_id="function.block",
+        ),
     )
-
-    @staticmethod
-    def _bind(node, context, matched):
-        assert isinstance(node, ast.Module)
-        read_after = _names_read_after(node.body)
-        inherited = context.values.get("read_after", frozenset())
-        child_values = {
-            f"statement_{index}": {"read_after": values["read_after"] | inherited}
-            for index, values in read_after.items()
-        }
-        return dataclasses.replace(
-            matched,
-            children=tuple(
-                dataclasses.replace(
-                    child,
-                    values={**child.values, **child_values[child.name]},
-                )
-                if child.name in child_values
-                else child
-                for child in matched.children
-            ),
-        )
 
     @staticmethod
     def construct(match, children, context):
@@ -5122,16 +5089,17 @@ class FunctionPattern(ElementPattern):
                     ),
                 ),
             ),
-            FunctionPattern._bind,
+            FunctionPattern.enter,
         )
     )
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def enter(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
         assert isinstance(node, ast.FunctionDef)
         function_context = context.function
         if function_context is None:
             return None
+        function_context.state.live_out = live_out(node.body)
         active_context = context.child(
             situation="function",
             role=function_context.function_kind,

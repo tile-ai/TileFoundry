@@ -1,10 +1,14 @@
 """Parser-owned checks for canonical grid-loop bindings."""
 
+import pytest
+
 from tests._source import import_dsl
 from tests.fixtures.placed.gqa_decode import GqaOnline
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import binding_name
+from tilefoundry.ir.core import Call, Constant, binding_name
+from tilefoundry.ir.core.kinds import UnaryKind
+from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.specialize import specialize_concretely
 from tilefoundry.ir.visitor import collect_exprs, expr_children
@@ -53,3 +57,31 @@ def test_region_boundaries_round_trip() -> None:
         if isinstance(expr, MeshRegion) and binding_name(expr.body) == "v2"
     )
     assert sum(producer in expr_children(expr) for expr in collect_exprs(body)) == 2
+
+
+@pytest.mark.parametrize(
+    ("expression", "value"),
+    [("-1.0", -1.0), ("-3", -3), ("-1e999", float("-inf")), ("-x", None)],
+)
+def test_signed_literals_are_constants_and_negated_values_are_calls(expression, value) -> None:
+    """Literal signs belong to constants; negating a runtime value remains a call."""
+    function = import_dsl(
+        f"""from tilefoundry import func
+from tilefoundry.dsl import Tensor
+
+@func
+def signed(x: Tensor[(), "f32"]):
+    return {expression}
+""",
+        "signed",
+    )
+    result = function.body
+    if value is None:
+        assert isinstance(result, Call)
+        assert isinstance(result.target, Unary)
+        assert result.target.kind is UnaryKind.NEG
+        assert result.args[0] is function.params[0]
+    else:
+        assert isinstance(result, Constant)
+        assert type(result.value) is type(value)
+        assert result.value == value
