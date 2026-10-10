@@ -4,15 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from contextlib import contextmanager
-from math import prod
 
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
-from tilefoundry.ir.types.layout import size as layout_size
-from tilefoundry.ir.types.mesh import Mesh, Topology, axis_keys, levels, refine, starts
+from tilefoundry.ir.types.mesh import Mesh, Topology, axis_keys
 from tilefoundry.ir.types.shard_layout import ShardLayout
-from tilefoundry.ir.types.stride import compact_row_major, crd2idx, idx2crd
 from tilefoundry.ir.types.utils import participant_layout
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
+
+from .mesh_utils import selection_layout, sub_box
 
 DSL_STAR_IMPORT = "from tilefoundry.dsl import *"
 
@@ -154,125 +153,39 @@ class PrintContext:
                 return text
         return None
 
-    def mesh_refinement(self, mesh: Mesh) -> tuple[str, Layout] | None:
-        """Recover a parent sub-box whose refinement gives this scope."""
-        if not (
-            len(mesh.topologies) == 1
-            and isinstance(mesh.layout, ComposedLayout)
-            and mesh.layout.inner is None
-            and isinstance(mesh.layout.outer, Layout)
-        ):
-            return None
-        shape = flatten(mesh.layout.shape)
-        strides = flatten(mesh.layout.outer.strides)
-        if not all(isinstance(one, int) for one in (*shape, *strides, mesh.layout.offset)):
-            return None
-        order = compact_row_major(shape)
-        positions = {
-            mesh.layout.offset + crd2idx(idx2crd(index, shape, order), shape, strides)
-            for index in range(layout_size(mesh.layout))
-        }
-        def relative_layout(selection: Mesh) -> Layout | None:
-            source = flatten(levels(selection)[0])
-            source_order = compact_row_major(source.shape)
-            source_strides = source.strides or source_order
-            offset = starts(selection)[0]
-            numbering = {
-                offset + crd2idx(
-                    idx2crd(index, source.shape, source_order), source.shape, source_strides
-                ): index
-                for index in range(layout_size(source))
-            }
-            if set(numbering) != positions or mesh.layout.offset != offset:
-                return None
-            stated = tuple(
-                numbering.get(offset + step, -1) if extent > 1 else order[axis]
-                for axis, (extent, step) in enumerate(zip(shape, strides))
-            )
-            candidate = Layout(shape, stated)
-            try:
-                return candidate if refine(selection, candidate, mesh.names) == mesh else None
-            except ValueError:
-                return None
-
+    def mesh_selection(self, mesh: Mesh) -> tuple[str, Layout] | None:
+        """Recover a lexical selection and its local composition layout."""
         for parent, alias in reversed(self._mesh_bindings):
-            if parent.topologies != mesh.topologies:
+            layout = selection_layout(mesh, parent)
+            if layout is not None:
+                return alias, layout
+            box = sub_box(parent, mesh)
+            if box is None:
                 continue
-            candidate = relative_layout(parent)
-            if candidate is not None:
-                return alias, candidate
-            if not isinstance(parent.layout, Layout):
-                continue
-            parent_shape = flatten(parent.layout.shape)
-            parent_strides = flatten(parent.layout.strides)
-            if not all(isinstance(one, int) for one in (*parent_shape, *parent_strides)):
-                continue
-            parent_order = compact_row_major(parent_shape)
-            coordinates = []
-            for index in range(layout_size(parent.layout)):
-                coordinate = idx2crd(index, parent_shape, parent_order)
-                if crd2idx(coordinate, parent_shape, parent_strides) in positions:
-                    coordinates.append(coordinate)
-            if len(coordinates) != len(positions):
-                continue
-            lower = tuple(min(axis) for axis in zip(*coordinates))
-            upper = tuple(max(axis) + 1 for axis in zip(*coordinates))
-            if prod(stop - start for start, stop in zip(lower, upper)) != len(positions):
-                continue
-            selection = parent[tuple(slice(start, stop) for start, stop in zip(lower, upper))]
-            candidate = relative_layout(selection)
-            if candidate is None:
-                continue
-            text = self._slice_from_parent(parent, selection, alias)
-            if text is not None:
-                return text, candidate
+            selection = parent[box]
+            layout = selection_layout(mesh, selection)
+            if layout is not None:
+                return self._box_text(parent, box, alias), layout
         return None
 
     @staticmethod
     def _slice_from_parent(parent: Mesh, child: Mesh, alias: str) -> str | None:
-        if not (
-            isinstance(parent.layout, Layout)
-            and isinstance(child.layout, ComposedLayout)
-            and child.layout.inner is None
-            and isinstance(child.layout.outer, Layout)
-        ):
+        if parent.names != child.names:
             return None
-        if parent.topologies != child.topologies or parent.names != child.names:
+        box = sub_box(parent, child)
+        if box is None or parent[box] != child:
             return None
-        parent_shape = flatten(parent.layout.shape)
-        parent_strides = flatten(parent.layout.strides)
-        child_shape = flatten(child.layout.outer.shape)
-        child_strides = flatten(child.layout.outer.strides)
-        if (
-            len(parent_shape) != len(child_shape)
-            or parent_strides != child_strides
-            or any(not isinstance(item, int) for item in (*parent_shape, *child_shape, *parent_strides))
-            or any(size < 1 or size > extent for size, extent in zip(child_shape, parent_shape))
-        ):
-            return None
+        return PrintContext._box_text(parent, box, alias)
 
-        remaining = child.layout.offset
-        starts = [0] * len(parent_shape)
-        for axis in sorted(range(len(parent_shape)), key=lambda item: parent_strides[item], reverse=True):
-            stride = parent_strides[axis]
-            maximum = parent_shape[axis] - child_shape[axis]
-            start = min(maximum, remaining // stride) if stride else 0
-            starts[axis] = start
-            remaining -= start * stride
-        if remaining != 0:
-            return None
-        if sum(start * stride for start, stride in zip(starts, parent_strides)) != child.layout.offset:
-            return None
-        if prod(child_shape) > prod(parent_shape):
-            return None
-
+    @staticmethod
+    def _box_text(parent: Mesh, box: tuple[slice, ...], alias: str) -> str:
         pieces: list[str] = []
-        for start, size, extent in zip(starts, child_shape, parent_shape):
-            if start == 0 and size == extent:
+        for part, extent in zip(box, flatten(parent.layout).shape):
+            start, stop = part.start, part.stop
+            if start == 0 and stop == extent:
                 pieces.append(":")
-                continue
-            stop = start + size
-            pieces.append(f"{'' if start == 0 else start}:{'' if stop == extent else stop}")
+            else:
+                pieces.append(f"{'' if start == 0 else start}:{'' if stop == extent else stop}")
         while len(pieces) > 1 and pieces[-1] == ":":
             pieces.pop()
         return f"{alias}[{', '.join(pieces)}]"

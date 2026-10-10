@@ -262,13 +262,15 @@ Printer-owned DSL names use that import; the header may append its existing
 `noqa` comment. Imports supplied by a Target's `to_python()` provider remain
 unchanged.
 
-A refined mesh scope that can be recovered from an active lexical selection
+A mesh scope composed from a selection that can be recovered from an active lexical selection
 MUST be emitted as `Mesh(selection, layout=shape, names=names)` when the
 selection-local numbering is row-major. Other numbering MUST be emitted as
 `Mesh(selection, layout=(shape, strides), names=names)`; these strides address
 the selection's row-major indices, not physical positions. Its physical
-positions, offset, and strides MUST agree with refining that selection; a
-matching slice uses the existing slice form.
+positions, offset, and strides MUST agree with composition on that selection; a
+matching slice uses the existing slice form. Inspection utilities recover the
+parent sub-box with `idx2crd`, and the selection-local layout with
+`composition(left_inverse(selection_layout_with_reversed_modes), mesh.layout.outer)`.
 
 A mesh identifier in placement sugar MUST be a lexical binding visible at the
 point represented by the text: a `with <mesh> as <name>` region, or the

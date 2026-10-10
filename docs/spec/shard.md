@@ -281,22 +281,22 @@ the ones they are XORed onto
 
 ## 5. `Mesh`
 
-In a kernel, `with Mesh(selection, layout=shape, names=names) as refined`
+In a kernel, `with Mesh(selection, layout=shape, names=names) as selected`
 rearranges a lexical mesh selection into new axes. The selection may be a
 constant slice and MUST name one topology level. The new shape MUST hold the
 same number of positions. Positions are numbered in the selection's row-major
 order, and each new axis MUST advance by one fixed physical stride throughout
 that selection. Noncontiguous selections are allowed when this condition holds.
-The topology and selection offset are preserved, and physical strides are
-derived from the selected positions. `layout=(shape, strides)` specifies
+The topology and selection offset are preserved. Physical strides are computed
+by `composition(selection_layout, layout, major="row")`. `layout=(shape, strides)` specifies
 strides in the selection's row-major numbering, rather than physical strides.
 Omitted strides use row-major numbering. Stated strides MUST have the rank of
-the shape, or refinement reports `refined mesh strides must have the rank of its shape`.
+the shape, or parsing reports `mesh selection strides must have the rank of its shape`.
 The layout MUST cover each index in
-`[0, size)` exactly once, or refinement reports
-`refined mesh layout must cover each selected position once`. Every new axis
+`[0, size)` exactly once, or parsing reports
+`mesh selection layout must cover each selected position once`. Every new axis
 MUST still map to a fixed physical stride. Extent-one axes may be omitted.
-Refining requires static positive extents and static selection strides.
+Selection composition requires static positive extents and static selection strides.
 The resulting mesh remains lexical and uses a `ComposedLayout`; slicing that
 mesh retains the existing already-sliced-mesh rejection.
 
@@ -684,7 +684,7 @@ When a `Layout` sits inside `ShardLayout.layout`, its `shape` and
 `stride` carry **additional, narrower semantics** beyond the plain
 [§3](#3-layout-pure-primitive) meaning — they describe the *distributed* form of the tensor, not a
 free-standing primitive layout. These narrower meanings are defined in
-[§7.1.1](#711-layoutshape) and [§7.1.2](#712-layoutstrides) and refine (not replace) the [§3](#3-layout-pure-primitive) contract.
+[§7.1.1](#711-layoutshape) and [§7.1.2](#712-layoutstrides) and extend the [§3](#3-layout-pure-primitive) contract.
 
 #### 7.1.1 `layout.shape`
 

@@ -325,8 +325,10 @@ class _DeferredFunction:
                 self.parsed.name = f"{base.name}.converter[{self.key}]"
         return self.parsed
 
-    def specialize(self, pattern: Any):
+    def specialize(self, pattern: Any, *, mesh: Mesh | None = None):
         pat = _validate_one_pattern(pattern)
+        if mesh is not None and not isinstance(mesh, Mesh):
+            raise TypeError(f"tilefoundry.specialize: mesh must be a Mesh, got {type(mesh).__name__}")
 
         def _wrap_variant(fn_inner):
             declaration = _DeferredFunction(
@@ -338,6 +340,7 @@ class _DeferredFunction:
                 _capture_function_closure(fn_inner),
                 base=self,
                 key=pat,
+                mesh=mesh,
             )
             self.module_context.declarations.append(declaration)
             return declaration
@@ -419,7 +422,7 @@ def func(fn=None, *, topologies=UNDECLARED, target=None, mesh=None):
     return _wrap
 
 
-def _specialize(self: HirFunction, pattern: Any):
+def _specialize(self: HirFunction, pattern: Any, *, mesh: Mesh | None = None):
     """``@base.specialize(RangePattern(...))`` — register a shape variant.
 
     Parses the decorated ``def`` into a variant ``hir.Function`` and appends it to
@@ -428,6 +431,8 @@ def _specialize(self: HirFunction, pattern: Any):
     Legal only before ``base`` enters a ``Module`` (a later call raises).
     """
     pat = _validate_one_pattern(pattern)
+    if mesh is not None and not isinstance(mesh, Mesh):
+        raise TypeError(f"tilefoundry.specialize: mesh must be a Mesh, got {type(mesh).__name__}")
 
     def _wrap_variant(fn_inner):
         dialect = "tir" if isinstance(self, PrimFunction) else "hir"
@@ -439,6 +444,7 @@ def _specialize(self: HirFunction, pattern: Any):
             base=self,
             key=pat,
             topologies=_enclosing_topologies(),
+            mesh=mesh,
         )
         if ir.body is None:
             raise TypeError(
