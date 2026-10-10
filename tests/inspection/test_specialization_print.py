@@ -57,7 +57,7 @@ def test_prototype_prints_pass_base_and_specialize_blocks() -> None:
         assert '@main.specialize(RangePattern("S", 1, 2))' in src
         assert '@main.specialize(RangePattern("S", 4, 6))' in src
 
-        assert "from tilefoundry.ir.pattern import RangePattern" in src
+        assert "from tilefoundry.dsl import *" in src
         compile(src, "<test>", "exec")
 
     assert "@func\ndef main(" in standalone

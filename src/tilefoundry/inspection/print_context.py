@@ -7,8 +7,12 @@ from math import prod
 
 from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
-from tilefoundry.ir.types.mesh import Mesh
+from tilefoundry.ir.types.layout import size as layout_size
+from tilefoundry.ir.types.mesh import Mesh, refine
+from tilefoundry.ir.types.stride import compact_row_major, crd2idx, idx2crd
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
+
+DSL_STAR_IMPORT = "from tilefoundry.dsl import *"
 
 
 class PrintContext:
@@ -23,7 +27,10 @@ class PrintContext:
 
     def use(self, rendered: PythonExpr | str) -> str:
         if isinstance(rendered, PythonExpr):
-            self.imports.update(rendered.imports)
+            self.imports.update(
+                DSL_STAR_IMPORT if line.startswith("from tilefoundry.dsl import ") else line
+                for line in rendered.imports
+            )
             return rendered.text
         return rendered
 
@@ -32,14 +39,17 @@ class PrintContext:
         name: str,
         var,
         *,
-        import_statement: str = "from tilefoundry.ir.types.dim import DimVar",
+        import_statement: str = DSL_STAR_IMPORT,
     ) -> None:
         self.imports.add(import_statement)
         self._dim_declarations.setdefault(name, (var, "DimVar"))
 
     def header(self) -> list[str]:
         """Render only imports and declarations reached while rendering the body."""
-        imports = list(_merge_imports(tuple(self.imports)))
+        imports = list(_merge_imports(tuple(self.imports - {DSL_STAR_IMPORT})))
+        if DSL_STAR_IMPORT in self.imports:
+            imports.append(DSL_STAR_IMPORT)
+            imports.sort()
         imports = [
             f"{line}  # noqa: F401, F403" if line.endswith(" import *") else line
             for line in imports
@@ -138,6 +148,59 @@ class PrintContext:
             text = self._slice_from_parent(parent, mesh, alias)
             if text is not None:
                 return text
+        return None
+
+    def mesh_refinement(self, mesh: Mesh) -> str | None:
+        """Recover a parent sub-box whose refinement gives this scope."""
+        if not (
+            len(mesh.topologies) == 1
+            and isinstance(mesh.layout, ComposedLayout)
+            and mesh.layout.inner is None
+            and isinstance(mesh.layout.outer, Layout)
+        ):
+            return None
+        shape = flatten(mesh.layout.shape)
+        strides = flatten(mesh.layout.outer.strides)
+        if not all(isinstance(one, int) for one in (*shape, *strides, mesh.layout.offset)):
+            return None
+        order = compact_row_major(shape)
+        positions = {
+            mesh.layout.offset + crd2idx(idx2crd(index, shape, order), shape, strides)
+            for index in range(layout_size(mesh.layout))
+        }
+        for parent, alias in reversed(self._mesh_bindings):
+            if parent.topologies != mesh.topologies:
+                continue
+            try:
+                if refine(parent, shape, mesh.names) == mesh:
+                    return alias
+            except ValueError:
+                pass
+            if not isinstance(parent.layout, Layout):
+                continue
+            parent_shape = flatten(parent.layout.shape)
+            parent_strides = flatten(parent.layout.strides)
+            if not all(isinstance(one, int) for one in (*parent_shape, *parent_strides)):
+                continue
+            parent_order = compact_row_major(parent_shape)
+            coordinates = []
+            for index in range(layout_size(parent.layout)):
+                coordinate = idx2crd(index, parent_shape, parent_order)
+                if crd2idx(coordinate, parent_shape, parent_strides) in positions:
+                    coordinates.append(coordinate)
+            if len(coordinates) != len(positions):
+                continue
+            starts = tuple(min(axis) for axis in zip(*coordinates))
+            stops = tuple(max(axis) + 1 for axis in zip(*coordinates))
+            if prod(stop - start for start, stop in zip(starts, stops)) != len(positions):
+                continue
+            selection = parent[tuple(slice(start, stop) for start, stop in zip(starts, stops))]
+            try:
+                if refine(selection, shape, mesh.names) != mesh:
+                    continue
+            except ValueError:
+                continue
+            return self._slice_from_parent(parent, selection, alias)
         return None
 
     @staticmethod

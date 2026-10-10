@@ -15,10 +15,12 @@ from tilefoundry.dsl import tf, T
 from tilefoundry.dsl._tensor import ConstTensor, Tensor
 
 
-from tilefoundry.script import func
+from tilefoundry.script import func, prim_func
+from tilefoundry.module import module
+from tilefoundry.ir import types as _types
+from tilefoundry.ir.types import *
 from tilefoundry.ir.pattern import RangePattern, Pattern
 from tilefoundry.ir.types.dim import DimVar, ceildiv
-from tilefoundry.ir.types import B, Broadcast, Mesh, P, Partial, S, Split, Topology
 from tilefoundry.ir.core.kinds import ReduceKind, UnaryKind, BinaryKind
 
 __all__ = [
@@ -27,18 +29,13 @@ __all__ = [
     "ConstTensor",
     "Tensor",
     "func",
+    "module",
+    "prim_func",
+    *_types.__all__,
     "Pattern",
     "RangePattern",
     "DimVar",
     "ceildiv",
-    "Mesh",
-    "Topology",
-    "Split",
-    "Partial",
-    "Broadcast",
-    "S",
-    "P",
-    "B",
     "ReduceKind",
     "UnaryKind",
     "BinaryKind",
