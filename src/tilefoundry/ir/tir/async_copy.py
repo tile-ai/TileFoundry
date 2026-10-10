@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import torch
-
+from tilefoundry.evaluator.kernels import gather
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op, OpCapability
@@ -157,20 +156,7 @@ def _eval_scheduled_copy_async(ctx):
     if not is_indexed_schedule(ctx.args):
         return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
     source, index = (arg.data for arg in ctx.args)
-    if ctx.op.fill is None:
-        data = torch.index_select(source, 0, index)
-    else:
-        valid = (index >= 0) & (index < source.shape[0])
-        data = torch.full(
-            (index.numel(), *source.shape[1:]),
-            ctx.op.fill,
-            dtype=source.dtype,
-            device=source.device,
-        )
-        selected = torch.index_select(source, 0, index[valid])
-        positions = torch.nonzero(valid, as_tuple=True)[0]
-        data.index_copy_(0, positions, selected)
-    return TensorValue(data=data, type=ctx.result_type)
+    return TensorValue(data=gather(source, index, 0, ctx.op.fill), type=ctx.result_type)
 
 
 @register_verify_stmt(CopyAsync)

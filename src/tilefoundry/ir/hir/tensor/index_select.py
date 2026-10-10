@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import torch
-
+from tilefoundry.evaluator.kernels import gather
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -124,17 +123,8 @@ def _eval_index_select(ctx):
     x = ctx.args[0].data
     index = ctx.args[1].data
     dim = _norm_dim(ctx.op.dim, x.dim())
-    if ctx.op.fill_value is not None:
-        valid = (index >= 0) & (index < x.shape[dim])
-        shape = list(x.shape)
-        shape[dim] = index.numel()
-        data = torch.full(shape, ctx.op.fill_value, dtype=x.dtype, device=x.device)
-        selected = torch.index_select(x, dim, index[valid])
-        positions = torch.nonzero(valid, as_tuple=True)[0]
-        data.index_copy_(dim, positions, selected)
-        return TensorValue(data=data, type=ctx.result_type)
     return TensorValue(
-        data=torch.index_select(x, dim, index),
+        data=gather(x, index, dim, ctx.op.fill_value),
         type=ctx.result_type,
     )
 
