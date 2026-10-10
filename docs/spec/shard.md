@@ -637,8 +637,11 @@ and outside a mesh body. A layout containing dimension placement (`@`) or
 value-state braces covers the current composed mesh scope; axes not stated are
 `Broadcast`. In a function signature it covers the function's declared mesh.
 Empty braces explicitly broadcast over every axis: `((8, 16), {})` or
-`((8, 16), (16, 1), {})`. Empty braces without splits or explicit strides
-default to row-major strides. Braces can state partial values, such as
+`((8, 16), (16, 1), {})`. A placement without Split, Partial or explicit
+strides defaults to row-major strides; explicit `@ B()` does not affect this
+default. Placements with Split or Partial retain `None` strides when omitted.
+Pattern positions such as `where(...)` retain `None`, leaving strides
+unconstrained. Braces can state partial values, such as
 `{threads.warp @ P("sum")}`; `@ B()` is accepted but does not change the
 implicit Broadcast of an unstated axis. Empty braces require an available
 mesh, and every referenced axis must map uniquely into that scope.

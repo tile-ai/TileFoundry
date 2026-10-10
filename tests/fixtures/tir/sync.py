@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tilefoundry.dsl import *  # noqa: F401, F403
+from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
@@ -12,7 +12,7 @@ from tilefoundry.target import CpuTarget, CudaTarget
 class SyncSquare:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def sync_square_device(a: Tensor[(4, 32), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout((4, 32), (32, 1)), names=("w", "t")) as m:
+        with Mesh((Topology("thread", 128),), layout=(4, 32), names=("w", "t")) as m:
             view = T.tensor_view(T.ptr_of(a), layout=((4 @ m.w, 32 @ m.t), (32, 1)))
             reg = T.alloc_tensor(
                 tensor_type=Tensor[(4, 32), "f32", ((4 @ m.w, 32 @ m.t), (32, 1)), "rmem"]
@@ -27,4 +27,12 @@ class SyncSquare:
 
     @prim_func(target=CpuTarget())
     def sync_square_host(a: Tensor[(4, 32), "f32"]):
-        launch(sync_square_device, a, grid=(1, 1, 1), block=(128, 1, 1))  # noqa: F821
+        launch(sync_square_device, a, grid=(
+        1,
+        1,
+        1,
+    ), block=(
+        128,
+        1,
+        1,
+    ))  # noqa: F821

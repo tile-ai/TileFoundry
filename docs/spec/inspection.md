@@ -258,11 +258,23 @@ There is no module-level mesh hoist or global mesh name map.
 
 The DSL surface MUST be imported with `from tilefoundry.dsl import *`, which
 re-exports `ir.types` and the `func`, `module`, and `prim_func` decorators.
-Printer-owned DSL names use that import; the header may append its existing
-`noqa` comment. Imports supplied by a Target's `to_python()` provider remain
-unchanged.
+The file header starts with `from __future__ import annotations`, a blank line,
+and `from tilefoundry.dsl import *`, without a `noqa` comment. Imports supplied
+by a Target's `to_python()` provider follow unchanged.
 
-A mesh scope composed from a selection that can be recovered from an active lexical selection
+In layout grammar positions, flat plain layouts MUST use a shape tuple or a
+`(shape, strides)` tuple; hierarchical shapes retain `Layout(...)`. Composition
+uses `L + offset | inner`. A placement representable over the current mesh scope
+MUST use dimension placements and Partial states; Broadcast axes are omitted.
+An all-Broadcast placement uses `{}` when it preserves the underlying layout.
+Values that sugar cannot express retain complete `ShardLayout(...)` constructs,
+whose Python-evaluated arguments retain `Layout(...)` / `ComposedLayout(...)`.
+Mesh headers use `layout=` and omit row-major strides. A topology is written by
+name only when the function inherits it from the enclosing module; standalone
+`prim_func` and explicit `@prim_func(target=...)` headers retain `Topology(...)`.
+String attributes use double quotes, and TIR tuple elements occupy separate lines.
+
+A mesh scope composed from a selection recoverable from an active lexical binding
 MUST be emitted as `Mesh(selection, layout=shape, names=names)` when the
 selection-local numbering is row-major. Other numbering MUST be emitted as
 `Mesh(selection, layout=(shape, strides), names=names)`; these strides address

@@ -2,52 +2,29 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from contextlib import contextmanager
 
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
-from tilefoundry.ir.types.mesh import Mesh, Topology, axis_keys
-from tilefoundry.ir.types.shard_layout import ShardLayout
-from tilefoundry.ir.types.utils import participant_layout
+from tilefoundry.ir.types.mesh import Mesh, axis_keys, make_mesh
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
 
 from .mesh_utils import selection_layout, sub_box
-
-DSL_STAR_IMPORT = "from tilefoundry.dsl import *"
-
-
-def render_imports(imports: Iterable[str]) -> list[str]:
-    """Merge and render imports while keeping the DSL star import separate."""
-    imports = set(imports)
-    lines = list(_merge_imports(tuple(imports - {DSL_STAR_IMPORT})))
-    if DSL_STAR_IMPORT in imports:
-        lines.append(DSL_STAR_IMPORT)
-        lines.sort()
-    return [
-        f"{line}  # noqa: F401, F403" if line.endswith(" import *") else line
-        for line in lines
-    ]
 
 
 class PrintContext:
     """Imports, symbolic declarations, and lexical mesh bindings for one file."""
 
     def __init__(self) -> None:
-        self.imports: set[str] = {DSL_STAR_IMPORT}
+        self.imports: set[str] = set()
         self._dim_declarations: dict[str, tuple[object, str]] = {}
         self._mesh_bindings: list[tuple[Mesh, str]] = []
-        self._projected_mesh_bindings: dict[
-            tuple[int, tuple[Topology | str, ...]], tuple[Mesh, Mesh]
-        ] = {}
         self._used_scope_names: set[str] = set()
         self._type_annotation_surface = False
+        self.topologies = ()
 
     def use(self, rendered: PythonExpr | str) -> str:
         if isinstance(rendered, PythonExpr):
-            self.imports.update(
-                DSL_STAR_IMPORT if line.startswith("from tilefoundry.dsl import ") else line
-                for line in rendered.imports
-            )
+            self.imports.update(rendered.imports)
             return rendered.text
         return rendered
 
@@ -56,7 +33,13 @@ class PrintContext:
 
     def header(self) -> list[str]:
         """Render file imports and declarations reached while rendering the body."""
-        lines = ["from __future__ import annotations", "", *render_imports(self.imports), ""]
+        lines = [
+            "from __future__ import annotations",
+            "",
+            "from tilefoundry.dsl import *",
+            *_merge_imports(tuple(self.imports)),
+            "",
+        ]
         if self._dim_declarations:
             lines.extend(
                 f'{name} = {constructor}("{var.name}", {var.lo}, {var.hi})'
@@ -93,24 +76,13 @@ class PrintContext:
         finally:
             self._type_annotation_surface = previous
 
-    def project_layout(self, layout: ShardLayout) -> ShardLayout:
-        """Cache the first lexical alias identity so projection preserves annotation spelling."""
-        projected = participant_layout(layout)
-        if projected is layout:
-            return projected
-        key = (id(layout.mesh), projected.mesh.topologies)
-        cached = self._projected_mesh_bindings.get(key)
-        if cached is not None:
-            return ShardLayout(projected.layout, projected.attrs, cached[1])
-        for bound, _name in reversed(self._mesh_bindings):
-            if bound == projected.mesh:
-                self._projected_mesh_bindings[key] = (layout.mesh, bound)
-                return ShardLayout(projected.layout, projected.attrs, bound)
-        return projected
+    @property
+    def current_mesh(self) -> Mesh | None:
+        return make_mesh(*(mesh for mesh, _name in self._mesh_bindings)) if self._mesh_bindings else None
 
     def mesh_alias(self, mesh: Mesh) -> str | None:
         for bound, name in reversed(self._mesh_bindings):
-            if bound is mesh:
+            if bound == mesh:
                 return name
         return None
 

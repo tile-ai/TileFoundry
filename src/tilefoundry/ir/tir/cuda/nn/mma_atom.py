@@ -27,7 +27,6 @@ from tilefoundry.ir.types import ComposedLayout, DType, Layout, Mesh, ShardLayou
 from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.types.utils import tile_view_layout
-from tilefoundry.utils.python_source import PythonExpr
 
 _MISS = object()
 
@@ -175,8 +174,6 @@ class MmaAtom(Printable):
         Enum's ``namespace`` spelling; every other value, the mesh included, is
         printed by *printer* in the same import context.
         """
-        if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
         stated = [
             f"{name}={self._printed_value(value, printer, ctx)}"
             for name, value in self.bindings.items()
