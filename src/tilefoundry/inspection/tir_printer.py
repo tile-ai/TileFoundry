@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from tilefoundry.inspection.print_context import DSL_STAR_IMPORT, TirPrintContext
+from tilefoundry.inspection.print_context import DSL_STAR_IMPORT, TirPrintContext, render_imports
 from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var, get_metadata
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -22,7 +22,6 @@ from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, LayoutBase, PointerType, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.visitor import StmtVisitor
-from tilefoundry.utils.python_source import PythonExpr
 
 _LINE_LENGTH = 100
 
@@ -100,7 +99,6 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
 
     def visit_Op(self, expr: Op, ctx=None) -> str:
         name = getattr(getattr(expr, "_op_schema", None), "name", type(expr).__name__.lower())
-        self.context.use(PythonExpr((DSL_STAR_IMPORT,), "T"))
         return f"T.{name}"
 
     def visit_program_call(self, expr: Call, ctx=None) -> str:
@@ -135,7 +133,6 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
                             else self.print(value, self.context, self.indent + "    ")
                         )
                     args.append(f"{param.name}={rendered}")
-        self.context.use(PythonExpr((DSL_STAR_IMPORT,), "T"))
         return f"T.{name}({', '.join(args)})"
 
     def _window_subscript(self, expr: Call, ctx=None) -> str:
@@ -335,8 +332,6 @@ def _function_block(fn: PrimFunction) -> list[str]:
     target_expr = fn.target.to_python()
     ctx.imports.update(target_expr.imports)
     target = target_expr.text
-    ctx.use(PythonExpr((DSL_STAR_IMPORT,), "prim_func"))
-    ctx.use(PythonExpr((DSL_STAR_IMPORT,), "Tensor"))
     dim_vars = {
         d.name: d
         for p in fn.params
@@ -344,8 +339,6 @@ def _function_block(fn: PrimFunction) -> list[str]:
         for d in p.type.shape
         if hasattr(d, "name")
     }
-    if dim_vars:
-        ctx.use(PythonExpr((DSL_STAR_IMPORT,), "DimVar"))
     lines = [f'_{d.name} = DimVar("{d.name}", {d.lo}, {d.hi})' for d in dim_vars.values()]
     lines.append("@prim_func(target=" + target + ")")
     params = ", ".join(
@@ -359,8 +352,6 @@ def _function_block(fn: PrimFunction) -> list[str]:
         lines.extend((f"def {_binding_name(fn.name)}(", f"    {params}", "):"))
     body = TirPrinter(context=ctx, indent="    ").visit(fn.body)
     lines.extend(body or ["    pass"])
-    if fn.variants:
-        ctx.use(PythonExpr((DSL_STAR_IMPORT,), "RangePattern"))
     for variant in fn.variants:
         pat = variant.specializations[0]
         lines.append("")
@@ -379,9 +370,7 @@ def _function_block(fn: PrimFunction) -> list[str]:
 
 
 def _imports_from(lines) -> list[str]:
-    ctx = TirPrintContext()
-    ctx.imports.update(getattr(lines, "imports", ()))
-    return ctx.header()[2:-1]
+    return render_imports(getattr(lines, "imports", ()))
 
 
 def tir_function_to_python(fn: PrimFunction, *, options=None) -> str:
@@ -429,7 +418,6 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         imports.update(target.imports)
         kwargs.append(f"target={target.text}")
     if mod.topologies is not None:
-        imports.add(DSL_STAR_IMPORT)
         rendered = ", ".join(f'Topology("{t.name}", {t.size!r})' for t in mod.topologies)
         kwargs.append(f"topologies=({rendered},)" if rendered else "topologies=()")
     decorator = f"@module({', '.join(kwargs)})"
@@ -467,9 +455,7 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         while remaining and not remaining[0]:
             remaining.pop(0)
         lines = declarations + ["", ""] + remaining
-    ctx = TirPrintContext()
-    ctx.imports.update(imports)
-    header = ctx.header()
+    header = ["from __future__ import annotations", "", *render_imports(imports), ""]
     if not declarations:
         header.append("")
     return "\n".join(header + lines) + "\n"

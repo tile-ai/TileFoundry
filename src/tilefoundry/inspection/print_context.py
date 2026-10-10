@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from contextlib import contextmanager
 from math import prod
 
@@ -15,11 +16,24 @@ from tilefoundry.utils.python_source import PythonExpr, _merge_imports
 DSL_STAR_IMPORT = "from tilefoundry.dsl import *"
 
 
+def render_imports(imports: Iterable[str]) -> list[str]:
+    """Merge and render imports while keeping the DSL star import separate."""
+    imports = set(imports)
+    lines = list(_merge_imports(tuple(imports - {DSL_STAR_IMPORT})))
+    if DSL_STAR_IMPORT in imports:
+        lines.append(DSL_STAR_IMPORT)
+        lines.sort()
+    return [
+        f"{line}  # noqa: F401, F403" if line.endswith(" import *") else line
+        for line in lines
+    ]
+
+
 class PrintContext:
     """Imports, symbolic declarations, and lexical mesh bindings for one file."""
 
     def __init__(self) -> None:
-        self.imports: set[str] = set()
+        self.imports: set[str] = {DSL_STAR_IMPORT}
         self._dim_declarations: dict[str, tuple[object, str]] = {}
         self._mesh_bindings: list[tuple[Mesh, str]] = []
         self._used_scope_names: set[str] = set()
@@ -41,20 +55,13 @@ class PrintContext:
         *,
         import_statement: str = DSL_STAR_IMPORT,
     ) -> None:
-        self.imports.add(import_statement)
+        if import_statement != DSL_STAR_IMPORT:
+            self.imports.add(import_statement)
         self._dim_declarations.setdefault(name, (var, "DimVar"))
 
     def header(self) -> list[str]:
-        """Render only imports and declarations reached while rendering the body."""
-        imports = list(_merge_imports(tuple(self.imports - {DSL_STAR_IMPORT})))
-        if DSL_STAR_IMPORT in self.imports:
-            imports.append(DSL_STAR_IMPORT)
-            imports.sort()
-        imports = [
-            f"{line}  # noqa: F401, F403" if line.endswith(" import *") else line
-            for line in imports
-        ]
-        lines = ["from __future__ import annotations", "", *imports, ""]
+        """Render file imports and declarations reached while rendering the body."""
+        lines = ["from __future__ import annotations", "", *render_imports(self.imports), ""]
         if self._dim_declarations:
             lines.extend(
                 f'{name} = {constructor}("{var.name}", {var.lo}, {var.hi})'
