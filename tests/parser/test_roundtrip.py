@@ -14,8 +14,8 @@ def test_gqa_correction_reads_the_old_carry_and_unique_yield() -> None:
     function = specialize_concretely(GqaOnline.entry_function(), {"ctx_len": 8})
     printed = as_script(function)
 
-    assert printed.count("        m_new = max(m, score)") == 1
-    assert " = sub(m, m_new)" in printed
+    assert printed.count("        m_new = tf.max(m, score)") == 1
+    assert " = tf.sub(m, m_new)" in printed
     lines = printed.splitlines()
     start = next(
         index for index, line in enumerate(lines) if line.lstrip() == "for i in range(8):"
@@ -36,7 +36,7 @@ def test_gqa_correction_reads_the_old_carry_and_unique_yield() -> None:
     ]
     assert yielded[-1] == f"{body_indent}m = m_new"
     assert len({line.split(" = ", 1)[1] for line in yielded}) == 3
-    assert lines[end] == f'{loop_indent}k_n = cast(k_new, dtype="f32")'
+    assert lines[end] == f'{loop_indent}k_n = tf.cast(k_new, dtype="f32")'
 
 
 def test_region_boundaries_round_trip() -> None:

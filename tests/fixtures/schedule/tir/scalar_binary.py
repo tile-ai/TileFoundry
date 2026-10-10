@@ -4,10 +4,7 @@
 
 from __future__ import annotations
 
-from tilefoundry import prim_func
-from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.types import B, Layout, Mesh, Topology
+from tilefoundry.dsl import *  # noqa: F401, F403
 from tilefoundry.target import CudaTarget
 
 

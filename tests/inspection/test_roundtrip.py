@@ -80,7 +80,7 @@ def test_slice_runtime_starts_tuple_roundtrips() -> None:
     )
     script = as_script(fn)
 
-    assert "slice(x, (start, 0), sizes=(2, 4), strides=(1, 1))" in script
+    assert "tf.slice(x, (start, 0), sizes=(2, 4), strides=(1, 1))" in script
     assert as_script(import_dsl(script)) == script
 
 
@@ -94,7 +94,7 @@ def test_two_argument_tile_window_roundtrips_as_a_subscript() -> None:
         assert index in script
         lines = script.splitlines()
         if fn is nested_scan_copy:
-            inner = next(i for i, line in enumerate(lines) if line.strip() == "for col in tile(4, 2):")
+            inner = next(i for i, line in enumerate(lines) if line.strip() == "for col in tf.tile(4, 2):")
             assert lines[inner - 1].strip() != "out = out"
             assert lines[-2].strip() == "out = out"
         assert as_script(import_dsl(script)) == script
@@ -114,7 +114,7 @@ def test_non_unit_scalar_index_loop_roundtrips_as_range() -> None:
         script = as_script(fn)
 
         assert f"for i in {loop}:" in script
-        assert "for i in tile(" not in script
+        assert "for i in tf.tile(" not in script
         assert as_script(import_dsl(script)) == script
 
 
@@ -135,7 +135,7 @@ def test_shadowed_call_loc_roundtrips() -> None:
         "    return vals\n"
     )
     script = as_script(fn)
-    assert "topk_out = topk(" in script, script
+    assert "topk_out = tf.topk(" in script, script
     assert as_script(import_dsl(script)) == script
 
 
@@ -238,8 +238,8 @@ def test_carry_updates_print_last_without_shadowing_the_old_value() -> None:
     loop_lines = printed[printed.index("    for i in range(4):") :].splitlines()
 
     assert loop_lines[-3:] == ["        o = o_2", "        m = m_new", "    return (m, o)"]
-    assert loop_lines.index("        m_new = max(m, x)") < loop_lines.index(
-        "        corr = sub(m, m_new)"
+    assert loop_lines.index("        m_new = tf.max(m, x)") < loop_lines.index(
+        "        corr = tf.sub(m, m_new)"
     )
     assert repr(fn.body) == repr(rebuilt.body)
     assert as_script(rebuilt) == printed

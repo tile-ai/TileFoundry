@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from tilefoundry.inspection.print_context import TirPrintContext
+from tilefoundry.inspection.print_context import DSL_STAR_IMPORT, TirPrintContext
 from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var, get_metadata
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -19,10 +19,10 @@ from tilefoundry.ir.tir.stmts import (
     Evaluate,
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import DType, PointerType, TensorType
+from tilefoundry.ir.types import DType, LayoutBase, PointerType, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.visitor import StmtVisitor
-from tilefoundry.utils.python_source import PythonExpr, _merge_imports
+from tilefoundry.utils.python_source import PythonExpr
 
 _LINE_LENGTH = 100
 
@@ -100,7 +100,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
 
     def visit_Op(self, expr: Op, ctx=None) -> str:
         name = getattr(getattr(expr, "_op_schema", None), "name", type(expr).__name__.lower())
-        self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
+        self.context.use(PythonExpr((DSL_STAR_IMPORT,), "T"))
         return f"T.{name}"
 
     def visit_program_call(self, expr: Call, ctx=None) -> str:
@@ -128,10 +128,14 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
             if param.kind == "attribute":
                 value = getattr(target, param.name, None)
                 if value is not None:
-                    args.append(
-                        f"{param.name}={self.print(value, self.context, self.indent + '    ')}"
-                    )
-        self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
+                    with self.type_surface(indent=self.indent + "    "):
+                        rendered = (
+                            self.layout_surface(value, self.context)
+                            if isinstance(value, LayoutBase)
+                            else self.print(value, self.context, self.indent + "    ")
+                        )
+                    args.append(f"{param.name}={rendered}")
+        self.context.use(PythonExpr((DSL_STAR_IMPORT,), "T"))
         return f"T.{name}({', '.join(args)})"
 
     def _window_subscript(self, expr: Call, ctx=None) -> str:
@@ -206,7 +210,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         return self._emit_evaluate(stmt)
 
     def visit_MeshScope(self, stmt, ctx=None):
-        rendered = self.visit(stmt.mesh, self.context)
+        rendered = self.mesh_context(stmt.mesh, self.context)
         line = f"{self.indent}with {rendered} as {stmt.binding.name}:"
         if len(line) + 4 <= _LINE_LENGTH:
             lines = [line]
@@ -328,9 +332,11 @@ def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
 
 def _function_block(fn: PrimFunction) -> list[str]:
     ctx = TirPrintContext()
-    target = ctx.use(fn.target.to_python())
-    ctx.use(PythonExpr(("from tilefoundry import prim_func",), "prim_func"))
-    ctx.use(PythonExpr(("from tilefoundry.dsl import Tensor",), "Tensor"))
+    target_expr = fn.target.to_python()
+    ctx.imports.update(target_expr.imports)
+    target = target_expr.text
+    ctx.use(PythonExpr((DSL_STAR_IMPORT,), "prim_func"))
+    ctx.use(PythonExpr((DSL_STAR_IMPORT,), "Tensor"))
     dim_vars = {
         d.name: d
         for p in fn.params
@@ -339,7 +345,7 @@ def _function_block(fn: PrimFunction) -> list[str]:
         if hasattr(d, "name")
     }
     if dim_vars:
-        ctx.use(PythonExpr(("from tilefoundry.dsl import DimVar",), "DimVar"))
+        ctx.use(PythonExpr((DSL_STAR_IMPORT,), "DimVar"))
     lines = [f'_{d.name} = DimVar("{d.name}", {d.lo}, {d.hi})' for d in dim_vars.values()]
     lines.append("@prim_func(target=" + target + ")")
     params = ", ".join(
@@ -354,7 +360,7 @@ def _function_block(fn: PrimFunction) -> list[str]:
     body = TirPrinter(context=ctx, indent="    ").visit(fn.body)
     lines.extend(body or ["    pass"])
     if fn.variants:
-        ctx.use(PythonExpr(("from tilefoundry.ir.pattern import RangePattern",), "RangePattern"))
+        ctx.use(PythonExpr((DSL_STAR_IMPORT,), "RangePattern"))
     for variant in fn.variants:
         pat = variant.specializations[0]
         lines.append("")
@@ -373,7 +379,9 @@ def _function_block(fn: PrimFunction) -> list[str]:
 
 
 def _imports_from(lines) -> list[str]:
-    return list(_merge_imports(tuple(getattr(lines, "imports", ()))))
+    ctx = TirPrintContext()
+    ctx.imports.update(getattr(lines, "imports", ()))
+    return ctx.header()[2:-1]
 
 
 def tir_function_to_python(fn: PrimFunction, *, options=None) -> str:
@@ -412,7 +420,7 @@ def _function_comments(fn: PrimFunction, options) -> list[str]:
 def tir_module_to_python(mod: Module, module_name: str | None = None, *, options=None) -> str:
     name = module_name or mod.name
     lines: list[str] = []
-    imports = {"from tilefoundry import module"}
+    imports = {DSL_STAR_IMPORT}
     kwargs = []
     if mod.entry is not None:
         kwargs.append(f'entry="{_binding_name(mod.entry)}"')
@@ -421,7 +429,7 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         imports.update(target.imports)
         kwargs.append(f"target={target.text}")
     if mod.topologies is not None:
-        imports.add("from tilefoundry.ir.types import Topology")
+        imports.add(DSL_STAR_IMPORT)
         rendered = ", ".join(f'Topology("{t.name}", {t.size!r})' for t in mod.topologies)
         kwargs.append(f"topologies=({rendered},)" if rendered else "topologies=()")
     decorator = f"@module({', '.join(kwargs)})"
@@ -459,7 +467,9 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         while remaining and not remaining[0]:
             remaining.pop(0)
         lines = declarations + ["", ""] + remaining
-    header = ["from __future__ import annotations", "", *_merge_imports(tuple(imports)), ""]
+    ctx = TirPrintContext()
+    ctx.imports.update(imports)
+    header = ctx.header()
     if not declarations:
         header.append("")
     return "\n".join(header + lines) + "\n"

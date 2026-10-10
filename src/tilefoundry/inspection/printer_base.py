@@ -6,7 +6,7 @@ import enum
 import json
 from contextlib import contextmanager
 
-from tilefoundry.ir.core import Call, Constant, Printable, PrinterBase, Tuple, Var
+from tilefoundry.ir.core import Call, Constant, Op, Printable, PrinterBase, Tuple, Var
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.mesh_scope import device_layout
@@ -31,6 +31,8 @@ from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import ExprFunctor, TypeFunctor
 from tilefoundry.target import Target
 from tilefoundry.utils.python_source import PythonExpr
+
+from .print_context import DSL_STAR_IMPORT
 
 _DIM_INFIX_OPS: dict[type, str] = {
     DimAdd: "+",
@@ -129,7 +131,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         ceildiv_args = self._ceildiv_args(value)
         if ceildiv_args is not None:
             if ctx is not None:
-                ctx.use(PythonExpr(("from tilefoundry.ir.types.dim import ceildiv",), "ceildiv"))
+                ctx.use(PythonExpr((DSL_STAR_IMPORT,), "ceildiv"))
             left, right = ceildiv_args
             return f"ceildiv({self.dim_entry(left, ctx)}, {self.dim_entry(right, ctx)})"
         target = value.target
@@ -283,7 +285,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
     def visit_TensorType(self, value: TensorType, ctx=None) -> str:
         if ctx is not None:
             ctx.use(
-                PythonExpr((f"from tilefoundry.dsl import {self._tensor_head}",), self._tensor_head)
+                PythonExpr((DSL_STAR_IMPORT,), self._tensor_head)
             )
         result = (
             f"{self._tensor_head}["
@@ -297,7 +299,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
                 with self.type_surface(indent=self._indent + "    "):
                     result += f",\n{self._indent}{self.visit(value.layout, ctx)}"
         elif value.layout is not None:
-            result += f", {self.visit(value.layout, ctx)}"
+            result += f", {self.layout_surface(value.layout, ctx)}"
         if value.storage is not StorageKind.GMEM:
             result += f', "{value.storage.name.lower()}"'
         return result + "]"
@@ -309,7 +311,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         if ctx is not None:
             ctx.use(
                 PythonExpr(
-                    ("from tilefoundry.ir.types import DType, PointerType, StorageKind",),
+                    (DSL_STAR_IMPORT,),
                     "",
                 )
             )
@@ -329,7 +331,26 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             sliced = ctx.mesh_slice(value)
             if sliced is not None:
                 return sliced
-            ctx.use(PythonExpr(("from tilefoundry.ir.types import Mesh, Topology",), "Mesh"))
+            ctx.use(PythonExpr((DSL_STAR_IMPORT,), "Mesh"))
+        return self._mesh_text(value, ctx)
+
+    def mesh_context(self, value: Mesh, ctx) -> str:
+        """Render a with header, including a recoverable lexical refinement."""
+        alias = ctx.mesh_alias(value) or ctx.mesh_slice(value)
+        if alias is not None:
+            return alias
+        selection = ctx.mesh_refinement(value)
+        if selection is not None:
+            shape = self.shape_tuple(flatten(value.layout.shape), ctx)
+            names = ", ".join(json.dumps(name) for name in value.names)
+            names = f"({names}{',' if len(value.names) == 1 else ''})"
+            ctx.imports.add(DSL_STAR_IMPORT)
+            return f"Mesh({selection}, layout={shape}, names={names})"
+        return self._mesh_text(value, ctx, layout_position=True)
+
+    def _mesh_text(self, value: Mesh, ctx=None, *, layout_position: bool = False) -> str:
+        if ctx is not None:
+            ctx.imports.add(DSL_STAR_IMPORT)
         topologies = ", ".join(
             f'Topology("{topology.name}", {self.dim_entry(topology.size, ctx)})'
             for topology in value.topologies
@@ -340,7 +361,8 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             written = ComposedLayout(
                 inner=value.layout.inner, offset=value.layout.offset, outer=written
             )
-        result = f"Mesh({topologies}, {self.visit(written, ctx)}"
+        rendered = self.layout_surface(written, ctx) if layout_position else self.visit(written, ctx)
+        result = f"Mesh({topologies}, {rendered}"
         if value.names:
             names = ", ".join(json.dumps(name) for name in value.names)
             result += f", names=({names}{',' if len(value.names) == 1 else ''})"
@@ -351,18 +373,52 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
 
     def visit_Layout(self, value: Layout, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types import Layout",), "Layout"))
+            ctx.use(PythonExpr((DSL_STAR_IMPORT,), "Layout"))
         strides = self.shape_tuple(value.strides, ctx) if value.strides is not None else "None"
         return f"Layout({self.shape_tuple(value.shape, ctx)}, {strides})"
 
     def visit_Swizzle(self, value: Swizzle, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types import Swizzle",), ""))
+            ctx.use(PythonExpr((DSL_STAR_IMPORT,), ""))
         return f"Swizzle({value.bits}, {value.base}, {value.shift})"
+
+    def layout_surface(self, value: LayoutBase, ctx=None) -> str:
+        """Use composition operators only where the parser expects a layout."""
+        if isinstance(value, ShardLayout):
+            return self.shard_surface(value, ctx) or self.visit(value, ctx)
+        if not isinstance(value, ComposedLayout) or not isinstance(value.outer, Layout):
+            return self.visit(value, ctx)
+        result = self.visit(value.outer, ctx)
+        if value.offset != 0:
+            result += " + " + self.dim_entry(value.offset, ctx, nested=True)
+        if value.inner is not None:
+            result += " | " + self.print(value.inner, ctx, self._indent)
+        return result
+
+    def op_value(self, value: Op, ctx=None, indent: str = "") -> str:
+        """Render a schema-backed op value through its attribute values."""
+        schema = type(value)._op_schema
+        if ctx is not None:
+            ctx.imports.add(DSL_STAR_IMPORT)
+        attrs = []
+        for param in schema.signature:
+            if param.kind != "attribute":
+                continue
+            attr = getattr(value, param.name, None)
+            if attr is None:
+                continue
+            with self.type_surface(indent=indent):
+                rendered = (
+                    self.layout_surface(attr, ctx)
+                    if isinstance(attr, LayoutBase)
+                    else self.print(attr, ctx, indent)
+                )
+            attrs.append(f"{param.name}={rendered}")
+        return f"{schema.dialect}.{schema.name}({', '.join(attrs)})"
 
     def visit_ComposedLayout(self, value: ComposedLayout, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types import ComposedLayout",), ""))
+            ctx.use(PythonExpr((DSL_STAR_IMPORT,), ""))
         outer, child = self._indent, self._indent + "    "
         with self.type_surface(indent=child):
             inner_text = self.visit(value.inner, ctx)
@@ -376,11 +432,8 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         )
 
     def visit_ShardLayout(self, value: ShardLayout, ctx=None) -> str:
-        surface = self.shard_surface(value, ctx)
-        if surface is not None:
-            return surface
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types import ShardLayout",), ""))
+            ctx.use(PythonExpr((DSL_STAR_IMPORT,), ""))
         outer, child = self._indent, self._indent + "    "
         attrs = ", ".join(self.visit(attr, ctx) for attr in value.attrs)
         if len(value.attrs) == 1:
@@ -398,17 +451,17 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
 
     def visit_Broadcast(self, value: Broadcast, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types import B",), "B"))
+            ctx.use(PythonExpr((DSL_STAR_IMPORT,), "B"))
         return "B()"
 
     def visit_Split(self, value: Split, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types import S",), "S"))
+            ctx.use(PythonExpr((DSL_STAR_IMPORT,), "S"))
         return f"S({value.axis})"
 
     def visit_Partial(self, value: Partial, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types import P",), "P"))
+            ctx.use(PythonExpr((DSL_STAR_IMPORT,), "P"))
         return f'P("{value.reduction}")'
 
     def print(self, value, ctx=None, indent: str = "") -> str:
@@ -422,19 +475,29 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         if isinstance(value, (TensorType, PointerType, Mesh, LayoutBase)):
             with self.type_surface(indent=indent):
                 return self.visit(value, ctx)
+        if isinstance(value, Op):
+            return self.op_value(value, ctx, indent)
         if isinstance(value, Printable):
             return value.print(self, ctx)
+        if isinstance(value, StorageKind):
+            return json.dumps(value.name.lower())
         if isinstance(value, enum.Enum):
             if ctx is not None:
                 ctx.use(
                     PythonExpr(
-                        (f"from {type(value).__module__} import {type(value).__name__}",), ""
+                        (
+                            DSL_STAR_IMPORT
+                            if type(value).__module__ == "tilefoundry.ir.core.kinds"
+                            else f"from {type(value).__module__} import {type(value).__name__}",
+                        ), ""
                     )
                 )
             return f"{type(value).__name__}.{value.name}"
         if isinstance(value, Target):
             rendered = value.to_python()
-            return ctx.use(rendered) if ctx is not None else rendered.text
+            if ctx is not None:
+                ctx.imports.update(rendered.imports)
+            return rendered.text
         if isinstance(value, tuple):
             rendered = ", ".join(self.print(item, ctx, indent) for item in value)
             return f"({rendered}{',' if len(value) == 1 else ''})"
@@ -446,7 +509,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
     def render_pattern(self, pattern: Pattern, ctx=None) -> str:
         if isinstance(pattern, RangePattern):
             if ctx is not None:
-                ctx.use(PythonExpr(("from tilefoundry.ir.pattern import RangePattern",), ""))
+                ctx.use(PythonExpr((DSL_STAR_IMPORT,), ""))
             return f'RangePattern("{pattern.dim_var}", {pattern.lo}, {pattern.hi})'
         return repr(pattern)
 

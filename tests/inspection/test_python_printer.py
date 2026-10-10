@@ -65,7 +65,7 @@ def test_binding_metadata_names_the_emitted_binding():
 
     canonical = as_script(function)
 
-    assert "result = add(source, source)" in canonical
+    assert "result = tf.add(source, source)" in canonical
 
     unbound = Call(
         target=Binary(kind=BinaryKind.ADD),
@@ -79,7 +79,7 @@ def test_binding_metadata_names_the_emitted_binding():
         return_type=tensor_type,
     )
 
-    assert "v0 = add(source, source)" in as_script(unbound_function)
+    assert "v0 = tf.add(source, source)" in as_script(unbound_function)
 
 
 def test_umat_type_is_printed_and_round_trips() -> None:
