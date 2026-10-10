@@ -72,12 +72,14 @@ object used by layout sugar and by a `MeshRegion`; it is not itself a runtime
 expression in the HIR value graph. A `with Mesh(...)` statement uses that value
 to delimit an execution domain and does not describe the placement of its
 result. An `as name` binding is lexical: it is available inside the `with`
-body and expires when the statement ends. When a body binds names that are read
-after the `with`, each escaping name is rebound to the enclosing `MeshRegion`
-result (a tuple region with `TupleGetItem` projections when several names
-escape); names used only inside the body remain local to the scope. Names read
-inside either a MeshRegion or LoopRegion but bound outside it are captured as
-`args`, with a fresh `params` binding used by the body. LoopRegion places
+body and expires when the statement ends. When a body changes a name visible
+before the `with`, or binds a new name in its live-out (the conservative set of
+names read after it), each escaping name is rebound to the enclosing `MeshRegion`
+result (a tuple region with `TupleGetItem` projections when several names escape);
+unchanged captures and new names used
+only inside the body remain local to the scope. Names read inside either a
+MeshRegion or LoopRegion but bound outside it are captured as `args`, with a
+fresh `params` binding used by the body. LoopRegion places
 carry slots first and excludes its own induction and carry names from captures.
 Capture is performed one region boundary at a time, so nested regions pass a
 value through each door.
@@ -110,12 +112,16 @@ Non-window index arithmetic MUST reject `/` with a diagnostic directing the
 author to integer division `//`, rather than returning a float.
 
 A loop body holds `with Mesh(...)` statements, and the loop carries what one
-binds. Because the body repeats, a name the `with` reads on its way to binding
-it escapes as a name read after it does, and the loop carries both. A TIR loop
+binds. A `with` exports changed names visible on entry, including loop carry
+parameters, and new names read by following statements. Bindings produced by
+nested loops or mesh scopes follow the same rule. A TIR loop
 bound that is not a literal is read as the dimension arithmetic the loop was
 lowered from, so a bound naming a mesh coordinate reads back as it was printed.
 
 ## 2. Syntax and Rules
+
+Negative integer and floating-point literals are single `Constant` values.
+Negating a name or a runtime expression constructs a `Unary(NEG)` Call.
 
 Tuple subscripting lowers `stages[index]` to `TupleGetItem(stages, index)`.
 Literal negative indices are normalized against the tuple arity before lowering.

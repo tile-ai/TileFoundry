@@ -29,6 +29,7 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
     if selector == "memory":
         from tilefoundry.analysis.memory import analyze_memory  # noqa: PLC0415
         from tilefoundry.analysis.metadata import (  # noqa: PLC0415
+            BufferAliasMetadata,
             MemoryMetadata,
             RegionMemoryMetadata,
         )
@@ -36,7 +37,7 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
         return Analyzer(
             "memory",
             analyze_memory,
-            produces=(MemoryMetadata, RegionMemoryMetadata),
+            produces=(BufferAliasMetadata, MemoryMetadata, RegionMemoryMetadata),
         )
     if selector == "roofline":
         from tilefoundry.analysis.metadata import RooflineMetadata  # noqa: PLC0415

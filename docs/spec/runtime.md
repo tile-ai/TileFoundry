@@ -1267,6 +1267,14 @@ __device__ void copy(TSrc const &src, TDst &dst);
 
 template <class TSrc, class TDst>
 __device__ void copy_async(TSrc const &src, TDst &dst);
+
+template <class ExecutionMesh, int Bytes, class TSrc, class TDst, class TIndex>
+__device__ void copy_async(TSrc const &src, TDst &dst, TIndex const &index);
+
+template <class ExecutionMesh, int Bytes, class TSrc, class TDst, class TIndex,
+          class TFill>
+__device__ void copy_async(TSrc const &src, TDst &dst, TIndex const &index,
+                           TFill fill);
 ```
 <!-- /generated -->
 

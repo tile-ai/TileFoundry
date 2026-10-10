@@ -699,6 +699,31 @@ second presentation of the result.
   MUST remap its split positions through the registered relation with fresh
   strides. Lowering MUST copy the source's permuted-stride view into the new
   result storage.
+- `Bitcast(x, layout)` reinterprets the same bytes with a new shape and layout,
+  preserving the input dtype and storage. `layout` is a `LayoutBase`; the result
+  shape for a plain layout is the product of the nested sizes in each top-level
+  layout mode. For an rmem `ShardLayout`, the result preserves `x.shape` and
+  changes only its layout. Its layout modes and `Split` positions MUST be valid
+  for that logical shape under the existing layout-position-to-tensor-axis rules.
+  Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
+  components, or both MUST be rmem `ShardLayout` on the same mesh containing
+  only `Split` attributes. Every `Layout` component MUST have stated strides.
+  For rmem shards, an address is the owning mesh coordinate paired with the
+  offset within that unit; the two address sets MUST be equal, so every element
+  stays in its original unit and register. `Broadcast` and `Partial` shards
+  MUST be rejected. Rmem shards MUST have an underlying `Layout` with stated,
+  non-nested strides; composed underlying layouts MUST be rejected. Ownership
+  MUST use `local_layout_and_offset` on the layout's factored domain. Both shapes
+  MUST be literal and have the same element count. Both address functions MUST be
+  injective, and every result address MUST belong to the source address set,
+  using the complete colex address functions including composed swizzles.
+  Type inference MUST reject violations and identify the failing end and rule.
+  Broadcast or overlapping layouts MUST NOT be bitcast. The result-to-source
+  coordinate relation MUST pair equal addresses, forming a bijection. Bitcast
+  MUST alias the source buffer, incur zero traffic, lower to a tensor view,
+  and have no instruction candidate. Evaluation MUST reorder values by these
+  same address functions. For a row-major `(N, K)` tensor, a bitcast with
+  `Layout((K, N), (1, K))` expresses the same bytes as `(K, N)` for `Q @ K^T`.
 - `Slice` is normalized as `Slice(x, starts, sizes=..., strides=...)`.
   `starts` is a tuple of rank-0 integer operands; `sizes` and `strides` are
   `ShapeDim` attributes stored in the same IR normal form as every other dim.
@@ -1014,6 +1039,8 @@ class Reshape(Op):
   - A plain C-order input reshapes to a C-order `Layout` over `new_shape`. An
     input with no assigned layout, or a non-contiguous plain input whose regroup
     cannot be expressed, has a `None` result layout.
+  - Removing only unit axes from a plain layout MUST preserve the strides of
+    the remaining axes, including when the input is a strided tensor window.
   - A bare, fully-`Broadcast` `ShardLayout` input (every attr `Broadcast`, no
     genuine sharding) carries that `ShardLayout` through `Reshape` when the
     input layout positions can express `new_shape` by the view rules below.
@@ -1091,6 +1118,7 @@ class IndexSelect(Op):
     x: Tensor
     index: Tensor
     dim: int = 0
+    fill_value: float | None = None
 ```
 
 These are pure value forms of torch's whole-slice indexing family
@@ -1106,14 +1134,24 @@ operation and is not an HIR op.
   - `IndexSelect.index` MUST be rank 1 with dtype i32 or i64. Its result has
     `x`'s rank, dtype, and storage; `shape[dim]` becomes `index.shape[0]` and all
     other extents are unchanged.
+  - A plain `Layout` input to `IndexSelect` MUST produce a row-major layout
+    over the result shape, independent of the source strides.
+  - When `IndexSelect.fill_value` is not `None`, indices below zero or at least
+    `x.shape[dim]` MUST produce slices filled with that value without reading
+    the source. With `None`, selection retains torch's bounds behavior.
   - `IndexSelect` produces a natural contiguous internal `Layout` for a
     `ShardLayout` input. `Broadcast` and `Partial` states carry through; a
     `Split` on `dim` becomes `Partial(sum)`, and a `Split` on another dim keeps
     its target. Multiple `Split`s including `dim`, or a composed shard layout,
     MUST fail closed.
-  - HIR-to-TIR lowers `IndexSelect` as a view only when `index.shape == (1,)`
-    and every input extent before `dim` is `1`. Other forms require a
-    materializing selection and MUST fail closed.
+  - `IndexSelect` is a pure value operation, not a copy. To stage dim-0
+    selections into shared memory, schedule its inputs as
+    `tf.schedule((x, index), op=T.copy_async(smem_layout=..., fill=f))`.
+    Its CopyAsync candidate declares the result landing in smem, using the
+    instruction's write type rather than the pure value's source storage.
+    The indexed instruction has no TMA candidate. Unscheduled `IndexSelect`
+    MUST fail lowering with this scheduling form in the diagnostic; copying
+    its already computed result with `CopyAsync` is not supported.
   - `IndexAdd` and `IndexCopy` require rank-1 `index`, equal `dst`/`src` dtype
     and rank, equal non-`dim` extents, and
     `index.shape[0] == src.shape[dim]`. Their result type is exactly `dst`'s.
@@ -1547,19 +1585,28 @@ class Reshard(Op):
 
     Attributes:
         x: input; input tensor.
-        layout: attribute; optional target ShardLayout.
+        layout: attribute; optional target LayoutBase (Layout / ComposedLayout / ShardLayout).
         storage: attribute; optional target storage kind.
     """
 
     x: Tensor
-    layout: ShardLayout = None
+    layout: LayoutBase = None
     storage: StorageKind = None
 ```
 - constraints:
   - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
     `x.storage`.
   - The output preserves the input logical `TensorType.shape`.
-  - Supplied `layout` is a `ShardLayout`.
+  - Supplied `layout` is a `LayoutBase` (`Layout` / `ComposedLayout` / `ShardLayout`).
+  - Memory analysis and lowering MUST treat a same-storage Reshard as a view
+    only when both layouts are plain (no nested `ShardLayout`) with strides
+    stated in every `Layout` component, the shape is literal, and every colex
+    coordinate maps to the same address in both layouts, including composed
+    swizzles. The result MUST reuse the source
+    buffer, lower to a view, and require no instruction candidate.
+  - A Reshard that changes addresses or storage, or whose layout contains a
+    `ShardLayout`, MUST retain its independent buffer and instruction selection
+    requirements.
   - Destination storage is concrete, not unmaterialized.
   - The single op covers zero-copy view, cross-storage copy, cross-CTA
   redistribute, and mixed cases; typeinfer and the recursive-local Cost

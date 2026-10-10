@@ -48,7 +48,9 @@ def _reshape_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     )
 
 
-register_buffer_alias(Reshape, Reshape.x)
+@register_buffer_alias(Reshape)
+def _buffer_alias(call: Call) -> int:
+    return 0
 
 
 def is_induction_var_singleton_reshape(expr) -> bool:
@@ -191,6 +193,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             new_layout = replace(x_ty.layout, layout=Layout(new_shape, None))
     else:
         def reshaped(layout: Layout) -> Layout | None:
+            nonunit = tuple(axis for axis, extent in enumerate(layout.shape) if extent != 1)
+            if (
+                len(nonunit) < len(layout.shape)
+                and layout.strides is not None
+                and new_shape == tuple(layout.shape[axis] for axis in nonunit)
+            ):
+                return Layout(new_shape, tuple(layout.strides[axis] for axis in nonunit))
             expected = try_compact_major(layout.shape)
             if layout.strides is not None and layout.strides != expected:
                 return None

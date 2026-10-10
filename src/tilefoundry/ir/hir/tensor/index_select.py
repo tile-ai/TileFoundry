@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import torch
-
+from tilefoundry.evaluator.kernels import gather
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -16,13 +15,11 @@ from tilefoundry.ir.types.shard_layout import (
     Split,
     split_target_axes,
 )
-from tilefoundry.ir.types.stride import compact_col_major
+from tilefoundry.ir.types.stride import compact_col_major, compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
-    identity_access,
-    iterating,
-    reached_at,
+    gather_relations,
     register_access_relation,
 )
 
@@ -34,6 +31,7 @@ class IndexSelect(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     index = ParamDef(kind="input", pattern=is_ranked_tensor())
     dim = ParamDef(kind="attribute", annotation=int, default=0)
+    fill_value = ParamDef(kind="attribute", annotation=float | None, default=None)
 
 
 def _norm_dim(dim: int, rank: int, ctx=None, call=None) -> int:
@@ -54,6 +52,8 @@ def _index_select_shard_layout(call, ctx, x_ty, dim: int, out_shape: tuple):
     closed.
     """
     sl = x_ty.layout
+    if isinstance(sl, Layout):
+        return Layout(shape=out_shape, strides=compact_row_major(out_shape))
     if not isinstance(sl, ShardLayout):
         return sl
     if not isinstance(sl.layout, Layout):
@@ -114,23 +114,8 @@ def _index_select_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ..
     result reached, one element per selected slice.
     """
     source_ty, index_ty = ctx.type_of(call.args[0]), ctx.type_of(call.args[1])
-    logical_source, logical_index = source_ty, index_ty
     axis = _norm_dim(call.target.dim, len(source_ty.shape))
-    out_shape = (
-        *source_ty.shape[:axis],
-        index_ty.shape[0],
-        *source_ty.shape[axis + 1 :],
-    )
-    rank = len(out_shape)
-    carried = {position: f"d{position}" for position in range(rank)}
-    return iterating(
-        out_shape,
-        (
-            reached_at(rank, source_ty, logical_source, carried, free=(axis,)),
-            reached_at(rank, index_ty, logical_index, {0: carried.get(axis, "0")}),
-            identity_access(rank),
-        ),
-    )
+    return gather_relations(source_ty, index_ty, axis)
 
 
 @register_eval(IndexSelect)
@@ -139,7 +124,7 @@ def _eval_index_select(ctx):
     index = ctx.args[1].data
     dim = _norm_dim(ctx.op.dim, x.dim())
     return TensorValue(
-        data=torch.index_select(x, dim, index),
+        data=gather(x, index, dim, ctx.op.fill_value),
         type=ctx.result_type,
     )
 

@@ -33,6 +33,7 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
+from tilefoundry.ir.hir.tensor.bitcast import Bitcast
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.hir.tensor.concat import Concat
@@ -55,7 +56,7 @@ from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.hir.tensor.zeros import Zeros
-from tilefoundry.ir.types import DType, IntegerDType, ShardLayout, TensorType, Type
+from tilefoundry.ir.types import DType, ShardLayout, TensorType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -76,64 +77,24 @@ from tilefoundry.ir.types.utils import numel, tensor_bytes
 from tilefoundry.visitor_registry.access_relation import logical_axes_of
 
 from .contexts import Cost, CostContext, TrafficBytes
+from .cost_utils import (
+    elementwise,
+    idle,
+    input_types,
+    operation_cost,
+    output_type,
+    row,
+    serviced,
+    traffic,
+)
 from .registries import register_cost_evaluator
-
-
-def _input_types(call: Call, ctx: CostContext) -> tuple[Type, ...]:
-    return tuple(ctx.local_type_of(arg) for arg in call.args)
-
-
-def _output_type(call: Call, ctx: CostContext) -> Type:
-    return ctx.local_output_type(call)
-
-
-def _traffic(inputs: tuple[Type, ...], output: Type) -> tuple[TrafficBytes, ...]:
-    """One entry per operand: every input read whole, the result written whole.
-
-    The default an Op gets by saying nothing about which part it touches.
-    """
-    return (
-        *(TrafficBytes(read=tensor_bytes(type)) for type in inputs),
-        TrafficBytes(write=tensor_bytes(output)),
-    )
-
-
-def _row(table: Type) -> int:
-    """One position's worth of a cache whose leading axis is the position."""
-    return tensor_bytes(table) // table.shape[0]
-
-
-def _idle(call: Call) -> tuple[TrafficBytes, ...]:
-    """No operand moves, but every operand still has a slot."""
-    return tuple(TrafficBytes() for _ in range(len(call.args) + 1))
-
-
-def _elementwise(call: Call, ctx: CostContext, *, dtype: DType | None = None) -> Cost:
-    inputs = _input_types(call, ctx)
-    output = _output_type(call, ctx)
-    result_dtype = dtype
-    if result_dtype is None:
-        if isinstance(output, TensorType):
-            result_dtype = output.dtype
-        else:
-            result_dtype = next(
-                type.dtype for type in inputs if isinstance(type, TensorType)
-            )
-    return Cost({result_dtype: numel(output)}, _traffic(inputs, output))
-
-
-def _serviced(call: Call, ctx: CostContext, kind: str) -> Cost:
-    """One result of *kind* per element, and no floating-point work at all."""
-    inputs = _input_types(call, ctx)
-    output = _output_type(call, ctx)
-    return Cost({}, _traffic(inputs, output), {kind: numel(output)})
 
 
 @register_cost_evaluator(MatMul)
 def _matmul(call: Call, ctx: CostContext) -> Cost:
     """One multiply and one add per multiply-accumulate: 2 * batch * m * k * n."""
-    lhs, rhs = _input_types(call, ctx)
-    output = _output_type(call, ctx)
+    lhs, rhs = input_types(call, ctx)
+    output = output_type(call, ctx)
     if not all(isinstance(type, TensorType) for type in (lhs, rhs, output)):
         raise ValueError("MatMul cost requires tensor inputs and output")
     logical_lhs = ctx.type_of(call.args[0])
@@ -149,13 +110,13 @@ def _matmul(call: Call, ctx: CostContext) -> Cost:
         if logical_axis == k_axis
     )
     flops = 2 * numel(output) * k
-    return Cost({lhs.dtype: flops}, _traffic((lhs, rhs), output))
+    return Cost({lhs.dtype: flops}, traffic((lhs, rhs), output))
 
 
 @register_cost_evaluator(Conv2D)
 def _conv2d(call: Call, ctx: CostContext) -> Cost:
-    input_, weight, bias = _input_types(call, ctx)
-    output = _output_type(call, ctx)
+    input_, weight, bias = input_types(call, ctx)
+    output = output_type(call, ctx)
     if not all(
         isinstance(type_, TensorType)
         for type_ in (input_, weight, bias, output)
@@ -178,27 +139,27 @@ def _conv2d(call: Call, ctx: CostContext) -> Cost:
         * logical_weight_shape[3]
     )
     return Cost(
-        {input_.dtype: flops}, _traffic((input_, weight, bias), output)
+        {input_.dtype: flops}, traffic((input_, weight, bias), output)
     )
 
 
 @register_cost_evaluator(Reduce)
 def _reduce(call: Call, ctx: CostContext) -> Cost:
-    (source,) = _input_types(call, ctx)
-    output = _output_type(call, ctx)
+    (source,) = input_types(call, ctx)
+    output = output_type(call, ctx)
     if not isinstance(source, TensorType):
         raise ValueError("Reduce cost requires a tensor input")
-    return Cost({source.dtype: numel(source)}, _traffic((source,), output))
+    return operation_cost(source.dtype, numel(source), traffic((source,), output))
 
 
 @register_cost_evaluator(RMSNorm)
 def _rms_norm(call: Call, ctx: CostContext) -> Cost:
-    inputs = _input_types(call, ctx)
-    output = _output_type(call, ctx)
+    inputs = input_types(call, ctx)
+    output = output_type(call, ctx)
     source = inputs[0]
     if not isinstance(source, TensorType):
         raise ValueError("RMSNorm cost requires a tensor input")
-    return Cost({DType.f32: 8 * numel(source)}, _traffic(inputs, output))
+    return Cost({DType.f32: 8 * numel(source)}, traffic(inputs, output))
 
 
 _PREDICATES = frozenset(
@@ -227,16 +188,8 @@ def _binary(call: Call, ctx: CostContext) -> Cost:
     """
     kind = call.target.kind
     if kind in _PREDICATES:
-        return _serviced(call, ctx, "predicate")
-    if _integral(call, ctx):
-        return _serviced(call, ctx, "integer")
-    return _elementwise(call, ctx)
-
-
-def _integral(call: Call, ctx: CostContext) -> bool:
-    """Whether this operation's result is whole numbers rather than reals."""
-    output = _output_type(call, ctx)
-    return isinstance(output, TensorType) and isinstance(output.dtype, IntegerDType)
+        return serviced(call, ctx, "predicate")
+    return elementwise(call, ctx)
 
 
 _SPECIAL = frozenset(
@@ -257,47 +210,45 @@ def _unary(call: Call, ctx: CostContext) -> Cost:
     """
     kind = call.target.kind
     if kind in _SPECIAL:
-        return _serviced(call, ctx, "special")
+        return serviced(call, ctx, "special")
     if kind is UnaryKind.NOT:
-        return _serviced(call, ctx, "predicate")
-    if _integral(call, ctx):
-        return _serviced(call, ctx, "integer")
-    return _elementwise(call, ctx)
+        return serviced(call, ctx, "predicate")
+    return elementwise(call, ctx)
 
 
 @register_cost_evaluator(Clamp)
 def _clamp(call: Call, ctx: CostContext) -> Cost:
-    return _elementwise(call, ctx)
+    return elementwise(call, ctx)
 
 
 @register_cost_evaluator(Sigmoid)
 def _sigmoid(call: Call, ctx: CostContext) -> Cost:
-    return _elementwise(call, ctx)
+    return elementwise(call, ctx)
 
 
 @register_cost_evaluator(Softplus)
 def _softplus(call: Call, ctx: CostContext) -> Cost:
-    return _elementwise(call, ctx)
+    return elementwise(call, ctx)
 
 
 @register_cost_evaluator(Silu)
 def _silu(call: Call, ctx: CostContext) -> Cost:
-    return _elementwise(call, ctx)
+    return elementwise(call, ctx)
 
 
 @register_cost_evaluator(Tanh)
 def _tanh(call: Call, ctx: CostContext) -> Cost:
-    return _elementwise(call, ctx)
+    return elementwise(call, ctx)
 
 
 @register_cost_evaluator(ReLU)
 def _relu(call: Call, ctx: CostContext) -> Cost:
-    return _elementwise(call, ctx)
+    return elementwise(call, ctx)
 
 
 @register_cost_evaluator(Gelu)
 def _gelu(call: Call, ctx: CostContext) -> Cost:
-    return _elementwise(call, ctx)
+    return elementwise(call, ctx)
 
 
 @register_cost_evaluator(Concat)
@@ -307,13 +258,13 @@ def _concat(call: Call, ctx: CostContext) -> Cost:
     Every input element is read once and written once, so the traffic is the
     inputs plus the output -- unlike a slice, which reads only what it keeps.
     """
-    return Cost({}, _traffic(_input_types(call, ctx), _output_type(call, ctx)))
+    return Cost({}, traffic(input_types(call, ctx), output_type(call, ctx)))
 
 
 @register_cost_evaluator(Slice)
 def _slice(call: Call, ctx: CostContext) -> Cost:
     """A slice is a view; reading its coordinates still has a cost."""
-    _, starts = _input_types(call, ctx)
+    _, starts = input_types(call, ctx)
     return Cost(
         {},
         (
@@ -327,7 +278,7 @@ def _slice(call: Call, ctx: CostContext) -> Cost:
 @register_cost_evaluator(InsertSlice)
 def _insert_slice(call: Call, ctx: CostContext) -> Cost:
     """Read and write the update window without charging the untouched dst."""
-    _, update, offsets = _input_types(call, ctx)
+    _, update, offsets = input_types(call, ctx)
     window = tensor_bytes(update)
     return Cost(
         {},
@@ -343,7 +294,7 @@ def _insert_slice(call: Call, ctx: CostContext) -> Cost:
 @register_cost_evaluator(CacheUpdate)
 def _cache_update(call: Call, ctx: CostContext) -> Cost:
     """Charge the statically bounded new window, never the whole cache."""
-    _, cur_pos, s, new = _input_types(call, ctx)
+    _, cur_pos, s, new = input_types(call, ctx)
     window = tensor_bytes(new)
     return Cost(
         {},
@@ -359,22 +310,22 @@ def _cache_update(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(SoftMax)
 def _softmax(call: Call, ctx: CostContext) -> Cost:
-    return _elementwise(call, ctx)
+    return elementwise(call, ctx)
 
 
 @register_cost_evaluator(Where)
 def _where(call: Call, ctx: CostContext) -> Cost:
     """Choosing between two values it already has is a select, not arithmetic."""
-    return _serviced(call, ctx, "select")
+    return serviced(call, ctx, "select")
 
 
 @register_cost_evaluator(LayerNorm)
 def _layer_norm(call: Call, ctx: CostContext) -> Cost:
-    source = _input_types(call, ctx)[0]
-    output = _output_type(call, ctx)
+    source = input_types(call, ctx)[0]
+    output = output_type(call, ctx)
     if not isinstance(source, TensorType):
         raise ValueError("LayerNorm cost requires a tensor input")
-    return Cost({DType.f32: 8 * numel(source)}, _traffic(_input_types(call, ctx), output))
+    return Cost({DType.f32: 8 * numel(source)}, traffic(input_types(call, ctx), output))
 
 
 @register_cost_evaluator(RoPE)
@@ -387,8 +338,8 @@ def _rope(call: Call, ctx: CostContext) -> Cost:
 
     The position-indexed caches contribute one row per call.
     """
-    query, key, cos_cache, sin_cache, pos_ids = _input_types(call, ctx)
-    output = _output_type(call, ctx)
+    query, key, cos_cache, sin_cache, pos_ids = input_types(call, ctx)
+    output = output_type(call, ctx)
     if not isinstance(query, TensorType):
         raise ValueError("RoPE cost requires a tensor query input")
     return Cost(
@@ -396,8 +347,8 @@ def _rope(call: Call, ctx: CostContext) -> Cost:
         (
             TrafficBytes(read=tensor_bytes(query)),
             TrafficBytes(read=tensor_bytes(key)),
-            TrafficBytes(read=_row(cos_cache)),
-            TrafficBytes(read=_row(sin_cache)),
+            TrafficBytes(read=row(cos_cache)),
+            TrafficBytes(read=row(sin_cache)),
             TrafficBytes(read=tensor_bytes(pos_ids)),
             TrafficBytes(write=tensor_bytes(output)),
         ),
@@ -406,17 +357,17 @@ def _rope(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(TopK)
 def _topk(call: Call, ctx: CostContext) -> Cost:
-    inputs = _input_types(call, ctx)
-    output = _output_type(call, ctx)
+    inputs = input_types(call, ctx)
+    output = output_type(call, ctx)
     source = inputs[0]
     dtype = source.dtype if isinstance(source, TensorType) else DType.f32
-    return Cost({dtype: numel(source)}, _traffic(inputs, output))
+    return operation_cost(dtype, numel(source), traffic(inputs, output))
 
 
 @register_cost_evaluator(IndexSelect)
 def _index_select(call: Call, ctx: CostContext) -> Cost:
-    index = _input_types(call, ctx)[1]
-    rows = tensor_bytes(_output_type(call, ctx))
+    index = input_types(call, ctx)[1]
+    rows = tensor_bytes(output_type(call, ctx))
     return Cost(
         {},
         (
@@ -429,10 +380,11 @@ def _index_select(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(IndexAdd)
 def _index_add(call: Call, ctx: CostContext) -> Cost:
-    _, index, src = _input_types(call, ctx)
+    _, index, src = input_types(call, ctx)
     touched = tensor_bytes(src)
-    return Cost(
-        {src.dtype: numel(src)},
+    return operation_cost(
+        src.dtype,
+        numel(src),
         (
             TrafficBytes(read=touched),
             TrafficBytes(read=tensor_bytes(index)),
@@ -444,7 +396,7 @@ def _index_add(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(IndexCopy)
 def _index_copy(call: Call, ctx: CostContext) -> Cost:
-    _, index, src = _input_types(call, ctx)
+    _, index, src = input_types(call, ctx)
     touched = tensor_bytes(src)
     return Cost(
         {},
@@ -459,61 +411,61 @@ def _index_copy(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(ArgMax)
 def _argmax(call: Call, ctx: CostContext) -> Cost:
-    inputs = _input_types(call, ctx)
-    output = _output_type(call, ctx)
-    return Cost({}, _traffic(inputs, output))
+    inputs = input_types(call, ctx)
+    output = output_type(call, ctx)
+    return Cost({}, traffic(inputs, output))
 
 
 @register_cost_evaluator(Cast)
 def _cast(call: Call, ctx: CostContext) -> Cost:
-    return _elementwise(call, ctx)
+    return elementwise(call, ctx)
 
 
 @register_cost_evaluator(Quant)
 def _quant(call: Call, ctx: CostContext) -> Cost:
-    inputs = _input_types(call, ctx)
-    output = _output_type(call, ctx)
+    inputs = input_types(call, ctx)
+    output = output_type(call, ctx)
     source = inputs[0]
     if not isinstance(source, TensorType):
         raise ValueError("Quant cost requires a tensor input")
-    return Cost({DType.f32: 4 * numel(source)}, _traffic(inputs, output))
+    return Cost({DType.f32: 4 * numel(source)}, traffic(inputs, output))
 
 
 @register_cost_evaluator(TupleGetItem)
 def _tuple_get_item(call: Call, ctx: CostContext) -> Cost:
-    return Cost({}, _idle(call))
+    return Cost({}, idle(call))
 
 
 @register_cost_evaluator(Rank)
 @register_cost_evaluator(ShapeOf)
 @register_cost_evaluator(Local)
 def _metadata_view(call: Call, ctx: CostContext) -> Cost:
-    return Cost({}, _idle(call))
+    return Cost({}, idle(call))
 
 
 @register_cost_evaluator(Split)
 @register_cost_evaluator(Stack)
 def _structure(call: Call, ctx: CostContext) -> Cost:
-    return Cost({}, _traffic(_input_types(call, ctx), _output_type(call, ctx)))
+    return Cost({}, traffic(input_types(call, ctx), output_type(call, ctx)))
 
 
 @register_cost_evaluator(FullLike)
 def _full_like(call: Call, ctx: CostContext) -> Cost:
     """The template gives its Type and none of its elements; one full write."""
-    output = _output_type(call, ctx)
+    output = output_type(call, ctx)
     return Cost({}, (TrafficBytes(), TrafficBytes(write=tensor_bytes(output))))
 
 
 @register_cost_evaluator(Arange)
 def _arange(call: Call, ctx: CostContext) -> Cost:
     """Coordinates are synthesized metadata until a consumer materializes them."""
-    return Cost({}, _idle(call))
+    return Cost({}, idle(call))
 
 
 @register_cost_evaluator(MeshCoord)
 def _mesh_coord(call: Call, ctx: CostContext) -> Cost:
     """Which unit this is costs nothing: the machine already knows."""
-    return Cost({}, _idle(call))
+    return Cost({}, idle(call))
 
 
 @register_cost_evaluator(DimAdd)
@@ -525,32 +477,37 @@ def _mesh_coord(call: Call, ctx: CostContext) -> Cost:
 @register_cost_evaluator(DimMax)
 def _dim_arithmetic(call: Call, ctx: CostContext) -> Cost:
     """Scalar index arithmetic is address work, not tensor work: it costs nothing."""
-    return Cost({}, _idle(call))
+    return Cost({}, idle(call))
 
 
 @register_cost_evaluator(Zeros)
 def _zeros(call: Call, ctx: CostContext) -> Cost:
     """Materialise a tensor of zeros: no arithmetic, one full write."""
-    output = _output_type(call, ctx)
+    output = output_type(call, ctx)
     return Cost({}, (TrafficBytes(write=tensor_bytes(output)),))
 
 
 @register_cost_evaluator(RepeatInterleave)
 def _repeat_interleave(call: Call, ctx: CostContext) -> Cost:
-    inputs = _input_types(call, ctx)
-    output = _output_type(call, ctx)
-    return Cost({}, _traffic(inputs, output))
+    inputs = input_types(call, ctx)
+    output = output_type(call, ctx)
+    return Cost({}, traffic(inputs, output))
 
 
 @register_cost_evaluator(Reshape)
 def _reshape(call: Call, ctx: CostContext) -> Cost:
-    return Cost({}, _idle(call))
+    return Cost({}, idle(call))
 
 
 @register_cost_evaluator(Transpose)
 def _transpose(call: Call, ctx: CostContext) -> Cost:
-    moved = tensor_bytes(_output_type(call, ctx))
+    moved = tensor_bytes(output_type(call, ctx))
     return Cost({}, (TrafficBytes(read=moved), TrafficBytes(write=moved)))
+
+
+@register_cost_evaluator(Bitcast)
+def _bitcast(call: Call, ctx: CostContext) -> Cost:
+    return Cost({}, idle(call))
 
 
 def _split_axes(type_) -> "dict[int, int] | None":
@@ -605,11 +562,11 @@ def _sent(source, destination) -> tuple[tuple[str, TrafficBytes], ...]:
 
 @register_cost_evaluator(Reshard)
 def _reshard(call: Call, ctx: CostContext) -> Cost:
-    source = _input_types(call, ctx)[0]
-    destination = _output_type(call, ctx)
+    source = input_types(call, ctx)[0]
+    destination = output_type(call, ctx)
     sent = _sent(source, destination)
     if source.storage == destination.storage:
-        return Cost({}, _idle(call), sent=sent)
+        return Cost({}, idle(call), sent=sent)
     return Cost({}, (
         TrafficBytes(read=tensor_bytes(source)),
         TrafficBytes(write=tensor_bytes(destination)),

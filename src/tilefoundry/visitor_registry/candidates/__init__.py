@@ -12,7 +12,7 @@ _CANDIDATES: dict[type, list[type]] = {}
 
 
 def register_candidates(hir_op: type, tir_ops: tuple[type, ...]) -> None:
-    """Add the TIR operations that can implement one HIR operation."""
+    """Register TIR carriers for one HIR operation."""
     registered = _CANDIDATES.setdefault(hir_op, [])
     for tir_op in tir_ops:
         if tir_op not in registered:

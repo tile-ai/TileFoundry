@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from tilefoundry.analysis.check import check_program, resolve_program_geometry
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.iteration_scope import ScopeBuilder
+from tilefoundry.analysis.iteration_scope import IterationScope, ScopeBuilder
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.visitor import AnalyzeContext
@@ -41,6 +41,7 @@ class AnalysisResult:
 
     module: Module
     function: Function
+    scopes: IterationScope
     analyses: tuple[str, ...]
     topology_level: str | None
     executed: tuple[str, ...]
@@ -187,6 +188,7 @@ def analyze(
     result = AnalysisResult(
         module=result_module,
         function=function,
+        scopes=context.root,
         analyses=roots,
         topology_level=topology_level,
         executed=tuple(algorithm.selector for algorithm in closure),

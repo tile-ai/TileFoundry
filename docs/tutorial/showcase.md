@@ -198,7 +198,7 @@ for needle in ("matmul(hidden, w_q", "cache_update(k_cache", "matmul(v33, w_o"):
 # analysis target=nvidia.h200_sxm module=Stage0_Naive function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,328896@total,328896@cta;f32:200448@logical,200448@total,200448@cta other-ops=special:1024@logical,1024@total,1024@cta precision=exact
-# memory traffic=gmem:r2.12MB/w787.69KB@logical,r2.12MB/w787.69KB@total,r2.12MB/w787.69KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:57:1.00KB;v10:60:128B;v11:61:16.12KB;v12:64:128.00KB;v13:66:128.00KB;v14:69:256.00KB;v16:75:256.00KB;v17:75:8.00KB;v18:76:64B;v19:77:8.00KB;v20:77:8.00KB;v21:59:256B;v23:62:16.12KB;v24:65:128.00KB;v25:67:128.00KB;v26:70:256.00KB;v28:79:256.00KB;v29:79:2.00KB;v2:58:256B;v30:78:64B;v31:80:2.00KB;v32:81:1.00KB;v34:82:512B;v4:60:640B;v5:60:512B;v6:68:2.00KB;v7:71:1.00KB;v8:71:2.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:1.60MB persistent=gmem:1.34MB
+# memory traffic=gmem:r1.12MB/w787.69KB@logical,r1.12MB/w787.69KB@total,r1.12MB/w787.69KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:57:1.00KB;v10:60:128B;v11:61:16.12KB;v12:64:128.00KB;v13:66:128.00KB;v14:69:256.00KB;v16:75:256.00KB;v17:75:8.00KB;v18:76:64B;v19:77:8.00KB;v20:77:8.00KB;v21:59:256B;v23:62:16.12KB;v24:65:128.00KB;v25:67:128.00KB;v26:70:256.00KB;v28:79:256.00KB;v29:79:2.00KB;v2:58:256B;v30:78:64B;v31:80:2.00KB;v32:81:1.00KB;v34:82:512B;v4:60:640B;v5:60:512B;v6:68:2.00KB;v7:71:1.00KB;v8:71:2.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:1.60MB persistent=gmem:1.34MB
 # roofline ideal-ns=630 bound-by=memory
 
     v0 = matmul(hidden, w_q, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@logical,131072@total,131072@cta precision=exact; memory traffic=gmem:r128.50KB/w512B@logical,r128.50KB/w512B@total,r128.50KB/w512B@cta footprint=hidden:512B;v0:57:512B;w_q:128.00KB footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=28 bound-by=memory
@@ -257,12 +257,12 @@ for ctx_len in (128, 512, 1024, 2048, 4096, 8192):
 
 | `ctx_len` | f32 flops `logical@total@CTA` | traffic `logical@total@CTA` | peak gmem bytes | ideal ns | bound |
 |---:|---:|---|---:|---:|---|
-| 128 | `200448@logical,200448@total,200448@cta` | `gmem:r2.12MB/w787.69KB@logical,r2.12MB/w787.69KB@total,r2.12MB/w787.69KB@cta` | 1.60MB | 630 | memory |
-| 512 | `799488@logical,799488@total,799488@cta` | `gmem:r4.52MB/w3.05MB@logical,r4.52MB/w3.05MB@total,r4.52MB/w3.05MB@cta` | 2.45MB | 1649 | memory |
-| 1024 | `1598208@logical,1598208@total,1598208@cta` | `gmem:r7.73MB/w6.10MB@logical,r7.73MB/w6.10MB@total,r7.73MB/w6.10MB@cta` | 3.59MB | 3007 | memory |
-| 2048 | `3195648@logical,3195648@total,3195648@cta` | `gmem:r14.13MB/w12.20MB@logical,r14.13MB/w12.20MB@total,r14.13MB/w12.20MB@cta` | 5.88MB | 5724 | memory |
-| 4096 | `6390528@logical,6390528@total,6390528@cta` | `gmem:r26.95MB/w24.38MB@logical,r26.95MB/w24.38MB@total,r26.95MB/w24.38MB@cta` | 10.44MB | 11158 | memory |
-| 8192 | `12780288@logical,12780288@total,12780288@cta` | `gmem:r52.57MB/w48.76MB@logical,r52.57MB/w48.76MB@total,r52.57MB/w48.76MB@cta` | 19.56MB | 22026 | memory |
+| 128 | `200448@logical,200448@total,200448@cta` | `gmem:r1.12MB/w787.69KB@logical,r1.12MB/w787.69KB@total,r1.12MB/w787.69KB@cta` | 1.60MB | 630 | memory |
+| 512 | `799488@logical,799488@total,799488@cta` | `gmem:r3.53MB/w3.05MB@logical,r3.53MB/w3.05MB@total,r3.53MB/w3.05MB@cta` | 2.45MB | 1649 | memory |
+| 1024 | `1598208@logical,1598208@total,1598208@cta` | `gmem:r6.73MB/w6.10MB@logical,r6.73MB/w6.10MB@total,r6.73MB/w6.10MB@cta` | 3.59MB | 3007 | memory |
+| 2048 | `3195648@logical,3195648@total,3195648@cta` | `gmem:r13.14MB/w12.20MB@logical,r13.14MB/w12.20MB@total,r13.14MB/w12.20MB@cta` | 5.88MB | 5724 | memory |
+| 4096 | `6390528@logical,6390528@total,6390528@cta` | `gmem:r25.95MB/w24.38MB@logical,r25.95MB/w24.38MB@total,r25.95MB/w24.38MB@cta` | 10.44MB | 11158 | memory |
+| 8192 | `12780288@logical,12780288@total,12780288@cta` | `gmem:r51.57MB/w48.76MB@logical,r51.57MB/w48.76MB@total,r51.57MB/w48.76MB@cta` | 19.56MB | 22026 | memory |
 
 The table says:
 
@@ -424,7 +424,7 @@ print(report.partition("\n\n")[0].rstrip())
 # analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:2203264@logical,4503744@total,562968@cta;f32:44352@logical,44352@total,5544@cta other-ops=special:14528@logical,14528@total,1816@cta precision=exact
-# memory traffic=gmem:r5.31MB/w3.55MB@logical,r30.03MB/w28.39MB@total,r3.75MB/w3.55MB@cta;rmem:r315.19KB/w201.69KB@logical,r315.19KB/w201.69KB@total,r39.40KB/w25.21KB@cta;smem:r3.55MB/w3.55MB@logical,r3.55MB/w3.55MB@total,r454.62KB/w454.62KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v12:221:128B;v13:222:227.12KB;v14:228:1.77MB;v15:227:1.77MB;v23:220:256B;v25:223:227.12KB;v26:231:1.77MB;v27:230:1.77MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.53MB;rmem:10.77KB;smem:227.12KB persistent=gmem:1.76MB
+# memory traffic=gmem:r4.31MB/w3.55MB@logical,r22.05MB/w28.39MB@total,r2.76MB/w3.55MB@cta;rmem:r315.19KB/w201.69KB@logical,r315.19KB/w201.69KB@total,r39.40KB/w25.21KB@cta;smem:r3.55MB/w3.55MB@logical,r3.55MB/w3.55MB@total,r454.62KB/w454.62KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v12:221:128B;v13:222:227.12KB;v14:228:1.77MB;v15:227:1.77MB;v23:220:256B;v25:223:227.12KB;v26:231:1.77MB;v27:230:1.77MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.53MB;rmem:10.77KB;smem:227.12KB persistent=gmem:1.76MB
 #   buffer=cos_cache holds=8.85MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=sin_cache holds=8.85MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=w_q holds=8.85MB time=none space=cta.head reuse=896.00KB fits=yes precision=upper_bound
@@ -460,7 +460,7 @@ print(report.partition("\n\n")[0].rstrip())
 # analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:2207392@logical,4507872@total,563484@cta;f32:44448@logical,44448@total,5556@cta other-ops=special:14560@logical,14560@total,1820@cta precision=exact
-# memory traffic=gmem:r5.31MB/w3.56MB@logical,r30.07MB/w28.45MB@total,r3.76MB/w3.56MB@cta;rmem:r315.88KB/w202.12KB@logical,r315.88KB/w202.12KB@total,r39.48KB/w25.27KB@cta;smem:r3.56MB/w3.56MB@logical,r3.56MB/w3.56MB@total,r455.62KB/w455.62KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v12:221:128B;v13:222:227.62KB;v14:228:1.78MB;v15:227:1.78MB;v23:220:256B;v25:223:227.62KB;v26:231:1.78MB;v27:230:1.78MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.53MB;rmem:10.79KB;smem:227.62KB persistent=gmem:1.76MB
+# memory traffic=gmem:r4.32MB/w3.56MB@logical,r22.09MB/w28.45MB@total,r2.76MB/w3.56MB@cta;rmem:r315.88KB/w202.12KB@logical,r315.88KB/w202.12KB@total,r39.48KB/w25.27KB@cta;smem:r3.56MB/w3.56MB@logical,r3.56MB/w3.56MB@total,r455.62KB/w455.62KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v12:221:128B;v13:222:227.62KB;v14:228:1.78MB;v15:227:1.78MB;v23:220:256B;v25:223:227.62KB;v26:231:1.78MB;v27:230:1.78MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.53MB;rmem:10.79KB;smem:227.62KB persistent=gmem:1.76MB
 #   buffer=cos_cache holds=8.87MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=sin_cache holds=8.87MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=w_q holds=8.87MB time=none space=cta.head reuse=896.00KB fits=yes precision=upper_bound
@@ -568,7 +568,7 @@ for line in report.splitlines():
 
 ```text
 # compute-cost flops=bf16:328896@logical,328896@total,328896@cta;f32:200448@logical,200448@total,200448@cta other-ops=special:1024@logical,1024@total,1024@cta precision=exact
-# memory traffic=gmem:r2.12MB/w787.69KB@logical,r2.12MB/w787.69KB@total,r2.12MB/w787.69KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:57:1.00KB;v10:60:128B;v11:61:16.12KB;v12:64:128.00KB;v13:66:128.00KB;v14:69:256.00KB;v16:75:256.00KB;v17:75:8.00KB;v18:76:64B;v19:77:8.00KB;v20:77:8.00KB;v21:59:256B;v23:62:16.12KB;v24:65:128.00KB;v25:67:128.00KB;v26:70:256.00KB;v28:79:256.00KB;v29:79:2.00KB;v2:58:256B;v30:78:64B;v31:80:2.00KB;v32:81:1.00KB;v34:82:512B;v4:60:640B;v5:60:512B;v6:68:2.00KB;v7:71:1.00KB;v8:71:2.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:1.60MB persistent=gmem:1.34MB
+# memory traffic=gmem:r1.12MB/w787.69KB@logical,r1.12MB/w787.69KB@total,r1.12MB/w787.69KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:57:1.00KB;v10:60:128B;v11:61:16.12KB;v12:64:128.00KB;v13:66:128.00KB;v14:69:256.00KB;v16:75:256.00KB;v17:75:8.00KB;v18:76:64B;v19:77:8.00KB;v20:77:8.00KB;v21:59:256B;v23:62:16.12KB;v24:65:128.00KB;v25:67:128.00KB;v26:70:256.00KB;v28:79:256.00KB;v29:79:2.00KB;v2:58:256B;v30:78:64B;v31:80:2.00KB;v32:81:1.00KB;v34:82:512B;v4:60:640B;v5:60:512B;v6:68:2.00KB;v7:71:1.00KB;v8:71:2.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:1.60MB persistent=gmem:1.34MB
 # roofline ideal-ns=630 bound-by=memory
 ```
 
@@ -594,7 +594,7 @@ for line in report.splitlines():
 
 ```text
 # compute-cost flops=bf16:461248@logical,2761728@total,345216@cta;f32:3840@logical,3840@total,480@cta other-ops=special:1024@logical,1024@total,128@cta precision=exact
-# memory traffic=gmem:r1.60MB/w258.62KB@logical,r11.90MB/w2.02MB@total,r1.49MB/w258.19KB@cta;rmem:r25.06KB/w17.06KB@logical,r25.06KB/w17.06KB@total,r3.13KB/w2.13KB@cta;smem:r261.00KB/w261.00KB@logical,r261.00KB/w261.00KB@total,r32.62KB/w32.62KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v12:221:128B;v13:222:16.12KB;v14:228:128.00KB;v15:227:128.00KB;v23:220:256B;v25:223:16.12KB;v26:231:128.00KB;v27:230:128.00KB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:1.47MB;rmem:896B;smem:16.12KB persistent=gmem:1.34MB
+# memory traffic=gmem:r613.39KB/w258.62KB@logical,r3.91MB/w2.02MB@total,r500.96KB/w258.19KB@cta;rmem:r25.06KB/w17.06KB@logical,r25.06KB/w17.06KB@total,r3.13KB/w2.13KB@cta;smem:r261.00KB/w261.00KB@logical,r261.00KB/w261.00KB@total,r32.62KB/w32.62KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v12:221:128B;v13:222:16.12KB;v14:228:128.00KB;v15:227:128.00KB;v23:220:256B;v25:223:16.12KB;v26:231:128.00KB;v27:230:128.00KB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:1.47MB;rmem:896B;smem:16.12KB persistent=gmem:1.34MB
 # roofline ideal-ns=404 bound-by=memory
 ```
 
@@ -756,7 +756,7 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 # analysis target=nvidia.h200_sxm module=Stage3_Fused function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:2983360@logical,8628160@total,461024@cta;f32:94080@logical,127488@total,3984@cta other-ops=integer:9@logical,512@total,16@cta;special:33056@logical,33152@total,1036@cta precision=exact
-# memory traffic=gmem:r3.32MB/w4.00MB@logical,r10.21MB/w4.02MB@total,r2.44MB/w4.00MB@cta;rmem:r64.64KB/w64.07KB@logical,r184.00KB/w164.00KB@total,r5.75KB/w5.12KB@cta;smem:r2.62MB/w2.46MB@logical,r8.90MB/w8.61MB@total,r284.71KB/w275.41KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_heads:64.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:277:1.00KB;v11:283:512.12KB;v12:285:2.00MB;v2:279:256B;v4:281:640B;v68:365:1.00KB;v6:281:128B;v70:368:512B;v7:282:512.12KB;v8:284:2.00MB;v9:280:256B;v_heads:64.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:6.81MB;rmem:512B;smem:16.77KB persistent=gmem:2.31MB
+# memory traffic=gmem:r2.32MB/w4.00MB@logical,r9.21MB/w4.02MB@total,r1.44MB/w4.00MB@cta;rmem:r64.64KB/w64.07KB@logical,r184.00KB/w164.00KB@total,r5.75KB/w5.12KB@cta;smem:r2.62MB/w2.46MB@logical,r8.90MB/w8.61MB@total,r284.71KB/w275.41KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_heads:64.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:277:1.00KB;v11:283:512.12KB;v12:285:2.00MB;v2:279:256B;v4:281:640B;v68:365:1.00KB;v6:281:128B;v70:368:512B;v7:282:512.12KB;v8:284:2.00MB;v9:280:256B;v_heads:64.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:6.81MB;rmem:512B;smem:16.77KB persistent=gmem:2.31MB
 #   buffer=w_o holds=6.44MB time=none space=cta.head,cta.worker reuse=3.88MB fits=yes precision=upper_bound
 # roofline ideal-ns=1599 bound-by=memory
 
@@ -893,7 +893,7 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # analysis target=nvidia.h200_sxm module=Stage4_WeightPrepared function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:329536@logical,338048@total,42256@cta;f32:6390528@logical,51124224@total,6390528@cta other-ops=special:32768@logical,262144@total,32768@cta precision=exact
-# memory traffic=gmem:r26.94MB/w24.38MB@logical,r213.37MB/w195.05MB@total,r26.67MB/w24.38MB@cta;rmem:r3.75KB/w3.75KB@logical,r3.75KB/w3.75KB@total,r480B/w480B@cta;smem:r322.00KB/w321.00KB@logical,r336.00KB/w328.00KB@total,r42.00KB/w41.00KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v11:413:640B;v12:413:512B;v13:424:2.00KB;v14:427:1.00KB;v15:427:2.00KB;v17:413:128B;v18:414:512.12KB;v19:417:4.00MB;v20:416:4.00MB;v21:425:8.00MB;v23:437:8.00MB;v24:437:256.00KB;v25:438:64B;v26:439:256.00KB;v27:439:256.00KB;v31:407:256B;v33:415:512.12KB;v34:421:4.00MB;v35:420:4.00MB;v36:426:8.00MB;v38:441:8.00MB;v39:441:2.00KB;v40:440:64B;v41:442:2.00KB;v42:442:1.00KB;v48:454:512B;v4:405:1.00KB;v9:406:256B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:10.44MB;rmem:128B;smem:16.50KB persistent=gmem:2.31MB
+# memory traffic=gmem:r25.95MB/w24.38MB@logical,r205.39MB/w195.05MB@total,r25.67MB/w24.38MB@cta;rmem:r3.75KB/w3.75KB@logical,r3.75KB/w3.75KB@total,r480B/w480B@cta;smem:r322.00KB/w321.00KB@logical,r336.00KB/w328.00KB@total,r42.00KB/w41.00KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v11:413:640B;v12:413:512B;v13:424:2.00KB;v14:427:1.00KB;v15:427:2.00KB;v17:413:128B;v18:414:512.12KB;v19:417:4.00MB;v20:416:4.00MB;v21:425:8.00MB;v23:437:8.00MB;v24:437:256.00KB;v25:438:64B;v26:439:256.00KB;v27:439:256.00KB;v31:407:256B;v33:415:512.12KB;v34:421:4.00MB;v35:420:4.00MB;v36:426:8.00MB;v38:441:8.00MB;v39:441:2.00KB;v40:440:64B;v41:442:2.00KB;v42:442:1.00KB;v48:454:512B;v4:405:1.00KB;v9:406:256B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:10.44MB;rmem:128B;smem:16.50KB persistent=gmem:2.31MB
 #   buffer=cos_cache holds=51.08MB time=none space=cta.head reuse=3.50MB fits=no precision=upper_bound
 #   buffer=sin_cache holds=51.08MB time=none space=cta.head reuse=3.50MB fits=no precision=upper_bound
 #   buffer=hidden holds=51.08MB time=none space=cta.head reuse=3.50KB fits=no precision=upper_bound
@@ -1068,7 +1068,7 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 # analysis target=nvidia.h200_sxm module=Stage5_CachePrepared function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:4557512@logical,5482952@total,858241@cta;f32:117288@logical,117288@total,14661@cta other-ops=integer:32@logical,256@total,32@cta;special:33040@logical,33040@total,4130@cta precision=exact
-# memory traffic=gmem:r7.32MB/w4.00MB@logical,r22.20MB/w32.02MB@total,r3.82MB/w4.00MB@cta;rmem:r163.53KB/w161.03KB@logical,r181.03KB/w161.03KB@total,r22.63KB/w20.13KB@cta;smem:r8.82MB/w8.55MB@logical,r8.85MB/w8.57MB@total,r1.11MB/w1.07MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_all:512.00KB;k_cache:16.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:479:1.00KB;v10:485:128B;v26:501:128.00KB;v2:481:256B;v43:510:128.00KB;v4:483:640B;v52:540:256B;v53:539:1.00KB;v65:543:256B;v66:542:1.00KB;v6:483:128B;v78:573:1.00KB;v7:484:128B;v80:576:512B;v8:482:256B;v_all:512.00KB;v_cache:16.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.38MB;rmem:512B;smem:16.77KB persistent=gmem:2.31MB
+# memory traffic=gmem:r5.32MB/w4.00MB@logical,r13.20MB/w32.02MB@total,r1.82MB/w4.00MB@cta;rmem:r163.53KB/w161.03KB@logical,r181.03KB/w161.03KB@total,r22.63KB/w20.13KB@cta;smem:r8.82MB/w8.55MB@logical,r8.85MB/w8.57MB@total,r1.11MB/w1.07MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_all:512.00KB;k_cache:16.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:479:1.00KB;v10:485:128B;v26:501:128.00KB;v2:481:256B;v43:510:128.00KB;v4:483:640B;v52:540:256B;v53:539:1.00KB;v65:543:256B;v66:542:1.00KB;v6:483:128B;v78:573:1.00KB;v7:484:128B;v80:576:512B;v8:482:256B;v_all:512.00KB;v_cache:16.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.38MB;rmem:512B;smem:16.75KB persistent=gmem:2.31MB
 #   buffer=k_all holds=2.60MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=v_all holds=2.60MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=w_o holds=2.60MB time=none space=cta.head reuse=896.00KB fits=yes precision=upper_bound
@@ -1166,7 +1166,7 @@ print(json.dumps(summary, indent=2, sort_keys=True))
     },
     "traffic": {
       "gmem": {
-        "read": 2224596,
+        "read": 1178068,
         "write": 806592
       }
     }

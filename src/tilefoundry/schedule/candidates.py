@@ -8,8 +8,8 @@ from typing import Any, Mapping
 
 import isl
 
-from tilefoundry.analysis import analyze
-from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
+from tilefoundry.analysis import AnalysisResult, analyze
+from tilefoundry.analysis.iteration_scope import walk_scopes
 from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.inspection import PatternPrinter, PythonPrinter
 from tilefoundry.ir.core import (
@@ -43,6 +43,7 @@ from tilefoundry.visitor_registry.access_relation import (
     projected_axes,
     relations_of,
 )
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import (
     candidate_ops,
     instruction_from_hir,
@@ -114,14 +115,17 @@ def _site_types(
     return reads, output
 
 
-def _sites(module, function, ctx: AnalyzeContext) -> tuple[_Site, ...]:
-    root = build_scopes(module, function, ctx=ctx)
+def _sites(result: AnalysisResult) -> tuple[_Site, ...]:
+    root = result.scopes
+    ctx = AnalyzeContext(result.module, result.module.resolve_target(), None, None)
     owners = {identity: scope for scope in walk_scopes(root) for identity in scope.relations}
     sites = []
-    for expr in collect_exprs(function.body):
+    for expr in collect_exprs(result.function.body):
         if not isinstance(expr, Call):
             continue
         if is_dim_op_call(expr) or not isinstance(expr.type, TensorType):
+            continue
+        if aliased_operand(expr) is not None:
             continue
         instructions = candidate_ops(type(expr.target))
         if not instructions:
@@ -200,6 +204,22 @@ def _instruction_relation_shape(site: _Site, op) -> tuple | None:
         if param.effect & MemoryEffect.WRITE
     )
     return reads, writes
+
+
+def _axis_refusals(site: _Site, site_shape: tuple, instruction_shape: tuple) -> list[str]:
+    def axes(shape):
+        names = tuple("None" if axis is None else f"d{axis}" for axis in shape[1])
+        return "(" + ", ".join(names) + ("," if len(names) == 1 else "") + ")"
+
+    refused = []
+    for operands, actual, required, effect in zip(
+        (site.reads, site.leaves), site_shape, instruction_shape, ("reads", "writes"),
+        strict=True,
+    ):
+        for (name, _type), source, instruction in zip(operands, actual, required, strict=True):
+            if source != instruction:
+                refused.append(f"{name} axes={axes(source)}, {effect} axes={axes(instruction)}")
+    return refused
 
 
 def _site_integer_parameter_values(param: ParamDef, site: _Site) -> tuple:
@@ -410,8 +430,7 @@ def candidates(
 ) -> dict[str, Any]:
     """Report instruction candidates for every unscheduled supported HIR site."""
     result = analyze(module, entry, analysis=("memory",), dims=dims)
-    ctx = AnalyzeContext(result.module, result.module.resolve_target(), None, None)
-    sites = _sites(result.module, result.function, ctx)
+    sites = _sites(result)
     if not sites:
         raise ValueError("source has no unscheduled candidate site")
     target = result.module.resolve_target()
@@ -432,7 +451,16 @@ def candidates(
                 continue
             prototype, _binding = instances[0]
             op = _instantiate(op_type, capability, prototype)
-            if _instruction_relation_shape(site, op) != site_shape:
+            instruction_shape = _instruction_relation_shape(site, op)
+            if instruction_shape is None:
+                continue
+            if instruction_shape != site_shape:
+                refused.append(
+                    {
+                        "id": op_identifier(capability.declaration or op_type),
+                        "refused": _axis_refusals(site, site_shape, instruction_shape),
+                    }
+                )
                 continue
             if any(
                 param.effect == MemoryEffect.WRITE

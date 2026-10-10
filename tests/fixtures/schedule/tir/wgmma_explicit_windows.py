@@ -18,12 +18,12 @@ def gemm(
     a: Tensor[(128, 32), "bf16"], b: Tensor[(32, 64), "bf16", Layout((32, 64), (1, 32))], out: Tensor[(128, 64), "bf16"]
 ):
     with Mesh((Topology("cta", 1),), Layout((1,), (1,)), names=("d0",)) as cta:
+        T.fill(out, 0.0)
         acc = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 32), "f32", Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
         )
-        T.fill(out, 0.0)
         tile_out = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 32), "bf16", Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"

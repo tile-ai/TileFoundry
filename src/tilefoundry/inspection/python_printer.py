@@ -44,6 +44,7 @@ from tilefoundry.ir.hir.specialize import (
     display_name,
     origin_of,
 )
+from tilefoundry.ir.hir.tensor.bitcast import Bitcast
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -145,13 +146,15 @@ class HirPrinter(PythonPrinter):
         """Render one HIR call after expression-level dispatch selected it."""
         target = expr.target
         args_text = ", ".join(self.reference(arg) for arg in expr.args)
-        if isinstance(target, Reshard):
+        if isinstance(target, (Reshard, Bitcast)):
             if ctx is not None:
                 ctx.imports.add("from tilefoundry.dsl.tf import *")
             layout_kw = ""
             if target.layout is not None:
                 with self.type_surface(indent=self._indent + "    "):
                     layout_kw = ", layout=" + self.visit(target.layout, ctx)
+            if isinstance(target, Bitcast):
+                return f"bitcast({args_text}{layout_kw})"
             storage = ""
             if target.storage is not None:
                 storage_name = target.storage.name.lower()

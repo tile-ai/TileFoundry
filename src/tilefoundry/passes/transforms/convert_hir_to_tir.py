@@ -12,9 +12,9 @@ from math import prod
 
 import isl
 
-from tilefoundry.analysis import MemoryMetadata, analyze
-from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
-from tilefoundry.analysis.liveness import storage_source
+from tilefoundry.analysis import AnalysisResult, MemoryMetadata, analyze
+from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
+from tilefoundry.analysis.metadata import BufferAliasMetadata
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
 from tilefoundry.ir.core import (
@@ -42,6 +42,7 @@ from tilefoundry.ir.hir.tensor._view_layout import derive_view_layout
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
+from tilefoundry.ir.tir.async_copy import CopyAsync, is_indexed_schedule
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, For, LetStmt, MeshScope, Sequential
@@ -76,6 +77,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iteration_universe,
     projected_axes,
 )
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import candidate_ops, sole_candidate
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.registries import typeinfer_registry
@@ -234,12 +236,16 @@ def _label(call: Call) -> str:
 class Lowering(ExprVisitor[Expr]):
     """Mechanical lowering of one analyzed HIR function."""
 
-    module: Module
+    result: AnalysisResult
     authored: Function
-    function: Function
 
     def __post_init__(self) -> None:
         ExprVisitor.__init__(self)
+        self.module = self.result.module
+        self.function = self.result.function
+        self.alias = get_metadata(self.function, BufferAliasMetadata)
+        if self.alias is None:
+            raise LoweringError("scheduled lowering requires buffer-alias analysis")
         self.names = Names(self.authored)
         self.logical: dict[int, TensorType] = {}
         self.staged: dict[int, tuple[Var, LoopRegion | None]] = {}
@@ -247,14 +253,12 @@ class Lowering(ExprVisitor[Expr]):
         self.output: Var | None = None
         self.scratch: list[Var] = []
         self.owner_cursors: dict[int, _Cursor] = {}
-        self.bindings: dict[int, Expr] = {}
         self.output_windows: dict[int, Call] = {}
         self.output_seed: Call | None = None
-        self.output_initialized = False
         self.authored_values: dict[int, Expr] = {}
         if self.function.body is not None and self.authored.body is not None:
             self.authored_values[id(self.function.body)] = self.authored.body
-        self.scopes = build_scopes(self.module, self.function)
+        self.scopes = self.result.scopes
         self.scope_for_call = {
             expr_id: scope
             for scope in walk_scopes(self.scopes)
@@ -333,20 +337,6 @@ class Lowering(ExprVisitor[Expr]):
         self._memo[id(seed)] = (seed, self.output)
         self.logical[id(self.output)] = seed.type
         return self.output
-
-    def _material_root(self, value: Expr) -> Expr:
-        seen: set[int] = set()
-        while id(value) not in seen:
-            seen.add(id(value))
-            following = storage_source(value, self.bindings)
-            if following is not None:
-                value = following
-                continue
-            if isinstance(value, LoopRegion) and len(value.yield_values) == 1:
-                value = value.args[0]
-                continue
-            return value
-        raise LoweringError("output seed resolution found a cyclic value")
 
     def _declare(
         self,
@@ -461,7 +451,6 @@ class Lowering(ExprVisitor[Expr]):
         return expr if known is None else known[1]
 
     def _bind_region_args(self, region: LoopRegion | MeshRegion, cursor: _Cursor) -> None:
-        self.bindings.update(zip(map(id, region.params), region.args, strict=True))
         values = tuple(self.visit(arg, cursor) for arg in region.args)
         for param, value in zip(region.params, values, strict=True):
             self._memo[id(param)] = (param, value)
@@ -629,9 +618,9 @@ class Lowering(ExprVisitor[Expr]):
         base = self.visit(call.args[0], cursor)
         starts_arg = call.args[1]
         starts = (
-            tuple(self._dim(value) for value in starts_arg.elements)
+            tuple(self._window_start(value, cursor) for value in starts_arg.elements)
             if isinstance(starts_arg, Tuple)
-            else (self._dim(starts_arg),)
+            else (self._window_start(starts_arg, cursor),)
         )
         if any(stride != 1 for stride in call.target.strides):
             raise LoweringError(f"{_label(call)} has a strided Slice, which is not contiguous")
@@ -653,6 +642,44 @@ class Lowering(ExprVisitor[Expr]):
             tuple(i64_const(0) for _ in source.type.shape),
             tuple(source.type.shape),
             desired,
+            cursor,
+            "tile",
+        )
+
+    def visit_Bitcast(self, call: Call, cursor: _Cursor) -> Expr:
+        source = self.visit(call.args[0], cursor)
+        if isinstance(call.type.layout, ShardLayout):
+            frame = self._physical_frame(call.type.layout.mesh)
+            inner = _Cursor()
+            value = self._window(
+                source,
+                tuple(i64_const(0) for _ in source.type.shape),
+                tuple(source.type.shape),
+                _with_frame(call.type, frame),
+                inner,
+                "tile",
+            )
+            cursor.add(MeshScope(frame, Var(self.names.fresh("threads"), type=_BINDING), inner.build()))
+            self.logical[id(value)] = call.type
+            return value
+        return self._window(
+            source,
+            tuple(i64_const(0) for _ in source.type.shape),
+            tuple(source.type.shape),
+            call.type,
+            cursor,
+            "tile",
+        )
+
+    def visit_Reshard(self, call: Call, cursor: _Cursor) -> Expr:
+        if aliased_operand(call) is None:
+            return self._lower_automatic_instruction(call, cursor)
+        source = self.visit(call.args[0], cursor)
+        return self._window(
+            source,
+            tuple(i64_const(0) for _ in source.type.shape),
+            tuple(source.type.shape),
+            call.type,
             cursor,
             "tile",
         )
@@ -701,7 +728,9 @@ class Lowering(ExprVisitor[Expr]):
 
     def visit_Zeros(self, call: Call, cursor: _Cursor) -> Expr:
         if call.type.storage is StorageKind.GMEM:
-            return self._ensure_output_seed(call)
+            out = self._ensure_output_seed(call)
+            self._emit_fill(out, call.type, self.owner_cursors[id(self.function)])
+            return out
         result = self._declare(
             call,
             call.type,
@@ -711,56 +740,67 @@ class Lowering(ExprVisitor[Expr]):
         self._emit_fill(result, call.type, cursor)
         return result
 
+    def _window_start(self, value: Expr, cursor: _Cursor) -> Expr:
+        if isinstance(value, Call) and isinstance(value.target, HirBinary):
+            operation = _DIM_BINARY.get(value.target.kind)
+            if operation is not None:
+                return simplify_dim(
+                    operation, tuple(self._window_start(arg, cursor) for arg in value.args)
+                )
+        return (
+            self.visit(value, cursor)
+            if isinstance(value, Call) and not is_dim_op_call(value)
+            else self._dim(value)
+        )
+
+    def visit_IndexSelect(self, call: Call, cursor: _Cursor) -> Expr:
+        raise LoweringError(
+            f"{_label(call)} is an unscheduled IndexSelect; write "
+            "tf.schedule((x, idx), op=T.copy_async(smem_layout=..., fill=...))"
+        )
+
     def visit_InsertSlice(self, call: Call, cursor: _Cursor) -> Expr:
-        assert self.output is not None
-        destination = call.args[0]
-        destination_root = self._material_root(destination)
-        if (
-            isinstance(destination_root, Call)
-            and isinstance(destination_root.target, Zeros)
-            and destination_root.type.storage is StorageKind.GMEM
-        ):
-            self._ensure_output_seed(destination_root)
-            if not self.output_initialized:
-                owner = self.owner_cursors[id(self.function)]
-                self._emit_fill(self.output, destination_root.type, owner)
-                self.output_initialized = True
-        if not (isinstance(destination, Call) and isinstance(destination.target, Zeros)):
-            self.visit(destination, cursor)
-        update_root = self._material_root(call.args[1])
-        if (
+        target = self.visit(call.args[0], cursor)
+        update_root = self.alias.roots[id(call.args[1])]
+        direct_write = (
             isinstance(update_root, Call)
             and isinstance(update_root.target, ScheduleOp)
             and isinstance(update_root.type, TensorType)
-            and update_root.type.storage is StorageKind.GMEM
-        ):
+            and update_root.type.storage is target.type.storage
+            and id(update_root) not in self._memo
+        )
+        if direct_write:
             self.output_windows[id(update_root)] = call
         update = self.visit(call.args[1], cursor)
-        if id(update_root) in self.output_windows:
-            return self.output
-        offsets = call.args[2]
-        starts = (
-            tuple(self._dim(value) for value in offsets.elements)
-            if isinstance(offsets, Tuple)
-            else (self._dim(offsets), *(i64_const(0) for _ in self.output.type.shape[1:]))
-        )
-        desired = replace(
-            update.type,
-            storage=StorageKind.GMEM,
-            layout=Layout(
-                tuple(update.type.shape),
-                tuple(compact_row_major(tuple(self.output.type.shape))),
-            ),
-        )
+        if direct_write:
+            return target
+        starts, desired = self._insert_window(call, target, update.type, cursor)
         self._emit_copy(
-            update,
-            self.output,
-            cursor,
-            starts=starts,
-            sizes=tuple(update.type.shape),
-            desired=desired,
+            update, target, cursor, starts=starts, sizes=tuple(update.type.shape), desired=desired
         )
-        return self.output
+        return target
+
+    def _insert_window(self, write: Call, target: Expr, desired: TensorType, cursor: _Cursor):
+        offsets = write.args[2]
+        starts = (
+            tuple(self._window_start(value, cursor) for value in offsets.elements)
+            if isinstance(offsets, Tuple)
+            else (
+                self._window_start(offsets, cursor),
+                *(i64_const(0) for _ in target.type.shape[1:]),
+            )
+        )
+        keys = Tuple(starts, type=TupleType(tuple(start.type for start in starts)))
+        cut = Call(
+            Slice(sizes=tuple(desired.shape), strides=(1,) * len(desired.shape)),
+            (target, keys),
+            type=desired,
+        )
+        inferred = typeinfer_registry.lookup(Slice)(
+            cut, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in (target, *starts)})
+        )
+        type_ = getattr(inferred, "type", inferred)
+        return starts, replace(desired, layout=type_.layout, storage=target.type.storage)
 
     def _insert_target(
         self,
@@ -819,13 +859,38 @@ class Lowering(ExprVisitor[Expr]):
         for param, operand in zip(reads, call.args, strict=True):
             value = self.visit(operand, cursor)
             if (
+                isinstance(op, CopyAsync)
+                and is_indexed_schedule(call.args)
+                and param.name == "src"
+                and (
+                    value.type.layout is None
+                    or any(value is self._memo[id(argument)][1] for argument in self.function.params)
+                )
+            ):
+                type_ = replace(
+                    value.type,
+                    layout=value.type.layout
+                    or Layout(tuple(value.type.shape), tuple(compact_row_major(value.type.shape))),
+                )
+                value = self._window(
+                    value,
+                    tuple(i64_const(0) for _ in value.type.shape),
+                    tuple(value.type.shape),
+                    type_,
+                    cursor,
+                    "source",
+                    whole_tensor=True,
+                )
+            if (
                 isinstance(value.type, TensorType)
                 and value.type.shape == ()
                 and value.type.storage is StorageKind.UMAT
             ):
                 scalar_type = replace(value.type, storage=StorageKind.RMEM)
                 scalar = Var(self.names.fresh("scalar"), type=scalar_type)
-                cursor.bind(scalar, Call(AllocTensor(tensor_type=scalar_type), (), type=scalar_type))
+                cursor.bind(
+                    scalar, Call(AllocTensor(tensor_type=scalar_type), (), type=scalar_type)
+                )
                 cursor.add(Evaluate(Fill(), (scalar, value)))
                 self.logical[id(scalar)] = scalar_type
                 value = scalar
@@ -850,28 +915,9 @@ class Lowering(ExprVisitor[Expr]):
         return written
 
     def _output_window(self, write: Call, desired: TensorType, cursor: _Cursor) -> Expr:
-        assert self.output is not None
-        offsets = write.args[2]
-        starts_ = (
-            tuple(self._dim(value) for value in offsets.elements)
-            if isinstance(offsets, Tuple)
-            else (
-                self._dim(offsets),
-                *(i64_const(0) for _ in self.output.type.shape[1:]),
-            )
-        )
-        layout = Layout(
-            tuple(desired.shape),
-            tuple(compact_row_major(tuple(self.output.type.shape))),
-        )
-        return self._window(
-            self.output,
-            starts_,
-            tuple(desired.shape),
-            replace(desired, storage=StorageKind.GMEM, layout=layout),
-            cursor,
-            "window",
-        )
+        target = self.visit(write.args[0], cursor)
+        starts, desired = self._insert_window(write, target, desired, cursor)
+        return self._window(target, starts, tuple(desired.shape), desired, cursor, "window")
 
     def _emit_instruction(self, call, op, operands, mesh, output_window, written, cursor):
         atom = getattr(op, "atom", None)
@@ -1032,7 +1078,7 @@ class Lowering(ExprVisitor[Expr]):
         attributes = {
             param.name: getattr(op, param.name)
             for param in type(op)._op_schema.signature
-            if param.kind == "attribute" and not param.has_default
+            if param.kind == "attribute" and (not param.has_default or param.name == "fill")
         }
         return type(op)(**attributes)
 
@@ -1078,7 +1124,20 @@ class Lowering(ExprVisitor[Expr]):
         desired: TensorType,
         cursor: _Cursor,
         stem: str,
+        *,
+        whole_tensor: bool = False,
     ) -> Var:
+        """Build a buffer view.
+
+        Args:
+            base: Source buffer.
+            starts: Source coordinates of the window's first element.
+            sizes: Source window extents.
+            desired: Result tensor type and layout.
+            cursor: Scope receiving the bound view.
+            stem: Prefix for the view's generated name.
+            whole_tensor: Runtime table sources avoid unsupported PtrOf(Slice) CUDA (side finding).
+        """
         held = base.type
         if not isinstance(held, TensorType):
             raise LoweringError(f"a tensor window cannot use {held!r} as its base")
@@ -1098,18 +1157,20 @@ class Lowering(ExprVisitor[Expr]):
                     tuple(compact_row_major(tuple(desired.shape))),
                 ),
             )
-        keys = Tuple(starts, type=TupleType(tuple(start.type for start in starts)))
-        cut_type = TensorType(tuple(sizes), held.dtype, None, held.storage)
-        cut = Call(
-            Slice(sizes=tuple(sizes), strides=(1,) * len(sizes)),
-            (base, keys),
-            type=cut_type,
-        )
-        inferred = typeinfer_registry.lookup(Slice)(
-            cut, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in (base, *starts)})
-        )
-        cut.type = getattr(inferred, "type", inferred)
-        pointer = Call(PtrOf(), (cut,), type=PointerType(held.dtype, held.storage))
+        source = base
+        if not whole_tensor:
+            keys = Tuple(starts, type=TupleType(tuple(start.type for start in starts)))
+            cut_type = TensorType(tuple(sizes), held.dtype, None, held.storage)
+            source = Call(
+                Slice(sizes=tuple(sizes), strides=(1,) * len(sizes)),
+                (base, keys),
+                type=cut_type,
+            )
+            inferred = typeinfer_registry.lookup(Slice)(
+                source, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in (base, *starts)})
+            )
+            source.type = getattr(inferred, "type", inferred)
+        pointer = Call(PtrOf(), (source,), type=PointerType(held.dtype, held.storage))
         view = Call(
             TensorView(layout=desired.layout, shape=tuple(desired.shape)),
             (pointer,),
@@ -1179,9 +1240,6 @@ class Lowering(ExprVisitor[Expr]):
 
     def _finish(self, result: Expr, cursor: _Cursor) -> None:
         assert self.output is not None
-        if self.output_seed is not None and not self.output_initialized:
-            self._emit_fill(self.output, self.output_seed.type, cursor)
-            self.output_initialized = True
         if result is not self.output:
             self._emit_copy(result, self.output, cursor)
 
@@ -1200,7 +1258,7 @@ class ConvertHIRToTIR(ModulePass):
         if not isinstance(authored, Function):
             raise LoweringError(f"{getattr(authored, 'name', self.entry)!r} is not an HIR function")
         result = analyze(module, authored, analysis=("memory",))
-        lowered = Lowering(result.module, authored, result.function).run()
+        lowered = Lowering(result, authored).run()
         lowered.metadata = result.function.metadata
         for record in render_analysis(result).summary:
             if isinstance(record, (ReportIdentity, ReportSelection)):

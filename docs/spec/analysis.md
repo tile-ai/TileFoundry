@@ -313,6 +313,14 @@ class Traffic:
 Every traffic amount is what a boundary's own relation reaches. The Op's
 evaluator says which way each boundary moves and whether it materialises
 anything; it does not say how much, and an Op with no relation fails closed.
+When a boundary axis's coordinate is determined by data (`reached_at`'s `free`
+axes), that boundary is a lookup. Its movement MUST be capped at the number of
+domain coordinates when countable: each coordinate selects at most one element
+from the possible image. If the domain count is unknown, the countable image
+remains the movement upper bound. The footprint MUST retain the full possible
+image. Out-of-bounds
+IndexSelect indices with `fill_value` are not statically distinguished; traffic
+counts one slice per index as an upper bound.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
@@ -467,15 +475,27 @@ are monotonic across the whole Function, including nested and sibling regions.
 | `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
 
 - constraints:
-  - An op registered with `register_buffer_alias(Op, Op.param)` describes the
-    bytes of that input parameter, re-addressed. `Slice` and `Reshape` register
-    their `x` parameter and MUST NOT receive independent lifetimes. A result
-    reached only through a `MeshRegion` result binding edge and tuple
-    projections likewise describes
-    bytes already held by the region body and MUST NOT receive an independent
-    lifetime. Every other result, including `Transpose` or a result that overwrites
+  - An op registered with `@register_buffer_alias(Op)` returns the viewed
+    input's position or `None` for each Call. The alias describes that input's
+    bytes. `Slice` and `Reshape` alias input zero and MUST NOT receive
+    independent lifetimes. `Tuple`,
+    `MeshRegion`, and `LoopRegion` results and static tuple projections describe
+    bytes already held by their selected body or carry and MUST NOT receive an
+    independent lifetime. Static tuple projections are structural edges, like
+    `Tuple`, `MeshRegion`, and `LoopRegion`, rather than registered views.
+    Every other result, including `Transpose` or a result that overwrites
     a destination, MUST allocate its own. Analysis MUST use operation semantics
     for this distinction rather than infer aliasing from layouts.
+  - Reshard MUST alias its source when storage is unchanged, both layouts are
+    plain (including compositions without `ShardLayout` components) with
+    strides stated in every `Layout` component, the shape is literal, and the
+    two layouts map every colex coordinate to the same address. An
+    address-changing, storage-changing, or sharded Reshard MUST
+    retain its independent lifetime.
+  - Bitcast MUST alias its source and allocate no independent buffer. Its
+    declared access relation MUST bijectively map result coordinates to source
+    coordinates with the same physical address, preserving the source's
+    lifetime and recording zero traffic.
   - A caller-owned parameter MUST NOT be reused. Donation is a contract with
     the caller, not a conclusion this family may draw.
 
@@ -549,21 +569,28 @@ class MemoryLevelPeak:
     requirements are mandatory rather than optional placement choices.
   - Registered buffer aliases MUST follow their named operand to its storage
     owner and MUST NOT receive independent `buffer_bytes` or `offsets`. Analysis
-    MUST prove that the result-to-operand map is single-valued, injective, and
+    MUST resolve structural tuple projections to their selected element without
+    a coordinate-renaming proof. For other aliases, it MUST prove that the
+    result-to-operand map is single-valued, injective, and
     contained in the operand's index box, using the call's own unmodified
     declared access relation via `renaming_relation`, not its folded accesses.
     Failure to prove that declaration MUST raise `AnalysisError`. `Transpose`
     is not registered: it writes a new value, retains its access permutation,
     and receives its own allocation under the ordinary conflict rules.
-  - Liveness MUST propagate a use through the same storage-sharing edges used
-    by `storage_owners`: registered buffer aliases to their source, mesh-region
-    results to their body, and tuple projections to their selected element.
+  - The first memory-analysis stage MUST resolve storage ownership once per
+    value and prove each registered view once in logical coordinates. Its
+    `BufferAliasMetadata` MUST carry the value-to-root table and region
+    parameter bindings. Liveness, placement, footprint, and lowering MUST
+    reuse that root table rather than trace producers or repeat proofs.
+    Access folding MUST remain in `resolve_access`, using the caller's
+    topology level because projected view coordinates depend on that level.
+  - Liveness MUST propagate a use to the root recorded for the same
+    storage-sharing edges: registered buffer aliases to their source, mesh-region
+    results to their body, loop results to their body without carries or their
+    carry parameters otherwise, and tuple projections to their selected element.
     Chains MUST propagate to the final owner. Placement interference, register
     peaks, and in-place conflict checks MUST consume this liveness directly,
     without independently rebuilding shared-storage intervals.
-    Storage ownership MUST be resolved once per value for an analysis, with
-    each registered alias proved once; allocation consumers MUST reuse that
-    owner table rather than repeat the proofs.
   - Every placed offset MUST be aligned to the greater of 16 bytes and the
     result element width. A staged result's copies MUST be contiguous: copy
     `k` starts at the solved block offset plus `k * buffer_bytes`.
@@ -1282,6 +1309,7 @@ class AnalysisResult:
     Attributes:
         module: attribute; Source Module.
         function: attribute; Function that received records.
+        scopes: attribute; Shared iteration-scope tree built for that Function by this Analyze call.
         analyses: attribute; Requested root analyses in first-occurrence order.
         topology_level: attribute; Topology level whose unit the per-unit quantities describe, or None.
         executed: attribute; Analyses executed in dependency order.
@@ -1290,6 +1318,7 @@ class AnalysisResult:
 
     module: "Module"
     function: "Function"
+    scopes: "IterationScope"
     analyses: tuple[str, ...]
     topology_level: str | None
     executed: tuple[str, ...]

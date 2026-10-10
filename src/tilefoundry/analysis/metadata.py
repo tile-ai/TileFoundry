@@ -11,10 +11,19 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from tilefoundry.ir.core import Expr
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 from .precision import AnalysisPrecision
+
+
+@dataclass(frozen=True)
+class BufferAliasMetadata(IRMetadata):
+    """Which buffer holds each value's bytes."""
+
+    roots: Mapping[int, Expr]
+    bindings: Mapping[int, Expr]
 
 
 @dataclass(frozen=True)
@@ -283,6 +292,7 @@ class PerformanceSummaryMetadata(IRMetadata):
 
 __all__ = [
     "Breakdown",
+    "BufferAliasMetadata",
     "MemoryMetadata",
     "ComputeCostMetadata",
     "Footprint",

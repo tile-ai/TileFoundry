@@ -41,6 +41,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes, VerifyContext
+from tilefoundry.visitor_registry.cost_utils import operation_cost
 from tilefoundry.visitor_registry.verify import verify_between
 
 
@@ -304,7 +305,9 @@ def _outer_band(
             for index in range(relation.dim(isl.dim_type.PARAM))
         )
         return AccessRelation(
-            relation, {name: access.values[name] for name in names if name in access.values}
+            relation,
+            {name: access.values[name] for name in names if name in access.values},
+            access.lookup,
         )
 
     return tuple(lifted(access) for access in relations)
@@ -344,7 +347,6 @@ def _schedule_cost(call: Call, ctx) -> Cost:
         )
     op = call.target.op
     _params, reads, writes = _instruction_schema(op, len(call.args))
-    flops = {}
     if any(param.effect & MemoryEffect.READ for param in writes):
         iterations = cardinality(iteration_universe(local))
         if iterations is None:
@@ -357,8 +359,8 @@ def _schedule_cost(call: Call, ctx) -> Cost:
             ),
             types[-1].dtype,
         )
-        flops = {dtype: 2 * iterations}
-    return Cost(flops, tuple(moved))
+        return operation_cost(dtype, 2 * iterations, tuple(moved))
+    return Cost({}, tuple(moved))
 
 
 @register_typeinfer(ScheduleOp)

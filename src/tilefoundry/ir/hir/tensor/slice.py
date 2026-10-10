@@ -203,7 +203,9 @@ def _slice_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     )
 
 
-register_buffer_alias(Slice, Slice.x)
+@register_buffer_alias(Slice)
+def _buffer_alias(call: "Call") -> int:
+    return 0
 
 
 def _i64(value: int) -> Constant:

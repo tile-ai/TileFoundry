@@ -268,14 +268,19 @@ def test_topk_dynamic_k_evaluates_at_two_ctx_bindings():
 _D = 8
 
 
-def test_topk_dynamic_k_downstream_index_select_shape_consistent():
+@pytest.mark.parametrize(
+    "table_layout",
+    (None, Layout((POS, _D), (_D, 1)), Layout((POS, _D), (1, POS))),
+    ids=("logical", "row-major", "column-major"),
+)
+def test_topk_dynamic_k_downstream_index_select_shape_consistent(table_layout):
     """Indices from a dynamic-k TopK feed ``index_select``.
 
     TopK retains its batch axis, so its indices flatten to torch's required 1-D
     vector before selection and the selected rows reshape back to (1, K, D).
     """
     scores = Var(type=make_tensor_type((1, POS), _F32), name="scores")
-    table = Var(type=make_tensor_type((POS, _D), _F32), name="table")
+    table = Var(type=make_tensor_type((POS, _D), _F32, layout=table_layout), name="table")
 
     topk_call = Call(type=scores.type, target=TopK(k=K, axis=-1), args=(scores,))
     topk_ty = TypeInferVisitor().visit(topk_call, TypeInferContext())
@@ -293,6 +298,8 @@ def test_topk_dynamic_k_downstream_index_select_shape_consistent():
     selected = Call(type=idx_ty, target=IndexSelect(dim=0), args=(table, flat_index))
     selected_ty = TypeInferVisitor().visit(selected, TypeInferContext())
     assert selected_ty.shape == (K, _D)
+    if table_layout is not None:
+        assert selected_ty.layout == Layout((K, _D), (_D, 1))
     selected = replace(selected, type=selected_ty)
 
     output = Call(

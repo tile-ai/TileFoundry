@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+from functools import cache
+from math import prod
+
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
+from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
-from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, apply
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
     shard_layout_local_shape,
+    shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
+from tilefoundry.ir.types.utils import is_literal_shape
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -23,6 +28,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 
 
 def _dim_mul(a, b):
@@ -161,8 +167,43 @@ class Reshard(Op):
     """Convert *x* to a target layout / storage in place, preserving the logical shape."""
 
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    layout = ParamDef(kind="attribute", annotation=ShardLayout, default=None)
+    layout = ParamDef(kind="attribute", annotation=LayoutBase, default=None)
     storage = ParamDef(kind="attribute", default=None)
+
+
+def _stated_strides(layout) -> bool:
+    if isinstance(layout, Layout):
+        return layout.strides is not None
+    if isinstance(layout, ComposedLayout):
+        return _stated_strides(layout.outer) and _stated_strides(layout.inner)
+    return True
+
+
+def _plain(layout) -> bool:
+    """Plain address functions have stated strides and no shard component."""
+    return (
+        isinstance(layout, (Layout, ComposedLayout))
+        and shard_layout_of(layout) is None
+        and _stated_strides(layout)
+    )
+
+
+@cache
+def _same_addresses(source, result, count: int) -> bool:
+    """Compare complete colex address functions, including composed swizzles."""
+    return all(apply(source, coord) == apply(result, coord) for coord in range(count))
+
+
+@register_buffer_alias(Reshard)
+def _buffer_alias(call: Call) -> int | None:
+    source, result = call.args[0].type, call.type
+    if result.storage is not source.storage:
+        return None
+    if not (_plain(source.layout) and _plain(result.layout)):
+        return None
+    if not is_literal_shape(result.shape):
+        return None
+    return 0 if _same_addresses(source.layout, result.layout, prod(result.shape)) else None
 
 
 @register_access_relation(Reshard)

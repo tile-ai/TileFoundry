@@ -736,18 +736,18 @@ class BindPattern(CombinatorPattern):
     def __init__(
         self,
         pattern: AstPattern[Any],
-        binder: Callable[
+        enter: Callable[
             [object, MatchContext, AstMatch[Any]], AstMatch[Any] | MatchFailure | None
         ],
     ):
         self.pattern = pattern
-        self.binder = binder
+        self.enter = enter
 
     def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         matched = self.pattern.match(node, context)
         if not is_matched(matched):
             return matched
-        bound = self.binder(node, context, matched)
+        bound = self.enter(node, context, matched)
         return bound
 
 
@@ -1330,6 +1330,7 @@ class MatchContext:
     lexical_scope: LexicalScope = field(default_factory=LexicalScope)
     parent: MatchContext | None = None
     values: Mapping[str, object] = field(default_factory=dict)
+    live_out: Mapping[ast.With, frozenset[str]] = field(default_factory=dict)
 
     @classmethod
     def from_function(cls, function: FuncParserContext) -> MatchContext:
@@ -1378,6 +1379,7 @@ class MatchContext:
         isolated_scope: bool = False,
         function: FuncParserContext | None = None,
         module: ModuleBuildContext | None = None,
+        live_out: Mapping[ast.With, frozenset[str]] | None = None,
     ) -> MatchContext:
         merged = dict(self.values)
         if values:
@@ -1408,6 +1410,7 @@ class MatchContext:
             lexical_scope=scope,
             parent=self,
             values=merged,
+            live_out=self.live_out if live_out is None else live_out,
         )
 
     def resolve_lexical(self, name: str) -> object:

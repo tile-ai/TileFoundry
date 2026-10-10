@@ -11,6 +11,7 @@ either way fails closed (no fake layout). See
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from tests.evaluator.eval_utils import EvalCase, run_eval_case
@@ -66,13 +67,23 @@ def _partial_reductions(ty) -> dict:
     return {i: a.reduction for i, a in enumerate(ty.layout.attrs) if isinstance(a, Partial)}
 
 
-def test_plain_c_order_layout_is_derived_when_reshape_is_a_view():
-    source = make_tensor_type((16, 8), layout=Layout(shape=(16, 8), strides=(8, 1)))
-    ty = infer_call(_reshape((8, 16)), source)
+@pytest.mark.parametrize(
+    ("shape", "strides", "new_shape", "expected"),
+    (
+        ((16, 8), (8, 1), (8, 16), (16, 1)),
+        ((1, 64, 1, 576), (65536, 576, 576, 1), (64, 576), (576, 1)),
+    ),
+    ids=("compact", "window-unit-axes"),
+)
+def test_plain_c_order_layout_is_derived_when_reshape_is_a_view(
+    shape, strides, new_shape, expected
+):
+    source = make_tensor_type(shape, layout=Layout(shape=shape, strides=strides))
+    ty = infer_call(_reshape(new_shape), source)
 
-    assert ty.layout == Layout(shape=(8, 16), strides=(16, 1))
-    assert infer_call(_reshape((8, 16)), make_tensor_type((16, 8))).layout == Layout(
-        shape=(8, 16), strides=(16, 1)
+    assert ty.layout == Layout(shape=new_shape, strides=expected)
+    assert infer_call(_reshape(new_shape), make_tensor_type(shape)).layout == Layout(
+        shape=new_shape, strides=expected
     )
 
 

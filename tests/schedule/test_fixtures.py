@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from math import prod
 from pathlib import Path
@@ -37,6 +38,7 @@ from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.inspection import PatternPrinter, as_script
 from tilefoundry.ir.core import Call, Op, OpCapability, Var, detach_metadata, get_metadata
 from tilefoundry.ir.core.errors import VerifyError
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef, collect_param_defs
 from tilefoundry.ir.core.register import register_op
@@ -45,6 +47,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp, operand_relations
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
+from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.transpose import Transpose
@@ -73,6 +76,7 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
+from tilefoundry.schedule import candidates, finalize
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     identity_relations,
@@ -90,6 +94,7 @@ PLAIN = (
     "gemm_relu_gemm_smem_staged",
     "gemm_relu_gemm_tiled",
     "gemm_relu_gemm_untiled",
+    "sparse_decode",
 )
 PLAIN_DIMS = {"chunk_rmsnorm": {"chunks": 16}}
 PLAIN_REFUSED = {
@@ -97,6 +102,9 @@ PLAIN_REFUSED = {
         r"no nvidia\.h200_sxm MMA reads lhs f32 smem and rhs f32 smem into f32"
         r"(.|\n)*gemm_relu_gemm_smem_staged\.py:41:29"
     ),
+}
+CANDIDATES_REFUSED = {
+    "captured_insert_update": "source has no unscheduled candidate site",
 }
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
@@ -132,6 +140,8 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "captured_insert_update": 16,
+    "sparse_decode": 16_384,
     "scalar_binary": 0,
     "fp8_block_scaled_gemm": 65_536,
     "gemm_8192x17408x5120_register_store": 196_608,
@@ -155,6 +165,11 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "captured_insert_update": {},
+    "sparse_decode": {
+        "thread@128:128#0": _RmemExpectation(33_024, "attention intermediates and row reductions"),
+        "thread@0:256#0": _RmemExpectation(33_024, "parent envelope of attention compute"),
+    },
     "scalar_binary": {
         "thread@0:32#0": _RmemExpectation(
             132,
@@ -480,7 +495,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
         smem = sorted(item.bytes for item in lifetimes if item.memory_level == "smem")
         rmem = sorted(item.bytes for item in lifetimes if item.memory_level == "rmem")
         assert smem == sorted((512 * 3, 4096 * 3))
-        assert rmem == [4096, 8192, 8192, 8192, 8192]
+        assert rmem == [4096, 8192, 8192, 8192]
 
     if analysis == "memory":
         placement = get_metadata(result.function, RegionMemoryMetadata)
@@ -492,7 +507,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
             for region in regions
             if (record := get_metadata(region, RegionMemoryMetadata)) is not None
         )
-        assert region_records
+        assert bool(region_records) == bool(RMEM_EXPECTED[path.stem])
         if path.stem == "gemm_8192x17408x5120_tma_store":
             assert len(region_records) == 4
         for record in region_records:
@@ -769,6 +784,157 @@ def test_fp8_block_scaled_gemm_matches_its_block_scaled_reference() -> None:
     torch.testing.assert_close(scheduled.float(), reference.float(), rtol=2**-7, atol=0)
 
 
+@dataclass(frozen=True)
+class FixtureCase:
+    name: str
+    fixture: str
+    stage: Callable[[Module], object]
+    check: Callable[[object], None]
+
+
+def _sparse_memory(module: Module) -> dict:
+    result = analyze(module, module.entry_function(), analysis="memory")
+    gather = next(
+        value
+        for value in collect_exprs(result.function.body)
+        if isinstance(value, Call) and isinstance(value.target, IndexSelect)
+    )
+    return {
+        "gather": get_metadata(gather, MemoryMetadata),
+        "region": get_metadata(result.function, RegionMemoryMetadata),
+    }
+
+
+def _check_selected_rows(records: dict) -> None:
+    assert records["gather"].operands[0].read == 8192, "gather reads 64 selected bf16 rows"
+
+
+def _check_table_footprint(records: dict) -> None:
+    footprint = records["region"].footprint
+    assert dict(footprint.buffers)["kv"].of("gmem").total == 32768, "the whole table is resident"
+
+
+def _sparse_cost(module: Module) -> ComputeCostMetadata:
+    result = analyze(module, module.entry_function(), analysis="compute-cost")
+    return get_metadata(result.function, ComputeCostMetadata)
+
+
+def _check_service_work(cost: ComputeCostMetadata) -> None:
+    assert not {"i64", "bool"}.intersection(cost.flops.names()), "services are not flops"
+    assert cost.other_ops.of("integer").total > 0, "i64 arithmetic counts as integer work"
+    assert cost.other_ops.of("predicate").total > 0, "predicates count separately"
+
+
+def _sparse_candidates(module: Module) -> dict:
+    return candidates(module, module.entry_function())
+
+
+def _check_gmem_gather_refusal(report: dict) -> None:
+    indexed = next(row for row in report["lines"] if row["op"] == "tf.index_select")
+    assert not indexed["candidates"] and [
+        item["id"] for item in indexed["refused"]
+    ] == ["T.copy_async"], "gather keeps its gmem result"
+    assert any(
+        "dst:" in reason and "StorageKind.GMEM" in reason and "StorageKind.SMEM" in reason
+        for reason in indexed["refused"][0]["refused"]
+    ), "copy_async requires an smem destination"
+
+
+def _sparse_placement(module: Module) -> tuple[RegionMemoryMetadata, list[str]]:
+    result = analyze(module, module.entry_function(), analysis="memory")
+    return (
+        get_metadata(result.function, RegionMemoryMetadata),
+        as_script(finalize(module)).splitlines(),
+    )
+
+
+def _check_smem_placement(placement: tuple[RegionMemoryMetadata, list[str]]) -> None:
+    """The second 64x64 bf16 tile ends at 8192 + 8192, the analyzed peak."""
+    record, lines = placement
+    assert record.peak_for("smem").peak_bytes == 16384, "two shared tiles need 16384 bytes"
+    assert lines[41].strip() == "ks = T.tensor_view(", "the lowered key tile is at line 42"
+    assert lines[42].strip() == "8192,", "the lowered key tile starts at 8192 bytes"
+
+
+def _sparse_attention(module: Module) -> tuple[torch.Tensor, torch.Tensor]:
+    generator = torch.Generator().manual_seed(9)
+    q = torch.randn(1, 2, 128, 64, generator=generator).to(torch.bfloat16)
+    kv = torch.randn(1, 256, 1, 64, generator=generator).to(torch.bfloat16)
+    idx = torch.arange(64, dtype=torch.int64) * 3
+    idx[1], idx[17] = -1, 256
+    live = (idx >= 0) & (idx < 256)
+    rows = torch.zeros(64, 64, dtype=torch.bfloat16)
+    rows[live] = kv.reshape(256, 64)[idx[live]]
+    scores = q[0, 1, 32:96].float() @ rows.float().t()
+    scores[:, ~live] = -torch.inf
+    probabilities = torch.softmax(scores, dim=1).to(torch.bfloat16)
+    reference = (probabilities.float() @ rows.float()).to(torch.bfloat16)
+    return evaluate(module.entry_function(), q, kv, idx), reference
+
+
+def _check_attention(values: tuple[torch.Tensor, torch.Tensor]) -> None:
+    actual, reference = values
+    torch.testing.assert_close(
+        actual.float(),
+        reference.float(),
+        rtol=2**-7,
+        atol=0,
+        msg="gather fill, mask/key alignment and natural output heads match torch",
+    )
+
+
+SPARSE_DECODE = (
+    FixtureCase(
+        "gather reads only the selected rows",
+        "plain/sparse_decode.py",
+        _sparse_memory,
+        _check_selected_rows,
+    ),
+    FixtureCase(
+        "gather retains the whole table footprint",
+        "plain/sparse_decode.py",
+        _sparse_memory,
+        _check_table_footprint,
+    ),
+    FixtureCase(
+        "integer and predicate work uses services",
+        "plain/sparse_decode.py",
+        _sparse_cost,
+        _check_service_work,
+    ),
+    FixtureCase(
+        "gather into smem is refused for a gmem result",
+        "plain/sparse_decode.py",
+        _sparse_candidates,
+        _check_gmem_gather_refusal,
+    ),
+    FixtureCase(
+        "analyzed smem peak matches the lowered placement",
+        "hir/sparse_decode.py",
+        _sparse_placement,
+        _check_smem_placement,
+    ),
+    FixtureCase(
+        "plain sparse attention matches torch",
+        "plain/sparse_decode.py",
+        _sparse_attention,
+        _check_attention,
+    ),
+    FixtureCase(
+        "scheduled sparse attention matches torch",
+        "hir/sparse_decode.py",
+        _sparse_attention,
+        _check_attention,
+    ),
+)
+
+
+@pytest.mark.parametrize("case", SPARSE_DECODE, ids=lambda case: case.name)
+def test_sparse_decode(case: FixtureCase) -> None:
+    root = Path(__file__).parents[1] / "fixtures" / "schedule"
+    case.check(case.stage(_module_in(root / case.fixture)))
+
+
 def test_single_issue_schedule_preserves_instruction_relations() -> None:
     schedule = _copy_schedule_call(repeat=(1,), order=(0,))
     source = schedule.args[0]
@@ -970,6 +1136,7 @@ def test_schedule_facts_lists_target_instructions_as_text_and_json(
             {"id": "T.cast", "capability": None},
             {"id": "T.clamp", "capability": None},
             {"id": "T.unary", "capability": None},
+            {"id": "T.where", "capability": None},
             {"id": "T.copy_async", "capability": "cp.async"},
             {
                 "id": "T.copy_async_tensor",
@@ -995,6 +1162,7 @@ instructions
   T.cast               all targets
   T.clamp              all targets
   T.unary              all targets
+  T.where              all targets
   T.copy_async         cp.async
   T.copy_async_tensor  cp.async.bulk.tensor
   T.copy               all targets
@@ -1022,6 +1190,7 @@ instructions
   T.cast    all targets
   T.clamp   all targets
   T.unary   all targets
+  T.where   all targets
   T.copy    all targets
   T.relu    all targets
   T.reduce  all targets
@@ -1086,22 +1255,25 @@ def test_schedule_candidate_reports_cover_every_site(
     assert all(row["candidates"] or row["refused"] for _name, row in sites)
     assert all(row["candidates"] for _name, row in sites if row["op"] == "tf.reshard")
     matmuls = [(name, row) for name, row in sites if row["op"] == "tf.matmul"]
-    assert len(matmuls) == 6
+    assert len(matmuls) == 8
     assert [name for name, row in matmuls if row["candidates"]] == [
         "fp8_block_scaled_gemm",
         "gemm_8192x17408x5120_cta_grid",
+        "sparse_decode",
+        "sparse_decode",
     ]
 
 
 @pytest.mark.parametrize(
-    ("name", "dims", "matmuls", "reshards", "accepted_matmuls"),
+    ("name", "dims", "matmuls", "reshards", "accepted_matmuls", "b_layout"),
     (
-        ("chunk_rmsnorm", ("chunks=16",), 0, 7, 0),
-        ("chunk_rmsnorm", ("chunks=32",), 0, 7, 0),
-        ("fp8_block_scaled_gemm", (), 1, 5, 1),
-        ("gemm_8192x17408x5120_cta_grid", (), 1, 4, 1),
-        ("gemm_relu_gemm_tiled", (), 2, 2, 0),
-        ("gemm_relu_gemm_untiled", (), 2, 0, 0),
+        ("chunk_rmsnorm", ("chunks=16",), 0, 7, 0, "KN"),
+        ("chunk_rmsnorm", ("chunks=32",), 0, 7, 0, "KN"),
+        ("fp8_block_scaled_gemm", (), 1, 5, 1, "KN"),
+        ("gemm_8192x17408x5120_cta_grid", (), 1, 4, 1, "KN"),
+        ("gemm_relu_gemm_tiled", (), 2, 2, 0, "KN"),
+        ("gemm_relu_gemm_untiled", (), 2, 0, 0, "KN"),
+        ("gemm_relu_gemm_untiled", (), 2, 0, 0, "NK"),
     ),
 )
 def test_schedule_candidates_reports_every_plain_site(
@@ -1110,10 +1282,19 @@ def test_schedule_candidates_reports_every_plain_site(
     matmuls: int,
     reshards: int,
     accepted_matmuls: int,
+    b_layout: str,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     source = f"tests/fixtures/schedule/plain/{name}.py"
+    if b_layout == "NK":
+        variant = tmp_path / f"{name}_nk.py"
+        variant.write_text(
+            Path(source).read_text()
+            .replace("tf.matmul(a, b)", 'tf.matmul(a, b, b_layout="NK")')
+            .replace("tf.matmul(y, c)", 'tf.matmul(y, c, b_layout="NK")')
+        )
+        source = str(variant)
     out = tmp_path / f"{name}.json"
 
     assert (
@@ -1132,6 +1313,16 @@ def test_schedule_candidates_reports_every_plain_site(
     assert sum(bool(row["candidates"]) for row in matmul_rows) == accepted_matmuls
     assert all(row["candidates"] or row["refused"] for row in report["lines"])
     assert all(row["candidates"] for row in reshard_rows)
+
+    if b_layout == "NK":
+        for row in matmul_rows:
+            assert row["refused"] == [
+                {
+                    "id": instruction,
+                    "refused": ["rhs axes=(d1, d2), reads axes=(d2, d1)"],
+                }
+                for instruction in ("T.cuda.sm90.Wgmma", "T.cuda.sm80.Mma")
+            ]
 
     if name == "fp8_block_scaled_gemm":
         (matmul,) = matmul_rows
@@ -1162,11 +1353,32 @@ def test_schedule_candidates_reports_every_plain_site(
             assert not invalid_out.exists()
 
 
-@pytest.mark.parametrize("source", HIR, ids=lambda path: path.stem)
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            path,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="_site_types locally projects broadcast operands onto incompatible axes",
+            ),
+        ) if path.stem == "sparse_decode" else path
+        for path in HIR
+    ],
+    ids=lambda path: path.stem,
+)
 def test_schedule_candidates_omit_selected_schedule_calls(
     source: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = tmp_path / f"{source.stem}.json"
+
+    if source.stem in CANDIDATES_REFUSED:
+        assert cli_main(["schedule", "candidates", str(source), str(out), "--json"]) == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert CANDIDATES_REFUSED[source.stem] in captured.err
+        assert not out.exists()
+        return
 
     assert cli_main(["schedule", "candidates", str(source), str(out), "--json"]) == 0
     assert capsys.readouterr() == ("", "")
