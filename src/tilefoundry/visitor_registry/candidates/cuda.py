@@ -13,4 +13,4 @@ from . import register_candidates
 register_candidates(MatMul, (TiledMma,))
 register_candidates(Reshard, (CopyAsync, CopyAsyncTensor, LdMatrix))
 
-register_candidates(IndexSelect, (CopyAsync,), lands=True)
+register_candidates(IndexSelect, (CopyAsync,))

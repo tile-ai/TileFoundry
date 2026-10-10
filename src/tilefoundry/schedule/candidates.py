@@ -22,7 +22,7 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
-from tilefoundry.ir.hir.schedule import instruction_write_types, operand_relations
+from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.pattern import (
     PatternMatcher,
     SwitchPattern,
@@ -31,7 +31,7 @@ from tilefoundry.ir.pattern import (
     declared_execution_mesh,
 )
 from tilefoundry.ir.pattern.utils import variants
-from tilefoundry.ir.types import Mesh, TensorType
+from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.utils import try_local_type_of
@@ -45,7 +45,6 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import (
-    candidate_lands,
     candidate_ops,
     instruction_from_hir,
     sole_candidate,
@@ -61,7 +60,6 @@ class _Site:
     reads: tuple[tuple[str, TensorType], ...]
     leaves: tuple[tuple[str, TensorType], ...]
     instructions: tuple[type, ...]
-    mesh: Mesh | None
 
 
 def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
@@ -149,7 +147,6 @@ def _sites(result: AnalysisResult) -> tuple[_Site, ...]:
                 reads=tuple(zip(names, reads, strict=True)),
                 leaves=(("result", output),),
                 instructions=instructions,
-                mesh=mesh,
             )
         )
     return tuple(sites)
@@ -179,7 +176,7 @@ def _instruction_operands(site: _Site, op) -> tuple[TensorType, ...] | None:
     if len(read_params) != len(site.reads) or len(write_params) > len(site.leaves):
         return None
     read_types = iter(type_ for _name, type_ in site.reads)
-    write_types = iter(_write_types(site, op))
+    write_types = iter(type_ for _name, type_ in site.leaves)
     operands = []
     for param in params:
         if param.effect & MemoryEffect.WRITE:
@@ -187,16 +184,6 @@ def _instruction_operands(site: _Site, op) -> tuple[TensorType, ...] | None:
         elif param.effect & MemoryEffect.READ:
             operands.append(next(read_types))
     return tuple(operands)
-
-
-def _write_types(site: _Site, op) -> tuple[TensorType, ...]:
-    if not candidate_lands(type(site.call.target), type(op)):
-        return tuple(type_ for _name, type_ in site.leaves)
-    params = _input_params(type(op), len(site.reads))
-    reads = tuple(param for param in params if param.effect & MemoryEffect.READ)
-    inputs = dict(zip((param.name for param in reads), (type_ for _name, type_ in site.reads), strict=True))
-    outputs, *_ = instruction_write_types(op, inputs, site.mesh)
-    return tuple(outputs.values())
 
 
 def _instruction_relation_shape(site: _Site, op) -> tuple | None:
@@ -357,7 +344,7 @@ def _asked(site: _Site, op) -> tuple[tuple[ParamDef, TensorType], ...] | None:
         *zip(read_params, (type_ for _name, type_ in site.reads), strict=True),
         *zip(
             write_params,
-            _write_types(site, op)[: len(write_params)],
+            (type_ for _name, type_ in site.leaves[: len(write_params)]),
             strict=True,
         ),
     )
@@ -497,10 +484,6 @@ def candidates(
                 }
                 if candidate["id"] == automatic_id:
                     candidate["default"] = True
-                if candidate_lands(type(site.call.target), type(op)):
-                    candidate["lands"] = [
-                        type_printer.print(type_) for type_ in _write_types(site, op)
-                    ]
                 usable.append(candidate)
             else:
                 common = _common(reasons)
@@ -544,8 +527,7 @@ def render(data: dict[str, Any]) -> str:
         for fit in row["candidates"]:
             kind = "default" if fit.get("default", False) else "candidate"
             needs = "" if fit["needs"] is None else f"  needs {fit['needs']}"
-            lands = "" if "lands" not in fit else f"  lands {', '.join(fit['lands'])}"
-            lines.append(f"    {kind:<12}{fit['id']}{needs}{lands}")
+            lines.append(f"    {kind:<12}{fit['id']}{needs}")
             lines.extend(f"                  {binding}" for binding in fit["bindings"])
         for rejection in row["refused"]:
             lines.extend(
