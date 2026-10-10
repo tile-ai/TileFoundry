@@ -756,7 +756,7 @@ per-op classes; they appear as `Evaluate(op, args)`. `BinaryKind` /
 TIR; lowering preserves the kind value without re-mapping. Their owning
 definitions are [core-ir §4](./core-ir.md#4-shared-operation-kinds).
 
-`Binary`, `Unary`, `Clamp`, `Cast`, `ReLU`, and `Reduce` are target-neutral
+`Binary`, `Unary`, `Where`, `Clamp`, `Cast`, `ReLU`, and `Reduce` are target-neutral
 instruction declarations (`OpCapability(None)`) with registered access
 relations, so schedule discovery and an explicit `tf.schedule` consume the same
 contracts as TIR verification. The five elementwise declarations use the
@@ -813,6 +813,15 @@ class Binary(Op):
     missing axes, size-1 axes, and rank-0 scalars. `dst.shape` MUST equal the
     broadcast of their shapes. Operand order MUST be preserved for every kind.
   - Lowers to the binary runtime family without per-kind TIR classes.
+
+##### Where
+
+`Where(cond, lhs, rhs, dst)` writes `lhs` where `cond` is true and `rhs`
+otherwise. Its capability is target-neutral and its operands are registers
+on the executing thread mesh. `cond` MUST have bool dtype; the data branches
+and destination MUST have the same dtype. All three inputs use right-aligned
+broadcasting, and `dst` MUST have their broadcast shape. HIR Where lowers to
+this effect-form instruction. This stage provides no CUDA emitter for it.
 
 ##### Unary
 ```python
@@ -1061,11 +1070,15 @@ class CopyAsync(Op):
     Attributes:
         src: input; gmem staging source.
         dst: input; smem staging destination.
+        index: optional third positional input; rank-1 i32/i64 row indices.
+        fill: attribute; optional out-of-range row value.
         smem_layout: attribute; optional landing arrangement.
     """
 
     src: Tensor
     dst: Tensor
+    index: Tensor | None = None
+    fill: float | None = None
     smem_layout: Layout | None = None
     execution_mesh: MeshPattern
 ```
@@ -1079,6 +1092,27 @@ class CopyAsync(Op):
     tile arrangement; its other strides ensure every participant's start is
     aligned. Two split layouts compare their tile modes only when their mesh
     and shard attrs are identical.
+  - With `index`, only dim 0 is gathered: `dst[r] = src[index[r]]`.
+    It is the third positional input: `T.copy_async(src, dst, index, fill=0)`.
+    Each of `src`, `dst`, and `index` MUST have a plain layout or a pure
+    Broadcast ShardLayout, with no Split or Partial attributes. Verification
+    MUST reject other distributions and identify the operand. This restriction
+    does not apply to transfers without an index.
+    The index MUST be rank-1 i32 or i64, and `dst` MUST have shape
+    `(index.shape[0], *src.shape[1:])`. Without `index`, `fill` MUST be `None`.
+    With a stated `fill`, an index below zero or at least `src.shape[0]`
+    MUST fill the whole destination row without reading the source.
+  - Indexed transfers MUST partition destination vectors among executing
+    threads. Vectors MUST stay inside a row; their width is chosen statically
+    from inner contiguous runs and row-stride alignment, using `ASYNC_WIDTHS`.
+    A valid row uses `cp.async`; an invalid row with zero fill uses the
+    instruction's zero-fill source-size form, while a nonzero fill uses
+    `st.shared` with the destination dtype's repeated fill pattern.
+  - Indexed schedules produce one `CopyAsync` instruction, whether the
+    index names all selected rows or the author schedules one index slice
+    per loop iteration. Lowering MUST NOT split rows or introduce predicate
+    operands. Schedule evaluation MUST agree with dim-0 IndexSelect,
+    including its out-of-range fill behavior. Indexed gather has no TMA form.
   - A later read of `dst` is ordered by `CpAsyncCommit` followed by
     `CpAsyncWait`.
   - `execution_mesh` states the issuing threads. The gmem and smem operands are

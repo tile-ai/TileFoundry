@@ -970,6 +970,7 @@ def test_schedule_facts_lists_target_instructions_as_text_and_json(
             {"id": "T.cast", "capability": None},
             {"id": "T.clamp", "capability": None},
             {"id": "T.unary", "capability": None},
+            {"id": "T.where", "capability": None},
             {"id": "T.copy_async", "capability": "cp.async"},
             {
                 "id": "T.copy_async_tensor",
@@ -995,6 +996,7 @@ instructions
   T.cast               all targets
   T.clamp              all targets
   T.unary              all targets
+  T.where              all targets
   T.copy_async         cp.async
   T.copy_async_tensor  cp.async.bulk.tensor
   T.copy               all targets
@@ -1022,6 +1024,7 @@ instructions
   T.cast    all targets
   T.clamp   all targets
   T.unary   all targets
+  T.where   all targets
   T.copy    all targets
   T.relu    all targets
   T.reduce  all targets

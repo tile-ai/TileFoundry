@@ -75,4 +75,95 @@ struct CopyAsync {
     }
 };
 
+/// Gather complete rows, distributing destination vectors over the issuer mesh.
+template <class ExecutionMesh, bool HasFill, int bytes>
+struct CopyIndexedAsync {
+    template <class TSrc, class TDst, class TIndex, class TFill>
+    __device__ void operator()(TSrc const &src, TDst &dst, TIndex const &index,
+                               TFill fill) const {
+        auto &&s = tilefoundry::local_tensor(src);
+        auto &&d = tilefoundry::local_tensor(dst);
+        auto &&idx = tilefoundry::local_tensor(index);
+        constexpr int srank = decltype(cute::rank(s))::value;
+        constexpr int drank = decltype(cute::rank(d))::value;
+        static_assert(srank >= 2 && drank == srank,
+                      "indexed copy_async requires a row with inner modes");
+        auto rows_s = cute::group_modes<1, srank>(s);
+        auto rows_d = cute::group_modes<1, drank>(d);
+        auto row_s = rows_s(0, cute::_);
+        auto row_d = rows_d(0, cute::_);
+        using value_type =
+            typename cute::remove_cvref_t<decltype(d)>::value_type;
+        static_assert(
+            bytes == 4 || bytes == 8 || bytes == 16,
+            "indexed copy_async needs an aligned 4, 8, or 16 byte row vector");
+        constexpr int V = bytes / int(sizeof(value_type));
+        constexpr auto threads =
+            tilefoundry::get<tilefoundry::TopologyScope::thread>(
+                ExecutionMesh{});
+        constexpr int participants = int(cute::size(threads.layout));
+        const int lane = int(threadIdx.x) - tilefoundry::offset(threads);
+        auto row_vectors = cute::recast<cute::uint_bit_t<bytes * 8>>(row_d);
+        const int vectors_per_row = int(cute::size(row_vectors));
+        const int vectors = int(cute::size<0>(rows_d)) * vectors_per_row;
+        for (int vector = lane; vector < vectors; vector += participants) {
+            const int row = vector / vectors_per_row;
+            const int column = vector % vectors_per_row;
+            const auto at = idx(row);
+            const bool valid = at >= 0 && at < cute::size<0>(rows_s);
+            auto destination = rows_d(row, cute::_);
+            auto destination_vectors =
+                cute::recast<cute::uint_bit_t<bytes * 8>>(destination);
+            auto *target = &destination_vectors(column);
+            if (!HasFill || valid || fill == TFill(0)) {
+                auto selected = rows_s(valid ? at : 0, cute::_);
+                auto selected_vectors =
+                    cute::recast<cute::uint_bit_t<bytes * 8>>(selected);
+                const auto *source = &selected_vectors(column);
+                const int source_bytes = !HasFill || valid ? bytes : 0;
+                const uint32_t shared =
+                    uint32_t(__cvta_generic_to_shared(target));
+                if constexpr (bytes == 16) {
+                    asm volatile(
+                        "cp.async.cg.shared.global [%0], [%1], 16, %2;" ::"r"(
+                            shared),
+                        "l"(source), "r"(source_bytes)
+                        : "memory");
+                } else {
+                    asm volatile(
+                        "cp.async.ca.shared.global [%0], [%1], %2, %3;" ::"r"(
+                            shared),
+                        "l"(source), "n"(bytes), "r"(source_bytes)
+                        : "memory");
+                }
+            } else {
+                alignas(16) value_type pattern[V];
+                CUTE_UNROLL
+                for (int element = 0; element < V; ++element)
+                    pattern[element] = value_type(fill);
+                const auto *words = reinterpret_cast<uint32_t const *>(pattern);
+                const uint32_t shared =
+                    uint32_t(__cvta_generic_to_shared(target));
+                if constexpr (bytes == 16) {
+                    asm volatile(
+                        "st.shared.v4.b32 [%0], {%1, %2, %3, %4};" ::"r"(
+                            shared),
+                        "r"(words[0]), "r"(words[1]), "r"(words[2]),
+                        "r"(words[3])
+                        : "memory");
+                } else if constexpr (bytes == 8) {
+                    asm volatile(
+                        "st.shared.v2.b32 [%0], {%1, %2};" ::"r"(shared),
+                        "r"(words[0]), "r"(words[1])
+                        : "memory");
+                } else {
+                    asm volatile("st.shared.b32 [%0], %1;" ::"r"(shared),
+                                 "r"(words[0])
+                                 : "memory");
+                }
+            }
+        }
+    }
+};
+
 }

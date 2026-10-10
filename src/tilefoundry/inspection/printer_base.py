@@ -4,9 +4,19 @@ from __future__ import annotations
 
 import enum
 import json
+import math
 from contextlib import contextmanager
 
-from tilefoundry.ir.core import Call, Constant, Printable, PrinterBase, Tuple, Var
+from tilefoundry.ir.core import (
+    Call,
+    Constant,
+    Op,
+    Printable,
+    PrinterBase,
+    Tuple,
+    Var,
+    op_identifier,
+)
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.mesh_scope import device_layout
@@ -424,6 +434,18 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
                 return self.visit(value, ctx)
         if isinstance(value, Printable):
             return value.print(self, ctx)
+        if isinstance(value, Op):
+            name = op_identifier(type(value))
+            dialect = name.split(".", 1)[0]
+            if ctx is not None:
+                ctx.use(PythonExpr((f"from tilefoundry.dsl import {dialect}",), dialect))
+            attrs = ", ".join(
+                f"{param.name}={self.print(getattr(value, param.name), ctx, indent)}"
+                for param in type(value)._op_schema.signature
+                if param.kind == "attribute"
+                and (not param.has_default or getattr(value, param.name) != param.default)
+            )
+            return f"{name}({attrs})"
         if isinstance(value, enum.Enum):
             if ctx is not None:
                 ctx.use(
@@ -438,6 +460,11 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         if isinstance(value, tuple):
             rendered = ", ".join(self.print(item, ctx, indent) for item in value)
             return f"({rendered}{',' if len(value) == 1 else ''})"
+        if isinstance(value, float):
+            if math.isinf(value):
+                return "-1e999" if value < 0 else "1e999"
+            if math.isnan(value):
+                return "(1e999 - 1e999)"
         if value is None or isinstance(value, (str, int, float, bool)):
             return repr(value)
         printed = self.visit(value, ctx)

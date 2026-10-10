@@ -9,14 +9,22 @@ from tilefoundry.ir.core.op import Op
 from tilefoundry.ir.core.param_def import collect_param_defs
 
 _CANDIDATES: dict[type, list[type]] = {}
+_LANDS: set[tuple[type, type]] = set()
 
 
-def register_candidates(hir_op: type, tir_ops: tuple[type, ...]) -> None:
-    """Add the TIR operations that can implement one HIR operation."""
+def register_candidates(hir_op: type, tir_ops: tuple[type, ...], *, lands: bool = False) -> None:
+    """Register carriers, optionally deriving their landing type from the instruction."""
     registered = _CANDIDATES.setdefault(hir_op, [])
     for tir_op in tir_ops:
         if tir_op not in registered:
             registered.append(tir_op)
+        if lands:
+            _LANDS.add((hir_op, tir_op))
+
+
+def candidate_lands(hir_op: type, tir_op: type) -> bool:
+    """Whether this pairing declares its own destination type."""
+    return (hir_op, tir_op) in _LANDS
 
 
 def candidate_ops(hir_op: type) -> tuple[type, ...]:
@@ -57,5 +65,6 @@ __all__ = [
     "instruction_from_hir",
     "sole_candidate",
     "candidate_ops",
+    "candidate_lands",
     "register_candidates",
 ]

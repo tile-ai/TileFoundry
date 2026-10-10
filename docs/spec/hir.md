@@ -1134,9 +1134,14 @@ operation and is not an HIR op.
     `Split` on `dim` becomes `Partial(sum)`, and a `Split` on another dim keeps
     its target. Multiple `Split`s including `dim`, or a composed shard layout,
     MUST fail closed.
-  - HIR-to-TIR lowers `IndexSelect` as a view only when `index.shape == (1,)`
-    and every input extent before `dim` is `1`. Other forms require a
-    materializing selection and MUST fail closed.
+  - `IndexSelect` is a pure value operation, not a copy. To stage dim-0
+    selections into shared memory, schedule its inputs as
+    `tf.schedule((x, index), op=T.copy_async(smem_layout=..., fill=f))`.
+    Its CopyAsync candidate declares the result landing in smem, using the
+    instruction's write type rather than the pure value's source storage.
+    The indexed instruction has no TMA candidate. Unscheduled `IndexSelect`
+    MUST fail lowering with this scheduling form in the diagnostic; copying
+    its already computed result with `CopyAsync` is not supported.
   - `IndexAdd` and `IndexCopy` require rank-1 `index`, equal `dst`/`src` dtype
     and rank, equal non-`dim` extents, and
     `index.shape[0] == src.shape[dim]`. Their result type is exactly `dst`'s.

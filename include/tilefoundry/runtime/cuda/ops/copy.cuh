@@ -20,3 +20,17 @@ template <class TSrc, class TDst>
 __device__ void copy_async(TSrc const &src, TDst &dst) {
     copy_impl::CopyAsync{}(src, dst);
 }
+
+template <class ExecutionMesh, int Bytes, class TSrc, class TDst, class TIndex>
+__device__ void copy_async(TSrc const &src, TDst &dst, TIndex const &index) {
+    copy_impl::CopyIndexedAsync<ExecutionMesh, false, Bytes>{}(src, dst, index,
+                                                               0);
+}
+
+template <class ExecutionMesh, int Bytes, class TSrc, class TDst, class TIndex,
+          class TFill>
+__device__ void copy_async(TSrc const &src, TDst &dst, TIndex const &index,
+                           TFill fill) {
+    copy_impl::CopyIndexedAsync<ExecutionMesh, true, Bytes>{}(src, dst, index,
+                                                              fill);
+}
