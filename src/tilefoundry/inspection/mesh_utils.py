@@ -40,7 +40,10 @@ def sub_box(parent: Mesh, mesh: Mesh) -> tuple[slice, ...] | None:
 
 
 def selection_layout(mesh: Mesh, selection: Mesh) -> Layout | None:
-    """Invert reversed selection modes so local indices use row-major numbering."""
+    """Invert reversed selection modes so local indices use row-major numbering.
+
+    Composition uses AssertionError to reject indivisible mode strides.
+    """
     if mesh.topologies != selection.topologies or len(mesh.topologies) != 1:
         return None
     if not isinstance(mesh.layout, ComposedLayout) or mesh.layout.inner is not None:

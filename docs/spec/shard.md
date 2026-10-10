@@ -684,7 +684,7 @@ When a `Layout` sits inside `ShardLayout.layout`, its `shape` and
 `stride` carry **additional, narrower semantics** beyond the plain
 [§3](#3-layout-pure-primitive) meaning — they describe the *distributed* form of the tensor, not a
 free-standing primitive layout. These narrower meanings are defined in
-[§7.1.1](#711-layoutshape) and [§7.1.2](#712-layoutstrides) and extend the [§3](#3-layout-pure-primitive) contract.
+[§7.1.1](#711-layoutshape) and [§7.1.2](#712-layoutstrides) and refine (not replace) the [§3](#3-layout-pure-primitive) contract.
 
 #### 7.1.1 `layout.shape`
 
