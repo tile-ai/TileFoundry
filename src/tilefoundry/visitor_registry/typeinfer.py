@@ -22,7 +22,7 @@ from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
-from tilefoundry.ir.types.utils import types_compatible
+from tilefoundry.ir.types.utils import participant_layout, types_compatible
 from tilefoundry.ir.visitor import ExprVisitor, expr_children
 
 from .contexts import FunctionScope, TypeInferContext, TypeInferResults
@@ -100,7 +100,8 @@ class TypeInferVisitor(ExprVisitor[Type]):
                 if not isinstance(layout, ShardLayout):
                     continue
                 try:
-                    covered = covered_by_scope(layout.mesh, ctx.current_mesh)
+                    projected = participant_layout(layout)
+                    covered = covered_by_scope(projected.mesh, ctx.current_mesh)
                 except ValueError as error:
                     ctx.error(call, str(error))
                 if not covered:
@@ -109,7 +110,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
                         f"input {index} is laid out more finely than the scope it "
                         "runs in; write it inside that scope, or reshard it back first",
                     )
-                if not storage_reaches(arg_type.storage, layout.mesh, ctx.current_mesh):
+                if not storage_reaches(arg_type.storage, projected.mesh, ctx.current_mesh):
                     ctx.error(
                         call,
                         f"input {index} is laid out more coarsely and kept in "

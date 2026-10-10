@@ -19,6 +19,7 @@ from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import separate
 from tilefoundry.ir.types.substitute import DimSubstitutionError, substitute_shape_dim
+from tilefoundry.ir.types.utils import participant_layout
 
 OPAQUE = object()
 
@@ -90,7 +91,20 @@ class PatternMatcher:
         saved = self.snapshot()
         self._depth += 1
         try:
-            found = self._match(pattern, subject)
+            if isinstance(subject, ShardLayout):
+                from .pattern import ShardLayoutPattern  # noqa: PLC0415 - pattern protocol cycle
+
+                if isinstance(pattern, ShardLayoutPattern):
+                    try:
+                        subject = participant_layout(subject, pattern.mesh.topologies)
+                    except ValueError:
+                        found = self._fail(pattern, subject)
+                    else:
+                        found = self._match(pattern, subject)
+                else:
+                    found = self._match(pattern, subject)
+            else:
+                found = self._match(pattern, subject)
         except Exception:
             self.restore(saved)
             raise

@@ -9,8 +9,10 @@ from math import prod
 from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
 from tilefoundry.ir.types.layout import size as layout_size
-from tilefoundry.ir.types.mesh import Mesh, levels, refine, starts
+from tilefoundry.ir.types.mesh import Mesh, Topology, levels, refine, starts
+from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx, idx2crd
+from tilefoundry.ir.types.utils import participant_layout
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
 
 DSL_STAR_IMPORT = "from tilefoundry.dsl import *"
@@ -36,6 +38,9 @@ class PrintContext:
         self.imports: set[str] = {DSL_STAR_IMPORT}
         self._dim_declarations: dict[str, tuple[object, str]] = {}
         self._mesh_bindings: list[tuple[Mesh, str]] = []
+        self._projected_mesh_bindings: dict[
+            tuple[int, tuple[Topology | str, ...]], tuple[Mesh, Mesh]
+        ] = {}
         self._used_scope_names: set[str] = set()
         self._type_annotation_surface = False
 
@@ -89,6 +94,21 @@ class PrintContext:
             yield
         finally:
             self._type_annotation_surface = previous
+
+    def project_layout(self, layout: ShardLayout) -> ShardLayout:
+        """Cache the first lexical alias identity so projection preserves annotation spelling."""
+        projected = participant_layout(layout)
+        if projected is layout:
+            return projected
+        key = (id(layout.mesh), projected.mesh.topologies)
+        cached = self._projected_mesh_bindings.get(key)
+        if cached is not None:
+            return ShardLayout(projected.layout, projected.attrs, cached[1])
+        for bound, _name in reversed(self._mesh_bindings):
+            if bound == projected.mesh:
+                self._projected_mesh_bindings[key] = (layout.mesh, bound)
+                return ShardLayout(projected.layout, projected.attrs, bound)
+        return projected
 
     def mesh_alias(self, mesh: Mesh) -> str | None:
         for bound, name in reversed(self._mesh_bindings):

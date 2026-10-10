@@ -22,7 +22,7 @@ from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.utils import bytes_by_storage
+from tilefoundry.ir.types.utils import bytes_by_storage, participant_layout
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.units import format_bytes
@@ -470,7 +470,7 @@ def values_in_region(
             continue
         held = leaves_of(item.value.type)[item.index]
         layout = shard_layout_of(getattr(held, "layout", None))
-        if layout is None or not held_in_region(layout.mesh, region.mesh):
+        if layout is None or not held_in_region(participant_layout(layout).mesh, region.mesh):
             continue
         result.append(item)
     return tuple(result)

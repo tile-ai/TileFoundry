@@ -70,7 +70,14 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.stride import compact_row_major
-from tilefoundry.ir.types.utils import i64_const, issue_frames, nonunit_mesh, static_dim_value
+from tilefoundry.ir.types.utils import (
+    i64_const,
+    issue_frames,
+    nonunit_mesh,
+    participant_layout,
+    static_dim_value,
+    types_compatible,
+)
 from tilefoundry.ir.visitor import ExprVisitor, StmtMutator, collect_exprs, expr_children
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.visitor_registry.access_relation import (
@@ -224,7 +231,7 @@ def _storage_type(type_: TensorType) -> TensorType:
 def _with_frame(type_: TensorType, frame: Mesh) -> TensorType:
     layout = type_.layout
     if isinstance(layout, ShardLayout):
-        layout = replace(layout, mesh=frame)
+        layout = replace(participant_layout(layout), mesh=frame)
     return replace(type_, layout=layout)
 
 
@@ -1142,7 +1149,10 @@ class Lowering(ExprVisitor[Expr]):
         stem: str,
     ) -> Expr:
         desired = _with_frame(desired, frame)
-        if value.type == desired or (
+        if (
+            types_compatible(desired, value.type)
+            and types_compatible(value.type, desired)
+        ) or (
             not isinstance(desired.layout, ShardLayout)
             and isinstance(value.type, TensorType)
             and tuple(value.type.shape) == tuple(desired.shape)
@@ -1223,7 +1233,7 @@ class Lowering(ExprVisitor[Expr]):
 
     def _holder_mesh(self, type_: TensorType) -> Mesh | None:
         layout = type_.layout
-        return layout.mesh if isinstance(layout, ShardLayout) else None
+        return participant_layout(layout).mesh if isinstance(layout, ShardLayout) else None
 
     def _emit_fill(self, target: Expr, logical_type: TensorType, cursor: _Cursor) -> None:
         mesh = self._holder_mesh(logical_type)

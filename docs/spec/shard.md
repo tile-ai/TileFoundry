@@ -617,6 +617,12 @@ Field meanings:
   propagation
 ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
 
+Instruction matching and scope checks project away levels whose attributes
+are all `Broadcast`, except for the instruction's participant levels. A
+participant level retains its `Broadcast` attributes and physical frame;
+levels containing `Split` or `Partial` remain part of the distribution and
+must match. Projection keeps each retained mesh axis aligned with its attribute.
+
 Surface syntax sugar:
 
 - `S(i)` ≡ `Split(axis=i)`
