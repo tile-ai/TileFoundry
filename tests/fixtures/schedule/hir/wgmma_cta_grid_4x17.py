@@ -28,8 +28,6 @@ class WGMMA_CTA_GRID_4X17:
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
-        a_smem = Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1)))
-        b_smem = Layout(((2, 8), (2, 8)), ((64, 8), (128, 1)))
         with Mesh(("cta",), layout=(GRID_M, GRID_N), names=("bm", "bn")) as _blocks:
             with Mesh(
                 ("thread",), layout=(3, 128),
@@ -45,12 +43,12 @@ class WGMMA_CTA_GRID_4X17:
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
                             (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=a_smem),
+                            op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1)))),
                             buffers=STAGES,
                         )
                         rhs = tf.schedule(
                             (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=b_smem),
+                            op=T.copy_async_tensor(smem_layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1)))),
                             buffers=STAGES,
                         )
 

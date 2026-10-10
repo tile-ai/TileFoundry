@@ -33,8 +33,6 @@ class FP8_BLOCK_SCALED_GEMM:
         a_scale: Tensor[(M, K_BLOCKS), "f32"],
         b_scale: Tensor[(K_BLOCKS, N_BLOCKS), "f32"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
-        a_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))))
-        b_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))))
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
                 ("thread",), layout=(3, 128),
@@ -49,12 +47,12 @@ class FP8_BLOCK_SCALED_GEMM:
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
                             (a[:, kb * BLOCK:kb * BLOCK + BLOCK],),
-                            op=T.copy_async_tensor(smem_layout=a_smem),
+                            op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3)),
                             buffers=STAGES,
                         )
                         rhs = tf.schedule(
                             (b[kb * BLOCK:kb * BLOCK + BLOCK, :],),
-                            op=T.copy_async_tensor(smem_layout=b_smem),
+                            op=T.copy_async_tensor(smem_layout=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3)),
                             buffers=STAGES,
                         )
 

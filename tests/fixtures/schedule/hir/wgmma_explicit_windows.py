@@ -32,8 +32,6 @@ class WGMMA_EXPLICIT_WINDOWS:
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16", Layout((K, N), (1, K))],
     ) -> Tensor[(M, N), "bf16"]:
-        a_smem = Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))
-        b_smem = Layout(((2, 8), (4, 8)), ((64, 1), (128, 8)))
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
                 ("thread",), layout=(2, 128),
@@ -53,12 +51,12 @@ class WGMMA_EXPLICIT_WINDOWS:
                             with threads[0, :32] as _loader:
                                 lhs = tf.schedule(
                                     (a[m:m + BM, k],),
-                                    op=T.copy_async_tensor(smem_layout=a_smem),
+                                    op=T.copy_async_tensor(smem_layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))),
                                     buffers=STAGES,
                                 )
                                 rhs = tf.schedule(
                                     (b[k, n:n + BN],),
-                                    op=T.copy_async_tensor(smem_layout=b_smem),
+                                    op=T.copy_async_tensor(smem_layout=Layout(((2, 8), (4, 8)), ((64, 1), (128, 8)))),
                                     buffers=STAGES,
                                 )
 

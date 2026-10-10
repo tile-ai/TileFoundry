@@ -27,8 +27,6 @@ class WGMMA_REPEAT_ALONG_K:
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
-        a_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))))
-        b_smem = Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1)))
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
                 ("thread",), layout=(3, 128),
@@ -44,12 +42,12 @@ class WGMMA_REPEAT_ALONG_K:
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
                             (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=a_smem),
+                            op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)),
                             buffers=STAGES,
                         )
                         rhs = tf.schedule(
                             (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=b_smem),
+                            op=T.copy_async_tensor(smem_layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1)))),
                             buffers=STAGES,
                         )
 

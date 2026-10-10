@@ -27,8 +27,6 @@ class WGMMA_A_MN_MAJOR:
         a: Tensor[(M, K), "bf16", Layout((M, K), (1, M)), "gmem"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
-        a_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((1, 64), (2, 8)), ((1024, 1), (512, 64))))
-        b_smem = ComposedLayout(Swizzle(2, 4, 3), 0, Layout(((2, 8), (1, 32)), ((256, 32), (512, 1))))
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
                 ("thread",), layout=(2, 128),
@@ -43,12 +41,12 @@ class WGMMA_A_MN_MAJOR:
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
                             (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=a_smem),
+                            op=T.copy_async_tensor(smem_layout=Layout(((1, 64), (2, 8)), ((1024, 1), (512, 64))) | Swizzle(3, 4, 3)),
                             buffers=STAGES,
                         )
                         rhs = tf.schedule(
                             (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=b_smem),
+                            op=T.copy_async_tensor(smem_layout=Layout(((2, 8), (1, 32)), ((256, 32), (512, 1))) | Swizzle(2, 4, 3)),
                             buffers=STAGES,
                         )
 

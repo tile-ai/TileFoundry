@@ -27,8 +27,6 @@ class SM80_MMA_LDMATRIX:
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
-        a_smem = Layout((16, 16), (16, 1))
-        b_smem = Layout((16, 8), (8, 1))
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
                 ("thread",), layout=(2, 32),
@@ -43,12 +41,12 @@ class SM80_MMA_LDMATRIX:
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
                             (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=a_smem),
+                            op=T.copy_async_tensor(smem_layout=((16, 16), (16, 1))),
                             buffers=STAGES,
                         )
                         rhs = tf.schedule(
                             (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=b_smem),
+                            op=T.copy_async_tensor(smem_layout=((16, 8), (8, 1))),
                             buffers=STAGES,
                         )
 

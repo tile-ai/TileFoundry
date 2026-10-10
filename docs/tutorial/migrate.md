@@ -85,6 +85,7 @@ casts first and scales second. The version below scales first.
 """One published step, authored as HIR: RMS norm, then blockwise FP8 quantization."""
 
 from tilefoundry.dsl import *
+
 from tilefoundry.target import CudaTarget
 
 ROWS = 2
@@ -167,6 +168,7 @@ failed.
 """One published step, authored as HIR: RMS norm, then blockwise FP8 quantization."""
 
 from tilefoundry.dsl import *
+
 from tilefoundry.target import CudaTarget
 
 ROWS = 2

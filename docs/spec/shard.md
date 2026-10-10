@@ -290,7 +290,9 @@ that selection. Noncontiguous selections are allowed when this condition holds.
 The topology and selection offset are preserved, and physical strides are
 derived from the selected positions. `layout=(shape, strides)` specifies
 strides in the selection's row-major numbering, rather than physical strides.
-Omitted strides use row-major numbering. The layout MUST cover each index in
+Omitted strides use row-major numbering. Stated strides MUST have the rank of
+the shape, or refinement reports `refined mesh strides must have the rank of its shape`.
+The layout MUST cover each index in
 `[0, size)` exactly once, or refinement reports
 `refined mesh layout must cover each selected position once`. Every new axis
 MUST still map to a fixed physical stride. Extent-one axes may be omitted.

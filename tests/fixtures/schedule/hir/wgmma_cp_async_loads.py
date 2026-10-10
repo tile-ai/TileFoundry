@@ -30,8 +30,6 @@ class WGMMA_CP_ASYNC_LOADS:
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
-        a_smem = Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))
-        b_smem = Layout(((2, 8), (4, 8)), ((64, 8), (128, 1)))
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
                 ("thread",), layout=(2, 128),
@@ -47,12 +45,12 @@ class WGMMA_CP_ASYNC_LOADS:
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
                             (a[:, k],),
-                            op=T.copy_async(smem_layout=a_smem),
+                            op=T.copy_async(smem_layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))),
                             buffers=STAGES,
                         )
                         rhs = tf.schedule(
                             (b[k, :],),
-                            op=T.copy_async(smem_layout=b_smem),
+                            op=T.copy_async(smem_layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1)))),
                             buffers=STAGES,
                         )
 

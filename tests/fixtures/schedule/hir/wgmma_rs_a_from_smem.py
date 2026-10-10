@@ -33,8 +33,6 @@ class WGMMA_RS_A_FROM_SMEM:
         a: Tensor[(M, K), "fp8e4m3"],
         b: Tensor[(K, N), "fp8e4m3", Layout((K, N), (1, K))],
     ) -> Tensor[(M, N), "bf16", "umat"]:
-        a_smem = Layout(((8, 8), (2, 16)), ((256, 16), (128, 1)))
-        b_smem = Layout(((2, 16), (4, 8)), ((128, 1), (256, 16)))
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
                 ("thread",), layout=(2, 128),
@@ -49,12 +47,12 @@ class WGMMA_RS_A_FROM_SMEM:
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
                             (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=a_smem),
+                            op=T.copy_async_tensor(smem_layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1)))),
                             buffers=STAGES,
                         )
                         rhs = tf.schedule(
                             (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=b_smem),
+                            op=T.copy_async_tensor(smem_layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16)))),
                             buffers=STAGES,
                         )
 
