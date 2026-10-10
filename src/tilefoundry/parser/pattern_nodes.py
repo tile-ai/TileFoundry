@@ -709,8 +709,9 @@ class PlacementConstructionRule:
     """Materialize the candidate only after placement invariants have run."""
 
     STATEMENT: ClassVar[str] = (
-        "A placement must construct a valid shard layout. Empty braces without "
-        "splits or stated strides use row-major strides."
+        "A placement must construct a valid shard layout. Without splits, partials "
+        "or stated strides, it uses row-major strides; Broadcast states do not "
+        "affect this default."
     )
 
     def apply(self, value, *, match, context):
@@ -725,7 +726,7 @@ class PlacementConstructionRule:
         if value.strides is not None and len(canonical.layout.shape) != len(value.strides):
             raise ParseError.from_node(match.node, context, "layout shape/stride rank mismatch")
         strides = value.strides
-        if strides is None and value.states_written and not value.splits and not value.states:
+        if strides is None and not any(isinstance(attr, (Split, Partial)) for attr in canonical.attrs):
             strides = runtime.compact_row_major(canonical.layout.shape, mul=operator.mul)
         return PlacedLayout(
             shape=value.shape,
@@ -3791,10 +3792,13 @@ class MeshContextPattern(ElementPattern):
                 topology_names = _resolve_mesh_topologies_at(
                     topology_names, context.function.topologies, match.node, context
                 )
+            layout = children["layout"]
+            if isinstance(layout, PlacedLayout):
+                layout = layout.layout
             try:
                 mesh = runtime.Mesh(
                     topologies=topology_names,
-                    layout=children["layout"],
+                    layout=layout,
                     names=names,
                 )
             except (TypeError, ValueError) as error:

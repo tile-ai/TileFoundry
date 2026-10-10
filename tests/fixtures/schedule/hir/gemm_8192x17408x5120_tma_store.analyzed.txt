@@ -7,33 +7,33 @@
 
 from __future__ import annotations
 
-from tilefoundry.dsl import *  # noqa: F401, F403
+from tilefoundry.dsl import *
 
-@func(mesh=Mesh((Topology("cta", 1),), Layout((1,), (1,)), names=("block",)))
+@func(mesh=Mesh((Topology("cta", 1),), layout=Layout((1,), (1,)), names=("block",)))
 def gemm(
     a: Tensor[(8192, 5120), "bf16"],
     b: Tensor[(5120, 17408), "bf16"]
 ) -> Tensor[(8192, 17408), "bf16"]:
-    with Mesh((Topology("thread", 384),), Layout((3, 128), (128, 1)), names=("warpgroup", "participant")) as thread:  # memory peak=rmem:128.00KB
+    with Mesh((Topology("thread", 384),), layout=(3, 128), names=("warpgroup", "participant")) as thread:  # memory peak=rmem:128.00KB
         out = tf.zeros(type=Tensor[(8192, 17408), "bf16"])  # Tensor[(8192, 17408), "bf16"]; memory traffic=gmem:r0/w272.00MB@logical,r0/w272.00MB@total,r0/w272.00MB@cta,r0/w272.00MB@thread footprint-precision=exact
         for m in tf.tile(8192, 128):
             for n in tf.tile(17408, 256):
                 with Mesh(thread[1:], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as thread_2:  # memory peak=rmem:128.00KB
-                    v1 = tf.zeros(type=Tensor[(128, 256), "f32", ((2 @ thread_2.group, 8 @ thread_2.lane8, 2, 4 @ thread_2.warp, 2, 4 @ thread_2.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])  # Tensor[(128, 256), "f32", ShardLayout( layout=Layout((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)), attrs=(S(0), S(3), S(1), S(5)), mesh=thread_2, ), "rmem"]; memory traffic=rmem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w128.00KB@cta,r0/w512B@thread footprint-precision=exact
+                    v1 = tf.zeros(type=Tensor[(128, 256), "f32", ((2 @ thread_2.group, 8 @ thread_2.lane8, 2, 4 @ thread_2.warp, 2, 4 @ thread_2.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])  # Tensor[(128, 256), "f32", ((2 @ thread_2.group, 8 @ thread_2.lane8, 2, 4 @ thread_2.warp, 2, 4 @ thread_2.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"]; memory traffic=rmem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w128.00KB@cta,r0/w512B@thread footprint-precision=exact
                 for k in tf.tile(5120, 64):
                     with thread[:1, :32] as thread_3:
-                        v2 = a[m, k]  # Tensor[(128, 64), "bf16", Layout((128, 64), (5120, 1))]; memory traffic=rmem:r16B/w0@logical,r16B/w0@total,r16B/w0@cta,r16B/w0@thread footprint-precision=exact
+                        v2 = a[m, k]  # Tensor[(128, 64), "bf16", ((128, 64), (5120, 1))]; memory traffic=rmem:r16B/w0@logical,r16B/w0@total,r16B/w0@cta,r16B/w0@thread footprint-precision=exact
                         v3 = tf.schedule((v2,), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=3)  # Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"]; memory traffic=gmem:r16.00KB/w0@logical,r16.00KB/w0@total,r16.00KB/w0@cta,r16.00KB/w0@thread;smem:r0/w16.00KB@logical,r0/w16.00KB@total,r0/w16.00KB@cta,r0/w16.00KB@thread footprint=a:16.00KB footprint-precision=exact
-                        v4 = b[k, n]  # Tensor[(64, 256), "bf16", Layout((64, 256), (17408, 1))]; memory traffic=rmem:r16B/w0@logical,r16B/w0@total,r16B/w0@cta,r16B/w0@thread footprint-precision=exact
+                        v4 = b[k, n]  # Tensor[(64, 256), "bf16", ((64, 256), (17408, 1))]; memory traffic=rmem:r16B/w0@logical,r16B/w0@total,r16B/w0@cta,r16B/w0@thread footprint-precision=exact
                         v5 = tf.schedule((v4,), op=T.copy_async_tensor(smem_layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3)), buffers=3)  # Tensor[(64, 256), "bf16", Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), "smem"]; memory traffic=gmem:r32.00KB/w0@logical,r32.00KB/w0@total,r32.00KB/w0@cta,r32.00KB/w0@thread;smem:r0/w32.00KB@logical,r0/w32.00KB@total,r0/w32.00KB@cta,r0/w32.00KB@thread footprint=b:32.00KB footprint-precision=exact
                     with Mesh(thread[1:], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as thread_4:  # memory peak=rmem:128.00KB
-                        v8 = tf.schedule((acc, v3, v5), op=T.tiled_mma(atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN)), repeat=(2, 1, 4), buffers=1)  # Tensor[(128, 256), "f32", ((2 @ thread_4.group, 8 @ thread_4.lane8, 2, 4 @ thread_4.warp, 2, 4 @ thread_4.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"]; memory traffic=rmem:r128.00KB/w128.00KB@logical,r128.00KB/w128.00KB@total,r128.00KB/w128.00KB@cta,r512B/w512B@thread;smem:r48.00KB/w0@logical,r48.00KB/w0@total,r48.00KB/w0@cta,r8.25KB/w0@thread footprint-precision=exact
+                        v8 = tf.schedule((acc, v3, v5), op=T.tiled_mma(atom=T.cuda.sm90.Wgmma(n=256, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN)), repeat=(2, 1, 4), buffers=1)  # Tensor[(128, 256), "f32", ((2 @ thread_4.group, 8 @ thread_4.lane8, 2, 4 @ thread_4.warp, 2, 4 @ thread_4.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"]; memory traffic=rmem:r128.00KB/w128.00KB@logical,r128.00KB/w128.00KB@total,r128.00KB/w128.00KB@cta,r512B/w512B@thread;smem:r48.00KB/w0@logical,r48.00KB/w0@total,r48.00KB/w0@cta,r8.25KB/w0@thread footprint-precision=exact
                     acc = v8
                 with Mesh(thread[1:], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as thread_5:  # memory peak=rmem:128.00KB
                     v9 = tf.cast(acc, dtype="bf16")  # Tensor[(128, 256), "bf16", ((2 @ thread_5.group, 8 @ thread_5.lane8, 2, 4 @ thread_5.warp, 2, 4 @ thread_5.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"]; memory traffic=rmem:r128.00KB/w64.00KB@logical,r128.00KB/w64.00KB@total,r128.00KB/w64.00KB@cta,r512B/w256B@thread footprint-precision=exact
                     v10 = tf.schedule((v9,), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)), buffers=1)  # Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"]; memory traffic=rmem:r64.00KB/w0@logical,r64.00KB/w0@total,r64.00KB/w0@cta,r256B/w0@thread;smem:r0/w64.00KB@logical,r0/w64.00KB@total,r0/w64.00KB@cta,r0/w256B@thread footprint-precision=exact
                 with thread[:1, :32] as thread_6:
-                    v11 = tf.schedule((v10,), op=T.copy_async_tensor(), buffers=1)  # Tensor[(128, 256), "bf16", Layout((128, 256), (256, 1))]; memory traffic=gmem:r0/w64.00KB@logical,r0/w64.00KB@total,r0/w64.00KB@cta,r0/w64.00KB@thread;smem:r64.00KB/w0@logical,r64.00KB/w0@total,r64.00KB/w0@cta,r64.00KB/w0@thread footprint=v11:71:64.00KB footprint-precision=exact
+                    v11 = tf.schedule((v10,), op=T.copy_async_tensor(), buffers=1)  # Tensor[(128, 256), "bf16", ((128, 256), (256, 1))]; memory traffic=gmem:r0/w64.00KB@logical,r0/w64.00KB@total,r0/w64.00KB@cta,r0/w64.00KB@thread;smem:r64.00KB/w0@logical,r64.00KB/w0@total,r64.00KB/w0@cta,r64.00KB/w0@thread footprint=v11:71:64.00KB footprint-precision=exact
                     v12 = tf.insert_slice(out, v11, (m, n))  # Tensor[(8192, 17408), "bf16"]; memory traffic=gmem:r64.00KB/w64.00KB@logical,r64.00KB/w64.00KB@total,r64.00KB/w64.00KB@cta,r64.00KB/w64.00KB@thread;rmem:r16B/w0@logical,r16B/w0@total,r16B/w0@cta,r16B/w0@thread footprint=v11:71:64.00KB;v12:72:64.00KB footprint-precision=exact
                 out = v12
             out = out

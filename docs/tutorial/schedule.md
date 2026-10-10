@@ -350,7 +350,7 @@ sed -n '1,114p' optimal_tir.py
 
 from __future__ import annotations
 
-from tilefoundry.dsl import *  # noqa: F401, F403
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 
@@ -358,12 +358,12 @@ from tilefoundry.target import CudaTarget
 def gemm(
     a: Tensor[(8192, 5120), "bf16"], b: Tensor[(5120, 17408), "bf16"], out: Tensor[(8192, 17408), "bf16"]
 ):
-    with Mesh((Topology("cta", 132),), Layout((132,), (1,)), names=("d0",)) as cta:
+    with Mesh((Topology("cta", 132),), layout=(132,), names=("d0",)) as cta:
         acc = T.alloc_tensor(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                Layout((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
                 "rmem",
             ]
         )
@@ -371,19 +371,17 @@ def gemm(
             tensor_type=Tensor[
                 (128, 256),
                 "bf16",
-                Layout((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
                 "rmem",
             ]
         )
         T.fill(out, 0.0)
-        with Mesh(
-            (Topology("thread", 384),), Layout((3, 128), (128, 1)), names=("d0", "d1")
-        ) as scope:
+        with Mesh((Topology("thread", 384),), layout=(3, 128), names=("d0", "d1")) as scope:
             for g in range(0, 4, 1):
                 for bn in range(0, 68, 1):
                     staged = T.tensor_view(
                         147456,
-                        dtype='bf16',
+                        dtype="bf16",
                         storage="smem",
                         layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3),
                         shape=(128, 256),
@@ -393,20 +391,28 @@ def gemm(
                             scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
                         ) as threads:
                             T.fill(acc, 0.0)
-                        lhs_stages = (T.tensor_view(98304, dtype='bf16', storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)), T.tensor_view(114688, dtype='bf16', storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)), T.tensor_view(131072, dtype='bf16', storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)))
-                        rhs_stages = (T.tensor_view(0, dtype='bf16', storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)), T.tensor_view(32768, dtype='bf16', storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)), T.tensor_view(65536, dtype='bf16', storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)))
+                        lhs_stages = (
+                            T.tensor_view(98304, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
+                            T.tensor_view(114688, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
+                            T.tensor_view(131072, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
+                        )
+                        rhs_stages = (
+                            T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)),
+                            T.tensor_view(32768, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)),
+                            T.tensor_view(65536, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)),
+                        )
                         for k in range(0, 5120, 64):
                             with scope[:1, :32] as scope_1:
                                 tile = T.tensor_view(
                                     T.ptr_of(a[((g * 16) + mi) * 128:((g * 16) + mi) * 128 + 128, k:k + 64]),
-                                    layout=Layout((128, 64), (5120, 1)),
+                                    layout=((128, 64), (5120, 1)),
                                     shape=(128, 64),
                                 )
                                 with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_1:
                                     T.copy_async_tensor(tile, lhs_stages[(k // 64) % 3])
                                 tile_1 = T.tensor_view(
                                     T.ptr_of(b[k:k + 64, bn * 256:bn * 256 + 256]),
-                                    layout=Layout((64, 256), (17408, 1)),
+                                    layout=((64, 256), (17408, 1)),
                                     shape=(64, 256),
                                 )
                                 with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
@@ -452,12 +458,6 @@ def gemm(
                                                     shape=(16, 256),
                                                 )
                                                 T.tiled_mma(
-                                                    acc_view,
-                                                    lhs_view,
-                                                    rhs_view,
-                                                    atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_3),
-                                                )
-                                                acc_view_1 = T.tensor_view(
 ```
 
 The three `g / bn / mi` loops and `cta.d0` survive lowering. The three RHS slots

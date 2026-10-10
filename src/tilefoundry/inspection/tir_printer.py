@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from tilefoundry.inspection.print_context import DSL_STAR_IMPORT, TirPrintContext, render_imports
+from tilefoundry.inspection.print_context import TirPrintContext
 from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var, get_metadata
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -90,6 +90,13 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
 
     def visit_Constant(self, expr: Constant, ctx=None) -> str:
         return repr(expr.value)
+
+    def visit_Tuple(self, expr: Tuple, ctx=None) -> str:
+        if not expr.elements:
+            return "()"
+        child = TirPrinter(context=self.context, indent=self.indent + "    ")
+        elements = "\n".join(f"{child.indent}{child.visit(item, ctx)}," for item in expr.elements)
+        return f"(\n{elements}\n{self.indent})"
 
     def visit_SymbolRef(self, expr: SymbolRef, ctx=None) -> str:
         return _binding_name(expr.name)
@@ -369,13 +376,11 @@ def _function_block(fn: PrimFunction) -> list[str]:
     return _RenderedLines(lines, ctx.imports)
 
 
-def _imports_from(lines) -> list[str]:
-    return render_imports(getattr(lines, "imports", ()))
-
-
 def tir_function_to_python(fn: PrimFunction, *, options=None) -> str:
     lines = _function_block(fn)
-    lines = ["from __future__ import annotations", "", *_imports_from(lines), "", "", *lines]
+    ctx = TirPrintContext()
+    ctx.imports.update(lines.imports)
+    lines = [*ctx.header(), "", *lines]
     comments = _function_comments(fn, options)
     if comments:
         lines = [*comments, "", *lines]
@@ -409,13 +414,13 @@ def _function_comments(fn: PrimFunction, options) -> list[str]:
 def tir_module_to_python(mod: Module, module_name: str | None = None, *, options=None) -> str:
     name = module_name or mod.name
     lines: list[str] = []
-    imports = {DSL_STAR_IMPORT}
+    ctx = TirPrintContext()
     kwargs = []
     if mod.entry is not None:
         kwargs.append(f'entry="{_binding_name(mod.entry)}"')
     if mod.target is not None:
         target = mod.target.to_python()
-        imports.update(target.imports)
+        ctx.imports.update(target.imports)
         kwargs.append(f"target={target.text}")
     if mod.topologies is not None:
         rendered = ", ".join(f'Topology("{t.name}", {t.size!r})' for t in mod.topologies)
@@ -441,7 +446,7 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
                 raise NotImplementedError("mixed HIR/TIR module printing is not yet supported")
             raise TypeError(f"TIR printer cannot serialize {type(fn).__name__}")
         block = _function_block(fn)
-        imports.update(block.imports)
+        ctx.imports.update(block.imports)
         blocks.append([*_function_comments(fn, options), *block])
     for index, block in enumerate(blocks):
         if index:
@@ -455,7 +460,7 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         while remaining and not remaining[0]:
             remaining.pop(0)
         lines = declarations + ["", ""] + remaining
-    header = ["from __future__ import annotations", "", *render_imports(imports), ""]
+    header = ctx.header()
     if not declarations:
         header.append("")
     return "\n".join(header + lines) + "\n"

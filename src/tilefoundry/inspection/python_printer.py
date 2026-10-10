@@ -1237,6 +1237,8 @@ def _emit_module_class(
     Children first, because a body calling one names the attribute it is bound
     to and a class body binds in the order it is written.
     """
+    previous_topologies = ctx.topologies
+    ctx.topologies = mod.topologies if mod.topologies is not None else previous_topologies
     lines = [_module_decorator_line(mod, mod.entry, ctx), f"class {module_name}:"]
     ordered = _emission_order(mod)
     child_entries = {
@@ -1260,6 +1262,7 @@ def _emit_module_class(
         if index:
             lines.append("")
         lines.extend(f"{indent}{ln}" if ln else ln for ln in block)
+    ctx.topologies = previous_topologies
     return lines
 
 

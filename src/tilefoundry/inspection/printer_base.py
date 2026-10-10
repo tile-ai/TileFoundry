@@ -205,8 +205,8 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         return added.args[0], divisor
 
     @staticmethod
-    def _project_layout(value: ShardLayout, ctx=None) -> ShardLayout:
-        return ctx.project_layout(value) if ctx is not None else participant_layout(value)
+    def _project_layout(value: ShardLayout) -> ShardLayout:
+        return participant_layout(value)
 
     def shard_surface(self, value: ShardLayout, ctx=None) -> str | None:
         """Render placement sugar only when every mesh axis has a scope binding.
@@ -215,8 +215,22 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         expression, so it declines a layout whose modes are grouped by tile
         axis: writing the groups in would emit a line the parser refuses.
         """
-        value = self._project_layout(value, ctx)
+        value = self._project_layout(value)
         layout = value.layout
+        if ctx is not None and isinstance(layout, Layout) and all(isinstance(attr, Broadcast) for attr in value.attrs):
+            current = ctx.current_mesh
+            if current is not None:
+                current = participant_layout(ShardLayout(layout, tuple(
+                    Broadcast() for _ in range(len(flatten(current.layout).shape))
+                ), current)).mesh
+                if current == value.mesh and layout.strides is not None and not any(
+                    isinstance(entry, tuple) for entry in (*layout.shape, *layout.strides)
+                ):
+                    shape = self.shape_tuple(layout.shape, ctx)
+                    parts = [shape]
+                    if layout.strides != compact_row_major(layout.shape):
+                        parts.append(self.shape_tuple(layout.strides, ctx))
+                    return "(" + ", ".join([*parts, "{}"]) + ")"
         names = value.mesh.names
         if (
             not isinstance(layout, Layout)
@@ -233,33 +247,19 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
 
         splits: dict[int, list[str]] = {}
         partials: list[str] = []
-        broadcasts: list[tuple[str, str, Broadcast]] = []
-        named_bindings: set[str] = set()
-        for index, (attr, ref) in enumerate(zip(value.attrs, refs, strict=True)):
+        for attr, ref in zip(value.attrs, refs, strict=True):
             assert ref is not None
-            binding = ref.partition(".")[0]
             if isinstance(attr, Split):
                 if attr.axis >= len(layout.shape):
                     return None
                 splits.setdefault(attr.axis, []).append(ref)
-                named_bindings.add(binding)
             elif isinstance(attr, Partial):
                 partials.append(f"{ref} @ {self.visit(attr, ctx)}")
-                named_bindings.add(binding)
-            elif isinstance(attr, Broadcast):
-                broadcasts.append((binding, ref, attr))
-            else:
+            elif not isinstance(attr, Broadcast):
                 return None
-
-        states = list(partials)
-        for binding, ref, attr in broadcasts:
-            if binding not in named_bindings:
-                states.append(f"{ref} @ {self.visit(attr, ctx)}")
-                named_bindings.add(binding)
-        if not splits and not states:
-            states = [f"{ref} @ {self.visit(attr, ctx)}" for _binding, ref, attr in broadcasts]
-        if not splits and not states:
+        if not splits and not partials:
             return None
+        states = partials
 
         explicit = layout.strides is not None
         if explicit and any(
@@ -343,7 +343,9 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
 
     def _mesh_text(self, value: Mesh, ctx=None, *, layout_position: bool = False) -> str:
         topologies = ", ".join(
-            f'Topology("{topology.name}", {self.dim_entry(topology.size, ctx)})'
+            json.dumps(topology.name)
+            if layout_position and ctx is not None and topology in ctx.topologies
+            else f'Topology("{topology.name}", {self.dim_entry(topology.size, ctx)})'
             for topology in value.topologies
         )
         topologies = f"({topologies}{',' if len(value.topologies) == 1 else ''})"
@@ -352,8 +354,11 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             written = ComposedLayout(
                 inner=value.layout.inner, offset=value.layout.offset, outer=written
             )
-        rendered = self.layout_surface(written, ctx) if layout_position else self.visit(written, ctx)
-        result = f"Mesh({topologies}, {rendered}"
+        if layout_position and isinstance(written, Layout) and written.strides == compact_row_major(written.shape):
+            rendered = self.shape_tuple(written.shape, ctx)
+        else:
+            rendered = self.layout_surface(written, ctx) if layout_position else self.visit(written, ctx)
+        result = f"Mesh({topologies}, layout={rendered}"
         if value.names:
             names = ", ".join(json.dumps(name) for name in value.names)
             result += f", names=({names}{',' if len(value.names) == 1 else ''})"
@@ -373,9 +378,12 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         """Use composition operators only where the parser expects a layout."""
         if isinstance(value, ShardLayout):
             return self.shard_surface(value, ctx) or self.visit(value, ctx)
+        if isinstance(value, Layout) and not any(isinstance(entry, tuple) for entry in (*value.shape, *(value.strides or ()))):
+            shape = self.shape_tuple(value.shape, ctx)
+            return shape if value.strides is None else f"({shape}, {self.shape_tuple(value.strides, ctx)})"
         if not isinstance(value, ComposedLayout) or not isinstance(value.outer, Layout):
             return self.visit(value, ctx)
-        result = self.visit(value.outer, ctx)
+        result = self.layout_surface(value.outer, ctx)
         if value.offset != 0:
             result += " + " + self.dim_entry(value.offset, ctx, nested=True)
         if value.inner is not None:
@@ -415,7 +423,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         )
 
     def visit_ShardLayout(self, value: ShardLayout, ctx=None) -> str:
-        value = self._project_layout(value, ctx)
+        value = self._project_layout(value)
         outer, child = self._indent, self._indent + "    "
         attrs = ", ".join(self.visit(attr, ctx) for attr in value.attrs)
         if len(value.attrs) == 1:
@@ -447,7 +455,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         through the visitor, and statement lines are joined into one text.
         """
         if isinstance(value, DType):
-            return repr(value.name)
+            return json.dumps(value.name)
         if isinstance(value, (TensorType, PointerType, Mesh, LayoutBase)):
             with self.type_surface(indent=indent):
                 return self.visit(value, ctx)
@@ -473,7 +481,9 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         if isinstance(value, tuple):
             rendered = ", ".join(self.print(item, ctx, indent) for item in value)
             return f"({rendered}{',' if len(value) == 1 else ''})"
-        if value is None or isinstance(value, (str, int, float, bool)):
+        if isinstance(value, str):
+            return json.dumps(value)
+        if value is None or isinstance(value, (int, float, bool)):
             return repr(value)
         printed = self.visit(value, ctx)
         return "\n".join(printed) if isinstance(printed, list) else printed

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from tilefoundry.dsl import *  # noqa: F401, F403
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 
@@ -12,72 +12,68 @@ from tilefoundry.target import CudaTarget
 def gemm(
     a: Tensor[(64, 32), "bf16"], b_f32: Tensor[(32, 32), "f32"], bias: Tensor[(64, 32), "f32"], out: Tensor[(64, 1), "bf16"]
 ):
-    with Mesh((Topology("cta", 1),), Layout((1,), (1,)), names=("d0",)) as cta:
+    with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
         acc = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 32), "f32", Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 32), "f32", ((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
         )
-        b = T.alloc_tensor(
-            tensor_type=Tensor[(16, 32), "bf16", Layout((32, 16), (16, 1)), "rmem"]
-        )
+        b = T.alloc_tensor(tensor_type=Tensor[(16, 32), "bf16", ((32, 16), (16, 1)), "rmem"])
         b_tile = T.alloc_tensor(
-            tensor_type=Tensor[(16, 32), "f32", Layout((32, 16), (16, 1)), "rmem"]
+            tensor_type=Tensor[(16, 32), "f32", ((32, 16), (16, 1)), "rmem"]
         )
         result = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 1), "bf16", Layout((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)), "rmem"
+                (64, 1), "bf16", ((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)), "rmem"
             ]
         )
         value = T.alloc_tensor(
-            tensor_type=Tensor[
-                (64, 1), "f32", Layout((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)), "rmem"
-            ]
+            tensor_type=Tensor[(64, 1), "f32", ((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)), "rmem"]
         )
         explicit = T.alloc_tensor(
-            tensor_type=Tensor[
-                (64, 1), "f32", Layout((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)), "rmem"
-            ]
+            tensor_type=Tensor[(64, 1), "f32", ((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)), "rmem"]
         )
         acc_1 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 32), "f32", Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 32), "f32", ((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
         )
         value_1 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 32), "f32", Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 32), "f32", ((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
         )
         bias_r = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 32), "f32", Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 32), "f32", ((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
         )
         automatic = T.alloc_tensor(
-            tensor_type=Tensor[
-                (64, 1), "f32", Layout((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)), "rmem"
-            ]
+            tensor_type=Tensor[(64, 1), "f32", ((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)), "rmem"]
         )
-        with Mesh(
-            (Topology("thread", 256),), Layout((2, 128), (128, 1)), names=("d0", "d1")
-        ) as scope:
+        with Mesh((Topology("thread", 256),), layout=(2, 128), names=("d0", "d1")) as scope:
             with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads:
                 T.fill(acc, 0.0)
-            lhs_stages = (T.tensor_view(2048, dtype='bf16', storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)), T.tensor_view(4096, dtype='bf16', storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)))
-            rhs_stages = (T.tensor_view(0, dtype='bf16', storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)), T.tensor_view(1024, dtype='bf16', storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)))
+            lhs_stages = (
+                T.tensor_view(2048, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
+                T.tensor_view(4096, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
+            )
+            rhs_stages = (
+                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
+                T.tensor_view(1024, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
+            )
             for k in range(0, 32, 16):
                 with Mesh(scope[:1, :32], layout=(32,), names=("d0",)) as scope_1:
                     tile = T.tensor_view(
                         T.ptr_of(a[0:0 + 64, k:k + 16]),
-                        layout=Layout((64, 16), (32, 1)),
+                        layout=((64, 16), (32, 1)),
                         shape=(64, 16),
                     )
                     with scope_1 as threads_1:
                         T.copy_async_tensor(tile, lhs_stages[(k // 16) % 2])
                     tile_1 = T.tensor_view(
                         T.ptr_of(b_f32[k:k + 16, 0:0 + 32]),
-                        layout=Layout((16, 32), (32, 1)),
+                        layout=((16, 32), (32, 1)),
                         shape=(16, 32),
                     )
                     with scope_1 as threads_2:
@@ -97,7 +93,7 @@ def gemm(
                             layout=((32 @ threads_2.d0, 16), (16, 1)),
                             shape=(16, 32),
                         )
-                        T.cast(src_frame, dst_frame_1, dtype='bf16')
+                        T.cast(src_frame, dst_frame_1, dtype="bf16")
                         src_frame_1 = T.tensor_view(
                             T.ptr_of(b[0:0 + 16, 0:0 + 32]),
                             layout=((32 @ threads_2.d0, 16), (16, 1)),
@@ -136,7 +132,7 @@ def gemm(
                                         acc_view,
                                         lhs_view,
                                         rhs_view,
-                                        atom=T.cuda.sm90.Wgmma(n=32, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_5),
+                                        atom=T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_5),
                                     )
             with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_4:
                 with scope_4 as threads_6:
@@ -233,9 +229,9 @@ def gemm(
                         layout=((8 @ threads_6.d1, 2, 4 @ threads_6.d0, 1, 1, 1), (8, 4, 1, 0, 0, 0)),
                         shape=(64, 1),
                     )
-                    T.cast(src_frame_5, dst_frame_8, dtype='bf16')
+                    T.cast(src_frame_5, dst_frame_8, dtype="bf16")
         with Mesh(
-            (Topology("thread", 256),), Layout((4, 8, 4), (32, 4, 1)) + 128, names=("d0", "d1", "d2")
+            (Topology("thread", 256),), layout=((4, 8, 4), (32, 4, 1)) + 128, names=("d0", "d1", "d2")
         ) as threads_13:
             result_view = T.tensor_view(
                 T.ptr_of(result[0:0 + 64, 0:0 + 1]),
