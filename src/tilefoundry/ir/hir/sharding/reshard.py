@@ -171,9 +171,21 @@ class Reshard(Op):
     storage = ParamDef(kind="attribute", default=None)
 
 
+def _stated_strides(layout) -> bool:
+    if isinstance(layout, Layout):
+        return layout.strides is not None
+    if isinstance(layout, ComposedLayout):
+        return _stated_strides(layout.outer) and _stated_strides(layout.inner)
+    return True
+
+
 def _plain(layout) -> bool:
-    """Plain address functions contain no participant-owned shard component."""
-    return isinstance(layout, (Layout, ComposedLayout)) and shard_layout_of(layout) is None
+    """Plain address functions have stated strides and no shard component."""
+    return (
+        isinstance(layout, (Layout, ComposedLayout))
+        and shard_layout_of(layout) is None
+        and _stated_strides(layout)
+    )
 
 
 @cache

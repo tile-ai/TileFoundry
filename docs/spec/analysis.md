@@ -485,9 +485,10 @@ are monotonic across the whole Function, including nested and sibling regions.
     a destination, MUST allocate its own. Analysis MUST use operation semantics
     for this distinction rather than infer aliasing from layouts.
   - Reshard MUST alias its source when storage is unchanged, both layouts are
-    plain (including compositions without `ShardLayout` components), the shape
-    is literal, and the two layouts map every colex coordinate to the same
-    address. An address-changing, storage-changing, or sharded Reshard MUST
+    plain (including compositions without `ShardLayout` components) with
+    strides stated in every `Layout` component, the shape is literal, and the
+    two layouts map every colex coordinate to the same address. An
+    address-changing, storage-changing, or sharded Reshard MUST
     retain its independent lifetime.
   - A caller-owned parameter MUST NOT be reused. Donation is a contract with
     the caller, not a conclusion this family may draw.
