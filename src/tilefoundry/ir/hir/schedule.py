@@ -146,24 +146,20 @@ def _instruction_schema(
     return params, reads, writes
 
 
-def _instruction_view(call: Call, ctx, *, fragments: bool = True):
-    schedule = call.target
-    op = schedule.op
-    params, reads, writes = _instruction_schema(op, len(call.args))
-    if len(call.args) != len(reads):
-        raise ValueError(f"{type(op).__name__} reads {len(reads)} operands, got {len(call.args)}")
+def instruction_write_types(op: Op, inputs: dict[str, TensorType], mesh):
+    """Derive write-only types and iteration boundaries for one instruction."""
+    params, reads, writes = _instruction_schema(op, len(inputs))
+    if len(inputs) != len(reads):
+        raise ValueError(f"{type(op).__name__} reads {len(reads)} operands, got {len(inputs)}")
     bindings = dict(getattr(getattr(op, "atom", None), "bindings", {}))
     patterns = tuple(_operand_pattern(param, op, bindings) for param in params)
-    whole = {param.name: ctx.type_of(arg) for param, arg in zip(reads, call.args, strict=True)}
-    if not all(isinstance(type_, TensorType) for type_ in whole.values()):
-        raise ValueError(f"{type(op).__name__} schedule operands must be tensors")
     for param, pattern in zip(params, patterns, strict=True):
         if param.effect == MemoryEffect.WRITE and pattern is None:
             raise ValueError(
                 f"{type(op).__name__} {param.name} is write-only and declares no result shape"
             )
     whole_relations = operand_relations(
-        op, tuple(whole.get(param.name, UnitType()) for param in params)
+        op, tuple(inputs.get(param.name, UnitType()) for param in params)
     )
     whole_shape = _iteration_shape(whole_relations)
     operands = whole_relations[: len(params)]
@@ -180,6 +176,35 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
     collapsed = frozenset(range(len(whole_shape))) - set().union(
         *(involved_dims(boundary.relation) for boundary in write_boundaries)
     )
+    outputs = {}
+    for param, pattern in zip(params, patterns, strict=True):
+        if param.effect & MemoryEffect.WRITE and not param.effect & MemoryEffect.READ:
+            outputs[param.name] = declared_write_type(
+                op,
+                param,
+                pattern,
+                inputs,
+                mesh,
+                (*read_boundaries, write_boundaries[writes.index(param)]),
+                collapsed,
+            )
+    return outputs, whole_shape, read_boundaries, collapsed
+
+
+def _instruction_view(call: Call, ctx, *, fragments: bool = True):
+    schedule = call.target
+    op = schedule.op
+    params, reads, writes = _instruction_schema(op, len(call.args))
+    if len(call.args) != len(reads):
+        raise ValueError(f"{type(op).__name__} reads {len(reads)} operands, got {len(call.args)}")
+    bindings = dict(getattr(getattr(op, "atom", None), "bindings", {}))
+    patterns = tuple(_operand_pattern(param, op, bindings) for param in params)
+    whole = {param.name: ctx.type_of(arg) for param, arg in zip(reads, call.args, strict=True)}
+    if not all(isinstance(type_, TensorType) for type_ in whole.values()):
+        raise ValueError(f"{type(op).__name__} schedule operands must be tensors")
+    outputs, whole_shape, read_boundaries, collapsed = instruction_write_types(
+        op, whole, ctx.current_mesh
+    )
     if fragments and getattr(op, "atom", None) is None:
         for type_, boundary in zip(whole.values(), read_boundaries, strict=True):
             layout = shard_layout_of(type_.layout)
@@ -192,18 +217,6 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
             ):
                 fragments = False
                 break
-    outputs = {}
-    for param, pattern in zip(params, patterns, strict=True):
-        if param.effect & MemoryEffect.WRITE and not param.effect & MemoryEffect.READ:
-            outputs[param.name] = declared_write_type(
-                op,
-                param,
-                pattern,
-                whole,
-                ctx.current_mesh,
-                (*read_boundaries, write_boundaries[writes.index(param)]),
-                collapsed,
-            )
     whole.update(outputs)
     whole_types = tuple(whole[param.name] for param in params)
     shapes = tuple(
@@ -410,4 +423,4 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
     return inner[params.index(result)]
 
 
-__all__ = ["ScheduleOp", "operand_relations"]
+__all__ = ["ScheduleOp", "instruction_write_types", "operand_relations"]

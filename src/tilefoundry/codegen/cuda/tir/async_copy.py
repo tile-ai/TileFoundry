@@ -9,7 +9,13 @@ from __future__ import annotations
 import math
 
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
-from tilefoundry.ir.tir.async_copy import CopyAsync, CpAsyncCommit, CpAsyncWait, indexed_width
+from tilefoundry.ir.tir.async_copy import (
+    CopyAsync,
+    CpAsyncCommit,
+    CpAsyncWait,
+    indexed_width,
+    is_indexed_copy,
+)
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 
@@ -23,7 +29,7 @@ def _tensor_expr(var, ctx: CudaCodegenContext) -> str:
 def _emit_copy_async(call, ctx: CudaCodegenContext) -> None:
     src = _tensor_expr(call.args[0], ctx)
     dst = _tensor_expr(call.args[1], ctx)
-    if len(call.args) == 3:
+    if is_indexed_copy(call.args):
         index = _tensor_expr(call.args[2], ctx)
         width = indexed_width(call.args[0].type, call.args[1].type)
         mesh_type = next(reversed(ctx._mesh_aliases.values()))[0]

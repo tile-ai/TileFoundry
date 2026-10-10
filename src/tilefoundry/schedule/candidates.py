@@ -22,7 +22,7 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
-from tilefoundry.ir.hir.schedule import operand_relations
+from tilefoundry.ir.hir.schedule import instruction_write_types, operand_relations
 from tilefoundry.ir.pattern import (
     PatternMatcher,
     SwitchPattern,
@@ -30,7 +30,7 @@ from tilefoundry.ir.pattern import (
     between_rules,
     declared_execution_mesh,
 )
-from tilefoundry.ir.pattern.utils import declared_write_type, variants
+from tilefoundry.ir.pattern.utils import variants
 from tilefoundry.ir.types import Mesh, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.int_tuple import flatten
@@ -38,7 +38,6 @@ from tilefoundry.ir.types.utils import try_local_type_of
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
-from tilefoundry.utils.isl_utils import involved_dims
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     projected_axes,
@@ -168,9 +167,7 @@ def _site_relation_shape(site: _Site) -> tuple:
     )
 
 
-def _instruction_operands(
-    site: _Site, op, *, declared: bool = True
-) -> tuple[TensorType, ...] | None:
+def _instruction_operands(site: _Site, op) -> tuple[TensorType, ...] | None:
     params = _input_params(type(op), len(site.reads))
     read_params = tuple(
         param
@@ -181,9 +178,7 @@ def _instruction_operands(
     if len(read_params) != len(site.reads) or len(write_params) > len(site.leaves):
         return None
     read_types = iter(type_ for _name, type_ in site.reads)
-    write_types = iter(
-        _write_types(site, op) if declared else tuple(type_ for _name, type_ in site.leaves)
-    )
+    write_types = iter(_write_types(site, op))
     operands = []
     for param in params:
         if param.effect & MemoryEffect.WRITE:
@@ -197,42 +192,10 @@ def _write_types(site: _Site, op) -> tuple[TensorType, ...]:
     if not candidate_lands(type(site.call.target), type(op)):
         return tuple(type_ for _name, type_ in site.leaves)
     params = _input_params(type(op), len(site.reads))
-    types = _instruction_operands(site, op, declared=False)
-    if types is None:
-        return ()
-    relations = operand_relations(op, types)
-    inputs = {
-        param.name: type_
-        for param, type_ in zip(params, types, strict=True)
-        if param.effect & MemoryEffect.READ
-    }
-    reads = tuple(
-        boundary
-        for param, boundary in zip(params, relations, strict=False)
-        if param.effect & MemoryEffect.READ
-    )
-    writes = tuple(
-        boundary
-        for param, boundary in zip(params, relations, strict=False)
-        if param.effect & MemoryEffect.WRITE
-    )
-    collapsed = frozenset(range(relations[0].relation.dim(isl.dim_type.IN))) - set().union(
-        *(involved_dims(boundary.relation) for boundary in writes)
-    )
-    return tuple(
-        declared_write_type(
-            op,
-            param,
-            _operand_pattern(param, op, {}),
-            inputs,
-            site.mesh,
-            (*reads, boundary),
-            collapsed,
-        )
-        for param, boundary in zip(
-            (param for param in params if param.effect & MemoryEffect.WRITE), writes, strict=True
-        )
-    )
+    reads = tuple(param for param in params if param.effect & MemoryEffect.READ)
+    inputs = dict(zip((param.name for param in reads), (type_ for _name, type_ in site.reads), strict=True))
+    outputs, *_ = instruction_write_types(op, inputs, site.mesh)
+    return tuple(outputs.values())
 
 
 def _instruction_relation_shape(site: _Site, op) -> tuple | None:

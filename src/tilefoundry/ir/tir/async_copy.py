@@ -33,6 +33,16 @@ from tilefoundry.visitor_registry.access_relation import (
 ASYNC_WIDTHS = (4, 8, 16)
 
 
+def is_indexed_copy(args) -> bool:
+    """A TIR CopyAsync supplies src, dst, and the optional index input."""
+    return len(args) == 3
+
+
+def is_indexed_schedule(args) -> bool:
+    """A HIR CopyAsync schedule supplies only its reads: src and index."""
+    return len(args) == 2
+
+
 class _CopyModes(SameModesConstraint):
     """An indexed transfer's contiguous vector must stay inside one row."""
 
@@ -135,7 +145,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 @register_access_relation(CopyAsync)
 def _copy_async_access(call, ctx):
-    if len(call.args) == 2:
+    if not is_indexed_copy(call.args):
         return identity_relations(call, ctx)
     source = ctx.type_of(call.args[0])
     index = ctx.type_of(call.args[2])
@@ -155,7 +165,7 @@ def _copy_async_access(call, ctx):
 
 @register_schedule_eval(CopyAsync)
 def _eval_scheduled_copy_async(ctx):
-    if len(ctx.args) == 2:
+    if is_indexed_schedule(ctx.args):
         return _eval_index_select(
             ctx.for_op(IndexSelect(dim=0, fill_value=ctx.op.fill), ctx.args, ctx.result_type)
         )
@@ -173,7 +183,7 @@ def verify_copy_async(call: "Call", ctx: "VerifyContext") -> None:
         ctx.error(call, f"CopyAsync source must be gmem, got {src.storage}")
     if src.dtype != dst.dtype:
         ctx.error(call, f"CopyAsync dtype mismatch: {src.dtype} vs {dst.dtype}")
-    if len(call.args) == 2:
+    if not is_indexed_copy(call.args):
         if call.target.fill is not None:
             ctx.error(call, "CopyAsync fill requires an index operand")
         return

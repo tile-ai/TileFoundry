@@ -42,7 +42,7 @@ from tilefoundry.ir.hir.tensor._view_layout import derive_view_layout
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
-from tilefoundry.ir.tir.async_copy import CopyAsync
+from tilefoundry.ir.tir.async_copy import CopyAsync, is_indexed_schedule
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, For, LetStmt, MeshScope, Sequential
@@ -868,11 +868,11 @@ class Lowering(ExprVisitor[Expr]):
             value = self.visit(operand, cursor)
             if (
                 isinstance(op, CopyAsync)
-                and len(call.args) == 2
+                and is_indexed_schedule(call.args)
                 and param.name == "src"
                 and (
                     value.type.layout is None
-                    or any(value is self._memo[id(param)][1] for param in self.function.params)
+                    or any(value is self._memo[id(argument)][1] for argument in self.function.params)
                 )
             ):
                 type_ = replace(
@@ -880,12 +880,14 @@ class Lowering(ExprVisitor[Expr]):
                     layout=value.type.layout
                     or Layout(tuple(value.type.shape), tuple(compact_row_major(value.type.shape))),
                 )
-                pointer = Call(PtrOf(), (value,), type=PointerType(type_.dtype, type_.storage))
-                value = cursor.bind(
-                    Var(self.names.fresh("source"), type=type_),
-                    Call(
-                        TensorView(layout=type_.layout, shape=type_.shape), (pointer,), type=type_
-                    ),
+                value = self._window(
+                    value,
+                    tuple(i64_const(0) for _ in value.type.shape),
+                    tuple(value.type.shape),
+                    type_,
+                    cursor,
+                    "source",
+                    whole_tensor=True,
                 )
             if (
                 isinstance(value.type, TensorType)
@@ -1130,7 +1132,20 @@ class Lowering(ExprVisitor[Expr]):
         desired: TensorType,
         cursor: _Cursor,
         stem: str,
+        *,
+        whole_tensor: bool = False,
     ) -> Var:
+        """Build a buffer view.
+
+        Args:
+            base: Source buffer.
+            starts: Source coordinates of the window's first element.
+            sizes: Source window extents.
+            desired: Result tensor type and layout.
+            cursor: Scope receiving the bound view.
+            stem: Prefix for the view's generated name.
+            whole_tensor: Runtime table sources avoid unsupported PtrOf(Slice) CUDA (side finding).
+        """
         held = base.type
         if not isinstance(held, TensorType):
             raise LoweringError(f"a tensor window cannot use {held!r} as its base")
@@ -1150,18 +1165,20 @@ class Lowering(ExprVisitor[Expr]):
                     tuple(compact_row_major(tuple(desired.shape))),
                 ),
             )
-        keys = Tuple(starts, type=TupleType(tuple(start.type for start in starts)))
-        cut_type = TensorType(tuple(sizes), held.dtype, None, held.storage)
-        cut = Call(
-            Slice(sizes=tuple(sizes), strides=(1,) * len(sizes)),
-            (base, keys),
-            type=cut_type,
-        )
-        inferred = typeinfer_registry.lookup(Slice)(
-            cut, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in (base, *starts)})
-        )
-        cut.type = getattr(inferred, "type", inferred)
-        pointer = Call(PtrOf(), (cut,), type=PointerType(held.dtype, held.storage))
+        source = base
+        if not whole_tensor:
+            keys = Tuple(starts, type=TupleType(tuple(start.type for start in starts)))
+            cut_type = TensorType(tuple(sizes), held.dtype, None, held.storage)
+            source = Call(
+                Slice(sizes=tuple(sizes), strides=(1,) * len(sizes)),
+                (base, keys),
+                type=cut_type,
+            )
+            inferred = typeinfer_registry.lookup(Slice)(
+                source, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in (base, *starts)})
+            )
+            source.type = getattr(inferred, "type", inferred)
+        pointer = Call(PtrOf(), (source,), type=PointerType(held.dtype, held.storage))
         view = Call(
             TensorView(layout=desired.layout, shape=tuple(desired.shape)),
             (pointer,),
