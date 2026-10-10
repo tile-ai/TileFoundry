@@ -255,7 +255,6 @@ class Lowering(ExprVisitor[Expr]):
         self.owner_cursors: dict[int, _Cursor] = {}
         self.output_windows: dict[int, Call] = {}
         self.output_seed: Call | None = None
-        self.output_initialized = False
         self.authored_values: dict[int, Expr] = {}
         if self.function.body is not None and self.authored.body is not None:
             self.authored_values[id(self.function.body)] = self.authored.body
@@ -338,9 +337,6 @@ class Lowering(ExprVisitor[Expr]):
         self._memo[id(seed)] = (seed, self.output)
         self.logical[id(self.output)] = seed.type
         return self.output
-
-    def _material_root(self, value: Expr) -> Expr:
-        return self.alias.roots[id(value)]
 
     def _declare(
         self,
@@ -732,7 +728,9 @@ class Lowering(ExprVisitor[Expr]):
 
     def visit_Zeros(self, call: Call, cursor: _Cursor) -> Expr:
         if call.type.storage is StorageKind.GMEM:
-            return self._ensure_output_seed(call)
+            out = self._ensure_output_seed(call)
+            self._emit_fill(out, call.type, self.owner_cursors[id(self.function)])
+            return out
         result = self._declare(
             call,
             call.type,
@@ -762,25 +760,8 @@ class Lowering(ExprVisitor[Expr]):
         )
 
     def visit_InsertSlice(self, call: Call, cursor: _Cursor) -> Expr:
-        assert self.output is not None
-        destination = call.args[0]
-        destination_root = self._material_root(destination)
-        if (
-            isinstance(destination_root, Call)
-            and isinstance(destination_root.target, Zeros)
-            and destination_root.type.storage is StorageKind.GMEM
-        ):
-            self._ensure_output_seed(destination_root)
-        if (
-            self.output_seed is not None
-            and self._known(destination_root) is self.output
-            and not self.output_initialized
-        ):
-            owner = self.owner_cursors[id(self.function)]
-            self._emit_fill(self.output, self.output_seed.type, owner)
-            self.output_initialized = True
-        target = self.visit(destination, cursor)
-        update_root = self._material_root(call.args[1])
+        target = self.visit(call.args[0], cursor)
+        update_root = self.alias.roots[id(call.args[1])]
         direct_write = (
             isinstance(update_root, Call)
             and isinstance(update_root.target, ScheduleOp)
@@ -1259,9 +1240,6 @@ class Lowering(ExprVisitor[Expr]):
 
     def _finish(self, result: Expr, cursor: _Cursor) -> None:
         assert self.output is not None
-        if self.output_seed is not None and not self.output_initialized:
-            self._emit_fill(self.output, self.output_seed.type, cursor)
-            self.output_initialized = True
         if result is not self.output:
             self._emit_copy(result, self.output, cursor)
 
