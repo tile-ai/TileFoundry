@@ -824,7 +824,6 @@ class ParserState:
     mesh_coordinates: dict[tuple[int, int], object] = field(default_factory=dict)
     opened_mesh: bool = False
     unscoped_call: ast.AST | None = None
-    live_out: dict[ast.With, frozenset[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1331,6 +1330,7 @@ class MatchContext:
     lexical_scope: LexicalScope = field(default_factory=LexicalScope)
     parent: MatchContext | None = None
     values: Mapping[str, object] = field(default_factory=dict)
+    live_out: Mapping[ast.With, frozenset[str]] = field(default_factory=dict)
 
     @classmethod
     def from_function(cls, function: FuncParserContext) -> MatchContext:
@@ -1379,6 +1379,7 @@ class MatchContext:
         isolated_scope: bool = False,
         function: FuncParserContext | None = None,
         module: ModuleBuildContext | None = None,
+        live_out: Mapping[ast.With, frozenset[str]] | None = None,
     ) -> MatchContext:
         merged = dict(self.values)
         if values:
@@ -1409,6 +1410,7 @@ class MatchContext:
             lexical_scope=scope,
             parent=self,
             values=merged,
+            live_out=self.live_out if live_out is None else live_out,
         )
 
     def resolve_lexical(self, name: str) -> object:

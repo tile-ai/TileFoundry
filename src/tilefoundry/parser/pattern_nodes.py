@@ -3569,6 +3569,7 @@ def live_out(
         after |= _loaded_names((statement,))
     return found
 
+
 def _enter_mesh_scope(context, mesh, match):
     """Record the scope a `with` opens, before its body is built.
 
@@ -3823,7 +3824,7 @@ class WithPattern(ElementPattern):
             body = children["body"]
             params = match.captures.get("region_params", ())
             entry = {param.name: param for param in params}
-            live = context.function.state.live_out[match.node]
+            live = context.live_out[match.node]
             escaping = tuple(
                 name
                 for name, value in frame.items()
@@ -5099,11 +5100,11 @@ class FunctionPattern(ElementPattern):
         function_context = context.function
         if function_context is None:
             return None
-        function_context.state.live_out = live_out(node.body)
         active_context = context.child(
             situation="function",
             role=function_context.function_kind,
             function=function_context,
+            live_out=live_out(node.body),
         )
         return dataclasses.replace(
             matched,

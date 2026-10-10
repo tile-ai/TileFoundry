@@ -5,6 +5,8 @@ import pytest
 from tests._source import import_dsl
 from tests.fixtures.placed.gqa_decode import GqaOnline
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
+from tilefoundry import func
+from tilefoundry.dsl import Tensor
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, binding_name
 from tilefoundry.ir.core.kinds import UnaryKind
@@ -59,29 +61,41 @@ def test_region_boundaries_round_trip() -> None:
     assert sum(producer in expr_children(expr) for expr in collect_exprs(body)) == 2
 
 
-@pytest.mark.parametrize(
-    ("expression", "value"),
-    [("-1.0", -1.0), ("-3", -3), ("-1e999", float("-inf")), ("-x", None)],
-)
-def test_signed_literals_are_constants_and_negated_values_are_calls(expression, value) -> None:
-    """Literal signs belong to constants; negating a runtime value remains a call."""
-    function = import_dsl(
-        f"""from tilefoundry import func
-from tilefoundry.dsl import Tensor
+def negative_float_literal(x: Tensor[(), "f32"]):
+    return -1.0
 
-@func
-def signed(x: Tensor[(), "f32"]):
-    return {expression}
-""",
-        "signed",
-    )
+
+def negative_integer_literal(x: Tensor[(), "f32"]):
+    return -3
+
+
+def negative_infinity_literal(x: Tensor[(), "f32"]):
+    return -1e999
+
+
+def negated_value(x: Tensor[(), "f32"]):
+    return -x
+
+
+@pytest.mark.parametrize(
+    ("program", "expected"),
+    (
+        pytest.param(negative_float_literal, -1.0, id="negative_float_literal"),
+        pytest.param(negative_integer_literal, -3, id="negative_integer_literal"),
+        pytest.param(negative_infinity_literal, float("-inf"), id="negative_infinity_literal"),
+        pytest.param(negated_value, None, id="negated_value"),
+    ),
+)
+def test_signed_literals_are_constants_and_negated_values_are_calls(program, expected) -> None:
+    """Literal signs belong to constants; negating a runtime value remains a call."""
+    function = func(program)
     result = function.body
-    if value is None:
+    if expected is None:
         assert isinstance(result, Call)
         assert isinstance(result.target, Unary)
         assert result.target.kind is UnaryKind.NEG
         assert result.args[0] is function.params[0]
     else:
         assert isinstance(result, Constant)
-        assert type(result.value) is type(value)
-        assert result.value == value
+        assert type(result.value) is type(expected)
+        assert result.value == expected
