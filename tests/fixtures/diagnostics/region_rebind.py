@@ -12,7 +12,7 @@ class RegionRebind:
     def run(x: Tensor[(8,), "f32"]):
         with Mesh(("thread",), (4,), names=("t",)) as m:
             r = tf.reshard(x, (8 @ m.t,), "rmem")
-            v2 = tf.reshard(r * 2.0, (8,), "gmem")
+            v2 = tf.reshard(r * 2.0, ((8,), (1,), {}), "gmem")
         with Mesh(("cta",), (2,), names=("c",)) as _c:
             t = v2
         return t

@@ -57,11 +57,11 @@ class GRID:
             n = cta.bn * BN
             acc = tf.zeros(Tensor[(BM, BN), "f32", "rmem"])
             for k in tf.tile(K, BK):
-                at = tf.reshard(a[m:m + BM, k], (BM, BK), "smem")
-                bt = tf.reshard(b[k, n:n + BN], (BK, BN), "smem")
+                at = tf.reshard(a[m:m + BM, k], ((BM, BK), (BK, 1), {}), "smem")
+                bt = tf.reshard(b[k, n:n + BN], ((BK, BN), (BN, 1), {}), "smem")
                 part = tf.matmul(at, bt, out_dtype="f32")
-                acc = acc + tf.reshard(part, (BM, BN), "rmem")
-            tile_out = tf.reshard(tf.cast(acc, "bf16"), (BM, BN), "gmem")
+                acc = acc + tf.reshard(part, ((BM, BN), (BN, 1), {}), "rmem")
+            tile_out = tf.reshard(tf.cast(acc, "bf16"), ((BM, BN), (BN, 1), {}), "gmem")
             return tf.insert_slice(out, tile_out, (m, n))
 ```
 
@@ -118,11 +118,11 @@ class PERSISTENT:
                     n = nt * BN
                     acc = tf.zeros(Tensor[(BM, BN), "f32", "rmem"])
                     for k in tf.tile(K, BK):
-                        at = tf.reshard(a[m:m + BM, k], (BM, BK), "smem")
-                        bt = tf.reshard(b[k, n:n + BN], (BK, BN), "smem")
+                        at = tf.reshard(a[m:m + BM, k], ((BM, BK), (BK, 1), {}), "smem")
+                        bt = tf.reshard(b[k, n:n + BN], ((BK, BN), (BN, 1), {}), "smem")
                         part = tf.matmul(at, bt, out_dtype="f32")
-                        acc = acc + tf.reshard(part, (BM, BN), "rmem")
-                    tile_out = tf.reshard(tf.cast(acc, "bf16"), (BM, BN), "gmem")
+                        acc = acc + tf.reshard(part, ((BM, BN), (BN, 1), {}), "rmem")
+                    tile_out = tf.reshard(tf.cast(acc, "bf16"), ((BM, BN), (BN, 1), {}), "gmem")
                     out = tf.insert_slice(out, tile_out, (m, n))
             return out
 ```

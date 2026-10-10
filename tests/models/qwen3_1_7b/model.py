@@ -240,7 +240,7 @@ class Qwen3_1_7B_DecoderLayer:
     ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # The same MLP with work split across a 128-CTA slice.
         with Mesh(("cta",), layout=(128,), names=("tile",)) as cta:
-            placed = tf.reshard(hidden, (1, S, config.hidden_size), "gmem")
+            placed = tf.reshard(hidden, ((1, S, config.hidden_size), (config.hidden_size * S, config.hidden_size, 1), {}), "gmem")
             gate_weight = tf.reshard(
                 w_gate,
                 (1, config.hidden_size, config.intermediate_size @ cta.tile),
@@ -274,7 +274,7 @@ class Qwen3_1_7B_DecoderLayer:
             act = tf.silu(gate)
             h = act * up
             return tf.reshard(
-                tf.matmul(h, down_weight), (1, S, config.hidden_size), "gmem"
+                tf.matmul(h, down_weight), ((1, S, config.hidden_size), (config.hidden_size * S, config.hidden_size, 1), {}), "gmem"
             )
 
     @func

@@ -38,8 +38,8 @@ class ChunkRmsNorm:
                 gate_row = tf.reshard(
                     gates, (H @ cta.head, T_LEN @ (cta.chunk, lanes.row), D), "rmem"
                 )
-                scale = tf.reshard(gamma, (D,), "rmem")
-                bias = tf.reshard(beta, (D,), "rmem")
+                scale = tf.reshard(gamma, ((D,), (1,), {}), "rmem")
+                bias = tf.reshard(beta, ((D,), (1,), {}), "rmem")
                 mean = tf.reduce(tf.square(row), axes=(-1,), keepdim=True, kind=ReduceKind.MEAN)
                 shifted = tf.schedule((mean, EPS), op=T.binary(kind=BinaryKind.ADD))
                 inv = tf.rsqrt(shifted)
@@ -48,4 +48,4 @@ class ChunkRmsNorm:
                 affine = bias + scaled
                 mixed = affine * (1.0 - gate_row)
                 out = mixed * 0.5
-            return tf.reshard(out, (H, T_LEN, D), "gmem")
+            return tf.reshard(out, ((H, T_LEN, D), (D * T_LEN, D, 1), {}), "gmem")

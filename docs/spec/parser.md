@@ -318,8 +318,7 @@ Layout-typed op attributes, including attributes inside `op=T.copy(...)`, MUST
 use the same layout grammar as `tf.reshard(layout=...)`. An op value's callee is
 resolved statically, and its schema selects each keyword's grammar. Keywords
 MUST name attributes of that schema. Callees without an op schema retain Python
-static-call evaluation. In a mesh body, a plain tuple denotes a broadcast
-`ShardLayout`; `Layout(...)` explicitly denotes a plain `Layout`.
+static-call evaluation.
 
 In a layout position, `L + off`, `L | inner`, and `L + off | inner` denote
 `ComposedLayout(None, off, L)`, `ComposedLayout(inner, 0, L)`, and

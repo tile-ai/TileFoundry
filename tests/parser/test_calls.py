@@ -277,7 +277,7 @@ def test_placement_at_and_matmul_at_coexist_in_one_function() -> None:
         def placed_matmul(x: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]):
             with Mesh(("cta",), (2,), ("tile",)) as mesh:
                 x_local = tf.reshard(x, (2 @ mesh.tile, 4), "gmem")
-                b_local = tf.reshard(b, (4, 3), "gmem")
+                b_local = tf.reshard(b, ((4, 3), (3, 1), {}), "gmem")
                 return x_local @ b_local
 
     scope = PlacedMatMul.entry_function().body

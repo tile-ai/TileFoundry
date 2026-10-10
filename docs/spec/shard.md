@@ -632,6 +632,16 @@ Surface syntax sugar:
 - `B()` ≡ `Broadcast()`
 - omitted mesh axes are `Broadcast`
 
+An unplaced shape or shape/stride tuple denotes a plain `Layout` both inside
+and outside a mesh body. A layout containing dimension placement (`@`) or
+value-state braces covers the current composed mesh scope; axes not stated are
+`Broadcast`. In a function signature it covers the function's declared mesh.
+Empty braces explicitly broadcast over every axis: `((8, 16), {})` or
+`((8, 16), (16, 1), {})`. Braces can state partial values, such as
+`{threads.warp @ P("sum")}`; `@ B()` is accepted but does not change the
+implicit Broadcast of an unstated axis. Empty braces require an available
+mesh, and every referenced axis must map uniquely into that scope.
+
 ---
 
 ## 7. `ShardLayout`

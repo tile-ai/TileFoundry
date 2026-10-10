@@ -33,4 +33,4 @@ class GEMM_8192X17408X5120_CTA_GRID:
                 bt = tf.reshard(b[k, :], (BK, N @ cta.bn), "smem")
                 part = tf.matmul(at, bt, out_dtype="f32")
                 acc = acc + tf.reshard(part, (M @ cta.bm, N @ cta.bn), "rmem")
-            return tf.reshard(tf.cast(acc, "bf16"), (M, N), "gmem")
+            return tf.reshard(tf.cast(acc, "bf16"), ((M, N), (N, 1), {}), "gmem")

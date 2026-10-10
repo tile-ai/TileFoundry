@@ -22,14 +22,14 @@ class ChildMatmul:
     @func
     def run(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]) -> Tensor[(M, N), "f32"]:
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
-            lhs = tf.reshard(a[:, 0:BK], (M, BK), "smem")
-            rhs = tf.reshard(b[0:BK, :], (BK, N), "smem")
+            lhs = tf.reshard(a[:, 0:BK], ((M, BK), (BK, 1), {}), "smem")
+            rhs = tf.reshard(b[0:BK, :], ((BK, N), (N, 1), {}), "smem")
             acc = tf.matmul(lhs, rhs, out_dtype="f32")
             for k in tf.tile(BK, K, BK):
-                lhs = tf.reshard(a[:, k], (M, BK), "smem")
-                rhs = tf.reshard(b[k, :], (BK, N), "smem")
+                lhs = tf.reshard(a[:, k], ((M, BK), (BK, 1), {}), "smem")
+                rhs = tf.reshard(b[k, :], ((BK, N), (N, 1), {}), "smem")
                 acc = acc + tf.matmul(lhs, rhs, out_dtype="f32")
-            return tf.reshard(acc, (M, N), "gmem")
+            return tf.reshard(acc, ((M, N), (N, 1), {}), "gmem")
 
 
 @module(entry="direct", topologies=(Topology("cta", 1),))
@@ -37,12 +37,12 @@ class ChildMatmulDirect:
     @func
     def direct(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]):
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
-            lhs = tf.reshard(a[:, 0:BK], (M, BK), "smem")
-            rhs = tf.reshard(b[0:BK, :], (BK, N), "smem")
+            lhs = tf.reshard(a[:, 0:BK], ((M, BK), (BK, 1), {}), "smem")
+            rhs = tf.reshard(b[0:BK, :], ((BK, N), (N, 1), {}), "smem")
             acc = tf.matmul(lhs, rhs, out_dtype="f32")
             for k in tf.tile(BK, K, BK):
-                lhs = tf.reshard(a[:, k], (M, BK), "smem")
-                rhs = tf.reshard(b[k, :], (BK, N), "smem")
+                lhs = tf.reshard(a[:, k], ((M, BK), (BK, 1), {}), "smem")
+                rhs = tf.reshard(b[k, :], ((BK, N), (N, 1), {}), "smem")
                 acc = acc + tf.matmul(lhs, rhs, out_dtype="f32")
             return acc
 
@@ -60,14 +60,14 @@ class ChildMatmulStaged:
         a: Tensor[(M, K_LEN), "bf16"], b: Tensor[(K_LEN, N), "bf16"]
     ) -> Tensor[(M, N), "f32"]:
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
-            lhs = tf.reshard(a[:, 0:BK], (M, BK), "smem")
-            rhs = tf.reshard(b[0:BK, :], (BK, N), "smem")
+            lhs = tf.reshard(a[:, 0:BK], ((M, BK), (BK, 1), {}), "smem")
+            rhs = tf.reshard(b[0:BK, :], ((BK, N), (N, 1), {}), "smem")
             acc = tf.matmul(lhs, rhs, out_dtype="f32")
             for k in tf.tile(BK, K_LEN, BK):
-                lhs = tf.reshard(a[:, k], (M, BK), "smem")
-                rhs = tf.reshard(b[k, :], (BK, N), "smem")
+                lhs = tf.reshard(a[:, k], ((M, BK), (BK, 1), {}), "smem")
+                rhs = tf.reshard(b[k, :], ((BK, N), (N, 1), {}), "smem")
                 acc = acc + tf.matmul(lhs, rhs, out_dtype="f32")
-            return tf.reshard(acc, (M, N), "gmem")
+            return tf.reshard(acc, ((M, N), (N, 1), {}), "gmem")
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))

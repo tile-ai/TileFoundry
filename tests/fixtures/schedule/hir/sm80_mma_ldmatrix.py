@@ -41,12 +41,12 @@ class SM80_MMA_LDMATRIX:
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
                             (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=((16, 16), (16, 1))),
+                            op=T.copy_async_tensor(smem_layout=(16, 16)),
                             buffers=STAGES,
                         )
                         rhs = tf.schedule(
                             (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=((16, 8), (8, 1))),
+                            op=T.copy_async_tensor(smem_layout=(16, 8)),
                             buffers=STAGES,
                         )
 
