@@ -48,7 +48,7 @@ def row_mean(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1), "f32"]:
     with Mesh(("thread",), (6, 32), ("w", "t")) as m:
         a_reg = tf.reshard(a, (1, 1536 @ (m.w, m.t)), rmem)
         a_mean = tf.reduce(a_reg, (-1,), True, ReduceKind.MEAN)
-        return tf.reshard(a_mean, ((1, 1), (1, 1), {}), gmem)
+        return tf.reshard(a_mean, ((1, 1), {}), gmem)
 
 
 def _randn_rows() -> torch.Tensor:

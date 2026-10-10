@@ -37,16 +37,16 @@ class TiledQKVProjection:
             for m in tf.tile(S, BM):  # noqa: F405
                 for n in tf.tile(N, BN):  # noqa: F405
                     acc = tf.zeros(
-                        Tensor[(BM, BN), "f32", ((BM, BN), (BN, 1), {}), "rmem"]
+                        Tensor[(BM, BN), "f32", ((BM, BN), {}), "rmem"]
                     )
                     for k in tf.tile(K, BK):  # noqa: F405
-                        lhs = tf.reshard(x[m, k], ((BM, BK), (BK, 1), {}), "smem")
-                        rhs = tf.reshard(weight[k, n], ((BK, BN), (BN, 1), {}), "smem")
+                        lhs = tf.reshard(x[m, k], ((BM, BK), {}), "smem")
+                        rhs = tf.reshard(weight[k, n], ((BK, BN), {}), "smem")
                         product = tf.matmul(lhs, rhs, out_dtype="f32")
-                        acc = acc + tf.reshard(product, ((BM, BN), (BN, 1), {}), "rmem")
+                        acc = acc + tf.reshard(product, ((BM, BN), {}), "rmem")
                     result = tf.insert_slice(
                         result,
-                        tf.reshard(acc, ((BM, BN), (BN, 1), {}), "gmem"),
+                        tf.reshard(acc, ((BM, BN), {}), "gmem"),
                         (m, n),
                     )
             return result
@@ -70,12 +70,12 @@ class GroupedMoEGEMM:
                         tf.reshape(
                             tokens[expert, m, 0:HIDDEN], (MOE_BM, HIDDEN)
                         ),
-                        ((MOE_BM, HIDDEN), (HIDDEN, 1), {}),
+                        ((MOE_BM, HIDDEN), {}),
                         "smem",
                     )
                     rhs = tf.reshard(
                         tf.reshape(weights[expert, 0:HIDDEN, 0:HIDDEN], (HIDDEN, HIDDEN)),
-                        ((HIDDEN, HIDDEN), (HIDDEN, 1), {}),
+                        ((HIDDEN, HIDDEN), {}),
                         "smem",
                     )
                     product = tf.matmul(
@@ -84,7 +84,7 @@ class GroupedMoEGEMM:
                     result = tf.insert_slice(
                         result,
                         tf.reshape(
-                            tf.reshard(product, ((MOE_BM, HIDDEN), (HIDDEN, 1), {}), "gmem"),
+                            tf.reshard(product, ((MOE_BM, HIDDEN), {}), "gmem"),
                             (1, MOE_BM, HIDDEN),
                         ),
                         (expert, m, 0),

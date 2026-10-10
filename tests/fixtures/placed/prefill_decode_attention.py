@@ -113,7 +113,7 @@ class PrefillDecodeAttention:
             normalized = running_out / running_sum
             return tf.reshard(
                 tf.transpose(tf.cast(normalized, dtype="bf16"), perm=(0, 2, 1, 3)),
-                ((1, SEQ, HEADS, HEAD_DIM), (HEAD_DIM * HEADS * SEQ, HEAD_DIM * HEADS, HEAD_DIM, 1), {}),
+                ((1, SEQ, HEADS, HEAD_DIM), {}),
                 "gmem",
             )
 

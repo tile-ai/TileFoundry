@@ -357,15 +357,15 @@ def test_a_held_child_takes_its_own_owners_target_types():
         def run(a: Tensor[(M, K), "f32"], b: Tensor[(K, N), "f32"]):
             with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
                 acc = tf.matmul(
-                    tf.reshard(a[:, 0:16], ((M, 16), (16, 1), {}), "smem"),
-                    tf.reshard(b[0:16, :], ((16, N), (N, 1), {}), "smem"),
+                    tf.reshard(a[:, 0:16], ((M, 16), {}), "smem"),
+                    tf.reshard(b[0:16, :], ((16, N), {}), "smem"),
                 )
                 for k in tf.tile(16, K, 16):  # noqa: F405 -- authored tile loop
                     acc = acc + tf.matmul(
-                        tf.reshard(a[:, k], ((M, 16), (16, 1), {}), "smem"),
-                        tf.reshard(b[k, :], ((16, N), (N, 1), {}), "smem"),
+                        tf.reshard(a[:, k], ((M, 16), {}), "smem"),
+                        tf.reshard(b[k, :], ((16, N), {}), "smem"),
                     )
-                return tf.reshard(acc, ((M, N), (N, 1), {}), "gmem")
+                return tf.reshard(acc, ((M, N), {}), "gmem")
 
     parsed = stored_types(_Refused)
     refused = _Refused

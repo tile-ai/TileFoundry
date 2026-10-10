@@ -26,7 +26,7 @@ class MoEMegaKernel:
             with cta[:120] as routed:
                 local = tf.reshard(tokens, (120 @ routed.tile, 64), "gmem")
                 placed = tf.relu(local)
-            return tf.reshard(placed, ((120, 64), (64, 1), {}), "gmem")  # noqa: F821
+            return tf.reshard(placed, ((120, 64), {}), "gmem")  # noqa: F821
 
     @func
     def shared_expert(tokens: Tensor[(120, 64), "f32"]):
@@ -34,7 +34,7 @@ class MoEMegaKernel:
             with cta[120:] as shared:
                 local = tf.reshard(tokens, (120 @ shared.tile, 64), "gmem")
                 placed = tf.square(local)
-            return tf.reshard(placed, ((120, 64), (64, 1), {}), "gmem")  # noqa: F821
+            return tf.reshard(placed, ((120, 64), {}), "gmem")  # noqa: F821
 
     @func
     def experts(tokens: Tensor[(120, 64), "f32"]):

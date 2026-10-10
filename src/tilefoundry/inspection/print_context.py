@@ -6,10 +6,9 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from math import prod
 
-from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
 from tilefoundry.ir.types.layout import size as layout_size
-from tilefoundry.ir.types.mesh import Mesh, Topology, levels, refine, starts
+from tilefoundry.ir.types.mesh import Mesh, Topology, axis_keys, levels, refine, starts
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx, idx2crd
 from tilefoundry.ir.types.utils import participant_layout
@@ -116,25 +115,12 @@ class PrintContext:
                 return name
         return None
 
-    @staticmethod
-    def _axis_levels(mesh: Mesh) -> tuple[str, ...]:
-        """The level each of the mesh's axes stands in, one name per axis."""
-        stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
-        return flatten(
-            tuple(
-                repeat_like(mode, topology.name)
-                for mode, topology in zip(stated.shape, mesh.topologies, strict=True)
-            )
-        )
-
     def mesh_axis_alias(self, mesh: Mesh, axis: int) -> str | None:
         """Name one mesh axis through an active scope binding, if one dominates it."""
         names = mesh.names
         if axis >= len(names):
             return None
-        target_name = names[axis]
-        target_levels = self._axis_levels(mesh)
-        target_level = target_levels[axis]
+        target_level, target_name = axis_keys(mesh)[axis]
         target_topology = next(
             (topology for topology in mesh.topologies if topology.name == target_level), None
         )
@@ -148,9 +134,8 @@ class PrintContext:
                 continue
             if not bound.names or target_name not in bound.names:
                 continue
-            bound_levels = self._axis_levels(bound)
-            for bound_axis, bound_name in enumerate(bound.names):
-                if bound_name != target_name or bound_levels[bound_axis] != target_level:
+            for bound_level, bound_name in axis_keys(bound):
+                if bound_name != target_name or bound_level != target_level:
                     continue
                 bound_topology = next(
                     topology for topology in bound.topologies if topology.name == target_level

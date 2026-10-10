@@ -447,6 +447,18 @@ def make_mesh(*meshes: Mesh) -> Mesh:
     return result
 
 
+def axis_keys(mesh: Mesh) -> tuple[tuple[str, str | None], ...]:
+    """Identify each mesh axis by its topology level and authored name."""
+    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+    keys = []
+    for topology, shape in zip(mesh.topologies, stated.shape, strict=True):
+        for _ in flatten(shape):
+            axis = len(keys)
+            name = mesh.names[axis] if axis < len(mesh.names) else None
+            keys.append((getattr(topology, "name", topology), name))
+    return tuple(keys)
+
+
 def separate(mesh: Mesh) -> tuple[Mesh, ...]:
     """Split a mesh into one mesh per topology, retaining per-level slices."""
     sliced = isinstance(mesh.layout, ComposedLayout)
@@ -466,6 +478,7 @@ def separate(mesh: Mesh) -> tuple[Mesh, ...]:
 __all__ = [
     "Mesh",
     "Topology",
+    "axis_keys",
     "check_topology",
     "levels",
     "make_mesh",

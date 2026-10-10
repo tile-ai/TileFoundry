@@ -29,10 +29,10 @@ class GEMM_RELU_GEMM_SMEM_STAGED:
             first = tf.zeros(Tensor[(M, N), "bf16"])
             for m in tf.tile(M, BM):
                 for n in tf.tile(N, BN):
-                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((BM, BN), (BN, 1), {}), "rmem"])
+                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((BM, BN), {}), "rmem"])
                     for k in tf.tile(K, BK):
-                        a_s = tf.reshard(a[m, k], ((BM, BK), (BK, 1), {}), "smem")
-                        b_s = tf.reshard(b[k, n], ((BK, BN), (BN, 1), {}), "smem")
+                        a_s = tf.reshard(a[m, k], ((BM, BK), {}), "smem")
+                        b_s = tf.reshard(b[k, n], ((BK, BN), {}), "smem")
                         lhs = tf.cast(a_s, dtype="f32")
                         rhs = tf.cast(b_s, dtype="f32")
                         partial = tf.reshard(

@@ -37,7 +37,7 @@ class TypePrinterSugar:
             staged = tf.reshard(tf.square(composed), (8 @ cta.tile, 4, 16), "smem")
             narrowed = tf.cast(staged, dtype="bf16")
             swapped = tf.transpose(narrowed, perm=(0, 2, 1))
-            gathered = tf.reshard(swapped, ((8, 16, 4), (64, 4, 1), {}), "gmem")
+            gathered = tf.reshard(swapped, ((8, 16, 4), {}), "gmem")
             seeded = tf.reshard(
                 seed, ShardLayout(Layout((2, 4, 2), (8, 2, 1)), (S(0), S(1)), mesh), "rmem"
             )
@@ -72,8 +72,8 @@ class TypePrinterSugar:
                     per_warp, ((8, 16), {thr.warp @ B(), thr.lane @ B()}), "gmem"
                 )
             return (
-                tf.reshard(split, ((8, 16), (16, 1), {}), "gmem"),
-                tf.reshard(whole, ((8, 16), (16, 1), {}), "gmem"),
+                tf.reshard(split, ((8, 16), {}), "gmem"),
+                tf.reshard(whole, ((8, 16), {}), "gmem"),
                 unfolded,
             )
 

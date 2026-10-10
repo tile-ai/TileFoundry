@@ -88,7 +88,7 @@ class GqaOnline:
             for i in range(C):
                 i_sh = tf.reshard(
                     tf.reshape(i, new_shape=(1,)),
-                    layout=((1,), (1,), {}),
+                    layout=((1,), {}),
                     storage="gmem",
                 )
                 k_i = tf.cast(
