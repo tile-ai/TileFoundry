@@ -46,7 +46,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.mesh import refine
+from tilefoundry.ir.types.mesh import axis_keys, refine
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
 
@@ -556,7 +556,7 @@ def _layout_sugar_parts(node: object):
             strides = extra
         elif (
             isinstance(extra, ast.Set)
-            or isinstance(extra, ast.Dict) and not extra.keys
+            or (isinstance(extra, ast.Dict) and not extra.keys)
         ) and states is None:
             states = extra
         else:
@@ -664,37 +664,11 @@ def _placement_scope(context):
     return _parser_infer_context(context).current_mesh
 
 
-def _mesh_axis_keys(mesh):
-    """Identify each physical axis by topology level and authored axis name."""
-    layout = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
-    keys = []
-    for topology, shape in zip(mesh.topologies, layout.shape, strict=True):
-        for _ in flatten(shape):
-            axis = len(keys)
-            name = mesh.names[axis] if axis < len(mesh.names) else None
-            keys.append((getattr(topology, "name", topology), name))
-    return tuple(keys)
-
-
-@dataclass(frozen=True)
-class EmptyStatesMeshRule:
-    STATEMENT: ClassVar[str] = (
-        "Empty braces broadcast over every axis of the current mesh scope, "
-        "or of the function mesh in a signature."
-    )
-
-    def apply(self, value, *, match, context):
-        if value.states_written and not value.states and _placement_scope(context) is None:
-            raise ParseError.from_node(
-                match.node, context, "empty braces require a current mesh scope"
-            )
-        return value
-
-
 @dataclass(frozen=True)
 class PlacementScopeRule:
     STATEMENT: ClassVar[str] = (
-        "A placement covers the current mesh scope; each referenced axis must "
+        "A placement requires and covers the current mesh scope, or the function "
+        "mesh in a signature; each referenced axis must "
         "map uniquely to an axis of that scope. Unstated axes are Broadcast."
     )
 
@@ -703,11 +677,16 @@ class PlacementScopeRule:
             return value
         mesh = _placement_scope(context)
         if mesh is None:
-            raise ParseError.from_node(match.node, context, "placement requires a current mesh scope")
-        keys = _mesh_axis_keys(mesh)
+            message = (
+                "empty braces require a current mesh scope"
+                if value.states_written and not value.states
+                else "placement requires a current mesh scope"
+            )
+            raise ParseError.from_node(match.node, context, message)
+        keys = axis_keys(mesh)
         attrs = [runtime.Broadcast() for _ in keys]
         for source, source_axis, *state in (*value.splits, *value.states):
-            key = _mesh_axis_keys(source)[source_axis]
+            key = axis_keys(source)[source_axis]
             targets = [axis for axis, held in enumerate(keys) if held == key]
             if len(targets) != 1:
                 raise ParseError.from_node(
@@ -726,7 +705,10 @@ class PlacementScopeRule:
 class PlacementConstructionRule:
     """Materialize the candidate only after placement invariants have run."""
 
-    STATEMENT: ClassVar[str] = "A placement must construct a valid shard layout."
+    STATEMENT: ClassVar[str] = (
+        "A placement must construct a valid shard layout. Empty braces without "
+        "splits or stated strides use row-major strides."
+    )
 
     def apply(self, value, *, match, context):
         if value.mesh is None:
@@ -739,10 +721,13 @@ class PlacementConstructionRule:
             raise ParseError.from_node(match.node, context, str(error)) from error
         if value.strides is not None and len(canonical.layout.shape) != len(value.strides):
             raise ParseError.from_node(match.node, context, "layout shape/stride rank mismatch")
+        strides = value.strides
+        if strides is None and value.states_written and not value.splits and not value.states:
+            strides = runtime.compact_row_major(canonical.layout.shape, mul=operator.mul)
         return PlacedLayout(
             shape=value.shape,
             layout=runtime.ShardLayout(
-                layout=runtime.Layout(shape=canonical.layout.shape, strides=value.strides),
+                layout=runtime.Layout(shape=canonical.layout.shape, strides=strides),
                 attrs=canonical.attrs,
                 mesh=canonical.mesh,
             ),
@@ -916,7 +901,6 @@ class PlacedLayoutPattern(ElementPattern):
         MeshAxisBoundOnceRule(),
         PlacementMeshResolutionRule(),
         PlacementLevelRule(),
-        EmptyStatesMeshRule(),
         PlacementScopeRule(),
         PlacementConstructionRule(),
         PlacementAnswerRule(),

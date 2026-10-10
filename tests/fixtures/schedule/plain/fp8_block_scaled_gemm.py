@@ -30,10 +30,10 @@ class FP8_BLOCK_SCALED_GEMM:
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
             acc = tf.zeros(Tensor[(M, N), "f32", "rmem"])
             for kb in range(K_BLOCKS):
-                at = tf.reshard(a[:, kb * BLOCK:kb * BLOCK + BLOCK], ((M, BLOCK), (BLOCK, 1), {}), "smem")
-                bt = tf.reshard(b[kb * BLOCK:kb * BLOCK + BLOCK, :], ((BLOCK, N), (N, 1), {}), "smem")
+                at = tf.reshard(a[:, kb * BLOCK:kb * BLOCK + BLOCK], ((M, BLOCK), {}), "smem")
+                bt = tf.reshard(b[kb * BLOCK:kb * BLOCK + BLOCK, :], ((BLOCK, N), {}), "smem")
                 part = tf.matmul(at, bt, out_dtype="f32")
-                row_scale = tf.reshard(a_scale[:, kb:kb + 1], ((M, 1), (1, 1), {}), "rmem")
-                tile_scale = tf.reshard(b_scale[kb:kb + 1, :], ((1, N_BLOCKS), (N_BLOCKS, 1), {}), "rmem")
+                row_scale = tf.reshard(a_scale[:, kb:kb + 1], ((M, 1), {}), "rmem")
+                tile_scale = tf.reshard(b_scale[kb:kb + 1, :], ((1, N_BLOCKS), {}), "rmem")
                 acc = acc + part * row_scale * tile_scale
-            return tf.reshard(tf.cast(acc, "bf16"), ((M, N), (N, 1), {}), "gmem")
+            return tf.reshard(tf.cast(acc, "bf16"), ((M, N), {}), "gmem")

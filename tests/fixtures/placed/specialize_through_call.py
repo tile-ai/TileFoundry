@@ -22,13 +22,13 @@ class ToCallee:
     def pick_small(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
-            return tf.reshard(xs + xs, ((1, D), (D, 1), {}), "gmem")
+            return tf.reshard(xs + xs, ((1, D), {}), "gmem")
 
     @pick.specialize(RangePattern("n", BOUND, N_MAX))
     def pick_big(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
-            return tf.reshard(xs + xs + xs, ((1, D), (D, 1), {}), "gmem")
+            return tf.reshard(xs + xs + xs, ((1, D), {}), "gmem")
 
     @func
     def run(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
@@ -47,13 +47,13 @@ class Direct:
     def pick_small(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
-            return tf.reshard(xs + xs, ((1, D), (D, 1), {}), "gmem")
+            return tf.reshard(xs + xs, ((1, D), {}), "gmem")
 
     @pick.specialize(RangePattern("n", BOUND, N_MAX))
     def pick_big(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
-            return tf.reshard(xs + xs + xs, ((1, D), (D, 1), {}), "gmem")
+            return tf.reshard(xs + xs + xs, ((1, D), {}), "gmem")
 
     @func
     def run(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:

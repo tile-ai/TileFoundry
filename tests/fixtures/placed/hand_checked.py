@@ -31,11 +31,11 @@ class InvariantReuse:
         x: Tensor[(S, K), "bf16"],
     ):
         with Mesh(("cta",), layout=(4,), names=("cta",)) as _cta:
-            result = tf.zeros(Tensor[(BM, BK), "bf16", ((BM, BK), (BK, 1), {}), "smem"])
+            result = tf.zeros(Tensor[(BM, BK), "bf16", ((BM, BK), {}), "smem"])
             for m in tf.tile(S, BM):  # noqa: F405
                 for n in tf.tile(N, BN):  # noqa: F405
                     for k in tf.tile(K, BK):  # noqa: F405
-                        loaded = tf.reshard(x[m, k], ((BM, BK), (BK, 1), {}), "smem")
+                        loaded = tf.reshard(x[m, k], ((BM, BK), {}), "smem")
                         result = loaded + loaded
             return result
 
@@ -51,8 +51,8 @@ class OverlappingReads:
     @func
     def read(x: Tensor[(16,), "bf16"]):
         with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
-            left = tf.reshard(x[0:8], ((8,), (1,), {}), "rmem")
-            right = tf.reshard(x[4:12], ((8,), (1,), {}), "rmem")
+            left = tf.reshard(x[0:8], ((8,), {}), "rmem")
+            right = tf.reshard(x[4:12], ((8,), {}), "rmem")
             return left + right
 
 
@@ -68,7 +68,7 @@ class SlicedView:
     def read(x: Tensor[(16,), "f32"]):
         with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
             viewed = tf.reshape(x[2:10], (2, 4))
-            return tf.reshard(viewed, ((2, 4), (4, 1), {}), "smem")
+            return tf.reshard(viewed, ((2, 4), {}), "smem")
 
 
 @module(entry="store", target=_H200, topologies=(Topology("cta", 1),))
@@ -82,8 +82,8 @@ class StoreOnly:
     @func
     def store():
         with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
-            local = tf.zeros(Tensor[(8,), "bf16", ((8,), (1,), {}), "rmem"])
-            return tf.reshard(local, ((8,), (1,), {}), "gmem")
+            local = tf.zeros(Tensor[(8,), "bf16", ((8,), {}), "rmem"])
+            return tf.reshard(local, ((8,), {}), "gmem")
 
 
 @module(entry="read", target=_H200, topologies=(Topology("cta", 1),))
@@ -97,7 +97,7 @@ class PackedDtype:
     @func
     def read(x: Tensor[(9,), "f4e2m1"]):
         with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
-            return tf.reshard(x, ((9,), (1,), {}), "rmem")
+            return tf.reshard(x, ((9,), {}), "rmem")
 
 
 @module(entry="read", target=_H200, topologies=(Topology("cta", 256),))
@@ -112,13 +112,13 @@ class WaveTruncation:
     @func
     def read(x: Tensor[(1024,), "bf16"]):
         with Mesh(("cta",), layout=(256,), names=("i",)) as cta:
-            result = tf.zeros(Tensor[(4,), "bf16", ((4,), (1,), {}), "rmem"])
+            result = tf.zeros(Tensor[(4,), "bf16", ((4,), {}), "rmem"])
             for i in tf.tile(  # noqa: F405
                 cta.i * (1024 // 256),
                 (cta.i + 1) * (1024 // 256),
                 4,
             ):
-                result = tf.reshard(x[i], ((4,), (1,), {}), "rmem")
+                result = tf.reshard(x[i], ((4,), {}), "rmem")
             return result
 
 
@@ -148,9 +148,9 @@ class TruncatedWaveReuse:
     @func
     def read(x: Tensor[(32,), "bf16"]):
         with Mesh(("cta",), layout=(256,), names=("i",)) as cta:
-            result = tf.zeros(Tensor[(16,), "bf16", ((16,), (1,), {}), "rmem"])
+            result = tf.zeros(Tensor[(16,), "bf16", ((16,), {}), "rmem"])
             for _i in range(cta.i, cta.i + 1):
-                result = tf.reshard(view(x), ((16,), (1,), {}), "rmem")  # noqa: F821
+                result = tf.reshard(view(x), ((16,), {}), "rmem")  # noqa: F821
             return result
 
 
@@ -167,12 +167,12 @@ class SiblingLoopReuse:
     @func
     def read(x: Tensor[(8,), "bf16"], y: Tensor[(8,), "bf16"]):
         with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
-            x_local = tf.zeros(Tensor[(8,), "bf16", ((8,), (1,), {}), "rmem"])
+            x_local = tf.zeros(Tensor[(8,), "bf16", ((8,), {}), "rmem"])
             for n in tf.tile(6, 2):  # noqa: F405
-                x_local = tf.reshard(x, ((8,), (1,), {}), "rmem")
-            y_local = tf.zeros(Tensor[(8,), "bf16", ((8,), (1,), {}), "rmem"])
+                x_local = tf.reshard(x, ((8,), {}), "rmem")
+            y_local = tf.zeros(Tensor[(8,), "bf16", ((8,), {}), "rmem"])
             for m in tf.tile(1, 1):  # noqa: F405
-                y_local = tf.reshard(y, ((8,), (1,), {}), "rmem")
+                y_local = tf.reshard(y, ((8,), {}), "rmem")
             return x_local + y_local
 
 
@@ -193,7 +193,7 @@ class CapacityExceeded:
     @func
     def read(x: Tensor[(786432,), "bf16"]):
         with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
-            return tf.reshard(x, ((786432,), (1,), {}), "rmem")
+            return tf.reshard(x, ((786432,), {}), "rmem")
 
 
 __all__ = [
