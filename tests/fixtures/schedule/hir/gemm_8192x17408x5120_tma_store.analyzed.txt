@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from tilefoundry.dsl import *
 
-@func(mesh=Mesh((Topology("cta", 1),), layout=Layout((1,), (1,)), names=("block",)))
+@func(mesh=Mesh((Topology("cta", 1),), layout=(1,), names=("block",)))
 def gemm(
     a: Tensor[(8192, 5120), "bf16"],
     b: Tensor[(5120, 17408), "bf16"]
@@ -33,7 +33,7 @@ def gemm(
                     v9 = tf.cast(acc, dtype="bf16")  # Tensor[(128, 256), "bf16", ((2 @ thread_5.group, 8 @ thread_5.lane8, 2, 4 @ thread_5.warp, 2, 4 @ thread_5.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"]; memory traffic=rmem:r128.00KB/w64.00KB@logical,r128.00KB/w64.00KB@total,r128.00KB/w64.00KB@cta,r512B/w256B@thread footprint-precision=exact
                     v10 = tf.schedule((v9,), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)), buffers=1)  # Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"]; memory traffic=rmem:r64.00KB/w0@logical,r64.00KB/w0@total,r64.00KB/w0@cta,r256B/w0@thread;smem:r0/w64.00KB@logical,r0/w64.00KB@total,r0/w64.00KB@cta,r0/w256B@thread footprint-precision=exact
                 with thread[:1, :32] as thread_6:
-                    v11 = tf.schedule((v10,), op=T.copy_async_tensor(), buffers=1)  # Tensor[(128, 256), "bf16", ((128, 256), (256, 1))]; memory traffic=gmem:r0/w64.00KB@logical,r0/w64.00KB@total,r0/w64.00KB@cta,r0/w64.00KB@thread;smem:r64.00KB/w0@logical,r64.00KB/w0@total,r64.00KB/w0@cta,r64.00KB/w0@thread footprint=v11:71:64.00KB footprint-precision=exact
+                    v11 = tf.schedule((v10,), op=T.copy_async_tensor(), buffers=1)  # Tensor[(128, 256), "bf16", (128, 256)]; memory traffic=gmem:r0/w64.00KB@logical,r0/w64.00KB@total,r0/w64.00KB@cta,r0/w64.00KB@thread;smem:r64.00KB/w0@logical,r64.00KB/w0@total,r64.00KB/w0@cta,r64.00KB/w0@thread footprint=v11:71:64.00KB footprint-precision=exact
                     v12 = tf.insert_slice(out, v11, (m, n))  # Tensor[(8192, 17408), "bf16"]; memory traffic=gmem:r64.00KB/w64.00KB@logical,r64.00KB/w64.00KB@total,r64.00KB/w64.00KB@cta,r64.00KB/w64.00KB@thread;rmem:r16B/w0@logical,r16B/w0@total,r16B/w0@cta,r16B/w0@thread footprint=v11:71:64.00KB;v12:72:64.00KB footprint-precision=exact
                 out = v12
             out = out

@@ -204,10 +204,6 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             return None
         return added.args[0], divisor
 
-    @staticmethod
-    def _project_layout(value: ShardLayout) -> ShardLayout:
-        return participant_layout(value)
-
     def shard_surface(self, value: ShardLayout, ctx=None) -> str | None:
         """Render placement sugar only when every mesh axis has a scope binding.
 
@@ -215,7 +211,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         expression, so it declines a layout whose modes are grouped by tile
         axis: writing the groups in would emit a line the parser refuses.
         """
-        value = self._project_layout(value)
+        value = participant_layout(value)
         layout = value.layout
         if ctx is not None and isinstance(layout, Layout) and all(isinstance(attr, Broadcast) for attr in value.attrs):
             current = ctx.current_mesh
@@ -354,7 +350,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             written = ComposedLayout(
                 inner=value.layout.inner, offset=value.layout.offset, outer=written
             )
-        if layout_position and isinstance(written, Layout) and written.strides == compact_row_major(written.shape):
+        if isinstance(written, Layout) and written.strides == compact_row_major(written.shape):
             rendered = self.shape_tuple(written.shape, ctx)
         else:
             rendered = self.layout_surface(written, ctx) if layout_position else self.visit(written, ctx)
@@ -380,7 +376,9 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             return self.shard_surface(value, ctx) or self.visit(value, ctx)
         if isinstance(value, Layout) and not any(isinstance(entry, tuple) for entry in (*value.shape, *(value.strides or ()))):
             shape = self.shape_tuple(value.shape, ctx)
-            return shape if value.strides is None else f"({shape}, {self.shape_tuple(value.strides, ctx)})"
+            if value.strides is None or value.strides == compact_row_major(value.shape):
+                return shape
+            return f"({shape}, {self.shape_tuple(value.strides, ctx)})"
         if not isinstance(value, ComposedLayout) or not isinstance(value.outer, Layout):
             return self.visit(value, ctx)
         result = self.layout_surface(value.outer, ctx)
@@ -423,7 +421,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         )
 
     def visit_ShardLayout(self, value: ShardLayout, ctx=None) -> str:
-        value = self._project_layout(value)
+        value = participant_layout(value)
         outer, child = self._indent, self._indent + "    "
         attrs = ", ".join(self.visit(attr, ctx) for attr in value.attrs)
         if len(value.attrs) == 1:
