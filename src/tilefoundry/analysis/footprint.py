@@ -515,8 +515,8 @@ def moving_boundaries(
 ) -> tuple[MovingBoundary, ...]:
     """Collect boundaries that move bytes at *memory_level* in one scope walk.
 
-    Every accessed value has a liveness interval; storage_owners resolves all
-    intervals and their storage-source chains, so owners covers each buffer.
+    The buffer-alias stage resolves every value before this walk, so the shared
+    roots table in owners covers each accessed buffer.
     """
     whole = replace(ctx, topology_level=None, topologies=())
     wave_units, declared_units = wave

@@ -29,7 +29,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.buffer_alias import Alias, register_buffer_alias
+from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 
 from ._view_layout import derive_view_layout
 
@@ -204,8 +204,8 @@ def _slice_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
 
 
 @register_buffer_alias(Slice)
-def _buffer_alias(call: "Call") -> Alias:
-    return Alias(0)
+def _buffer_alias(call: "Call") -> int:
+    return 0
 
 
 def _i64(value: int) -> Constant:

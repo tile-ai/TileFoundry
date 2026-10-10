@@ -210,14 +210,10 @@ def resolve_access(
     if isinstance(held, TensorType) and is_literal_shape(held.shape):
         relation = relation.intersect_range(shape_to_isl_set(tuple(held.shape), {}))
     operand = scope.capture_root(operand)
-    while (
-        isinstance(operand, Call)
-        and (alias := aliased_operand(operand)) is not None
-        and alias.element is None
-    ):
+    while isinstance(operand, Call) and (position := aliased_operand(operand)) is not None:
         folded = renaming_relation(operand, ctx, scope.projected_relations(operand, ctx))
         relation = relation.apply_range(folded.relation)
-        operand = scope.capture_root(operand.args[alias.operand])
+        operand = scope.capture_root(operand.args[position])
         relation, folded_precision = eliminate_parameters(
             relation,
             folded.values,

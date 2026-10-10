@@ -475,13 +475,15 @@ are monotonic across the whole Function, including nested and sibling regions.
 | `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
 
 - constraints:
-  - An op registered with `@register_buffer_alias(Op)` returns `Alias(operand,
-    element=None)` or `None` for each Call. The alias describes that input's
-    bytes, optionally selecting one tuple element. `Slice` and `Reshape`
-    alias input zero and MUST NOT receive independent lifetimes. `Tuple`,
+  - An op registered with `@register_buffer_alias(Op)` returns the viewed
+    input's position or `None` for each Call. The alias describes that input's
+    bytes. `Slice` and `Reshape` alias input zero and MUST NOT receive
+    independent lifetimes. `Tuple`,
     `MeshRegion`, and `LoopRegion` results and static tuple projections describe
     bytes already held by their selected body or carry and MUST NOT receive an
-    independent lifetime. Every other result, including `Transpose` or a result that overwrites
+    independent lifetime. Static tuple projections are structural edges, like
+    `Tuple`, `MeshRegion`, and `LoopRegion`, rather than registered views.
+    Every other result, including `Transpose` or a result that overwrites
     a destination, MUST allocate its own. Analysis MUST use operation semantics
     for this distinction rather than infer aliasing from layouts.
   - Reshard MUST alias its source when storage is unchanged, both layouts are
@@ -575,16 +577,20 @@ class MemoryLevelPeak:
     Failure to prove that declaration MUST raise `AnalysisError`. `Transpose`
     is not registered: it writes a new value, retains its access permutation,
     and receives its own allocation under the ordinary conflict rules.
-  - Liveness MUST propagate a use through the same storage-sharing edges used
-    by `storage_owners`: registered buffer aliases to their source, mesh-region
+  - The first memory-analysis stage MUST resolve storage ownership once per
+    value and prove each registered view once in logical coordinates. Its
+    `BufferAliasMetadata` MUST carry the value-to-root table and region
+    parameter bindings. Liveness, placement, footprint, and lowering MUST
+    reuse that root table rather than trace producers or repeat proofs.
+    Access folding MUST remain in `resolve_access`, using the caller's
+    topology level because projected view coordinates depend on that level.
+  - Liveness MUST propagate a use to the root recorded for the same
+    storage-sharing edges: registered buffer aliases to their source, mesh-region
     results to their body, loop results to their body without carries or their
     carry parameters otherwise, and tuple projections to their selected element.
     Chains MUST propagate to the final owner. Placement interference, register
     peaks, and in-place conflict checks MUST consume this liveness directly,
     without independently rebuilding shared-storage intervals.
-    Storage ownership MUST be resolved once per value for an analysis, with
-    each registered alias proved once; allocation consumers MUST reuse that
-    owner table rather than repeat the proofs.
   - Every placed offset MUST be aligned to the greater of 16 bytes and the
     result element width. A staged result's copies MUST be contiguous: copy
     `k` starts at the solved block offset plus `k * buffer_bytes`.

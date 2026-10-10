@@ -19,16 +19,13 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.utils import is_literal_shape, local_type_of, tensor_types
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
-from tilefoundry.visitor_registry.access_relation import renaming_relation
-from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 
 from .access import Access
 from .errors import AnalysisError
-from .iteration_scope import IterationScope, walk_scopes
-from .liveness import Liveness, storage_source
+from .iteration_scope import IterationScope
+from .liveness import Liveness
 from .metadata import ValueLifetime
 from .precision import AnalysisPrecision
-from .visitor import AnalyzeContext
 
 
 class SolverOptions(Protocol):
@@ -82,56 +79,6 @@ class AllocationModel:
     addresses: tuple[cp_model.IntVar, ...]
     owners: dict[int, Expr]
     aliased: set[tuple[int, int]] = field(default_factory=set)
-
-
-def storage_owners(
-    root: IterationScope, liveness: Liveness, ctx: AnalyzeContext
-) -> dict[int, Expr]:
-    """Resolve storage once per value and prove each registered alias once."""
-    logical = replace(ctx, topology_level=None)
-    declarations = {key: scope for scope in walk_scopes(root) for key in scope.relations}
-    owners: dict[int, Expr] = {}
-
-    def resolve(value: Expr) -> Expr:
-        key = id(value)
-        if key in owners:
-            return owners[key]
-        following = storage_source(value, liveness.bindings)
-        if (
-            isinstance(value, Call)
-            and (alias := aliased_operand(value)) is not None
-            and alias.element is None
-        ):
-            operand = value.args[alias.operand]
-            relation = renaming_relation(
-                value, logical, declarations[key].projected_relations(value, logical)
-            ).relation
-            box = (
-                shape_to_isl_set(tuple(operand.type.shape), {})
-                if is_literal_shape(operand.type.shape)
-                else None
-            )
-            if (
-                box is None
-                or not relation.is_single_valued()
-                or not relation.is_injective()
-                or not relation.range().is_subset(box)
-            ):
-                param = tuple(
-                    param for param in type(value.target)._op_schema.signature
-                    if param.kind == "input"
-                )[alias.operand]
-                raise AnalysisError(
-                    f"{type(value.target).__name__} declares its result is {param.name}'s bytes, "
-                    f"but its access relation {relation} is not single-valued, injective, "
-                    "and within the operand"
-                )
-        owners[key] = value if following is None else resolve(following)
-        return owners[key]
-
-    for interval in liveness.intervals:
-        resolve(interval.value)
-    return owners
 
 
 def is_non_conflicting(
@@ -521,7 +468,7 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
         result_index = allocation_index(node, ctx)
         if (
             not isinstance(node, Call)
-            or aliased_operand(node) is not None
+            or ctx.owners[id(node)] is not node
             or id(node) not in ctx.current.accesses.get("narrow", {})
             or result_index is None
         ):

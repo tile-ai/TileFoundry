@@ -25,7 +25,7 @@ from tilefoundry.visitor_registry.access_relation import (
     linearized_view,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.buffer_alias import Alias, register_buffer_alias
+from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 
 from ._view_layout import derive_view_layout
 
@@ -49,8 +49,8 @@ def _reshape_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
 
 
 @register_buffer_alias(Reshape)
-def _buffer_alias(call: Call) -> Alias:
-    return Alias(0)
+def _buffer_alias(call: Call) -> int:
+    return 0
 
 
 def is_induction_var_singleton_reshape(expr) -> bool:

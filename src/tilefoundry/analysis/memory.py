@@ -43,8 +43,8 @@ from .allocation import (
     alias_components,
     find_aliases,
     solve_allocation,
-    storage_owners,
 )
+from .buffer_alias import analyze_buffer_alias
 from .errors import AnalysisError
 from .facts import TARGET_MEMORY_OWNER, MemoryHierarchyFacts
 from .footprint import (
@@ -650,6 +650,8 @@ class MemoryVisitor(ExprVisitor[None]):
 
 def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     """Attach Call movement and Function-wide movement and placement."""
+    alias = analyze_buffer_alias(function, context)
+    attach(function, alias)
     module = context.module
     topology_level = context.topology_level
     facts = context.target.get_facts(MemoryHierarchyFacts)
@@ -727,7 +729,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     )
     footprint_labels = dict(zip(distinct, value_labels(label_values), strict=True))
     liveness = analyze_liveness(function)
-    owners = storage_owners(context.root, liveness, context)
+    owners = alias.roots
     reuse = (
         reuse_windows(
             context.root,

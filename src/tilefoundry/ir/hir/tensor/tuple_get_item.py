@@ -19,7 +19,6 @@ from tilefoundry.visitor_registry.access_relation import (
     leaves_of,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.buffer_alias import Alias, register_buffer_alias
 
 
 @register_op(name="tuple_get_item")
@@ -65,14 +64,6 @@ def _access_relations(call: "Call", ctx: "AccessContext") -> tuple[AccessRelatio
         walks,
         (reads, control_read(rank, ctx, index), identity_access(rank)),
     )
-
-
-@register_buffer_alias(TupleGetItem)
-def _buffer_alias(call: "Call") -> Alias | None:
-    index = call.args[1]
-    if isinstance(index, Constant) and type(index.value) is int:
-        return Alias(0, element=index.value)
-    return None
 
 
 @register_typeinfer(TupleGetItem)

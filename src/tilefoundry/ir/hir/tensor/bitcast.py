@@ -40,7 +40,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.buffer_alias import Alias, register_buffer_alias
+from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 
 
 @register_op(name="bitcast")
@@ -172,8 +172,8 @@ def _(call: Call, ctx) -> TensorType:
 
 
 @register_buffer_alias(Bitcast)
-def _buffer_alias(call: Call) -> Alias:
-    return Alias(0)
+def _buffer_alias(call: Call) -> int:
+    return 0
 
 
 def _quasi_affine_equations(coordinates: tuple, result_shape: tuple) -> list[str] | None:

@@ -28,7 +28,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.buffer_alias import Alias, register_buffer_alias
+from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 
 
 def _dim_mul(a, b):
@@ -195,7 +195,7 @@ def _same_addresses(source, result, count: int) -> bool:
 
 
 @register_buffer_alias(Reshard)
-def _buffer_alias(call: Call) -> Alias | None:
+def _buffer_alias(call: Call) -> int | None:
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage:
         return None
@@ -203,7 +203,7 @@ def _buffer_alias(call: Call) -> Alias | None:
         return None
     if not is_literal_shape(result.shape):
         return None
-    return Alias(0) if _same_addresses(source.layout, result.layout, prod(result.shape)) else None
+    return 0 if _same_addresses(source.layout, result.layout, prod(result.shape)) else None
 
 
 @register_access_relation(Reshard)

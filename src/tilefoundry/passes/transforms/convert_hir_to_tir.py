@@ -14,7 +14,7 @@ import isl
 
 from tilefoundry.analysis import AnalysisResult, MemoryMetadata, analyze
 from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
-from tilefoundry.analysis.liveness import storage_source
+from tilefoundry.analysis.metadata import BufferAliasMetadata
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
 from tilefoundry.ir.core import (
@@ -243,6 +243,9 @@ class Lowering(ExprVisitor[Expr]):
         ExprVisitor.__init__(self)
         self.module = self.result.module
         self.function = self.result.function
+        self.alias = get_metadata(self.function, BufferAliasMetadata)
+        if self.alias is None:
+            raise LoweringError("scheduled lowering requires buffer-alias analysis")
         self.names = Names(self.authored)
         self.logical: dict[int, TensorType] = {}
         self.staged: dict[int, tuple[Var, LoopRegion | None]] = {}
@@ -250,7 +253,6 @@ class Lowering(ExprVisitor[Expr]):
         self.output: Var | None = None
         self.scratch: list[Var] = []
         self.owner_cursors: dict[int, _Cursor] = {}
-        self.bindings: dict[int, Expr] = {}
         self.output_windows: dict[int, Call] = {}
         self.output_seed: Call | None = None
         self.output_initialized = False
@@ -338,18 +340,7 @@ class Lowering(ExprVisitor[Expr]):
         return self.output
 
     def _material_root(self, value: Expr) -> Expr:
-        seen: set[int] = set()
-        while id(value) not in seen:
-            seen.add(id(value))
-            following = storage_source(value, self.bindings)
-            if following is not None:
-                value = following
-                continue
-            if isinstance(value, LoopRegion) and len(value.yield_values) == 1:
-                value = value.args[0]
-                continue
-            return value
-        raise LoweringError("output seed resolution found a cyclic value")
+        return self.alias.roots[id(value)]
 
     def _declare(
         self,
@@ -464,7 +455,6 @@ class Lowering(ExprVisitor[Expr]):
         return expr if known is None else known[1]
 
     def _bind_region_args(self, region: LoopRegion | MeshRegion, cursor: _Cursor) -> None:
-        self.bindings.update(zip(map(id, region.params), region.args, strict=True))
         values = tuple(self.visit(arg, cursor) for arg in region.args)
         for param, value in zip(region.params, values, strict=True):
             self._memo[id(param)] = (param, value)
@@ -781,10 +771,14 @@ class Lowering(ExprVisitor[Expr]):
             and destination_root.type.storage is StorageKind.GMEM
         ):
             self._ensure_output_seed(destination_root)
-            if not self.output_initialized:
-                owner = self.owner_cursors[id(self.function)]
-                self._emit_fill(self.output, destination_root.type, owner)
-                self.output_initialized = True
+        if (
+            self.output_seed is not None
+            and self._known(destination_root) is self.output
+            and not self.output_initialized
+        ):
+            owner = self.owner_cursors[id(self.function)]
+            self._emit_fill(self.output, self.output_seed.type, owner)
+            self.output_initialized = True
         target = self.visit(destination, cursor)
         update_root = self._material_root(call.args[1])
         direct_write = (
