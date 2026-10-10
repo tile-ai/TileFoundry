@@ -14,7 +14,7 @@ from tilefoundry.ir.core.metadata import (
     get_metadata,
 )
 from tilefoundry.ir.core.stmt import Stmt
-from tilefoundry.ir.types import BoolDType, IntegerDType, Mesh, Topology
+from tilefoundry.ir.types import Mesh, Topology
 from tilefoundry.ir.types.tensor_type import DType, Type
 from tilefoundry.ir.types.utils import local_type_of
 
@@ -194,15 +194,6 @@ class TrafficBytes:
         return self.read + self.write
 
 
-def work(dtype: DType, count: int) -> tuple[dict[DType, int], dict[str, int]]:
-    """Classify arithmetic as floating-point work or an integer/predicate service."""
-    if isinstance(dtype, IntegerDType):
-        return {}, {"integer": count}
-    if isinstance(dtype, BoolDType):
-        return {}, {"predicate": count}
-    return {dtype: count}, {}
-
-
 @dataclass(frozen=True)
 class Cost:
     """Leaf-local logical work for one selected ``OpCandidate``.
@@ -261,5 +252,4 @@ __all__ = [
     "CostContext",
     "Cost",
     "TrafficBytes",
-    "work",
 ]

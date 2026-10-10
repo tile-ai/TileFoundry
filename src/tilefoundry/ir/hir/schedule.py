@@ -40,7 +40,8 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     relations_of,
 )
-from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes, VerifyContext, work
+from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes, VerifyContext
+from tilefoundry.visitor_registry.cost_utils import operation_cost
 from tilefoundry.visitor_registry.verify import verify_between
 
 
@@ -346,8 +347,6 @@ def _schedule_cost(call: Call, ctx) -> Cost:
         )
     op = call.target.op
     _params, reads, writes = _instruction_schema(op, len(call.args))
-    flops = {}
-    service = {}
     if any(param.effect & MemoryEffect.READ for param in writes):
         iterations = cardinality(iteration_universe(local))
         if iterations is None:
@@ -360,8 +359,8 @@ def _schedule_cost(call: Call, ctx) -> Cost:
             ),
             types[-1].dtype,
         )
-        flops, service = work(dtype, 2 * iterations)
-    return Cost(flops, tuple(moved), service)
+        return operation_cost(dtype, 2 * iterations, tuple(moved))
+    return Cost({}, tuple(moved))
 
 
 @register_typeinfer(ScheduleOp)
