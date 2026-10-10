@@ -1,7 +1,6 @@
 """A name bound before a mesh scope, rebound inside it, and returned after it."""
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 N = 8

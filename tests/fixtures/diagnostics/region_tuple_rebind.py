@@ -1,7 +1,6 @@
 """A tuple-valued sibling region can carry an outer region through its args."""
 
-from tilefoundry import module
-from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
+from tilefoundry.dsl import *
 
 
 @module(

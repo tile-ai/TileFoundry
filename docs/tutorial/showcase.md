@@ -78,12 +78,12 @@ import re
 import sys
 from pathlib import Path
 
-from tilefoundry import func, module
+from tilefoundry.dsl import *
 from tilefoundry.analysis import analyze as run_analysis
-from tilefoundry.dsl import ConstTensor, DimVar, RangePattern, Mesh, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 - bare tile() in the fused body
+
+
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
-from tilefoundry.ir.types import Topology
+
 from tilefoundry.target import CudaTarget
 
 HIDDEN = 256
@@ -201,9 +201,9 @@ for needle in ("matmul(hidden, w_q", "cache_update(k_cache", "matmul(v33, w_o"):
 # memory traffic=gmem:r2.12MB/w787.69KB@logical,r2.12MB/w787.69KB@total,r2.12MB/w787.69KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:57:1.00KB;v10:60:128B;v11:61:16.12KB;v12:64:128.00KB;v13:66:128.00KB;v14:69:256.00KB;v16:75:256.00KB;v17:75:8.00KB;v18:76:64B;v19:77:8.00KB;v20:77:8.00KB;v21:59:256B;v23:62:16.12KB;v24:65:128.00KB;v25:67:128.00KB;v26:70:256.00KB;v28:79:256.00KB;v29:79:2.00KB;v2:58:256B;v30:78:64B;v31:80:2.00KB;v32:81:1.00KB;v34:82:512B;v4:60:640B;v5:60:512B;v6:68:2.00KB;v7:71:1.00KB;v8:71:2.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:1.60MB persistent=gmem:1.34MB
 # roofline ideal-ns=630 bound-by=memory
 
-    v0 = matmul(hidden, w_q, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@logical,131072@total,131072@cta precision=exact; memory traffic=gmem:r128.50KB/w512B@logical,r128.50KB/w512B@total,r128.50KB/w512B@cta footprint=hidden:512B;v0:57:512B;w_q:128.00KB footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=28 bound-by=memory
-    v11 = cache_update(k_cache, cur_pos, write_len, v10)  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v10:60:128B;v11:61:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
-    v34 = matmul(v33, w_o, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", Layout((1, 1, 256), (256, 256, 1))]; compute-cost flops=bf16:131072@logical,131072@total,131072@cta precision=exact; memory traffic=gmem:r128.50KB/w512B@logical,r128.50KB/w512B@total,r128.50KB/w512B@cta footprint=v32:81:512B;v34:82:512B;w_o:128.00KB footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=28 bound-by=memory
+    v0 = tf.matmul(hidden, w_q, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@logical,131072@total,131072@cta precision=exact; memory traffic=gmem:r128.50KB/w512B@logical,r128.50KB/w512B@total,r128.50KB/w512B@cta footprint=hidden:512B;v0:57:512B;w_q:128.00KB footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=28 bound-by=memory
+    v11 = tf.cache_update(k_cache, cur_pos, write_len, v10)  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v10:60:128B;v11:61:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
+    v34 = tf.matmul(v33, w_o, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", Layout((1, 1, 256), (256, 256, 1))]; compute-cost flops=bf16:131072@logical,131072@total,131072@cta precision=exact; memory traffic=gmem:r128.50KB/w512B@logical,r128.50KB/w512B@total,r128.50KB/w512B@cta footprint=v32:81:512B;v34:82:512B;w_o:128.00KB footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=28 bound-by=memory
 ```
 
 `@logical` is the authored request before loop replication; `@total` is the
@@ -673,7 +673,7 @@ class Stage3_Fused:
             l = tf.full_like(m_slots, value=0.0)
             acc = tf.full_like(acc_slots, value=0.0)
 
-            for start in tile(CTX, BLOCK * WORKERS):
+            for start in tf.tile(CTX, BLOCK * WORKERS):
                 base = start + cta.worker * BLOCK
                 kb = tf.reshard(
                     k_heads[:, base : base + BLOCK, :, :],
@@ -760,7 +760,7 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 #   buffer=w_o holds=6.44MB time=none space=cta.head,cta.worker reuse=3.88MB fits=yes precision=upper_bound
 # roofline ideal-ns=1599 bound-by=memory
 
-        v7 = cache_update(k_cache, cur_pos, write_len, v6)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v6:281:128B;v7:282:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
+        v7 = tf.cache_update(k_cache, cur_pos, write_len, v6)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v6:281:128B;v7:282:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
 ```
 
 The embedded `Stage3_Fused` program is the split-K example for this page.
@@ -903,11 +903,11 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 #   advisory="l2 reuse window cta.head holds 51.08MB at a 132-unit wave, exceeding capacity 47.68MB"
 # roofline ideal-ns=11158 bound-by=memory
 
-    v1 = reshard(w_q, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost precision=exact; memory traffic=gmem:r128.00KB/w0@logical,r128.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w16.00KB@cta footprint=w_q:128.00KB footprint-precision=exact operands=0:r128.00KB/w0;result:r0/w128.00KB; roofline ideal-ns=28 bound-by=memory
-    v2 = matmul(v0, v1, a_layout="MK", b_layout="KN", out_dtype="f32")  # Tensor[(1, 1, 256), "f32", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "rmem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta precision=exact; memory traffic=rmem:r0/w1.00KB@logical,r0/w1.00KB@total,r0/w128B@cta;smem:r128.50KB/w0@logical,r132.00KB/w0@total,r16.50KB/w0@cta footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w1.00KB; roofline ideal-ns=1 bound-by=compute
+    v1 = tf.reshard(w_q, layout=(1, 256, 8 @ mesh.head, 32), storage="smem")  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost precision=exact; memory traffic=gmem:r128.00KB/w0@logical,r128.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w16.00KB@cta footprint=w_q:128.00KB footprint-precision=exact operands=0:r128.00KB/w0;result:r0/w128.00KB; roofline ideal-ns=28 bound-by=memory
+    v2 = tf.matmul(v0, v1, a_layout="MK", b_layout="KN", out_dtype="f32")  # Tensor[(1, 1, 256), "f32", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "rmem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta precision=exact; memory traffic=rmem:r0/w1.00KB@logical,r0/w1.00KB@total,r0/w128B@cta;smem:r128.50KB/w0@logical,r132.00KB/w0@total,r16.50KB/w0@cta footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w1.00KB; roofline ideal-ns=1 bound-by=compute
 
-    v45 = reshard(w_o, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost precision=exact; memory traffic=gmem:r128.00KB/w0@logical,r128.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w16.00KB@cta footprint=w_o:128.00KB footprint-precision=exact operands=0:r128.00KB/w0;result:r0/w128.00KB; roofline ideal-ns=28 bound-by=memory
-    v46 = matmul(v44, v45, a_layout="MK", b_layout="KN", out_dtype="f32")  # Tensor[(1, 1, 256), "f32", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "rmem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta precision=exact; memory traffic=rmem:r0/w1.00KB@logical,r0/w1.00KB@total,r0/w128B@cta;smem:r128.50KB/w0@logical,r132.00KB/w0@total,r16.50KB/w0@cta footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w1.00KB; roofline ideal-ns=1 bound-by=compute
+    v45 = tf.reshard(w_o, layout=(1, 256, 8 @ mesh.head, 32), storage="smem")  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost precision=exact; memory traffic=gmem:r128.00KB/w0@logical,r128.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w16.00KB@cta footprint=w_o:128.00KB footprint-precision=exact operands=0:r128.00KB/w0;result:r0/w128.00KB; roofline ideal-ns=28 bound-by=memory
+    v46 = tf.matmul(v44, v45, a_layout="MK", b_layout="KN", out_dtype="f32")  # Tensor[(1, 1, 256), "f32", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "rmem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta precision=exact; memory traffic=rmem:r0/w1.00KB@logical,r0/w1.00KB@total,r0/w128B@cta;smem:r128.50KB/w0@logical,r132.00KB/w0@total,r16.50KB/w0@cta footprint-precision=exact operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w1.00KB; roofline ideal-ns=1 bound-by=compute
 ```
 
 ## 6. Stream the KV cache
@@ -961,7 +961,7 @@ class Stage5_CachePrepared:
             l = tf.full_like(template, value=0.0)
             acc = tf.full_like(queries, value=0.0)
 
-            for start in tile(CTX, BLOCK):
+            for start in tf.tile(CTX, BLOCK):
                 base = start + 0
                 kb = tf.reshard(
                     tf.repeat_interleave(
@@ -1077,8 +1077,8 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 #   buffer=cur_pos holds=2.60MB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 # roofline ideal-ns=2473 bound-by=memory
 
-        v25 = slice(k_cache, (0, v24, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", Layout((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost precision=exact; memory traffic=rmem:r32B/w0@logical,r256B/w0@total,r32B/w0@cta footprint-precision=exact operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
-        v7 = cache_update(k_cache, cur_pos, write_len, v6)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v6:483:128B;v7:484:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
+        v25 = tf.slice(k_cache, (0, v24, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", Layout((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost precision=exact; memory traffic=rmem:r32B/w0@logical,r256B/w0@total,r32B/w0@cta footprint-precision=exact operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
+        v7 = tf.cache_update(k_cache, cur_pos, write_len, v6)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v6:483:128B;v7:484:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
 ```
 
 ```text

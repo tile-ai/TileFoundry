@@ -12,9 +12,7 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry import func, module
-from tilefoundry.dsl import DimVar, RangePattern, Tensor
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 — binds bare ``mul`` / ``add``
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 _S = DimVar("S", 1, 7)
@@ -28,11 +26,11 @@ class Dispatch:
 
     @main.specialize(RangePattern("S", 1, 3))
     def small_shape(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
-        return mul(x, x)  # noqa: F821  (bound via ``from tilefoundry.dsl.tf import *``)
+        return tf.mul(x, x)
 
     @main.specialize(RangePattern("S", 4, 7))
     def large_shape(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
-        return add(x, x)  # noqa: F821
+        return tf.add(x, x)  # noqa: F821
 
 
 def _build_runtime_module():

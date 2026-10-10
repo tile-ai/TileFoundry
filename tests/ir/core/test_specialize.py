@@ -12,9 +12,7 @@ from tests.fixtures.placed.gqa_decode import (
     GqaOnline,
 )
 from tests.fixtures.placed.specialize_through_call import ToCallee
-from tilefoundry import func, module
-from tilefoundry.dsl import RangePattern, Tensor, Topology, tf
-from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- names resolved dynamically
+from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import (
     SpecializationError,
@@ -26,7 +24,6 @@ from tilefoundry.ir.hir.specialize import (
     specialize_function,
     variant_for,
 )
-from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.target import CudaTarget
 
 ENTRY = GqaOnline.entry_function()

@@ -1,7 +1,6 @@
 """A CTA-sharded elementwise square for a CUDA target."""
 
-from tilefoundry import module
-from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 

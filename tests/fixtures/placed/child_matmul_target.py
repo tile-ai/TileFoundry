@@ -7,9 +7,7 @@ that tile straight back, so the root's own call is typed by the same rule;
 ``ChildMatmulStaged`` keeps the loop in a specialization variant.
 """
 
-from tilefoundry import func, module
-from tilefoundry.dsl import DimVar, Mesh, RangePattern, Tensor, Topology, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 64
@@ -27,7 +25,7 @@ class ChildMatmul:
             lhs = tf.reshard(a[:, 0:BK], (M, BK), "smem")
             rhs = tf.reshard(b[0:BK, :], (BK, N), "smem")
             acc = tf.matmul(lhs, rhs, out_dtype="f32")
-            for k in tile(BK, K, BK):
+            for k in tf.tile(BK, K, BK):
                 lhs = tf.reshard(a[:, k], (M, BK), "smem")
                 rhs = tf.reshard(b[k, :], (BK, N), "smem")
                 acc = acc + tf.matmul(lhs, rhs, out_dtype="f32")
@@ -42,7 +40,7 @@ class ChildMatmulDirect:
             lhs = tf.reshard(a[:, 0:BK], (M, BK), "smem")
             rhs = tf.reshard(b[0:BK, :], (BK, N), "smem")
             acc = tf.matmul(lhs, rhs, out_dtype="f32")
-            for k in tile(BK, K, BK):
+            for k in tf.tile(BK, K, BK):
                 lhs = tf.reshard(a[:, k], (M, BK), "smem")
                 rhs = tf.reshard(b[k, :], (BK, N), "smem")
                 acc = acc + tf.matmul(lhs, rhs, out_dtype="f32")
@@ -65,7 +63,7 @@ class ChildMatmulStaged:
             lhs = tf.reshard(a[:, 0:BK], (M, BK), "smem")
             rhs = tf.reshard(b[0:BK, :], (BK, N), "smem")
             acc = tf.matmul(lhs, rhs, out_dtype="f32")
-            for k in tile(BK, K_LEN, BK):
+            for k in tf.tile(BK, K_LEN, BK):
                 lhs = tf.reshard(a[:, k], (M, BK), "smem")
                 rhs = tf.reshard(b[k, :], (BK, N), "smem")
                 acc = acc + tf.matmul(lhs, rhs, out_dtype="f32")

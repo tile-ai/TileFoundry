@@ -32,9 +32,7 @@ but names no TIR instruction.
 #!/usr/bin/env python3
 """One 128 by 256 output tile per CTA on a 64 by 68 grid."""
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 8192
@@ -58,7 +56,7 @@ class GRID:
             m = cta.bm * BM
             n = cta.bn * BN
             acc = tf.zeros(Tensor[(BM, BN), "f32", "rmem"])
-            for k in tile(K, BK):
+            for k in tf.tile(K, BK):
                 at = tf.reshard(a[m:m + BM, k], (BM, BK), "smem")
                 bt = tf.reshard(b[k, n:n + BN], (BK, BN), "smem")
                 part = tf.matmul(at, bt, out_dtype="f32")
@@ -92,9 +90,7 @@ this is the same 4352-tile GEMM, covered exactly once.
 #!/usr/bin/env python3
 """The same GEMM assigned to 132 persistent CTAs."""
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 8192
@@ -121,7 +117,7 @@ class PERSISTENT:
                     m = mt * BM
                     n = nt * BN
                     acc = tf.zeros(Tensor[(BM, BN), "f32", "rmem"])
-                    for k in tile(K, BK):
+                    for k in tf.tile(K, BK):
                         at = tf.reshard(a[m:m + BM, k], (BM, BK), "smem")
                         bt = tf.reshard(b[k, n:n + BN], (BK, BN), "smem")
                         part = tf.matmul(at, bt, out_dtype="f32")
@@ -145,7 +141,7 @@ sed -n '/^from __future__/q;p' persistent.txt
 # analysis target=nvidia.h200_sxm module=PERSISTENT function=gemm topology=cta wave=132/132
 # selection requested=compute-cost,memory,performance executed=compute-cost,memory,performance
 # compute-cost flops=bf16:21476933632@logical,2834955239424@total,21476933632@cta,21476933632@thread;f32:167772160@logical,22145925120@total,167772160@cta,167772160@thread other-ops=integer:65@logical,16896@total,128@cta,128@thread precision=upper_bound
-# memory traffic=gmem:r86.50MB/w280.00MB@logical,r31.45GB/w36.09GB@total,r244.00MB/w280.00MB@cta,r244.00MB/w280.00MB@thread;rmem:r1.26GB/w1.25GB@logical,r166.57GB/w166.55GB@total,r1.26GB/w1.26GB@cta,r1.26GB/w1.26GB@thread;smem:r240.00MB/w82.50MB@logical,r30.94GB/w30.94GB@total,r240.00MB/w240.00MB@cta,r240.00MB/w240.00MB@thread footprint=a:32.00KB;b:2.12MB;v20:38:128.00KB;v21:39:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:48.00KB persistent=gmem:250.00MB
+# memory traffic=gmem:r86.50MB/w280.00MB@logical,r31.45GB/w36.09GB@total,r244.00MB/w280.00MB@cta,r244.00MB/w280.00MB@thread;rmem:r1.26GB/w1.25GB@logical,r166.57GB/w166.55GB@total,r1.26GB/w1.26GB@cta,r1.26GB/w1.26GB@thread;smem:r240.00MB/w82.50MB@logical,r30.94GB/w30.94GB@total,r240.00MB/w240.00MB@cta,r240.00MB/w240.00MB@thread footprint=a:32.00KB;b:2.12MB;v20:36:128.00KB;v21:37:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:48.00KB persistent=gmem:250.00MB
 # performance root=PERSISTENT::gemm predicted-ns=18317269 waves=1
 ```
 
@@ -185,12 +181,12 @@ grep -E 'tf.matmul|candidate   T.cuda.sm90.Wgmma|n=256, dtype=bf16, form=SS|tf.b
 ```
 
 ```text
-  v10:33  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", "smem"]  rhs=Tensor[(64, 256), "bf16", "smem"]
+  v10:31  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", "smem"]  rhs=Tensor[(64, 256), "bf16", "smem"]
     candidate   T.cuda.sm90.Wgmma  needs thread p0:p0+256, p0 % 128 = 0
                   n=256, dtype=bf16, form=SS
-  v12:34  tf.binary  per cta  lhs=Tensor[(128, 256), "f32", "rmem"]  rhs=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "f32", "rmem"]
+  v12:32  tf.binary  per cta  lhs=Tensor[(128, 256), "f32", "rmem"]  rhs=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "f32", "rmem"]
     default     T.binary
-  v13:35  tf.cast  per cta  x=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "bf16", "rmem"]
+  v13:33  tf.cast  per cta  x=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "bf16", "rmem"]
     default     T.cast
 ```
 
@@ -258,11 +254,7 @@ producer warp fills a three-stage SW128 TMA ring while two consumer warpgroups
 issue SS WGMMA, then stage each result in separate SW128 memory for a TMA store.
 """
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, T, Tensor, Topology, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
-from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Split, Swizzle
-from tilefoundry.ir.types import Mesh as ThreadMesh
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 8192
@@ -277,18 +269,6 @@ GM = M // BM
 GN = N // BN
 GROUP_M = 16
 
-_COMPUTE = ThreadMesh((Topology("thread", 384),),
-                      ComposedLayout(None, 128, Layout((2, 4, 8, 4), (128, 32, 4, 1))),
-                      ("group", "warp", "lane8", "lane4"))
-A_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0,
-                        Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))))
-B_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0,
-                        Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))))
-OUT_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0, Layout((128, (4, 64)), (64, (8192, 1))))
-ACC = ShardLayout(Layout((2, 8, 2, 4, 2, 4, 32),
-                         (16384, 1, 8, 16, 64, 128, 512)),
-                  (Split(0), Split(3), Split(1), Split(5)), _COMPUTE)
-
 
 @module(
     entry="gemm",
@@ -301,6 +281,9 @@ class GEMM_8192X17408X5120_OPTIMAL:
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "bf16"]:
+        a_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))))
+        b_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))))
+        out_smem = ComposedLayout(Swizzle(3, 4, 3), 0, Layout((128, (4, 64)), (64, (8192, 1))))
         with Mesh(("cta",), layout=(CTAS,), names=("persistent",)) as cta:
             with Mesh(
                 ("thread",), layout=(3, 128),
@@ -316,33 +299,33 @@ class GEMM_8192X17408X5120_OPTIMAL:
                         for mi in range(start, GROUP_M, CTAS):
                             m = (g * GROUP_M + mi) * BM
                             n = bn * BN
-                            with threads[1:3, :] as _compute:
-                                acc = tf.zeros(Tensor[(BM, BN), "f32", ACC, "rmem"])
+                            with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
+                                acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
 
-                            for k in tile(K, BK):
+                            for k in tf.tile(K, BK):
                                 with threads[0, :32] as _loader:
                                     lhs = tf.schedule(
                                         (a[m:m + BM, k],),
-                                        op=T.copy_async_tensor(smem_layout=A_SMEM),
+                                        op=T.copy_async_tensor(smem_layout=a_smem),
                                         buffers=STAGES,
                                     )
                                     rhs = tf.schedule(
                                         (b[k, n:n + BN],),
-                                        op=T.copy_async_tensor(smem_layout=B_SMEM),
+                                        op=T.copy_async_tensor(smem_layout=b_smem),
                                         buffers=STAGES,
                                     )
 
-                                with threads[1:3, :] as _compute:
+                                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
                                     acc = tf.schedule(
                                         (acc, lhs, rhs),
                                         op=T.tiled_mma(atom=wgmma),
                                         repeat=(2, 1, 4),
                                     )
 
-                            with threads[1:3, :] as _compute:
+                            with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
                                 tile_out = tf.cast(acc, dtype="bf16")
                                 staged = tf.schedule(
-                                    (tile_out,), op=T.copy(smem_layout=OUT_SMEM)
+                                    (tile_out,), op=T.copy(smem_layout=out_smem)
                                 )
 
                             with threads[0, :32] as _storer:
@@ -366,14 +349,11 @@ sed -n '1,114p' optimal_tir.py
 ```text
 # analysis target=nvidia.h200_sxm module=GEMM_8192X17408X5120_OPTIMAL function=gemm topology=cta wave=132/132
 # selection requested=memory executed=memory
-# memory traffic=gmem:r192.00MB/w306.00MB@logical,r133.68GB/w39.45GB@total,r1.01GB/w306.00MB@cta,r1.01GB/w306.00MB@thread;rmem:r2.71GB/w2.67GB@logical,r357.29GB/w357.20GB@total,r2.71GB/w2.71GB@cta,r11.51MB/w10.82MB@thread;smem:r1.01GB/w192.00MB@logical,r133.68GB/w133.68GB@total,r1.01GB/w1.01GB@cta,r192.31MB/w1020.07MB@thread footprint=a:256.00KB;b:288.00KB;v27:96:128.00KB;v28:97:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
+# memory traffic=gmem:r192.00MB/w306.00MB@logical,r133.68GB/w39.45GB@total,r1.01GB/w306.00MB@cta,r1.01GB/w306.00MB@thread;rmem:r2.71GB/w2.67GB@logical,r357.29GB/w357.20GB@total,r2.71GB/w2.71GB@cta,r11.51MB/w10.82MB@thread;smem:r1.01GB/w192.00MB@logical,r133.68GB/w133.68GB@total,r1.01GB/w1.01GB@cta,r192.31MB/w1020.07MB@thread footprint=a:256.00KB;b:288.00KB;v27:83:128.00KB;v28:84:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
 
 from __future__ import annotations
 
-from tilefoundry import prim_func
-from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.types import B, ComposedLayout, Layout, Mesh, ShardLayout, Swizzle, Topology
-from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.dsl import *  # noqa: F401, F403
 from tilefoundry.target import CudaTarget
 
 
@@ -407,49 +387,17 @@ def gemm(
                     staged = T.tensor_view(
                         147456,
                         dtype='bf16',
-                        storage=StorageKind.SMEM,
-                        layout=ComposedLayout(
-                            inner=Swizzle(3, 4, 3),
-                            offset=0,
-                            outer=Layout((128, (4, 64)), (64, (8192, 1))),
-                        ),
+                        storage="smem",
+                        layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3),
                         shape=(128, 256),
                     )
                     for mi in range(((cta.d0 - (32 * g)) - (16 * bn)) - (132 * (((cta.d0 - (32 * g)) - (16 * bn)) // 132)), 16, 132):
                         with Mesh(
-                            (Topology("thread", 384),), ComposedLayout(
-    inner=None,
-    offset=128,
-    outer=Layout((2, 4, 8, 4), (128, 32, 4, 1)),
-), names=("d0", "d1", "d2", "d3")
+                            scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
                         ) as threads:
                             T.fill(acc, 0.0)
-                        lhs_stages = (T.tensor_view(98304, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
-                                inner=Swizzle(3, 4, 3),
-                                offset=0,
-                                outer=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))),
-                            ), shape=(128, 64)), T.tensor_view(114688, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
-                                inner=Swizzle(3, 4, 3),
-                                offset=0,
-                                outer=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))),
-                            ), shape=(128, 64)), T.tensor_view(131072, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
-                                inner=Swizzle(3, 4, 3),
-                                offset=0,
-                                outer=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))),
-                            ), shape=(128, 64)))
-                        rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
-                                inner=Swizzle(3, 4, 3),
-                                offset=0,
-                                outer=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))),
-                            ), shape=(64, 256)), T.tensor_view(32768, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
-                                inner=Swizzle(3, 4, 3),
-                                offset=0,
-                                outer=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))),
-                            ), shape=(64, 256)), T.tensor_view(65536, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
-                                inner=Swizzle(3, 4, 3),
-                                offset=0,
-                                outer=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))),
-                            ), shape=(64, 256)))
+                        lhs_stages = (T.tensor_view(98304, dtype='bf16', storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)), T.tensor_view(114688, dtype='bf16', storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)), T.tensor_view(131072, dtype='bf16', storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)))
+                        rhs_stages = (T.tensor_view(0, dtype='bf16', storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)), T.tensor_view(32768, dtype='bf16', storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)), T.tensor_view(65536, dtype='bf16', storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)))
                         for k in range(0, 5120, 64):
                             with scope[:1, :32] as scope_1:
                                 tile = T.tensor_view(
@@ -457,27 +405,62 @@ def gemm(
                                     layout=Layout((128, 64), (5120, 1)),
                                     shape=(128, 64),
                                 )
-                                with Mesh(
-                                    (Topology("thread", 384),), ComposedLayout(
-    inner=None,
-    offset=0,
-    outer=Layout((32,), (1,)),
-), names=("d0",)
-                                ) as threads_1:
+                                with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_1:
                                     T.copy_async_tensor(tile, lhs_stages[(k // 64) % 3])
                                 tile_1 = T.tensor_view(
                                     T.ptr_of(b[k:k + 64, bn * 256:bn * 256 + 256]),
                                     layout=Layout((64, 256), (17408, 1)),
                                     shape=(64, 256),
                                 )
-                                with Mesh(
-                                    (Topology("thread", 384),), ComposedLayout(
-    inner=None,
-    offset=0,
-    outer=Layout((32,), (1,)),
-), names=("d0",)
-                                ) as threads_2:
+                                with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
                                     T.copy_async_tensor(tile_1, rhs_stages[(k // 64) % 3])
+                            with Mesh(
+                                scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
+                            ) as scope_2:
+                                with Mesh(
+                                    scope[1:2], layout=(4, 8, 4), names=("d0", "d1", "d2")
+                                ) as threads_3:
+                                    for o_m in range(0, 64, 64):
+                                        for o_n in range(0, 256, 256):
+                                            for o_k in range(0, 64, 64):
+                                                acc_view = T.tensor_view(
+                                                    T.ptr_of(acc[o_m:o_m + 64, o_n:o_n + 256]),
+                                                    layout=((8 @ threads_3.d1, 2, 4 @ threads_3.d0, 2, 4 @ threads_3.d2, 32), (1, 8, 16, 64, 128, 512)),
+                                                    shape=(64, 256),
+                                                )
+                                                lhs_view = T.tensor_view(
+                                                    T.ptr_of(lhs_stages[(k // 64) % 3][o_m:o_m + 64, o_k:o_k + 16]),
+                                                    layout=ShardLayout(
+                                                        layout=ComposedLayout(
+                                                            inner=Swizzle(3, 4, 3),
+                                                            offset=0,
+                                                            outer=Layout(((8, 8), 16), ((512, 64), 1)),
+                                                        ),
+                                                        attrs=(B(), B(), B()),
+                                                        mesh=threads_3,
+                                                    ),
+                                                    shape=(64, 16),
+                                                )
+                                                rhs_view = T.tensor_view(
+                                                    T.ptr_of(rhs_stages[(k // 64) % 3][o_k:o_k + 16, o_n:o_n + 256]),
+                                                    layout=ShardLayout(
+                                                        layout=ComposedLayout(
+                                                            inner=Swizzle(3, 4, 3),
+                                                            offset=0,
+                                                            outer=Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))),
+                                                        ),
+                                                        attrs=(B(), B(), B()),
+                                                        mesh=threads_3,
+                                                    ),
+                                                    shape=(16, 256),
+                                                )
+                                                T.tiled_mma(
+                                                    acc_view,
+                                                    lhs_view,
+                                                    rhs_view,
+                                                    atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_3),
+                                                )
+                                                acc_view_1 = T.tensor_view(
 ```
 
 The three `g / bn / mi` loops and `cta.d0` survive lowering. The three RHS slots

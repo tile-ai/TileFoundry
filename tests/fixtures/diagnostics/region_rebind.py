@@ -1,7 +1,6 @@
 """A sibling region captures an earlier region value through its args edge."""
 
-from tilefoundry import module
-from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
+from tilefoundry.dsl import *
 
 
 @module(

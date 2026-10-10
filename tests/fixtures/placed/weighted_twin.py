@@ -6,8 +6,7 @@ standalone checks because only a root may declare one.
 
 from dataclasses import replace
 
-from tilefoundry import module
-from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, func, tf
+from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.target import CpuTarget
 

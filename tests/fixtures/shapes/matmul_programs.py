@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry import func
-from tilefoundry.dsl import DimVar, Tensor, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import AmxTarget, CudaTarget
 
 DYNAMIC_M = DimVar("seq", 1, 127)

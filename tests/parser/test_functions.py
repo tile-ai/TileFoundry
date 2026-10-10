@@ -7,17 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from tilefoundry import func, module
 from tilefoundry.cli.source import load_namespace
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, SourceSpanMetadata, get_metadata
 from tilefoundry.ir.core.module import Module, subtree
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.pattern import RangePattern
-from tilefoundry.ir.types import TupleType
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CudaTarget
@@ -216,13 +211,13 @@ def test_every_parsed_call_knows_where_it_came_from(source: Path) -> None:
 @pytest.mark.parametrize(
     ("iterator", "expected"),
     (
-        ("tile(10)", "tile(extent) is not supported; use range(extent)"),
+        ("tf.tile(10)", "tf.tile(extent) is not supported; use range(extent)"),
         (
-            "tile(1, 2, 3, 4)",
-            "tile() takes 2 or 3 arguments, (stop, step) or (start, stop, step), got 4",
+            "tf.tile(1, 2, 3, 4)",
+            "tf.tile() takes 2 or 3 arguments, (stop, step) or (start, stop, step), got 4",
         ),
         ("range(1, 2, 3, 4)", "range() takes 1 to 3 arguments, got 4"),
-        ("steps(1, 2)", "loop iterator must be tile(...) or range(...)"),
+        ("steps(1, 2)", "loop iterator must be tf.tile(...) or range(...)"),
     ),
 )
 def test_a_loop_iterator_states_why_its_arity_is_invalid(iterator: str, expected: str) -> None:
@@ -232,21 +227,21 @@ def test_a_loop_iterator_states_why_its_arity_is_invalid(iterator: str, expected
     accepted forms, so the reason is stated before the shape rejects.
     """
     with pytest.raises(ParseError, match=re.escape(expected)):
-        if iterator == "tile(10)":
+        if iterator == "tf.tile(10)":
 
             @func
             def looping(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
                 out = tf.add(seed, seed)
-                for row in tile(10):  # noqa: F821
+                for row in tf.tile(10):  # noqa: F821
                     out = tf.add(x[row, :], seed)
                 return out
 
-        elif iterator == "tile(1, 2, 3, 4)":
+        elif iterator == "tf.tile(1, 2, 3, 4)":
 
             @func
             def looping(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
                 out = tf.add(seed, seed)
-                for row in tile(1, 2, 3, 4):  # noqa: F821
+                for row in tf.tile(1, 2, 3, 4):  # noqa: F821
                     out = tf.add(x[row, :], seed)
                 return out
 

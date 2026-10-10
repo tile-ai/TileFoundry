@@ -54,7 +54,9 @@ def gemm(
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
                         T.copy_async_tensor(tile_1, rhs_stages[(k // 16) % 2])
-                with scope[1:] as scope_2:
+                with Mesh(
+                    scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
+                ) as scope_2:
                     with Mesh(
                         scope[1:2], layout=(4, 8, 4), names=("d0", "d1", "d2")
                     ) as threads_3:
@@ -125,10 +127,10 @@ def gemm(
                                         rhs_view_1,
                                         atom=T.cuda.sm90.Wgmma(n=64, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_4),
                                     )
-            with scope[1:] as scope_3:
-                with Mesh(
-                    scope_3, layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                ) as threads_5:
+            with Mesh(
+                scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
+            ) as scope_3:
+                with scope_3 as threads_5:
                     src_frame = T.tensor_view(
                         T.ptr_of(acc[0:0 + 128, 0:0 + 256]),
                         layout=((2 @ threads_5.d0, 4, 8 @ threads_5.d2, 2, 4 @ threads_5.d1, 2, 4 @ threads_5.d3, 8), (16384, 4096, 1, 8, 16, 64, 128, 512)),

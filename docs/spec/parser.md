@@ -94,6 +94,16 @@ These strides are not physical strides, and the offset remains derived from
 the selection. Placement, `Layout(...)` calls, and composition sugar are not
 refinement syntax. See [shard §5](shard.md#5-mesh).
 
+Within a `with Mesh` body, a Mesh or mesh-bearing ShardLayout resolved from
+module scope or a closure MUST be rejected with
+`layout mesh '<name>' is not a lexical Mesh binding`. Layout constructions
+MUST refer to lexical mesh bindings or their constant slices. A Python
+`Mesh(...)` constructor in the body MUST be rejected with
+``open meshes with `with Mesh(...) as name` ``; open meshes in a with header.
+Function parameter annotations and `@func(mesh=...)` are outside this check.
+Tile loops MUST use `tf.tile(extent, step)` (or its three-argument form);
+bare `tile(...)` is rejected with `tile loops are written tf.tile(extent, step)`.
+
 In an authored HIR function that opens a mesh, every authored runtime Call
 runs inside a mesh scope. This includes operation and function calls, operator
 expressions, tensor slices, and explicit tuple subscripts, even for UMAT scalar
@@ -229,7 +239,7 @@ signature             ::= (name ':' type-annotation (',' name ':' type-annotatio
 return-type           ::= type-annotation
 if                    ::= if cond-node block (block)?
 while                 ::= while cond-node block
-loop-iterator         ::= ('tf.tile' | 'tile') '(' expression ',' expression (',' expression)? ')'
+loop-iterator         ::= 'tf.tile' '(' expression ',' expression (',' expression)? ')'
                           | 'range' '(' (expression | expression ',' expression | expression ','
                             expression ',' expression) ')'
 loop-carry-statement  ::= expression '=' expression

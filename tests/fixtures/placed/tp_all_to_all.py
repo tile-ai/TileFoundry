@@ -10,19 +10,12 @@ share of it.
 
 from __future__ import annotations
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.ir.types import Layout, Split
-from tilefoundry.ir.types import Mesh as ShardMesh
-from tilefoundry.ir.types.shard_layout import canonical_shard_layout
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 GPUS, CTAS, R, C = 2, 4, 8, 8
 GPU, CTA = Topology("gpu", GPUS), Topology("cta", CTAS)
 
-_MESH = ShardMesh(topologies=(GPU,), layout=Layout((GPUS,), (1,)), names=("g",))
-BY_ROW = canonical_shard_layout((R, C), _MESH, (Split(0),))
-BY_COLUMN = canonical_shard_layout((R, C), _MESH, (Split(1),))
 
 HELD_BYTES = R * C * 4 // GPUS
 SENT_BYTES = HELD_BYTES - HELD_BYTES // GPUS
@@ -38,7 +31,7 @@ class TransposeShard:
 
     @func
     def transpose_shard(
-        x: Tensor[(R, C), "f32", BY_ROW],
-    ) -> Tensor[(R, C), "f32", BY_COLUMN]:
+        x: Tensor[(R, C), "f32", ShardLayout(Layout((GPUS, R // GPUS, C), (R // GPUS * C, C, 1)), (Split(0),), Mesh((GPU,), Layout((GPUS,), (1,)), ("g",)))],
+    ) -> Tensor[(R, C), "f32", ShardLayout(Layout((R, GPUS, C // GPUS), (C, C // GPUS, 1)), (Split(1),), Mesh((GPU,), Layout((GPUS,), (1,)), ("g",)))]:
         with Mesh(("gpu",), layout=(GPUS,), names=("g",)) as g:
             return tf.reshard(x, (R, C @ g.g), "gmem")

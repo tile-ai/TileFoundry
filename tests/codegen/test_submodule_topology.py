@@ -6,10 +6,7 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry import module, prim_func
-from tilefoundry.dsl import T, Tensor
-from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- bind bare launch
-from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Split, Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")

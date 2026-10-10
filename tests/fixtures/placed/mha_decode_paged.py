@@ -9,8 +9,7 @@ which a corpus cannot be asked: a fixture whose shape depends on the environment
 is a different program on every machine. They are four Modules over one builder.
 """
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 _WAVE = 128

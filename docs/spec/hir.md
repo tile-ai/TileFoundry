@@ -223,7 +223,7 @@ results is expressed by Python object identity:
 - *Single use*: nest the Calls.
   `Call(Binary(kind=MUL), (Call(Binary(kind=ADD), (a, b)), c))` does
   not name the inner `Binary` result.
-- *Multiple uses*: the parser binds `c = add(a, b)` in its lexical
+- *Multiple uses*: the parser binds `c = tf.add(a, b)` in its lexical
   env so subsequent `mul(c, c)` / `sub(c, d)` share the same Call
   node. The IR has no binding nodes; DAG edges express "same value".
 
@@ -362,19 +362,19 @@ class LoopRegion(Expr):
     carry) or `TupleType` (multi-carry).
   - mutable during the compiler's authorised typing and metadata updates.
 
-**Iteration domain.** Both DSL loop surfaces — `for i in tile(...)` and
+**Iteration domain.** Both DSL loop surfaces — `for i in tf.tile(...)` and
 `for i in range(...)` — lower to this one node; they share the domain
 `(start, extent, step)` and differ only in the loop-variable binding (`tile`
 binds a parser-side Python `slice`, while `range` binds a scalar; see
 [parser §2.1](./parser.md#21-syntax)). `range` is not unrolled. `induction_var` ranges
 over `range(start, extent, step)`: `start` and `extent` are the **half-open**
 `[start, extent)` Python-range endpoints (so `extent` is the **stop** value,
-not a count). `start` defaults to `0` for `tile(stop, step)` and `range(stop)`;
-the `tile(start, stop, step)` and `range(start, stop[, step])` surfaces set it.
+not a count). `start` defaults to `0` for `tf.tile(stop, step)` and `range(stop)`;
+the `tf.tile(start, stop, step)` and `range(start, stop[, step])` surfaces set it.
 Each of `start` / `extent` / `step` is a `ShapeDim`
 ([types §4](./types.md#4-dim--symbolic-shape-dimensions)).
 
-For `tile(stop, step)` or `tile(start, stop, step)`, the parser-side window at
+For `tf.tile(stop, step)` or `tf.tile(start, stop, step)`, the parser-side window at
 one iteration is `[induction_var, induction_var + step)`. The induction value
 is already a coordinate in `range(start, stop, step)`, not an ordinal to
 multiply by `step`.
@@ -471,8 +471,8 @@ class MeshRegion(Expr):
 
 ```python
 # example
-acc = zeros((M,), f32, storage="rmem")
-for i in tile(K, BLOCK):
+acc = tf.zeros((M,), "f32", storage="rmem")
+for i in tf.tile(K, BLOCK):
     acc = acc + load_tile(x, i)
 # After the loop, `acc` resolves to the LoopRegion value.
 ```
@@ -543,7 +543,7 @@ per-name IR classes.
 One spelling is preferred, so that two authors reading the same IR write it the
 same way: an arithmetic or comparison operand pair SHOULD be written with the
 Python operator (`a + b`, `a * b`, `a < b`), and a sub-tensor SHOULD be written as
-a subscript (`x[:, :, j:j + 1]`, `x[:, :, 3]`). The named forms `add(a, b)` and
+a subscript (`x[:, :, j:j + 1]`, `x[:, :, 3]`). The named forms `tf.add(a, b)` and
 `slice(x, begin=…, end=…, strides=…)` remain the underlying surface — they are what
 the operator and subscript resolve to, and they stay available where a name must be
 computed — but they are not the form to reach for first. Both spellings build the

@@ -9,8 +9,7 @@ import pytest
 import torch
 
 from tests.ops.ir.cost_utils import CostCase, run_cost_case
-from tilefoundry import func
-from tilefoundry.dsl import DimVar, Tensor, tf
+from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.schedule import operand_relations
@@ -18,9 +17,7 @@ from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.rank import Rank
 from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
 from tilefoundry.ir.isl_interop import shape_to_isl_set
-from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.ir.types.layout import EMPTY_LAYOUT
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor

@@ -152,7 +152,7 @@ class Nemotron35Lightning30BA3B:
             m = tf.full_like(m0, value=NEGINF)
             l = tf.full_like(m0, value=0.0)
             acc = tf.full_like(a0, value=0.0)
-            for t in tile(CF, ABLK * WRKH):
+            for t in tf.tile(CF, ABLK * WRKH):
                 b0 = t + kv.w * ABLK
                 kb = tf.reshard(tf.transpose(k_cache[:, b0:b0 + ABLK, :, :], perm=(0, 2, 1, 3)), (1, HKV @ kv.g, ABLK, DH), "smem")
                 vb = tf.reshard(tf.transpose(v_cache[:, b0:b0 + ABLK, :, :], perm=(0, 2, 1, 3)), (1, HKV @ kv.g, ABLK, DH), "smem")
@@ -200,7 +200,7 @@ class Nemotron35Lightning30BA3B:
             m = tf.full_like(m0, value=NEGINF)
             l = tf.full_like(m0, value=0.0)
             acc = tf.full_like(a0, value=0.0)
-            for t in tile(CF, ABLK * WRK):
+            for t in tf.tile(CF, ABLK * WRK):
                 b0 = t + kv.w * ABLK
                 kb = tf.reshard(tf.transpose(k_cache[:, b0:b0 + ABLK, :, :], perm=(0, 2, 1, 3)), (1, HKV @ kv.g, ABLK, DH), "smem")
                 vb = tf.reshard(tf.transpose(v_cache[:, b0:b0 + ABLK, :, :], perm=(0, 2, 1, 3)), (1, HKV @ kv.g, ABLK, DH), "smem")

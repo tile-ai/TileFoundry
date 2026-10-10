@@ -10,9 +10,7 @@ import torch
 
 import tilefoundry
 from tests.fixtures.tir.sync import SyncSquare
-from tilefoundry import module, prim_func
-from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.types import Layout, Mesh, S, ShardLayout, Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")

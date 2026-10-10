@@ -10,11 +10,7 @@ from __future__ import annotations
 
 import torch
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, tf
-from tilefoundry.ir.types import Layout, Split
-from tilefoundry.ir.types import Mesh as ShardMesh
-from tilefoundry.ir.types.shard_layout import canonical_shard_layout
+from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.target import CudaTarget
 
@@ -22,8 +18,6 @@ GPUS, R, C = 2, 4, 4
 COLUMNS = C // GPUS
 GPU, CTA = Topology("gpu", GPUS), Topology("cta", R)
 
-_MESH = ShardMesh(topologies=(GPU,), layout=Layout((GPUS,), (1,)), names=("g",))
-_BY_COLUMN = canonical_shard_layout((R, C), _MESH, (Split(1),))
 
 PROJECT_FULL = torch.arange(R * C, dtype=torch.float32).reshape(R, C)
 DECODE_FULL = torch.arange(100.0, 100.0 + R, dtype=torch.float32)
@@ -39,8 +33,8 @@ class DecoderLayer:
     @func
     def project(
         x: Tensor[(R, C), "f32"],
-        project_weight: ConstTensor[(R, C), "f32", _BY_COLUMN],
-    ) -> Tensor[(R, C), "f32", _BY_COLUMN]:
+        project_weight: ConstTensor[(R, C), "f32", ShardLayout(Layout((R, GPUS, C // GPUS), (C, C // GPUS, 1)), (Split(1),), Mesh((GPU,), Layout((GPUS,), (1,)), ("g",)))],
+    ) -> Tensor[(R, C), "f32", ShardLayout(Layout((R, GPUS, C // GPUS), (C, C // GPUS, 1)), (Split(1),), Mesh((GPU,), Layout((GPUS,), (1,)), ("g",)))]:
         with Mesh(("gpu",), layout=(GPUS,), names=("g",)) as g:
             return tf.reshard(project_weight, (R, C @ g.g), "gmem")
 

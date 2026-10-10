@@ -13,9 +13,7 @@ from __future__ import annotations
 
 import math
 
-from tilefoundry import func, module
-from tilefoundry.dsl import DimVar, Mesh, Tensor, tf
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 HEADS = 16
@@ -55,7 +53,7 @@ class FlashSplitKDecode:
             l = tf.full_like(m_slots, value=0.0)
             acc = tf.full_like(acc_slots, value=0.0)
 
-            for c in tile(CTX, BLOCK * WORKERS):
+            for c in tf.tile(CTX, BLOCK * WORKERS):
                 base = c + cta.w * BLOCK
                 kb = tf.reshard(
                     k_cache[:, base : base + BLOCK, :, :],

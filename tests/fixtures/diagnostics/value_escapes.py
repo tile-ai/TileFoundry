@@ -1,6 +1,5 @@
 """A thread-placed value consumed after escaping into a CTA-only scope."""
 
-from tilefoundry import module
 from tilefoundry.dsl import *
 
 

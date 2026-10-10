@@ -23,6 +23,7 @@ from tests.ops.ir.typeinfer_utils import (
     raw_shard_tensor_type,
     run_typeinfer_case,
 )
+from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function
@@ -30,17 +31,7 @@ from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Mesh,
-    TensorType,
-    Topology,
-    TupleType,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
-from tilefoundry.ir.types.dim import DimVar, dim_min
+from tilefoundry.ir.types.dim import dim_min
 from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
@@ -179,13 +170,16 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
 
 def test_topk_parser_preserves_largest_sorted():
     src = (
-        "from tilefoundry import func\n"
-        "from tilefoundry.dsl import Tensor\n"
-        "from tilefoundry.dsl.tf import *\n\n"
-        "@func\n"
-        'def f(x: Tensor[(4, 256), "f32"]):\n'
-        "    v = topk(x, k=6, axis=-1, largest=False, sorted=True)\n"
-        "    return v\n"
+        (
+            'from tilefoundry.dsl import *\n'
+            '\n'
+            '\n'
+            '\n'
+            '@func\n'
+            'def f(x: Tensor[(4, 256), "f32"]):\n'
+            '    v = tf.topk(x, k=6, axis=-1, largest=False, sorted=True)\n'
+            '    return v\n'
+        )
     )
     topk = import_dsl(src).body.target
     assert isinstance(topk, TopK)

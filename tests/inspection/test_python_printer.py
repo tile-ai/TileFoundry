@@ -10,6 +10,7 @@ from dataclasses import dataclass, fields, replace
 
 from tests._source import import_dsl
 from tests.fixtures.placed.rmsnorm import RmsnormModule
+from tilefoundry.dsl import *
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import _type_text
 from tilefoundry.ir.core import BindingMetadata, Call, Var
@@ -17,8 +18,6 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, register_target
 from tilefoundry.target.cuda import CudaArchitecture
 from tilefoundry.target.cuda import CudaTarget as BuiltinCudaTarget

@@ -95,7 +95,7 @@ PLAIN_DIMS = {"chunk_rmsnorm": {"chunks": 16}}
 PLAIN_REFUSED = {
     "gemm_relu_gemm_smem_staged": (
         r"no nvidia\.h200_sxm MMA reads lhs f32 smem and rhs f32 smem into f32"
-        r"(.|\n)*gemm_relu_gemm_smem_staged\.py:41:29"
+        r"(.|\n)*gemm_relu_gemm_smem_staged\.py:39:29"
     ),
 }
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))

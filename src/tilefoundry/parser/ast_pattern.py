@@ -1582,6 +1582,17 @@ def _decorator_name(node: ast.AST) -> str | None:
 
 
 def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
+    def external_value(value):
+        state = getattr(context.function, "state", None)
+        if getattr(state, "mesh_stack", ()) and (
+            isinstance(value, Mesh)
+            or isinstance(value, ShardLayout) and value.mesh is not None
+        ):
+            raise ParseError.from_node(
+                node, context, f"layout mesh {node.id!r} is not a lexical Mesh binding"
+            )
+        return value
+
     if isinstance(node, ast.Name):
         lexical = context.lexical_scope.lookup(node.id)
         if lexical is not None:
@@ -1596,7 +1607,7 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
             else None
         )
         if isinstance(module_scope, Mapping) and node.id in module_scope:
-            return module_scope[node.id]
+            return external_value(module_scope[node.id])
         lookup = getattr(module_scope, "lookup", None)
         if callable(lookup):
             try:
@@ -1605,7 +1616,7 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
                 pass
             else:
                 if value is not None:
-                    return value
+                    return external_value(value)
         closure = (
             function.closure
             if function is not None
@@ -1614,7 +1625,7 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
             else {}
         )
         if node.id in closure:
-            return closure[node.id]
+            return external_value(closure[node.id])
         raise ParseError.from_node(node, context, f"undefined static name {node.id!r}")
     if isinstance(node, ast.Attribute):
         owner = _resolve_reference(node.value, context)

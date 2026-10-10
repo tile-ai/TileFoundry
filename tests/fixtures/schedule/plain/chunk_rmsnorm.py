@@ -6,8 +6,7 @@ rank-one and scalar broadcasts (#200). This remains a plain scheduling fixture:
 only two binaries select instructions; the other sites still need candidates.
 """
 
-from tilefoundry import func, module
-from tilefoundry.dsl import BinaryKind, DimVar, Mesh, ReduceKind, T, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 H = 4

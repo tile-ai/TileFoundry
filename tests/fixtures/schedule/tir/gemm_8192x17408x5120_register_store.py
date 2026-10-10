@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=GEMM_8192X17408X5120_REGISTER_STORE function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r250.00MB/w544.00MB@logical,r15.94GB/w544.00MB@total,r15.94GB/w544.00MB@cta,r15.94GB/w273.06MB@thread;rmem:r43.30GB/w42.77GB@logical,r43.31GB/w43.30GB@total,r43.31GB/w43.30GB@cta,r183.88MB/w173.19MB@thread;smem:r15.94GB/w250.00MB@logical,r15.94GB/w15.94GB@total,r15.94GB/w15.94GB@cta,r2.74GB/w15.94GB@thread footprint=a:16.00KB;b:32.00KB;v10:83:64.00KB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:192.00KB persistent=gmem:250.00MB
+# memory traffic=gmem:r250.00MB/w544.00MB@logical,r15.94GB/w544.00MB@total,r15.94GB/w544.00MB@cta,r15.94GB/w273.06MB@thread;rmem:r43.30GB/w42.77GB@logical,r43.31GB/w43.30GB@total,r43.31GB/w43.30GB@cta,r183.88MB/w173.19MB@thread;smem:r15.94GB/w250.00MB@logical,r15.94GB/w15.94GB@total,r15.94GB/w15.94GB@cta,r2.74GB/w15.94GB@thread footprint=a:16.00KB;b:32.00KB;v10:70:64.00KB footprint-precision=exact peak=gmem:522.00MB;rmem:128.00KB;smem:192.00KB persistent=gmem:250.00MB
 #   buffer=b holds=175.50MB time=m space=none reuse=10.46GB fits=no precision=exact
 #   buffer=a holds=3.81MB time=n space=none reuse=83.75MB fits=yes precision=exact
 #   error="l2 reuse window m holds 175.50MB at a 1-unit wave, exceeding capacity 47.68MB"
@@ -60,7 +60,9 @@ def gemm(
                             )
                             with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
                                 T.copy_async_tensor(tile_1, rhs_stages[(k // 64) % 4])
-                        with scope[1:] as scope_2:
+                        with Mesh(
+                            scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
+                        ) as scope_2:
                             with Mesh(
                                 scope[1:2], layout=(4, 8, 4), names=("d0", "d1", "d2")
                             ) as threads_3:
@@ -369,10 +371,10 @@ def gemm(
                                                 rhs_view_7,
                                                 atom=T.cuda.sm90.Wgmma(n=256, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_4),
                                             )
-                    with scope[1:] as scope_3:
-                        with Mesh(
-                            scope_3, layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                        ) as threads_5:
+                    with Mesh(
+                        scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
+                    ) as scope_3:
+                        with scope_3 as threads_5:
                             src_frame = T.tensor_view(
                                 T.ptr_of(acc[0:0 + 128, 0:0 + 256]),
                                 layout=((2 @ threads_5.d0, 8 @ threads_5.d2, 2, 4 @ threads_5.d1, 2, 4 @ threads_5.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),

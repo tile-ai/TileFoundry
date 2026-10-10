@@ -9,8 +9,7 @@ something only beside the control it differs from, so `GmemSquare` is the contro
 for two of these and each pair differs in exactly one respect.
 """
 
-from tilefoundry import func, module
-from tilefoundry.dsl import DimVar, Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")
@@ -178,7 +177,7 @@ class _CrossScopePerformance:
             ("cta",), layout=(_CROSS_SCOPE_HEADS, 8), names=("strip", "tile")
         ) as mesh:
             acc = out
-            for position in tile(_CROSS_SCOPE_SEQ, _CROSS_SCOPE_TILE):
+            for position in tf.tile(_CROSS_SCOPE_SEQ, _CROSS_SCOPE_TILE):
                 base = position + 0
                 placed = tf.reshard(
                     x[:, base : base + _CROSS_SCOPE_TILE, :],

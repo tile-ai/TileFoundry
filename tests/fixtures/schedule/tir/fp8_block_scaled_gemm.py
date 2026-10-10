@@ -92,10 +92,10 @@ def gemm(
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
                         T.copy_async_tensor(tile_1, rhs_stages[kb % 2])
-                with scope[1:] as scope_2:
-                    with Mesh(
-                        scope_2, layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                    ) as threads_3:
+                with Mesh(
+                    scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
+                ) as scope_2:
+                    with scope_2 as threads_3:
                         T.fill(part, 0.0)
                     with Mesh(
                         scope[1:2], layout=(4, 8, 4), names=("d0", "d1", "d2")
@@ -410,9 +410,7 @@ def gemm(
                         layout=Layout((128, 1), (4, 1)),
                         shape=(128, 1),
                     )
-                    with Mesh(
-                        scope_2, layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                    ) as threads_6:
+                    with scope_2 as threads_6:
                         dst_frame = T.tensor_view(
                             T.ptr_of(row_scale[0:0 + 128, 0:0 + 1]),
                             layout=((2 @ threads_6.d0, 8 @ threads_6.d2, 2, 4 @ threads_6.d1), (64, 1, 8, 16)),
@@ -440,9 +438,7 @@ def gemm(
                         layout=Layout((1, 1), (1, 1)),
                         shape=(1, 1),
                     )
-                    with Mesh(
-                        scope_2, layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                    ) as threads_8:
+                    with scope_2 as threads_8:
                         dst_frame_2 = T.tensor_view(
                             T.ptr_of(tile_scale[0:0 + 1, 0:0 + 1]),
                             layout=((1, 1), (1, 1), {threads_8.d0 @ B()}),
@@ -481,19 +477,16 @@ def gemm(
                             shape=(128, 128),
                         )
                         T.binary(lhs_frame_2, rhs_frame_2, dst_frame_4, kind=BinaryKind.ADD)
-                with Mesh(
-                    scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                ) as threads_11:
                     acc_1_view = T.tensor_view(
                         T.ptr_of(acc_1[0:0 + 128, 0:0 + 128]),
-                        layout=((2 @ threads_11.d0, 8 @ threads_11.d2, 2, 4 @ threads_11.d1, 2, 4 @ threads_11.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ scope_2.d0, 8 @ scope_2.d2, 2, 4 @ scope_2.d1, 2, 4 @ scope_2.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),
                         shape=(128, 128),
                     )
                     T.copy(acc_1_view, acc)
-            with scope[1:] as scope_3:
-                with Mesh(
-                    scope_3, layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                ) as threads_12:
+            with Mesh(
+                scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
+            ) as scope_3:
+                with scope_3 as threads_12:
                     src_frame = T.tensor_view(
                         T.ptr_of(acc[0:0 + 128, 0:0 + 128]),
                         layout=((2 @ threads_12.d0, 8 @ threads_12.d2, 2, 4 @ threads_12.d1, 2, 4 @ threads_12.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),

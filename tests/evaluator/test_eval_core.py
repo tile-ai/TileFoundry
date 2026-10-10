@@ -22,13 +22,10 @@ from tests.fixtures.shapes.scaled_modules import (
     PairedScaledParent,
     ScaledChild,
 )
-from tilefoundry import func, module
-from tilefoundry.dsl import RangePattern, Tensor
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
+from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.target import CudaTarget
 
 _DEV = "cpu"
@@ -36,7 +33,7 @@ _DEV = "cpu"
 
 @func
 def _add_scalar(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    return add(x, 2.0)
+    return tf.add(x, 2.0)
 
 
 def test_python_scalar_constant_operand():
@@ -46,12 +43,12 @@ def test_python_scalar_constant_operand():
 
 @func
 def _callee(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    return add(a, b)
+    return tf.add(a, b)
 
 
 @func
 def _caller(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    return mul(_callee(a, b), b)
+    return tf.mul(_callee(a, b), b)
 
 
 def test_function_call_binds_callee_params():
@@ -79,7 +76,7 @@ def test_structurally_equal_params_keep_distinct_ssa_bindings():
 def _carry_sum(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
     acc = a
     for i in range(3):
-        acc = add(acc, b)
+        acc = tf.add(acc, b)
     return acc
 
 
@@ -94,9 +91,9 @@ def _carry_two(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "
     p = a
     q = b
     for i in range(2):
-        p = add(p, b)
-        q = add(q, a)
-    return add(p, q)
+        p = tf.add(p, b)
+        q = tf.add(q, a)
+    return tf.add(p, q)
 
 
 def test_multi_carry_accumulator():

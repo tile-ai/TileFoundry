@@ -2025,6 +2025,14 @@ class StaticCallPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         callee = children["callee"]
+        if (
+            callee is runtime.Mesh
+            and context.function is not None
+            and context.function.state.mesh_stack
+        ):
+            raise ParseError.from_node(
+                match.node, context, "open meshes with `with Mesh(...) as name`"
+            )
         if not callable(callee) and not isinstance(callee, type):
             raise ParseError.from_node(
                 match.node,
@@ -4225,7 +4233,7 @@ def _loop_iterator_kind(call: ast.Call) -> str | None:
     """Recognize the iterator surface shared by syntax and diagnostics."""
     callee = call.func
     if isinstance(callee, ast.Name) and callee.id in {"tile", "range"}:
-        return callee.id
+        return "bare_tile" if callee.id == "tile" else "range"
     if (
         isinstance(callee, ast.Attribute)
         and isinstance(callee.value, ast.Name)
@@ -4310,9 +4318,9 @@ def _iterator_arity_failure(kind: str, count: int, node: ast.Call) -> PatternFai
     if count in ({2, 3} if kind == "tile" else {1, 2, 3}):
         return None
     if kind == "tile" and count == 1:
-        detail = "tile(extent) is not supported; use range(extent)"
+        detail = "tf.tile(extent) is not supported; use range(extent)"
     elif kind == "tile":
-        detail = f"tile() takes 2 or 3 arguments, (stop, step) or (start, stop, step), got {count}"
+        detail = f"tf.tile() takes 2 or 3 arguments, (stop, step) or (start, stop, step), got {count}"
     else:
         detail = f"range() takes 1 to 3 arguments, got {count}"
     return PatternFailure("loop_header", node, detail)
@@ -4358,17 +4366,22 @@ class LoopHeaderPattern(ElementPattern):
         if isinstance(node, ast.For) and isinstance(node.iter, ast.Call):
             kind = _loop_iterator_kind(node.iter)
             count = len(node.iter.args)
+            if kind == "bare_tile":
+                return PatternFailure(
+                    "loop_header", node.iter.func,
+                    "tile loops are written tf.tile(extent, step)",
+                )
             if kind not in {"tile", "range"}:
                 return PatternFailure(
                     "loop_header",
                     node.iter.func,
-                    "loop iterator must be tile(...) or range(...)",
+                    "loop iterator must be tf.tile(...) or range(...)",
                 )
             if node.iter.keywords:
                 return PatternFailure(
                     "loop_header",
                     node.iter,
-                    "tile()/range() does not accept keyword args (positional-only at the IR level)",
+                    "tf.tile()/range() does not accept keyword args (positional-only at the IR level)",
                 )
             if failure := _iterator_arity_failure(kind, count, node.iter):
                 return failure
@@ -4387,7 +4400,7 @@ class LoopHeaderPattern(ElementPattern):
             return PatternFailure(
                 "loop_header",
                 node.iter,
-                "tile()/range() does not accept keyword args (positional-only at the IR level)",
+                "tf.tile()/range() does not accept keyword args (positional-only at the IR level)",
             )
         if failure := _iterator_arity_failure(kind, count, node.iter):
             return failure

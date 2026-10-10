@@ -1,7 +1,6 @@
 """Modules whose sibling-only weights must stay lazy when one leaf runs."""
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.target import CpuTarget, CudaTarget
 

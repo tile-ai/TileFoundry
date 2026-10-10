@@ -20,7 +20,6 @@ from tests.fixtures.placed.symbolic_offset import (
     _SymbolicStoreOffset,
 )
 from tests.models.access_footprint.model import TiledQKVProjection
-from tilefoundry import func, module
 from tilefoundry.analysis import (
     Breakdown,
     ComputeCostMetadata,
@@ -41,7 +40,7 @@ from tilefoundry.analysis.compute_cost import (
 )
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import MemoryOptions
-from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
 from tilefoundry.ir.core import (
     Call,

@@ -28,9 +28,7 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
         with Mesh(
             (Topology("thread", 64),), Layout((2, 32), (32, 1)), names=("d0", "d1")
         ) as scope:
-            with Mesh(
-                (Topology("thread", 64),), Layout((4, 8), (1, 4)) + 32, names=("d0", "d1")
-            ) as threads:
+            with Mesh(scope[1:], layout=((4, 8), (1, 4)), names=("d0", "d1")) as threads:
                 T.fill(acc, 0.0)
             lhs_stages = (T.tensor_view(512, dtype='bf16', storage="smem", layout=Layout((16, 16), (16, 1)), shape=(16, 16)), T.tensor_view(1024, dtype='bf16', storage="smem", layout=Layout((16, 16), (16, 1)), shape=(16, 16)))
             rhs_stages = (T.tensor_view(0, dtype='bf16', storage="smem", layout=Layout((16, 8), (8, 1)), shape=(16, 8)), T.tensor_view(256, dtype='bf16', storage="smem", layout=Layout((16, 8), (8, 1)), shape=(16, 8)))
@@ -50,10 +48,8 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
                         T.copy_async_tensor(tile_1, rhs_stages[(k // 16) % 2])
-                with scope[1:] as scope_2:
-                    with Mesh(
-                        (Topology("thread", 64),), Layout((4, 8), (1, 4)) + 32, names=("d0", "d1")
-                    ) as threads_3:
+                with Mesh(scope[1:], layout=((4, 8), (1, 4)), names=("d0", "d1")) as scope_2:
+                    with scope_2 as threads_3:
                         dst_frame = T.tensor_view(
                             T.ptr_of(lhs_frag[0:0 + 16, 0:0 + 16]),
                             layout=((2, 4 @ threads_3.d0, 2, 8 @ threads_3.d1, 2), (1, 2, 8, 16, 128)),
@@ -90,10 +86,8 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
                                         rhs_view,
                                         atom=T.cuda.sm80.Mma(mesh=threads_3),
                                     )
-            with scope[1:] as scope_3:
-                with Mesh(
-                    (Topology("thread", 64),), Layout((4, 8), (1, 4)) + 32, names=("d0", "d1")
-                ) as threads_6:
+            with Mesh(scope[1:], layout=((4, 8), (1, 4)), names=("d0", "d1")) as scope_3:
+                with scope_3 as threads_6:
                     src_frame = T.tensor_view(
                         T.ptr_of(acc[0:0 + 16, 0:0 + 8]),
                         layout=((2, 4 @ threads_6.d0, 8 @ threads_6.d1, 2), (1, 2, 8, 64)),

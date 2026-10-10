@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, tf
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 S, K, N = 8, 4, 6
@@ -34,9 +32,9 @@ class InvariantReuse:
     ):
         with Mesh(("cta",), layout=(4,), names=("cta",)) as _cta:
             result = tf.zeros(Tensor[(BM, BK), "bf16", (BM, BK), "smem"])
-            for m in tile(S, BM):  # noqa: F405
-                for n in tile(N, BN):  # noqa: F405
-                    for k in tile(K, BK):  # noqa: F405
+            for m in tf.tile(S, BM):  # noqa: F405
+                for n in tf.tile(N, BN):  # noqa: F405
+                    for k in tf.tile(K, BK):  # noqa: F405
                         loaded = tf.reshard(x[m, k], (BM, BK), "smem")
                         result = loaded + loaded
             return result
@@ -115,7 +113,7 @@ class WaveTruncation:
     def read(x: Tensor[(1024,), "bf16"]):
         with Mesh(("cta",), layout=(256,), names=("i",)) as cta:
             result = tf.zeros(Tensor[(4,), "bf16", (4,), "rmem"])
-            for i in tile(  # noqa: F405
+            for i in tf.tile(  # noqa: F405
                 cta.i * (1024 // 256),
                 (cta.i + 1) * (1024 // 256),
                 4,
@@ -170,10 +168,10 @@ class SiblingLoopReuse:
     def read(x: Tensor[(8,), "bf16"], y: Tensor[(8,), "bf16"]):
         with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
             x_local = tf.zeros(Tensor[(8,), "bf16", (8,), "rmem"])
-            for n in tile(6, 2):  # noqa: F405
+            for n in tf.tile(6, 2):  # noqa: F405
                 x_local = tf.reshard(x, (8,), "rmem")
             y_local = tf.zeros(Tensor[(8,), "bf16", (8,), "rmem"])
-            for m in tile(1, 1):  # noqa: F405
+            for m in tf.tile(1, 1):  # noqa: F405
                 y_local = tf.reshard(y, (8,), "rmem")
             return x_local + y_local
 

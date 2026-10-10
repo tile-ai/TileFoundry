@@ -7,12 +7,10 @@ validity rather than structural round-trip validation.
 
 from __future__ import annotations
 
+from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.pattern import RangePattern
-from tilefoundry.ir.types import make_tensor_type
-from tilefoundry.ir.types.dim import DimVar
 
 
 def _s_type():
