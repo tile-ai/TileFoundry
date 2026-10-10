@@ -12,8 +12,8 @@ from math import prod
 
 import isl
 
-from tilefoundry.analysis import MemoryMetadata, analyze
-from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
+from tilefoundry.analysis import AnalysisResult, MemoryMetadata, analyze
+from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
 from tilefoundry.analysis.liveness import storage_source
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
@@ -236,12 +236,13 @@ def _label(call: Call) -> str:
 class Lowering(ExprVisitor[Expr]):
     """Mechanical lowering of one analyzed HIR function."""
 
-    module: Module
+    result: AnalysisResult
     authored: Function
-    function: Function
 
     def __post_init__(self) -> None:
         ExprVisitor.__init__(self)
+        self.module = self.result.module
+        self.function = self.result.function
         self.names = Names(self.authored)
         self.logical: dict[int, TensorType] = {}
         self.staged: dict[int, tuple[Var, LoopRegion | None]] = {}
@@ -256,7 +257,7 @@ class Lowering(ExprVisitor[Expr]):
         self.authored_values: dict[int, Expr] = {}
         if self.function.body is not None and self.authored.body is not None:
             self.authored_values[id(self.function.body)] = self.authored.body
-        self.scopes = build_scopes(self.module, self.function)
+        self.scopes = self.result.scopes
         self.scope_for_call = {
             expr_id: scope
             for scope in walk_scopes(self.scopes)
@@ -1285,7 +1286,7 @@ class ConvertHIRToTIR(ModulePass):
         if not isinstance(authored, Function):
             raise LoweringError(f"{getattr(authored, 'name', self.entry)!r} is not an HIR function")
         result = analyze(module, authored, analysis=("memory",))
-        lowered = Lowering(result.module, authored, result.function).run()
+        lowered = Lowering(result, authored).run()
         lowered.metadata = result.function.metadata
         for record in render_analysis(result).summary:
             if isinstance(record, (ReportIdentity, ReportSelection)):

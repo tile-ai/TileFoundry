@@ -1303,6 +1303,7 @@ class AnalysisResult:
     Attributes:
         module: attribute; Source Module.
         function: attribute; Function that received records.
+        scopes: attribute; Shared iteration-scope tree built for that Function by this Analyze call.
         analyses: attribute; Requested root analyses in first-occurrence order.
         topology_level: attribute; Topology level whose unit the per-unit quantities describe, or None.
         executed: attribute; Analyses executed in dependency order.
@@ -1311,6 +1312,7 @@ class AnalysisResult:
 
     module: "Module"
     function: "Function"
+    scopes: "IterationScope"
     analyses: tuple[str, ...]
     topology_level: str | None
     executed: tuple[str, ...]

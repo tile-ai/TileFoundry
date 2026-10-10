@@ -8,8 +8,8 @@ from typing import Any, Mapping
 
 import isl
 
-from tilefoundry.analysis import analyze
-from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
+from tilefoundry.analysis import AnalysisResult, analyze
+from tilefoundry.analysis.iteration_scope import walk_scopes
 from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.inspection import PatternPrinter, PythonPrinter
 from tilefoundry.ir.core import (
@@ -117,11 +117,12 @@ def _site_types(
     return reads, output
 
 
-def _sites(module, function, ctx: AnalyzeContext) -> tuple[_Site, ...]:
-    root = build_scopes(module, function, ctx=ctx)
+def _sites(result: AnalysisResult) -> tuple[_Site, ...]:
+    root = result.scopes
+    ctx = AnalyzeContext(result.module, result.module.resolve_target(), None, None)
     owners = {identity: scope for scope in walk_scopes(root) for identity in scope.relations}
     sites = []
-    for expr in collect_exprs(function.body):
+    for expr in collect_exprs(result.function.body):
         if not isinstance(expr, Call):
             continue
         if is_dim_op_call(expr) or not isinstance(expr.type, TensorType):
@@ -442,8 +443,7 @@ def candidates(
 ) -> dict[str, Any]:
     """Report instruction candidates for every unscheduled supported HIR site."""
     result = analyze(module, entry, analysis=("memory",), dims=dims)
-    ctx = AnalyzeContext(result.module, result.module.resolve_target(), None, None)
-    sites = _sites(result.module, result.function, ctx)
+    sites = _sites(result)
     if not sites:
         raise ValueError("source has no unscheduled candidate site")
     target = result.module.resolve_target()

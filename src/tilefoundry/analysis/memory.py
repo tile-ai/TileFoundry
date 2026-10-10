@@ -15,7 +15,6 @@ from tilefoundry.ir.core import (
     value_labels,
 )
 from tilefoundry.ir.core import attach_metadata as attach
-from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
@@ -57,7 +56,7 @@ from .footprint import (
     reuse_windows,
     wave_of,
 )
-from .iteration_scope import IterationScope, Repeats, build_scopes, walk_scopes
+from .iteration_scope import IterationScope, Repeats, walk_scopes
 from .liveness import LiveInterval, Liveness, analyze_liveness, result_copies
 from .metadata import (
     Breakdown,
@@ -537,31 +536,6 @@ def values_in_region(
     return tuple(result)
 
 
-def analyze_value_lifetimes(
-    module: Module,
-    function: Function,
-    *,
-    topology_level: str | None = None,
-) -> tuple[ValueLifetime, ...]:
-    """Project checked structural SSA liveness into memory residency."""
-    liveness = analyze_liveness(function)
-    facts = module.resolve_target().get_facts(MemoryHierarchyFacts)
-    analyzed = AnalyzeContext(module, module.resolve_target(), None, None)
-    local = CostContext(
-        scope=FunctionScope(module, function),
-        topology_level=topology_level,
-        topologies=module.effective_topologies(),
-    )
-    projected = _project_allocation_values(
-        liveness,
-        frozenset(id(parameter) for parameter in function.params),
-        facts,
-        local,
-        storage_owners(build_scopes(module, function, ctx=analyzed), liveness, analyzed),
-    )
-    return tuple(item.lifetime for item in projected)
-
-
 @dataclass
 class MemoryContext(AnalyzeContext):
     """State carried through the memory-family expression walk."""
@@ -1029,5 +1003,4 @@ __all__ = [
     "MemoryOptions",
     "SELECTOR",
     "analyze_memory",
-    "analyze_value_lifetimes",
 ]
