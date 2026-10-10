@@ -33,8 +33,8 @@ class PersistentGemmFlat:
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "f32"]:
-        out = tf.zeros(Tensor[(M, N), "f32"])
         with Mesh(("cta",), layout=(NBLOCKS,), names=("i",)) as cta:
+            out = tf.zeros(Tensor[(M, N), "f32"])
             for t in range(cta.i, NUM_TILES, NBLOCKS):
                 mi = (t // GRID_N) * BM
                 ni = (t % GRID_N) * BN

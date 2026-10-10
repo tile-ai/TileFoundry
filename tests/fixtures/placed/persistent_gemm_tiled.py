@@ -31,8 +31,8 @@ class PersistentGemmTiled:
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "f32"]:
-        out = tf.zeros(Tensor[(M, N), "f32"])
         with Mesh(("cta",), layout=(BX, BY), names=("x", "y")) as cta:
+            out = tf.zeros(Tensor[(M, N), "f32"])
             for mi in tile(cta.x * (M // BX), (cta.x + 1) * (M // BX), BM):
                 for ni in tile(cta.y * (N // BY), (cta.y + 1) * (N // BY), BN):
                     acc = tf.zeros(Tensor[(BM, BN), "f32", (BM, BN), "rmem"])

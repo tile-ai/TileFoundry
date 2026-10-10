@@ -8,6 +8,7 @@ import isl
 import pytest
 
 from tests.fixtures.placed import persistent_gemm_tiled
+from tests.fixtures.placed.data_started_window import C, D, DataStart, MeshStart, W
 from tests.fixtures.placed.gemm_schedules import (
     WAVE_BK,
     WAVE_BM,
@@ -96,6 +97,23 @@ def _working_set_bytes(memory: dict) -> int:
 def _reuse_conclusions(memory: dict) -> list[dict]:
     fields = ("buffer", "time", "space", "holds_bytes", "reuse_bytes", "fits")
     return [{field: row[field] for field in fields} for row in memory["reuse_windows"]]
+
+
+@pytest.mark.parametrize(
+    ("module", "start_bytes", "precision"),
+    ((DataStart, 8, "upper_bound"), (MeshStart, 0, "exact")),
+)
+def test_window_starts_preserve_read_traffic_and_footprint_precision(
+    module, start_bytes: int, precision: str,
+) -> None:
+    """Each CTA loads a window, then reads its gmem copy for insertion."""
+    memory = _memory_record(module)
+    window_bytes = W * D * 2
+    traffic = memory["traffic"]["storage"]["gmem"]
+    assert traffic["total"]["read"] == C * (start_bytes + 2 * window_bytes)
+    assert traffic["per_unit"][0]["read"] == start_bytes + 2 * window_bytes
+    assert _footprint_bytes(memory, "x") == window_bytes
+    assert memory["footprint"]["precision"] == precision
 
 
 @pytest.mark.parametrize("counted_precision", tuple(AnalysisPrecision))

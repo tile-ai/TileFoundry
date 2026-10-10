@@ -131,9 +131,11 @@ consistent across construction sites.
 **Call typing — visitor-scoped inference.** A `Call` keeps its authored
 `Function` template as `target`. Its result type is inferred by seeding a new
 visitor memo with the actual argument types bound to the callee's formal
-parameters, then walking the callee body in a child context. This is type
-inference only: it does not rebuild a `Function`, mutate the target, or create
-a per-call instance. The callee body is read under the caller's effective
+parameters, then walking the callee body in a child context that retains the
+call site's mesh. A callee without a mesh declaration runs in that scope;
+a `MeshRegion` in its body composes with it using the usual nested-region rules.
+This is type inference only: it does not rebuild a `Function`, mutate the target,
+or create a per-call instance. The callee body is read under the caller's effective
 Target and none of its nodes is written; only a walk that owns the caller's
 body stores the result on the caller's `Call`.
 Caller-supplied layout (sharding) flowing into a layout-unconstrained
@@ -141,8 +143,9 @@ parameter propagates through the body, including through a `Tuple` or
 `LoopRegion` return.
 
 Within one inference traversal, repeated calls to the same `Function` object
-with equal argument types MUST reuse the previously inferred result type. The
-cache key uses callee identity and the argument-type tuple; the cached value is
+with equal argument types and equal call-site mesh scopes MUST reuse the
+previously inferred result type. The cache key uses callee identity, the
+argument-type tuple, and the call-site mesh; the cached value is
 only a `Type`, never a derived `Function` or a replacement `Call.target`.
 
 Argument types bind to supplied parameters in order. A `ConstTensor` parameter

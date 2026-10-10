@@ -2136,6 +2136,15 @@ class CallBindingRule:
 
 
 @dataclass(frozen=True)
+class AuthoredCallScopeRule:
+    STATEMENT: ClassVar[str] = "An authored HIR call must run inside a mesh if its function opens one."
+
+    def apply(self, value, *, match, context):
+        _note_authored_call(match.node, context)
+        return value
+
+
+@dataclass(frozen=True)
 class CallTypeInferenceRule:
     STATEMENT: ClassVar[str] = "A call's result type must be inferred from its binding."
 
@@ -2643,6 +2652,7 @@ class CallPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         CallVariadicInputFormRule(),
         CallBindingRule(),
+        AuthoredCallScopeRule(),
         CallTypeInferenceRule(),
     )
 
@@ -2677,6 +2687,7 @@ def _expression_operator_pattern(operator_type: type[ast.AST]) -> ChoicePattern:
 
 _CALL_RESULT_RULES: tuple[AstRule[Any], ...] = (
     CallBindingRule(),
+    AuthoredCallScopeRule(),
     CallTypeInferenceRule(),
 )
 
@@ -2808,6 +2819,7 @@ class BinaryExpressionPattern(ElementPattern):
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         CallBindingRule(),
+        AuthoredCallScopeRule(),
         CallTypeInferenceRule(),
     )
 
@@ -2851,6 +2863,7 @@ class UnaryExpressionPattern(ElementPattern):
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         CallBindingRule(),
+        AuthoredCallScopeRule(),
         CallTypeInferenceRule(),
     )
 
@@ -3108,6 +3121,7 @@ class SubscriptExpressionPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
+        _note_authored_call(match.node, context)
         value = children["value"]
         index = children["index"]
         if isinstance(value.type, runtime.TupleType):
@@ -3219,6 +3233,7 @@ class MeshCoordinatePattern(ElementPattern):
     def construct(match, children, context):
         if context.function is None:
             raise ParseError.from_node(match.node, context, "mesh coordinate lacks context")
+        _note_authored_call(match.node, context)
         mesh = match.captures["mesh"]
         axis = match.captures["axis"]
         extent = flatten(mesh.layout).shape[axis]
@@ -3442,6 +3457,31 @@ def _parser_infer_context(context):
     return found
 
 
+def _reject_unscoped_call(node, context):
+    raise ParseError.from_node(
+        node,
+        context,
+        f"{ast.unparse(node)} runs outside every mesh scope in a HIR function "
+        "that opens one; move this operation inside with Mesh(...)",
+    )
+
+
+def _note_authored_call(node, context):
+    """Record authored Calls in their execution scope.
+
+    See [parser §1.5](docs/spec/parser.md#15-mesh-declarations-and-region-captures).
+    """
+    if context.function is None or context.function.dialect != "hir":
+        return
+    if _parser_infer_context(context).current_mesh is not None:
+        return
+    state = context.function.state
+    if state.opened_mesh:
+        _reject_unscoped_call(node, context)
+    if state.unscoped_call is None:
+        state.unscoped_call = node
+
+
 def _directly_bound_names(statements):
     """Return names assigned directly by a block's statements."""
     names: set[str] = set()
@@ -3517,6 +3557,11 @@ def _enter_mesh_scope(context, mesh, match):
     with it, so on the way out the new ones can be told from the old.
     """
     infer = _parser_infer_context(context)
+    if context.function.dialect == "hir":
+        state = context.function.state
+        if state.unscoped_call is not None:
+            _reject_unscoped_call(state.unscoped_call, context)
+        state.opened_mesh = True
     try:
         entered_mesh = runtime.make_mesh(infer.current_mesh, mesh) if infer.current_mesh else mesh
     except ValueError as error:

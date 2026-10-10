@@ -53,7 +53,7 @@ class TypeInferContext:
     scope: FunctionScope | None = None
     current_mesh: Mesh | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
-    instantiated_memo: dict[tuple[int, tuple[Type, ...]], Type] = field(
+    instantiated_memo: dict[tuple[int, tuple[Type, ...], Mesh | None], Type] = field(
         default_factory=dict, repr=False, compare=False
     )
 
@@ -85,15 +85,13 @@ class TypeInferContext:
     def for_callee(self, callee: object) -> TypeInferContext:
         """Move to *callee* with a fresh scope memo and the shared call cache.
 
-        The mesh scope resets with them: a callee runs on the participants its
-        own body names, not on the caller's as well, so asking what a call runs
-        on is a question about `callee.body` and reaches no further.
+        The callee inherits the call site's mesh. A MeshRegion in its body
+        composes that scope using the same rules as an authored nested region.
         """
         return replace(
             self,
             scope=self.scope_for(callee),
             memo={},
-            current_mesh=None,
         )
 
     def type_of(self, expr: Expr) -> Type:

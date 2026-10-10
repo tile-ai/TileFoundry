@@ -822,6 +822,8 @@ class ParserState:
 
     mesh_stack: list[object] = field(default_factory=list)
     mesh_coordinates: dict[tuple[int, int], object] = field(default_factory=dict)
+    opened_mesh: bool = False
+    unscoped_call: ast.AST | None = None
 
 
 @dataclass(frozen=True)

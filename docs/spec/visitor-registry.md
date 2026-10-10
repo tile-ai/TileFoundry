@@ -191,7 +191,7 @@ class TypeInferContext:
     scope: FunctionScope | None = None
     current_mesh: Mesh | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
-    instantiated_memo: dict[tuple[int, tuple[Type, ...]], Type] = field(
+    instantiated_memo: dict[tuple[int, tuple[Type, ...], Mesh | None], Type] = field(
         default_factory=dict, repr=False, compare=False
     )
 
@@ -216,7 +216,9 @@ nothing of that kind rather than guessing.
     and the pair MUST be reachable from the package root together, since one is
     how the other is constructed.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
-    subclass retains its analysis-specific state.
+    subclass retains its analysis-specific state. It also retains `current_mesh`:
+    a callee inherits the call site's scope, and a region in its body composes
+    with that scope using the usual nested-region rules.
   - `resolve_target` answers which Target's rules apply: the scope Module's
     resolved Target, or `None` without a scope or when no Module on the owner
     chain declares one. The parser's context, which reads a function before its
@@ -230,8 +232,8 @@ nothing of that kind rather than guessing.
     Function boundary creates a fresh context table; a region keeps its scope
     and seeds a nested visitor table from the enclosing one.
   - `instantiated_memo` is the traversal-wide Function-call result table,
-    keyed by `(id(callee), argument_types)`. Crossing a Function boundary MUST
-    preserve the same table object. It stores Types only and never introduces
+    keyed by `(id(callee), argument_types, current_mesh)`. Crossing a Function
+    boundary MUST preserve the same table object. It stores Types only and never introduces
     a derived Function into the IR.
   - The two tables have opposite lifetimes: `memo` is replaced at a Function
     boundary, while `instantiated_memo` is shared by the complete traversal.
@@ -305,7 +307,8 @@ def inference_type(expr: Expr, ctx: TypeInferContext | None = None, *, ranges=Fa
     `ctx.error`. Handlers read operand types through `ctx.type_of`, which sees
     the current scope's memo bindings. A `Function` binds parameters into a new visitor memo and walks
     its body in a replaced child context ([hir §1.1](./hir.md#11-function)); repeated calls to the same
-    callee with equal argument types reuse the result in `instantiated_memo`.
+    callee with equal argument types and call-site mesh scopes reuse the result
+    in `instantiated_memo`.
   - `visit_leaf_Tuple` derives a structural `TupleType` directly from its
     already-derived operands, never the Tuple node's stamped `.type`.
   - `visit_LoopRegion` and `visit_MeshRegion` derive all `args` outside the

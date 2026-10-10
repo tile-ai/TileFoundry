@@ -68,8 +68,8 @@ class Naive:
 
     @func
     def rms_norm_quant(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
-        normed = norm(a, gamma)  # noqa: F821
         with Mesh(("cta",), (1,), ("tile",)) as _cta:
+            normed = norm(a, gamma)  # noqa: F821
             with Mesh(("thread",), (ROWS, 4, 32), ("x", "y", "t")) as m:
                 held = tf.reshard(normed, (ROWS @ m.x, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
                 blocks = tf.reshape(tf.cast(held, "f32"), (ROWS, BLOCKS, BLOCK))
