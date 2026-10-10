@@ -7,6 +7,7 @@ import json
 from contextlib import contextmanager
 
 from tilefoundry.ir.core import Call, Constant, Op, Printable, PrinterBase, Tuple, Var
+from tilefoundry.ir.core.param_def import MISSING
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.mesh_scope import device_layout
@@ -31,8 +32,6 @@ from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import ExprFunctor, TypeFunctor
 from tilefoundry.target import Target
 from tilefoundry.utils.python_source import PythonExpr
-
-from .print_context import DSL_STAR_IMPORT
 
 _DIM_INFIX_OPS: dict[type, str] = {
     DimAdd: "+",
@@ -130,8 +129,6 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
     def visit_Call(self, value: Call, ctx=None) -> str:
         ceildiv_args = self._ceildiv_args(value)
         if ceildiv_args is not None:
-            if ctx is not None:
-                ctx.use(PythonExpr((DSL_STAR_IMPORT,), "ceildiv"))
             left, right = ceildiv_args
             return f"ceildiv({self.dim_entry(left, ctx)}, {self.dim_entry(right, ctx)})"
         target = value.target
@@ -283,10 +280,6 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         return parts[0] if len(parts) == 1 else "(" + ", ".join(parts) + ")"
 
     def visit_TensorType(self, value: TensorType, ctx=None) -> str:
-        if ctx is not None:
-            ctx.use(
-                PythonExpr((DSL_STAR_IMPORT,), self._tensor_head)
-            )
         result = (
             f"{self._tensor_head}["
             f'{self.shape_tuple(value.shape, ctx)}, "{self.dtype_str(value.dtype, ctx)}"'
@@ -308,13 +301,6 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         return f"Tuple[{', '.join(self.visit(field, ctx) for field in value.fields)}]"
 
     def visit_PointerType(self, value: PointerType, ctx=None) -> str:
-        if ctx is not None:
-            ctx.use(
-                PythonExpr(
-                    (DSL_STAR_IMPORT,),
-                    "",
-                )
-            )
         return f"PointerType(DType.{value.dtype.name}, StorageKind.{value.storage.name})"
 
     def visit_UnitType(self, value: UnitType, ctx=None) -> str:
@@ -331,7 +317,6 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             sliced = ctx.mesh_slice(value)
             if sliced is not None:
                 return sliced
-            ctx.use(PythonExpr((DSL_STAR_IMPORT,), "Mesh"))
         return self._mesh_text(value, ctx)
 
     def mesh_context(self, value: Mesh, ctx) -> str:
@@ -344,13 +329,10 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             shape = self.shape_tuple(flatten(value.layout.shape), ctx)
             names = ", ".join(json.dumps(name) for name in value.names)
             names = f"({names}{',' if len(value.names) == 1 else ''})"
-            ctx.imports.add(DSL_STAR_IMPORT)
             return f"Mesh({selection}, layout={shape}, names={names})"
         return self._mesh_text(value, ctx, layout_position=True)
 
     def _mesh_text(self, value: Mesh, ctx=None, *, layout_position: bool = False) -> str:
-        if ctx is not None:
-            ctx.imports.add(DSL_STAR_IMPORT)
         topologies = ", ".join(
             f'Topology("{topology.name}", {self.dim_entry(topology.size, ctx)})'
             for topology in value.topologies
@@ -372,14 +354,10 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         return "None"
 
     def visit_Layout(self, value: Layout, ctx=None) -> str:
-        if ctx is not None:
-            ctx.use(PythonExpr((DSL_STAR_IMPORT,), "Layout"))
         strides = self.shape_tuple(value.strides, ctx) if value.strides is not None else "None"
         return f"Layout({self.shape_tuple(value.shape, ctx)}, {strides})"
 
     def visit_Swizzle(self, value: Swizzle, ctx=None) -> str:
-        if ctx is not None:
-            ctx.use(PythonExpr((DSL_STAR_IMPORT,), ""))
         return f"Swizzle({value.bits}, {value.base}, {value.shift})"
 
     def layout_surface(self, value: LayoutBase, ctx=None) -> str:
@@ -398,14 +376,12 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
     def op_value(self, value: Op, ctx=None, indent: str = "") -> str:
         """Render a schema-backed op value through its attribute values."""
         schema = type(value)._op_schema
-        if ctx is not None:
-            ctx.imports.add(DSL_STAR_IMPORT)
         attrs = []
         for param in schema.signature:
             if param.kind != "attribute":
                 continue
             attr = getattr(value, param.name, None)
-            if attr is None:
+            if param.default is not MISSING and attr == param.default:
                 continue
             with self.type_surface(indent=indent):
                 rendered = (
@@ -417,8 +393,6 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         return f"{schema.dialect}.{schema.name}({', '.join(attrs)})"
 
     def visit_ComposedLayout(self, value: ComposedLayout, ctx=None) -> str:
-        if ctx is not None:
-            ctx.use(PythonExpr((DSL_STAR_IMPORT,), ""))
         outer, child = self._indent, self._indent + "    "
         with self.type_surface(indent=child):
             inner_text = self.visit(value.inner, ctx)
@@ -432,8 +406,6 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         )
 
     def visit_ShardLayout(self, value: ShardLayout, ctx=None) -> str:
-        if ctx is not None:
-            ctx.use(PythonExpr((DSL_STAR_IMPORT,), ""))
         outer, child = self._indent, self._indent + "    "
         attrs = ", ".join(self.visit(attr, ctx) for attr in value.attrs)
         if len(value.attrs) == 1:
@@ -450,18 +422,12 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         )
 
     def visit_Broadcast(self, value: Broadcast, ctx=None) -> str:
-        if ctx is not None:
-            ctx.use(PythonExpr((DSL_STAR_IMPORT,), "B"))
         return "B()"
 
     def visit_Split(self, value: Split, ctx=None) -> str:
-        if ctx is not None:
-            ctx.use(PythonExpr((DSL_STAR_IMPORT,), "S"))
         return f"S({value.axis})"
 
     def visit_Partial(self, value: Partial, ctx=None) -> str:
-        if ctx is not None:
-            ctx.use(PythonExpr((DSL_STAR_IMPORT,), "P"))
         return f'P("{value.reduction}")'
 
     def print(self, value, ctx=None, indent: str = "") -> str:
@@ -482,14 +448,10 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         if isinstance(value, StorageKind):
             return json.dumps(value.name.lower())
         if isinstance(value, enum.Enum):
-            if ctx is not None:
+            if ctx is not None and type(value).__module__ != "tilefoundry.ir.core.kinds":
                 ctx.use(
                     PythonExpr(
-                        (
-                            DSL_STAR_IMPORT
-                            if type(value).__module__ == "tilefoundry.ir.core.kinds"
-                            else f"from {type(value).__module__} import {type(value).__name__}",
-                        ), ""
+                        (f"from {type(value).__module__} import {type(value).__name__}",), ""
                     )
                 )
             return f"{type(value).__name__}.{value.name}"
@@ -508,8 +470,6 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
 
     def render_pattern(self, pattern: Pattern, ctx=None) -> str:
         if isinstance(pattern, RangePattern):
-            if ctx is not None:
-                ctx.use(PythonExpr((DSL_STAR_IMPORT,), ""))
             return f'RangePattern("{pattern.dim_var}", {pattern.lo}, {pattern.hi})'
         return repr(pattern)
 

@@ -33,6 +33,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.param_def import _variadic_item_annotation
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
@@ -58,10 +59,9 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import expr_children
-from tilefoundry.parser.pattern_nodes import _variadic_item_annotation
 from tilefoundry.utils.python_source import PythonExpr
 
-from .print_context import DSL_STAR_IMPORT, HirPrintContext
+from .print_context import HirPrintContext
 from .printer_base import PythonPrinter
 from .tir_printer import _function_block as _tir_function_block
 from .tir_printer import tir_function_to_python, tir_module_to_python
@@ -146,8 +146,6 @@ class HirPrinter(PythonPrinter):
         target = expr.target
         args_text = ", ".join(self.reference(arg) for arg in expr.args)
         if isinstance(target, Reshard):
-            if ctx is not None:
-                ctx.imports.add(DSL_STAR_IMPORT)
             layout_kw = ""
             if target.layout is not None:
                 with self.type_surface(indent=self._indent + "    "):
@@ -188,8 +186,6 @@ class HirPrinter(PythonPrinter):
                 stop = begin + size * stride
                 indexers.append(f"{begin}:{stop}" if stride == 1 else f"{begin}:{stop}:{stride}")
             if runtime_starts:
-                if ctx is not None:
-                    ctx.imports.add(DSL_STAR_IMPORT)
                 start_refs = ", ".join(
                     self._slice_start(start, size, stride)
                     for start, size, stride in zip(starts.elements, target.sizes, target.strides)
@@ -203,8 +199,6 @@ class HirPrinter(PythonPrinter):
                 )
             return f"{self.reference(expr.args[0])}[{', '.join(indexers)}]"
 
-        if ctx is not None:
-            ctx.imports.add(DSL_STAR_IMPORT)
         alias_name = _kinded_alias_name(target)
         suppressed = {"kind"} if alias_name is not None else set()
         attrs: list[str] = []
@@ -922,7 +916,6 @@ def _emit_def(
         step = printer.visit(region.step, ctx)
         start = printer.visit(region.start, ctx)
         if id(region.induction_var) in _tile_window_steps:
-            ctx.imports.add(DSL_STAR_IMPORT)
             loop = (
                 f"tf.tile({extent}, {step})"
                 if region.start == 0
@@ -1036,12 +1029,9 @@ def _emit_def(
     return lines
 
 
-def _new_hir_context(*, for_module: bool = False, target=None) -> HirPrintContext:
+def _new_hir_context(*, target=None) -> HirPrintContext:
     """Create a HIR context with imports owned by the surrounding file."""
     ctx = HirPrintContext()
-    if for_module:
-        ctx.imports.add(DSL_STAR_IMPORT)
-    ctx.imports.add(DSL_STAR_IMPORT)
     if target is not None:
         rendered = target.to_python()
         ctx.imports.update(rendered.imports)
@@ -1229,7 +1219,6 @@ def _module_decorator_line(mod: Module, entry_name: str | None, ctx: HirPrintCon
         ctx.imports.update(rendered.imports)
         kwargs.append(f"target={rendered.text}")
     if mod.topologies is not None:
-        ctx.imports.add(DSL_STAR_IMPORT)
         topo_strs = [f'Topology("{t.name}", {printer.visit(t.size, ctx)})' for t in mod.topologies]
         rendered_topologies = f"({', '.join(topo_strs)},)" if topo_strs else "()"
         kwargs.append(f"topologies={rendered_topologies}")
@@ -1299,7 +1288,7 @@ def _module_to_python(
         raise TypeError("Module printer requires a function entry")
 
     indent4 = "    "
-    ctx = _new_hir_context(for_module=True, target=root.target)
+    ctx = _new_hir_context(target=root.target)
     lines = _emit_module_class(
         root,
         module_name,

@@ -30,6 +30,7 @@ from tilefoundry.ir.core import (
     attach_metadata,
     get_metadata,
 )
+from tilefoundry.ir.core.param_def import _variadic_item_annotation
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.pattern import _mangle_variant_name
 from tilefoundry.ir.tir.launch import launch_call
@@ -2411,20 +2412,6 @@ class VariadicInputsPattern(ElementPattern):
         return VariadicInputs(tuple(children.values()))
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
-
-
-def _variadic_item_annotation(param: object) -> object | None:
-    if getattr(param, "kind", None) != "input":
-        return None
-    annotation = getattr(param, "annotation", None)
-    if get_origin(annotation) is not tuple:
-        return None
-    args = get_args(annotation)
-    if len(args) == 1:
-        return args[0]
-    if len(args) == 2 and args[1] is Ellipsis:
-        return args[0]
-    return None
 
 
 @dataclass(frozen=True)
