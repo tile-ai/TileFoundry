@@ -43,6 +43,7 @@ from tilefoundry.visitor_registry.access_relation import (
     projected_axes,
     relations_of,
 )
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import (
     candidate_ops,
     instruction_from_hir,
@@ -122,6 +123,8 @@ def _sites(module, function, ctx: AnalyzeContext) -> tuple[_Site, ...]:
         if not isinstance(expr, Call):
             continue
         if is_dim_op_call(expr) or not isinstance(expr.type, TensorType):
+            continue
+        if aliased_operand(expr) is not None:
             continue
         instructions = candidate_ops(type(expr.target))
         if not instructions:

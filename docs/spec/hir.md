@@ -1555,19 +1555,27 @@ class Reshard(Op):
 
     Attributes:
         x: input; input tensor.
-        layout: attribute; optional target ShardLayout.
+        layout: attribute; optional target LayoutBase (Layout / ComposedLayout / ShardLayout).
         storage: attribute; optional target storage kind.
     """
 
     x: Tensor
-    layout: ShardLayout = None
+    layout: LayoutBase = None
     storage: StorageKind = None
 ```
 - constraints:
   - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
     `x.storage`.
   - The output preserves the input logical `TensorType.shape`.
-  - Supplied `layout` is a `ShardLayout`.
+  - Supplied `layout` is a `LayoutBase` (`Layout` / `ComposedLayout` / `ShardLayout`).
+  - Memory analysis and lowering MUST treat a same-storage Reshard as a view
+    only when both layouts are plain (no nested `ShardLayout`), the shape is
+    literal, and every colex coordinate maps to the same address in both
+    layouts, including composed swizzles. The result MUST reuse the source
+    buffer, lower to a view, and require no instruction candidate.
+  - A Reshard that changes addresses or storage, or whose layout contains a
+    `ShardLayout`, MUST retain its independent buffer and instruction selection
+    requirements.
   - Destination storage is concrete, not unmaterialized.
   - The single op covers zero-copy view, cross-storage copy, cross-CTA
   redistribute, and mixed cases; typeinfer and the recursive-local Cost

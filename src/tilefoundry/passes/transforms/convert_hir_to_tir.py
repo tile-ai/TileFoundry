@@ -76,6 +76,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iteration_universe,
     projected_axes,
 )
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import candidate_ops, sole_candidate
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.registries import typeinfer_registry
@@ -653,6 +654,19 @@ class Lowering(ExprVisitor[Expr]):
             tuple(i64_const(0) for _ in source.type.shape),
             tuple(source.type.shape),
             desired,
+            cursor,
+            "tile",
+        )
+
+    def visit_Reshard(self, call: Call, cursor: _Cursor) -> Expr:
+        if aliased_operand(call) is None:
+            return self._lower_automatic_instruction(call, cursor)
+        source = self.visit(call.args[0], cursor)
+        return self._window(
+            source,
+            tuple(i64_const(0) for _ in source.type.shape),
+            tuple(source.type.shape),
+            call.type,
             cursor,
             "tile",
         )
