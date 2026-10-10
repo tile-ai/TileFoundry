@@ -33,7 +33,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.param_def import _variadic_item_annotation
+from tilefoundry.ir.core.param_def import variadic_item_annotation
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
@@ -239,7 +239,7 @@ class HirPrinter(PythonPrinter):
         inputs = tuple(param for param in schema.signature if param.kind == "input") if schema else ()
         arguments = (
             [self.tuple_reference(expr.args)]
-            if len(inputs) == 1 and _variadic_item_annotation(inputs[0]) is not None
+            if len(inputs) == 1 and variadic_item_annotation(inputs[0]) is not None
             else [self.reference(arg) for arg in expr.args]
         )
         return f"tf.{_op_name(target)}({', '.join([*arguments, *attrs])})"

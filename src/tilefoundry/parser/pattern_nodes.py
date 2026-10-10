@@ -30,7 +30,7 @@ from tilefoundry.ir.core import (
     attach_metadata,
     get_metadata,
 )
-from tilefoundry.ir.core.param_def import _variadic_item_annotation
+from tilefoundry.ir.core.param_def import variadic_item_annotation
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.pattern import _mangle_variant_name
 from tilefoundry.ir.tir.launch import launch_call
@@ -2425,7 +2425,7 @@ class CallVariadicInputFormRule:
         if not isinstance(schema, runtime.OpSchema):
             return value
         inputs = tuple(param for param in schema.signature if param.kind == "input")
-        if len(inputs) != 1 or _variadic_item_annotation(inputs[0]) is None:
+        if len(inputs) != 1 or variadic_item_annotation(inputs[0]) is None:
             return value
         argument = match.node.args[0]
         if isinstance(argument, ast.GeneratorExp):
@@ -2543,7 +2543,7 @@ class CallPattern(ElementPattern):
     @staticmethod
     def _pattern_for_param(param: object, node: ast.AST) -> AstPattern[Any]:
         annotation = param.annotation
-        if _variadic_item_annotation(param) is not None:
+        if variadic_item_annotation(param) is not None:
             return VariadicInputsPattern()
         if annotation is runtime.TensorType and isinstance(node, ast.Subscript):
             return TensorPattern()
@@ -2575,7 +2575,7 @@ class CallPattern(ElementPattern):
         params = tuple(schema.signature)
         inputs = [param for param in params if param.kind == "input"]
         attrs = [param for param in params if param.kind == "attribute"]
-        variadic = len(inputs) == 1 and _variadic_item_annotation(inputs[0]) is not None
+        variadic = len(inputs) == 1 and variadic_item_annotation(inputs[0]) is not None
         positional = list(node.args)
         children: list[AstChild] = []
         bound_attrs: set[str] = set()

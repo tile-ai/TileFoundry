@@ -48,15 +48,7 @@ class PrintContext:
             return rendered.text
         return rendered
 
-    def declare_dim(
-        self,
-        name: str,
-        var,
-        *,
-        import_statement: str = DSL_STAR_IMPORT,
-    ) -> None:
-        if import_statement != DSL_STAR_IMPORT:
-            self.imports.add(import_statement)
+    def declare_dim(self, name: str, var) -> None:
         self._dim_declarations.setdefault(name, (var, "DimVar"))
 
     def header(self) -> list[str]:
