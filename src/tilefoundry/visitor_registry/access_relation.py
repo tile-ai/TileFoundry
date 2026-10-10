@@ -1103,6 +1103,32 @@ def broadcast_shapes(a: tuple, b: tuple, *, raising: bool = True):
     return tuple(out)
 
 
+def broadcast_all(shapes: tuple[tuple, ...]) -> tuple:
+    """The common right-aligned broadcast shape of these operands."""
+    out_shape = shapes[0]
+    for shape in shapes[1:]:
+        out_shape = broadcast_shapes(out_shape, shape)
+    return out_shape
+
+
+def broadcast_relations(shapes: tuple[tuple, ...]) -> tuple[AccessRelation, ...]:
+    """Map the broadcast domain to each operand and then to the result."""
+    out_shape = broadcast_all(shapes)
+    rank = len(out_shape)
+    dims = [f"d{i}" for i in range(rank)]
+    source = "[" + ", ".join(dims) + "]"
+    maps = []
+    for shape in shapes:
+        pad = rank - len(shape)
+        accessed = [
+            "0" if is_one(shape[i]) and not is_one(out_shape[pad + i]) else dims[pad + i]
+            for i in range(len(shape))
+        ]
+        maps.append(AccessRelation(isl.map(f"{{ {source} -> [{', '.join(accessed)}] }}")))
+    maps.append(AccessRelation(isl.map(f"{{ {source} -> [{', '.join(dims)}] }}")))
+    return tuple(maps)
+
+
 def broadcast_access(result_shape: tuple, operand_shape: tuple) -> AccessRelation:
     """Which coordinate of an operand a result coordinate reads.
 
@@ -1156,6 +1182,23 @@ def _operand_reads(
         else:
             reads.append(out_axes[axis + shift])
     return reads
+
+
+def gather_relations(
+    source: TensorType, index: TensorType, axis: int
+) -> tuple[AccessRelation, AccessRelation, AccessRelation]:
+    """Read source slices selected by index, then write the gathered result."""
+    out_shape = (*source.shape[:axis], index.shape[0], *source.shape[axis + 1 :])
+    rank = len(out_shape)
+    carried = {position: f"d{position}" for position in range(rank)}
+    return iterating(
+        out_shape,
+        (
+            reached_at(rank, source, source, carried, free=(axis,)),
+            reached_at(rank, index, index, {0: carried.get(axis, "0")}),
+            identity_access(rank),
+        ),
+    )
 
 
 def matmul_relations(
@@ -1313,6 +1356,9 @@ def static_bytes(type_: "Type") -> int | None:
 __all__ = [
     "AccessRelation",
     "access_relation_registry",
+    "broadcast_all",
+    "broadcast_relations",
+    "gather_relations",
     "iterating",
     "identity_access",
     "identity_relations",

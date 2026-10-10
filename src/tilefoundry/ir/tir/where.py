@@ -5,11 +5,15 @@ from __future__ import annotations
 from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir.tensor.where import _broadcast_all, _maps
 from tilefoundry.ir.pattern import utils
 from tilefoundry.ir.types import DType, StorageKind, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
-from tilefoundry.visitor_registry.access_relation import iterating, register_access_relation
+from tilefoundry.visitor_registry.access_relation import (
+    broadcast_all,
+    broadcast_relations,
+    iterating,
+    register_access_relation,
+)
 
 _IN_RMEM = utils.tensor_in(StorageKind.RMEM)
 
@@ -35,8 +39,8 @@ def _(call, ctx) -> UnitType:
 @register_access_relation(Where)
 def _(call, ctx):
     shapes = tuple(ctx.type_of(arg).shape for arg in call.args[:3])
-    boundaries = _maps(shapes)
-    return iterating(_broadcast_all(shapes), (*boundaries, boundaries[-1]))
+    boundaries = broadcast_relations(shapes)
+    return iterating(broadcast_all(shapes), (*boundaries, boundaries[-1]))
 
 
 @register_verify_stmt(Where)
@@ -46,7 +50,7 @@ def _(call, ctx) -> None:
         ctx.error(call, "Where condition must have bool dtype")
     if lhs.dtype != rhs.dtype or lhs.dtype != dst.dtype:
         ctx.error(call, "Where data branches and destination must have matching dtypes")
-    if _broadcast_all((cond.shape, lhs.shape, rhs.shape)) != tuple(dst.shape):
+    if broadcast_all((cond.shape, lhs.shape, rhs.shape)) != tuple(dst.shape):
         ctx.error(call, "Where destination must have the broadcast shape of its inputs")
 
 

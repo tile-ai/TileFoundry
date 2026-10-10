@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import torch
+
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir.tensor.index_select import IndexSelect, _eval_index_select
 from tilefoundry.ir.pattern import (
     DistinctConstraint,
     OrPattern,
@@ -23,10 +24,8 @@ from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
-    identity_access,
+    gather_relations,
     identity_relations,
-    iterating,
-    reached_at,
     register_access_relation,
 )
 
@@ -149,27 +148,29 @@ def _copy_async_access(call, ctx):
         return identity_relations(call, ctx)
     source = ctx.type_of(call.args[0])
     index = ctx.type_of(call.args[2])
-    shape = (index.shape[0], *source.shape[1:])
-    rank = len(shape)
-    carried = {axis: f"d{axis}" for axis in range(rank)}
-    return iterating(
-        shape,
-        (
-            reached_at(rank, source, source, carried, free=(0,)),
-            identity_access(rank),
-            reached_at(rank, index, index, {0: "d0"}),
-            identity_access(rank),
-        ),
-    )
+    source_access, index_access, out = gather_relations(source, index, 0)
+    return source_access, out, index_access, out
 
 
 @register_schedule_eval(CopyAsync)
 def _eval_scheduled_copy_async(ctx):
-    if is_indexed_schedule(ctx.args):
-        return _eval_index_select(
-            ctx.for_op(IndexSelect(dim=0, fill_value=ctx.op.fill), ctx.args, ctx.result_type)
+    if not is_indexed_schedule(ctx.args):
+        return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
+    source, index = (arg.data for arg in ctx.args)
+    if ctx.op.fill is None:
+        data = torch.index_select(source, 0, index)
+    else:
+        valid = (index >= 0) & (index < source.shape[0])
+        data = torch.full(
+            (index.numel(), *source.shape[1:]),
+            ctx.op.fill,
+            dtype=source.dtype,
+            device=source.device,
         )
-    return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
+        selected = torch.index_select(source, 0, index[valid])
+        positions = torch.nonzero(valid, as_tuple=True)[0]
+        data.index_copy_(0, positions, selected)
+    return TensorValue(data=data, type=ctx.result_type)
 
 
 @register_verify_stmt(CopyAsync)

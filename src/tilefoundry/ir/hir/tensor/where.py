@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -20,8 +19,8 @@ from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
-    broadcast_shapes,
-    is_one,
+    broadcast_all,
+    broadcast_relations,
     iterating,
     register_access_relation,
     relations_of,
@@ -39,35 +38,11 @@ class Where(Op):
     other = ParamDef(kind="input")
 
 
-def _broadcast_all(shapes: tuple[tuple, ...]) -> tuple:
-    out_shape = shapes[0]
-    for shape in shapes[1:]:
-        out_shape = broadcast_shapes(out_shape, shape)
-    return out_shape
-
-
-def _maps(shapes: tuple[tuple, ...]) -> tuple[AccessRelation, ...]:
-    out_shape = _broadcast_all(shapes)
-    rank = len(out_shape)
-    dims = [f"d{i}" for i in range(rank)]
-    source = "[" + ", ".join(dims) + "]"
-    maps = []
-    for shape in shapes:
-        pad = rank - len(shape)
-        accessed = [
-            "0" if is_one(shape[i]) and not is_one(out_shape[pad + i]) else dims[pad + i]
-            for i in range(len(shape))
-        ]
-        maps.append(AccessRelation(isl.map(f"{{ {source} -> [{', '.join(accessed)}] }}")))
-    maps.append(AccessRelation(isl.map(f"{{ {source} -> [{', '.join(dims)}] }}")))
-    return tuple(maps)
-
-
 @register_access_relation(Where)
 def _where_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     input_types = tuple(ctx.type_of(arg) for arg in call.args)
     shapes = tuple(type_.shape for type_ in input_types)
-    return iterating(_broadcast_all(shapes), _maps(shapes))
+    return iterating(broadcast_all(shapes), broadcast_relations(shapes))
 
 
 @register_typeinfer(Where)
@@ -87,7 +62,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         relation = relations_of(call, ctx)
         out_shape = shape_from_relation(
             relation[len(call.args)],
-            _broadcast_all((condition.shape, input_.shape, other.shape)),
+            broadcast_all((condition.shape, input_.shape, other.shape)),
         )
         data_shard = derive_output_shard_layout((input_, other), relation[1:], out_shape)
         layout = (

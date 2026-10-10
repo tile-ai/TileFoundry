@@ -20,9 +20,7 @@ from tilefoundry.ir.types.stride import compact_col_major, compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
-    identity_access,
-    iterating,
-    reached_at,
+    gather_relations,
     register_access_relation,
 )
 
@@ -117,23 +115,8 @@ def _index_select_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ..
     result reached, one element per selected slice.
     """
     source_ty, index_ty = ctx.type_of(call.args[0]), ctx.type_of(call.args[1])
-    logical_source, logical_index = source_ty, index_ty
     axis = _norm_dim(call.target.dim, len(source_ty.shape))
-    out_shape = (
-        *source_ty.shape[:axis],
-        index_ty.shape[0],
-        *source_ty.shape[axis + 1 :],
-    )
-    rank = len(out_shape)
-    carried = {position: f"d{position}" for position in range(rank)}
-    return iterating(
-        out_shape,
-        (
-            reached_at(rank, source_ty, logical_source, carried, free=(axis,)),
-            reached_at(rank, index_ty, logical_index, {0: carried.get(axis, "0")}),
-            identity_access(rank),
-        ),
-    )
+    return gather_relations(source_ty, index_ty, axis)
 
 
 @register_eval(IndexSelect)
