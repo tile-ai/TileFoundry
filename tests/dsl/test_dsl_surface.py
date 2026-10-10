@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry import func
-from tilefoundry.dsl import DimVar, RangePattern, T, Tensor, tf
+from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.op_registry import _schemas_by_dialect_name
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.specialize import display_name
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types.dim import DimVar as IrDimVar
+
+IrDimVar = DimVar
 
 
 @pytest.fixture(autouse=True)

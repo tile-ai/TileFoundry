@@ -13,8 +13,7 @@ from __future__ import annotations
 def composed_leaf_source(dim_name: str) -> str:
     """The source a CLI test writes to a temp file, with its own DimVar name."""
     return (
-        "from tilefoundry import func, module\n"
-        "from tilefoundry.dsl import ConstTensor, DimVar, Tensor, tf\n"
+        "from tilefoundry.dsl import *\n"
         "from tilefoundry.target import CudaTarget\n"
         f"N = DimVar('{dim_name}', 1, 8)\n"
         "@module(entry='run')\n"

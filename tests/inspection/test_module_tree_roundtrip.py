@@ -16,15 +16,7 @@ from tests.fixtures.logical.hir_composition import Expert
 from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
-from tilefoundry import func, module
-from tilefoundry.dsl import (  # noqa: F401
-    ConstTensor,
-    DimVar,
-    Mesh,
-    RangePattern,
-    Tensor,
-    tf,
-)
+from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.inspection.dot import hir_function_to_dot
 from tilefoundry.ir.core import Call

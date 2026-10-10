@@ -84,8 +84,7 @@ casts first and scales second. The version below scales first.
 #!/usr/bin/env python3
 """One published step, authored as HIR: RMS norm, then blockwise FP8 quantization."""
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, ReduceKind, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 ROWS = 2
@@ -167,8 +166,7 @@ failed.
 #!/usr/bin/env python3
 """One published step, authored as HIR: RMS norm, then blockwise FP8 quantization."""
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, ReduceKind, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 ROWS = 2

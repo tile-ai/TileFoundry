@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare tile in authored bodies
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 _HIDDEN = 2048
@@ -36,7 +33,7 @@ class _LiteralStoreOffset:
             ("cta",), layout=(_STRIP, _MESH_TILE), names=("strip", "tile")
         ) as mesh:
             result = out
-            for position in tile(_SEQ, _ROW_TILE):
+            for position in tf.tile(_SEQ, _ROW_TILE):
                 base = position + 0
                 for group in range(_GROUPS):
                     rows = tf.reshard(
@@ -86,7 +83,7 @@ class _SymbolicStoreOffset:
             ("cta",), layout=(_STRIP, _MESH_TILE), names=("strip", "tile")
         ) as mesh:
             result = out
-            for position in tile(_SEQ, _ROW_TILE):
+            for position in tf.tile(_SEQ, _ROW_TILE):
                 base = position + 0
                 for group in range(_GROUPS):
                     group_index = group + 0

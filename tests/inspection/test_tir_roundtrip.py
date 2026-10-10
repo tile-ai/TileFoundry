@@ -10,11 +10,11 @@ import pytest
 import tilefoundry.codegen.cuda  # noqa: F401
 from tests._source import import_dsl
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
+from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.stmts import For, Sequential
-from tilefoundry.ir.types import DType, TensorType
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 CANONICAL = tuple(path for path in (FIXTURES / "tir").glob("*.py") if path.name != "layouts.py")
@@ -53,13 +53,21 @@ def test_placed_types_print_and_reparse_as_layout_sugar() -> None:
 
 def test_mixed_hir_tir_module_prints_both_function_families() -> None:
     mixed = import_dsl(
-        "from tilefoundry import func, module, prim_func\n"
-        "from tilefoundry.dsl import Tensor\n"
-        "from tilefoundry.target import CpuTarget\n\n"
-        "@module()\nclass Mixed:\n"
-        "    @func\n    def h(a: Tensor[(1,), 'f32']):\n        return a\n\n"
-        "    @prim_func(target=CpuTarget())\n"
-        "    def t(a: Tensor[(1,), 'f32']):\n        return\n",
+        (
+            'from tilefoundry.dsl import *\n'
+            '\n'
+            'from tilefoundry.target import CpuTarget\n'
+            '\n'
+            '@module()\n'
+            'class Mixed:\n'
+            '    @func\n'
+            "    def h(a: Tensor[(1,), 'f32']):\n"
+            '        return a\n'
+            '\n'
+            '    @prim_func(target=CpuTarget())\n'
+            "    def t(a: Tensor[(1,), 'f32']):\n"
+            '        return\n'
+        ),
         name="Mixed",
     )
     printed = as_script(mixed)
@@ -69,14 +77,17 @@ def test_mixed_hir_tir_module_prints_both_function_families() -> None:
 
 def test_tir_for_if_and_abort_roundtrip() -> None:
     function = import_dsl(
-        "from tilefoundry import prim_func\n"
-        "from tilefoundry.dsl import T, Tensor\n"
-        "from tilefoundry.target import CpuTarget\n\n"
-        "@prim_func(target=CpuTarget())\n"
-        "def control(a: Tensor[(1,), 'f32']):\n"
-        "    for i in range(2):\n"
-        "        if i < 1:\n"
-        "            T.abort(message='stop')\n",
+        (
+            'from tilefoundry.dsl import *\n'
+            '\n'
+            'from tilefoundry.target import CpuTarget\n'
+            '\n'
+            '@prim_func(target=CpuTarget())\n'
+            "def control(a: Tensor[(1,), 'f32']):\n"
+            '    for i in range(2):\n'
+            '        if i < 1:\n'
+            "            T.abort(message='stop')\n"
+        ),
         name="control",
     )
     printed = as_script(function)
@@ -87,18 +98,21 @@ def test_tir_for_if_and_abort_roundtrip() -> None:
 
 def test_tir_for_if_and_sync_mesh_forms_roundtrip() -> None:
     function = import_dsl(
-        "from tilefoundry import prim_func\n"
-        "from tilefoundry.dsl import T, Tensor\n"
-        "from tilefoundry.ir.types import Layout, Mesh, Topology\n"
-        "from tilefoundry.target import CudaTarget\n\n"
-        "@prim_func(target=CudaTarget('nvidia.h200_sxm'))\n"
-        "def device(a: Tensor[(64,), 'f32'], out: Tensor[(64,), 'f32']):\n"
-        "    with Mesh((Topology('thread', 32),), Layout((32,), (1,))) as thread:\n"
-        "        for i in range(0, 2, 1):\n"
-        "            if i < 1:\n"
-        "                T.sync(thread)\n"
-        "            else:\n"
-        "                T.sync(thread[:])\n",
+        (
+            'from tilefoundry.dsl import *\n'
+            '\n'
+            '\n'
+            'from tilefoundry.target import CudaTarget\n'
+            '\n'
+            "@prim_func(target=CudaTarget('nvidia.h200_sxm'))\n"
+            "def device(a: Tensor[(64,), 'f32'], out: Tensor[(64,), 'f32']):\n"
+            "    with Mesh((Topology('thread', 32),), Layout((32,), (1,))) as thread:\n"
+            '        for i in range(0, 2, 1):\n'
+            '            if i < 1:\n'
+            '                T.sync(thread)\n'
+            '            else:\n'
+            '                T.sync(thread[:])\n'
+        ),
         name="device",
     )
     printed = as_script(function)
@@ -109,13 +123,16 @@ def test_tir_for_if_and_sync_mesh_forms_roundtrip() -> None:
 
 def test_tir_for_accepts_nonconstant_bounds() -> None:
     import_dsl(
-        "from tilefoundry import prim_func\n"
-        "from tilefoundry.dsl import Tensor\n"
-        "from tilefoundry.target import CpuTarget\n\n"
-        "@prim_func(target=CpuTarget())\n"
-        "def dynamic(n: Tensor[(), 'i64']):\n"
-        "    for i in range(n):\n"
-        "        return\n",
+        (
+            'from tilefoundry.dsl import *\n'
+            '\n'
+            'from tilefoundry.target import CpuTarget\n'
+            '\n'
+            '@prim_func(target=CpuTarget())\n'
+            "def dynamic(n: Tensor[(), 'i64']):\n"
+            '    for i in range(n):\n'
+            '        return\n'
+        ),
         name="dynamic",
     )
 

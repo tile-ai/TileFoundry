@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, DimVar, Tensor, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 EVALUATOR_N = DimVar("N_eval", 1, 7)

@@ -1,7 +1,6 @@
 """An unplaced two-output orchestration and its runtime reference."""
 
-from tilefoundry import module
-from tilefoundry.dsl import Tensor, Topology, func
+from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.target import CpuTarget
 

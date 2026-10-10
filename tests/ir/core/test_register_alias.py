@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry import func
-from tilefoundry.dsl import Tensor
+from tilefoundry.dsl import *
 from tilefoundry.dsl.tf import add as _tf_add  # noqa: F401  -- closure capture
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
@@ -31,7 +30,6 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType
 
 
 @pytest.fixture

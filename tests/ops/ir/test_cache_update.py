@@ -20,22 +20,14 @@ from tests.ops.ir.typeinfer_utils import (
     TypeInferCase,
     run_typeinfer_case,
 )
-from tilefoundry import func, module
 from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.analysis.api import analyze
-from tilefoundry.dsl import Mesh, Tensor, tf
+from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Var, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Topology,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
 from tilefoundry.ir.types.shard_layout import Partial
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget

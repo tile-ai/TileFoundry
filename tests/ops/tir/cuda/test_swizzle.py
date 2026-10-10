@@ -11,12 +11,10 @@ import torch
 import tilefoundry
 import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
 from tests._source import import_dsl
-from tilefoundry import module, prim_func
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
-from tilefoundry.dsl import T, Tensor
+from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, ShardLayout, Split, Swizzle, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")

@@ -1,7 +1,6 @@
 """Every legal region-boundary shape in one program, priced and round-tripped."""
 
-from tilefoundry import module
-from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 

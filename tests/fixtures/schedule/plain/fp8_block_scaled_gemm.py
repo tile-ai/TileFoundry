@@ -8,9 +8,7 @@ earlier block is scaled twice. B is the (K, N) view of a row-major (N, K)
 weight, so its K windows are K-contiguous. The block offsets ``kb * BLOCK`` are
 scalar index arithmetic, which costs nothing.
 """
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.ir.types import Layout
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 128
@@ -19,7 +17,6 @@ K = 512
 BLOCK = 128
 K_BLOCKS = K // BLOCK
 N_BLOCKS = N // BLOCK
-WEIGHT_VIEW = Layout((K, N), (1, K))
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
@@ -27,7 +24,7 @@ WEIGHT_VIEW = Layout((K, N), (1, K))
 class FP8_BLOCK_SCALED_GEMM:
     @func
     def gemm(a: Tensor[(M, K), "fp8e4m3"],
-             b: Tensor[(K, N), "fp8e4m3", WEIGHT_VIEW],
+             b: Tensor[(K, N), "fp8e4m3", Layout((K, N), (1, K))],
              a_scale: Tensor[(M, K_BLOCKS), "f32"],
              b_scale: Tensor[(K_BLOCKS, N_BLOCKS), "f32"]) -> Tensor[(M, N), "bf16"]:
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:

@@ -54,8 +54,8 @@ def gemm(
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
                         T.copy_async_tensor(tile_1, rhs_stages[(k // 32) % 2])
-                with scope[1:] as scope_2:
-                    with Mesh(scope_2, layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads_3:
+                with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_2:
+                    with scope_2 as threads_3:
                         dst_frame = T.tensor_view(
                             T.ptr_of(frag[0:0 + 64, 0:0 + 32]),
                             layout=((8 @ threads_3.d1, 2, 4 @ threads_3.d0, 4, 4 @ threads_3.d2, 2), (1, 8, 16, 64, 256, 1024)),
@@ -90,8 +90,8 @@ def gemm(
                                         rhs_view,
                                         atom=T.cuda.sm90.Wgmma(n=32, dtype='fp8e4m3', form=T.cuda.sm90.Form.RS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K, mesh=threads_3),
                                     )
-            with scope[1:] as scope_3:
-                with Mesh(scope_3, layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads_5:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_3:
+                with scope_3 as threads_5:
                     src_frame = T.tensor_view(
                         T.ptr_of(acc[0:0 + 64, 0:0 + 32]),
                         layout=((8 @ threads_5.d1, 2, 4 @ threads_5.d0, 2, 4 @ threads_5.d2, 4), (1, 8, 16, 64, 128, 512)),

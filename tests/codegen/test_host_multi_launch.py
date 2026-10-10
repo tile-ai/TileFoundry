@@ -6,29 +6,16 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry import module, prim_func
 from tilefoundry.codegen.context_builder import build_codegen_context
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
-from tilefoundry.dsl import T, Tensor
+from tilefoundry.dsl import *
 from tilefoundry.ir.core import Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import (
-    B,
-    CallableType,
-    DType,
-    Layout,
-    Mesh,
-    ShardLayout,
-    TensorType,
-    Topology,
-    UnitType,
-)
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
@@ -44,7 +31,7 @@ class _TwoCopyLaunches:
                 layout=ShardLayout(
                     layout=Layout((1, 128), (128, 1)),
                     attrs=(B(),),
-                    mesh=Mesh((Topology("thread", 1),), Layout((1,), (1,))),
+                    mesh=thread,
                 ),
             )
             out_view = T.tensor_view(
@@ -52,7 +39,7 @@ class _TwoCopyLaunches:
                 layout=ShardLayout(
                     layout=Layout((1, 128), (128, 1)),
                     attrs=(B(),),
-                    mesh=Mesh((Topology("thread", 1),), Layout((1,), (1,))),
+                    mesh=thread,
                 ),
             )
             T.copy(view, out_view)
@@ -66,7 +53,7 @@ class _TwoCopyLaunches:
                 layout=ShardLayout(
                     layout=Layout((1, 128), (128, 1)),
                     attrs=(B(),),
-                    mesh=Mesh((Topology("thread", 1),), Layout((1,), (1,))),
+                    mesh=thread,
                 ),
             )
             out_view = T.tensor_view(
@@ -74,7 +61,7 @@ class _TwoCopyLaunches:
                 layout=ShardLayout(
                     layout=Layout((1, 128), (128, 1)),
                     attrs=(B(),),
-                    mesh=Mesh((Topology("thread", 1),), Layout((1,), (1,))),
+                    mesh=thread,
                 ),
             )
             T.copy(view, out_view)

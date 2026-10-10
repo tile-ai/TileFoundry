@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from tilefoundry import module
 from tilefoundry.dsl import *
 
 

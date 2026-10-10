@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 3840
@@ -39,7 +36,7 @@ class PersistentGemmFlat:
                 mi = (t // GRID_N) * BM
                 ni = (t % GRID_N) * BN
                 acc = tf.zeros(Tensor[(BM, BN), "f32", (BM, BN), "rmem"])
-                for ki in tile(K, BK):
+                for ki in tf.tile(K, BK):
                     lhs = tf.reshard(a[mi : mi + BM, ki], (BM, BK), "smem")
                     rhs = tf.reshard(b[ki, ni : ni + BN], (BK, BN), "smem")
                     product = tf.matmul(lhs, rhs, out_dtype="f32")

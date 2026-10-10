@@ -8,9 +8,7 @@ means is asserted where that behaviour lives.
 
 from __future__ import annotations
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Tensor, tf
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")

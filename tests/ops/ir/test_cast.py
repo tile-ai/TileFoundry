@@ -14,10 +14,10 @@ from tests._source import import_dsl
 from tests.ops.ir.typeinfer_utils import (
     infer_call,
 )
+from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.hir.tensor.cast import Cast
-from tilefoundry.ir.types import DType, Layout, Mesh, Topology, make_tensor_type
 from tilefoundry.ir.types.shard_layout import ShardLayout, Split
 
 _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))

@@ -14,11 +14,10 @@ import pytest
 
 from tests.fixtures.logical.hir_composition import REFERENCE_PROGRAMS, CrossModule, Expert
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
-from tilefoundry import func, module
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.metadata import ComputeCostMetadata, MemoryMetadata
-from tilefoundry.dsl import ConstTensor, DimVar, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function

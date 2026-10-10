@@ -18,13 +18,12 @@ import pytest
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
-from tilefoundry import CompilerOptions, DType, build, jit, module
+from tilefoundry import CompilerOptions, build, jit
 from tilefoundry.analysis import AnalysisError, analyze
-from tilefoundry.dsl import DimVar
+from tilefoundry.dsl import *
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
-from tilefoundry.ir.types import Topology
 from tilefoundry.target import (
     CpuTarget,
     CudaTarget,

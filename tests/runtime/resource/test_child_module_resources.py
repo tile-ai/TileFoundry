@@ -13,8 +13,7 @@ import pytest
 import torch
 
 from tests.fixtures.shapes.scaled_modules import FusedScaledParent, ScaledChild
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Tensor, tf
+from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.target import CudaTarget
 

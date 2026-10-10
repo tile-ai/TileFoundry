@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=WGMMA_A_K_MAJOR function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r10.00KB/w4.00KB@logical,r10.00KB/w4.00KB@total,r10.00KB/w4.00KB@cta,r10.00KB/w4.00KB@thread;rmem:r24.06KB/w28.00KB@logical,r24.06KB/w28.00KB@total,r24.06KB/w28.00KB@cta,r256B/w224B@thread;smem:r6.00KB/w6.00KB@logical,r6.00KB/w6.00KB@total,r6.00KB/w6.00KB@cta,r640B/w6.00KB@thread footprint=at:2.00KB;b:1.00KB;v2:58:4.00KB footprint-precision=exact peak=gmem:8.00KB;rmem:8.00KB;smem:6.00KB persistent=gmem:6.00KB
+# memory traffic=gmem:r10.00KB/w4.00KB@logical,r10.00KB/w4.00KB@total,r10.00KB/w4.00KB@cta,r10.00KB/w4.00KB@thread;rmem:r24.06KB/w28.00KB@logical,r24.06KB/w28.00KB@total,r24.06KB/w28.00KB@cta,r256B/w224B@thread;smem:r6.00KB/w6.00KB@logical,r6.00KB/w6.00KB@total,r6.00KB/w6.00KB@cta,r640B/w6.00KB@thread footprint=at:2.00KB;b:1.00KB;v2:45:4.00KB footprint-precision=exact peak=gmem:8.00KB;rmem:8.00KB;smem:6.00KB persistent=gmem:6.00KB
 
 from __future__ import annotations
 
@@ -57,8 +57,8 @@ def gemm(
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_3:
                         T.copy_async_tensor(tile_2, rhs_stages[(k // 32) % 2])
-                with scope[1:] as scope_2:
-                    with Mesh(scope_2, layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads_4:
+                with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_2:
+                    with scope_2 as threads_4:
                         for o_m in range(0, 64, 64):
                             for o_n in range(0, 32, 32):
                                 for o_k in range(0, 32, 32):
@@ -91,8 +91,8 @@ def gemm(
                                         rhs_view,
                                         atom=T.cuda.sm90.Wgmma(n=32, dtype='fp8e4m3', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K, mesh=threads_4),
                                     )
-            with scope[1:] as scope_3:
-                with Mesh(scope_3, layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads_5:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_3:
+                with scope_3 as threads_5:
                     src_frame = T.tensor_view(
                         T.ptr_of(acc[0:0 + 64, 0:0 + 32]),
                         layout=((8 @ threads_5.d1, 2, 4 @ threads_5.d0, 2, 4 @ threads_5.d2, 4), (1, 8, 16, 64, 128, 512)),

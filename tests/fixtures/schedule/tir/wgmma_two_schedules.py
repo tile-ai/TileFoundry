@@ -48,8 +48,8 @@ def gemm(
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
                         T.copy_async_tensor(tile_1, rhs_stages[(k // 16) % 2])
-                with scope[1:] as scope_2:
-                    with Mesh(scope_2, layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads_3:
+                with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_2:
+                    with scope_2 as threads_3:
                         for o_m in range(0, 64, 64):
                             for o_n in range(0, 32, 32):
                                 for o_k in range(0, 16, 16):
@@ -97,8 +97,8 @@ def gemm(
                     )
                     with Mesh(scope_3, layout=(32,), names=("d0",)) as threads_5:
                         T.copy_async_tensor(tile_3, rhs_2_stages[(k // 16) % 2])
-                with scope[1:] as scope_4:
-                    with Mesh(scope_4, layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads_6:
+                with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_4:
+                    with scope_4 as threads_6:
                         for o_m_1 in range(0, 64, 64):
                             for o_n_1 in range(0, 32, 32):
                                 for o_k_1 in range(0, 16, 16):
@@ -131,8 +131,8 @@ def gemm(
                                         rhs_view_1,
                                         atom=T.cuda.sm90.Wgmma(n=32, dtype='bf16', form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_6),
                                     )
-            with scope[1:] as scope_5:
-                with Mesh(scope_5, layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads_7:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_5:
+                with scope_5 as threads_7:
                     src_frame = T.tensor_view(
                         T.ptr_of(acc[0:0 + 64, 0:0 + 32]),
                         layout=((8 @ threads_7.d1, 2, 4 @ threads_7.d0, 2, 4 @ threads_7.d2, 4), (1, 8, 16, 64, 128, 512)),

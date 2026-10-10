@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard

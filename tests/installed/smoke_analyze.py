@@ -5,31 +5,33 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-_BAD_MODULE = """
-from tilefoundry import module
-from tilefoundry.dsl import Tensor, func, tf
+_BAD_MODULE = (
+    '\n'
+    'from tilefoundry.dsl import *\n'
+    '\n'
+    '\n'
+    '@module(entry="main")\n'
+    'class Bad:\n'
+    '    @func\n'
+    '    def main(x: Tensor[(8,), "f32"]):\n'
+    '        wrong = tf.add(x, tf.cast(x, "i32"))\n'
+    '        return wrong\n'
+)
 
-@module(entry="main")
-class Bad:
-    @func
-    def main(x: Tensor[(8,), "f32"]):
-        wrong = tf.add(x, tf.cast(x, "i32"))
-        return wrong
-"""
-
-_OPEN_MODULE = """
-from tilefoundry import module
-from tilefoundry.dsl import DimVar, Tensor, Topology, func, tf
-from tilefoundry.target import CudaTarget
-
-N = DimVar("N", 1, 8)
-
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-class Open:
-    @func
-    def main(x: Tensor[(N,), "f32"]):
-        return tf.add(x, x)
-"""
+_OPEN_MODULE = (
+    '\n'
+    'from tilefoundry.dsl import *\n'
+    '\n'
+    'from tilefoundry.target import CudaTarget\n'
+    '\n'
+    'N = DimVar("N", 1, 8)\n'
+    '\n'
+    '@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))\n'
+    'class Open:\n'
+    '    @func\n'
+    '    def main(x: Tensor[(N,), "f32"]):\n'
+    '        return tf.add(x, x)\n'
+)
 
 
 def test_logical_analyses_run(tf, cmine, tmp_path) -> None:

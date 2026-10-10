@@ -7,8 +7,7 @@ from typing import get_args, get_origin
 
 import pytest
 
-from tilefoundry import func, module, prim_func
-from tilefoundry.dsl import Mesh, Tensor, tf
+from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
@@ -20,7 +19,6 @@ from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, Topology
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CpuTarget, CudaTarget
 
@@ -333,7 +331,7 @@ def test_valueful_mesh_region_also_wraps_escaping_bindings() -> None:
         def valueful_escape(x: Tensor[(2,), "f32"]):
             with Mesh(("cta",), layout=(2,), names=("tile",)) as _mesh:
                 value = tf.relu(x)
-                for _index in tile(2, 1):  # noqa: F821
+                for _index in tf.tile(2, 1):  # noqa: F821
                     value = tf.relu(value)
             return value
 

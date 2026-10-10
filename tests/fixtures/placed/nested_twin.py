@@ -2,7 +2,7 @@
 
 from weighted_twin import Weighted, WeightedTwin
 
-from tilefoundry import module
+from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_module
 from tilefoundry.target import CpuTarget
 

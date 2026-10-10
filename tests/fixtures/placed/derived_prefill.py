@@ -1,8 +1,6 @@
 """A placed prefill whose execution geometry derives from authored dimensions."""
 
-from tilefoundry import func, module
-from tilefoundry.dsl import DimVar, Mesh, Tensor, ceildiv, tf
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 PREFILL_N = DimVar("prefill_n", 1, 64)

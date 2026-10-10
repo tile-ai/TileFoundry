@@ -1,9 +1,6 @@
 """A dispatch on a callee: check and analyze both select its implementation."""
 
-from tilefoundry import func, module
-from tilefoundry.dsl import DimVar, Mesh, RangePattern, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 D, W, BOUND = 64, 4, 128

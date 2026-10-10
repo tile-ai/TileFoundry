@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Mesh, Tensor, tf
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")
@@ -36,12 +34,12 @@ class TiledQKVProjection:
     ) -> Tensor[(S, N), "f32"]:
         with Mesh(("cta",), layout=(132,), names=("cta",)) as _cta:
             result = output
-            for m in tile(S, BM):  # noqa: F405
-                for n in tile(N, BN):  # noqa: F405
+            for m in tf.tile(S, BM):  # noqa: F405
+                for n in tf.tile(N, BN):  # noqa: F405
                     acc = tf.zeros(
                         Tensor[(BM, BN), "f32", (BM, BN), "rmem"]
                     )
-                    for k in tile(K, BK):  # noqa: F405
+                    for k in tf.tile(K, BK):  # noqa: F405
                         lhs = tf.reshard(x[m, k], (BM, BK), "smem")
                         rhs = tf.reshard(weight[k, n], (BK, BN), "smem")
                         product = tf.matmul(lhs, rhs, out_dtype="f32")
@@ -66,8 +64,8 @@ class GroupedMoEGEMM:
     ) -> Tensor[(EXPERTS, TOKENS, HIDDEN), "f32"]:
         with Mesh(("cta",), layout=(132,), names=("cta",)) as _cta:
             result = output
-            for expert in tile(EXPERTS, 1):  # noqa: F405
-                for m in tile(TOKENS, MOE_BM):  # noqa: F405
+            for expert in tf.tile(EXPERTS, 1):  # noqa: F405
+                for m in tf.tile(TOKENS, MOE_BM):  # noqa: F405
                     lhs = tf.reshard(
                         tf.reshape(
                             tokens[expert, m, 0:HIDDEN], (MOE_BM, HIDDEN)

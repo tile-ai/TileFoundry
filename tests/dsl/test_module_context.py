@@ -16,12 +16,10 @@ import pytest
 
 from tests._source import import_dsl
 from tests.fixtures.logical import module_context as context_fixture
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, tf  # noqa: F401 -- used by bodies
+from tilefoundry.dsl import *
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CTA = context_fixture.CONTEXT_CTA

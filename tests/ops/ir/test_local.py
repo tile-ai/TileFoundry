@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry import func, module
 from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.analysis.api import analyze
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.hir.sharding.local import Local
-from tilefoundry.ir.types import Layout
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TrafficBytes

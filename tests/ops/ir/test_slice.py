@@ -11,23 +11,14 @@ from dataclasses import replace
 
 import pytest
 
+from tilefoundry.dsl import *
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.ir.core import Call, Constant, Tuple, TypeInferContext, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
 from tilefoundry.ir.isl_interop import normalize_dim
-from tilefoundry.ir.types import (
-    ComposedLayout,
-    DType,
-    Layout,
-    Mesh,
-    Topology,
-    TupleType,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
-from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
+from tilefoundry.ir.types.dim import DimMul, simplify_dim
 from tilefoundry.ir.types.shard_layout import ShardLayout, Split, shard_layout_of
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
@@ -292,9 +283,6 @@ def test_runtime_start_slice_preserves_static_strides():
 
 import torch  # noqa: E402
 
-from tilefoundry import func, module  # noqa: E402
-from tilefoundry.dsl import Mesh, Tensor, Topology  # noqa: E402
-from tilefoundry.dsl.tf import *  # noqa: E402,F401,F403
 from tilefoundry.evaluator import evaluate  # noqa: E402
 
 _HALF, _COLS, _STEP = 4, 4, 2
@@ -307,11 +295,11 @@ class _MovedWindow:
     @func
     def moved_copy(gu: Tensor[(2 * _HALF, _COLS), "f32"]):
         with Mesh(("thread",), (1,), ("t",)) as m:
-            gr = reshard(gu, (2 * _HALF, _COLS @ m.t), "rmem")
-            acc = full_like(gr, 0.0)
-            for r in tile(_HALF, _STEP):
-                acc = insert_slice(acc, gr[r + _HALF, :], (r, 0))
-            return reshard(acc, (2 * _HALF, _COLS @ m.t), "gmem")
+            gr = tf.reshard(gu, (2 * _HALF, _COLS @ m.t), "rmem")
+            acc = tf.full_like(gr, 0.0)
+            for r in tf.tile(_HALF, _STEP):
+                acc = tf.insert_slice(acc, gr[r + _HALF, :], (r, 0))
+            return tf.reshard(acc, (2 * _HALF, _COLS @ m.t), "gmem")
 
 
 def _moved_reference(gu):

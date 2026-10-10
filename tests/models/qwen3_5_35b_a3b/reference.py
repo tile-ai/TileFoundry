@@ -73,7 +73,6 @@ GDN_V_PER_K = CONFIG.linear_num_value_heads // CONFIG.linear_num_key_heads
 GDN_CONV_CONTEXT = CONFIG.linear_conv_kernel_dim - 1
 
 
-
 def build_hf_decoder_layer(block_type: str, seed=0, device="cpu", dtype=DTYPE):
     """One ``Qwen3_5MoeDecoderLayer`` of *block_type*, weights drawn at *seed*.
 

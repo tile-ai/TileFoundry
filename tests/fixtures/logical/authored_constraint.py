@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Tensor, tf
-from tilefoundry.ir.types import Layout, Mesh, Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
-
-_CTA_MESH = Mesh((Topology("cta", 8),), Layout((8,), (1,)))
 
 
 @module(
@@ -18,5 +14,6 @@ _CTA_MESH = Mesh((Topology("cta", 8),), Layout((8,), (1,)))
 class AuthoredConstraint:
     @func
     def constrained(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 16), "bf16"]:
-        y: where(layout=(8 @ cta, 16), mesh=_CTA_MESH, storage="gmem") = tf.add(x, x)
+        cta_mesh = Mesh((Topology("cta", 8),), Layout((8,), (1,)))
+        y: where(layout=(8 @ cta, 16), mesh=cta_mesh, storage="gmem") = tf.add(x, x)
         return y
