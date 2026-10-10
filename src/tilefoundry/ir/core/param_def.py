@@ -99,7 +99,7 @@ class ParamDef:
         return self.default is not MISSING
 
 
-def _variadic_item_annotation(param: object) -> object | None:
+def variadic_item_annotation(param: object) -> object | None:
     """Return the element annotation for one tuple-valued input parameter."""
     if getattr(param, "kind", None) != "input":
         return None
@@ -143,4 +143,5 @@ __all__ = [
     "ParamDef",
     "_MissingType",
     "collect_param_defs",
+    "variadic_item_annotation",
 ]
