@@ -68,6 +68,56 @@ scope without a Target is typed with none. `FunctionRole` is `ROOT`, `VARIANT`, 
 `ParseError` is the single authored-source diagnostic type and includes source location and
 recursive parse situation. These are the only public parser symbols.
 
+### 1.5 Mesh declarations and region captures
+
+Mesh declarations are values. `Mesh(...)` constructs the compile-time domain
+object used by layout sugar and by a `MeshRegion`; it is not itself a runtime
+expression in the HIR value graph. A `with Mesh(...)` statement uses that value
+to delimit an execution domain and does not describe the placement of its
+result. An `as name` binding is lexical: it is available inside the `with`
+body and expires when the statement ends. When a body binds names that are read
+after the `with`, each escaping name is rebound to the enclosing `MeshRegion`
+result (a tuple region with `TupleGetItem` projections when several names
+escape); names used only inside the body remain local to the scope. Names read
+inside either a MeshRegion or LoopRegion but bound outside it are captured as
+`args`, with a fresh `params` binding used by the body. LoopRegion places
+carry slots first and excludes its own induction and carry names from captures.
+Capture is performed one region boundary at a time, so nested regions pass a
+value through each door.
+
+In an authored HIR function that opens a mesh, every authored runtime Call
+runs inside a mesh scope. This includes operation and function calls, operator
+expressions, tensor slices, and explicit tuple subscripts, even for UMAT scalar
+results. An unscoped Call raises `ParseError` at its source expression and directs
+the author to move it inside `with Mesh(...)`. Function parameters, Python
+constants, compile-time mesh declarations, and parser-generated result projections
+do not require an execution scope. A function-level `mesh=` covers the whole body.
+HIR functions that open no mesh remain logical programs; TIR is unaffected by
+this restriction.
+
+A function call inside a mesh supplies that execution scope to its callee.
+The callee may omit its own mesh or declare a region that composes with the
+call-site scope ([hir §1.1](./hir.md#11-function)). The parser checks authored
+call sites lexically; it does not exempt an unscoped function call because its
+callee contains a mesh. Authors may place the orchestration calls inside a
+mesh and keep each helper's operations in the inherited or explicitly declared
+scope.
+
+When a captured name denotes a tile window `slice(iv, iv + step, 1)`, the parser
+captures the induction Expr and reconstructs the window with its new parameter.
+Tile windows support `window ± c` (translate start/stop), `window * c`, and `c * window`
+(scale start, stop, and stride, preserving the element count). Division,
+floor division, remainder, and operations between two windows MUST raise
+`ParseError`; a Python slice MUST NOT enter the HIR expression graph.
+Non-window index arithmetic MUST reject `/` with a diagnostic directing the
+author to integer division `//`, rather than returning a float.
+
+A loop body holds `with Mesh(...)` statements, and the loop carries what one
+binds. Because the body repeats, a name the `with` reads on its way to binding
+it escapes as a name read after it does, and the loop carries both. A TIR loop
+bound that is not a literal is read as the dimension arithmetic the loop was
+lowered from, so a bound naming a mesh coordinate reads back as it was printed.
+
 ## 2. Syntax and Rules
 
 Tuple subscripting lowers `stages[index]` to `TupleGetItem(stages, index)`.
@@ -307,6 +357,13 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | tensor | annotation, call_attribute, expression, slice_endpoint, subscript_index, type_annotation, variadic_input | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, call_attribute, expression, slice_endpoint, subscript_index, type_annotation, variadic_input | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
 <!-- parser-constraints:end -->
+
+A `mesh-axis` used by placement sugar MUST resolve to a mesh binding in the
+current lexical scope. A module or closure name that resolves to a `Mesh` does
+not become a placement binding. Such an external value remains valid as the
+context expression of `with ... as ...` outside an open mesh scope, or as the
+value supplied to `@func(mesh=...)`; the resulting lexical binding is the name
+placement sugar may use.
 
 ## 3. Implementation Overview
 
