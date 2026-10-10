@@ -177,12 +177,13 @@ def _nested(extent: int, *, wrapped: bool) -> TensorType:
 
 
 @pytest.mark.parametrize(
-    ("destination", "update", "offsets", "own", "level"),
+    ("destination", "update", "offsets", "window", "own", "level"),
     [
         pytest.param(
             make_shard_tensor_type((8,), mesh=_CTA2_MESH, attrs=(ShardSplit(0),), dtype=DType.f32),
             make_shard_tensor_type((4,), mesh=_CTA2_MESH, attrs=(ShardSplit(0),), dtype=DType.f32),
             Constant(type=_I64, value=2),
+            "{ [d0] : 2 <= d0 <= 5 }",
             "{ [d0] : 2 <= d0 <= 3 }",
             "cta",
             id="split_axis",
@@ -199,6 +200,7 @@ def _nested(extent: int, *, wrapped: bool) -> TensorType:
                 type=TupleType(fields=(_I64, _I64)),
                 elements=(Constant(type=_I64, value=0), Constant(type=_I64, value=2)),
             ),
+            "{ [d0, d1] : 0 <= d0 <= 1 and 2 <= d1 <= 5 }",
             "{ [0, d1] : 2 <= d1 <= 5 }",
             "cta",
             id="axes_regrouped_onto_one_position",
@@ -208,6 +210,7 @@ def _nested(extent: int, *, wrapped: bool) -> TensorType:
                 _nested(8, wrapped=wrapped),
                 _nested(4, wrapped=wrapped),
                 Constant(type=_I64, value=2),
+                "{ [d0] : 2 <= d0 <= 5 }",
                 "{ [d0] : 2 <= d0 <= 3 }",
                 "thread",
                 id=f"nested_{'through_an_offset_view' if wrapped else 'directly'}",
@@ -217,7 +220,7 @@ def _nested(extent: int, *, wrapped: bool) -> TensorType:
     ],
 )
 def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed(
-    destination, update, offsets, own, level
+    destination, update, offsets, window, own, level
 ) -> None:
     """An insert reads its update only inside the window.
 
@@ -236,6 +239,9 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed(
 
     stated = relations_of(call, ctx)
     reads = stated[1].relation
+    assert reads.domain().is_equal(isl.set(window)), (
+        "the unprojected insert reads its update across exactly the whole window"
+    )
     assert reads.range().is_equal(shape_to_isl_set(tuple(update.shape), {})), (
         "the unprojected insert reads exactly the update's window coordinates"
     )
