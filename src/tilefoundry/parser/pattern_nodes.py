@@ -3540,17 +3540,28 @@ class MeshContextPattern(ElementPattern):
             )
         if layout_node is None:
             return PatternFailure("mesh", node, "a mesh requires a `layout`")
-        if (
-            refining
-            and ShapePattern().match(
-                layout_node, context.child(situation="mesh_shape", role="shape")
-            ) is None
-        ):
-            return PatternFailure(
-                "mesh",
-                layout_node,
-                "a refined mesh states its shape only; strides come from the selection",
-            )
+        shape_node, strides_node = layout_node, None
+        if refining:
+            shape_context = context.child(situation="mesh_shape", role="shape")
+            if (
+                not isinstance(layout_node, ast.Tuple)
+                or ShapePattern().match(layout_node, shape_context) is None
+            ):
+                if (
+                    not isinstance(layout_node, ast.Tuple)
+                    or len(layout_node.elts) != 2
+                    or any(
+                        not isinstance(one, ast.Tuple)
+                        or ShapePattern().match(one, shape_context) is None
+                        for one in layout_node.elts
+                    )
+                ):
+                    return PatternFailure(
+                        "mesh",
+                        layout_node,
+                        "a refined mesh layout is a shape tuple or (shape, strides) tuple",
+                    )
+                shape_node, strides_node = layout_node.elts
         children = [
             AstChild(
                 "selection" if refining else "topology_names",
@@ -3560,13 +3571,17 @@ class MeshContextPattern(ElementPattern):
                 "topologies",
             ),
             AstChild(
-                "layout",
+                "shape" if refining else "layout",
                 ShapePattern() if refining else LayoutPattern(),
-                layout_node,
+                shape_node if refining else layout_node,
                 "mesh_shape" if refining else "mesh_layout",
                 "shape" if refining else "layout",
             ),
         ]
+        if strides_node is not None:
+            children.append(
+                AstChild("strides", ShapePattern(), strides_node, "mesh_strides", "strides")
+            )
         if names_node is not None:
             children.append(
                 AstChild(
@@ -3590,7 +3605,11 @@ class MeshContextPattern(ElementPattern):
             raise ParseError.from_node(match.node, context, "Mesh requires function context")
         if match.branch_id == "mesh_refine":
             try:
-                mesh = refine(children["selection"], children["layout"], children.get("names", ()))
+                mesh = refine(
+                    children["selection"],
+                    runtime.Layout(children["shape"], children.get("strides")),
+                    children.get("names", ()),
+                )
             except (TypeError, ValueError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
         elif match.branch_id == "mesh_context":

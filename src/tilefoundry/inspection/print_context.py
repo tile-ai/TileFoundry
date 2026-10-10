@@ -9,7 +9,7 @@ from math import prod
 from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
 from tilefoundry.ir.types.layout import size as layout_size
-from tilefoundry.ir.types.mesh import Mesh, refine
+from tilefoundry.ir.types.mesh import Mesh, levels, refine, starts
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx, idx2crd
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
 
@@ -149,7 +149,7 @@ class PrintContext:
                 return text
         return None
 
-    def mesh_refinement(self, mesh: Mesh) -> str | None:
+    def mesh_refinement(self, mesh: Mesh) -> tuple[str, Layout] | None:
         """Recover a parent sub-box whose refinement gives this scope."""
         if not (
             len(mesh.topologies) == 1
@@ -167,14 +167,35 @@ class PrintContext:
             mesh.layout.offset + crd2idx(idx2crd(index, shape, order), shape, strides)
             for index in range(layout_size(mesh.layout))
         }
+        def relative_layout(selection: Mesh) -> Layout | None:
+            source = flatten(levels(selection)[0])
+            source_order = compact_row_major(source.shape)
+            source_strides = source.strides or source_order
+            offset = starts(selection)[0]
+            numbering = {
+                offset + crd2idx(
+                    idx2crd(index, source.shape, source_order), source.shape, source_strides
+                ): index
+                for index in range(layout_size(source))
+            }
+            if set(numbering) != positions or mesh.layout.offset != offset:
+                return None
+            stated = tuple(
+                numbering.get(offset + step, -1) if extent > 1 else order[axis]
+                for axis, (extent, step) in enumerate(zip(shape, strides))
+            )
+            candidate = Layout(shape, stated)
+            try:
+                return candidate if refine(selection, candidate, mesh.names) == mesh else None
+            except ValueError:
+                return None
+
         for parent, alias in reversed(self._mesh_bindings):
             if parent.topologies != mesh.topologies:
                 continue
-            try:
-                if refine(parent, shape, mesh.names) == mesh:
-                    return alias
-            except ValueError:
-                pass
+            candidate = relative_layout(parent)
+            if candidate is not None:
+                return alias, candidate
             if not isinstance(parent.layout, Layout):
                 continue
             parent_shape = flatten(parent.layout.shape)
@@ -189,17 +210,17 @@ class PrintContext:
                     coordinates.append(coordinate)
             if len(coordinates) != len(positions):
                 continue
-            starts = tuple(min(axis) for axis in zip(*coordinates))
-            stops = tuple(max(axis) + 1 for axis in zip(*coordinates))
-            if prod(stop - start for start, stop in zip(starts, stops)) != len(positions):
+            lower = tuple(min(axis) for axis in zip(*coordinates))
+            upper = tuple(max(axis) + 1 for axis in zip(*coordinates))
+            if prod(stop - start for start, stop in zip(lower, upper)) != len(positions):
                 continue
-            selection = parent[tuple(slice(start, stop) for start, stop in zip(starts, stops))]
-            try:
-                if refine(selection, shape, mesh.names) != mesh:
-                    continue
-            except ValueError:
+            selection = parent[tuple(slice(start, stop) for start, stop in zip(lower, upper))]
+            candidate = relative_layout(selection)
+            if candidate is None:
                 continue
-            return self._slice_from_parent(parent, selection, alias)
+            text = self._slice_from_parent(parent, selection, alias)
+            if text is not None:
+                return text, candidate
         return None
 
     @staticmethod

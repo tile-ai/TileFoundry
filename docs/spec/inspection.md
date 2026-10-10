@@ -263,7 +263,10 @@ Printer-owned DSL names use that import; the header may append its existing
 unchanged.
 
 A refined mesh scope that can be recovered from an active lexical selection
-MUST be emitted as `Mesh(selection, layout=shape, names=names)`. Its physical
+MUST be emitted as `Mesh(selection, layout=shape, names=names)` when the
+selection-local numbering is row-major. Other numbering MUST be emitted as
+`Mesh(selection, layout=(shape, strides), names=names)`; these strides address
+the selection's row-major indices, not physical positions. Its physical
 positions, offset, and strides MUST agree with refining that selection; a
 matching slice uses the existing slice form.
 

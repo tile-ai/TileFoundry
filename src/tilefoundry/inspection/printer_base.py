@@ -28,6 +28,7 @@ from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, Swiz
 from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import ExprFunctor, TypeFunctor
 from tilefoundry.target import Target
@@ -326,7 +327,10 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             return alias
         selection = ctx.mesh_refinement(value)
         if selection is not None:
-            shape = self.shape_tuple(flatten(value.layout.shape), ctx)
+            selection, layout = selection
+            shape = self.shape_tuple(layout.shape, ctx)
+            if layout.strides != compact_row_major(layout.shape):
+                shape = f"({shape}, {self.shape_tuple(layout.strides, ctx)})"
             names = ", ".join(json.dumps(name) for name in value.names)
             names = f"({names}{',' if len(value.names) == 1 else ''})"
             return f"Mesh({selection}, layout={shape}, names={names})"

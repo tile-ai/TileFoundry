@@ -87,8 +87,12 @@ mesh or its constant slice in row-major selection order. It preserves the
 selected positions and derives physical strides and offset from that selection.
 The selection MUST name one topology level and hold exactly `size(shape)`
 positions. Each new axis MUST map to one constant physical stride; contiguous
-positions are not required. The refinement states its shape only; explicit
-strides are rejected because they come from the selection. See [shard §5](shard.md#5-mesh).
+positions are not required. `layout=(shape, strides)` may specify strides in
+the selection's row-major numbering; omitting them uses row-major strides.
+The layout MUST cover each selection index in `[0, size)` exactly once.
+These strides are not physical strides, and the offset remains derived from
+the selection. Placement, `Layout(...)` calls, and composition sugar are not
+refinement syntax. See [shard §5](shard.md#5-mesh).
 
 In an authored HIR function that opens a mesh, every authored runtime Call
 runs inside a mesh scope. This includes operation and function calls, operator
