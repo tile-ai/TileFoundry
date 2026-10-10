@@ -55,7 +55,6 @@ from config import REAL  # noqa: E402 -- must follow the sys.path bootstrap
 from tilefoundry import DType, func, module
 from tilefoundry.target import CudaTarget
 from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 -- tf used by @func bodies
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare op bindings
 from tilefoundry.evaluator import to_torch_dtype
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.runtime import Absolute
@@ -732,8 +731,6 @@ def build(config):
         names = [
             param.name for param in node.entry_function().params if not param.is_const
         ][1:]
-        # `next`, not `min`: `from tilefoundry.dsl.tf import *` binds `min` to
-        # the op.
         at = next(index for index, name in enumerate(names) if name in _CACHE_PARAMS)
         return (*mixer_args[:at], *cache, *mixer_args[at:])
 

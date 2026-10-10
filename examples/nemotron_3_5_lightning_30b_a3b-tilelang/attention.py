@@ -25,7 +25,6 @@ from pathlib import Path
 from tilefoundry import func, module
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare tf.tile() in the scan
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 

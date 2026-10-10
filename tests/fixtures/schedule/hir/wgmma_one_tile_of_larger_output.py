@@ -41,7 +41,7 @@ class WGMMA_ONE_TILE_OF_LARGER_OUTPUT:
 
                 out = tf.zeros(Tensor[(OUT_M, OUT_N), "bf16"])
 
-                with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                     acc = tf.zeros(Tensor[(M, N), "f32", ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 4), (1, 8, 16, 64, 128, 512)), "rmem"])
 
                 for k in tf.tile(K, BK):
@@ -57,13 +57,13 @@ class WGMMA_ONE_TILE_OF_LARGER_OUTPUT:
                             buffers=STAGES,
                         )
 
-                    with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                    with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                         acc = tf.schedule(
                             (acc, lhs, rhs),
                             op=T.tiled_mma(atom=wgmma),
                         )
 
-                with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                     tile_out = tf.cast(acc, dtype="bf16")
                     result = tf.insert_slice(out, tile_out, (0, 0))
                 return result

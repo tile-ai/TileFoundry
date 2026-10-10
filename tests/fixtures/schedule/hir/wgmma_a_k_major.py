@@ -26,7 +26,7 @@ class WGMMA_A_K_MAJOR:
     @func
     def gemm(
         at: Tensor[(K, M), "fp8e4m3"],
-        b: Tensor[(K, N), "fp8e4m3", Layout((K, N), (1, K))],
+        b: Tensor[(K, N), "fp8e4m3", ((K, N), (1, K))],
     ) -> Tensor[(M, N), "bf16", "umat"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
@@ -35,7 +35,7 @@ class WGMMA_A_K_MAJOR:
             ) as threads:
                 wgmma = T.cuda.sm90.Wgmma(n=32, dtype="fp8e4m3", form=T.cuda.sm90.Form.SS)
 
-                with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                     acc = tf.zeros(Tensor[(M, N), "f32", ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 4), (1, 8, 16, 64, 128, 512)), "rmem"])
 
                 for k in tf.tile(K, BK):
@@ -52,12 +52,12 @@ class WGMMA_A_K_MAJOR:
                             buffers=STAGES,
                         )
 
-                    with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                    with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                         acc = tf.schedule(
                             (acc, lhs, rhs),
                             op=T.tiled_mma(atom=wgmma),
                         )
 
-                with Mesh(threads[1, :], layout=(4, 8, 4), names=('warp', 'lane8', 'lane4')) as _compute:
+                with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                     result = tf.cast(acc, dtype="bf16")
                 return result

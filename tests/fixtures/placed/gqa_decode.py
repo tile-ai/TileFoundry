@@ -53,27 +53,30 @@ class GqaOnline:
     owns, and every body here names the same ``cta`` level.
     """
 
-    @func
+    @func(mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)))
     def gqa_online_attend(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ShardLayout(Layout((1, C, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ShardLayout(Layout((1, C, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", ShardLayout(Layout((1, S, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", ShardLayout(Layout((1, S, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         pass
 
-    @gqa_online_attend.specialize(RangePattern("ctx_len", 0, SMALL_CONTEXT_T))
+    @gqa_online_attend.specialize(
+        RangePattern("ctx_len", 0, SMALL_CONTEXT_T),
+        mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)),
+    )
     def head_on_cta(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ShardLayout(Layout((1, C, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ShardLayout(Layout((1, C, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", ShardLayout(Layout((1, S, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", ShardLayout(Layout((1, S, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
-        with Mesh(("cta",), layout=Layout((NUM_CTA,), (1,))) as cta:
+        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:
             q_sh = tf.reshard(q, layout=(1, S, _HKV, _G @ cta, _D))
             q_f = tf.cast(q_sh, dtype="f32")
             q_groups = tf.transpose(
@@ -128,7 +131,7 @@ class GqaOnline:
         v_cache: Tensor[(1, C, _HKV, _D), "bf16"],
     ):
 
-        with Mesh(("cta",), layout=Layout((NUM_CTA,), (1,))) as cta:  # noqa: F841
+        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:  # noqa: F841
             k_f = tf.transpose(
                 tf.cast(
                     tf.repeat_interleave(
@@ -178,7 +181,7 @@ class GqaOnline:
         v_new: Tensor[(1, S, _HKV, _D), "bf16"],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
-        with Mesh(("cta",), layout=Layout((NUM_CTA,), (1,))) as cta:  # noqa: F841
+        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:  # noqa: F841
             m = tf.reduce(m_p, axes=(-2,), keepdim=True, kind="max")
             alpha = tf.exp(m_p - m)
             l = tf.reduce(alpha * l_p, axes=(-2,), keepdim=True, kind="sum")
@@ -196,13 +199,16 @@ class GqaOnline:
             corr_n = tf.exp(score_n - m_all)
             return tf.cast((o * corr + corr_n * v_n) / (l_blk * corr + corr_n), dtype="bf16")
 
-    @gqa_online_attend.specialize(RangePattern("ctx_len", SMALL_CONTEXT_T + 1, MAX_CTX))
+    @gqa_online_attend.specialize(
+        RangePattern("ctx_len", SMALL_CONTEXT_T + 1, MAX_CTX),
+        mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)),
+    )
     def ctx_split_kv(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ShardLayout(Layout((1, C, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ShardLayout(Layout((1, C, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", ShardLayout(Layout((1, S, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", ShardLayout(Layout((1, S, _HKV, _D)), (Broadcast(),), Mesh((Topology('cta', NUM_CTA),), Layout((NUM_CTA,), (1,))))],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         m_p, l_p, o_p = _ctx_partials(q, k_cache, v_cache)

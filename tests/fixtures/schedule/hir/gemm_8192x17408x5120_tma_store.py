@@ -40,7 +40,7 @@ class GEMM_8192X17408X5120_TMA_STORE:
                 out = tf.zeros(Tensor[(M, N), "bf16"])
                 for m in tf.tile(M, BM):
                     for n in tf.tile(N, BN):
-                        with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
+                        with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                             acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
 
                         for k in tf.tile(K, BK):
@@ -56,14 +56,14 @@ class GEMM_8192X17408X5120_TMA_STORE:
                                     buffers=STAGES,
                                 )
 
-                            with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
+                            with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                                 acc = tf.schedule(
                                     (acc, lhs, rhs),
                                     op=T.tiled_mma(atom=wgmma),
                                     repeat=(2, 1, 4),
                                 )
 
-                        with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=('group', 'warp', 'lane8', 'lane4')) as _compute:
+                        with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                             tile_out = tf.cast(acc, dtype="bf16")
                             staged = tf.schedule((tile_out,), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
 

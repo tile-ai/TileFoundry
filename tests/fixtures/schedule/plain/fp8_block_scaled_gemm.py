@@ -24,7 +24,7 @@ N_BLOCKS = N // BLOCK
 class FP8_BLOCK_SCALED_GEMM:
     @func
     def gemm(a: Tensor[(M, K), "fp8e4m3"],
-             b: Tensor[(K, N), "fp8e4m3", Layout((K, N), (1, K))],
+             b: Tensor[(K, N), "fp8e4m3", ((K, N), (1, K))],
              a_scale: Tensor[(M, K_BLOCKS), "f32"],
              b_scale: Tensor[(K_BLOCKS, N_BLOCKS), "f32"]) -> Tensor[(M, N), "bf16"]:
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
