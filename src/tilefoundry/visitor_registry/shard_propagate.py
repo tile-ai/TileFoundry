@@ -23,6 +23,7 @@ from tilefoundry.ir.types.shard_layout import (
     shard_layout_of,
 )
 from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.ir.types.utils import participant_layout
 from tilefoundry.utils.isl_utils import as_multi_aff, equates, involved_dims
 
 
@@ -225,7 +226,7 @@ def derive_output_shard_layout(
 ):
     """Derive the output ``ShardLayout`` from the input shards and the Op's relations."""
     input_types = tuple(
-        replace(type_, layout=layout)
+        replace(type_, layout=participant_layout(layout))
         if (layout := shard_layout_of(type_.layout)) is not None
         else type_
         for type_ in input_types

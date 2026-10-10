@@ -22,9 +22,9 @@ from tilefoundry.ir.pattern.utils import (
     declared_write_type,
     selected_pattern,
 )
-from tilefoundry.ir.types import TensorType, UnitType
+from tilefoundry.ir.types import ShardLayout, TensorType, UnitType
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
-from tilefoundry.ir.types.utils import tile_inner_type
+from tilefoundry.ir.types.utils import participant_layout, tile_inner_type
 from tilefoundry.utils.isl_utils import cardinality, involved_dims
 from tilefoundry.visitor_registry import (
     register_cost_evaluator,
@@ -375,6 +375,13 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
     bindings = dict(getattr(getattr(op, "atom", None), "bindings", {}))
     matcher = PatternMatcher(bindings)
     for param, pattern, type_ in zip(params, patterns, inner, strict=True):
+        if isinstance(type_.layout, ShardLayout):
+            type_ = TensorType(
+                type_.shape,
+                type_.dtype,
+                participant_layout(type_.layout),
+                type_.storage,
+            )
         if pattern is None or matcher.match(pattern, type_):
             continue
         from tilefoundry.inspection.pattern_printer import PatternPrinter  # noqa: PLC0415
