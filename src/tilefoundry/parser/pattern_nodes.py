@@ -3527,25 +3527,16 @@ def _read_before_bound(statements):
     return frozenset(live)
 
 
-def _block_escaping_names(statements, *, repeated: bool = False):
-    """Return each with child's escaping bindings in one reverse block scan.
-
-    A block that repeats carries what it reads on its way to binding it, so a
-    `with` that both reads and binds a name states that name's next value and
-    the region it is bound through is what the round after reads.
-    """
+def _names_read_after(statements):
+    """Return, for each `with` child, the names the statements after it read."""
     read_after: set[str] = set()
-    escaping: dict[int, Mapping[str, object]] = {}
+    found: dict[int, Mapping[str, object]] = {}
     for index in range(len(statements) - 1, -1, -1):
         statement = statements[index]
         if isinstance(statement, ast.With):
-            bound = _directly_bound_names(statement.body)
-            reached = set(read_after)
-            if repeated:
-                reached.update(_read_before_bound(statement.body))
-            escaping[index] = {"escaping_names": frozenset(bound & reached)}
+            found[index] = {"read_after": frozenset(read_after)}
         read_after.update(_loaded_names((statement,)))
-    return escaping
+    return found
 
 
 def _enter_mesh_scope(context, mesh, match):
@@ -3694,19 +3685,7 @@ def _rebind_through_region(context, mesh, names, frame, node, params=(), args=()
     rebound comes back, so a caller with no body value of its own still has one
     that reaches the region.
     """
-    values = [
-        (name, frame[name])
-        for name in frame
-        if name in names and isinstance(frame[name], runtime.Expr)
-    ]
-    missing = set(names) - {name for name, _value in values}
-    if missing:
-        missing_names = ", ".join(sorted(missing))
-        raise ParseError.from_node(
-            node,
-            context,
-            f"mesh scope escaping values are not frame-local Expr bindings: {missing_names}",
-        )
+    values = [(name, frame[name]) for name in names]
     if len(values) == 1:
         scoped = _scoped_region(mesh, values[0][1], params, args)
         _bind_region_results(context, scoped, [values[0][0]], node)
@@ -3812,15 +3791,25 @@ class WithPattern(ElementPattern):
             raise ParseError.from_node(match.node, context, "Mesh stack is unbalanced")
         if context.function.dialect == "hir":
             body = children["body"]
-            escaping = context.values.get("escaping_names", frozenset())
             params = match.captures.get("region_params", ())
+            entry = {param.name: param for param in params}
+            read_after = context.values.get("read_after", frozenset())
+            escaping = tuple(
+                name
+                for name, value in frame.items()
+                if isinstance(value, runtime.Expr)
+                and value is not entry.get(name)
+                and (context.lexical_scope.lookup(name) is not None or name in read_after)
+            )
             args = match.captures.get("region_args", ())
             rebound = None
             if escaping:
                 rebound = _rebind_through_region(
                     context, mesh, escaping, frame, match.node, params, args
                 )
-            if body is not None:
+            if body is not None and (
+                rebound is None or isinstance(match.node.body[-1], ast.Return)
+            ):
                 return _scoped_region(mesh, body, params, args)
             return None if rebound is None else context.lexical_scope.lookup(rebound)
         binding = runtime.Var(
@@ -4341,16 +4330,13 @@ class LoopBodyPattern(ElementPattern):
 
     @staticmethod
     def _bind(node, _context, matched):
-        """Tell each `with` in the body which of its names the loop reads later.
+        """Pass following statements' reads to each `with` in this loop body.
 
-        A `with Mesh(...)` states who runs the statements it holds, so a value
-        assigned inside one and read after it leaves through the region rather
-        than around it. Which names those are is the same reverse scan a
-        function block makes, asked of the loop's own statements.
+        Reads outside the loop are not inherited: new names stay loop-local.
         """
         assert isinstance(node, ast.Module)
-        escaping = _block_escaping_names(node.body, repeated=True)
-        child_values = {f"statement_{index}": values for index, values in escaping.items()}
+        read_after = _names_read_after(node.body)
+        child_values = {f"statement_{index}": values for index, values in read_after.items()}
         return dataclasses.replace(
             matched,
             children=tuple(
@@ -4870,10 +4856,14 @@ class BlockPattern(ElementPattern):
     )
 
     @staticmethod
-    def _bind(node, _context, matched):
+    def _bind(node, context, matched):
         assert isinstance(node, ast.Module)
-        escaping = _block_escaping_names(node.body)
-        child_values = {f"statement_{index}": values for index, values in escaping.items()}
+        read_after = _names_read_after(node.body)
+        inherited = context.values.get("read_after", frozenset())
+        child_values = {
+            f"statement_{index}": {"read_after": values["read_after"] | inherited}
+            for index, values in read_after.items()
+        }
         return dataclasses.replace(
             matched,
             children=tuple(
