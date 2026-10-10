@@ -91,18 +91,13 @@ class PatternMatcher:
         saved = self.snapshot()
         self._depth += 1
         try:
-            if isinstance(subject, ShardLayout):
-                from .pattern import ShardLayoutPattern  # noqa: PLC0415 - pattern protocol cycle
-
-                if isinstance(pattern, ShardLayoutPattern):
-                    try:
-                        subject = participant_layout(subject, pattern.mesh.topologies)
-                    except ValueError:
-                        found = self._fail(pattern, subject)
-                    else:
-                        found = self._match(pattern, subject)
-                else:
-                    found = self._match(pattern, subject)
+            try:
+                if isinstance(subject, ShardLayout) and isinstance(
+                    pattern, _shard_layout_pattern_type()
+                ):
+                    subject = participant_layout(subject, pattern.mesh.topologies)
+            except ValueError:
+                found = self._fail(pattern, subject)
             else:
                 found = self._match(pattern, subject)
         except Exception:
@@ -486,6 +481,12 @@ def _pattern_type():
     from .pattern import Pattern  # noqa: PLC0415 - pattern protocol cycle
 
     return Pattern
+
+
+def _shard_layout_pattern_type():
+    from .pattern import ShardLayoutPattern  # noqa: PLC0415 - pattern protocol cycle
+
+    return ShardLayoutPattern
 
 
 def _named(value):

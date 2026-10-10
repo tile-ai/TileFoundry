@@ -90,15 +90,18 @@ def participant_layout(
     an instruction frame, retain distributed levels, or the innermost level for
     an entirely broadcast value.
     """
+    def topology_name(topology):
+        return getattr(topology, "name", topology)
+
     levels = separate(layout.mesh)
     required_names = (
-        {getattr(topology, "name", topology) for topology in required.topologies}
+        {topology_name(topology) for topology in required.topologies}
         if isinstance(required, Mesh)
         else None if required is None else set(required)
     )
     if len(levels) == 1 and (
         required_names is None
-        or getattr(levels[0].topologies[0], "name", levels[0].topologies[0]) in required_names
+        or topology_name(levels[0].topologies[0]) in required_names
     ):
         return layout
     attrs_by_level = []
@@ -111,16 +114,16 @@ def participant_layout(
         raise ValueError("shard attributes must have the rank of their mesh")
     if required_names is None:
         required_names = {
-            getattr(level.topologies[0], "name", level.topologies[0])
+            topology_name(level.topologies[0])
             for level, attrs in zip(levels, attrs_by_level, strict=True)
             if any(not isinstance(attr, Broadcast) for attr in attrs)
         }
     if not required_names:
-        required_names = {getattr(levels[-1].topologies[0], "name", levels[-1].topologies[0])}
+        required_names = {topology_name(levels[-1].topologies[0])}
     selected = []
     selected_attrs = []
     for level, attrs in zip(levels, attrs_by_level, strict=True):
-        name = getattr(level.topologies[0], "name", level.topologies[0])
+        name = topology_name(level.topologies[0])
         if name in required_names:
             selected.append(level)
             selected_attrs.extend(attrs)
@@ -135,6 +138,7 @@ def participant_layout(
 
 def _participant_frame(source: Mesh, required: Mesh) -> tuple[Mesh, int]:
     """Find a physical suffix; its dropped count indexes the full source layout."""
+    assert len(required.topologies) == 1, "participant frames require one topology level"
     source_layout = flatten(source.layout)
     required_layout = flatten(required.layout)
     if not isinstance(source_layout, Layout) or not isinstance(required_layout, Layout):

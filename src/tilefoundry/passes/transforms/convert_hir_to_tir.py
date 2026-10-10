@@ -76,7 +76,6 @@ from tilefoundry.ir.types.utils import (
     nonunit_mesh,
     participant_layout,
     static_dim_value,
-    types_compatible,
 )
 from tilefoundry.ir.visitor import ExprVisitor, StmtMutator, collect_exprs, expr_children
 from tilefoundry.passes.pass_base import ModulePass
@@ -1149,10 +1148,10 @@ class Lowering(ExprVisitor[Expr]):
         stem: str,
     ) -> Expr:
         desired = _with_frame(desired, frame)
-        if (
-            types_compatible(desired, value.type)
-            and types_compatible(value.type, desired)
-        ) or (
+        actual = value.type
+        if isinstance(actual, TensorType) and isinstance(actual.layout, ShardLayout):
+            actual = replace(actual, layout=participant_layout(actual.layout))
+        if actual == desired or (
             not isinstance(desired.layout, ShardLayout)
             and isinstance(value.type, TensorType)
             and tuple(value.type.shape) == tuple(desired.shape)
