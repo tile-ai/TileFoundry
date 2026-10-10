@@ -242,18 +242,19 @@ def levels(mesh: Mesh) -> tuple[Layout, ...]:
     return tuple(get(stated, index) for index in range(_rank(stated)))
 
 
-def refine(selection: Mesh, shape: tuple[int, ...], names: tuple[str, ...]) -> Mesh:
-    """Refactor a selection's row-major positions into equally spaced axes.
+def refine(selection: Mesh, layout: Layout, names: tuple[str, ...]) -> Mesh:
+    """Map selection-local indices to axes with fixed physical strides.
 
-    Retain the selected topology and offset; derive each physical stride from
-    the selection rather than the new shape's compact numbering.
+    The layout must cover every row-major selection index once. Its strides
+    describe that numbering; the selection supplies physical strides and offset.
     """
     if len(selection.topologies) != 1:
         raise ValueError(f"a refined mesh selects one topology level; got {_named(selection)!r}")
-    if not isinstance(shape, tuple) or any(isinstance(one, tuple) for one in shape):
-        raise ValueError("a refined mesh states its shape only; strides come from the selection")
+    if not isinstance(layout, Layout):
+        raise TypeError("refinement layout must be a Layout")
     source = flatten(levels(selection)[0])
-    layout = Layout(shape)
+    layout = flatten(layout)
+    shape = layout.shape
     count = size(source)
     if size(layout) != count:
         raise ValueError(
@@ -267,17 +268,30 @@ def refine(selection: Mesh, shape: tuple[int, ...], names: tuple[str, ...]) -> M
     if not all(isinstance(step, int) for step in source_steps):
         raise ValueError("refining a mesh requires static selection strides")
     source_order = compact_row_major(source.shape)
-    order = compact_row_major(shape)
+    coordinate_order = compact_row_major(shape)
+    stated = layout.strides if layout.strides is not None else coordinate_order
+    if len(stated) != len(shape):
+        raise ValueError("refined mesh layout must cover each selected position once")
+    if not all(isinstance(step, int) for step in stated):
+        raise ValueError("refining a mesh requires static layout strides")
+    indices = tuple(
+        crd2idx(idx2crd(index, shape, coordinate_order), shape, stated)
+        for index in range(count)
+    )
+    if set(indices) != set(range(count)):
+        raise ValueError("refined mesh layout must cover each selected position once")
 
     def position(index):
         return crd2idx(idx2crd(index, source.shape, source_order), source.shape, source_steps)
 
-    steps = tuple(position(step) if extent > 1 else 0 for extent, step in zip(shape, order))
-    for axis, (extent, step, physical) in enumerate(zip(shape, order, steps)):
+    steps = tuple(position(step) if extent > 1 else 0 for extent, step in zip(shape, stated))
+    for axis, (extent, coordinate_step, physical) in enumerate(
+        zip(shape, coordinate_order, steps)
+    ):
         for index in range(count):
-            if (index // step) % extent == extent - 1:
+            if (index // coordinate_step) % extent == extent - 1:
                 continue
-            if position(index + step) - position(index) != physical:
+            if position(indices[index + coordinate_step]) - position(indices[index]) != physical:
                 name = names[axis] if names else str(axis)
                 raise ValueError(
                     f"refined axis {name!r} does not map to one stride of the selection"
