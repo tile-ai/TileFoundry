@@ -610,8 +610,8 @@ calculation.
 
 At long context, the full-cache form is the wrong residency choice. `Stage3_Fused` uses a two-dimensional CTA mesh. The head axis owns query heads and the worker axis owns disjoint cache blocks. Each worker keeps online `(m, l, acc)` state, then the worker axis is combined with an explicit log-sum-exp merge.
 
-The entry calls `prepare` and `scan` inside a single-CTA mesh. `prepare` inherits
-that scope; `scan` declares its own head/worker mesh for the cache scan.
+The single `gqa_decode` function prepares QKV and updates the caches inside a
+single-CTA mesh, then scans them inside the head/worker mesh.
 
 <!-- tilefoundry-source: attn_layer.py -->
 
@@ -621,11 +621,12 @@ class Stage3_Fused:
     """Split the cache scan across workers and combine online-softmax partials."""
 
     @func
-    def prepare(
+    def gqa_decode(
         hidden: Tensor[(1, 1, HIDDEN), "bf16"],
         w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
         w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
         w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
         k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
         v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
         cur_pos: Tensor[(1,), "i32"],
@@ -633,26 +634,19 @@ class Stage3_Fused:
         pos_ids: Tensor[(1,), "i32"],
         cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
         sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ):
-        q = tf.reshape(
-            tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-        )
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-        k_heads = tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2)
-        v_heads = tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2)
-        return q_rope, k_heads, v_heads
-
-    @func
-    def scan(
-        q_rope: Tensor[(1, 1, QUERY_HEADS, HEAD_DIM), "bf16"],
-        k_heads: Tensor[(1, CTX, QUERY_HEADS, HEAD_DIM), "bf16"],
-        v_heads: Tensor[(1, CTX, QUERY_HEADS, HEAD_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
     ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        with Mesh(("cta",), layout=(1,), names=("tile",)) as _cta:
+            q = tf.reshape(
+                tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
+            )
+            k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+            v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+            q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
+            k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
+            v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
+            k_heads = tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2)
+            v_heads = tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2)
+
         with Mesh(
             ("cta",), layout=(QUERY_HEADS, WORKERS), names=("head", "worker")
         ) as cta:
@@ -736,28 +730,6 @@ class Stage3_Fused:
             )
             return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
 
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        with Mesh(("cta",), layout=(1,), names=("tile",)) as _cta:
-            q_rope, k_heads, v_heads = prepare(  # noqa: F821
-                hidden, w_q, w_k, w_v, k_cache, v_cache,
-                cur_pos, write_len, pos_ids, cos_cache, sin_cache,
-            )
-            return scan(q_rope, k_heads, v_heads, w_o)  # noqa: F821
-
 
 gqa_decode_fused = Stage3_Fused.entry_function()
 ```
@@ -784,11 +756,11 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 # analysis target=nvidia.h200_sxm module=Stage3_Fused function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:2983360@logical,8628160@total,461024@cta;f32:94080@logical,127488@total,3984@cta other-ops=integer:9@logical,512@total,16@cta;special:33056@logical,33152@total,1036@cta precision=exact
-# memory traffic=gmem:r3.32MB/w4.00MB@logical,r10.21MB/w4.02MB@total,r2.44MB/w4.00MB@cta;rmem:r64.64KB/w64.07KB@logical,r184.00KB/w164.00KB@total,r5.75KB/w5.12KB@cta;smem:r2.62MB/w2.46MB@logical,r8.90MB/w8.61MB@total,r284.71KB/w275.41KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_heads:64.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:275:1.00KB;v11:281:512.12KB;v12:283:2.00MB;v2:277:256B;v4:279:640B;v68:371:1.00KB;v6:279:128B;v70:374:512B;v7:280:512.12KB;v8:282:2.00MB;v9:278:256B;v_heads:64.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:6.81MB;rmem:512B;smem:16.77KB persistent=gmem:2.31MB
+# memory traffic=gmem:r3.32MB/w4.00MB@logical,r10.21MB/w4.02MB@total,r2.44MB/w4.00MB@cta;rmem:r64.64KB/w64.07KB@logical,r184.00KB/w164.00KB@total,r5.75KB/w5.12KB@cta;smem:r2.62MB/w2.46MB@logical,r8.90MB/w8.61MB@total,r284.71KB/w275.41KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_heads:64.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:277:1.00KB;v11:283:512.12KB;v12:285:2.00MB;v2:279:256B;v4:281:640B;v68:365:1.00KB;v6:281:128B;v70:368:512B;v7:282:512.12KB;v8:284:2.00MB;v9:280:256B;v_heads:64.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:6.81MB;rmem:512B;smem:16.77KB persistent=gmem:2.31MB
 #   buffer=w_o holds=6.44MB time=none space=cta.head,cta.worker reuse=3.88MB fits=yes precision=upper_bound
 # roofline ideal-ns=1599 bound-by=memory
 
-    v7 = cache_update(k_cache, cur_pos, write_len, v6)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v6:279:128B;v7:280:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
+        v7 = cache_update(k_cache, cur_pos, write_len, v6)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v6:281:128B;v7:282:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
 ```
 
 The embedded `Stage3_Fused` program is the split-K example for this page.
@@ -921,7 +893,7 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # analysis target=nvidia.h200_sxm module=Stage4_WeightPrepared function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:329536@logical,338048@total,42256@cta;f32:6390528@logical,51124224@total,6390528@cta other-ops=special:32768@logical,262144@total,32768@cta precision=exact
-# memory traffic=gmem:r26.94MB/w24.38MB@logical,r213.37MB/w195.05MB@total,r26.67MB/w24.38MB@cta;rmem:r3.75KB/w3.75KB@logical,r3.75KB/w3.75KB@total,r480B/w480B@cta;smem:r322.00KB/w321.00KB@logical,r336.00KB/w328.00KB@total,r42.00KB/w41.00KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v11:441:640B;v12:441:512B;v13:452:2.00KB;v14:455:1.00KB;v15:455:2.00KB;v17:441:128B;v18:442:512.12KB;v19:445:4.00MB;v20:444:4.00MB;v21:453:8.00MB;v23:465:8.00MB;v24:465:256.00KB;v25:466:64B;v26:467:256.00KB;v27:467:256.00KB;v31:435:256B;v33:443:512.12KB;v34:449:4.00MB;v35:448:4.00MB;v36:454:8.00MB;v38:469:8.00MB;v39:469:2.00KB;v40:468:64B;v41:470:2.00KB;v42:470:1.00KB;v48:482:512B;v4:433:1.00KB;v9:434:256B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:10.44MB;rmem:128B;smem:16.50KB persistent=gmem:2.31MB
+# memory traffic=gmem:r26.94MB/w24.38MB@logical,r213.37MB/w195.05MB@total,r26.67MB/w24.38MB@cta;rmem:r3.75KB/w3.75KB@logical,r3.75KB/w3.75KB@total,r480B/w480B@cta;smem:r322.00KB/w321.00KB@logical,r336.00KB/w328.00KB@total,r42.00KB/w41.00KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v11:413:640B;v12:413:512B;v13:424:2.00KB;v14:427:1.00KB;v15:427:2.00KB;v17:413:128B;v18:414:512.12KB;v19:417:4.00MB;v20:416:4.00MB;v21:425:8.00MB;v23:437:8.00MB;v24:437:256.00KB;v25:438:64B;v26:439:256.00KB;v27:439:256.00KB;v31:407:256B;v33:415:512.12KB;v34:421:4.00MB;v35:420:4.00MB;v36:426:8.00MB;v38:441:8.00MB;v39:441:2.00KB;v40:440:64B;v41:442:2.00KB;v42:442:1.00KB;v48:454:512B;v4:405:1.00KB;v9:406:256B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:10.44MB;rmem:128B;smem:16.50KB persistent=gmem:2.31MB
 #   buffer=cos_cache holds=51.08MB time=none space=cta.head reuse=3.50MB fits=no precision=upper_bound
 #   buffer=sin_cache holds=51.08MB time=none space=cta.head reuse=3.50MB fits=no precision=upper_bound
 #   buffer=hidden holds=51.08MB time=none space=cta.head reuse=3.50KB fits=no precision=upper_bound
@@ -942,9 +914,9 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 
 `Stage5_CachePrepared` leaves the static projection weights in their ordinary form and changes only the cache scan. `BLOCK=128` rows move through smem while `(m, l, acc)` stays resident. The updated cache is read at `cur_pos` once, so append and scan are separate traffic events.
 
-As in the split-K stage, `prepare` inherits the entry's single-CTA mesh and
-`scan` declares its own head mesh. The historical scan uses the original caches;
-the current-position read uses the caches returned by `prepare`.
+The single `gqa_decode` function prepares QKV and updates the caches inside a
+single-CTA mesh, then scans inside the head mesh. The historical scan uses the
+original caches; the current-position read uses the updated caches.
 
 <!-- tilefoundry-source: attn_layer.py -->
 
@@ -954,11 +926,12 @@ class Stage5_CachePrepared:
     """Stream cache blocks through smem while an online state stays resident."""
 
     @func
-    def prepare(
+    def gqa_decode(
         hidden: Tensor[(1, 1, HIDDEN), "bf16"],
         w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
         w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
         w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
         k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
         v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
         cur_pos: Tensor[(1,), "i32"],
@@ -966,27 +939,17 @@ class Stage5_CachePrepared:
         pos_ids: Tensor[(1,), "i32"],
         cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
         sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ):
-        q = tf.reshape(
-            tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-        )
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-        return q_rope, k_all, v_all
-
-    @func
-    def scan(
-        q_rope: Tensor[(1, 1, QUERY_HEADS, HEAD_DIM), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        k_all: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_all: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
     ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        with Mesh(("cta",), layout=(1,), names=("tile",)) as _cta:
+            q = tf.reshape(
+                tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
+            )
+            k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+            v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+            q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
+            k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
+            v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
+
         with Mesh(("cta",), layout=(QUERY_HEADS,), names=("head",)) as cta:
             qh = tf.reshard(
                 q_rope, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
@@ -1078,28 +1041,6 @@ class Stage5_CachePrepared:
             )
             return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
 
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        with Mesh(("cta",), layout=(1,), names=("tile",)) as _cta:
-            q_rope, k_all, v_all = prepare(  # noqa: F821
-                hidden, w_q, w_k, w_v, k_cache, v_cache,
-                cur_pos, write_len, pos_ids, cos_cache, sin_cache,
-            )
-            return scan(q_rope, k_cache, v_cache, k_all, v_all, cur_pos, w_o)  # noqa: F821
-
 
 gqa_decode_cache_prepared = Stage5_CachePrepared.entry_function()
 ```
@@ -1127,7 +1068,7 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 # analysis target=nvidia.h200_sxm module=Stage5_CachePrepared function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:4557512@logical,5482952@total,858241@cta;f32:117288@logical,117288@total,14661@cta other-ops=integer:32@logical,256@total,32@cta;special:33040@logical,33040@total,4130@cta precision=exact
-# memory traffic=gmem:r7.32MB/w4.00MB@logical,r22.20MB/w32.02MB@total,r3.82MB/w4.00MB@cta;rmem:r163.53KB/w161.03KB@logical,r181.03KB/w161.03KB@total,r22.63KB/w20.13KB@cta;smem:r8.82MB/w8.55MB@logical,r8.85MB/w8.57MB@total,r1.11MB/w1.07MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_all:512.00KB;k_cache:16.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:505:1.00KB;v10:511:128B;v26:538:128.00KB;v2:507:256B;v43:547:128.00KB;v4:509:640B;v52:577:256B;v53:576:1.00KB;v65:580:256B;v66:579:1.00KB;v6:509:128B;v78:610:1.00KB;v7:510:128B;v80:613:512B;v8:508:256B;v_all:512.00KB;v_cache:16.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.38MB;rmem:512B;smem:16.77KB persistent=gmem:2.31MB
+# memory traffic=gmem:r7.32MB/w4.00MB@logical,r22.20MB/w32.02MB@total,r3.82MB/w4.00MB@cta;rmem:r163.53KB/w161.03KB@logical,r181.03KB/w161.03KB@total,r22.63KB/w20.13KB@cta;smem:r8.82MB/w8.55MB@logical,r8.85MB/w8.57MB@total,r1.11MB/w1.07MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_all:512.00KB;k_cache:16.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:479:1.00KB;v10:485:128B;v26:501:128.00KB;v2:481:256B;v43:510:128.00KB;v4:483:640B;v52:540:256B;v53:539:1.00KB;v65:543:256B;v66:542:1.00KB;v6:483:128B;v78:573:1.00KB;v7:484:128B;v80:576:512B;v8:482:256B;v_all:512.00KB;v_cache:16.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:3.38MB;rmem:512B;smem:16.77KB persistent=gmem:2.31MB
 #   buffer=k_all holds=2.60MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=v_all holds=2.60MB time=none space=cta.head reuse=3.50MB fits=yes precision=upper_bound
 #   buffer=w_o holds=2.60MB time=none space=cta.head reuse=896.00KB fits=yes precision=upper_bound
@@ -1136,8 +1077,8 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 #   buffer=cur_pos holds=2.60MB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 # roofline ideal-ns=2473 bound-by=memory
 
-            v25 = slice(k_cache, (0, v24, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", Layout((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost precision=exact; memory traffic=rmem:r32B/w0@logical,r256B/w0@total,r32B/w0@cta footprint-precision=exact operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
-    v7 = cache_update(k_cache, cur_pos, write_len, v6)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v6:509:128B;v7:510:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
+        v25 = slice(k_cache, (0, v24, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", Layout((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost precision=exact; memory traffic=rmem:r32B/w0@logical,r256B/w0@total,r32B/w0@cta footprint-precision=exact operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
+        v7 = cache_update(k_cache, cur_pos, write_len, v6)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v6:483:128B;v7:484:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
 ```
 
 ```text

@@ -10,7 +10,7 @@ from tests._source import import_dsl
 from tests.fixtures.placed.fused_boundary import FusedBoundary
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
 from tests.fixtures.placed.rmsnorm import RmsnormModule
-from tilefoundry import module
+from tilefoundry import module, prim_func
 from tilefoundry.analysis.check import check_program
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, VerifyError, binding_name
@@ -39,36 +39,154 @@ def test_unscoped_initialization_is_rejected_at_the_authored_call() -> None:
     assert "inside with Mesh(...)" in str(raised.value)
 
 
-@pytest.mark.parametrize("after_mesh", (False, True), ids=("before-mesh", "after-mesh"))
+@func
+def mesh_scope_helper(x: Tensor[(4, 4), "f32"]):
+    return x
+
+
+def add_before_mesh(x: Tensor[(4, 4), "f32"]):
+    result = tf.add(x, x)
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    return result
+
+
+def add_after_mesh(x: Tensor[(4, 4), "f32"]):
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    result = tf.add(x, x)
+    return result
+
+
+def call_before_mesh(x: Tensor[(4, 4), "f32"]):
+    result = mesh_scope_helper(x)
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    return result
+
+
+def call_after_mesh(x: Tensor[(4, 4), "f32"]):
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    result = mesh_scope_helper(x)
+    return result
+
+
+def binary_before_mesh(x: Tensor[(4, 4), "f32"]):
+    result = x + x
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    return result
+
+
+def binary_after_mesh(x: Tensor[(4, 4), "f32"]):
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    result = x + x
+    return result
+
+
+def unary_before_mesh(x: Tensor[(4, 4), "f32"]):
+    result = -x
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    return result
+
+
+def unary_after_mesh(x: Tensor[(4, 4), "f32"]):
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    result = -x
+    return result
+
+
+def matmul_before_mesh(x: Tensor[(4, 4), "f32"]):
+    result = x @ x
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    return result
+
+
+def matmul_after_mesh(x: Tensor[(4, 4), "f32"]):
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    result = x @ x
+    return result
+
+
+def slice_before_mesh(x: Tensor[(4, 4), "f32"]):
+    result = x[:, :]
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    return result
+
+
+def slice_after_mesh(x: Tensor[(4, 4), "f32"]):
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    result = x[:, :]
+    return result
+
+
+def tuple_before_mesh(
+    x: Tensor[(4, 4), "f32"],
+    pair: tuple[Tensor[(4, 4), "f32"], Tensor[(4, 4), "f32"]],
+):
+    result = pair[0]
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    return result
+
+
+def tuple_after_mesh(
+    x: Tensor[(4, 4), "f32"],
+    pair: tuple[Tensor[(4, 4), "f32"], Tensor[(4, 4), "f32"]],
+):
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    result = pair[0]
+    return result
+
+
+def scalar_before_mesh(x: Tensor[(4, 4), "f32"]):
+    result = 1 + 2
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    return result
+
+
+def scalar_after_mesh(x: Tensor[(4, 4), "f32"]):
+    with Mesh(("cta",), (1,), names=("unit",)) as _mesh:
+        _value = x
+    result = 1 + 2
+    return result
+
+
 @pytest.mark.parametrize(
-    "expression",
-    ("tf.add(x, x)", "helper(x)", "x + x", "-x", "x @ x", "x[:, :]",
-     "pair[0]", "1 + 2"),
+    "program",
+    (
+        add_before_mesh,
+        add_after_mesh,
+        call_before_mesh,
+        call_after_mesh,
+        binary_before_mesh,
+        binary_after_mesh,
+        unary_before_mesh,
+        unary_after_mesh,
+        matmul_before_mesh,
+        matmul_after_mesh,
+        slice_before_mesh,
+        slice_after_mesh,
+        tuple_before_mesh,
+        tuple_after_mesh,
+        scalar_before_mesh,
+        scalar_after_mesh,
+    ),
+    ids=lambda program: program.__name__,
 )
-def test_authored_runtime_expressions_require_a_mesh_scope(
-    expression: str, after_mesh: bool,
-) -> None:
-    outside = f"        result = {expression}\n"
-    mesh = ('        with Mesh(("cta",), (1,), names=("unit",)) as _mesh:\n'
-            '            value = x\n')
-    source = (
-        'from tilefoundry import func, module\n'
-        'from tilefoundry.dsl import Mesh, Tensor, Topology, tf\n'
-        '@func\n'
-        'def helper(x: Tensor[(4, 4), "f32"]):\n'
-        '    return x\n'
-        '@module(entry="run", topologies=(Topology("cta", 1),))\n'
-        'class Unscoped:\n'
-        '    @func\n'
-        '    def run(x: Tensor[(4, 4), "f32"], '
-        'pair: tuple[Tensor[(4, 4), "f32"], Tensor[(4, 4), "f32"]]):\n'
-        + (mesh + outside if after_mesh else outside + mesh)
-        + '        return result\n'
-    )
-    line = next(i for i, text in enumerate(source.splitlines(), 1) if "result =" in text)
-    with pytest.raises(ParseError, match="runs outside every mesh scope") as raised:
-        import_dsl(source, "Unscoped")
-    assert f"source.py:{line}:" in str(raised.value)
+def test_authored_runtime_expressions_require_a_mesh_scope(program) -> None:
+    with pytest.raises(ParseError, match="runs outside every mesh scope"):
+        func(program, topologies=(Topology("cta", 1),))
 
 
 def test_a_return_expression_after_a_mesh_requires_a_scope() -> None:
@@ -83,25 +201,17 @@ def test_a_return_expression_after_a_mesh_requires_a_scope() -> None:
 
 
 def test_logical_hir_and_tir_calls_remain_unscoped() -> None:
-    logical = import_dsl(
-        'from tilefoundry import func\n'
-        'from tilefoundry.dsl import Tensor, tf\n'
-        '@func\n'
-        'def run(x: Tensor[(4,), "f32"]):\n'
-        '    return tf.add(x, x)\n',
-        "run",
-    )
-    tir = import_dsl(
-        'from tilefoundry import prim_func\n'
-        'from tilefoundry.dsl import Mesh, Tensor, Topology, T\n'
-        '@prim_func\n'
-        'def run(x: Tensor[(4,), "f32"]):\n'
-        '    ptr = T.ptr_of(x)\n'
-        '    with Mesh((Topology("thread", 1),), (1,), names=("unit",)) as _mesh:\n'
-        '        value = T.ptr_of(x)\n'
-        '    ptr2 = T.ptr_of(x)\n',
-        "run",
-    )
+    @func
+    def logical(x: Tensor[(4,), "f32"]):
+        return tf.add(x, x)
+
+    @prim_func
+    def tir(x: Tensor[(4,), "f32"]):
+        _ptr = T.ptr_of(x)
+        with Mesh((Topology("thread", 1),), (1,), names=("unit",)) as _mesh:
+            _value = T.ptr_of(x)
+        _ptr2 = T.ptr_of(x)
+
     assert logical.body is not None and tir.body is not None
 
 
