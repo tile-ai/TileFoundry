@@ -46,7 +46,7 @@ from tilefoundry.ir.types.dim import (
     DimVar,
 )
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.mesh import Mesh
+from tilefoundry.ir.types.mesh import Mesh, make_mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.tensor_type import TupleType
@@ -612,7 +612,7 @@ def _iter_op_attrs(op):
 
 
 def _assert_mesh_in_scope(mesh: Mesh, scope, fn):
-    if any(mesh == m for m in scope):
+    if any(mesh == m for m in scope) or (scope and mesh == make_mesh(*scope)):
         return
     for p in fn.params:
         if isinstance(p.type, TensorType) and isinstance(p.type.layout, ShardLayout):

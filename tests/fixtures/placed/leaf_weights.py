@@ -1,7 +1,6 @@
 """Modules whose sibling-only weights must stay lazy when one leaf runs."""
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.target import CpuTarget, CudaTarget
 
@@ -18,7 +17,7 @@ class Mod:
         """A leaf with no constants, beside functions with medium weights."""
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
-            return tf.reshard(xs + xs, (1, D), "gmem")
+            return tf.reshard(xs + xs, ((1, D), {}), "gmem")
 
     @func
     def entry(
@@ -27,7 +26,7 @@ class Mod:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
             ws = tf.reshard(w_a[0:1, :], (1, D @ m.w), "smem")
-            return tf.reshard(xs + tf.cast(ws, dtype="f32"), (1, D), "gmem")
+            return tf.reshard(xs + tf.cast(ws, dtype="f32"), ((1, D), {}), "gmem")
 
     @func
     def other(
@@ -37,7 +36,7 @@ class Mod:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
             ws = tf.reshard(w_b[0:1, :], (1, D @ m.w), "smem")
-            return tf.reshard(xs * tf.cast(ws, dtype="f32"), (1, D), "gmem")
+            return tf.reshard(xs * tf.cast(ws, dtype="f32"), ((1, D), {}), "gmem")
 
 
 @module(entry="entry", target=CpuTarget(), topologies=(Topology("cta", W),))
@@ -47,7 +46,7 @@ class Small:
         """A runnable leaf with no constants."""
         with Mesh(("cta",), layout=(W,), names=("b",)) as m:
             xs = tf.reshard(x, (1, D @ m.b), "rmem")
-            return tf.reshard(xs + xs, (1, D), "gmem")
+            return tf.reshard(xs + xs, ((1, D), {}), "gmem")
 
     @func
     def entry(
@@ -56,7 +55,7 @@ class Small:
         with Mesh(("cta",), layout=(W,), names=("b",)) as m:
             xs = tf.reshard(x, (1, D @ m.b), "rmem")
             ws = tf.reshard(w, (1, D @ m.b), "rmem")
-            return tf.reshard(tf.mul(xs, ws), (1, D), "gmem")
+            return tf.reshard(tf.mul(xs, ws), ((1, D), {}), "gmem")
 
 
 @runtime_module(Small)

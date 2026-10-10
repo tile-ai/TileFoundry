@@ -25,7 +25,6 @@ from pathlib import Path
 from tilefoundry import func, module
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare tile() in the scan
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
@@ -82,7 +81,7 @@ class ScanByHead:
             acc = tf.full_like(a0, value=0.0)
             # Every block, in order, on this one unit: no worker axis, so no
             # log-sum-exp merge and no remainder that belongs to somebody else.
-            for t in tile(CF, ABLK):
+            for t in tf.tile(CF, ABLK):
                 b0 = t
                 kb = tf.reshard(tf.transpose(k_cache[:, b0:b0 + ABLK, :, :], perm=(0, 2, 1, 3)),
                                 (1, HKV @ kv.g, ABLK, DH), "smem")
@@ -142,7 +141,7 @@ class ScanByContext:
             m = tf.full_like(m0, value=NEGINF)
             l = tf.full_like(m0, value=0.0)
             acc = tf.full_like(a0, value=0.0)
-            for t in tile(CF, ABLK * WRK):
+            for t in tf.tile(CF, ABLK * WRK):
                 b0 = t + kv.w * ABLK
                 kb = tf.reshard(tf.transpose(k_cache[:, b0:b0 + ABLK, :, :], perm=(0, 2, 1, 3)),
                                 (1, HKV @ kv.g, ABLK, DH), "smem")
@@ -206,7 +205,7 @@ class ScanBoth:
             m = tf.full_like(m0, value=NEGINF)
             l = tf.full_like(m0, value=0.0)
             acc = tf.full_like(a0, value=0.0)
-            for t in tile(CF, ABLK * WRK_BOTH):
+            for t in tf.tile(CF, ABLK * WRK_BOTH):
                 b0 = t + kv.w * ABLK
                 kb = tf.reshard(tf.transpose(k_cache[:, b0:b0 + ABLK, :, :], perm=(0, 2, 1, 3)),
                                 (1, HKV @ kv.g, ABLK, DH), "smem")
@@ -279,7 +278,7 @@ class AttnDispatch:
             acc = tf.full_like(a0, value=0.0)
             # Every WRK_BOTH-th block, so the four workers of a head between
             # them walk the context once rather than four times.
-            for t in tile(CF, ABLK * WRK_BOTH):
+            for t in tf.tile(CF, ABLK * WRK_BOTH):
                 b0 = t + kv.w * ABLK
                 kb = tf.reshard(tf.transpose(k_cache[:, b0:b0 + ABLK, :, :], perm=(0, 2, 1, 3)),
                                 (1, HKV @ kv.g, ABLK, DH), "smem")
@@ -334,7 +333,7 @@ class AttnDispatch:
             m = tf.full_like(m0, value=NEGINF)
             l = tf.full_like(m0, value=0.0)
             acc = tf.full_like(a0, value=0.0)
-            for t in tile(CF, ABLK * WRK):
+            for t in tf.tile(CF, ABLK * WRK):
                 b0 = t + kv.w * ABLK
                 kb = tf.reshard(tf.transpose(k_cache[:, b0:b0 + ABLK, :, :], perm=(0, 2, 1, 3)),
                                 (1, HKV @ kv.g, ABLK, DH), "smem")

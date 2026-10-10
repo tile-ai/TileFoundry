@@ -7,9 +7,7 @@ that tile straight back, so the root's own call is typed by the same rule;
 ``ChildMatmulStaged`` keeps the loop in a specialization variant.
 """
 
-from tilefoundry import func, module
-from tilefoundry.dsl import DimVar, Mesh, RangePattern, Tensor, Topology, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 64
@@ -24,14 +22,14 @@ class ChildMatmul:
     @func
     def run(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]) -> Tensor[(M, N), "f32"]:
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
-            lhs = tf.reshard(a[:, 0:BK], (M, BK), "smem")
-            rhs = tf.reshard(b[0:BK, :], (BK, N), "smem")
+            lhs = tf.reshard(a[:, 0:BK], ((M, BK), {}), "smem")
+            rhs = tf.reshard(b[0:BK, :], ((BK, N), {}), "smem")
             acc = tf.matmul(lhs, rhs, out_dtype="f32")
-            for k in tile(BK, K, BK):
-                lhs = tf.reshard(a[:, k], (M, BK), "smem")
-                rhs = tf.reshard(b[k, :], (BK, N), "smem")
+            for k in tf.tile(BK, K, BK):
+                lhs = tf.reshard(a[:, k], ((M, BK), {}), "smem")
+                rhs = tf.reshard(b[k, :], ((BK, N), {}), "smem")
                 acc = acc + tf.matmul(lhs, rhs, out_dtype="f32")
-            return tf.reshard(acc, (M, N), "gmem")
+            return tf.reshard(acc, ((M, N), {}), "gmem")
 
 
 @module(entry="direct", topologies=(Topology("cta", 1),))
@@ -39,12 +37,12 @@ class ChildMatmulDirect:
     @func
     def direct(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]):
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
-            lhs = tf.reshard(a[:, 0:BK], (M, BK), "smem")
-            rhs = tf.reshard(b[0:BK, :], (BK, N), "smem")
+            lhs = tf.reshard(a[:, 0:BK], ((M, BK), {}), "smem")
+            rhs = tf.reshard(b[0:BK, :], ((BK, N), {}), "smem")
             acc = tf.matmul(lhs, rhs, out_dtype="f32")
-            for k in tile(BK, K, BK):
-                lhs = tf.reshard(a[:, k], (M, BK), "smem")
-                rhs = tf.reshard(b[k, :], (BK, N), "smem")
+            for k in tf.tile(BK, K, BK):
+                lhs = tf.reshard(a[:, k], ((M, BK), {}), "smem")
+                rhs = tf.reshard(b[k, :], ((BK, N), {}), "smem")
                 acc = acc + tf.matmul(lhs, rhs, out_dtype="f32")
             return acc
 
@@ -62,14 +60,14 @@ class ChildMatmulStaged:
         a: Tensor[(M, K_LEN), "bf16"], b: Tensor[(K_LEN, N), "bf16"]
     ) -> Tensor[(M, N), "f32"]:
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
-            lhs = tf.reshard(a[:, 0:BK], (M, BK), "smem")
-            rhs = tf.reshard(b[0:BK, :], (BK, N), "smem")
+            lhs = tf.reshard(a[:, 0:BK], ((M, BK), {}), "smem")
+            rhs = tf.reshard(b[0:BK, :], ((BK, N), {}), "smem")
             acc = tf.matmul(lhs, rhs, out_dtype="f32")
-            for k in tile(BK, K_LEN, BK):
-                lhs = tf.reshard(a[:, k], (M, BK), "smem")
-                rhs = tf.reshard(b[k, :], (BK, N), "smem")
+            for k in tf.tile(BK, K_LEN, BK):
+                lhs = tf.reshard(a[:, k], ((M, BK), {}), "smem")
+                rhs = tf.reshard(b[k, :], ((BK, N), {}), "smem")
                 acc = acc + tf.matmul(lhs, rhs, out_dtype="f32")
-            return tf.reshard(acc, (M, N), "gmem")
+            return tf.reshard(acc, ((M, N), {}), "gmem")
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))

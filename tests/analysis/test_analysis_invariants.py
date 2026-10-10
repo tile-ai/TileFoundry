@@ -20,7 +20,7 @@ from tilefoundry.analysis.memory import (
     _reached_bytes,
     call_traffic,
 )
-from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
+from tilefoundry.dsl import *
 from tilefoundry.inspection.values import (
     ENTRIES,
     ENTRY,
@@ -47,20 +47,8 @@ from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.slice import Slice as SliceOp
 from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import (
-    ComposedLayout,
-    DType,
-    Layout,
-    Mesh,
-    TensorType,
-    Topology,
-    TupleType,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
 from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import is_literal_shape, tensor_bytes
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,

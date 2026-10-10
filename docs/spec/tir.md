@@ -178,8 +178,8 @@ class PrimFunction(Stmt):
   appear directly as `LetStmt.value`. Nesting it inside any other
   Expr is rejected.
 - **`MeshScope` mesh in scope**. Any embedded `ShardLayout` MUST
-  reference a mesh on the active TIR `MeshScope` traversal cache or a parameter's
-  `ShardLayout.mesh`.
+  reference a mesh on the active TIR `MeshScope` traversal cache, the
+  composition of that stack, or a parameter's `ShardLayout.mesh`.
 - **`For` bound coordinates**. A `MeshCoord` read by `For.start` / `.stop` /
   `.step` MUST name a literal in-range axis of a mesh bound by an enclosing
   `MeshScope`.

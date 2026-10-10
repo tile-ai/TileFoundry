@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")
@@ -53,13 +50,13 @@ class Gemm_MNK_NN64:
     @func
     def gemm(a: Tensor[(TILE_M, TILE_K), "bf16"], b: Tensor[(TILE_K, TILE_N), "bf16"]):
         with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
-            result = tf.zeros(Tensor[(64, 64), "bf16", (64, 64), "rmem"])
-            for m in tile(TILE_M, 64):
-                for n in tile(TILE_N, 64):
-                    for k in tile(TILE_K, 64):
-                        lhs = tf.reshard(a[m, k], (64, 64), "smem")
-                        rhs = tf.reshard(b[k, n], (64, 64), "smem")
-                        result = tf.reshard(tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"), (64, 64), "rmem")
+            result = tf.zeros(Tensor[(64, 64), "bf16", ((64, 64), {}), "rmem"])
+            for m in tf.tile(TILE_M, 64):
+                for n in tf.tile(TILE_N, 64):
+                    for k in tf.tile(TILE_K, 64):
+                        lhs = tf.reshard(a[m, k], ((64, 64), {}), "smem")
+                        rhs = tf.reshard(b[k, n], ((64, 64), {}), "smem")
+                        result = tf.reshard(tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"), ((64, 64), {}), "rmem")
             return result
 
 
@@ -74,13 +71,13 @@ class Gemm_MNK_NN128:
     @func
     def gemm(a: Tensor[(TILE_M, TILE_K), "bf16"], b: Tensor[(TILE_K, TILE_N), "bf16"]):
         with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
-            result = tf.zeros(Tensor[(128, 128), "bf16", (128, 128), "rmem"])
-            for m in tile(TILE_M, 128):
-                for n in tile(TILE_N, 128):
-                    for k in tile(TILE_K, 128):
-                        lhs = tf.reshard(a[m, k], (128, 128), "smem")
-                        rhs = tf.reshard(b[k, n], (128, 128), "smem")
-                        result = tf.reshard(tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"), (128, 128), "rmem")
+            result = tf.zeros(Tensor[(128, 128), "bf16", ((128, 128), {}), "rmem"])
+            for m in tf.tile(TILE_M, 128):
+                for n in tf.tile(TILE_N, 128):
+                    for k in tf.tile(TILE_K, 128):
+                        lhs = tf.reshard(a[m, k], ((128, 128), {}), "smem")
+                        rhs = tf.reshard(b[k, n], ((128, 128), {}), "smem")
+                        result = tf.reshard(tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"), ((128, 128), {}), "rmem")
             return result
 
 
@@ -95,17 +92,17 @@ class Gemm_MK_NN64x128x32_w1x132:
     @func
     def gemm(a: Tensor[(WAVE_M, WAVE_K), "bf16"], b: Tensor[(WAVE_K, WAVE_N), "bf16"]):
         with Mesh(("cta",), layout=(1, WAVE_C), names=("x", "y")) as cta:
-            result = tf.zeros(Tensor[(WAVE_BM, WAVE_BN), "bf16", (WAVE_BM, WAVE_BN), "rmem"])
+            result = tf.zeros(Tensor[(WAVE_BM, WAVE_BN), "bf16", ((WAVE_BM, WAVE_BN), {}), "rmem"])
             b_columns = tf.reshape(b, (WAVE_K, WAVE_C, WAVE_BN))
             for yi in range(cta.y, WAVE_C, WAVE_C):
-                for mi in tile(WAVE_M, WAVE_BM):
-                    for ki in tile(WAVE_K, WAVE_BK):
-                        lhs = tf.reshard(a[mi, ki], (WAVE_BM, WAVE_BK), "smem")
+                for mi in tf.tile(WAVE_M, WAVE_BM):
+                    for ki in tf.tile(WAVE_K, WAVE_BK):
+                        lhs = tf.reshard(a[mi, ki], ((WAVE_BM, WAVE_BK), {}), "smem")
                         rhs = tf.reshard(
-                            b_columns[ki, yi, :], (WAVE_BK, WAVE_BN), "smem"
+                            b_columns[ki, yi, :], ((WAVE_BK, WAVE_BN), {}), "smem"
                         )
                         result = tf.reshard(
-                            tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"), (WAVE_BM, WAVE_BN), "rmem"
+                            tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"), ((WAVE_BM, WAVE_BN), {}), "rmem"
                         )
             return result
 
@@ -126,27 +123,27 @@ class Gemm_MNK_NN64x128x32_w11x12:
             layout=(WAVE_OTHER, WAVE_G),
             names=("x", "y"),
         ) as cta:
-            result = tf.zeros(Tensor[(WAVE_BM, WAVE_BN), "bf16", (WAVE_BM, WAVE_BN), "rmem"])
+            result = tf.zeros(Tensor[(WAVE_BM, WAVE_BN), "bf16", ((WAVE_BM, WAVE_BN), {}), "rmem"])
             a_groups = tf.reshape(a, (WAVE_OTHER, WAVE_M // WAVE_OTHER, WAVE_K))
             b_groups = tf.reshape(b, (WAVE_K, WAVE_G, WAVE_N // WAVE_G))
             for xi in range(cta.x, WAVE_OTHER, WAVE_OTHER):
                 for yi in range(cta.y, WAVE_G, WAVE_G):
-                    for mi in tile(WAVE_M // WAVE_OTHER, WAVE_BM):
-                        for ni in tile(WAVE_N // WAVE_G, WAVE_BN):
-                            for ki in tile(WAVE_K, WAVE_BK):
+                    for mi in tf.tile(WAVE_M // WAVE_OTHER, WAVE_BM):
+                        for ni in tf.tile(WAVE_N // WAVE_G, WAVE_BN):
+                            for ki in tf.tile(WAVE_K, WAVE_BK):
                                 lhs = tf.reshard(
                                     a_groups[xi, mi, ki],
-                                    (WAVE_BM, WAVE_BK),
+                                    ((WAVE_BM, WAVE_BK), {}),
                                     "smem",
                                 )
                                 rhs = tf.reshard(
                                     b_groups[ki, yi, ni],
-                                    (WAVE_BK, WAVE_BN),
+                                    ((WAVE_BK, WAVE_BN), {}),
                                     "smem",
                                 )
                                 result = tf.reshard(
                                     tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"),
-                                    (WAVE_BM, WAVE_BN),
+                                    ((WAVE_BM, WAVE_BN), {}),
                                     "rmem",
                                 )
             return result
@@ -168,27 +165,27 @@ class Gemm_MNK_NN64x128x32_w12x11:
             layout=(WAVE_G, WAVE_OTHER),
             names=("x", "y"),
         ) as cta:
-            result = tf.zeros(Tensor[(WAVE_BM, WAVE_BN), "bf16", (WAVE_BM, WAVE_BN), "rmem"])
+            result = tf.zeros(Tensor[(WAVE_BM, WAVE_BN), "bf16", ((WAVE_BM, WAVE_BN), {}), "rmem"])
             a_groups = tf.reshape(a, (WAVE_G, WAVE_M // WAVE_G, WAVE_K))
             b_groups = tf.reshape(b, (WAVE_K, WAVE_OTHER, WAVE_N // WAVE_OTHER))
             for xi in range(cta.x, WAVE_G, WAVE_G):
                 for yi in range(cta.y, WAVE_OTHER, WAVE_OTHER):
-                    for mi in tile(WAVE_M // WAVE_G, WAVE_BM):
-                        for ni in tile(WAVE_N // WAVE_OTHER, WAVE_BN):
-                            for ki in tile(WAVE_K, WAVE_BK):
+                    for mi in tf.tile(WAVE_M // WAVE_G, WAVE_BM):
+                        for ni in tf.tile(WAVE_N // WAVE_OTHER, WAVE_BN):
+                            for ki in tf.tile(WAVE_K, WAVE_BK):
                                 lhs = tf.reshard(
                                     a_groups[xi, mi, ki],
-                                    (WAVE_BM, WAVE_BK),
+                                    ((WAVE_BM, WAVE_BK), {}),
                                     "smem",
                                 )
                                 rhs = tf.reshard(
                                     b_groups[ki, yi, ni],
-                                    (WAVE_BK, WAVE_BN),
+                                    ((WAVE_BK, WAVE_BN), {}),
                                     "smem",
                                 )
                                 result = tf.reshard(
                                     tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"),
-                                    (WAVE_BM, WAVE_BN),
+                                    ((WAVE_BM, WAVE_BN), {}),
                                     "rmem",
                                 )
             return result
@@ -220,7 +217,7 @@ class Gemm_MNK_NN128x128x64_w12x11_k4096:
                 Tensor[
                     (RESIDENT_BM, RESIDENT_BN),
                     "bf16",
-                    (RESIDENT_BM, RESIDENT_BN),
+                    ((RESIDENT_BM, RESIDENT_BN), {}),
                     "rmem",
                 ]
             )
@@ -234,20 +231,20 @@ class Gemm_MNK_NN128x128x64_w12x11_k4096:
                     RESIDENT_N,
                     RESIDENT_Y * RESIDENT_BN,
                 ):
-                    for ki in tile(RESIDENT_K_FITS, RESIDENT_BK):
+                    for ki in tf.tile(RESIDENT_K_FITS, RESIDENT_BK):
                         lhs = tf.reshard(
                             a[mi : mi + RESIDENT_BM, ki],
-                            (RESIDENT_BM, RESIDENT_BK),
+                            ((RESIDENT_BM, RESIDENT_BK), {}),
                             "smem",
                         )
                         rhs = tf.reshard(
                             b[ki, ni : ni + RESIDENT_BN],
-                            (RESIDENT_BK, RESIDENT_BN),
+                            ((RESIDENT_BK, RESIDENT_BN), {}),
                             "smem",
                         )
                         result = tf.reshard(
                             tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"),
-                            (RESIDENT_BM, RESIDENT_BN),
+                            ((RESIDENT_BM, RESIDENT_BN), {}),
                             "rmem",
                         )
             return result
@@ -279,7 +276,7 @@ class Gemm_MNK_NN128x128x64_w12x11_k16384:
                 Tensor[
                     (RESIDENT_BM, RESIDENT_BN),
                     "bf16",
-                    (RESIDENT_BM, RESIDENT_BN),
+                    ((RESIDENT_BM, RESIDENT_BN), {}),
                     "rmem",
                 ]
             )
@@ -293,20 +290,20 @@ class Gemm_MNK_NN128x128x64_w12x11_k16384:
                     RESIDENT_N,
                     RESIDENT_Y * RESIDENT_BN,
                 ):
-                    for ki in tile(RESIDENT_K_OVER, RESIDENT_BK):
+                    for ki in tf.tile(RESIDENT_K_OVER, RESIDENT_BK):
                         lhs = tf.reshard(
                             a[mi : mi + RESIDENT_BM, ki],
-                            (RESIDENT_BM, RESIDENT_BK),
+                            ((RESIDENT_BM, RESIDENT_BK), {}),
                             "smem",
                         )
                         rhs = tf.reshard(
                             b[ki, ni : ni + RESIDENT_BN],
-                            (RESIDENT_BK, RESIDENT_BN),
+                            ((RESIDENT_BK, RESIDENT_BN), {}),
                             "smem",
                         )
                         result = tf.reshard(
                             tf.cast(tf.matmul(lhs, rhs, out_dtype="f32"), "bf16"),
-                            (RESIDENT_BM, RESIDENT_BN),
+                            ((RESIDENT_BM, RESIDENT_BN), {}),
                             "rmem",
                         )
             return result
@@ -339,7 +336,7 @@ class Gemm_MNK_NT128x128x64_w17x8:
                 Tensor[
                     (RESIDENT_BM, RESIDENT_BN),
                     "bf16",
-                    (RESIDENT_BM, RESIDENT_BN),
+                    ((RESIDENT_BM, RESIDENT_BN), {}),
                     "rmem",
                 ]
             )
@@ -353,20 +350,20 @@ class Gemm_MNK_NT128x128x64_w17x8:
                     (cta.y + 1) * (DEEPGEMM_N // DEEPGEMM_Y),
                     RESIDENT_BN,
                 ):
-                    for ki in tile(DEEPGEMM_K, RESIDENT_BK):
+                    for ki in tf.tile(DEEPGEMM_K, RESIDENT_BK):
                         lhs = tf.reshard(
                             a[mi : mi + RESIDENT_BM, ki],
-                            (RESIDENT_BM, RESIDENT_BK),
+                            ((RESIDENT_BM, RESIDENT_BK), {}),
                             "smem",
                         )
                         rhs = tf.reshard(
                             b[ni : ni + RESIDENT_BN, ki],
-                            (RESIDENT_BN, RESIDENT_BK),
+                            ((RESIDENT_BN, RESIDENT_BK), {}),
                             "smem",
                         )
                         result = tf.reshard(
                             tf.cast(tf.matmul(lhs, rhs, b_layout="NK", out_dtype="f32"), "bf16"),
-                            (RESIDENT_BM, RESIDENT_BN),
+                            ((RESIDENT_BM, RESIDENT_BN), {}),
                             "rmem",
                         )
             return result

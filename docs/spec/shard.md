@@ -349,6 +349,12 @@ Field meanings:
   sub-box ([tir §1.5](./tir.md#15-sync))
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
 
+In a kernel, `with Mesh(selection, layout=shape, names=names)` rearranges a lexical,
+single-level selection.
+`layout=(shape, strides)` states selection-local numbering (row-major by default); it MUST
+cover every selected position once, with one fixed physical stride per axis.
+Composition preserves topology and offset; slicing the resulting composed mesh is rejected.
+
 Every mesh MUST state one arrangement per level it names, each in that level's
 own numbering, as one nested `Layout` whose mode `i` is level `i` -- a mesh
 naming one level included. `Mesh` normalizes what was written into that form at
@@ -598,12 +604,34 @@ Field meanings:
   propagation
 ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
 
+Comparing or combining shard layouts, or consuming their mesh for matching,
+scope checks, propagation, type compatibility, lowering, memory analysis or
+printing, uses the same projection: omit levels whose attributes are all
+`Broadcast`, except for an instruction's required participant levels. Those
+levels retain their `Broadcast` attributes and physical frame; levels containing
+`Split` or `Partial` remain part of the distribution and must match. Projection
+keeps retained mesh axes aligned with their attributes without rewriting stored types.
+
 Surface syntax sugar:
 
 - `S(i)` ≡ `Split(axis=i)`
 - `P()` / `P("sum")` ≡ `Partial(reduction="sum")`
 - `B()` ≡ `Broadcast()`
 - omitted mesh axes are `Broadcast`
+
+An unplaced shape or shape/stride tuple denotes a plain `Layout` both inside
+and outside a mesh body. A layout containing dimension placement (`@`) or
+value-state braces covers the current composed mesh scope; axes not stated are
+`Broadcast`. In a function signature it covers the function's declared mesh.
+Empty braces explicitly broadcast over every axis: `((8, 16), {})` or
+`((8, 16), (16, 1), {})`. A placement without Split, Partial or explicit
+strides defaults to row-major strides; explicit `@ B()` does not affect this
+default. Placements with Split or Partial retain `None` strides when omitted.
+Pattern positions such as `where(...)` retain `None`, leaving strides
+unconstrained. Braces can state partial values, such as
+`{threads.warp @ P("sum")}`; `@ B()` is accepted but does not change the
+implicit Broadcast of an unstated axis. Empty braces require an available
+mesh, and every referenced axis must map uniquely into that scope.
 
 ---
 

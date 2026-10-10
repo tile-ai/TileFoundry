@@ -11,9 +11,7 @@ lowering.
 from __future__ import annotations
 
 import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
-from tilefoundry import module, prim_func
-from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Split, Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget, CudaTarget
 
 GPUS, CTAS, THREADS = 2, 4, 16
@@ -42,8 +40,8 @@ class GpuPlacedRows:
     def copy_rows_device(a: Tensor[(ROWS, COLS), "f32"], out: Tensor[(ROWS, COLS), "f32"]):
         with Mesh(
             (Topology("gpu", GPUS), Topology("cta", CTAS), Topology("thread", THREADS)),
-            Layout(shape=(GPUS, CTAS, THREADS), strides=(CTAS * THREADS, THREADS, 1)),
-            ("g", "c", "t"),
+            layout=(GPUS, CTAS, THREADS),
+            names=("g", "c", "t"),
         ) as m:
             rows = _split_rows(m)
             source = T.tensor_view(T.ptr_of(a), layout=rows)

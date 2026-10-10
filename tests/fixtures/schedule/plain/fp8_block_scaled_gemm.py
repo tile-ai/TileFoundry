@@ -8,9 +8,7 @@ earlier block is scaled twice. B is the (K, N) view of a row-major (N, K)
 weight, so its K windows are K-contiguous. The block offsets ``kb * BLOCK`` are
 scalar index arithmetic, which costs nothing.
 """
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.ir.types import Layout
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 128
@@ -19,7 +17,6 @@ K = 512
 BLOCK = 128
 K_BLOCKS = K // BLOCK
 N_BLOCKS = N // BLOCK
-WEIGHT_VIEW = Layout((K, N), (1, K))
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
@@ -27,16 +24,16 @@ WEIGHT_VIEW = Layout((K, N), (1, K))
 class FP8_BLOCK_SCALED_GEMM:
     @func
     def gemm(a: Tensor[(M, K), "fp8e4m3"],
-             b: Tensor[(K, N), "fp8e4m3", WEIGHT_VIEW],
+             b: Tensor[(K, N), "fp8e4m3", ((K, N), (1, K))],
              a_scale: Tensor[(M, K_BLOCKS), "f32"],
              b_scale: Tensor[(K_BLOCKS, N_BLOCKS), "f32"]) -> Tensor[(M, N), "bf16"]:
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
             acc = tf.zeros(Tensor[(M, N), "f32", "rmem"])
             for kb in range(K_BLOCKS):
-                at = tf.reshard(a[:, kb * BLOCK:kb * BLOCK + BLOCK], (M, BLOCK), "smem")
-                bt = tf.reshard(b[kb * BLOCK:kb * BLOCK + BLOCK, :], (BLOCK, N), "smem")
+                at = tf.reshard(a[:, kb * BLOCK:kb * BLOCK + BLOCK], ((M, BLOCK), {}), "smem")
+                bt = tf.reshard(b[kb * BLOCK:kb * BLOCK + BLOCK, :], ((BLOCK, N), {}), "smem")
                 part = tf.matmul(at, bt, out_dtype="f32")
-                row_scale = tf.reshard(a_scale[:, kb:kb + 1], (M, 1), "rmem")
-                tile_scale = tf.reshard(b_scale[kb:kb + 1, :], (1, N_BLOCKS), "rmem")
+                row_scale = tf.reshard(a_scale[:, kb:kb + 1], ((M, 1), {}), "rmem")
+                tile_scale = tf.reshard(b_scale[kb:kb + 1, :], ((1, N_BLOCKS), {}), "rmem")
                 acc = acc + part * row_scale * tile_scale
-            return tf.reshard(tf.cast(acc, "bf16"), (M, N), "gmem")
+            return tf.reshard(tf.cast(acc, "bf16"), ((M, N), {}), "gmem")

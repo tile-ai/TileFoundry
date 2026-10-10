@@ -10,13 +10,11 @@ import torch
 
 import tilefoundry
 import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
-from tilefoundry import module, prim_func
-from tilefoundry.dsl import T, Tensor
+from tilefoundry.dsl import *
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.dot import Dot
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
-from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, Topology, make_tensor_type
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function

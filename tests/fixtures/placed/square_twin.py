@@ -1,7 +1,6 @@
 """A placed square, its faithful reference, and a deliberately drifted reference."""
 
-from tilefoundry import module
-from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
+from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.target import CpuTarget
 

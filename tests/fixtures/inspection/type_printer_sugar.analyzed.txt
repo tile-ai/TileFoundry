@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-from tilefoundry import func
-from tilefoundry.dsl import Tensor
-from tilefoundry.dsl.storage import gmem, rmem, smem
-from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.types import B, Layout, Mesh, P, S, ShardLayout, Topology
+from tilefoundry.dsl import *
 
-@func(mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=("warp", "lane")))
+@func(mesh=Mesh((Topology("thread", 8),), layout=(2, 4), names=("warp", "lane")))
 def composed_mesh_pipeline(
     x: Tensor[(8, 4, 16), "f32"],
     seed: Tensor[(16,), "f32"],
@@ -15,25 +11,25 @@ def composed_mesh_pipeline(
         ShardLayout(
             layout=Layout((4, 2, 16), None),
             attrs=(S(0), B(), P("sum")),
-            mesh=Mesh((Topology("cta", 4), Topology("thread", 8)), Layout((4, 2, 4), (8, 4, 1)), names=("tile", "warp", "lane")),
+            mesh=Mesh((Topology("cta", 4), Topology("thread", 8)), layout=(4, 2, 4), names=("tile", "warp", "lane")),
         ), "rmem"]
 ):
-    with Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=("tile",)) as cta:  # memory peak=rmem:640B;smem:768B persistent=rmem:128B
-        v0 = reshard(x, layout=(4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), storage=rmem)  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost precision=exact; memory traffic=gmem:r2.00KB/w0@logical,r2.00KB/w0@total,r512B/w0@cta,r64B/w0@thread;rmem:r0/w2.00KB@logical,r0/w2.00KB@total,r0/w512B@cta,r0/w64B@thread footprint=x:2.00KB footprint-precision=exact
-        v1 = unary(v0, kind="square")  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost flops=f32:512@logical,512@total,128@cta,16@thread precision=exact; memory traffic=rmem:r2.00KB/w2.00KB@logical,r2.00KB/w2.00KB@total,r512B/w512B@cta,r64B/w64B@thread footprint-precision=exact
-        v2 = reshard(v1, layout=(4 @ cta.tile, 2, 4, 16), storage=smem)  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost precision=exact; memory traffic=rmem:r2.00KB/w0@logical,r2.00KB/w0@total,r512B/w0@cta,r64B/w0@thread;smem:r0/w2.00KB@logical,r0/w2.00KB@total,r0/w512B@cta,r0/w64B@thread footprint-precision=exact
-        v3 = cast(v2, dtype="bf16")  # Tensor[(8, 4, 16), "bf16", ((4 @ cta.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost flops=bf16:512@logical,512@total,128@cta,128@thread precision=exact; memory traffic=smem:r2.00KB/w1.00KB@logical,r2.00KB/w1.00KB@total,r512B/w256B@cta,r512B/w256B@thread footprint-precision=exact
-        v4 = transpose(v3, perm=(0, 2, 1))  # Tensor[(8, 16, 4), "bf16", ((4 @ cta.tile, 2, 16, 4), (128, 64, 4, 1)), "smem"]; compute-cost precision=exact; memory traffic=smem:r1.00KB/w1.00KB@logical,r1.00KB/w1.00KB@total,r256B/w256B@cta,r256B/w256B@thread footprint-precision=exact
-        v5 = reshard(v4, layout=((8, 16, 4), (64, 4, 1), {cta.tile @ B()}), storage=gmem)  # Tensor[(8, 16, 4), "bf16", ((8, 16, 4), (64, 4, 1), {cta.tile @ B()})]; compute-cost precision=exact; memory traffic=gmem:r0/w1.00KB@logical,r0/w1.00KB@total,r0/w256B@cta,r0/w256B@thread;smem:r1.00KB/w0@logical,r1.00KB/w0@total,r256B/w0@cta,r256B/w0@thread footprint=v5:71:1.00KB footprint-precision=exact
-        v6 = reshard(seed, layout=((2 @ mesh.warp, 4 @ mesh.lane, 2), (8, 2, 1)), storage=rmem)  # Tensor[(16,), "f32", ((2 @ mesh.warp, 4 @ mesh.lane, 2), (8, 2, 1)), "rmem"]; compute-cost precision=exact; memory traffic=gmem:r64B/w0@logical,r256B/w0@total,r64B/w0@cta,r8B/w0@thread;rmem:r0/w64B@logical,r0/w256B@total,r0/w64B@cta,r0/w8B@thread footprint=seed:64B footprint-precision=exact
-    folded = reshard(acc, layout=(2 @ mesh.warp, 4, 4 @ mesh.lane, 4), storage=rmem)  # Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 4 @ mesh.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost precision=exact; memory footprint-precision=exact
-    summed = reshard(mixed, layout=((8, 16), {mesh.warp @ B()}), storage=rmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.warp @ B()}), "rmem"]; compute-cost precision=exact; memory footprint-precision=exact
+    with Mesh((Topology("cta", 4),), layout=(4,), names=("tile",)) as cta:  # memory peak=rmem:640B;smem:768B persistent=rmem:128B
+        v0 = tf.reshard(x, layout=(4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), storage="rmem")  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost precision=exact; memory traffic=gmem:r2.00KB/w0@logical,r2.00KB/w0@total,r512B/w0@cta,r64B/w0@thread;rmem:r0/w2.00KB@logical,r0/w2.00KB@total,r0/w512B@cta,r0/w64B@thread footprint=x:2.00KB footprint-precision=exact
+        v1 = tf.unary(v0, kind="square")  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost flops=f32:512@logical,512@total,128@cta,16@thread precision=exact; memory traffic=rmem:r2.00KB/w2.00KB@logical,r2.00KB/w2.00KB@total,r512B/w512B@cta,r64B/w64B@thread footprint-precision=exact
+        v2 = tf.reshard(v1, layout=(4 @ cta.tile, 2, 4, 16), storage="smem")  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost precision=exact; memory traffic=rmem:r2.00KB/w0@logical,r2.00KB/w0@total,r512B/w0@cta,r64B/w0@thread;smem:r0/w2.00KB@logical,r0/w2.00KB@total,r0/w512B@cta,r0/w64B@thread footprint-precision=exact
+        v3 = tf.cast(v2, dtype="bf16")  # Tensor[(8, 4, 16), "bf16", ((4 @ cta.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost flops=bf16:512@logical,512@total,128@cta,128@thread precision=exact; memory traffic=smem:r2.00KB/w1.00KB@logical,r2.00KB/w1.00KB@total,r512B/w256B@cta,r512B/w256B@thread footprint-precision=exact
+        v4 = tf.transpose(v3, perm=(0, 2, 1))  # Tensor[(8, 16, 4), "bf16", ((4 @ cta.tile, 2, 16, 4), (128, 64, 4, 1)), "smem"]; compute-cost precision=exact; memory traffic=smem:r1.00KB/w1.00KB@logical,r1.00KB/w1.00KB@total,r256B/w256B@cta,r256B/w256B@thread footprint-precision=exact
+        v5 = tf.reshard(v4, layout=((8, 16, 4), {}), storage="gmem")  # Tensor[(8, 16, 4), "bf16", ((8, 16, 4), {})]; compute-cost precision=exact; memory traffic=gmem:r0/w1.00KB@logical,r0/w1.00KB@total,r0/w256B@cta,r0/w256B@thread;smem:r1.00KB/w0@logical,r1.00KB/w0@total,r256B/w0@cta,r256B/w0@thread footprint=v5:40:1.00KB footprint-precision=exact
+        v6 = tf.reshard(seed, layout=((2 @ mesh.warp, 4 @ mesh.lane, 2), (8, 2, 1)), storage="rmem")  # Tensor[(16,), "f32", ((2 @ mesh.warp, 4 @ mesh.lane, 2), (8, 2, 1)), "rmem"]; compute-cost precision=exact; memory traffic=gmem:r64B/w0@logical,r256B/w0@total,r64B/w0@cta,r8B/w0@thread;rmem:r0/w64B@logical,r0/w256B@total,r0/w64B@cta,r0/w8B@thread footprint=seed:64B footprint-precision=exact
+    folded = tf.reshard(acc, layout=(2 @ mesh.warp, 4, 4 @ mesh.lane, 4), storage="rmem")  # Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 4 @ mesh.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost precision=exact; memory footprint-precision=exact
+    summed = tf.reshard(mixed, layout=((8, 16), {}), storage="rmem")  # Tensor[(8, 16), "f32", ((8, 16), {}), "rmem"]; compute-cost precision=exact; memory footprint-precision=exact
     for _ in range(3):
-        v10 = add(summed, summed)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.warp @ B()}), "rmem"]; compute-cost flops=f32:128@logical,128@total,128@cta,128@thread precision=exact; memory traffic=rmem:r1.00KB/w512B@logical,r1.00KB/w512B@total,r1.00KB/w512B@cta,r1.00KB/w512B@thread footprint-precision=exact
-        v11 = unary(folded, kind="square")  # Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 4 @ mesh.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost flops=f32:128@logical,128@total,128@cta,16@thread precision=exact; memory traffic=rmem:r512B/w512B@logical,r512B/w512B@total,r512B/w512B@cta,r64B/w64B@thread footprint-precision=exact
+        v10 = tf.add(summed, summed)  # Tensor[(8, 16), "f32", ((8, 16), {}), "rmem"]; compute-cost flops=f32:128@logical,128@total,128@cta,128@thread precision=exact; memory traffic=rmem:r1.00KB/w512B@logical,r1.00KB/w512B@total,r1.00KB/w512B@cta,r1.00KB/w512B@thread footprint-precision=exact
+        v11 = tf.unary(folded, kind="square")  # Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 4 @ mesh.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost flops=f32:128@logical,128@total,128@cta,16@thread precision=exact; memory traffic=rmem:r512B/w512B@logical,r512B/w512B@total,r512B/w512B@cta,r64B/w64B@thread footprint-precision=exact
         folded = v11
         summed = v10
-    v13 = reshard(folded, layout=Layout((8, 16), (16, 1)), storage=gmem)  # Tensor[(8, 16), "f32", Layout((8, 16), (16, 1))]; compute-cost precision=exact; memory traffic=gmem:r0/w512B@logical,r0/w512B@total,r0/w512B@cta,r0/w64B@thread;rmem:r512B/w0@logical,r512B/w0@total,r512B/w0@cta,r64B/w0@thread footprint=v13:82:512B footprint-precision=exact
-    v15 = reshard(summed, layout=Layout((8, 16), (16, 1)), storage=gmem)  # Tensor[(8, 16), "f32", Layout((8, 16), (16, 1))]; compute-cost precision=exact; memory traffic=gmem:r0/w512B@logical,r0/w512B@total,r0/w512B@cta,r0/w512B@thread;rmem:r512B/w0@logical,r512B/w0@total,r512B/w0@cta,r512B/w0@thread footprint=v15:83:512B footprint-precision=exact
-    v17 = reshard(v6, layout=Layout((16,), (1,)), storage=gmem)  # Tensor[(16,), "f32", Layout((16,), (1,))]; compute-cost precision=exact; memory traffic=gmem:r0/w64B@logical,r0/w64B@total,r0/w64B@cta,r0/w8B@thread;rmem:r64B/w0@logical,r64B/w0@total,r64B/w0@cta,r8B/w0@thread footprint=v17:84:64B footprint-precision=exact
+    v13 = tf.reshard(folded, layout=(8, 16), storage="gmem")  # Tensor[(8, 16), "f32", (8, 16)]; compute-cost precision=exact; memory traffic=gmem:r0/w512B@logical,r0/w512B@total,r0/w512B@cta,r0/w64B@thread;rmem:r512B/w0@logical,r512B/w0@total,r512B/w0@cta,r64B/w0@thread footprint=v13:53:512B footprint-precision=exact
+    v15 = tf.reshard(summed, layout=(8, 16), storage="gmem")  # Tensor[(8, 16), "f32", (8, 16)]; compute-cost precision=exact; memory traffic=gmem:r0/w512B@logical,r0/w512B@total,r0/w512B@cta,r0/w512B@thread;rmem:r512B/w0@logical,r512B/w0@total,r512B/w0@cta,r512B/w0@thread footprint=v15:54:512B footprint-precision=exact
+    v17 = tf.reshard(v6, layout=(16,), storage="gmem")  # Tensor[(16,), "f32", (16,)]; compute-cost precision=exact; memory traffic=gmem:r0/w64B@logical,r0/w64B@total,r0/w64B@cta,r0/w8B@thread;rmem:r64B/w0@logical,r64B/w0@total,r64B/w0@cta,r8B/w0@thread footprint=v17:55:64B footprint-precision=exact
     return (v5, v13, v15, v17)

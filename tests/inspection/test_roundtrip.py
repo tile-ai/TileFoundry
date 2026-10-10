@@ -8,45 +8,38 @@ See [inspection §2.7](docs/spec/inspection.md#27-round-trip-contract).
 
 from tests._source import import_dsl
 from tests.fixtures.shapes.tile_window_syntax import nested_scan_copy, scan_copy
+from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.types import DType
 
 _HEADER = (
-    "from __future__ import annotations\n"
-    "from tilefoundry import func\n"
-    "from tilefoundry.dsl.tf import *\n"
-    "from tilefoundry.dsl import Tensor\n"
-)
-
-_SHARD_IMPORT = (
-    "from tilefoundry.ir.types import (\n"
-    "    B, S, P, ComposedLayout, Layout, Mesh, ShardLayout, Topology,\n"
-    ")\n"
+    'from __future__ import annotations\n'
+    'from tilefoundry.dsl import *\n'
+    '\n'
+    '\n'
 )
 
 
 def test_positional_and_keyword_attrs_are_the_same_program() -> None:
-    """``reshard(a, shared_layout)`` ≡ ``reshard(a, layout=shared_layout)``.
+    """``tf.reshard(a, shared_layout)`` ≡ ``tf.reshard(a, layout=shared_layout)``.
 
-    ``reshard(a, shared_layout)`` ≡ ``reshard(a, layout=shared_layout)``: an
+    ``tf.reshard(a, shared_layout)`` ≡ ``tf.reshard(a, layout=shared_layout)``: an
     attribute may be passed either way at the call site, and the printer has one
     canonical form for both, so the two sources print identically.
     """
     body = (
-        "sl = ShardLayout(\n"
-        "    layout=Layout((1, 1536), (1536, 1)),\n"
-        "    attrs=(),\n"
-        '    mesh=Mesh((Topology("cta", 128),), Layout((128,), (1,))),\n'
-        ")\n"
-        "\n"
         "@func\n"
         'def f(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1536), "f32"]:\n'
+        "    sl = ShardLayout(\n"
+        "        layout=Layout((1, 1536), (1536, 1)),\n"
+        "        attrs=(),\n"
+        '        mesh=Mesh((Topology("cta", 128),), Layout((128,), (1,))),\n'
+        "    )\n"
     )
     printed = [
-        as_script(import_dsl(_HEADER + _SHARD_IMPORT + body + call))
+        as_script(import_dsl(_HEADER + body + call))
         for call in (
-            "    b = reshard(a, sl)\n    return b\n",
-            "    b = reshard(a, layout=sl)\n    return b\n",
+            "    b = tf.reshard(a, sl)\n    return b\n",
+            "    b = tf.reshard(a, layout=sl)\n    return b\n",
         )
     ]
 
@@ -64,7 +57,7 @@ def test_insert_slice_tuple_offset_arg_roundtrips() -> None:
     fn = import_dsl(
         _HEADER + "\n@func\n"
         'def ins(dst: Tensor[(2, 5, 3), "f32"], upd: Tensor[(2, 1, 3), "f32"]):\n'
-        "    res = insert_slice(dst, upd, (0, 1, 0))\n"
+        "    res = tf.insert_slice(dst, upd, (0, 1, 0))\n"
         "    return res\n"
     )
     script = as_script(fn)
@@ -76,11 +69,11 @@ def test_slice_runtime_starts_tuple_roundtrips() -> None:
     fn = import_dsl(
         _HEADER + "\n@func\n"
         'def cut(x: Tensor[(8, 4), "f32"], start: Tensor[(), "i64"]):\n'
-        "    return slice(x, (start, 0), sizes=(2, 4), strides=(1, 1))\n"
+        "    return tf.slice(x, (start, 0), sizes=(2, 4), strides=(1, 1))\n"
     )
     script = as_script(fn)
 
-    assert "slice(x, (start, 0), sizes=(2, 4), strides=(1, 1))" in script
+    assert "tf.slice(x, (start, 0), sizes=(2, 4), strides=(1, 1))" in script
     assert as_script(import_dsl(script)) == script
 
 
@@ -94,7 +87,7 @@ def test_two_argument_tile_window_roundtrips_as_a_subscript() -> None:
         assert index in script
         lines = script.splitlines()
         if fn is nested_scan_copy:
-            inner = next(i for i, line in enumerate(lines) if line.strip() == "for col in tile(4, 2):")
+            inner = next(i for i, line in enumerate(lines) if line.strip() == "for col in tf.tile(4, 2):")
             assert lines[inner - 1].strip() != "out = out"
             assert lines[-2].strip() == "out = out"
         assert as_script(import_dsl(script)) == script
@@ -106,15 +99,15 @@ def test_non_unit_scalar_index_loop_roundtrips_as_range() -> None:
         fn = import_dsl(
             _HEADER + "\n@func\n"
             'def gather(x: Tensor[(8,), "f32"]):\n'
-            '    out = zeros(Tensor[(), "f32"])\n'
+            '    out = tf.zeros(Tensor[(), "f32"])\n'
             f"    for i in {loop}:\n"
-            "        out = add(out, x[i])\n"
+            "        out = tf.add(out, x[i])\n"
             "    return out\n"
         )
         script = as_script(fn)
 
         assert f"for i in {loop}:" in script
-        assert "for i in tile(" not in script
+        assert "for i in tf.tile(" not in script
         assert as_script(import_dsl(script)) == script
 
 
@@ -131,11 +124,11 @@ def test_shadowed_call_loc_roundtrips() -> None:
     fn = import_dsl(
         _HEADER + "\n@func\n"
         'def sh(x: Tensor[(4, 8), "f32"]):\n'
-        "    vals, idx = topk(x, k=3, axis=-1, largest=True, sorted=True)\n"
+        "    vals, idx = tf.topk(x, k=3, axis=-1, largest=True, sorted=True)\n"
         "    return vals\n"
     )
     script = as_script(fn)
-    assert "topk_out = topk(" in script, script
+    assert "topk_out = tf.topk(" in script, script
     assert as_script(import_dsl(script)) == script
 
 
@@ -171,14 +164,14 @@ def test_tuple_return_with_mesh_element_roundtrips() -> None:
     rendered call references the declared mesh and round-trips.
     """
     fn = import_dsl(
-        _HEADER + _SHARD_IMPORT + "sl = ShardLayout(\n"
-        "    layout=Layout((1, 1536), (1536, 1)),\n"
-        "    attrs=(),\n"
-        '    mesh=Mesh((Topology("cta", 128),), Layout((128,), (1,))),\n'
-        ")\n"
-        "\n@func\n"
+        _HEADER + "@func\n"
         'def f(a: Tensor[(1, 1536), "f32"], c: Tensor[(1, 1536), "f32"]):\n'
-        '    b = reshard(a, sl, "smem")\n'
+        "    sl = ShardLayout(\n"
+        "        layout=Layout((1, 1536), (1536, 1)),\n"
+        "        attrs=(),\n"
+        '        mesh=Mesh((Topology("cta", 128),), Layout((128,), (1,))),\n'
+        "    )\n"
+        '    b = tf.reshard(a, sl, "smem")\n'
         "    return (b, c)\n"
     )
     printed = as_script(fn)
@@ -193,23 +186,15 @@ def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
     A ``ComposedLayout`` whose outer is a prior ``ShardLayout`` stage must print
     as that nesting: flattening it would lose which mesh level owns which axis.
     """
+    nested = (
+        "ShardLayout(ComposedLayout(None, 1, "
+        "ShardLayout(Layout((8,), (1,)), (S(0),), "
+        "Mesh((Topology('thread', 2),), Layout((2,), (1,))))), "
+        "(B(),), Mesh((Topology('cta', 4),), Layout((4,), (1,))))"
+    )
     fn = import_dsl(
-        "from __future__ import annotations\n"
-        "from tilefoundry import func\n"
-        "from tilefoundry.dsl import Tensor\n"
-        + _SHARD_IMPORT
-        + "thread = Mesh((Topology('thread', 2),), Layout((2,), (1,)))\n"
-        "cta = Mesh((Topology('cta', 4),), Layout((4,), (1,)))\n"
-        "prior = ShardLayout(\n"
-        "    layout=Layout((8,), (1,)), attrs=(S(0),), mesh=thread,\n"
-        ")\n"
-        "nested = ShardLayout(\n"
-        "    layout=ComposedLayout(inner=None, offset=1, outer=prior),\n"
-        "    attrs=(B(),),\n"
-        "    mesh=cta,\n"
-        ")\n"
-        "\n@func\n"
-        "def f(a: Tensor[(8,), 'f32', nested]) -> Tensor[(8,), 'f32', nested]:\n"
+        _HEADER + "@func\n"
+        f"def f(a: Tensor[(8,), 'f32', {nested}]) -> Tensor[(8,), 'f32', {nested}]:\n"
         "    return a\n"
     )
     printed = as_script(fn)
@@ -223,12 +208,12 @@ def test_carry_updates_print_last_without_shadowing_the_old_value() -> None:
     fn = import_dsl(
         _HEADER + "\n@func\n"
         'def online(x: Tensor[(4,), "f32"]):\n'
-        '    m = zeros(Tensor[(4,), "f32"])\n'
-        '    o = zeros(Tensor[(4,), "f32"])\n'
+        '    m = tf.zeros(Tensor[(4,), "f32"])\n'
+        '    o = tf.zeros(Tensor[(4,), "f32"])\n'
         "    for i in range(4):\n"
-        "        m_new = maximum(m, x)\n"
-        "        corr = sub(m, m_new)\n"
-        "        o = add(o, corr)\n"
+        "        m_new = tf.maximum(m, x)\n"
+        "        corr = tf.sub(m, m_new)\n"
+        "        o = tf.add(o, corr)\n"
         "        m = m_new\n"
         "    return (m, o)\n"
     )
@@ -238,8 +223,8 @@ def test_carry_updates_print_last_without_shadowing_the_old_value() -> None:
     loop_lines = printed[printed.index("    for i in range(4):") :].splitlines()
 
     assert loop_lines[-3:] == ["        o = o_2", "        m = m_new", "    return (m, o)"]
-    assert loop_lines.index("        m_new = max(m, x)") < loop_lines.index(
-        "        corr = sub(m, m_new)"
+    assert loop_lines.index("        m_new = tf.max(m, x)") < loop_lines.index(
+        "        corr = tf.sub(m, m_new)"
     )
     assert repr(fn.body) == repr(rebuilt.body)
     assert as_script(rebuilt) == printed

@@ -1,7 +1,6 @@
 """A tuple-valued sibling region can carry an outer region through its args."""
 
-from tilefoundry import module
-from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
+from tilefoundry.dsl import *
 
 
 @module(
@@ -13,7 +12,7 @@ class RegionTupleRebind:
     def run(x: Tensor[(8,), "f32"]):
         with Mesh(("thread",), (4,), names=("t",)) as m:
             r = tf.reshard(x, (8 @ m.t,), "rmem")
-            v2 = tf.reshard(r * 2.0, (8,), "gmem")
+            v2 = tf.reshard(r * 2.0, ((8,), {}), "gmem")
         with Mesh(("cta",), (2,), names=("c",)) as _c:
-            w = tf.reshard(x, (8,), "smem")
+            w = tf.reshard(x, ((8,), {}), "smem")
             return v2, w

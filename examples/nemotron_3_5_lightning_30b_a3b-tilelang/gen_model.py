@@ -309,7 +309,7 @@ def _online_scan(p, var):
         qs = "(1, HKV @ kv.g, GQA, DH)"
         blk = "(1, HKV @ kv.g, ABLK, DH)"
         tblk = "(1, HKV @ kv.g, CT, DH)"
-        head = [f"for {p}_t in tile(CF, ABLK * WRK):",
+        head = [f"for {p}_t in tf.tile(CF, ABLK * WRK):",
                 f"    {p}_b0 = {p}_t + kv.w * ABLK"]
     else:
         st, ac = "(1, HKV, GQA, 1)", "(1, HKV, GQA, DH)"
@@ -317,7 +317,7 @@ def _online_scan(p, var):
         blk = "(1, HKV, ABLK, DH)"
         tblk = "(1, HKV, CT, DH)"
         if smem:
-            head = [f"for {p}_t in tile(CF, ABLK):", f"    {p}_b0 = {p}_t + 0"]
+            head = [f"for {p}_t in tf.tile(CF, ABLK):", f"    {p}_b0 = {p}_t + 0"]
         else:
             head = None
     out = []
@@ -451,7 +451,6 @@ from tilefoundry import func, module
 from tilefoundry.dsl import (  # noqa: F401
     ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf,
 )
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare op bindings
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
@@ -685,7 +684,7 @@ def scan_funcs(var: int) -> str:
             "            m = tf.full_like(m0, value=NEGINF)",
             "            l = tf.full_like(m0, value=0.0)",
             "            acc = tf.full_like(a0, value=0.0)",
-            f"            for t in tile(CF, {step}):",
+            f"            for t in tf.tile(CF, {step}):",
             f"                b0 = t + {boff}",
             "                kb = tf.reshard(tf.transpose(k_cache[:, b0:b0 + ABLK, :, :],"
             " perm=(0, 2, 1, 3)), (1, HKV @ kv.g, ABLK, DH), \"smem\")",

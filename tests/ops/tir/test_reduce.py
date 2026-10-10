@@ -11,8 +11,7 @@ import torch
 
 import tilefoundry
 import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
-from tilefoundry import module, prim_func
-from tilefoundry.dsl import T, Tensor
+from tilefoundry.dsl import *
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.schedule import operand_relations
@@ -20,18 +19,6 @@ from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.reduce import Reduce
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
-from tilefoundry.ir.types import (
-    ComposedLayout,
-    DType,
-    Layout,
-    Mesh,
-    ShardLayout,
-    Split,
-    Swizzle,
-    Topology,
-    UnitType,
-    make_tensor_type,
-)
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.target import CpuTarget, CudaTarget

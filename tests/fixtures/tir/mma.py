@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from tilefoundry import module, prim_func
-from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.types import Layout, Mesh, Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
@@ -13,7 +11,7 @@ class MmHandwritten:
         a: Tensor[(16, 16), "bf16"], b: Tensor[(16, 8), "bf16"], c: Tensor[(16, 8), "f32"]
     ):
         with Mesh(
-            (Topology("thread", 32),), Layout((4, 8), (1, 4)), names=("warp", "lane")
+            (Topology("thread", 32),), layout=((4, 8), (1, 4)), names=("warp", "lane")
         ) as _warp:
             a_view = T.tensor_view(
                 T.ptr_of(a), layout=((2, 4 @ _warp.warp, 2, 8 @ _warp.lane, 2), (1, 2, 8, 16, 128))
@@ -53,4 +51,12 @@ class MmHandwritten:
 
     @prim_func(target=CpuTarget())
     def mm_host(a: Tensor[(16, 16), "bf16"], b: Tensor[(16, 8), "bf16"], c: Tensor[(16, 8), "f32"]):
-        launch(mm_device, a, b, c, grid=(1, 1, 1), block=(32, 1, 1))  # noqa: F821
+        launch(mm_device, a, b, c, grid=(
+        1,
+        1,
+        1,
+    ), block=(
+        32,
+        1,
+        1,
+    ))  # noqa: F821

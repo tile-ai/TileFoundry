@@ -399,6 +399,7 @@ class ElementPattern(CombinatorPattern, Generic[T]):
     """A named grammar production backed by one executable syntax graph."""
 
     syntax: ClassVar[AstPattern[Any] | None] = None
+    BIND_RULES: ClassVar[tuple[object, ...]] = ()
 
     def match(self, node: object, context: MatchContext) -> AstMatch[T] | None:
         syntax = type(self).syntax
@@ -503,7 +504,28 @@ class LiteralPattern(CombinatorPattern):
         return AstMatch(self, "literal", node, {"value": raw}, "literal")
 
 
+@dataclass(frozen=True)
+class LexicalMeshReferenceRule:
+    STATEMENT: ClassVar[str] = (
+        "Inside an open mesh scope, an external Mesh or mesh-bearing ShardLayout "
+        "cannot stand in for a lexical Mesh binding."
+    )
+
+    def apply(self, value, *, node, context):
+        state = getattr(context.function, "state", None)
+        if getattr(state, "mesh_stack", ()) and (
+            isinstance(value, Mesh)
+            or isinstance(value, ShardLayout) and value.mesh is not None
+        ):
+            raise ParseError.from_node(
+                node, context, f"layout mesh {node.id!r} is not a lexical Mesh binding"
+            )
+        return value
+
+
 class ReferencePattern(CombinatorPattern):
+    REFERENCE_RULES: ClassVar[tuple[object, ...]] = (LexicalMeshReferenceRule(),)
+
     def __init__(self, *, resolve: bool = False, expected: type | tuple[type, ...] | None = None):
         self.resolve = resolve
         self.expected = expected
@@ -1582,6 +1604,11 @@ def _decorator_name(node: ast.AST) -> str | None:
 
 
 def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
+    def external_value(value):
+        for rule in ReferencePattern.REFERENCE_RULES:
+            value = rule.apply(value, node=node, context=context)
+        return value
+
     if isinstance(node, ast.Name):
         lexical = context.lexical_scope.lookup(node.id)
         if lexical is not None:
@@ -1596,7 +1623,7 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
             else None
         )
         if isinstance(module_scope, Mapping) and node.id in module_scope:
-            return module_scope[node.id]
+            return external_value(module_scope[node.id])
         lookup = getattr(module_scope, "lookup", None)
         if callable(lookup):
             try:
@@ -1605,7 +1632,7 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
                 pass
             else:
                 if value is not None:
-                    return value
+                    return external_value(value)
         closure = (
             function.closure
             if function is not None
@@ -1614,7 +1641,7 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
             else {}
         )
         if node.id in closure:
-            return closure[node.id]
+            return external_value(closure[node.id])
         raise ParseError.from_node(node, context, f"undefined static name {node.id!r}")
     if isinstance(node, ast.Attribute):
         owner = _resolve_reference(node.value, context)

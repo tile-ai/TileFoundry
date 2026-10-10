@@ -9,8 +9,7 @@ which a corpus cannot be asked: a fixture whose shape depends on the environment
 is a different program on every machine. They are four Modules over one builder.
 """
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 _WAVE = 128
@@ -55,11 +54,11 @@ def _built(batch: int, heads: int, kv: int, dim: int, page: int, dtype: str):
                 layout=(batch, heads, split),
                 names=("seq", "head", "split"),
             ) as cta:
-                k_cache = tf.reshard(k, (kv, heads, dim), "gmem")
-                v_cache = tf.reshard(v, (kv, heads, dim), "gmem")
-                table = tf.reshard(block_table, (batch, pages), "gmem")
-                lengths = tf.reshard(real_seqlen_kv, (batch,), "gmem")
-                q_placed = tf.reshard(q, (batch, 1, heads, dim), "gmem")
+                k_cache = tf.reshard(k, ((kv, heads, dim), {}), "gmem")
+                v_cache = tf.reshard(v, ((kv, heads, dim), {}), "gmem")
+                table = tf.reshard(block_table, ((batch, pages), {}), "gmem")
+                lengths = tf.reshard(real_seqlen_kv, ((batch,), {}), "gmem")
+                q_placed = tf.reshard(q, ((batch, 1, heads, dim), {}), "gmem")
 
                 gathered = tf.reshape(table, new_shape=(batch * pages,))
                 k_logical = tf.reshape(

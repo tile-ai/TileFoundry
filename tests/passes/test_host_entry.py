@@ -10,12 +10,9 @@ from __future__ import annotations
 import pytest
 
 from tests.fixtures.tir.square import TirSquare
-from tilefoundry import module, prim_func
-from tilefoundry.dsl import DimVar, T, Tensor
-from tilefoundry.ir.pattern import RangePattern
+from tilefoundry.dsl import *
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.ir.types import Layout, Mesh, S, ShardLayout, Topology
 from tilefoundry.passes.transforms import insert_default_host_entry
 from tilefoundry.target import CpuTarget, CudaTarget
 

@@ -8,17 +8,7 @@ then are the block's row and tile scales copied into registers, multiplied in,
 and the scaled block added to the f32 accumulator.
 """
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, T, Tensor, Topology, tf
-from tilefoundry.ir.types import (
-    Broadcast,
-    ComposedLayout,
-    Layout,
-    ShardLayout,
-    Split,
-    Swizzle,
-)
-from tilefoundry.ir.types import Mesh as ThreadMesh
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 128
@@ -28,22 +18,6 @@ BLOCK = 128
 K_BLOCKS = K // BLOCK
 N_BLOCKS = N // BLOCK
 STAGES = 2
-WEIGHT_VIEW = Layout((K, N), (1, K))
-
-_COMPUTE = ThreadMesh((Topology("thread", 384),),
-                      ComposedLayout(None, 128, Layout((2, 4, 8, 4), (128, 32, 4, 1))),
-                      ("group", "warp", "lane8", "lane4"))
-A_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0,
-                        Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))))
-B_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0,
-                        Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))))
-ACC = ShardLayout(Layout((2, 8, 2, 4, 2, 4, 16),
-                         (8192, 1, 8, 16, 64, 128, 512)),
-                  (Split(0), Split(3), Split(1), Split(5)), _COMPUTE)
-ROW = ShardLayout(Layout((2, 8, 2, 4), (64, 1, 8, 16)),
-                  (Split(0), Split(3), Split(1), Broadcast()), _COMPUTE)
-TILE = ShardLayout(Layout((1, 1), (1, 1)),
-                   (Broadcast(), Broadcast(), Broadcast(), Broadcast()), _COMPUTE)
 
 
 @module(
@@ -55,7 +29,7 @@ class FP8_BLOCK_SCALED_GEMM:
     @func
     def gemm(
         a: Tensor[(M, K), "fp8e4m3"],
-        b: Tensor[(K, N), "fp8e4m3", WEIGHT_VIEW],
+        b: Tensor[(K, N), "fp8e4m3", ((K, N), (1, K))],
         a_scale: Tensor[(M, K_BLOCKS), "f32"],
         b_scale: Tensor[(K_BLOCKS, N_BLOCKS), "f32"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
@@ -66,37 +40,37 @@ class FP8_BLOCK_SCALED_GEMM:
             ) as threads:
                 wgmma = T.cuda.sm90.Wgmma(n=128, dtype="fp8e4m3", form=T.cuda.sm90.Form.SS)
 
-                with threads[1:3, :] as _compute:
-                    acc = tf.zeros(Tensor[(M, N), "f32", ACC, "rmem"])
+                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
+                    acc = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 16), (8192, 1, 8, 16, 64, 128, 512)), "rmem"])
 
                 for kb in range(K_BLOCKS):
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
                             (a[:, kb * BLOCK:kb * BLOCK + BLOCK],),
-                            op=T.copy_async_tensor(smem_layout=A_SMEM),
+                            op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3)),
                             buffers=STAGES,
                         )
                         rhs = tf.schedule(
                             (b[kb * BLOCK:kb * BLOCK + BLOCK, :],),
-                            op=T.copy_async_tensor(smem_layout=B_SMEM),
+                            op=T.copy_async_tensor(smem_layout=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3)),
                             buffers=STAGES,
                         )
 
-                    with threads[1:3, :] as _compute:
-                        part = tf.zeros(Tensor[(M, N), "f32", ACC, "rmem"])
+                    with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
+                        part = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 16), (8192, 1, 8, 16, 64, 128, 512)), "rmem"])
                         part = tf.schedule(
                             (part, lhs, rhs),
                             op=T.tiled_mma(atom=wgmma),
                             repeat=(2, 1, 4),
                         )
                         row_scale = tf.schedule(
-                            (a_scale[:, kb:kb + 1],), op=T.copy(rmem_layout=ROW)
+                            (a_scale[:, kb:kb + 1],), op=T.copy(rmem_layout=((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp), (64, 1, 8, 16)))
                         )
                         tile_scale = tf.schedule(
-                            (b_scale[kb:kb + 1, :],), op=T.copy(rmem_layout=TILE)
+                            (b_scale[kb:kb + 1, :],), op=T.copy(rmem_layout=((1, 1), {}))
                         )
                         acc = acc + part * row_scale * tile_scale
 
-                with threads[1:3, :] as _compute:
+                with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                     result = tf.cast(acc, dtype="bf16")
                 return result

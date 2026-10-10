@@ -20,7 +20,6 @@ from tests.fixtures.placed.symbolic_offset import (
     _SymbolicStoreOffset,
 )
 from tests.models.access_footprint.model import TiledQKVProjection
-from tilefoundry import func, module
 from tilefoundry.analysis import (
     Breakdown,
     ComputeCostMetadata,
@@ -41,7 +40,7 @@ from tilefoundry.analysis.compute_cost import (
 )
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import MemoryOptions
-from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
 from tilefoundry.ir.core import (
     Call,
@@ -167,7 +166,7 @@ class _SharedTile:
     @func
     def broadcast(source: Tensor[(1056, 6600), "f32"]):
         with Mesh(("cta",), layout=(132,), names=("tile",)) as _cta:
-            local = tf.reshard(source, (1056, 6600), "smem")
+            local = tf.reshard(source, ((1056, 6600), {}), "smem")
             return tf.add(local, local)
 
     @func
@@ -305,7 +304,7 @@ class _SplitLastAxis:
         w: ConstTensor[(_SPLIT_HIDDEN, _SPLIT_OUT), "bf16"],
     ):
         with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
-            rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem")
+            rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], ((1, _SPLIT_BLOCK, _SPLIT_BLOCK), {}), "smem")
             strip = tf.reshard(w[0:_SPLIT_BLOCK, :], (_SPLIT_BLOCK, _SPLIT_OUT @ mesh.unit), "smem")
             return tf.matmul(rows, strip, out_dtype="f32")
 
@@ -320,7 +319,7 @@ class _SplitStripMajor:
         w: ConstTensor[(_SPLIT_GRID, _SPLIT_HIDDEN, _SPLIT_PER), "bf16"],
     ):
         with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
-            rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem")
+            rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], ((1, _SPLIT_BLOCK, _SPLIT_BLOCK), {}), "smem")
             strip = tf.reshard(
                 w[:, 0:_SPLIT_BLOCK, :],
                 (_SPLIT_GRID @ mesh.unit, _SPLIT_BLOCK, _SPLIT_PER),

@@ -197,6 +197,20 @@ scope binding. A binding is either a `with <mesh> as <name>` region or the
 function's own execution domain. A mesh merely restated in another expression
 is not a binding, and the printer never invents a name for one.
 
+In layout positions, a `ComposedLayout` with a plain `Layout` outer MUST use
+`L + off | inner`, omitting a zero offset or absent inner. Compound offsets
+MUST be parenthesized. Layout positions include tensor annotations, layout-typed
+op attributes, and a `with Mesh(...)` header's layout. Python-evaluated positions,
+including `@func(mesh=...)` and `ShardLayout(...)` / `Mesh(...)` constructor
+arguments, retain `ComposedLayout(...)`. A plain `Layout` MUST retain its
+`Layout(...)` constructor so it does not become a broadcast `ShardLayout`.
+
+HIR operations and tile-window loops MUST use `tf.<name>(...)` and
+`tf.tile(...)`. Op values MUST use their schema name and recursively rendered
+attributes, including layout sugar. A single `Tuple[...]` input MUST be emitted
+as an explicit tuple of operands, retaining a trailing comma for one operand.
+Storage attributes MUST be emitted as strings.
+
 Placement sugar states one dimension per tensor axis, with each `Split` written
 on the dimension it divides, adds the stride tuple whenever the layout has one,
 and states the remaining mesh axes in a `{axis @ ...}` set. A layout that groups
@@ -241,6 +255,34 @@ The print context records imports and declarations while the printer visits the
 program. After the body has been visited, the context emits the file header;
 it MUST contain only imports and `DimVar` declarations reached by the output.
 There is no module-level mesh hoist or global mesh name map.
+
+The DSL surface MUST be imported with `from tilefoundry.dsl import *`, which
+re-exports `ir.types` and the `func`, `module`, and `prim_func` decorators.
+The file header starts with `from __future__ import annotations`, a blank line,
+and `from tilefoundry.dsl import *`, without a `noqa` comment. Imports supplied
+by a Target's `to_python()` provider follow unchanged.
+
+In layout grammar positions, flat plain layouts MUST use a shape tuple or a
+`(shape, strides)` tuple; hierarchical shapes retain `Layout(...)`. Composition
+uses `L + offset | inner`. A placement representable over the current mesh scope
+MUST use dimension placements and Partial states; Broadcast axes are omitted.
+An all-Broadcast placement uses `{}` when it preserves the underlying layout.
+Values that sugar cannot express retain complete `ShardLayout(...)` constructs,
+whose Python-evaluated arguments retain `Layout(...)` / `ComposedLayout(...)`.
+Mesh headers use `layout=` and omit row-major strides. A topology is written by
+name only when the function inherits it from the enclosing module; standalone
+`prim_func` and explicit `@prim_func(target=...)` headers retain `Topology(...)`.
+String attributes use double quotes, and TIR tuple elements occupy separate lines.
+
+A mesh scope composed from a selection recoverable from an active lexical binding
+MUST be emitted as `Mesh(selection, layout=shape, names=names)` when the
+selection-local numbering is row-major. Other numbering MUST be emitted as
+`Mesh(selection, layout=(shape, strides), names=names)`; these strides address
+the selection's row-major indices, not physical positions. Its physical
+positions, offset, and strides MUST agree with composition on that selection; a
+matching slice uses the existing slice form. Inspection utilities recover the
+parent sub-box with `idx2crd`, and the selection-local layout with
+`composition(left_inverse(selection_layout_with_reversed_modes), mesh.layout.outer)`.
 
 A mesh identifier in placement sugar MUST be a lexical binding visible at the
 point represented by the text: a `with <mesh> as <name>` region, or the

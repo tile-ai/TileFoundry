@@ -119,8 +119,8 @@ def test_check_reports_grid_loop_parser_errors_from_the_installed_wheel(
     tf, tmp_path
 ) -> None:
     for name, loop, message in (
-        ("single", "tile(8)", "tile(extent) is not supported; use range(extent)"),
-        ("keyword", "tile(8, step=2)", "positional-only at the IR level"),
+        ("single", "tf.tile(8)", "tf.tile(extent) is not supported; use range(extent)"),
+        ("keyword", "tf.tile(8, step=2)", "positional-only at the IR level"),
     ):
         source = tmp_path / f"{name}.py"
         source.write_text(

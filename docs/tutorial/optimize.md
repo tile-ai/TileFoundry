@@ -35,8 +35,7 @@ written where the next function can read them.
 #!/usr/bin/env python3
 """The step from the migrate page, placed two ways: with a boundary, and without."""
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Mesh, ReduceKind, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 ROWS = 2
@@ -64,7 +63,7 @@ class Naive:
                 rows = tf.cast(held, "f32")
                 mean = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
                 normed = tf.cast(rows * tf.rsqrt(mean + EPS), "bf16") * scaling
-                return tf.reshard(normed, (ROWS, H), "gmem")
+                return tf.reshard(normed, ((ROWS, H), {}), "gmem")
 
     @func
     def rms_norm_quant(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
@@ -76,8 +75,8 @@ class Naive:
                 scale = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX) * (1.0 / FP8_MAX)
                 quant = tf.cast(tf.clamp(blocks / scale, -FP8_MAX, FP8_MAX), "fp8e4m3")
                 return (
-                    tf.reshard(tf.reshape(quant, (ROWS, H)), (ROWS, H), "gmem"),
-                    tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), (ROWS, BLOCKS), "gmem"),
+                    tf.reshard(tf.reshape(quant, (ROWS, H)), ((ROWS, H), {}), "gmem"),
+                    tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), ((ROWS, BLOCKS), {}), "gmem"),
                 )
 ```
 
@@ -88,7 +87,7 @@ grep -E '^# (memory|roofline) ' Naive.txt
 ```
 
 ```text
-# memory traffic=gmem:r70.00KB/w42.44KB@logical,r70.00KB/w42.44KB@total,r70.00KB/w42.44KB@cta,r336B/w224B@thread;rmem:r589.35KB/w476.90KB@logical,r589.35KB/w476.90KB@total,r589.35KB/w476.90KB@cta,r2.54KB/w2.04KB@thread footprint=a:28.00KB;gamma:14.00KB;normed:28.00KB;v10:33:28.00KB;v21:45:14.00KB;v23:46:448B footprint-precision=exact peak=gmem:70.00KB;rmem:112.44KB persistent=gmem:42.00KB
+# memory traffic=gmem:r70.00KB/w42.44KB@logical,r70.00KB/w42.44KB@total,r70.00KB/w42.44KB@cta,r336B/w224B@thread;rmem:r589.35KB/w476.90KB@logical,r589.35KB/w476.90KB@total,r589.35KB/w476.90KB@cta,r2.54KB/w2.04KB@thread footprint=a:28.00KB;gamma:14.00KB;normed:28.00KB;v10:32:28.00KB;v21:44:14.00KB;v23:45:448B footprint-precision=exact peak=gmem:70.00KB;rmem:112.44KB persistent=gmem:42.00KB
 # roofline ideal-ns=24 bound-by=memory
 ```
 
@@ -120,8 +119,8 @@ class Fused:
                 scale = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX) * (1.0 / FP8_MAX)
                 quant = tf.cast(tf.clamp(blocks / scale, -FP8_MAX, FP8_MAX), "fp8e4m3")
                 return (
-                    tf.reshard(tf.reshape(quant, (ROWS, H)), (ROWS, H), "gmem"),
-                    tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), (ROWS, BLOCKS), "gmem"),
+                    tf.reshard(tf.reshape(quant, (ROWS, H)), ((ROWS, H), {}), "gmem"),
+                    tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), ((ROWS, BLOCKS), {}), "gmem"),
                 )
 ```
 
@@ -132,7 +131,7 @@ grep -E '^# (memory|roofline) ' Fused.txt
 ```
 
 ```text
-# memory traffic=gmem:r42.00KB/w14.44KB@logical,r42.00KB/w14.44KB@total,r42.00KB/w14.44KB@cta,r224B/w112B@thread;rmem:r561.35KB/w448.90KB@logical,r561.35KB/w448.90KB@total,r561.35KB/w448.90KB@cta,r2.43KB/w1.93KB@thread footprint=a:28.00KB;gamma:14.00KB;v19:65:14.00KB;v21:66:448B footprint-precision=exact peak=gmem:56.44KB;rmem:112.44KB persistent=gmem:42.00KB
+# memory traffic=gmem:r42.00KB/w14.44KB@logical,r42.00KB/w14.44KB@total,r42.00KB/w14.44KB@cta,r224B/w112B@thread;rmem:r561.35KB/w448.90KB@logical,r561.35KB/w448.90KB@total,r561.35KB/w448.90KB@cta,r2.43KB/w1.93KB@thread footprint=a:28.00KB;gamma:14.00KB;v19:64:14.00KB;v21:65:448B footprint-precision=exact peak=gmem:56.44KB;rmem:112.44KB persistent=gmem:42.00KB
 # roofline ideal-ns=13 bound-by=memory
 ```
 

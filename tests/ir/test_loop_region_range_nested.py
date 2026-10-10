@@ -14,12 +14,9 @@ from __future__ import annotations
 
 import torch
 
-from tilefoundry import func
-from tilefoundry.dsl import Tensor, tf  # noqa: F401
-from tilefoundry.dsl.tf import *  # noqa: F401, F403
+from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core.kinds import ReduceKind
-from tilefoundry.ir.types.dim import DimVar
 
 _M = DimVar("m", 1, 63)
 _K = DimVar("k", 1, 63)

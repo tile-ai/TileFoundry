@@ -10,7 +10,6 @@ from tests._source import import_dsl
 from tests.fixtures.placed.fused_boundary import FusedBoundary
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
 from tests.fixtures.placed.rmsnorm import RmsnormModule
-from tilefoundry import module, prim_func
 from tilefoundry.analysis.check import check_program
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, VerifyError, binding_name

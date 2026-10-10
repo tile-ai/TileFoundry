@@ -100,11 +100,7 @@ from pathlib import Path
 
 from transformers import Gemma2Config
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by @func bodies
-from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 

@@ -11,10 +11,7 @@ from __future__ import annotations
 
 import math
 
-from tilefoundry import func
-from tilefoundry.dsl import Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.types import Layout, Mesh, Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 S = 1
@@ -32,8 +29,8 @@ def static_online_attend(
     k_cache: Tensor[(1, C, NUM_KV_HEADS, HEAD_DIM), "bf16"],
     v_cache: Tensor[(1, C, NUM_KV_HEADS, HEAD_DIM), "bf16"],
 ) -> Tensor[(1, S, NUM_Q_HEADS, HEAD_DIM), "bf16"]:
-    with Mesh(("cta",), layout=Layout((132,), (1,))) as cta:  # noqa: F841
-        q_sh = reshard(q, layout=(1, S, NUM_Q_HEADS, HEAD_DIM))
+    with Mesh(("cta",), layout=(132,)) as cta:  # noqa: F841
+        q_sh = tf.reshard(q, layout=((1, S, NUM_Q_HEADS, HEAD_DIM), {}))
         q_f = tf.cast(q_sh, dtype="f32")
         q_s = q_f * tf.full_like(q_f, value=SCALE)
         tmpl = tf.reduce(

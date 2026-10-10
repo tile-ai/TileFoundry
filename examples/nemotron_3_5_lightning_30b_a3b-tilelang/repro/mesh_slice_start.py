@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare tile()
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
@@ -38,7 +37,7 @@ class Fixed:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             a0 = tf.zeros(Tensor[(W @ m.w, 1, D), "f32", "smem"])
             acc = tf.full_like(a0, value=0.0)
-            for t in tile(N, BLK * W):
+            for t in tf.tile(N, BLK * W):
                 b0 = t
                 blk = tf.reshard(x[:, b0:b0 + BLK, :], (1, BLK, D), "smem")
                 acc = acc + tf.cast(tf.reduce(blk, axes=(1,), keepdim=True, kind="sum"),
@@ -58,7 +57,7 @@ class Strided:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             a0 = tf.zeros(Tensor[(W @ m.w, 1, D), "f32", "smem"])
             acc = tf.full_like(a0, value=0.0)
-            for t in tile(N, BLK * W):
+            for t in tf.tile(N, BLK * W):
                 b0 = t + m.w * BLK
                 blk = tf.reshard(x[:, b0:b0 + BLK, :], (1, BLK, D), "smem")
                 acc = acc + tf.cast(tf.reduce(blk, axes=(1,), keepdim=True, kind="sum"),

@@ -9,8 +9,7 @@ from tests.fixtures.shapes.tile_window_syntax import (
     MeshInsideTileWindow,
     NestedScaledTileWindows,
 )
-from tilefoundry import func
-from tilefoundry.dsl import DimVar, Tensor
+from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -34,7 +33,7 @@ def test_a_tile_window_cannot_be_used_as_an_explicit_bound() -> None:
         @func
         def stage(x: Tensor[(1, 256, 64), "f32"]):
             out = x[:, 0:128, :]
-            for t in tile(128, 128):
+            for t in tf.tile(128, 128):
                 out = x[:, t : t + 128, :]
             return out
 
@@ -45,7 +44,7 @@ def test_a_tile_window_rejects_true_division() -> None:
         @func
         def stage(x: Tensor[(1, 256, 64), "f32"]):
             out = x[:, 0:64, :]
-            for t in tile(128, 128):
+            for t in tf.tile(128, 128):
                 out = x[:, t / 2, :]
             return out
 

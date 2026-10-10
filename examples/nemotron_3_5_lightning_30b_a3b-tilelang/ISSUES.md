@@ -50,7 +50,7 @@ The `4` is the width of that mesh axis.
 **Why it matters.** "Split a long reduction over a worker axis, and let unit *w*
 walk every *W*-th block" is the most basic way to write this kind of program —
 and for long-context attention it is the only placement with enough parallel
-units. In HIR that is `for t in tile(CF, BLK * W)` with `b0 = t + kv.w * BLK`,
+units. In HIR that is `for t in tf.tile(CF, BLK * W)` with `b0 = t + kv.w * BLK`,
 which is exactly the shape the evaluator cannot run.
 
 The consequence is that this model's `check` **only runs at `ctx_full = 0`**,

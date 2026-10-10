@@ -1,7 +1,5 @@
 """Untiled baseline retained for the original placement regression workflow."""
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 

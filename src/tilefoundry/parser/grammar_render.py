@@ -120,6 +120,8 @@ class RenderVisitor:
         if pattern.syntax is None:
             raise TypeError(f"{type(pattern).__name__} has no executable syntax")
         rhs = self.visit(pattern.syntax)
+        for pattern_class in getattr(pattern, "ATTRIBUTE_PATTERNS", ()):
+            self.visit(pattern_class())
         self._productions.append((grammar_name, rhs))
         return _text(grammar_name)
 
@@ -181,16 +183,12 @@ class RenderVisitor:
             return _text("identifier")
         if node_type is ast.Attribute:
             value = fields.get("value")
-            if isinstance(value, AstNodePattern) and value.node_type is ast.Name:
-                return _concat(
-                    _text("identifier"),
-                    _terminal("."),
-                    _text("identifier"),
-                )
+            fallback = "identifier" if isinstance(value, AstNodePattern) and value.node_type is ast.Name else "primary"
+            attr = fields.get("attr")
             return _concat(
-                _text("primary"),
+                self.visit(value) if value is not None else _text(fallback),
                 _terminal("."),
-                _text("identifier"),
+                self.visit(attr) if isinstance(attr, (LiteralPattern, ChoicePattern)) else _text("identifier"),
             )
         if node_type in {ast.Tuple, ast.List, ast.Set}:
             delimiters = {
@@ -374,6 +372,7 @@ class RenderVisitor:
             return _terminal("@")
         operator = {
             ast.Add: "+",
+            ast.BitOr: "|",
             ast.Sub: "-",
             ast.Mult: "*",
             ast.Div: "/",

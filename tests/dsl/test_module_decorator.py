@@ -17,8 +17,7 @@ import dataclasses
 import pytest
 import torch
 
-from tilefoundry import func, module, prim_func
-from tilefoundry.dsl import ConstTensor, T, Tensor, tf  # noqa: F401 — tf/T used by bodies
+from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.inspection import as_script
@@ -28,7 +27,6 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.types import Layout, Mesh, StorageKind, Topology
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.runtime.resource import DictResource
 from tilefoundry.target import CpuTarget, CudaTarget
@@ -359,15 +357,15 @@ def test_a_held_child_takes_its_own_owners_target_types():
         def run(a: Tensor[(M, K), "f32"], b: Tensor[(K, N), "f32"]):
             with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
                 acc = tf.matmul(
-                    tf.reshard(a[:, 0:16], (M, 16), "smem"),
-                    tf.reshard(b[0:16, :], (16, N), "smem"),
+                    tf.reshard(a[:, 0:16], ((M, 16), {}), "smem"),
+                    tf.reshard(b[0:16, :], ((16, N), {}), "smem"),
                 )
-                for k in tile(16, K, 16):  # noqa: F405 -- authored tile loop
+                for k in tf.tile(16, K, 16):  # noqa: F405 -- authored tile loop
                     acc = acc + tf.matmul(
-                        tf.reshard(a[:, k], (M, 16), "smem"),
-                        tf.reshard(b[k, :], (16, N), "smem"),
+                        tf.reshard(a[:, k], ((M, 16), {}), "smem"),
+                        tf.reshard(b[k, :], ((16, N), {}), "smem"),
                     )
-                return tf.reshard(acc, (M, N), "gmem")
+                return tf.reshard(acc, ((M, N), {}), "gmem")
 
     parsed = stored_types(_Refused)
     refused = _Refused

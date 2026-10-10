@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from tilefoundry import module, prim_func
-from tilefoundry.dsl import DimVar, T, Tensor
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.pattern import RangePattern
-from tilefoundry.ir.types import Layout, Mesh, Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _S = DimVar("S", 1, 255)
@@ -20,7 +16,7 @@ class TirSquare:
 
     @square_device.specialize(RangePattern("S", 1, 127))
     def square_small(x: Tensor[(_S,), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=("t",)) as thread:
+        with Mesh((Topology("thread", 128),), layout=(128,), names=("t",)) as thread:
             view = T.tensor_view(T.ptr_of(x), layout=((128 @ thread.t,), (1,)))
             reg = T.alloc_tensor(
                 tensor_type=Tensor[(128,), "f32", ((128 @ thread.t,), (1,)), "rmem"]
@@ -35,7 +31,7 @@ class TirSquare:
 
     @square_device.specialize(RangePattern("S", 128, 255))
     def square_large(x: Tensor[(_S,), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=("t",)) as thread:
+        with Mesh((Topology("thread", 128),), layout=(128,), names=("t",)) as thread:
             view = T.tensor_view(T.ptr_of(x), layout=((128 @ thread.t,), (1,)))
             reg = T.alloc_tensor(
                 tensor_type=Tensor[(128,), "f32", ((128 @ thread.t,), (1,)), "rmem"]
@@ -50,4 +46,12 @@ class TirSquare:
 
     @prim_func(target=CpuTarget())
     def square_host(x: Tensor[(_S,), "f32"]):
-        launch(square_device, x, grid=(1, 1, 1), block=(128, 1, 1))  # noqa: F821
+        launch(square_device, x, grid=(
+        1,
+        1,
+        1,
+    ), block=(
+        128,
+        1,
+        1,
+    ))  # noqa: F821

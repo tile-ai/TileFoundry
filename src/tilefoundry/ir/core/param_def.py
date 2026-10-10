@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Flag, auto
-from typing import Any, Literal
+from typing import Any, Literal, get_args, get_origin
 
 
 class _MissingType:
@@ -99,6 +99,21 @@ class ParamDef:
         return self.default is not MISSING
 
 
+def variadic_item_annotation(param: object) -> object | None:
+    """Return the element annotation for one tuple-valued input parameter."""
+    if getattr(param, "kind", None) != "input":
+        return None
+    annotation = getattr(param, "annotation", None)
+    if get_origin(annotation) is not tuple:
+        return None
+    args = get_args(annotation)
+    if len(args) == 1:
+        return args[0]
+    if len(args) == 2 and args[1] is Ellipsis:
+        return args[0]
+    return None
+
+
 def collect_param_defs(cls: type) -> tuple["ParamDef", ...]:
     """Reflect ``ParamDef`` class-body descriptors off ``cls`` in MRO order.
 
@@ -128,4 +143,5 @@ __all__ = [
     "ParamDef",
     "_MissingType",
     "collect_param_defs",
+    "variadic_item_annotation",
 ]

@@ -241,34 +241,3 @@ matching that path. Outside it the decorator requires explicit values; the stand
 The `.pyi` stubs reflect registered schemas only. After adding a new
 `@register_op` / `@register_alias`, regenerate them with
 `python -m tilefoundry.dsl regen`.
-
-## 5. DSL import surface
-
-The author-facing exports route through `tilefoundry.dsl`:
-
-```python
-# example
-# Canonical authoring imports.
-from tilefoundry import func, prim_func
-from tilefoundry.dsl import tf, T, Tensor
-```
-
-- `Tensor` is the parser-owned DSL authoring-surface annotation
-  sugar; it is owned by `tilefoundry.dsl` (defined under
-  `tilefoundry.dsl._tensor`, re-exported as `tilefoundry.dsl.Tensor`). It
-  is **not** the IR tensor type — the IR type carrier is
-  `tilefoundry.ir.types.TensorType`. See [parser §2.1](./parser.md#21-syntax) for
-  the annotation grammar.
-- `DType` is **not** re-exported. dtype values use string form in
-  DSL source (`Tensor[(8,), "bf16"]`, `zeros((1, 64), "bf16", ...)`);
-  the parser converts strings to `DType.<name>` at attribute-binding
-  time when the receiving `ParamDef` declares `annotation=DType`.
-- For users who prefer bare Op names (`add(...)` / `relu(...)`),
-  `from tilefoundry.dsl.tf import *` binds every registered HIR name
-  into the call site's lexical scope. Without that import the
-  parser requires the namespace form `tf.add(...)`.
-
-The `tilefoundry.dsl.{tf, T}` modules expose `__all__` via their lazy
-`__getattr__`, so a star-import sees every name registered against
-the corresponding dialect, including custom Ops registered after
-the DSL package first loaded.

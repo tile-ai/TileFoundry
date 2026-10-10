@@ -10,10 +10,8 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry import func, prim_func
-from tilefoundry.dsl import DimVar, ReduceKind, Tensor, tf
+from tilefoundry.dsl import *
 from tilefoundry.dsl.storage import gmem, rmem
-from tilefoundry.dsl.tf import *  # noqa: F401,F403  -- bind bare op names (reshard, relu, ...)
 from tilefoundry.ir.core import Constant, Var, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.launch import Launch
@@ -21,18 +19,6 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import (
-    CallableType,
-    DType,
-    Layout,
-    Mesh,
-    S,
-    ShardLayout,
-    TensorType,
-    Topology,
-    UnitType,
-)
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
@@ -47,9 +33,9 @@ class ExternalH200Target(CudaTarget):
 @func(topologies=(Topology("cta", _ROWS),))
 def double_rows(a: Tensor[(_ROWS, _COLS), "f32"]) -> Tensor[(_ROWS, _COLS), "f32"]:
     with Mesh(("cta",), layout=Layout(shape=(_ROWS,), strides=(1,))) as cta:
-        reg = reshard(a, layout=(128 @ cta, 12), storage=rmem)  # noqa: F405
+        reg = tf.reshard(a, layout=(128 @ cta, 12), storage=rmem)  # noqa: F405
         out = tf.mul(reg, reg)
-        return reshard(out, layout=(128 @ cta, 12), storage=gmem)  # noqa: F405
+        return tf.reshard(out, layout=(128 @ cta, 12), storage=gmem)  # noqa: F405
 
 
 @prim_func(target=CpuTarget())
@@ -62,7 +48,7 @@ def row_mean(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1), "f32"]:
     with Mesh(("thread",), (6, 32), ("w", "t")) as m:
         a_reg = tf.reshard(a, (1, 1536 @ (m.w, m.t)), rmem)
         a_mean = tf.reduce(a_reg, (-1,), True, ReduceKind.MEAN)
-        return tf.reshard(a_mean, (1, 1), gmem)
+        return tf.reshard(a_mean, ((1, 1), {}), gmem)
 
 
 def _randn_rows() -> torch.Tensor:
@@ -83,7 +69,7 @@ def _dynamic_cta_module(*, explicit_host: bool) -> Module:
     @func(topologies=(Topology("cta", _NT),))
     def dyn_double(a: Tensor[(_NT, _TILE), "f32"]) -> Tensor[(_NT, _TILE), "f32"]:
         with Mesh(("cta",), layout=Layout(shape=(_NT,), strides=(1,))) as cta:
-            reg = reshard(  # noqa: F405
+            reg = tf.reshard(  # noqa: F405
                 a,
                 layout=ShardLayout(
                     layout=Layout(shape=(_NT, _TILE), strides=(_TILE, 1)),
@@ -93,7 +79,7 @@ def _dynamic_cta_module(*, explicit_host: bool) -> Module:
                 storage=rmem,
             )
             out = tf.mul(reg, reg)
-            return reshard(  # noqa: F405
+            return tf.reshard(  # noqa: F405
                 out,
                 layout=ShardLayout(
                     layout=Layout(shape=(_NT, _TILE), strides=(_TILE, 1)),

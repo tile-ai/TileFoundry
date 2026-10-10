@@ -7,9 +7,7 @@ nothing names a thread: this is the program an author asks ``schedule
 candidates`` about before writing the schedule, so what it states is each
 CTA's tiles and the storage they move between.
 """
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 8192
@@ -30,9 +28,9 @@ class GEMM_8192X17408X5120_CTA_GRID:
              b: Tensor[(K, N), "bf16"]) -> Tensor[(M, N), "bf16"]:
         with Mesh(("cta",), layout=(GM, GN), names=("bm", "bn")) as cta:
             acc = tf.zeros(Tensor[(M @ cta.bm, N @ cta.bn), "f32", "rmem"])
-            for k in tile(K, BK):
+            for k in tf.tile(K, BK):
                 at = tf.reshard(a[:, k], (M @ cta.bm, BK), "smem")
                 bt = tf.reshard(b[k, :], (BK, N @ cta.bn), "smem")
                 part = tf.matmul(at, bt, out_dtype="f32")
                 acc = acc + tf.reshard(part, (M @ cta.bm, N @ cta.bn), "rmem")
-            return tf.reshard(tf.cast(acc, "bf16"), (M, N), "gmem")
+            return tf.reshard(tf.cast(acc, "bf16"), ((M, N), {}), "gmem")

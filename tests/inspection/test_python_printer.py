@@ -10,6 +10,7 @@ from dataclasses import dataclass, fields, replace
 
 from tests._source import import_dsl
 from tests.fixtures.placed.rmsnorm import RmsnormModule
+from tilefoundry.dsl import *
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import _type_text
 from tilefoundry.ir.core import BindingMetadata, Call, Var
@@ -17,8 +18,6 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, register_target
 from tilefoundry.target.cuda import CudaArchitecture
 from tilefoundry.target.cuda import CudaTarget as BuiltinCudaTarget
@@ -65,7 +64,7 @@ def test_binding_metadata_names_the_emitted_binding():
 
     canonical = as_script(function)
 
-    assert "result = add(source, source)" in canonical
+    assert "result = tf.add(source, source)" in canonical
 
     unbound = Call(
         target=Binary(kind=BinaryKind.ADD),
@@ -79,7 +78,7 @@ def test_binding_metadata_names_the_emitted_binding():
         return_type=tensor_type,
     )
 
-    assert "v0 = add(source, source)" in as_script(unbound_function)
+    assert "v0 = tf.add(source, source)" in as_script(unbound_function)
 
 
 def test_umat_type_is_printed_and_round_trips() -> None:

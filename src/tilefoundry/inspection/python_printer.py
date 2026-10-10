@@ -33,6 +33,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.param_def import variadic_item_annotation
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
@@ -49,12 +50,11 @@ from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import DType, LayoutBase, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
-    ShardLayout,
     Split,
 )
 from tilefoundry.ir.types.utils import static_dim_value
@@ -146,24 +146,15 @@ class HirPrinter(PythonPrinter):
         target = expr.target
         args_text = ", ".join(self.reference(arg) for arg in expr.args)
         if isinstance(target, Reshard):
-            if ctx is not None:
-                ctx.imports.add("from tilefoundry.dsl.tf import *")
             layout_kw = ""
             if target.layout is not None:
                 with self.type_surface(indent=self._indent + "    "):
-                    layout_kw = ", layout=" + self.visit(target.layout, ctx)
+                    layout_kw = ", layout=" + self.layout_surface(target.layout, ctx)
             storage = ""
             if target.storage is not None:
                 storage_name = target.storage.name.lower()
-                if ctx is not None:
-                    ctx.use(
-                        PythonExpr(
-                            (f"from tilefoundry.dsl.storage import {storage_name}",),
-                            storage_name,
-                        )
-                    )
-                storage = f", storage={storage_name}"
-            return f"reshard({args_text}{layout_kw}{storage})"
+                storage = f', storage="{storage_name}"'
+            return f"tf.reshard({args_text}{layout_kw}{storage})"
         if isinstance(target, HirFunction):
             binding = _module_callee_binding(target, self._child_entries)
             return f"{binding or target.name}({args_text})"
@@ -195,8 +186,6 @@ class HirPrinter(PythonPrinter):
                 stop = begin + size * stride
                 indexers.append(f"{begin}:{stop}" if stride == 1 else f"{begin}:{stop}:{stride}")
             if runtime_starts:
-                if ctx is not None:
-                    ctx.imports.add("from tilefoundry.dsl.tf import *")
                 start_refs = ", ".join(
                     self._slice_start(start, size, stride)
                     for start, size, stride in zip(starts.elements, target.sizes, target.strides)
@@ -204,14 +193,12 @@ class HirPrinter(PythonPrinter):
                 if len(starts.elements) == 1:
                     start_refs += ","
                 return (
-                    f"slice({self.reference(expr.args[0])}, ({start_refs}), "
+                    f"tf.slice({self.reference(expr.args[0])}, ({start_refs}), "
                     f"sizes={_attr_tuple_str(target.sizes, self, ctx)}, "
                     f"strides={_attr_tuple_str(target.strides, self, ctx)})"
                 )
             return f"{self.reference(expr.args[0])}[{', '.join(indexers)}]"
 
-        if ctx is not None:
-            ctx.imports.add("from tilefoundry.dsl.tf import *")
         alias_name = _kinded_alias_name(target)
         suppressed = {"kind"} if alias_name is not None else set()
         attrs: list[str] = []
@@ -235,17 +222,27 @@ class HirPrinter(PythonPrinter):
                 else:
                     literal = repr(value)
                 attrs.append(f"{param.name}={literal}")
-            elif isinstance(value, (ShardLayout, TensorType)):
+            elif isinstance(value, (LayoutBase, TensorType)):
                 with self.type_surface(indent=self._indent + "        "):
-                    rendered = self.visit(value, ctx)
+                    rendered = (
+                        self.layout_surface(value, ctx)
+                        if isinstance(value, LayoutBase) else self.visit(value, ctx)
+                    )
                 if isinstance(value, TensorType):
                     rendered = " ".join(rendered.split())
                 attrs.append(f"{param.name}={rendered}")
             elif isinstance(value, tuple):
                 attrs.append(f"{param.name}={_attr_tuple_str(value, self, ctx)}")
             else:
-                attrs.append(f"{param.name}={value}")
-        return f"{_op_name(target)}({', '.join([*(self.reference(arg) for arg in expr.args), *attrs])})"
+                attrs.append(f"{param.name}={self.print(value, ctx, self._indent + '        ')}")
+        schema = getattr(type(target), "_op_schema", None)
+        inputs = tuple(param for param in schema.signature if param.kind == "input") if schema else ()
+        arguments = (
+            [self.tuple_reference(expr.args)]
+            if len(inputs) == 1 and variadic_item_annotation(inputs[0]) is not None
+            else [self.reference(arg) for arg in expr.args]
+        )
+        return f"tf.{_op_name(target)}({', '.join([*arguments, *attrs])})"
 
 
 @dataclass(frozen=True)
@@ -919,11 +916,10 @@ def _emit_def(
         step = printer.visit(region.step, ctx)
         start = printer.visit(region.start, ctx)
         if id(region.induction_var) in _tile_window_steps:
-            ctx.imports.add("from tilefoundry.dsl.tf import *")
             loop = (
-                f"tile({extent}, {step})"
+                f"tf.tile({extent}, {step})"
                 if region.start == 0
-                else f"tile({start}, {extent}, {step})"
+                else f"tf.tile({start}, {extent}, {step})"
             )
         elif region.start == 0 and region.step == 1:
             loop = f"range({extent})"
@@ -952,7 +948,7 @@ def _emit_def(
             if terminal:
                 lines.append(f"{level}return {printer.reference(region.body)}")
             return
-        mesh_text = printer.visit(region.mesh, ctx)
+        mesh_text = printer.mesh_context(region.mesh, ctx)
         mesh_name = ctx.scope_name(region.mesh)
         lines.append(
             f"{level}with {mesh_text} as {mesh_name}:{_comments(region, options, printer, ctx)}"
@@ -1033,12 +1029,9 @@ def _emit_def(
     return lines
 
 
-def _new_hir_context(*, for_module: bool = False, target=None) -> HirPrintContext:
+def _new_hir_context(*, target=None) -> HirPrintContext:
     """Create a HIR context with imports owned by the surrounding file."""
     ctx = HirPrintContext()
-    if for_module:
-        ctx.imports.add("from tilefoundry.module import module")
-    ctx.imports.add("from tilefoundry import func")
     if target is not None:
         rendered = target.to_python()
         ctx.imports.update(rendered.imports)
@@ -1226,7 +1219,6 @@ def _module_decorator_line(mod: Module, entry_name: str | None, ctx: HirPrintCon
         ctx.imports.update(rendered.imports)
         kwargs.append(f"target={rendered.text}")
     if mod.topologies is not None:
-        ctx.imports.add("from tilefoundry.ir.types import Topology")
         topo_strs = [f'Topology("{t.name}", {printer.visit(t.size, ctx)})' for t in mod.topologies]
         rendered_topologies = f"({', '.join(topo_strs)},)" if topo_strs else "()"
         kwargs.append(f"topologies={rendered_topologies}")
@@ -1245,6 +1237,8 @@ def _emit_module_class(
     Children first, because a body calling one names the attribute it is bound
     to and a class body binds in the order it is written.
     """
+    previous_topologies = ctx.topologies
+    ctx.topologies = mod.topologies if mod.topologies is not None else previous_topologies
     lines = [_module_decorator_line(mod, mod.entry, ctx), f"class {module_name}:"]
     ordered = _emission_order(mod)
     child_entries = {
@@ -1268,6 +1262,7 @@ def _emit_module_class(
         if index:
             lines.append("")
         lines.extend(f"{indent}{ln}" if ln else ln for ln in block)
+    ctx.topologies = previous_topologies
     return lines
 
 
@@ -1296,7 +1291,7 @@ def _module_to_python(
         raise TypeError("Module printer requires a function entry")
 
     indent4 = "    "
-    ctx = _new_hir_context(for_module=True, target=root.target)
+    ctx = _new_hir_context(target=root.target)
     lines = _emit_module_class(
         root,
         module_name,

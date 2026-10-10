@@ -106,29 +106,30 @@ def test_parse_dims_rejects_one_dimension_stated_twice() -> None:
         cli.parse_dims(["ctx_len=8", "ctx_len=8"])
 
 
-_NEIGHBOURS = """from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.target import CudaTarget
-
-N = 132 * 128
-_H200 = CudaTarget('nvidia.h200_sxm')
-
-
-@module(entry='nope', target=_H200, topologies=(Topology('cta', 132),))
-class Unsound:
-    @func
-    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:
-        return tf.square(x)
-
-
-@module(entry='kernel', target=_H200, topologies=(Topology('cta', 132),))
-class Sound:
-    @func
-    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:
-        with Mesh(('cta',), layout=(132,), names=('block',)) as m:
-            placed = tf.reshard(x, (N @ m.block,), 'gmem')
-            return tf.reshard(tf.square(placed), (N @ m.block,), 'gmem')
-"""
+_NEIGHBOURS = (
+    'from tilefoundry.dsl import *\n'
+    '\n'
+    'from tilefoundry.target import CudaTarget\n'
+    '\n'
+    'N = 132 * 128\n'
+    "_H200 = CudaTarget('nvidia.h200_sxm')\n"
+    '\n'
+    '\n'
+    "@module(entry='nope', target=_H200, topologies=(Topology('cta', 132),))\n"
+    'class Unsound:\n'
+    '    @func\n'
+    "    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
+    '        return tf.square(x)\n'
+    '\n'
+    '\n'
+    "@module(entry='kernel', target=_H200, topologies=(Topology('cta', 132),))\n"
+    'class Sound:\n'
+    '    @func\n'
+    "    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
+    "        with Mesh(('cta',), layout=(132,), names=('block',)) as m:\n"
+    "            placed = tf.reshard(x, (N @ m.block,), 'gmem')\n"
+    "            return tf.reshard(tf.square(placed), (N @ m.block,), 'gmem')\n"
+)
 
 
 @pytest.mark.parametrize(
@@ -360,12 +361,14 @@ def test_repeated_source_loads_keep_one_logical_target_registration(tmp_path) ->
     )
     source = tmp_path / "model.py"
     source.write_text(
-        "from tilefoundry import module\n"
-        "from provider import ReloadTarget\n"
-        "@module(target=ReloadTarget())\n"
-        "class Model:\n"
-        "    def forward(self):\n"
-        "        return None\n",
+        (
+            'from tilefoundry.dsl import *\n'
+            'from provider import ReloadTarget\n'
+            '@module(target=ReloadTarget())\n'
+            'class Model:\n'
+            '    def forward(self):\n'
+            '        return None\n'
+        ),
         encoding="utf-8",
     )
 
@@ -757,8 +760,8 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     assert "routed_expert(" not in annotated
     assert "shared_expert(" not in annotated
     assert annotated.count("reshard(tokens") == 2
-    assert "v0 = reshard(tokens" in annotated
-    assert "v3 = reshard(tokens" in annotated
+    assert "v0 = tf.reshard(tokens" in annotated
+    assert "v3 = tf.reshard(tokens" in annotated
     assert "with cta[:120] as cta_2:" in annotated
     assert "with cta_3[120:] as cta_4:" in annotated
 
@@ -785,8 +788,8 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']} precision=exact",
         "# memory traffic=gmem:r120.00KB/w90.00KB@logical,"
         "r7.79MB/w3.93MB@total,r62.75KB/w32.75KB@cta "
-        "footprint=<value 4>:30.00KB;<value 5>:30.00KB;v0:29:256B;"
-        "v1:30:256B;v3:37:2.50KB;v4:38:2.50KB;v6:44:30.00KB "
+        "footprint=<value 4>:30.00KB;<value 5>:30.00KB;v0:27:256B;"
+        "v1:28:256B;v3:35:2.50KB;v4:36:2.50KB;v6:42:30.00KB "
         "footprint-precision=exact peak=gmem:62.50KB persistent=gmem:30.00KB",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
@@ -813,7 +816,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     ]
     assert 'Tensor[(120, 64), "f32", ((120 @ cta_2.tile, 64), (64, 1))]' in annotated_types
     assert 'Tensor[(120, 64), "f32", ((12 @ cta_3.tile, 10, 64), (640, 64, 1))]' in annotated_types
-    assert 'Tensor[(120, 64), "f32", ((120, 64), (64, 1), {cta.tile @ B()})]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", ((120, 64), {})]' in annotated_types
 
     rows = payload["calls"]
     assert len(rows) == 7

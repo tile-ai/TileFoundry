@@ -12,11 +12,8 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry import module, prim_func
-from tilefoundry.dsl import DimVar, T, Tensor
+from tilefoundry.dsl import *
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, TensorType, Topology
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _TILE = 12

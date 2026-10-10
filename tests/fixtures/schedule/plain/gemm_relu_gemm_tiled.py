@@ -2,9 +2,7 @@
 
 ReLU is the first matmul's epilogue, so every op stays at tile level.
 """
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 1024
@@ -24,27 +22,27 @@ class GEMM_RELU_GEMM_TILED:
              c: Tensor[(N, N), "bf16"]) -> Tensor[(M, N), "bf16"]:
         with Mesh(("cta",), layout=(1,), names=("g",)) as _cta:
             first = tf.zeros(Tensor[(M, N), "bf16"])
-            for m in tile(M, BM):
-                for n in tile(N, BN):
-                    acc = tf.zeros(Tensor[(BM, BN), "f32", (BM, BN), "rmem"])
-                    for k in tile(K, BK):
+            for m in tf.tile(M, BM):
+                for n in tf.tile(N, BN):
+                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((BM, BN), {}), "rmem"])
+                    for k in tf.tile(K, BK):
                         lhs = tf.cast(a[m, k], dtype="f32")
                         rhs = tf.cast(b[k, n], dtype="f32")
                         partial = tf.reshard(
-                            tf.matmul(lhs, rhs), (BM, BN), "rmem"
+                            tf.matmul(lhs, rhs), ((BM, BN), {}), "rmem"
                         )
                         acc = acc + partial
                     first = tf.insert_slice(first, tf.relu(tf.cast(acc, dtype="bf16")), (m, n))
 
             result = tf.zeros(Tensor[(M, N), "bf16"])
-            for m2 in tile(M, BM):
-                for n2 in tile(N, BN):
-                    acc2 = tf.zeros(Tensor[(BM, BN), "f32", (BM, BN), "rmem"])
-                    for k2 in tile(N, BK):
+            for m2 in tf.tile(M, BM):
+                for n2 in tf.tile(N, BN):
+                    acc2 = tf.zeros(Tensor[(BM, BN), "f32", ((BM, BN), {}), "rmem"])
+                    for k2 in tf.tile(N, BK):
                         lhs2 = tf.cast(first[m2, k2], dtype="f32")
                         rhs2 = tf.cast(c[k2, n2], dtype="f32")
                         partial2 = tf.reshard(
-                            tf.matmul(lhs2, rhs2), (BM, BN), "rmem"
+                            tf.matmul(lhs2, rhs2), ((BM, BN), {}), "rmem"
                         )
                         acc2 = acc2 + partial2
                     result = tf.insert_slice(result, tf.cast(acc2, dtype="bf16"), (m2, n2))

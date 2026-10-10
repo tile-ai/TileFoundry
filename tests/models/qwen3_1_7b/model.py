@@ -56,11 +56,7 @@ from pathlib import Path
 
 from transformers import Qwen3Config
 
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Mesh, Tensor, tf  # noqa: F401 — used by @func bodies
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 
@@ -244,7 +240,7 @@ class Qwen3_1_7B_DecoderLayer:
     ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # The same MLP with work split across a 128-CTA slice.
         with Mesh(("cta",), layout=(128,), names=("tile",)) as cta:
-            placed = tf.reshard(hidden, (1, S, config.hidden_size), "gmem")
+            placed = tf.reshard(hidden, ((1, S, config.hidden_size), {}), "gmem")
             gate_weight = tf.reshard(
                 w_gate,
                 (1, config.hidden_size, config.intermediate_size @ cta.tile),
@@ -278,7 +274,7 @@ class Qwen3_1_7B_DecoderLayer:
             act = tf.silu(gate)
             h = act * up
             return tf.reshard(
-                tf.matmul(h, down_weight), (1, S, config.hidden_size), "gmem"
+                tf.matmul(h, down_weight), ((1, S, config.hidden_size), {}), "gmem"
             )
 
     @func

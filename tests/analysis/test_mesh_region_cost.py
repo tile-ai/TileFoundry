@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
-from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
     RegionMemoryMetadata,
@@ -13,13 +12,11 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis.metadata import shares
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.types import DType, Layout, TensorType
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TypeInferContext
@@ -43,7 +40,7 @@ class WithScope:
         with Mesh(("cta",), (2,), ("tile",)) as _cta:
             with Mesh(("thread",), (4,), ("t",)) as thread:
                 local = tf.reshard(x, (8, 16 @ thread.t), "rmem")
-                return tf.reshard(local + local, (8, 16), "gmem")
+                return tf.reshard(local + local, ((8, 16), {}), "gmem")
 
 
 @module(entry="f", target=_TARGET, topologies=_TOPOLOGIES)
@@ -53,7 +50,7 @@ class UnshardedInScope:
         with Mesh(("cta",), (2,), ("tile",)) as _cta:
             with Mesh(("thread",), (4,), ("t",)) as _thread:
                 local = tf.zeros(Tensor[(8, 16), "f32", "rmem"])
-                return tf.reshard(local + local, (8, 16), "gmem")
+                return tf.reshard(local + local, ((8, 16), {}), "gmem")
 
 
 def _cost(owner) -> tuple[int, int, int, int]:

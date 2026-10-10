@@ -9,9 +9,7 @@ from __future__ import annotations
 import torch
 
 from tests.models.decode_oracle import agrees_to_one_rounding
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by @func bodies
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
+from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.runtime.resource import DictResource
 

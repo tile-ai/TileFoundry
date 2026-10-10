@@ -13,12 +13,7 @@ from __future__ import annotations
 
 import math
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by the @func body
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op names for the @func body
-from tilefoundry.ir.pattern import RangePattern
-from tilefoundry.ir.types import Broadcast, Layout, Mesh, ShardLayout, Split, Topology
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.dsl import *
 
 HEAD_DIM = 128
 NUM_Q_HEADS = 32
@@ -48,23 +43,6 @@ _HKV = NUM_KV_HEADS
 _G = GQA_GROUP
 _SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
-_CTA_MESH = Mesh((Topology("cta", NUM_CTA),), Layout((NUM_CTA,), (1,)))
-_CACHE_LAYOUT = ShardLayout(
-    Layout((1, C, _HKV, _D)),
-    (Broadcast(),),
-    _CTA_MESH,
-)
-_TOKEN_LAYOUT = ShardLayout(
-    Layout((1, S, _HKV, _D)),
-    (Broadcast(),),
-    _CTA_MESH,
-)
-_GROUPED_LAYOUT = ShardLayout(
-    Layout((1, S, _G, _HKV, _D), (S * _G * _HKV * _D, _G * _HKV * _D, _HKV * _D, _D, 1)),
-    (Split(2),),
-    _CTA_MESH,
-)
-
 
 @module(entry="gqa_online_attend", topologies=(Topology("cta", NUM_CTA),))
 class GqaOnline:
@@ -75,28 +53,31 @@ class GqaOnline:
     owns, and every body here names the same ``cta`` level.
     """
 
-    @func
+    @func(mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)))
     def gqa_online_attend(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         pass
 
-    @gqa_online_attend.specialize(RangePattern("ctx_len", 0, SMALL_CONTEXT_T))
+    @gqa_online_attend.specialize(
+        RangePattern("ctx_len", 0, SMALL_CONTEXT_T),
+        mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)),
+    )
     def head_on_cta(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
-        with Mesh(("cta",), layout=Layout((NUM_CTA,), (1,))) as cta:
-            q_sh = reshard(q, layout=(1, S, _HKV, _G @ cta, _D))
+        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:
+            q_sh = tf.reshard(q, layout=(1, S, _HKV, _G @ cta, _D))
             q_f = tf.cast(q_sh, dtype="f32")
             q_groups = tf.transpose(
                 tf.reshape(q_f, new_shape=(1, S, _HKV, _G, _D)),
@@ -106,11 +87,11 @@ class GqaOnline:
             tmpl = tf.reduce(q_groups, axes=(-1,), keepdim=True, kind="sum")
             m = tf.full_like(tmpl, value=-1e30)
             l = tf.full_like(tmpl, value=0.0)
-            o = tf.zeros(Tensor[(1, S, _G, _HKV, _D), "f32", _GROUPED_LAYOUT])
+            o = tf.zeros(Tensor[(1, S, _G, _HKV, _D), "f32", ((1, S, _G @ cta, _HKV, _D), (S * _G * _HKV * _D, _G * _HKV * _D, _HKV * _D, _D, 1))])
             for i in range(C):
-                i_sh = reshard(
+                i_sh = tf.reshard(
                     tf.reshape(i, new_shape=(1,)),
-                    layout=(1,),
+                    layout=((1,), {}),
                     storage="gmem",
                 )
                 k_i = tf.cast(
@@ -150,7 +131,7 @@ class GqaOnline:
         v_cache: Tensor[(1, C, _HKV, _D), "bf16"],
     ):
 
-        with Mesh(("cta",), layout=Layout((NUM_CTA,), (1,))) as cta:  # noqa: F841
+        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:  # noqa: F841
             k_f = tf.transpose(
                 tf.cast(
                     tf.repeat_interleave(
@@ -200,7 +181,7 @@ class GqaOnline:
         v_new: Tensor[(1, S, _HKV, _D), "bf16"],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
-        with Mesh(("cta",), layout=Layout((NUM_CTA,), (1,))) as cta:  # noqa: F841
+        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:  # noqa: F841
             m = tf.reduce(m_p, axes=(-2,), keepdim=True, kind="max")
             alpha = tf.exp(m_p - m)
             l = tf.reduce(alpha * l_p, axes=(-2,), keepdim=True, kind="sum")
@@ -218,13 +199,16 @@ class GqaOnline:
             corr_n = tf.exp(score_n - m_all)
             return tf.cast((o * corr + corr_n * v_n) / (l_blk * corr + corr_n), dtype="bf16")
 
-    @gqa_online_attend.specialize(RangePattern("ctx_len", SMALL_CONTEXT_T + 1, MAX_CTX))
+    @gqa_online_attend.specialize(
+        RangePattern("ctx_len", SMALL_CONTEXT_T + 1, MAX_CTX),
+        mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)),
+    )
     def ctx_split_kv(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         m_p, l_p, o_p = _ctx_partials(q, k_cache, v_cache)

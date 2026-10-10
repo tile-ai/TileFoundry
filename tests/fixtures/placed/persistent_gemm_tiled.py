@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
-from tilefoundry.ir.types import Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 3840
@@ -33,17 +30,17 @@ class PersistentGemmTiled:
     ) -> Tensor[(M, N), "f32"]:
         with Mesh(("cta",), layout=(BX, BY), names=("x", "y")) as cta:
             out = tf.zeros(Tensor[(M, N), "f32"])
-            for mi in tile(cta.x * (M // BX), (cta.x + 1) * (M // BX), BM):
-                for ni in tile(cta.y * (N // BY), (cta.y + 1) * (N // BY), BN):
-                    acc = tf.zeros(Tensor[(BM, BN), "f32", (BM, BN), "rmem"])
-                    for ki in tile(K, BK):
-                        lhs = tf.reshard(a[mi, ki], (BM, BK), "smem")
-                        rhs = tf.reshard(b[ki, ni], (BK, BN), "smem")
+            for mi in tf.tile(cta.x * (M // BX), (cta.x + 1) * (M // BX), BM):
+                for ni in tf.tile(cta.y * (N // BY), (cta.y + 1) * (N // BY), BN):
+                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((BM, BN), {}), "rmem"])
+                    for ki in tf.tile(K, BK):
+                        lhs = tf.reshard(a[mi, ki], ((BM, BK), {}), "smem")
+                        rhs = tf.reshard(b[ki, ni], ((BK, BN), {}), "smem")
                         product = tf.matmul(lhs, rhs, out_dtype="f32")
-                        acc = acc + tf.reshard(product, (BM, BN), "rmem")
+                        acc = acc + tf.reshard(product, ((BM, BN), {}), "rmem")
                     out = tf.insert_slice(
                         out,
-                        tf.reshard(acc, (BM, BN), "gmem"),
+                        tf.reshard(acc, ((BM, BN), {}), "gmem"),
                         (mi, ni),
                     )
             return out

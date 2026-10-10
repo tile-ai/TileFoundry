@@ -8,11 +8,7 @@ automatically selected binary, ReLU, reduction, and cast instructions alongside
 an explicit reduction, producing an ``(M, 1)`` result.
 """
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, ReduceKind, T, Tensor, Topology, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
-from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Split
-from tilefoundry.ir.types import Mesh as ThreadMesh
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 M = 64
@@ -20,19 +16,6 @@ N = 32
 K = 32
 BK = 16
 STAGES = 2
-
-
-_COMPUTE = ThreadMesh((Topology("thread", 256),),
-                      ComposedLayout(None, 128, Layout((4, 8, 4), (32, 4, 1))),
-                      ("warp", "lane8", "lane4"))
-_LOADER = ThreadMesh((Topology("thread", 256),),
-                     Layout((32,), (1,)), ("lane",))
-A_SMEM = Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))
-B_SMEM = Layout(((2, 8), (4, 8)), ((64, 8), (128, 1)))
-B_REG = ShardLayout(Layout((32, 16), (16, 1)), (Split(0),), _LOADER)
-ACC = ShardLayout(Layout((8, 2, 4, 2, 4, 4),
-                         (1, 8, 16, 64, 128, 512)),
-                  (Split(2), Split(0), Split(4)), _COMPUTE)
 
 
 @module(
@@ -55,37 +38,37 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                 wgmma = T.cuda.sm90.Wgmma(
                     n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
-                with threads[1, :] as _compute:
-                    acc = tf.zeros(Tensor[(M, N), "f32", ACC, "rmem"])
+                with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
+                    acc = tf.zeros(Tensor[(M, N), "f32", ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 4), (1, 8, 16, 64, 128, 512)), "rmem"])
 
-                for k in tile(K, BK):
-                    with threads[0, :32] as _loader:
+                for k in tf.tile(K, BK):
+                    with Mesh(threads[0, :32], layout=(32,), names=("lane",)) as _loader:
                         lhs = tf.schedule(
                             (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=A_SMEM),
+                            op=T.copy_async_tensor(smem_layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))),
                             buffers=STAGES,
                         )
 
-                    with threads[0, :32] as _loader:
+                    with Mesh(threads[0, :32], layout=(32,), names=("lane",)) as _loader:
                         b_tile = tf.schedule(
                             (b_f32[k, :],),
-                            op=T.copy(rmem_layout=B_REG),
+                            op=T.copy(rmem_layout=((32 @ _loader.lane, 16), (16, 1))),
                         )
                         b = tf.cast(b_tile, dtype="bf16")
                         rhs = tf.schedule(
                             (b,),
-                            op=T.copy(smem_layout=B_SMEM),
+                            op=T.copy(smem_layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1)))),
                             buffers=STAGES,
                         )
 
-                    with threads[1, :] as _compute:
+                    with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                         acc = tf.schedule(
                             (acc, lhs, rhs),
                             op=T.tiled_mma(atom=wgmma),
                         )
 
-                with threads[1, :] as _compute:
-                    bias_r = tf.schedule((bias,), op=T.copy(rmem_layout=ACC))
+                with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
+                    bias_r = tf.schedule((bias,), op=T.copy(rmem_layout=((8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 4), (1, 8, 16, 64, 128, 512))))
                     acc = tf.relu(acc + bias_r)
                     explicit = tf.schedule(
                         (acc,),
