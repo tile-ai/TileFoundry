@@ -67,22 +67,6 @@ recursive parse situation. These are the only public parser symbols.
 
 ### 1.5 Mesh declarations and region captures
 
-Layout-typed op attributes, including attributes inside `op=T.copy(...)`, MUST
-use the same layout grammar as `tf.reshard(layout=...)`. An op value's callee is
-resolved statically, and its schema selects each keyword's grammar. Keywords
-MUST name attributes of that schema. Callees without an op schema retain Python
-static-call evaluation. In a mesh body, a plain tuple denotes a broadcast
-`ShardLayout`; `Layout(...)` explicitly denotes a plain `Layout`.
-
-In a layout position, `L + off`, `L | inner`, and `L + off | inner` denote
-`ComposedLayout(None, off, L)`, `ComposedLayout(inner, 0, L)`, and
-`ComposedLayout(inner, off, L)`. `L` MUST denote a plain `Layout` without mesh
-placement: a flat shape tuple, shape/stride tuple, layout reference, or
-`Layout(...)` call. Hierarchical shapes require `Layout(...)`. `off` MUST be an
-integer or dimension expression; a compound offset is written `L + (a + b)`.
-`inner` MUST be a `Swizzle` or `LayoutBase`. Offsets precede `|`. These operators
-are parser syntax and do not change Python evaluation of layout constructors.
-
 Mesh declarations are values. `Mesh(...)` constructs the compile-time domain
 object used by layout sugar and by a `MeshRegion`; it is not itself a runtime
 expression in the HIR value graph. A `with Mesh(...)` statement uses that value
@@ -103,7 +87,8 @@ mesh or its constant slice in row-major selection order. It preserves the
 selected positions and derives physical strides and offset from that selection.
 The selection MUST name one topology level and hold exactly `size(shape)`
 positions. Each new axis MUST map to one constant physical stride; contiguous
-positions are not required. See [shard §5](shard.md#5-mesh).
+positions are not required. The refinement states its shape only; explicit
+strides are rejected because they come from the selection. See [shard §5](shard.md#5-mesh).
 
 In an authored HIR function that opens a mesh, every authored runtime Call
 runs inside a mesh scope. This includes operation and function calls, operator
@@ -314,6 +299,22 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 <!-- parser-grammar:end -->
 
 ### 2.2 Rules
+
+Layout-typed op attributes, including attributes inside `op=T.copy(...)`, MUST
+use the same layout grammar as `tf.reshard(layout=...)`. An op value's callee is
+resolved statically, and its schema selects each keyword's grammar. Keywords
+MUST name attributes of that schema. Callees without an op schema retain Python
+static-call evaluation. In a mesh body, a plain tuple denotes a broadcast
+`ShardLayout`; `Layout(...)` explicitly denotes a plain `Layout`.
+
+In a layout position, `L + off`, `L | inner`, and `L + off | inner` denote
+`ComposedLayout(None, off, L)`, `ComposedLayout(inner, 0, L)`, and
+`ComposedLayout(inner, off, L)`. `L` MUST denote a plain `Layout` without mesh
+placement: a flat shape tuple, shape/stride tuple, layout reference, or
+`Layout(...)` call. Hierarchical shapes require `Layout(...)`. `off` MUST be an
+integer or dimension expression; a compound offset is written `L + (a + b)`.
+`inner` MUST be a `Swizzle` or `LayoutBase`. Offsets precede `|`. These operators
+are parser syntax and do not change Python evaluation of layout constructors.
 
 <!-- parser-constraints:start -->
 | Owner | Situation | Rule | Statement | Source |

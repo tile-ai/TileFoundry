@@ -288,7 +288,8 @@ same number of positions. Positions are numbered in the selection's row-major
 order, and each new axis MUST advance by one fixed physical stride throughout
 that selection. Noncontiguous selections are allowed when this condition holds.
 The topology and selection offset are preserved, and physical strides are
-derived from the selected positions. Extent-one axes may be omitted.
+derived from the selected positions. The refinement states its shape only;
+explicit strides are rejected. Extent-one axes may be omitted.
 Refining requires static positive extents and static selection strides.
 The resulting mesh remains lexical and uses a `ComposedLayout`; slicing that
 mesh retains the existing already-sliced-mesh rejection.
