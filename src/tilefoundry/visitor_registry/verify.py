@@ -50,7 +50,7 @@ from tilefoundry.ir.types.mesh import Mesh, make_mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.tensor_type import TupleType
-from tilefoundry.ir.types.utils import participant_layout, static_dim_value
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
@@ -337,16 +337,6 @@ def verify_operands(call, ctx) -> None:
         if param.pattern is None:
             continue
         value = ctx.type_of(arg)
-        if isinstance(value, TensorType) and isinstance(value.layout, ShardLayout):
-            try:
-                value = dataclasses.replace(
-                    value,
-                    layout=participant_layout(
-                        value.layout, getattr(atom, "required_execution_mesh", None)
-                    ),
-                )
-            except ValueError as error:
-                ctx.error(call, str(error))
         pattern = (
             param.pattern.read_on(call.target)
             if hasattr(param.pattern, "read_on")

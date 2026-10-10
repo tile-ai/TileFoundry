@@ -617,11 +617,13 @@ Field meanings:
   propagation
 ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
 
-Instruction matching and scope checks project away levels whose attributes
-are all `Broadcast`, except for the instruction's participant levels. A
-participant level retains its `Broadcast` attributes and physical frame;
-levels containing `Split` or `Partial` remain part of the distribution and
-must match. Projection keeps each retained mesh axis aligned with its attribute.
+Comparing or combining shard layouts, or consuming their mesh for matching,
+scope checks, propagation, type compatibility, lowering, memory analysis or
+printing, uses the same projection: omit levels whose attributes are all
+`Broadcast`, except for an instruction's required participant levels. Those
+levels retain their `Broadcast` attributes and physical frame; levels containing
+`Split` or `Partial` remain part of the distribution and must match. Projection
+keeps retained mesh axes aligned with their attributes without rewriting stored types.
 
 Surface syntax sugar:
 

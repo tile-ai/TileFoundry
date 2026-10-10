@@ -204,6 +204,10 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             return None
         return added.args[0], divisor
 
+    @staticmethod
+    def _project_layout(value: ShardLayout, ctx=None) -> ShardLayout:
+        return ctx.project_layout(value) if ctx is not None else participant_layout(value)
+
     def shard_surface(self, value: ShardLayout, ctx=None) -> str | None:
         """Render placement sugar only when every mesh axis has a scope binding.
 
@@ -211,7 +215,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         expression, so it declines a layout whose modes are grouped by tile
         axis: writing the groups in would emit a line the parser refuses.
         """
-        value = ctx.project_layout(value) if ctx is not None else participant_layout(value)
+        value = self._project_layout(value, ctx)
         layout = value.layout
         names = value.mesh.names
         if (
@@ -411,7 +415,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         )
 
     def visit_ShardLayout(self, value: ShardLayout, ctx=None) -> str:
-        value = ctx.project_layout(value) if ctx is not None else participant_layout(value)
+        value = self._project_layout(value, ctx)
         outer, child = self._indent, self._indent + "    "
         attrs = ", ".join(self.visit(attr, ctx) for attr in value.attrs)
         if len(value.attrs) == 1:
