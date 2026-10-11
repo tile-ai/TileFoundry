@@ -88,7 +88,7 @@ grep -E '^# (memory|roofline) ' Naive.txt
 ```
 
 ```text
-# memory traffic=gmem:r70.00KB/w42.44KB@logical,r70.00KB/w42.44KB@total,r70.00KB/w42.44KB@cta,r336B/w224B@thread;rmem:r589.35KB/w476.90KB@logical,r589.35KB/w476.90KB@total,r589.35KB/w476.90KB@cta,r2.54KB/w2.04KB@thread footprint=a:28.00KB;gamma:14.00KB;normed:28.00KB;v10:33:28.00KB;v21:45:14.00KB;v23:46:448B footprint-precision=exact peak=gmem:70.00KB;rmem:112.44KB persistent=gmem:42.00KB
+# memory traffic=gmem:r70.00KB/w42.44KB@logical,r70.00KB/w42.44KB@total,r70.00KB/w42.44KB@cta,r336B/w224B@thread;rmem:r589.35KB/w476.90KB@logical,r589.35KB/w476.90KB@total,r589.35KB/w476.90KB@cta,r2.54KB/w2.04KB@thread footprint=a:28.00KB;gamma:14.00KB;v10:33:56.00KB;v21:45:14.00KB;v23:46:448B footprint-precision=exact peak=gmem:70.00KB;rmem:112.44KB persistent=gmem:42.00KB
 # roofline ideal-ns=24 bound-by=memory
 ```
 
