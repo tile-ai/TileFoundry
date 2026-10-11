@@ -36,6 +36,43 @@ class Access:
     output_index: int | None = None
 
 
+@dataclass(frozen=True)
+class BufferAlias:
+    """The result is buffer's bytes, at the coordinates relation names."""
+
+    buffer: Expr
+    relation: AccessRelation
+
+
+def buffer_alias(
+    call: Call, ctx: TypeInferContext, local_relations: tuple[AccessRelation, ...]
+) -> BufferAlias | None:
+    """A registered view's bytes and coordinates, proving the declaration on every ask."""
+    position = aliased_operand(call)
+    if position is None:
+        return None
+    operand = call.args[position]
+    relation = renaming_relation(call, ctx, local_relations)
+    shape = tuple(operand.type.shape)
+    box = shape_to_isl_set(shape, {}) if is_literal_shape(shape) else None
+    if (
+        box is None
+        or not relation.relation.is_single_valued()
+        or not relation.relation.is_injective()
+        or not relation.relation.range().is_subset(box)
+    ):
+        param = tuple(
+            param for param in type(call.target)._op_schema.signature
+            if param.kind == "input"
+        )[position]
+        raise AnalysisError(
+            f"{type(call.target).__name__} declares its result is {param.name}'s bytes, "
+            f"but its access relation {relation.relation} is not single-valued, injective, "
+            "and within the operand"
+        )
+    return BufferAlias(operand, relation)
+
+
 def widest_allowed(access: isl.map, name: str, held: object) -> int | None:
     """The value a parameter may take that reaches the most of its operand.
 
@@ -210,13 +247,14 @@ def resolve_access(
     if isinstance(held, TensorType) and is_literal_shape(held.shape):
         relation = relation.intersect_range(shape_to_isl_set(tuple(held.shape), {}))
     operand = scope.capture_root(operand)
-    while isinstance(operand, Call) and (position := aliased_operand(operand)) is not None:
-        folded = renaming_relation(operand, ctx, scope.projected_relations(operand, ctx))
-        relation = relation.apply_range(folded.relation)
-        operand = scope.capture_root(operand.args[position])
+    while isinstance(operand, Call) and (
+        alias := buffer_alias(operand, ctx, scope.projected_relations(operand, ctx))
+    ) is not None:
+        relation = relation.apply_range(alias.relation.relation)
+        operand = scope.capture_root(alias.buffer)
         relation, folded_precision = eliminate_parameters(
             relation,
-            folded.values,
+            alias.relation.values,
             scope,
             operand.type,
             narrow=narrow,
@@ -235,6 +273,8 @@ def resolve_access(
 
 __all__ = [
     "Access",
+    "BufferAlias",
+    "buffer_alias",
     "eliminate_parameters",
     "resolve_access",
     "widest_allowed",

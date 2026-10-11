@@ -476,12 +476,14 @@ are monotonic across the whole Function, including nested and sibling regions.
 
 - constraints:
   - An op registered with `@register_buffer_alias(Op)` returns the viewed
-    input's position or `None` for each Call. The alias describes that input's
-    bytes. `Slice` and `Reshape` alias input zero and MUST NOT receive
+    input's position or `None` for each Call. `buffer_alias()` returns
+    `BufferAlias(buffer, relation)`, describing that input's bytes and the
+    result-to-input coordinates, and proves the declaration on every call.
+    `Slice` and `Reshape` alias input zero and MUST NOT receive
     independent lifetimes. `Tuple`,
     `MeshRegion`, and `LoopRegion` results and static tuple projections describe
     bytes already held by their selected body or carry and MUST NOT receive an
-    independent lifetime. Static tuple projections are structural edges, like
+    independent lifetime. Static tuple projections are visitor structural rules, like
     `Tuple`, `MeshRegion`, and `LoopRegion`, rather than registered views.
     Every other result, including `Transpose` or a result that overwrites
     a destination, MUST allocate its own. Analysis MUST use operation semantics
@@ -578,10 +580,10 @@ class MemoryLevelPeak:
     is not registered: it writes a new value, retains its access permutation,
     and receives its own allocation under the ordinary conflict rules.
   - The first memory-analysis stage MUST resolve storage ownership once per
-    value and prove each registered view once in logical coordinates. Its
+    value. Its
     `BufferAliasMetadata` MUST carry the value-to-root table and region
     parameter bindings. Liveness, placement, footprint, and lowering MUST
-    reuse that root table rather than trace producers or repeat proofs.
+    reuse that root table rather than trace producers.
     Access folding MUST remain in `resolve_access`, using the caller's
     topology level because projected view coordinates depend on that level.
   - Liveness MUST propagate a use to the root recorded for the same

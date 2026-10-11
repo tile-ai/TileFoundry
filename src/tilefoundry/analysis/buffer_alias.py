@@ -1,23 +1,17 @@
-"""Resolve backing buffers and prove view declarations once for memory analysis."""
+"""Resolve backing buffers for memory analysis."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.isl_interop import shape_to_isl_set
-from tilefoundry.ir.types.utils import is_literal_shape
 from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.visitor_registry.access_relation import renaming_relation
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 
-from .errors import AnalysisError
-from .iteration_scope import walk_scopes
 from .metadata import BufferAliasMetadata
 from .visitor import AnalyzeContext
 
@@ -51,47 +45,16 @@ def storage_source(
 
 
 class BufferAliasVisitor(ExprVisitor[None]):
-    """Collect definition-ordered roots and check each logical view once."""
+    """Collect definition-ordered backing buffers."""
 
     def __init__(self, function: Function, context: AnalyzeContext) -> None:
         super().__init__(root_function=function)
-        self.logical = replace(context, topology_level=None)
-        self.declarations = {
-            key: scope for scope in walk_scopes(context.root) for key in scope.relations
-        }
         self.roots: dict[int, Expr] = {}
         self.bindings: dict[int, Expr] = {}
 
     def default_visit_leaf(self, value: Expr, operands: tuple[None, ...], ctx=None) -> None:
         del operands, ctx
         source = storage_source(value, self.bindings, self.roots)
-        if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
-            operand = value.args[position]
-            relation = renaming_relation(
-                value,
-                self.logical,
-                self.declarations[id(value)].projected_relations(value, self.logical),
-            ).relation
-            box = (
-                shape_to_isl_set(tuple(operand.type.shape), {})
-                if is_literal_shape(operand.type.shape)
-                else None
-            )
-            if (
-                box is None
-                or not relation.is_single_valued()
-                or not relation.is_injective()
-                or not relation.range().is_subset(box)
-            ):
-                param = tuple(
-                    param for param in type(value.target)._op_schema.signature
-                    if param.kind == "input"
-                )[position]
-                raise AnalysisError(
-                    f"{type(value.target).__name__} declares its result is {param.name}'s bytes, "
-                    f"but its access relation {relation} is not single-valued, injective, "
-                    "and within the operand"
-                )
         self.roots[id(value)] = value if source is None else self.roots[id(source)]
 
     def visit_MeshRegion(self, region: MeshRegion, ctx=None) -> None:
