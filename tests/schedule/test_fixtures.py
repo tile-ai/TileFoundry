@@ -119,6 +119,51 @@ CANDIDATES_REFUSED = {
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
+_H200_FACTS_TEXT = """\
+target nvidia.h200_sxm
+instructions
+  T.binary             all targets
+  T.cast               all targets
+  T.clamp              all targets
+  T.unary              all targets
+  T.where              all targets
+  T.copy_async         cp.async
+  T.copy_async_tensor  cp.async.bulk.tensor
+  T.copy               all targets
+  T.ldmatrix           ldmatrix
+  T.relu               all targets
+  T.tiled_mma          wgmma.mma_async, mma.sync
+  T.reduce             all targets
+"""
+_H200_FACTS_JSON = {
+    "target": "nvidia.h200_sxm",
+    "instructions": [
+        {"id": "T.binary", "capability": None},
+        {"id": "T.cast", "capability": None},
+        {"id": "T.clamp", "capability": None},
+        {"id": "T.unary", "capability": None},
+        {"id": "T.where", "capability": None},
+        {"id": "T.copy_async", "capability": "cp.async"},
+        {"id": "T.copy_async_tensor", "capability": "cp.async.bulk.tensor"},
+        {"id": "T.copy", "capability": None},
+        {"id": "T.ldmatrix", "capability": "ldmatrix"},
+        {"id": "T.relu", "capability": None},
+        {"id": "T.tiled_mma", "capability": ["wgmma.mma_async", "mma.sync"]},
+        {"id": "T.reduce", "capability": None},
+    ],
+}
+_TARGET_NEUTRAL_FACTS = """\
+target {target}
+instructions
+  T.binary  all targets
+  T.cast    all targets
+  T.clamp   all targets
+  T.unary   all targets
+  T.where   all targets
+  T.copy    all targets
+  T.relu    all targets
+  T.reduce  all targets
+"""
 CANDIDATE_GOLDEN = (
     Path(__file__).parents[1]
     / "fixtures"
@@ -898,6 +943,16 @@ def _check_golden(out: Path, captured: pytest.CaptureResult[str], *, golden: Pat
         assert out.read_bytes() == golden.read_bytes()
 
 
+def _check_facts(
+    out: Path, captured: pytest.CaptureResult[str], *, expected: str | dict,
+) -> None:
+    if isinstance(expected, dict):
+        assert _quiet_json(out, captured) == expected
+    else:
+        assert captured == ("", "")
+        assert out.read_text() == expected
+
+
 def _check_facts_refusal(out: Path, captured: pytest.CaptureResult[str], *, message: str) -> None:
     assert captured.out == ""
     assert captured.err.startswith("tilefoundry: error: ")
@@ -998,13 +1053,19 @@ FIXTURES = (
         FixtureCase(
             name,
             ("schedule", "facts", "--target", target, "{out}", *options),
-            partial(_check_golden, golden=WGMMA_FACTS.parent / f"{target}.facts.{suffix}"),
+            partial(_check_facts, expected=expected),
         )
-        for name, target, options, suffix in (
-            ("facts list CUDA instructions as text", "nvidia.h200_sxm", (), "txt"),
-            ("facts list CUDA instructions as JSON", "nvidia.h200_sxm", ("--json",), "json"),
-            ("CPU facts list only target neutral instructions", "cpu", (), "txt"),
-            ("Apple facts list only target neutral instructions", "apple.m2_pro", (), "txt"),
+        for name, target, options, expected in (
+            ("facts list CUDA instructions as text", "nvidia.h200_sxm", (), _H200_FACTS_TEXT),
+            ("facts list CUDA instructions as JSON", "nvidia.h200_sxm", ("--json",), _H200_FACTS_JSON),
+            (
+                "CPU facts list only target neutral instructions", "cpu", (),
+                _TARGET_NEUTRAL_FACTS.format(target="cpu"),
+            ),
+            (
+                "Apple facts list only target neutral instructions", "apple.m2_pro", (),
+                _TARGET_NEUTRAL_FACTS.format(target="apple.m2_pro"),
+            ),
         )
     ),
     *(
