@@ -785,8 +785,8 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']} precision=exact",
         "# memory traffic=gmem:r120.00KB/w90.00KB@logical,"
         "r7.79MB/w3.93MB@total,r62.75KB/w32.75KB@cta "
-        "footprint=<value 4>:30.00KB;<value 5>:30.00KB;v0:29:256B;"
-        "v1:30:256B;v3:37:2.50KB;v4:38:2.50KB;v6:44:30.00KB "
+        "footprint=v0:29:256B;v1:30:256B;v2:31:30.00KB;"
+        "v3:37:2.50KB;v4:38:2.50KB;v5:39:30.00KB;v6:44:30.00KB "
         "footprint-precision=exact peak=gmem:62.50KB persistent=gmem:30.00KB",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
