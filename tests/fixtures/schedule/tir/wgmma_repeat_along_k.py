@@ -85,11 +85,7 @@ def gemm(
                                     )
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 64) % 2][o_k:o_k + 16, o_n:o_n + 16]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_3,
-                                        ),
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(
@@ -118,11 +114,7 @@ def gemm(
                                     )
                                     rhs_view_1 = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 64) % 2][o_k + 16:o_k + 16 + 16, o_n:o_n + 16]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_3,
-                                        ),
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(
@@ -151,11 +143,7 @@ def gemm(
                                     )
                                     rhs_view_2 = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 64) % 2][o_k + 32:o_k + 32 + 16, o_n:o_n + 16]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_3,
-                                        ),
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(
@@ -184,11 +172,7 @@ def gemm(
                                     )
                                     rhs_view_3 = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 64) % 2][o_k + 48:o_k + 48 + 16, o_n:o_n + 16]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_3,
-                                        ),
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(
@@ -223,11 +207,7 @@ def gemm(
                                     )
                                     rhs_view_4 = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 64) % 2][o_k_1:o_k_1 + 16, o_n_1:o_n_1 + 16]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_4,
-                                        ),
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(
@@ -256,11 +236,7 @@ def gemm(
                                     )
                                     rhs_view_5 = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 64) % 2][o_k_1 + 16:o_k_1 + 16 + 16, o_n_1:o_n_1 + 16]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_4,
-                                        ),
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(
@@ -289,11 +265,7 @@ def gemm(
                                     )
                                     rhs_view_6 = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 64) % 2][o_k_1 + 32:o_k_1 + 32 + 16, o_n_1:o_n_1 + 16]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_4,
-                                        ),
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(
@@ -322,11 +294,7 @@ def gemm(
                                     )
                                     rhs_view_7 = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 64) % 2][o_k_1 + 48:o_k_1 + 48 + 16, o_n_1:o_n_1 + 16]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_4,
-                                        ),
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(

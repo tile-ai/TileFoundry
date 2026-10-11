@@ -61,20 +61,12 @@ def gemm(
                                     )
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(lhs_stages[(k // 16) % 2][o_m:o_m + 64, o_k:o_k + 16]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_3,
-                                        ),
+                                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 16) % 2][o_k:o_k + 16, o_n:o_n + 32]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_3,
-                                        ),
+                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 32),
                                     )
                                     T.tiled_mma(

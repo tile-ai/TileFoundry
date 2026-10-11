@@ -223,20 +223,15 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         """
         value = participant_layout(value)
         layout = value.layout
-        if ctx is not None and isinstance(layout, Layout) and all(isinstance(attr, Broadcast) for attr in value.attrs):
+        if ctx is not None and all(isinstance(attr, Broadcast) for attr in value.attrs):
             current = ctx.current_mesh
-            if current is not None:
+            if current is not None and isinstance(layout, Layout) and layout.strides is not None:
                 current = participant_layout(ShardLayout(layout, tuple(
                     Broadcast() for _ in range(len(flatten(current.layout).shape))
                 ), current)).mesh
-                if current == value.mesh and layout.strides is not None and not any(
-                    isinstance(entry, tuple) for entry in (*layout.shape, *layout.strides)
-                ):
-                    shape = self.shape_tuple(layout.shape, ctx)
-                    parts = [shape]
-                    if layout.strides != compact_row_major(layout.shape):
-                        parts.append(self.shape_tuple(layout.strides, ctx))
-                    return "(" + ", ".join([*parts, "{}"]) + ")"
+                if current == value.mesh:
+                    operand = self.layout_surface(layout, ctx)
+                    return operand + " @ {B()}"
         names = value.mesh.names
         if (
             not isinstance(layout, Layout)
@@ -287,9 +282,10 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         parts = [f"({dims_text})"]
         if explicit:
             parts.append(self.shape_tuple(layout.strides, ctx))
+        operand = parts[0] if len(parts) == 1 else "(" + ", ".join(parts) + ")"
         if states:
-            parts.append("{" + ", ".join(states) + "}")
-        return parts[0] if len(parts) == 1 else "(" + ", ".join(parts) + ")"
+            operand += " @ {" + ", ".join(states) + "}"
+        return operand
 
     def visit_TensorType(self, value: TensorType, ctx=None) -> str:
         result = (

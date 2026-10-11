@@ -190,35 +190,18 @@ DSL text forms for tensor / layout / shard annotations are owned by
 round-trip without losing mesh / layout / storage information;
 otherwise it falls back to the verbose `ShardLayout(...)`.
 
-A `ShardLayout` over a plain `Layout` whose `Mesh` has named axes MUST use the
-placement sugar of [parser §2.1](./parser.md#21-syntax), in both type slots and
-op-attribute slots, when every mesh identifier in that sugar has an explicit
-scope binding. A binding is either a `with <mesh> as <name>` region or the
-function's own execution domain. A mesh merely restated in another expression
-is not a binding, and the printer never invents a name for one.
-
-In layout positions, a `ComposedLayout` with a plain `Layout` outer MUST use
-`L + off | inner`, omitting a zero offset or absent inner. Compound offsets
-MUST be parenthesized. Layout positions include tensor annotations, layout-typed
-op attributes, and a `with Mesh(...)` header's layout. Python-evaluated positions,
-including `@func(mesh=...)` and `ShardLayout(...)` / `Mesh(...)` constructor
-arguments, retain `ComposedLayout(...)`. A plain `Layout` MUST retain its
-`Layout(...)` constructor so it does not become a broadcast `ShardLayout`.
+Layouts and placements use the forms described in
+[shard §6](./shard.md#6-shardattr), with acceptance rules in
+[parser §2](./parser.md#2-syntax-and-rules). The printer uses sugar when it
+preserves the value and the needed lexical bindings; otherwise it emits a
+complete constructor. Python-evaluated constructor arguments retain
+`Layout(...)` and `ComposedLayout(...)`.
 
 HIR operations and tile-window loops MUST use `tf.<name>(...)` and
 `tf.tile(...)`. Op values MUST use their schema name and recursively rendered
 attributes, including layout sugar. A single `Tuple[...]` input MUST be emitted
 as an explicit tuple of operands, retaining a trailing comma for one operand.
 Storage attributes MUST be emitted as strings.
-
-Placement sugar states one dimension per tensor axis, with each `Split` written
-on the dimension it divides, adds the stride tuple whenever the layout has one,
-and states the remaining mesh axes in a `{axis @ ...}` set. A layout that groups
-an axis's modes has no sugar; elsewhere a group is written as the shape tuple
-it is. Because the parser
-reads an unstated mesh axis as `Broadcast`, the set carries every `Partial` and
-carries `Broadcast` only when no `Split` or `Partial` would otherwise name the
-mesh.
 
 The printer has one type-text surface: the canonical `Tensor[...]` form of
 [parser §2.1](./parser.md#21-syntax), used by `as_script()`, comments, DOT,
@@ -262,35 +245,19 @@ The file header starts with `from __future__ import annotations`, a blank line,
 and `from tilefoundry.dsl import *`, without a `noqa` comment. Imports supplied
 by a Target's `to_python()` provider follow unchanged.
 
-In layout grammar positions, flat plain layouts MUST use a shape tuple or a
-`(shape, strides)` tuple; hierarchical shapes retain `Layout(...)`. Composition
-uses `L + offset | inner`. A placement representable over the current mesh scope
-MUST use dimension placements and Partial states; Broadcast axes are omitted.
-An all-Broadcast placement uses `{}` when it preserves the underlying layout.
-Values that sugar cannot express retain complete `ShardLayout(...)` constructs,
-whose Python-evaluated arguments retain `Layout(...)` / `ComposedLayout(...)`.
-Mesh headers use `layout=` and omit row-major strides. A topology is written by
-name only when the function inherits it from the enclosing module; standalone
-`prim_func` and explicit `@prim_func(target=...)` headers retain `Topology(...)`.
-String attributes use double quotes, and TIR tuple elements occupy separate lines.
+Layout text follows [shard §6](./shard.md#6-shardattr) and
+[parser §2](./parser.md#2-syntax-and-rules). The printer preserves complete
+constructors when sugar cannot express the value. Mesh headers omit row-major
+strides and use the layout keyword. A topology is written by name only when the
+function inherits it from the enclosing module; standalone `prim_func` and
+explicit `@prim_func(target=...)` headers retain `Topology(...)`. String
+attributes use double quotes, and TIR tuple elements occupy separate lines.
 
-A mesh scope composed from a selection recoverable from an active lexical binding
-MUST be emitted as `Mesh(selection, layout=shape, names=names)` when the
-selection-local numbering is row-major. Other numbering MUST be emitted as
-`Mesh(selection, layout=(shape, strides), names=names)`; these strides address
-the selection's row-major indices, not physical positions. Its physical
-positions, offset, and strides MUST agree with composition on that selection; a
-matching slice uses the existing slice form. Inspection utilities recover the
-parent sub-box with `idx2crd`, and the selection-local layout with
-`composition(left_inverse(selection_layout_with_reversed_modes), mesh.layout.outer)`.
-
-A mesh identifier in placement sugar MUST be a lexical binding visible at the
-point represented by the text: a `with <mesh> as <name>` region, or the
-function's own execution domain. The function execution domain is represented
-as `@func(mesh=...)`, so its name is available to signature annotations. A
-nested region writes its mesh expression at the `with` boundary and uses that
-binding in its body. A named constant or an out-of-scope mesh does not create a
-binding; types that refer to one use the verbose form.
+Recoverable mesh selections MUST print relative to an active lexical parent;
+a matching slice uses the slice form. Otherwise the printer emits a complete
+mesh constructor. The function's execution mesh is available while printing
+its signature and body; a named constant outside those bindings does not
+create a printable lexical name.
 
 Analysis annotations use the same type text for value-producing statements, but
 a structural `LoopRegion` or `MeshRegion` line MUST NOT restate the aggregate

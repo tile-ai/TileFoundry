@@ -604,34 +604,28 @@ Field meanings:
   propagation
 ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
 
-Comparing or combining shard layouts, or consuming their mesh for matching,
-scope checks, propagation, type compatibility, lowering, memory analysis or
-printing, uses the same projection: omit levels whose attributes are all
-`Broadcast`, except for an instruction's required participant levels. Those
-levels retain their `Broadcast` attributes and physical frame; levels containing
-`Split` or `Partial` remain part of the distribution and must match. Projection
-keeps retained mesh axes aligned with their attributes without rewriting stored types.
+Comparing or combining shard layouts and consuming their mesh use one projection
+that keeps mesh axes aligned with their attributes without rewriting stored types.
+It omits all-Broadcast levels except an instruction's required participant levels;
+levels containing Split or Partial remain part of the distribution.
 
-Surface syntax sugar:
+### Surface syntax sugar
 
-- `S(i)` ≡ `Split(axis=i)`
-- `P()` / `P("sum")` ≡ `Partial(reduction="sum")`
-- `B()` ≡ `Broadcast()`
-- omitted mesh axes are `Broadcast`
+| Written form | Meaning |
+| --- | --- |
+| `(8, 16)` | Plain row-major `Layout` |
+| `((8, 16), (1, 8))` | Plain `Layout` with explicit strides |
+| `(8 @ t.w, 16)` | `ShardLayout` splitting a tensor dimension over `t.w` |
+| `(8, 16) @ {B()}` | All-Broadcast `ShardLayout` |
+| `(8 @ t.w, 16) @ {t.l @ P("sum")}` | Split placement with Partial values on `t.l` |
+| `((8 @ t.w, 16), (16, 1)) @ {t.l @ P("sum")}` | Placement with explicit strides and Partial values |
+| `((8, 16), {})` | Transitional spelling of an all-Broadcast `ShardLayout` |
+| `where(layout=(_, _, dim) @ {cta @ B()})` | Broadcast constraint on the named topology `cta` |
 
-An unplaced shape or shape/stride tuple denotes a plain `Layout` both inside
-and outside a mesh body. A layout containing dimension placement (`@`) or
-value-state braces covers the current composed mesh scope; axes not stated are
-`Broadcast`. In a function signature it covers the function's declared mesh.
-Empty braces explicitly broadcast over every axis: `((8, 16), {})` or
-`((8, 16), (16, 1), {})`. A placement without Split, Partial or explicit
-strides defaults to row-major strides; explicit `@ B()` does not affect this
-default. Placements with Split or Partial retain `None` strides when omitted.
-Pattern positions such as `where(...)` retain `None`, leaving strides
-unconstrained. Braces can state partial values, such as
-`{threads.warp @ P("sum")}`; `@ B()` is accepted but does not change the
-implicit Broadcast of an unstated axis. Empty braces require an available
-mesh, and every referenced axis must map uniquely into that scope.
+Placement covers the current composed mesh scope, or the function mesh in a
+signature; unstated axes are Broadcast. A `where` clause constrains named
+topologies rather than lexical mesh axes. The executable syntax and acceptance
+rules are generated in [parser §2](./parser.md#2-syntax-and-rules).
 
 ---
 

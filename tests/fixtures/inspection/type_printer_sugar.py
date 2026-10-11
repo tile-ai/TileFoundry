@@ -25,7 +25,7 @@ class TypePrinterSugar:
         seed: Tensor[(16,), "f32"],
         acc: Tensor[
             (8, 16), "f32",
-            ((2 @ mesh.warp, 4, 16), {mesh.lane @ P("sum")}),
+            (2 @ mesh.warp, 4, 16) @ {mesh.lane @ P("sum")},
             "rmem",
         ],
         mixed: Tensor[(8, 16), "f32", ShardLayout(layout=Layout((4, 2, 16), None), attrs=(S(0), B(), P("sum")), mesh=Mesh((Topology("cta", 4), Topology("thread", 8)), layout=(4, 2, 4), names=("tile", "warp", "lane"))), "rmem"],

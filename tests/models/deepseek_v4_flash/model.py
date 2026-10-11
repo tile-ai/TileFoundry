@@ -869,7 +869,7 @@ def _submodules(config: DSV4Config):
                 hidden, shared_w1_weight, shared_w1_scale,
                 shared_w3_weight, shared_w3_scale, shared_w2_weight, shared_w2_scale,
             )
-            combined: where(layout=((_, _, dim), {cta @ B()})) = combine_expert_outputs(
+            combined: where(layout=(_, _, dim) @ {cta @ B()}) = combine_expert_outputs(
                 routed_value, shared_value,
             )
             return combined
@@ -1233,7 +1233,7 @@ def _submodules(config: DSV4Config):
                 hidden, shared_w1_weight, shared_w1_scale,
                 shared_w3_weight, shared_w3_scale, shared_w2_weight, shared_w2_scale,
             )
-            combined: where(layout=((_, _, dim), {cta @ B()})) = combine_expert_outputs(
+            combined: where(layout=(_, _, dim) @ {cta @ B()}) = combine_expert_outputs(
                 routed_value, shared_value,
             )
             return combined

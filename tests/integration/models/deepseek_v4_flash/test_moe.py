@@ -112,4 +112,4 @@ def test_root_printer_keeps_explicit_input_contracts() -> None:
     printed = as_script(deepseek_v4_flash_module)
     assert 'entry="deepseek_v4_flash_moe"' in printed
     assert f"routed_experts: where(layout=(_, 6 @ cta, {DIM}))" in printed
-    assert f"combined: where(layout=((_, _, {DIM}), {{cta @ B()}}))" in printed
+    assert f"combined: where(layout=(_, _, {DIM}) @ {{cta @ B()}})" in printed

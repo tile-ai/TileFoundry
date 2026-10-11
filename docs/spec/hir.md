@@ -298,7 +298,8 @@ freeze** below).
 - `.specialize(pattern, *, mesh=None)` accepts an explicit function mesh with
   the same semantics and Mesh type check as `@func(mesh=...)`. It does not
   inherit the prototype's mesh; variant and base parameter and return types
-  MUST still match.
+  MUST still match. Authored layout forms and their acceptance rules are owned
+  by [shard §6](./shard.md#6-shardattr) and [parser §2](./parser.md#2-syntax-and-rules).
 - A variant carries exactly one `RangePattern` in `specializations`.
   The canonical signature is
   `";".join(f"{p.dim_var}${p.lo}_{p.hi}" for p in specializations)`
@@ -1623,13 +1624,13 @@ dispatches on `(layout, storage)`:
 - `layout=None`, storage unchanged → `x.type` (no-op).
 - `layout=None`, storage changed → error; a storage change MUST carry an
   explicit `layout=`.
-- `layout=Layout(strides=None)` (sugar), storage unchanged → dest strides match
+- a layout with unspecified strides, storage unchanged → dest strides match
   the form already on `x.layout`: a Split-axes-zero source ⇒ per-instance form;
   otherwise ⇒ shared-engine C-order over the canonical global shape. When
   `x.layout` is `None` (plain kernel-param), fall back to shared-engine C-order.
-- `layout=Layout(strides=None)` (sugar), low → high level → dest strides =
+- a layout with unspecified strides, low → high level → dest strides =
   C-order over `layout.shape` (shared-engine form).
-- `layout=Layout(strides=None)` (sugar), high → low level → dest `strides[k]=0`
+- a layout with unspecified strides, high → low level → dest `strides[k]=0`
   for every `Split` axis `k`; non-`Split` axes follow C-order over
   `shard_layout_local_shape(layout)` with size-1 → 0 (per-instance form).
 - `layout=Layout(strides=tuple)` (verbose) → dest strides are taken verbatim;

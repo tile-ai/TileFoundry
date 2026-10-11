@@ -491,7 +491,7 @@ def _layout_constraint_str(constraint: LayoutClause) -> str:
             binding_str.append(f'{_constraint_value_str(topology)} @ P("{attr.reduction}")')
         else:  # pragma: no cover - LayoutClause validates this type
             raise TypeError(f"unsupported layout binding {type(attr).__name__}")
-    return f"({dims_str}, {{{', '.join(binding_str)}}})"
+    return f"{dims_str} @ {{{', '.join(binding_str)}}}"
 
 
 def _where_str(metadata: WhereClauseMetadata) -> str:

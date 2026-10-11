@@ -78,11 +78,7 @@ def gemm(
                                     )
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 32) % 2][o_k:o_k + 32, o_n:o_n + 32]),
-                                        layout=ShardLayout(
-                                            layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_3,
-                                        ),
+                                        layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))) @ {B()},
                                         shape=(32, 32),
                                     )
                                     T.tiled_mma(

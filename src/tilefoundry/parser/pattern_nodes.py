@@ -499,77 +499,97 @@ def _layout_strides() -> AstPattern[Any]:
     return pattern
 
 
+def _empty_states() -> AstPattern[Any]:
+    """The transitional empty-state tuple syntax, removed in M7."""
+    return AstNodePattern(
+        ast.Dict,
+        FieldPattern("keys", SequencePattern()),
+        FieldPattern("values", SequencePattern()),
+    )
+
+
+def _state_call(name: str, *args) -> AstPattern[Any]:
+    return AstNodePattern(
+        ast.Call,
+        FieldPattern("func", AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern(name)))),
+        FieldPattern("args", SequencePattern(*args)),
+        FieldPattern("keywords", SequencePattern()),
+    )
+
+
 def _value_states() -> AstPattern[Any]:
-    """Empty braces broadcast; nonempty braces state unsplit mesh-axis values."""
-    populated = AstNodePattern(
-        ast.Set,
-        FieldPattern(
-            "elts",
-            RepeatPattern(
+    """One Broadcast call, or axis-bound Partial calls."""
+    pattern = ChoicePattern(
+        AstNodePattern(ast.Set, FieldPattern("elts", SequencePattern(_state_call("B")))),
+        AstNodePattern(
+            ast.Set,
+            FieldPattern("elts", RepeatPattern(
                 AstNodePattern(
                     ast.BinOp,
                     FieldPattern("op", AstNodePattern(ast.MatMult)),
-                    FieldPattern("left", MeshAxisPattern()),
-                    FieldPattern(
-                        "right",
-                        ChoicePattern(
-                            AstNodePattern(
-                                ast.Call,
-                                FieldPattern(
-                                    "func",
-                                    AstNodePattern(
-                                        ast.Name, FieldPattern("id", LiteralPattern("B"))
-                                    ),
-                                ),
-                                FieldPattern("args", SequencePattern()),
-                            ),
-                            AstNodePattern(
-                                ast.Call,
-                                FieldPattern(
-                                    "func",
-                                    AstNodePattern(
-                                        ast.Name, FieldPattern("id", LiteralPattern("P"))
-                                    ),
-                                ),
-                                FieldPattern(
-                                    "args",
-                                    SequencePattern(
-                                        AstNodePattern(
-                                            ast.Constant,
-                                            FieldPattern("value", LiteralPattern(value_type=str)),
-                                        )
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ),
+                    FieldPattern("left", AstNodePattern(ast.expr)),
+                    FieldPattern("right", _state_call("P", AstNodePattern(
+                        ast.Constant, FieldPattern("value", LiteralPattern(value_type=str)),
+                    ))),
                 ),
                 minimum=1,
-            ),
-        ),
-    )
-    pattern = ChoicePattern(
-        populated,
-        AstNodePattern(
-            ast.Dict,
-            FieldPattern("keys", SequencePattern()),
-            FieldPattern("values", SequencePattern()),
+            )),
         ),
     )
     pattern.grammar_name = "value_states"
     return pattern
 
 
+@dataclass(frozen=True)
+class ValueStatesFormRule:
+    STATEMENT: ClassVar[str] = (
+        "Layout states are either a single B() or one or more axis @ P(nonempty string) "
+        "entries; empty states, axis @ B(), and mixing B() with other entries are rejected."
+    )
+
+    def apply(self, value, *, node, context):
+        if isinstance(node, ast.Set) and len(node.elts) == 1:
+            item = node.elts[0]
+            if isinstance(item, ast.Call) and isinstance(item.func, ast.Name):
+                if item.func.id == "B" and not item.args and not item.keywords:
+                    return value
+        if isinstance(node, ast.Set) and node.elts and all(
+            _value_state_parts(item) is not None for item in node.elts
+        ):
+            return value
+        raise ParseError.from_node(
+            node, context, 'layout states must be {B()} or {axis @ P("reduction"), ...}'
+        )
+
+
+class ValueStatesPattern(ElementPattern):
+    element_name = "value_states"
+    syntax = LazyPattern(_value_states)
+    BIND_RULES = (ValueStatesFormRule(),)
+    RULES = ()
+
+    def match(self, node, context):
+        for rule in self.BIND_RULES:
+            rule.apply(None, node=node, context=context)
+        return super().match(node, context)
+
+    @staticmethod
+    def construct(match, children, context):
+        return match.node
+
+
 def _layout_sugar_parts(node: object):
     """Split layout sugar into its dims, its strides, and its value states.
 
     ``(d, ...)`` states dims alone. Wrapping the dims in a tuple adds an
-    optional stride tuple and an optional ``{axis @ B(), axis @ P("sum")}``
-    set, in that order, so one production reads every form the printer emits.
+    optional stride tuple and the transitional empty ``{}`` set. Nonempty
+    states are attached by the separate ``layout @ {states}`` production.
     Return ``None`` when the node is not layout sugar at all.
     """
-    if not isinstance(node, ast.Tuple) or not node.elts:
+    if not isinstance(node, ast.Tuple):
         return None
+    if not node.elts:
+        return node, None, None
     head, *extras = node.elts
     if not extras or not isinstance(head, ast.Tuple):
         return node, None, None
@@ -578,10 +598,7 @@ def _layout_sugar_parts(node: object):
     for extra in extras:
         if isinstance(extra, ast.Tuple) and strides is None and states is None:
             strides = extra
-        elif (
-            isinstance(extra, ast.Set)
-            or (isinstance(extra, ast.Dict) and not extra.keys)
-        ) and states is None:
+        elif isinstance(extra, ast.Dict) and not extra.keys and states is None:
             states = extra
         else:
             return None
@@ -589,14 +606,12 @@ def _layout_sugar_parts(node: object):
 
 
 def _value_state_parts(node: ast.AST):
-    """Read ``axis @ B()`` or ``axis @ P("reduction")`` as axis node and state."""
+    """Read ``axis @ P("reduction")`` as axis node and state."""
     if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
         return None
     call = node.right
     if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name) or call.keywords:
         return None
-    if call.func.id == "B" and not call.args:
-        return node.left, "B", None
     if call.func.id == "P" and len(call.args) == 1:
         reduction = call.args[0]
         if isinstance(reduction, ast.Constant) and isinstance(reduction.value, str):
@@ -703,7 +718,7 @@ class PlacementScopeRule:
         if mesh is None:
             message = (
                 "empty braces require a current mesh scope"
-                if value.states_written and not value.states
+                if value.states_written and not value.states and isinstance(match.node, ast.Tuple)
                 else "placement requires a current mesh scope"
             )
             raise ParseError.from_node(match.node, context, message)
@@ -749,10 +764,11 @@ class PlacementConstructionRule:
         strides = value.strides
         if strides is None and not any(isinstance(attr, (Split, Partial)) for attr in canonical.attrs):
             strides = runtime.compact_row_major(canonical.layout.shape, mul=operator.mul)
+        layout = runtime.Layout(shape=canonical.layout.shape, strides=strides)
         return PlacedLayout(
             shape=value.shape,
             layout=runtime.ShardLayout(
-                layout=runtime.Layout(shape=canonical.layout.shape, strides=strides),
+                layout=layout,
                 attrs=canonical.attrs,
                 mesh=canonical.mesh,
             ),
@@ -777,6 +793,16 @@ class PlacementAnswerRule:
         return value
 
 
+def _placement_operand_syntax():
+    return ChoicePattern(
+        AstNodePattern(
+            ast.Tuple,
+            FieldPattern("elts", SequencePattern(_layout_dims(), _layout_strides())),
+        ),
+        _layout_dims(),
+    )
+
+
 class PlacedLayoutPattern(ElementPattern):
     """The one placement production, including dimensions, strides, and states."""
 
@@ -788,18 +814,14 @@ class PlacedLayoutPattern(ElementPattern):
                     ast.Tuple,
                     FieldPattern(
                         "elts",
-                        SequencePattern(_layout_dims(), _layout_strides(), _value_states()),
+                        SequencePattern(_layout_dims(), _layout_strides(), _empty_states()),
                     ),
                 ),
                 AstNodePattern(
                     ast.Tuple,
-                    FieldPattern("elts", SequencePattern(_layout_dims(), _layout_strides())),
+                    FieldPattern("elts", SequencePattern(_layout_dims(), _empty_states())),
                 ),
-                AstNodePattern(
-                    ast.Tuple,
-                    FieldPattern("elts", SequencePattern(_layout_dims(), _value_states())),
-                ),
-                _layout_dims(),
+                _placement_operand_syntax(),
             ),
             PlacedLayoutPattern.enter,
         )
@@ -819,7 +841,9 @@ class PlacedLayoutPattern(ElementPattern):
         return extent, (*axes, *right_axes)
 
     @staticmethod
-    def enter(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def enter(
+        node: object, context: MatchContext, matched: AstMatch[Any], *, allow_plain: bool = False,
+    ) -> AstMatch[Any] | None:
         parts = _layout_sugar_parts(node)
         if parts is None:
             return None
@@ -884,7 +908,7 @@ class PlacedLayoutPattern(ElementPattern):
                 children.append(
                     AstChild(child_name, MeshAxisPattern(), axis_node, "mesh_axis", "mesh_axis")
                 )
-        if not found_placement and states_node is None and strides_node is None:
+        if not allow_plain and not found_placement and states_node is None and strides_node is None:
             return None
         return dataclasses.replace(
             matched,
@@ -930,6 +954,86 @@ class PlacedLayoutPattern(ElementPattern):
         PlacementConstructionRule(),
         PlacementAnswerRule(),
     )
+
+
+class PlacementOperandPattern(PlacedLayoutPattern):
+    """Parse placement dimensions before the enclosing state rules construct them."""
+
+    element_name = "placement_operand"
+    syntax = LazyPattern(lambda: BindPattern(
+        _placement_operand_syntax(), PlacementOperandPattern._bind,
+    ))
+    RULES = ()
+
+    @staticmethod
+    def _bind(node, context, matched):
+        return PlacedLayoutPattern.enter(node, context, matched, allow_plain=True)
+
+
+@dataclass(frozen=True)
+class StatedLayoutOperandRule:
+    STATEMENT: ClassVar[str] = (
+        "States attach to placement dimensions or a plain Layout operand; composed "
+        "operands must use the complete ShardLayout(...) constructor."
+    )
+
+    def apply(self, value, *, match, context):
+        operand, states = value
+        if isinstance(operand, _PlacementCandidate):
+            return dataclasses.replace(operand, states=states, states_written=True)
+        if isinstance(operand, ComposedLayout):
+            raise ParseError.from_node(
+                match.node, context,
+                "composed layouts with states must use the complete ShardLayout(...) constructor",
+            )
+        if not isinstance(operand, Layout):
+            raise ParseError.from_node(
+                match.node, context, "layout states require a Layout or placement operand"
+            )
+        return _PlacementCandidate(
+            operand.shape, operand.strides, (), states, True,
+        )
+
+
+class StatedLayoutPattern(ElementPattern):
+    element_name = "stated_layout"
+    syntax = LazyPattern(lambda: BindPattern(
+        AstNodePattern(
+            ast.BinOp,
+            FieldPattern("op", AstNodePattern(ast.MatMult)),
+            FieldPattern("left", ChildPattern("operand", ChoicePattern(
+                PlacementOperandPattern(), ComposedLayoutSugarPattern(), StaticValuePattern(),
+            ), "layout", "layout")),
+            FieldPattern("right", ValueStatesPattern()),
+        ),
+        StatedLayoutPattern._bind,
+    ))
+
+    @staticmethod
+    def _bind(node, context, matched):
+        children = list(matched.children)
+        states = []
+        for index, item in enumerate(node.right.elts):
+            state = _value_state_parts(item)
+            if state is None:
+                continue
+            axis, kind, reduction = state
+            name = f"state_{index}"
+            children.append(AstChild(name, MeshAxisPattern(), axis, "mesh_axis", "mesh_axis"))
+            states.append((name, kind, reduction))
+        return dataclasses.replace(matched, children=tuple(children), captures={
+            **matched.captures, "states": tuple(states),
+        })
+
+    @staticmethod
+    def construct(match, children, context):
+        states = tuple(
+            (*children[name], kind, reduction)
+            for name, kind, reduction in match.captures["states"]
+        )
+        return children["operand"], states
+
+    RULES = (StatedLayoutOperandRule(), *PlacedLayoutPattern.RULES)
 
 
 @dataclass(frozen=True)
@@ -1081,6 +1185,7 @@ class LayoutPattern(ElementPattern):
                 ),
                 pattern_id="tensor.layout.call",
             ),
+            StatedLayoutPattern(),
             PlacedLayoutPattern(),
             PlainLayoutPattern(),
             ComposedLayoutSugarPattern(),
@@ -1165,7 +1270,7 @@ class TensorOptionalSlotPattern(ElementPattern):
                 return "layout"
             if isinstance(node.value, str):
                 return "storage"
-        if isinstance(node, (ast.Tuple, ast.Call)):
+        if isinstance(node, (ast.Tuple, ast.Call, ast.BinOp)):
             return "layout"
         if isinstance(node, (ast.Name, ast.Attribute)):
             try:
@@ -1205,6 +1310,7 @@ class TensorShapeLayoutPattern(ElementPattern):
     element_name = "tensor_shape_layout"
     syntax = LazyPattern(
         lambda: ChoicePattern(
+            StatedLayoutPattern(),
             PlacedLayoutPattern(),
             ShapePattern(),
         )
@@ -1533,28 +1639,42 @@ def _parse_partial_constraint(node: ast.AST):
     return Partial(value)
 
 
-def _parse_constraint_bindings(node: ast.AST):
-    if not isinstance(node, ast.Set):
-        raise ValueError("layout bindings must be a set")
-    bindings = []
-    for item in node.elts:
-        if not isinstance(item, ast.BinOp) or not isinstance(item.op, ast.MatMult):
-            raise ValueError("layout bindings must use `topology @ B()` or `P()`")
-        topology = _constraint_value(item.left)
-        if not isinstance(topology, str) or not topology:
-            raise ValueError("layout binding topology must be symbolic")
-        if (
-            isinstance(item.right, ast.Call)
-            and isinstance(item.right.func, ast.Name)
-            and item.right.func.id == "B"
-            and not item.right.args
-            and not item.right.keywords
-        ):
-            attribute = Broadcast()
-        else:
-            attribute = _parse_partial_constraint(item.right)
-        bindings.append((topology, attribute))
-    return bindings
+@dataclass(frozen=True)
+class WhereTopologyStatesRule:
+    STATEMENT: ClassVar[str] = (
+        "Where layout states constrain named topologies with topology @ B() or "
+        "topology @ P(nonempty string); they do not bind lexical mesh axes."
+    )
+
+    def apply(self, value, *, node, context):
+        if not isinstance(node, ast.Set) or not node.elts:
+            raise ValueError("layout bindings must be a nonempty set")
+        bindings = []
+        for item in node.elts:
+            if not isinstance(item, ast.BinOp) or not isinstance(item.op, ast.MatMult):
+                raise ValueError("layout bindings must use `topology @ B()` or `P()`")
+            topology = _constraint_value(item.left)
+            if not isinstance(topology, str) or not topology:
+                raise ValueError("layout binding topology must be symbolic")
+            if (
+                isinstance(item.right, ast.Call)
+                and isinstance(item.right.func, ast.Name)
+                and item.right.func.id == "B"
+                and not item.right.args
+                and not item.right.keywords
+            ):
+                attribute = Broadcast()
+            else:
+                attribute = _parse_partial_constraint(item.right)
+            bindings.append((topology, attribute))
+        return bindings
+
+
+def _parse_constraint_bindings(node: ast.AST, context: MatchContext):
+    value = None
+    for rule in WhereAnnotationPattern.BIND_RULES:
+        value = rule.apply(value, node=node, context=context)
+    return value
 
 
 def _where_static(node: ast.AST, context: MatchContext):
@@ -1564,15 +1684,13 @@ def _where_static(node: ast.AST, context: MatchContext):
 
 
 def _parse_layout_constraint(node: ast.AST, context: MatchContext):
+    states_node = None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
+        states_node = node.right
+        node = node.left
     if not isinstance(node, ast.Tuple):
         raise ValueError("layout constraint must be a tuple")
     dims_node = node
-    extras: tuple[ast.AST, ...] = ()
-    if node.elts and isinstance(node.elts[0], ast.Tuple):
-        dims_node = node.elts[0]
-        extras = tuple(node.elts[1:])
-        if len(extras) > 1:
-            raise ValueError("layout constraint accepts one binding set")
     if not dims_node.elts:
         raise ValueError("layout constraint cannot be empty")
 
@@ -1589,7 +1707,7 @@ def _parse_layout_constraint(node: ast.AST, context: MatchContext):
             shape.append(_LAYOUT_WILDCARD)
             continue
         if isinstance(item, ast.Name) and item.id == "D":
-            raise ValueError("layout broadcast must use a `{topology @ B()}` binding")
+            raise ValueError("layout broadcast must use `layout @ {topology @ B()}`")
         if isinstance(item, ast.BinOp) and isinstance(item.op, ast.MatMult):
             extent = resolve_extent(item.left)
             topology = _constraint_value(item.right)
@@ -1599,8 +1717,8 @@ def _parse_layout_constraint(node: ast.AST, context: MatchContext):
             bindings.append((topology, Split(index)))
             continue
         shape.append(resolve_extent(item))
-    if extras:
-        bindings.extend(_parse_constraint_bindings(extras[0]))
+    if states_node is not None:
+        bindings.extend(_parse_constraint_bindings(states_node, context))
     if len({topology for topology, _ in bindings}) != len(bindings):
         raise ValueError("layout constraint cannot bind one topology more than once")
     return LayoutClause(layout=Layout(shape=tuple(shape)), bindings=tuple(bindings))
@@ -1608,6 +1726,7 @@ def _parse_layout_constraint(node: ast.AST, context: MatchContext):
 
 class WhereAnnotationPattern(ElementPattern):
     element_name = "where_annotation"
+    BIND_RULES = (WhereTopologyStatesRule(),)
     syntax = BranchPattern(
         "where_annotation",
         AstNodePattern(

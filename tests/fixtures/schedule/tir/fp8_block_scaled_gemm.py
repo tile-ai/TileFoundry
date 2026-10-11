@@ -441,7 +441,7 @@ def gemm(
                     with scope_2 as threads_8:
                         dst_frame_2 = T.tensor_view(
                             T.ptr_of(tile_scale[0:0 + 1, 0:0 + 1]),
-                            layout=((1, 1), {}),
+                            layout=(1, 1) @ {B()},
                             shape=(1, 1),
                         )
                         T.copy(tile_3, dst_frame_2)
@@ -452,7 +452,7 @@ def gemm(
                         )
                         rhs_frame_1 = T.tensor_view(
                             T.ptr_of(tile_scale[0:0 + 1, 0:0 + 1]),
-                            layout=((1, 1), {}),
+                            layout=(1, 1) @ {B()},
                             shape=(1, 1),
                         )
                         dst_frame_3 = T.tensor_view(
