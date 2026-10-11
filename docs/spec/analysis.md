@@ -330,7 +330,7 @@ counts one slice per index as an upper bound.
 | `MemoryMetadata.operands` | One occurrence's movement in order `(*call.args, call)`. | No |
 | `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` tensor result, including a carried phi. `None` for tuple results or results that are not address-placed. | No |
 | `MemoryMetadata.offsets` | The byte offset of each physical result slot: each copy of a staged tensor in copy order, or each tuple tensor leaf in flat leaf order. An `rmem` result has no reported offsets. Staged tuple results MUST raise `AnalysisError`. | No |
-| `MemoryMetadata.alias` | An adopted InsertSlice update window or carried-phi tie, expressed as `BufferAlias(buffer, relation)`. Only lowering reads it; it MUST NOT appear in analysis reports. | No |
+| `MemoryMetadata.alias` | See [`BufferAlias`](#bufferalias). Only lowering reads it; it MUST NOT appear in analysis reports. | No |
 | `RegionMemoryMetadata.topologies` | The same effective Module topology levels. | No |
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
 
@@ -477,6 +477,23 @@ are monotonic across the whole Function, including nested and sibling regions.
 | `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
 
 - constraints:
+  - A caller-owned parameter MUST NOT be reused. Donation is a contract with
+    the caller, not a conclusion this family may draw.
+
+##### `BufferAlias`
+
+```python
+class BufferAlias:
+    buffer: Expr                  # the value whose bytes hold this result
+    relation: AccessRelation      # result coordinates -> buffer coordinates
+```
+
+| Field | How it is computed | Reads the target |
+|---|---|---|
+| `BufferAlias.buffer` | A registered view: the operand `aliased_operand` names. An adopted InsertSlice update window: the destination resolved through region captures. A carried-phi tie: the initial value. | No |
+| `BufferAlias.relation` | A registered view: `renaming_relation`. An update window: the proven operand-to-result relation with parameters resolved to values visible at the producer. A tie: identity. | No |
+
+- constraints:
   - An op registered with `@register_buffer_alias(Op)` returns the viewed
     input's position or `None` for each Call. `buffer_alias()` returns
     `BufferAlias(buffer, relation)`, describing that input's bytes and the
@@ -500,8 +517,44 @@ are monotonic across the whole Function, including nested and sibling regions.
     declared access relation MUST bijectively map result coordinates to source
     coordinates with the same physical address, preserving the source's
     lifetime and recording zero traffic.
-  - A caller-owned parameter MUST NOT be reused. Donation is a contract with
-    the caller, not a conclusion this family may draw.
+  - Registered buffer aliases MUST return their operand's storage without
+    creating a new box and MUST NOT receive independent `buffer_bytes` or
+    `offsets`. Analysis MUST resolve structural tuple projections to their
+    selected element without a coordinate-renaming proof. For other aliases,
+    `buffer_alias()` MUST prove that the result-to-operand map is single-valued, injective, and
+    contained in the operand's index box, using the call's own unmodified
+    declared access relation via `renaming_relation`, not its folded accesses.
+    Failure to prove that declaration MUST raise `AnalysisError`. `Transpose`
+    is not registered: it writes a new value, retains its access permutation,
+    and receives its own allocation under the ordinary conflict rules.
+  - Allocation MUST return storage for each SSA value and record adopted
+    InsertSlice update windows and carried-phi ties in `MemoryMetadata.alias`.
+    An update window MUST be adopted only together with the InsertSlice's
+    destination alias. Its buffer MUST be the destination resolved through
+    region captures; its relation MUST map producer coordinates to destination
+    coordinates. The destination and SSA parameters MUST be defined in the
+    producer's scope or an ancestor, before the producer's definition event.
+    Constants and dimension variables are always visible;
+    a mesh coordinate is visible only if an enclosing mesh region declares its
+    topology. Lowering MUST execute this decision without reading
+    the InsertSlice's parameters at the producer. An untied carry MUST receive
+    its own storage and a copy of its initial value before entering the loop.
+    Ordinary `smem` aliases use their placed offsets; `rmem` alias groups only
+    estimate peaks. Access folding MUST remain in `resolve_access`, using the
+    caller's topology level because projected view coordinates depend on it.
+  - Liveness MUST record only each SSA value's own uses. A storage box's
+    interval MUST span the union of its tensor members' intervals and its uses
+    MUST include all tensor member uses. A tuple SSA value has no bytes: its
+    interval MUST NOT extend its leaf boxes. Each tuple use MUST extend all
+    leaves to that event, except a static tuple projection, whose result's own
+    interval extends only the selected storage. This rule also applies to tuple
+    region parameters bound to their argument's leaf tuple, including captures,
+    synthetic loop uses, and returns. Registered views, region parameters and
+    results, and static tuple projections reuse the corresponding operand or
+    carry storage. Placement interference, register peaks, and in-place conflict
+    checks MUST consume those box intervals and uses. A dynamic tuple projection
+    MUST extend every possible leaf's storage and MUST NOT participate in
+    in-place reuse.
 
 ##### `MemoryLevelPeak`
 
@@ -571,44 +624,6 @@ class MemoryLevelPeak:
     operand, including a narrowing pointwise operation; an exact contained
     relation MUST keep the operand range inside the result range. These alias
     requirements are mandatory rather than optional placement choices.
-  - Registered buffer aliases MUST return their operand's storage without
-    creating a new box and MUST NOT receive independent `buffer_bytes` or
-    `offsets`. Analysis MUST resolve structural tuple projections to their
-    selected element without a coordinate-renaming proof. For other aliases,
-    `buffer_alias()` MUST prove that the result-to-operand map is single-valued, injective, and
-    contained in the operand's index box, using the call's own unmodified
-    declared access relation via `renaming_relation`, not its folded accesses.
-    Failure to prove that declaration MUST raise `AnalysisError`. `Transpose`
-    is not registered: it writes a new value, retains its access permutation,
-    and receives its own allocation under the ordinary conflict rules.
-  - Allocation MUST return storage for each SSA value and record adopted
-    InsertSlice update windows and carried-phi ties in `MemoryMetadata.alias`.
-    An update window MUST be adopted only together with the InsertSlice's
-    destination alias. Its buffer MUST be the destination resolved through
-    region captures; its relation MUST map producer coordinates to destination
-    coordinates. The destination and SSA parameters MUST be defined in the
-    producer's scope or an ancestor, before the producer's definition event.
-    Constants and dimension variables are always visible;
-    a mesh coordinate is visible only if an enclosing mesh region declares its
-    topology. Lowering MUST execute this decision without reading
-    the InsertSlice's parameters at the producer. An untied carry MUST receive
-    its own storage and a copy of its initial value before entering the loop.
-    Ordinary `smem` aliases use their placed offsets; `rmem` alias groups only
-    estimate peaks. Access folding MUST remain in `resolve_access`, using the
-    caller's topology level because projected view coordinates depend on it.
-  - Liveness MUST record only each SSA value's own uses. A storage box's
-    interval MUST span the union of its tensor members' intervals and its uses
-    MUST include all tensor member uses. A tuple SSA value has no bytes: its
-    interval MUST NOT extend its leaf boxes. Each tuple use MUST extend all
-    leaves to that event, except a static tuple projection, whose result's own
-    interval extends only the selected storage. This rule also applies to tuple
-    region parameters bound to their argument's leaf tuple, including captures,
-    synthetic loop uses, and returns. Registered views, region parameters and
-    results, and static tuple projections reuse the corresponding operand or
-    carry storage. Placement interference, register peaks, and in-place conflict
-    checks MUST consume those box intervals and uses. A dynamic tuple projection
-    MUST extend every possible leaf's storage and MUST NOT participate in
-    in-place reuse.
   - Every placed offset MUST be aligned to the greater of 16 bytes and the
     result element width. A staged result's copies MUST be contiguous: copy
     `k` starts at the solved block offset plus `k * buffer_bytes`.
