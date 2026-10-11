@@ -10,7 +10,7 @@ import isl
 from tilefoundry.ir.core import Call, Constant, Expr, Var
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.isl_interop import IslParamValues, dim_to_isl_pw_aff, shape_to_isl_set
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.utils import is_literal_shape, local_type_of, static_dim_value
 from tilefoundry.ir.visitor import ExprCloner
 from tilefoundry.utils.isl_utils import cardinality, has_unbounded_param
@@ -34,6 +34,7 @@ class Access:
     buffer: Expr
     precision: AnalysisPrecision = AnalysisPrecision.EXACT
     output_index: int | None = None
+    index: int = 0
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,52 @@ class BufferAlias:
 
     buffer: Expr
     relation: AccessRelation
+    index: int = 0
+
+
+@dataclass(frozen=True)
+class BufferSource:
+    """A definition-time source, including its loop prefix and proven precision."""
+
+    alias: BufferAlias
+    depth: int
+    precision: AnalysisPrecision = AnalysisPrecision.EXACT
+    elements: tuple[BufferSource, ...] = ()
+
+
+def aligned_source(
+    source: BufferSource, depth: int, parameters: Mapping[str, object] | None = None
+) -> isl.map:
+    """Align a cached source to the caller's enclosing-loop prefix."""
+    relation = source.alias.relation.relation
+    canonical = {id(value): name for name, value in (parameters or {}).items()}
+    for name, value in source.alias.relation.values.items():
+        target = canonical.get(id(value), name)
+        if target == name:
+            continue
+        position = relation.find_dim_by_name(isl.dim_type.PARAM, name)
+        existing = relation.find_dim_by_name(isl.dim_type.PARAM, target)
+        if existing < 0:
+            relation = relation.set_dim_name(isl.dim_type.PARAM, position, target)
+        else:
+            relation = relation.equate(isl.dim_type.PARAM, position, isl.dim_type.PARAM, existing)
+            relation = relation.project_out(isl.dim_type.PARAM, position, 1)
+    if source.depth > depth:
+        return relation.project_out(isl.dim_type.IN, depth, source.depth - depth)
+    if source.depth < depth:
+        return relation.insert_dims(isl.dim_type.IN, source.depth, depth - source.depth)
+    return relation
+
+
+def apply_source(
+    relation: isl.map, source: BufferSource, depth: int,
+    parameters: Mapping[str, object] | None = None,
+) -> isl.map:
+    """Compose once, carrying the call's loop coordinates into the source domain."""
+    relation = relation.insert_dims(isl.dim_type.OUT, 0, depth)
+    for axis in range(depth):
+        relation = relation.equate(isl.dim_type.IN, axis, isl.dim_type.OUT, axis)
+    return relation.apply_range(aligned_source(source, depth, parameters))
 
 
 def buffer_alias(
@@ -155,6 +202,7 @@ def _parameter_term(
     held: object,
     *,
     narrow: bool,
+    retained: dict[str, object] | None = None,
 ) -> tuple[isl.pw_aff | None, AnalysisPrecision]:
     """What one parameter equals, over the enclosing induction variables.
 
@@ -181,6 +229,8 @@ def _parameter_term(
         pass
     else:
         if not has_unbounded_param(term):
+            if retained is not None:
+                retained.update(values)
             return term, AnalysisPrecision.EXACT
     number = widest_allowed(relation, name, held)
     term = None if number is None else isl.pw_aff(f"{{ [{number}] }}")
@@ -194,6 +244,7 @@ def eliminate_parameters(
     held: object,
     *,
     narrow: bool,
+    retained: dict[str, object] | None = None,
 ) -> tuple[isl.map, AnalysisPrecision]:
     """Eliminate parameters using scoped affine expressions or widening."""
     precision = AnalysisPrecision.EXACT
@@ -202,7 +253,7 @@ def eliminate_parameters(
         if relation.find_dim_by_name(isl.dim_type.PARAM, name) < 0:
             raise AnalysisError(f"access pattern parameter {name!r} is missing from its relation")
         term, resolved_precision = _parameter_term(
-            value, relation, name, scope, held, narrow=narrow
+            value, relation, name, scope, held, narrow=narrow, retained=retained
         )
         if term is not None:
             term = term.add_dims(isl.dim_type.IN, rank - term.dim(isl.dim_type.IN))
@@ -224,6 +275,7 @@ def resolve_access(
     input_index: int | None,
     output_index: int | None = None,
     narrow: bool,
+    sources: Mapping[int, BufferSource],
 ) -> Access | None:
     """Resolve one declared boundary into an access from its iteration scope."""
     relation = boundary.relation
@@ -233,33 +285,30 @@ def resolve_access(
         isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
     )
     relation = relation.intersect_domain(scope_domain)
+    try:
+        held = (
+            ctx.local_type_of(operand) if getattr(ctx, "topology_level", None) is not None
+            else local_type_of(operand.type) if narrow else operand.type
+        )
+    except (TypeError, ValueError, NotImplementedError):
+        return None
+    if output_index is not None and isinstance(held, TupleType):
+        held = held.fields[output_index]
     relation, precision = eliminate_parameters(
         relation,
         boundary.values,
         scope,
-        operand.type,
+        held if getattr(ctx, "topology_level", None) is not None else operand.type,
         narrow=narrow,
     )
-    try:
-        held = local_type_of(operand.type) if narrow else operand.type
-    except (TypeError, ValueError, NotImplementedError):
-        return None
     if isinstance(held, TensorType) and is_literal_shape(held.shape):
         relation = relation.intersect_range(shape_to_isl_set(tuple(held.shape), {}))
-    operand = scope.capture_root(operand)
-    while isinstance(operand, Call) and (
-        alias := buffer_alias(operand, ctx, scope.projected_relations(operand, ctx))
-    ) is not None:
-        relation = relation.apply_range(alias.relation.relation)
-        operand = scope.capture_root(alias.buffer)
-        relation, folded_precision = eliminate_parameters(
-            relation,
-            alias.relation.values,
-            scope,
-            operand.type,
-            narrow=narrow,
-        )
-        precision = precision.join(folded_precision)
+    entry = sources[id(operand)]
+    if entry.elements and output_index is not None:
+        entry = entry.elements[output_index]
+    relation = apply_source(relation, entry, scope.depth, scope.domain_params)
+    precision = precision.join(entry.precision)
+    operand = entry.alias.buffer
     if has_unbounded_param(relation):
         precision = AnalysisPrecision.UNKNOWN
     return Access(
@@ -268,12 +317,16 @@ def resolve_access(
         buffer=operand,
         precision=precision,
         output_index=output_index,
+        index=entry.alias.index,
     )
 
 
 __all__ = [
     "Access",
     "BufferAlias",
+    "BufferSource",
+    "aligned_source",
+    "apply_source",
     "buffer_alias",
     "eliminate_parameters",
     "resolve_access",

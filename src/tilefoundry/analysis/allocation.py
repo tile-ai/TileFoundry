@@ -40,7 +40,7 @@ from tilefoundry.ir.types.utils import (
 )
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
-from tilefoundry.visitor_registry.access_relation import AccessRelation
+from tilefoundry.visitor_registry.access_relation import AccessRelation, leaves_of
 from tilefoundry.visitor_registry.contexts import CostContext
 
 from .access import Access, BufferAlias, buffer_alias
@@ -222,7 +222,7 @@ def operand_to_result_relation(
     node: Call,
     scope: IterationScope,
     producer_of: Callable[[Expr], Expr],
-) -> tuple[tuple[Expr, isl.map], ...]:
+) -> tuple[tuple[Expr, int, isl.map], ...]:
     """Prove exact logical relations between one result and its operands."""
 
     def coverage(accesses: tuple[Access, ...]) -> isl.set | None:
@@ -245,9 +245,9 @@ def operand_to_result_relation(
             result = result.union(access.relation)
         return result.coalesce()
 
-    def value_domain(value: Expr) -> isl.set | None:
+    def value_domain(value: Expr, index: int = 0) -> isl.set | None:
         try:
-            held = local_type_of(value.type)
+            held = leaves_of(local_type_of(value.type))[index]
         except (TypeError, ValueError, NotImplementedError):
             return None
         if not isinstance(held, TensorType):
@@ -292,11 +292,13 @@ def operand_to_result_relation(
         except isl.Error:
             return None
 
-    def complete(operand: Expr, inputs: isl.map | None, outputs: isl.map | None) -> isl.map | None:
+    def complete(
+        operand: Expr, index: int, inputs: isl.map | None, outputs: isl.map | None
+    ) -> isl.map | None:
         if inputs is None or outputs is None:
             return None
         relation = composed(inputs, outputs)
-        expected = value_domain(operand)
+        expected = value_domain(operand, index)
         if relation is None or expected is None:
             return None
         try:
@@ -340,16 +342,16 @@ def operand_to_result_relation(
     ):
         return ()
 
-    by_buffer: dict[int, list[Access]] = defaultdict(list)
-    operands: dict[int, Expr] = {}
+    by_buffer: dict[tuple[int, int], list[Access]] = defaultdict(list)
+    operands: dict[tuple[int, int], Expr] = {}
     for access in inputs:
         operand = access.buffer
-        key = id(operand)
+        key = (id(operand), access.index)
         by_buffer[key].append(access)
         operands[key] = operand
 
-    result: list[tuple[Expr, isl.map]] = []
-    seen: set[int] = set()
+    result: list[tuple[Expr, int, isl.map]] = []
+    seen: set[tuple[int, int]] = set()
     if covers_result(
         output_coverage,
         full_result,
@@ -363,9 +365,9 @@ def operand_to_result_relation(
                 pointwise = input_relation is not None and input_relation.is_equal(output_relation)
             except isl.Error:
                 pointwise = False
-            relation = complete(operand, input_relation, output_relation) if pointwise else None
+            relation = complete(operand, key[1], input_relation, output_relation) if pointwise else None
             if relation is not None:
-                result.append((operand, relation))
+                result.append((operand, key[1], relation))
                 seen.add(key)
 
     if not isinstance(node.target, InsertSlice):
@@ -374,8 +376,8 @@ def operand_to_result_relation(
     destination = producer_of(node.args[0])
     update = producer_of(node.args[1])
     written = output_coverage
-    destination_coverage = coverage(tuple(by_buffer.get(id(destination), ())))
-    update_accesses = tuple(by_buffer.get(id(update), ()))
+    destination_coverage = coverage(tuple(by_buffer.get((id(destination), 0), ())))
+    update_accesses = tuple(by_buffer.get((id(update), 0), ()))
     update_coverage = coverage(update_accesses)
 
     if destination_coverage is not None:
@@ -395,25 +397,25 @@ def operand_to_result_relation(
         if (
             partitioned
             and complete_identity
-            and id(destination) not in seen
+            and (id(destination), 0) not in seen
         ):
-            result.append((destination, relation))
-            seen.add(id(destination))
+            result.append((destination, 0, relation))
+            seen.add((id(destination), 0))
 
     try:
         update_matches_write = update_coverage is not None and update_coverage.is_equal(written)
     except isl.Error:
         update_matches_write = False
     update_relation = (
-        complete(update, access_relation(update_accesses), output_relation)
+        complete(update, 0, access_relation(update_accesses), output_relation)
         if update_matches_write
         else None
     )
     if (
         update_relation is not None
-        and id(update) not in seen
+        and (id(update), 0) not in seen
     ):
-        result.append((update, update_relation))
+        result.append((update, 0, update_relation))
     return tuple(result)
 
 
@@ -685,8 +687,9 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
     ) -> None:
         """Apply the window constraint and publish it together for lowering."""
         if self.alias(result, update, relation, ctx):
-            moved = get_metadata(update.producer, MemoryMetadata) or MemoryMetadata()
-            attach_metadata(update.producer, replace(moved, alias=alias))
+            if not isinstance(update.producer.type, TupleType):
+                moved = get_metadata(update.producer, MemoryMetadata) or MemoryMetadata()
+                attach_metadata(update.producer, replace(moved, alias=alias))
 
     def default_visit_leaf(
         self, node: Expr, operands: tuple[Storage, ...], ctx: AllocationModel
@@ -721,8 +724,10 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             if isinstance(node.target, InsertSlice):
                 update = self.storage_of(node.args[1])
                 destination = self.storage_of(node.args[0])
-            for operand, relation in relations:
+            for operand, index, relation in relations:
                 storage = self.storage_of(operand)
+                if isinstance(storage, tuple):
+                    storage = leaves(storage)[index]
                 if not isinstance(storage, Box):
                     continue
                 is_update = storage is update and storage is not destination

@@ -679,19 +679,24 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for _call, reached in calls
         for item in reached
     )
-    distinct: dict[int, Expr] = {}
+    distinct: dict[tuple[int, int], Expr] = {}
     for item in merged_reached:
         if item.reached is not None:
-            distinct.setdefault(id(item.buffer), item.buffer)
+            distinct.setdefault((id(item.buffer), item.index), item.buffer)
     captured_names: dict[int, Expr] = {}
     for scope in walk_scopes(context.root):
         for param, _argument in scope.captures:
             captured_names.setdefault(id(scope.capture_root(param)), param)
+    label_sources = {id(value): value for value in distinct.values()}
     label_values = (
         value if getattr(value, "name", None) else captured_names.get(key, value)
-        for key, value in distinct.items()
+        for key, value in label_sources.items()
     )
-    footprint_labels = dict(zip(distinct, value_labels(label_values), strict=True))
+    source_labels = dict(zip(label_sources, value_labels(label_values), strict=True))
+    footprint_labels = {
+        key: source_labels[key[0]] + (f"[{key[1]}]" if isinstance(value.type, TupleType) else "")
+        for key, value in distinct.items()
+    }
     liveness = analyze_liveness(function)
     placement = CostContext(
         scope=FunctionScope(module, function),
@@ -727,10 +732,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     )
     allocation = AllocationConstraintVisitor(root_function=function, liveness=liveness)
 
-    def producer_of(value: Expr) -> Expr:
-        storage = allocation.storage_of(value)
-        return storage.producer if isinstance(storage, Box) else value
-
     allocation.visit_function_body(function, model)
     definitions = {id(interval.value): index for index, interval in enumerate(liveness.intervals)}
     model.boxes.sort(key=lambda box: (definitions[id(box.producer)], box.leaf))
@@ -744,7 +745,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             declared_units=wave[1],
             ctx=locals_by_unit.get(topology_level, whole),
             labels=footprint_labels,
-            producer_of=producer_of,
         )
         if memory_level is not None and wave is not None
         else ()

@@ -413,7 +413,6 @@ def _placed(
     if (
         not isinstance(local, TensorType)
         or not isinstance(logical, TensorType)
-        or relation.is_empty()
     ):
         return relation
     if relation.dim(isl.dim_type.OUT) != len(logical.shape):

@@ -486,12 +486,14 @@ are monotonic across the whole Function, including nested and sibling regions.
 class BufferAlias:
     buffer: Expr                  # the value whose bytes hold this result
     relation: AccessRelation      # result coordinates -> buffer coordinates
+    index: int = 0                # flattened tensor result index of buffer
 ```
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `BufferAlias.buffer` | A registered view: the operand `aliased_operand` names. An adopted InsertSlice update window: the destination resolved through region captures. A carried-phi tie: the initial value. | No |
 | `BufferAlias.relation` | A registered view: `renaming_relation`. An update window: the proven operand-to-result relation with parameters resolved to values visible at the producer. A tie: identity. | No |
+| `BufferAlias.index` | The flattened tensor result index of `buffer`; zero for a tensor result. Source identity is `(buffer, index)`. | No |
 
 - constraints:
   - An op registered with `@register_buffer_alias(Op)` returns the viewed
@@ -530,7 +532,10 @@ class BufferAlias:
   - Allocation MUST return storage for each SSA value and record adopted
     InsertSlice update windows and carried-phi ties in `MemoryMetadata.alias`.
     An update window MUST be adopted only together with the InsertSlice's
-    destination alias. Its buffer MUST be the destination resolved through
+    destination alias. A material tuple op's leaf MAY reuse the destination's
+    window in analysis, but its producer MUST NOT receive `MemoryMetadata.alias`:
+    lowering does not support material tuple results. An update window's buffer
+    MUST be the destination resolved through
     region captures; its relation MUST map producer coordinates to destination
     coordinates. The destination and SSA parameters MUST be defined in the
     producer's scope or an ancestor, before the producer's definition event.
@@ -540,8 +545,20 @@ class BufferAlias:
     the InsertSlice's parameters at the producer. An untied carry MUST receive
     its own storage and a copy of its initial value before entering the loop.
     Ordinary `smem` aliases use their placed offsets; `rmem` alias groups only
-    estimate peaks. Access folding MUST remain in `resolve_access`, using the
-    caller's topology level because projected view coordinates depend on it.
+    estimate peaks. Scope construction MUST compute each value's source once
+    per view in definition order, using only its operands' source entries.
+    Registered views compose their result-to-input relation with the input's
+    source. MeshRegion results use their body's source; static tuple projections
+    select a structural element or a material op's flattened result index;
+    loop results use their corresponding carried phi; capture parameters use
+    their arguments' sources. Every other source is the value itself and identity.
+    `resolve_access` MUST perform one source lookup and one relation composition,
+    rather than trace producers per access. Boundary parameters MUST be eliminated
+    before composition in the operand's coordinate space. View parameters MUST
+    be eliminated when constructing that view's source, in the input's coordinate
+    space and using the input's type for widening. Source relations retain their
+    defining loop prefix, aligned to the access's enclosing loops; loops internal
+    to an escaping region MUST be projected out.
   - Liveness MUST record only each SSA value's own uses. A storage box's
     interval MUST span the union of its tensor members' intervals and its uses
     MUST include all tensor member uses. A tuple SSA value has no bytes: its
@@ -1456,7 +1473,17 @@ def analyze(
 
 The normalized HIR is visited once per `analyze()` call. That visit produces an
 `IterationScope` tree parallel to Function, LoopRegion, and MeshRegion nesting
-and `Access` relations for the narrow and device views. A mesh scope adds no
+and `Access` relations for the narrow, device and unit views. Without a selected
+topology level, the unit view MUST use logical coordinates. Every view MUST
+construct a source for every value in its own coordinates. Unit coordinates are the logical
+coordinates composed with the layout's decomposition map; intersection with the
+operand's index box and parameter widening MUST use its unit-local type.
+Registered-view proofs MUST run once in logical coordinates and be reused for
+the unit view: bijective decomposition preserves the proven properties. Unit
+accesses MUST NOT fall back to narrow accesses. A refused unit boundary MUST
+contribute unknown evidence; a missing boundary MUST contribute lower-bound
+evidence through the same completeness rules as other refused or missing
+boundaries. A mesh scope adds no
 iteration dimension: it keeps its parent's depth and domain, so the first
 `depth` input dimensions of an access relation remain the enclosing loops.
 `IterationScope.domain` is the accumulated authored loop domain;
@@ -1466,7 +1493,10 @@ An input `Access` stores its original Call boundary index as well as its relatio
 and allocation expression; an output stores `input_index=None` and its own output
 boundary index, which is the tuple field it answers for. Failed boundaries remain
 absent without shifting the index on later successful inputs or outputs. Storage
-level and element width are read from the allocation type. A refused descendant
+level and element width are read from the allocation type. `Access.index` is the
+source's flattened tensor result index, zero for tensor results; buffers MUST be
+grouped by `(Access.buffer, Access.index)`, and a tuple result's label is
+`<name>[index]`. A refused descendant
 makes its owning scope unknown for that view. Non-affine runtime indices retain
 the widest legal access approximation.
 Normalization clones each reached Function call site independently. Within one

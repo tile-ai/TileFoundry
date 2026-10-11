@@ -7,7 +7,7 @@ level.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 
 import isl
@@ -28,7 +28,7 @@ from tilefoundry.utils.isl_utils import cardinality
 from tilefoundry.visitor_registry.access_relation import leaves_of
 from tilefoundry.visitor_registry.contexts import CostContext
 
-from .access import Access, resolve_access
+from .access import Access
 from .facts import MemoryHierarchyFacts
 from .iteration_scope import IterationScope, walk_scopes
 from .loop_domain import induction_name
@@ -52,6 +52,7 @@ class ReachedAddresses:
     dtype: DType | None
     reached: isl.set | None
     precision: AnalysisPrecision
+    index: int = 0
 
     def __post_init__(self) -> None:
         if (self.dtype is None) != (self.reached is None):
@@ -386,19 +387,17 @@ def reuse_axes(boundary: MovingBoundary, wave: tuple[int, int]) -> ReuseAxes:
 
 def _boundary_type(access: Access, call: Call, ctx: CostContext) -> Type | None:
     """Recover the source Type for one input or indexed output boundary."""
-    if access.output_index is None:
-        return ctx.local_type_of(access.buffer)
-    output = ctx.local_type_of(call)
-    if isinstance(output, TupleType):
-        index = access.output_index
-        return output.fields[index] if 0 <= index < len(output.fields) else None
-    return output if access.output_index == 0 else None
+    held = ctx.local_type_of(access.buffer)
+    fields = leaves_of(held)
+    return fields[access.index] if 0 <= access.index < len(fields) else None
 
 
-def _call_accesses(scope: IterationScope, call: Call) -> tuple[Access, ...]:
-    """The narrow input and output boundaries recorded for one Call."""
+def _call_accesses(
+    scope: IterationScope, call: Call, view: str = "narrow"
+) -> tuple[Access, ...]:
+    """The input and output boundaries recorded for one Call in a view."""
     found: list[Access] = []
-    for side in (scope.accesses.get("narrow", {}), scope.outputs.get("narrow", {})):
+    for side in (scope.accesses.get(view, {}), scope.outputs.get(view, {})):
         recorded = side.get(id(call))
         if recorded is not None and recorded[0] is call:
             found.extend(recorded[1])
@@ -427,7 +426,7 @@ def _missing_boundaries(
         if operands[index].read > 0 or operands[index].write > 0
     )
     missing_outputs = (
-        ReachedAddresses(call, index, None, None, AnalysisPrecision.LOWER_BOUND)
+        ReachedAddresses(call, index, None, None, AnalysisPrecision.LOWER_BOUND, index)
         for index in sorted(set(range(output_count)) - recorded_outputs)
         if operands[-1].read > 0 or operands[-1].write > 0
     )
@@ -447,7 +446,7 @@ def _uncounted_boundaries(
     output_count = len(output.fields) if isinstance(output, TupleType) else 1
     return (
         *(ReachedAddresses(arg, None, None, None, precision) for arg in call.args),
-        *(ReachedAddresses(call, index, None, None, precision) for index in range(output_count)),
+        *(ReachedAddresses(call, index, None, None, precision, index) for index in range(output_count)),
     )
 
 
@@ -510,13 +509,11 @@ def moving_boundaries(
     memory_level: str,
     wave: tuple[int, int],
     ctx: CostContext,
-    labels: Mapping[int, str],
-    producer_of: Callable[[Expr], Expr],
+    labels: Mapping[tuple[int, int], str],
 ) -> tuple[MovingBoundary, ...]:
     """Collect boundaries that move bytes at *memory_level* in one scope walk.
 
-    Allocation has already visited every value, so each accessed buffer's
-    storage producer is available without chasing its definitions.
+    Definition-time source entries already name each boundary's material result.
     """
     whole = replace(ctx, topology_level=None, topologies=())
     wave_units, declared_units = wave
@@ -554,10 +551,10 @@ def moving_boundaries(
                 if device_recorded is not None and device_recorded[0] is call
                 else {}
             )
-            try:
-                unit_relations = scope.projected_relations(call, ctx)
-            except (NotImplementedError, TypeError, ValueError, isl.Error):
-                unit_relations = None
+            unit_by_boundary = {
+                (item.input_index, item.output_index): item
+                for item in _call_accesses(scope, call, "unit")
+            }
             for access in _call_accesses(scope, call):
                 movement = (
                     moved.operands[access.input_index]
@@ -574,58 +571,14 @@ def moving_boundaries(
                     continue
                 if len(leaves) != 1 or not isinstance(leaves[0], TensorType):
                     continue
-                label = labels.get(id(access.buffer))
+                label = labels.get((id(access.buffer), access.index))
                 if label is None:
                     continue
                 boundary_key = (access.input_index, access.output_index)
                 space_wave_access = device_by_boundary.get(boundary_key, access)
-                unit_access = access
-                if unit_relations is not None:
-                    try:
-                        if access.input_index is not None:
-                            boundary = unit_relations[access.input_index]
-                            operand = call.args[access.input_index]
-                            local_rank = boundary.relation.dim(isl.dim_type.OUT)
-                            logical_rank = (
-                                len(operand.type.shape)
-                                if isinstance(operand.type, TensorType)
-                                else local_rank
-                            )
-                            if local_rank == logical_rank:
-                                unit_access = (
-                                    resolve_access(
-                                        operand,
-                                        boundary,
-                                        scope,
-                                        ctx,
-                                        input_index=access.input_index,
-                                        narrow=False,
-                                    )
-                                    or access
-                                )
-                        elif access.output_index is not None:
-                            boundary = unit_relations[len(call.args) + access.output_index]
-                            local_rank = boundary.relation.dim(isl.dim_type.OUT)
-                            logical_rank = (
-                                len(held.shape)
-                                if isinstance(held, TensorType)
-                                else local_rank
-                            )
-                            if local_rank == logical_rank:
-                                unit_access = (
-                                    resolve_access(
-                                        call,
-                                        boundary,
-                                        scope,
-                                        ctx,
-                                        input_index=None,
-                                        output_index=access.output_index,
-                                        narrow=False,
-                                    )
-                                    or access
-                                )
-                    except (IndexError, NotImplementedError, TypeError, ValueError, isl.Error):
-                        unit_access = access
+                unit_access = unit_by_boundary.get(boundary_key)
+                if unit_access is None:
+                    continue
                 found.append(
                     MovingBoundary(
                         scope=scope,
@@ -642,7 +595,7 @@ def moving_boundaries(
                         mesh_parameters=mesh_parameters,
                         axis_parameters=axis_parameters
                         if _shared_origin(
-                            definitions.get(id(producer_of(access.buffer))), topology_level, wave
+                            definitions.get(id(access.buffer)), topology_level, wave
                         )
                         else (),
                         position=position,
@@ -661,12 +614,15 @@ def _uncounted_movements(
     whole = replace(ctx, topology_level=None, topologies=())
     found: list[tuple[IterationScope, ReachedAddresses]] = []
     for scope in walk_scopes(root):
-        for call in scope.refused.get("narrow", ()):
+        refused = scope.refused.get("narrow", frozenset()) | scope.refused.get("unit", frozenset())
+        for call in refused:
             found.extend(
                 (scope, item)
                 for item in _uncounted_boundaries(call, whole, AnalysisPrecision.UNKNOWN)
             )
         for call, _recorded in scope.accesses.get("narrow", {}).values():
+            if call in refused:
+                continue
             moved = get_metadata(call, MemoryMetadata)
             operands = () if moved is None else moved.operands
             accesses = _call_accesses(scope, call)
@@ -699,11 +655,14 @@ def _uncounted_movements(
                                 None,
                                 None,
                                 AnalysisPrecision.LOWER_BOUND,
+                                access.index,
                             ),
                         )
                     )
             found.extend(
-                (scope, item) for item in _missing_boundaries(call, accesses, operands, whole)
+                (scope, item) for item in _missing_boundaries(
+                    call, _call_accesses(scope, call, "unit"), operands, whole
+                )
             )
     return tuple(found)
 
@@ -757,6 +716,7 @@ def reached_by(
                     dtype=None,
                     reached=None,
                     precision=AnalysisPrecision.LOWER_BOUND,
+                    index=access.index,
                 )
             )
             continue
@@ -776,6 +736,7 @@ def reached_by(
                 dtype=leaves[0].dtype,
                 reached=reached,
                 precision=AnalysisPrecision.UNKNOWN if refused else access.precision,
+                index=access.index,
             )
         )
     result.extend(_missing_boundaries(call, accesses, operands, ctx))
@@ -794,9 +755,9 @@ class _BufferReuse:
 
 def _by_buffer(
     boundaries: tuple[MovingBoundary, ...], wave: tuple[int, int]
-) -> dict[int, _BufferReuse]:
+) -> dict[tuple[int, int], _BufferReuse]:
     """Select the outermost time axis and union space axes per buffer."""
-    buffers: dict[int, _BufferReuse] = {}
+    buffers: dict[tuple[int, int], _BufferReuse] = {}
     for boundary in boundaries:
         if not boundary.reads:
             continue
@@ -805,7 +766,7 @@ def _by_buffer(
             continue
         loops = _loop_scopes(boundary.scope)
         candidate = loops[axes.time] if axes.time is not None else None
-        key = id(boundary.access.buffer)
+        key = (id(boundary.access.buffer), boundary.access.index)
         current = buffers.get(key)
         selected = None if current is None else current.time_scope
         if candidate is not None and (
@@ -839,13 +800,13 @@ def _window_index(
 def _window_footprints(
     boundaries: tuple[MovingBoundary, ...],
     uncounted: tuple[tuple[IterationScope, ReachedAddresses], ...],
-    buffers: Mapping[int, _BufferReuse],
+    buffers: Mapping[tuple[int, int], _BufferReuse],
     *,
     memory_level: str,
 ) -> dict[int | None, Footprint | None]:
     """Count every moving buffer once in each distinct selected window."""
     labels = {
-        id(boundary.access.buffer): boundary.label for boundary in boundaries
+        (id(boundary.access.buffer), boundary.access.index): boundary.label for boundary in boundaries
     }
     windows = {
         id(item.time_scope.owner) if item.time_scope is not None else None: item.time_scope
@@ -868,6 +829,7 @@ def _window_footprints(
                     boundary.dtype,
                     boundary.reached(window),
                     boundary.access.precision,
+                    boundary.access.index,
                 )
             )
         if key in footprints:
@@ -882,7 +844,7 @@ def _window_footprints(
 
 
 def _reuse_rows(
-    buffers: Mapping[int, _BufferReuse],
+    buffers: Mapping[tuple[int, int], _BufferReuse],
     footprints: Mapping[int | None, Footprint | None],
     capacity: int,
 ) -> tuple[ReuseWindow, ...]:
@@ -929,13 +891,12 @@ def reuse_windows(
     wave_units: int,
     declared_units: int,
     ctx: CostContext,
-    labels: Mapping[int, str],
-    producer_of: Callable[[Expr], Expr],
+    labels: Mapping[tuple[int, int], str],
 ) -> tuple[ReuseWindow, ...]:
     """Describe one cache-residency window per buffer that is read again."""
     wave = (wave_units, declared_units)
     boundaries = moving_boundaries(
-        root, memory_level=memory_level, wave=wave, ctx=ctx, labels=labels, producer_of=producer_of
+        root, memory_level=memory_level, wave=wave, ctx=ctx, labels=labels
     )
     buffers = _by_buffer(boundaries, wave)
     if not buffers or ctx.scope is None:
@@ -952,9 +913,9 @@ def reuse_windows(
 
 def merged(items: Iterable[ReachedAddresses]) -> tuple[ReachedAddresses, ...]:
     """Union addresses by source allocation and output field."""
-    grouped: dict[tuple[int, int | None], ReachedAddresses] = {}
+    grouped: dict[tuple[int, int, int | None], ReachedAddresses] = {}
     for item in items:
-        key = (id(item.buffer), item.output_index)
+        key = (id(item.buffer), item.index, item.output_index)
         previous = grouped.get(key)
         if previous is None:
             grouped[key] = item
@@ -975,7 +936,7 @@ def footprint_of(
     items: Iterable[ReachedAddresses],
     *,
     memory_level: str,
-    labels: Mapping[int, str],
+    labels: Mapping[tuple[int, int], str],
     windows: int = 1,
 ) -> Footprint:
     """Count unioned addresses and pack their element widths into bytes."""
@@ -994,7 +955,7 @@ def footprint_of(
             )
             continue
         packed = -(-(amount * item.dtype.bit_width) // 8)
-        key = (labels[id(item.buffer)], memory_level)
+        key = (labels[(id(item.buffer), item.index)], memory_level)
         totals[key] = totals.get(key, 0) + packed
         precision = precision.join(item.precision)
 

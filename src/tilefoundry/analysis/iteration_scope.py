@@ -7,13 +7,14 @@ from dataclasses import dataclass, field, replace
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr, Var
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import dim_range
-from tilefoundry.ir.types import Mesh, Topology
+from tilefoundry.ir.types import Mesh, TensorType, Topology, TupleType
 from tilefoundry.ir.types.dim import DimSub, simplify_dim
 from tilefoundry.ir.types.layout import ComposedLayout, get, size
 from tilefoundry.ir.types.mesh import make_mesh
@@ -22,12 +23,25 @@ from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
     access_relation_registry,
+    identity_access,
+    leaves_of,
     projected,
     relations_of,
+    renaming_relation,
 )
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
-from .access import Access, resolve_access
+from .access import (
+    Access,
+    BufferAlias,
+    BufferSource,
+    aligned_source,
+    apply_source,
+    buffer_alias,
+    eliminate_parameters,
+    resolve_access,
+)
 from .errors import AnalysisError
 from .loop_domain import induction_name, iteration_domain
 from .precision import AnalysisPrecision
@@ -248,17 +262,20 @@ class ScopeBuilder:
         module: Module,
         graph: Function,
         *,
-        views: Sequence[str] = ("narrow", "device"),
+        views: Sequence[str] = ("narrow", "device", "unit"),
         ctx: AnalyzeContext | None = None,
     ) -> None:
         self.graph = graph
         self.topologies = module.effective_topologies()
         self.views = tuple(views)
+        self.sources: dict[str, dict[int, BufferSource]] = {view: {} for view in self.views}
+        self.aliases: dict[int, BufferAlias | None] = {}
         self.type_ctx = (
             AnalyzeContext(module, module.resolve_target(), None, None)
             if ctx is None
             else replace(ctx, topology_level=None)
         )
+        self.unit_ctx = ctx if ctx is not None else self.type_ctx
         self.seeds: dict[int, IterationScope]
         self.variance: dict[int, frozenset[int]]
         self.seen: set[int]
@@ -266,49 +283,179 @@ class ScopeBuilder:
     def _empty_accesses(self) -> dict[str, dict[int, tuple[Call, tuple[Access, ...]]]]:
         return {view: {} for view in self.views}
 
+    def _view_context(self, view: str) -> TypeInferContext:
+        return self.unit_ctx if view == "unit" else self.type_ctx
+
+    def _source_relation(
+        self, source: BufferSource, scope: IterationScope
+    ) -> BufferSource:
+        """Carry one operand entry into a region, or union its inner loop points."""
+        relation = aligned_source(source, scope.depth, scope.domain_params)
+        domain = scope.domain.insert_dims(
+            isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
+        )
+        relation = relation.intersect_domain(domain)
+        retained = dict(source.alias.relation.values)
+        retained.update(scope.domain_params)
+        values = {
+            relation.get_dim_name(isl.dim_type.PARAM, axis): retained[
+                relation.get_dim_name(isl.dim_type.PARAM, axis)
+            ] for axis in range(relation.dim(isl.dim_type.PARAM))
+        }
+        return replace(
+            source,
+            alias=replace(source.alias, relation=AccessRelation(relation, values)),
+            depth=scope.depth,
+            elements=tuple(self._source_relation(item, scope) for item in source.elements),
+        )
+
+    def _identity_source(
+        self, expr: Expr, held, scope: IterationScope, index: int = 0
+    ) -> BufferSource:
+        """A material result names itself, with no data-coordinate renaming."""
+        rank = len(held.shape) if isinstance(held, TensorType) else 1
+        relation = identity_access(rank).relation.insert_dims(isl.dim_type.IN, 0, scope.depth)
+        domain = scope.domain.insert_dims(isl.dim_type.SET, scope.depth, rank)
+        relation = relation.intersect_domain(domain)
+        values = {
+            name: value for name, value in scope.domain_params.items()
+            if relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
+        }
+        return BufferSource(BufferAlias(expr, AccessRelation(relation, values), index), scope.depth)
+
+    def _material_source(self, expr: Expr, held, scope: IterationScope) -> BufferSource:
+        """Number tensor leaves first, then retain the result's type structure."""
+        leaves = iter(
+            self._identity_source(expr, leaf, scope, index)
+            for index, leaf in enumerate(leaves_of(held))
+        )
+        return self._structured_source(expr, held, scope, leaves)
+
+    def _structured_source(
+        self, expr: Expr, held, scope: IterationScope, leaves: Iterator[BufferSource]
+    ) -> BufferSource:
+        """Reassemble an already indexed leaf sequence into one structured source."""
+        if isinstance(held, TensorType):
+            return next(leaves)
+        source = self._identity_source(expr, held, scope)
+        if isinstance(held, TupleType):
+            return replace(
+                source,
+                elements=tuple(
+                    self._structured_source(expr, field, scope, leaves) for field in held.fields
+                ),
+            )
+        return source
+
+    def _view_alias(
+        self, expr: Expr, scope: IterationScope, view: str, local_relations
+    ) -> BufferAlias | None:
+        """Prove a registered view once logically, then use this view's coordinates."""
+        if not isinstance(expr, Call):
+            return None
+        if id(expr) not in self.aliases:
+            self.aliases[id(expr)] = (
+                buffer_alias(expr, self.type_ctx, scope.projected_relations(expr, self.type_ctx))
+                if aliased_operand(expr) is not None else None
+            )
+        alias = self.aliases[id(expr)]
+        if alias is not None and view == "unit":
+            return replace(alias, relation=renaming_relation(expr, self.unit_ctx, local_relations))
+        return alias
+
+    def _view_source(
+        self, alias: BufferAlias, scope: IterationScope, view: str
+    ) -> BufferSource:
+        """Eliminate this view's parameters before composing its operand's source."""
+        ctx = self._view_context(view)
+        operand = self.sources[view][id(alias.buffer)]
+        relation = alias.relation.relation.insert_dims(isl.dim_type.IN, 0, scope.depth)
+        domain = scope.domain.insert_dims(
+            isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
+        )
+        relation = relation.intersect_domain(domain)
+        retained = dict(scope.domain_params)
+        relation, precision = eliminate_parameters(
+            relation, alias.relation.values, scope,
+            ctx.local_type_of(alias.buffer) if view == "unit" else scope.capture_root(alias.buffer).type,
+            narrow=view == "narrow", retained=retained,
+        )
+        relation = apply_source(relation, operand, scope.depth, scope.domain_params)
+        retained.update(operand.alias.relation.values)
+        values = {
+            relation.get_dim_name(isl.dim_type.PARAM, axis): retained[
+                relation.get_dim_name(isl.dim_type.PARAM, axis)
+            ] for axis in range(relation.dim(isl.dim_type.PARAM))
+        }
+        return BufferSource(
+            BufferAlias(operand.alias.buffer, AccessRelation(relation, values), operand.alias.index),
+            scope.depth, precision.join(operand.precision),
+        )
+
+    def _record_source(
+        self, expr: Expr, scope: IterationScope, view: str, local_relations=()
+    ) -> None:
+        table = self.sources[view]
+        if isinstance(expr, Tuple):
+            table[id(expr)] = replace(
+                self._identity_source(expr, expr.type, scope),
+                elements=tuple(self._source_relation(table[id(item)], scope) for item in expr.elements),
+            )
+            return
+        if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem) and (
+            isinstance(expr.args[1], Constant) and type(expr.args[1].value) is int
+        ):
+            table[id(expr)] = self._source_relation(
+                table[id(expr.args[0])].elements[expr.args[1].value], scope
+            )
+            return
+        alias = self._view_alias(expr, scope, view, local_relations)
+        if alias is not None:
+            table[id(expr)] = self._view_source(alias, scope, view)
+            return
+        table[id(expr)] = self._material_source(expr, self._view_context(view).local_type_of(expr), scope)
+
     def _record_accesses(self, expr: Call, scope: IterationScope) -> None:
         if (
             isinstance(expr.target, Function)
             or access_relation_registry.lookup(type(expr.target)) is None
         ):
+            for view in self.views:
+                self._record_source(expr, scope, view)
             return
         try:
             stated = relations_of(expr, self.type_ctx)
             scope.relations[id(expr)] = (expr, stated)
-            local_relations = scope.projected_relations(expr, self.type_ctx)
         except (NotImplementedError, TypeError, ValueError, isl.Error):
             for view in self.views:
+                self._record_source(expr, scope, view)
                 scope.refused[view] = scope.refused.get(view, frozenset()) | {expr}
             return
         for view in self.views:
-            narrow = view == "narrow"
-            built: list[Access] = []
-            for index, boundary in enumerate(local_relations[: len(expr.args)]):
-                access = resolve_access(
-                    expr.args[index],
-                    boundary,
-                    scope,
-                    self.type_ctx,
-                    input_index=index,
-                    narrow=narrow,
-                )
-                if access is not None:
-                    built.append(access)
-            scope.accesses.setdefault(view, {})[id(expr)] = (expr, tuple(built))
-            written: list[Access] = []
-            for output_index, boundary in enumerate(local_relations[len(expr.args) :]):
-                access = resolve_access(
-                    expr,
-                    boundary,
-                    scope,
-                    self.type_ctx,
-                    input_index=None,
-                    output_index=output_index,
-                    narrow=narrow,
-                )
-                if access is not None:
-                    written.append(access)
-            scope.outputs.setdefault(view, {})[id(expr)] = (expr, tuple(written))
+            ctx = self._view_context(view)
+            try:
+                local_relations = scope.projected_relations(expr, ctx)
+            except (NotImplementedError, TypeError, ValueError, isl.Error):
+                self._record_source(expr, scope, view)
+                scope.refused[view] = scope.refused.get(view, frozenset()) | {expr}
+                continue
+            self._record_source(expr, scope, view, local_relations)
+            for inputs, boundaries, into in (
+                (True, local_relations[:len(expr.args)], scope.accesses),
+                (False, local_relations[len(expr.args):], scope.outputs),
+            ):
+                built: list[Access] = []
+                for index, boundary in enumerate(boundaries):
+                    operand = expr.args[index] if inputs else expr
+                    access = resolve_access(
+                        operand, boundary, scope, ctx,
+                        input_index=index if inputs else None,
+                        output_index=None if inputs else index,
+                        narrow=view == "narrow", sources=self.sources[view],
+                    )
+                    if access is not None:
+                        built.append(access)
+                into.setdefault(view, {})[id(expr)] = (expr, tuple(built))
 
     def _record_variance(self, expr: Expr, operands: tuple[Expr, ...]) -> None:
         changing: set[int] = set()
@@ -338,14 +485,26 @@ class ScopeBuilder:
             )
             scope.children = (*scope.children, child)
             self.seeds[id(expr.induction_var)] = child
+            self._visit(expr.induction_var, child)
             for carried in expr.params[: len(expr.yield_values)]:
                 self.seeds[id(carried)] = child
+                self._visit(carried, child)
             for param, argument in child.captures:
                 self._record_variance(param, (argument,))
                 self.seen.add(id(param))
+                for view in self.views:
+                    self.sources[view][id(param)] = self._source_relation(self.sources[view][id(argument)], child)
             self._visit(expr.body, child)
             for operand in expr.yield_values:
                 self._visit(operand, child)
+            for view in self.views:
+                carries = tuple(self.sources[view][id(param)] for param in expr.params[:len(expr.yield_values)])
+                source = (
+                    carries[0] if len(carries) == 1 else
+                    replace(self._identity_source(expr, expr.type, child), elements=carries) if carries else
+                    self.sources[view][id(expr.body)]
+                )
+                self.sources[view][id(expr)] = self._source_relation(source, scope)
             self._record_variance(expr, expr_children(expr))
             return
         if isinstance(expr, MeshRegion):
@@ -365,7 +524,11 @@ class ScopeBuilder:
             for param, argument in child.captures:
                 self._record_variance(param, (argument,))
                 self.seen.add(id(param))
+                for view in self.views:
+                    self.sources[view][id(param)] = self._source_relation(self.sources[view][id(argument)], child)
             self._visit(expr.body, child)
+            for view in self.views:
+                self.sources[view][id(expr)] = self._source_relation(self.sources[view][id(expr.body)], scope)
             self._record_variance(expr, expr_children(expr))
             return
         operands = expr_children(expr)
@@ -373,6 +536,9 @@ class ScopeBuilder:
             self._visit(operand, scope)
         if isinstance(expr, Call):
             self._record_accesses(expr, scope)
+        else:
+            for view in self.views:
+                self._record_source(expr, scope, view)
         self._record_variance(expr, operands)
 
     def build(self) -> IterationScope:
@@ -403,7 +569,7 @@ def build_scopes(
     module: Module,
     graph: Function,
     *,
-    views: Sequence[str] = ("narrow", "device"),
+    views: Sequence[str] = ("narrow", "device", "unit"),
     ctx: AnalyzeContext | None = None,
 ) -> IterationScope:
     """Build the iteration-scope tree and access views in one normalized walk."""
