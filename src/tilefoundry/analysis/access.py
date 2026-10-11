@@ -16,6 +16,7 @@ from tilefoundry.ir.visitor import ExprCloner
 from tilefoundry.utils.isl_utils import cardinality, has_unbounded_param
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
+    identity_access,
     renaming_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
@@ -46,23 +47,14 @@ class BufferAlias:
     index: int = 0
 
 
-@dataclass(frozen=True)
-class BufferSource:
-    """A definition-time source, including its loop prefix and proven precision."""
-
-    alias: BufferAlias
-    depth: int
-    precision: AnalysisPrecision = AnalysisPrecision.EXACT
-    elements: tuple[BufferSource, ...] = ()
-
-
 def aligned_source(
-    source: BufferSource, depth: int, parameters: Mapping[str, object] | None = None
+    source: BufferAlias, rank: int, depth: int,
+    parameters: Mapping[str, object] | None = None
 ) -> isl.map:
     """Align a cached source to the caller's enclosing-loop prefix."""
-    relation = source.alias.relation.relation
+    relation = source.relation.relation
     canonical = {id(value): name for name, value in (parameters or {}).items()}
-    for name, value in source.alias.relation.values.items():
+    for name, value in source.relation.values.items():
         target = canonical.get(id(value), name)
         if target == name:
             continue
@@ -73,22 +65,23 @@ def aligned_source(
         else:
             relation = relation.equate(isl.dim_type.PARAM, position, isl.dim_type.PARAM, existing)
             relation = relation.project_out(isl.dim_type.PARAM, position, 1)
-    if source.depth > depth:
-        return relation.project_out(isl.dim_type.IN, depth, source.depth - depth)
-    if source.depth < depth:
-        return relation.insert_dims(isl.dim_type.IN, source.depth, depth - source.depth)
+    source_depth = relation.dim(isl.dim_type.IN) - rank
+    if source_depth > depth:
+        return relation.project_out(isl.dim_type.IN, depth, source_depth - depth)
+    if source_depth < depth:
+        return relation.insert_dims(isl.dim_type.IN, source_depth, depth - source_depth)
     return relation
 
 
 def apply_source(
-    relation: isl.map, source: BufferSource, depth: int,
+    relation: isl.map, source: BufferAlias, rank: int, depth: int,
     parameters: Mapping[str, object] | None = None,
 ) -> isl.map:
     """Compose once, carrying the call's loop coordinates into the source domain."""
     relation = relation.insert_dims(isl.dim_type.OUT, 0, depth)
     for axis in range(depth):
         relation = relation.equate(isl.dim_type.IN, axis, isl.dim_type.OUT, axis)
-    return relation.apply_range(aligned_source(source, depth, parameters))
+    return relation.apply_range(aligned_source(source, rank, depth, parameters))
 
 
 def buffer_alias(
@@ -275,9 +268,15 @@ def resolve_access(
     input_index: int | None,
     output_index: int | None = None,
     narrow: bool,
-    sources: Mapping[int, BufferSource],
+    sources: Mapping[int, BufferAlias | tuple],
+    precisions: Mapping[int, AnalysisPrecision | tuple],
+    source_scope: "IterationScope",
 ) -> Access | None:
-    """Resolve one declared boundary into an access from its iteration scope."""
+    """Resolve one declared boundary into an access from its iteration scope.
+
+    A whole-tuple input boundary names leaf slots rather than tensor elements,
+    so it uses the operand's own identity instead of an individual leaf source.
+    """
     relation = boundary.relation
     loops = scope.enclosing_loops()
     relation = relation.insert_dims(isl.dim_type.IN, 0, len(loops))
@@ -304,11 +303,29 @@ def resolve_access(
     if isinstance(held, TensorType) and is_literal_shape(held.shape):
         relation = relation.intersect_range(shape_to_isl_set(tuple(held.shape), {}))
     entry = sources[id(operand)]
-    if entry.elements and output_index is not None:
-        entry = entry.elements[output_index]
-    relation = apply_source(relation, entry, scope.depth, scope.domain_params)
-    precision = precision.join(entry.precision)
-    operand = entry.alias.buffer
+    source_precision = precisions[id(operand)]
+    source_type = ctx.local_type_of(operand)
+    if isinstance(entry, tuple):
+        if output_index is not None:
+            entry = entry[output_index]
+            source_precision = source_precision[output_index]
+            source_type = source_type.fields[output_index]
+        else:
+            identity = identity_access(1).relation
+            identity = identity.insert_dims(isl.dim_type.IN, 0, source_scope.depth)
+            identity = identity.intersect_domain(
+                source_scope.domain.insert_dims(isl.dim_type.SET, source_scope.depth, 1)
+            )
+            values = {
+                name: value for name, value in source_scope.domain_params.items()
+                if identity.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
+            }
+            entry = BufferAlias(operand, AccessRelation(identity, values))
+            source_precision = AnalysisPrecision.EXACT
+    rank = len(source_type.shape) if isinstance(source_type, TensorType) else 1
+    relation = apply_source(relation, entry, rank, scope.depth, scope.domain_params)
+    precision = precision.join(source_precision)
+    operand = entry.buffer
     if has_unbounded_param(relation):
         precision = AnalysisPrecision.UNKNOWN
     return Access(
@@ -317,14 +334,13 @@ def resolve_access(
         buffer=operand,
         precision=precision,
         output_index=output_index,
-        index=entry.alias.index,
+        index=entry.index,
     )
 
 
 __all__ = [
     "Access",
     "BufferAlias",
-    "BufferSource",
     "aligned_source",
     "apply_source",
     "buffer_alias",
