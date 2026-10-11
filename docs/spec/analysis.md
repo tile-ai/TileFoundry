@@ -573,8 +573,11 @@ class BufferAlias:
     with intersecting intervals MUST NOT overlap. Register and other non-address-solved
     peaks MUST count each live alias group once, including alias values. In-place
     checks MUST read liveness uses of every group member and reject a result when
-    a member has a later ordinary use. A dynamic tuple projection returns every
-    possible leaf in a Python tuple and MUST NOT participate in in-place reuse.
+    a member has a later ordinary use. A dynamic tuple projection MUST conservatively
+    keep every possible tensor leaf resident until the function timeline ends,
+    using an `AllocationValue` at the projection's definition tied to that leaf's
+    address and group. The projection and its forwards have no independent storage
+    and MUST NOT participate in in-place reuse or loop ties.
 
 ##### `MemoryLevelPeak`
 

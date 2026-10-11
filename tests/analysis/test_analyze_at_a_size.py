@@ -23,6 +23,7 @@ from tests.fixtures.placed.mha_decode_paged import LongerCache, ShorterCache
 from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
 from tests.models.corpus import ConcreteCase, placed_cases
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
+from tilefoundry import func, module
 from tilefoundry.analysis import (
     AnalysisPrecision,
     AnalysisResult,
@@ -41,9 +42,11 @@ from tilefoundry.analysis.liveness import analyze_liveness
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
+from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.ir.core import Call, describe_expr, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
 from tilefoundry.ir.hir.specialize import (
     origin_of,
@@ -53,6 +56,7 @@ from tilefoundry.ir.hir.specialize import (
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import Topology
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
@@ -728,6 +732,68 @@ def test_every_internal_record_agrees(case: ConcreteCase, monkeypatch: pytest.Mo
     expected_schedule = EXPECTED_PERSISTENT_SCHEDULES.get(case.id)
     if expected_schedule is not None:
         _assert_persistent_schedule(scopes, expected_schedule)
+
+
+def test_dynamic_tuple_selection_keeps_all_possible_storage_resident(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A captured dynamic view pins both possible leaves without enabling reuse."""
+    @module(
+        entry="choose", target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 1),),
+    )
+    class DynamicSelection:
+        @func
+        def choose(k: Tensor[(), "i32"]):
+            with Mesh(("cta",), (1,), names=("block",)) as cta:
+                first = tf.zeros(Tensor[(4,), "bf16", (4,), "smem"])
+                second = tf.zeros(Tensor[(4,), "bf16", (4,), "smem"])
+                choices = (first, second)
+                selected = choices[k]
+                with cta[:] as _inner:
+                    picked = selected
+                result = tf.add(picked, picked)
+                return result
+
+    allocations = []
+    visit_body = AllocationConstraintVisitor.visit_function_body
+
+    def record_allocation(visitor, function, context):
+        storage = visit_body(visitor, function, context)
+        allocations.append((visitor, context))
+        return storage
+
+    monkeypatch.setattr(AllocationConstraintVisitor, "visit_function_body", record_allocation)
+    result = analyze(DynamicSelection, DynamicSelection.entry_function(), analysis="memory")
+    visitor, model = allocations[0]
+    selected = next(
+        expr for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem)
+    )
+    possible = [value for value in model.values if value.value is selected]
+    assert len(possible) == 2
+    assert visitor.storage_of(selected) is None, "a dynamic selection has no single storage"
+    for value, field in zip(possible, selected.args[0].elements, strict=True):
+        leaf = visitor.storage_of(field)
+        assert model.groups.find(value) is model.groups.find(leaf)
+        assert value.lifetime.defined_at == model.liveness.interval_of(selected).defined_at
+        assert value.lifetime.last_used_at == model.liveness.timeline_end
+    inner = next(
+        expr for expr in collect_exprs(result.function.body)
+        if isinstance(expr, MeshRegion) and any(arg is selected for _, arg in expr.captures())
+    )
+    parameter = next(param for param, arg in inner.captures() if arg is selected)
+    assert visitor.storage_of(parameter) is None, "capturing a dynamic view cannot enable reuse"
+    assert visitor.storage_of(inner) is None, "a region forwarding the view has no single storage"
+    consumer = next(
+        expr for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call) and len(expr.args) == 2 and all(arg is inner for arg in expr.args)
+    )
+    output = visitor.storage_of(consumer)
+    assert all(model.groups.find(output) is not model.groups.find(value) for value in possible), (
+        "the consumer must not overwrite either possible leaf"
+    )
+    assert get_metadata(consumer, MemoryMetadata).alias is None
 
 
 @pytest.mark.parametrize("family", FAMILIES)

@@ -18,7 +18,6 @@ from tilefoundry.ir.core import (
     Var,
     attach_metadata,
     get_metadata,
-    value_labels,
 )
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -195,6 +194,7 @@ def covers_result(
 def operand_to_result_relation(
     node: Call,
     scope: IterationScope,
+    insert_accesses: tuple[Access, Access] | None,
 ) -> tuple[tuple[Expr, int, isl.map], ...]:
     """Prove exact logical relations between one result and its operands."""
 
@@ -343,11 +343,10 @@ def operand_to_result_relation(
                 result.append((operand, key[1], relation))
                 seen.add(key)
 
-    if not isinstance(node.target, InsertSlice):
+    if insert_accesses is None:
         return tuple(result)
 
-    destination_access = next(access for access in inputs if access.input_index == 0)
-    update_access = next(access for access in inputs if access.input_index == 1)
+    destination_access, update_access = insert_accesses
     destination, destination_index = destination_access.buffer, destination_access.index
     update, update_index = update_access.buffer, update_access.index
     written = output_coverage
@@ -521,28 +520,26 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             )
         return interval
 
-    def same_storage(self, node: Expr, storage: Storage, ctx: AllocationModel) -> Storage:
-        """Give aliases their own intervals and require the operand's address."""
-        indexes = iter(range(len(leaves_of(node.type))))
-        return self._same_structure(node, node.type, storage, indexes, ctx)
-
-    def _same_structure(
-        self, node: Expr, held, storage: Storage, indexes, ctx: AllocationModel,
+    def same_storage(
+        self, node: Expr, storage: Storage, ctx: AllocationModel, *, held=None, index: int = 0,
     ) -> Storage:
-        """Keep the operand's structure while creating the alias result identities."""
+        """Give aliases their own intervals and require the operand's address."""
+        if storage is None:
+            return None
+        if held is None:
+            held = node.type
         if isinstance(held, TupleType):
-            return tuple(
-                self._same_structure(node, field_type, field, indexes, ctx)
-                for field_type, field in zip(held.fields, storage, strict=True)
-            )
-        index = next(indexes)
-        if not isinstance(held, TensorType) or storage is None:
+            fields = []
+            for field_type, field in zip(held.fields, storage, strict=True):
+                fields.append(self.same_storage(node, field, ctx, held=field_type, index=index))
+                index += len(leaves_of(field_type))
+            return tuple(fields)
+        if not isinstance(held, TensorType):
             return None
         operand = storage
         interval = self.result_interval(node, index, ctx)
         lifetime = replace(
             operand.lifetime,
-            binding=value_labels((node,))[0] + (f"[{index}]" if isinstance(node.type, TupleType) else ""),
             defined_at=interval.defined_at,
             last_used_at=interval.last_used_at,
         )
@@ -592,7 +589,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             level, amount = quantity
             interval = self.result_interval(node, index, ctx)
             lifetime = ValueLifetime(
-                binding=value_labels((node,))[0] + (f"[{index}]" if isinstance(node.type, TupleType) else ""),
+                binding="",
                 memory_level=level,
                 bytes=amount,
                 persistent=id(node) in ctx.persistent,
@@ -717,10 +714,22 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         """Apply ordinary aliases now and defer carry aliases until loop yields."""
         if isinstance(node, Call):
             if isinstance(node.target, TupleGetItem):
+                if operands[0] is None:
+                    return None
                 index = node.args[1]
                 if isinstance(index, Constant) and type(index.value) is int:
                     return self.same_storage(node, operands[0][index.value], ctx)
-                return leaves(operands[0])
+                held = leaves_of(node.type)
+                for field in operands[0]:
+                    for slot, operand in enumerate(flatten(field)):
+                        if not isinstance(operand, AllocationValue):
+                            continue
+                        possible = self.same_storage(node, operand, ctx, held=held[slot], index=slot)
+                        possible.lifetime = replace(
+                            possible.lifetime,
+                            last_used_at=ctx.liveness.timeline_end,
+                        )
+                return None
             logical = replace(ctx.local, topology_level=None)
             local_relations = (
                 ctx.current.projected_relations(node, logical)
@@ -731,19 +740,21 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 return self.same_storage(node, self.storage_of(alias.buffer), ctx)
         result = self.allocate(node, ctx)
         if isinstance(node, Call) and isinstance(result, AllocationValue):
-            relations = operand_to_result_relation(node, ctx.current)
             update = None
             destination = None
+            insert_accesses = None
             if isinstance(node.target, InsertSlice):
                 inputs = ctx.current.accesses["narrow"][id(node)][1]
-                update_access = next(a for a in inputs if a.input_index == 1)
                 destination_access = next(a for a in inputs if a.input_index == 0)
+                update_access = next(a for a in inputs if a.input_index == 1)
+                insert_accesses = destination_access, update_access
                 update = self.storage_of(update_access.buffer)
                 destination = self.storage_of(destination_access.buffer)
                 if isinstance(update, tuple):
                     update = leaves(update)[update_access.index]
                 if isinstance(destination, tuple):
                     destination = leaves(destination)[destination_access.index]
+            relations = operand_to_result_relation(node, ctx.current, insert_accesses)
             for operand, index, relation in relations:
                 storage = self.storage_of(operand)
                 if isinstance(storage, tuple):

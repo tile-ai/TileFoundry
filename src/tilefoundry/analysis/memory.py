@@ -711,17 +711,16 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     model.values.sort(key=lambda item: (definitions[id(item.value)], item.index))
     allocation_values = tuple(model.values)
     material_values = tuple(item for item in allocation_values if item in model.material)
-    producers = {id(item.value): item.value for item in material_values}
+    producers = {id(item.value): item.value for item in (*material_values, *allocation_values)}
     labels = dict(zip(producers, value_labels(producers.values()), strict=True))
-    lifetimes = tuple(
-        replace(
+    for item in allocation_values:
+        item.lifetime = replace(
             item.lifetime,
             binding=labels[id(item.value)] + (
                 f"[{item.index}]" if isinstance(item.value.type, TupleType) else ""
             ),
         )
-        for item in material_values
-    )
+    lifetimes = tuple(item.lifetime for item in material_values)
     reuse = (
         reuse_windows(
             context.root,
