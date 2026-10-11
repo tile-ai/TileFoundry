@@ -1,0 +1,10 @@
+target apple.m2_pro
+instructions
+  T.binary  all targets
+  T.cast    all targets
+  T.clamp   all targets
+  T.unary   all targets
+  T.where   all targets
+  T.copy    all targets
+  T.relu    all targets
+  T.reduce  all targets

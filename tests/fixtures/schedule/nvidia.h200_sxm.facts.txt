@@ -1,0 +1,14 @@
+target nvidia.h200_sxm
+instructions
+  T.binary             all targets
+  T.cast               all targets
+  T.clamp              all targets
+  T.unary              all targets
+  T.where              all targets
+  T.copy_async         cp.async
+  T.copy_async_tensor  cp.async.bulk.tensor
+  T.copy               all targets
+  T.ldmatrix           ldmatrix
+  T.relu               all targets
+  T.tiled_mma          wgmma.mma_async, mma.sync
+  T.reduce             all targets

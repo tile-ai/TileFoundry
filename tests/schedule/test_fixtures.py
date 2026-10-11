@@ -12,8 +12,9 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
-from collections.abc import Callable
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
+from functools import partial
 from itertools import combinations
 from math import prod
 from pathlib import Path
@@ -48,7 +49,6 @@ from tilefoundry.ir.core import (
     get_metadata,
 )
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef, collect_param_defs
 from tilefoundry.ir.core.register import register_op
@@ -57,7 +57,6 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp, operand_relations
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
-from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.transpose import Transpose
@@ -87,7 +86,6 @@ from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout_algebra import cosize
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
-from tilefoundry.schedule import candidates, finalize
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     identity_relations,
@@ -801,76 +799,72 @@ def test_fp8_block_scaled_gemm_matches_its_block_scaled_reference() -> None:
 @dataclass(frozen=True)
 class FixtureCase:
     name: str
-    fixture: str
-    stage: Callable[[Module], object]
-    check: Callable[[object], None]
+    argv: tuple[str, ...]
+    check: Callable[[Path, pytest.CaptureResult[str]], None]
+    code: int = 0
+    files: Mapping[str, Callable[[], torch.Tensor]] = field(default_factory=dict)
 
 
-def _sparse_memory(module: Module) -> dict:
-    result = analyze(module, module.entry_function(), analysis="memory")
+def _quiet_json(out: Path, captured: pytest.CaptureResult[str]) -> dict:
+    assert captured == ("", "")
+    return json.loads(out.read_text())
+
+
+def _check_selected_rows(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    records = _quiet_json(out, captured)
     gather = next(
-        value
-        for value in collect_exprs(result.function.body)
-        if isinstance(value, Call) and isinstance(value.target, IndexSelect)
+        row["memory"]
+        for row in records["calls"]
+        if any(
+            operand["arg"] == 1 and operand["name"] == "idx"
+            for operand in row["memory"]["operands"]
+        )
     )
-    return {
-        "gather": get_metadata(gather, MemoryMetadata),
-        "region": get_metadata(result.function, RegionMemoryMetadata),
-    }
+    assert gather["operands"][0]["read"] == 8192, "gather reads 64 selected bf16 rows"
 
 
-def _check_selected_rows(records: dict) -> None:
-    assert records["gather"].operands[0].read == 8192, "gather reads 64 selected bf16 rows"
+def _check_table_footprint(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    records = _quiet_json(out, captured)
+    footprint = records["function_records"]["memory"]["footprint"]
+    assert footprint["buffers"]["kv"]["gmem"]["total"] == 32768, "the whole table is resident"
 
 
-def _check_table_footprint(records: dict) -> None:
-    footprint = records["region"].footprint
-    assert dict(footprint.buffers)["kv"].of("gmem").total == 32768, "the whole table is resident"
+def _check_service_work(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    records = _quiet_json(out, captured)
+    cost = records["function_records"]["compute-cost"]
+    assert not {"i64", "bool"}.intersection(cost["flops"]), "services are not flops"
+    assert cost["other_ops"]["integer"]["total"] > 0, "i64 arithmetic counts as integer work"
+    assert cost["other_ops"]["predicate"]["total"] > 0, "predicates count separately"
 
 
-def _sparse_cost(module: Module) -> ComputeCostMetadata:
-    result = analyze(module, module.entry_function(), analysis="compute-cost")
-    return get_metadata(result.function, ComputeCostMetadata)
-
-
-def _check_service_work(cost: ComputeCostMetadata) -> None:
-    assert not {"i64", "bool"}.intersection(cost.flops.names()), "services are not flops"
-    assert cost.other_ops.of("integer").total > 0, "i64 arithmetic counts as integer work"
-    assert cost.other_ops.of("predicate").total > 0, "predicates count separately"
-
-
-def _sparse_candidates(module: Module) -> dict:
-    return candidates(module, module.entry_function())
-
-
-def _check_gmem_gather_refusal(report: dict) -> None:
+def _check_gmem_gather_refusal(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    report = _quiet_json(out, captured)
     indexed = next(row for row in report["lines"] if row["op"] == "tf.index_select")
-    assert not indexed["candidates"] and [
-        item["id"] for item in indexed["refused"]
-    ] == ["T.copy_async"], "gather keeps its gmem result"
+    assert not indexed["candidates"] and [item["id"] for item in indexed["refused"]] == [
+        "T.copy_async"
+    ], "gather keeps its gmem result"
     assert any(
         "dst:" in reason and "StorageKind.GMEM" in reason and "StorageKind.SMEM" in reason
         for reason in indexed["refused"][0]["refused"]
     ), "copy_async requires an smem destination"
 
 
-def _sparse_placement(module: Module) -> tuple[RegionMemoryMetadata, list[str]]:
-    result = analyze(module, module.entry_function(), analysis="memory")
-    return (
-        get_metadata(result.function, RegionMemoryMetadata),
-        as_script(finalize(module)).splitlines(),
-    )
-
-
-def _check_smem_placement(placement: tuple[RegionMemoryMetadata, list[str]]) -> None:
+def _check_smem_placement(out: Path, captured: pytest.CaptureResult[str]) -> None:
     """The second 64x64 bf16 tile ends at 8192 + 8192, the analyzed peak."""
-    record, lines = placement
-    assert record.peak_for("smem").peak_bytes == 16384, "two shared tiles need 16384 bytes"
+    assert captured == ("", "")
+    lines = out.read_text().splitlines()
+    peaks = next(
+        item.removeprefix("peak=") for item in lines[2].split() if item.startswith("peak=")
+    )
+    assert dict(item.split(":") for item in peaks.split(";"))["smem"] == "16.00KB", (
+        "two shared tiles need 16384 bytes"
+    )
+    lines = lines[5:]
     assert lines[41].strip() == "ks = T.tensor_view(", "the lowered key tile is at line 42"
     assert lines[42].strip() == "8192,", "the lowered key tile starts at 8192 bytes"
 
 
-def _sparse_attention(module: Module) -> tuple[torch.Tensor, torch.Tensor]:
+def _attention_tensor(name: str) -> torch.Tensor:
     generator = torch.Generator().manual_seed(9)
     q = torch.randn(1, 2, 128, 64, generator=generator).to(torch.bfloat16)
     kv = torch.randn(1, 256, 1, 64, generator=generator).to(torch.bfloat16)
@@ -883,70 +877,189 @@ def _sparse_attention(module: Module) -> tuple[torch.Tensor, torch.Tensor]:
     scores[:, ~live] = -torch.inf
     probabilities = torch.softmax(scores, dim=1).to(torch.bfloat16)
     reference = (probabilities.float() @ rows.float()).to(torch.bfloat16)
-    return evaluate(module.entry_function(), q, kv, idx), reference
+    return {"q": q, "kv": kv, "idx": idx, "expected": reference}[name]
 
 
-def _check_attention(values: tuple[torch.Tensor, torch.Tensor]) -> None:
-    actual, reference = values
-    torch.testing.assert_close(
-        actual.float(),
-        reference.float(),
-        rtol=2**-7,
-        atol=0,
-        msg="gather fill, mask/key alignment and natural output heads match torch",
+def _check_attention(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    report = _quiet_json(out, captured)
+    comparison = report["runs"][0]["outputs"][0]["fns"][0]
+    assert comparison["fn"] == "allclose"
+    assert comparison["rtol"] == 2**-7 and comparison["atol"] == 0
+    assert report["passed"] and comparison["passed"], (
+        "gather fill, mask/key alignment and natural output heads match torch"
     )
 
 
-SPARSE_DECODE = (
+def _check_golden(out: Path, captured: pytest.CaptureResult[str], *, golden: Path) -> None:
+    assert captured == ("", "")
+    if golden.suffix == ".json":
+        assert json.loads(out.read_text()) == json.loads(golden.read_text())
+    else:
+        assert out.read_bytes() == golden.read_bytes()
+
+
+def _check_facts_refusal(out: Path, captured: pytest.CaptureResult[str], *, message: str) -> None:
+    assert captured.out == ""
+    assert captured.err.startswith("tilefoundry: error: ")
+    assert message in captured.err
+    assert not out.exists()
+
+
+FIXTURES = (
     FixtureCase(
         "gather reads only the selected rows",
-        "plain/sparse_decode.py",
-        _sparse_memory,
+        (
+            "analyze",
+            "tests/fixtures/schedule/plain/sparse_decode.py",
+            "{out}",
+            "--memory",
+            "--json",
+        ),
         _check_selected_rows,
     ),
     FixtureCase(
         "gather retains the whole table footprint",
-        "plain/sparse_decode.py",
-        _sparse_memory,
+        (
+            "analyze",
+            "tests/fixtures/schedule/plain/sparse_decode.py",
+            "{out}",
+            "--memory",
+            "--json",
+        ),
         _check_table_footprint,
     ),
     FixtureCase(
         "integer and predicate work uses services",
-        "plain/sparse_decode.py",
-        _sparse_cost,
+        (
+            "analyze",
+            "tests/fixtures/schedule/plain/sparse_decode.py",
+            "{out}",
+            "--compute-cost",
+            "--json",
+        ),
         _check_service_work,
     ),
     FixtureCase(
         "gather into smem is refused for a gmem result",
-        "plain/sparse_decode.py",
-        _sparse_candidates,
+        (
+            "schedule",
+            "candidates",
+            "tests/fixtures/schedule/plain/sparse_decode.py",
+            "{out}",
+            "--json",
+        ),
         _check_gmem_gather_refusal,
     ),
     FixtureCase(
         "analyzed smem peak matches the lowered placement",
-        "hir/sparse_decode.py",
-        _sparse_placement,
+        ("schedule", "finalize", "tests/fixtures/schedule/hir/sparse_decode.py", "{out}"),
         _check_smem_placement,
     ),
-    FixtureCase(
-        "plain sparse attention matches torch",
-        "plain/sparse_decode.py",
-        _sparse_attention,
-        _check_attention,
+    *(
+        FixtureCase(
+            name,
+            (
+                "check",
+                f"tests/fixtures/schedule/{stage}/sparse_decode.py:SparseDecode",
+                "--inputs",
+                "files:{tmp}/q.pt,{tmp}/kv.pt,{tmp}/idx.pt",
+                "--expected",
+                "{tmp}/expected.pt",
+                "--device",
+                "cpu",
+                "--out",
+                "output",
+                "--fn",
+                "allclose",
+                "--rtol",
+                str(2**-7),
+                "--atol",
+                "0",
+                "--json",
+                "{out}",
+            ),
+            _check_attention,
+            files={
+                f"{key}.pt": partial(_attention_tensor, key)
+                for key in ("q", "kv", "idx", "expected")
+            },
+        )
+        for name, stage in (
+            ("plain sparse attention matches torch", "plain"),
+            ("scheduled sparse attention matches torch", "hir"),
+        )
     ),
     FixtureCase(
-        "scheduled sparse attention matches torch",
-        "hir/sparse_decode.py",
-        _sparse_attention,
-        _check_attention,
+        "facts write the Wgmma declaration",
+        ("schedule", "facts", "T.cuda.sm90.Wgmma", "--target", "nvidia.h200_sxm", "{out}"),
+        partial(_check_golden, golden=WGMMA_FACTS),
+    ),
+    *(
+        FixtureCase(
+            name,
+            ("schedule", "facts", "--target", target, "{out}", *options),
+            partial(_check_golden, golden=WGMMA_FACTS.parent / f"{target}.facts.{suffix}"),
+        )
+        for name, target, options, suffix in (
+            ("facts list CUDA instructions as text", "nvidia.h200_sxm", (), "txt"),
+            ("facts list CUDA instructions as JSON", "nvidia.h200_sxm", ("--json",), "json"),
+            ("CPU facts list only target neutral instructions", "cpu", (), "txt"),
+            ("Apple facts list only target neutral instructions", "apple.m2_pro", (), "txt"),
+        )
+    ),
+    *(
+        FixtureCase(
+            name,
+            ("schedule", "facts", instruction, "--target", target, "{out}"),
+            partial(_check_facts_refusal, message=message),
+            code=1,
+        )
+        for name, instruction, target, message in (
+            (
+                "facts refuse an unknown instruction without output",
+                "T.cuda.sm90.Unknown",
+                "nvidia.h200_sxm",
+                "unknown instruction 'T.cuda.sm90.Unknown'",
+            ),
+            (
+                "facts refuse an unknown target without output",
+                "T.cuda.sm90.Wgmma",
+                "nvidia.unknown",
+                "unknown target identity 'nvidia.unknown'",
+            ),
+        )
+    ),
+    FixtureCase(
+        "candidates write the canonical report",
+        (
+            "schedule",
+            "candidates",
+            f"tests/fixtures/schedule/plain/{CANDIDATE_GOLDEN.name.removesuffix('.candidates.txt')}.py",
+            "{out}",
+        ),
+        partial(_check_golden, golden=CANDIDATE_GOLDEN),
+    ),
+    FixtureCase(
+        "analyze writes the memory report",
+        (
+            "analyze",
+            "tests/fixtures/schedule/hir/gemm_8192x17408x5120_tma_store.py",
+            "{out}",
+            "--memory",
+        ),
+        partial(_check_golden, golden=ANALYZED_GOLDEN),
     ),
 )
 
 
-@pytest.mark.parametrize("case", SPARSE_DECODE, ids=lambda case: case.name)
-def test_sparse_decode(case: FixtureCase) -> None:
-    root = Path(__file__).parents[1] / "fixtures" / "schedule"
-    case.check(case.stage(_module_in(root / case.fixture)))
+@pytest.mark.parametrize("case", FIXTURES, ids=lambda case: case.name)
+def test_fixture(case: FixtureCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    for name, make in case.files.items():
+        torch.save(make(), tmp_path / name)
+    out = tmp_path / "out"
+    argv = [arg.format(out=out, tmp=tmp_path) for arg in case.argv]
+    assert cli_main(argv) == case.code
+    case.check(out, capsys.readouterr())
 
 
 def test_single_issue_schedule_preserves_instruction_relations() -> None:
@@ -1109,148 +1222,6 @@ def test_parameter_structure_does_not_repeat_its_name() -> None:
 def test_instruction_requires_an_execution_mesh_declaration() -> None:
     with pytest.raises(ValueError, match="_UnstatedInstruction execution_mesh must be"):
         declared_execution_mesh(_UnstatedInstruction)
-
-
-def test_schedule_facts_writes_wgmma_declaration(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    out = tmp_path / "facts.txt"
-
-    assert (
-        cli_main(
-            [
-                "schedule",
-                "facts",
-                "T.cuda.sm90.Wgmma",
-                "--target",
-                "nvidia.h200_sxm",
-                str(out),
-            ]
-        )
-        == 0
-    )
-    assert capsys.readouterr() == ("", "")
-    assert out.read_bytes() == WGMMA_FACTS.read_bytes()
-
-
-def test_schedule_facts_lists_target_instructions_as_text_and_json(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    text_out = tmp_path / "facts.txt"
-    json_out = tmp_path / "facts.json"
-    args = ["schedule", "facts", "--target", "nvidia.h200_sxm"]
-
-    assert cli_main([*args, str(text_out)]) == 0
-    assert cli_main([*args, str(json_out), "--json"]) == 0
-    assert capsys.readouterr() == ("", "")
-    expected = {
-        "target": "nvidia.h200_sxm",
-        "instructions": [
-            {"id": "T.binary", "capability": None},
-            {"id": "T.cast", "capability": None},
-            {"id": "T.clamp", "capability": None},
-            {"id": "T.unary", "capability": None},
-            {"id": "T.where", "capability": None},
-            {"id": "T.copy_async", "capability": "cp.async"},
-            {
-                "id": "T.copy_async_tensor",
-                "capability": "cp.async.bulk.tensor",
-            },
-            {"id": "T.copy", "capability": None},
-            {"id": "T.ldmatrix", "capability": "ldmatrix"},
-            {"id": "T.relu", "capability": None},
-            {
-                "id": "T.tiled_mma",
-                "capability": ["wgmma.mma_async", "mma.sync"],
-            },
-            {"id": "T.reduce", "capability": None},
-        ],
-    }
-    assert json.loads(json_out.read_text()) == expected
-    assert (
-        text_out.read_text()
-        == """\
-target nvidia.h200_sxm
-instructions
-  T.binary             all targets
-  T.cast               all targets
-  T.clamp              all targets
-  T.unary              all targets
-  T.where              all targets
-  T.copy_async         cp.async
-  T.copy_async_tensor  cp.async.bulk.tensor
-  T.copy               all targets
-  T.ldmatrix           ldmatrix
-  T.relu               all targets
-  T.tiled_mma          wgmma.mma_async, mma.sync
-  T.reduce             all targets
-"""
-    )
-
-
-@pytest.mark.parametrize("target", ("cpu", "apple.m2_pro"))
-def test_schedule_facts_only_lists_target_neutral_instructions_for_non_cuda(
-    target: str,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    out = tmp_path / "facts.txt"
-
-    assert cli_main(["schedule", "facts", "--target", target, str(out)]) == 0
-    assert capsys.readouterr() == ("", "")
-    assert out.read_text() == f"""target {target}
-instructions
-  T.binary  all targets
-  T.cast    all targets
-  T.clamp   all targets
-  T.unary   all targets
-  T.where   all targets
-  T.copy    all targets
-  T.relu    all targets
-  T.reduce  all targets
-"""
-
-
-@pytest.mark.parametrize(
-    ("selection", "message"),
-    (
-        (
-            ["T.cuda.sm90.Unknown", "--target", "nvidia.h200_sxm"],
-            "unknown instruction 'T.cuda.sm90.Unknown'",
-        ),
-        (
-            ["T.cuda.sm90.Wgmma", "--target", "nvidia.unknown"],
-            "unknown target identity 'nvidia.unknown'",
-        ),
-    ),
-    ids=("instruction", "target"),
-)
-def test_schedule_facts_rejects_unknown_selection_without_output(
-    selection: list[str],
-    message: str,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    out = tmp_path / "facts.txt"
-
-    assert cli_main(["schedule", "facts", *selection, str(out)]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err.startswith("tilefoundry: error: ")
-    assert message in captured.err
-    assert not out.exists()
-
-
-def test_schedule_candidates_writes_canonical_report(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    name = CANDIDATE_GOLDEN.name.removesuffix(".candidates.txt")
-    source = f"tests/fixtures/schedule/plain/{name}.py"
-    out = tmp_path / "candidates.txt"
-
-    assert cli_main(["schedule", "candidates", source, str(out)]) == 0
-    assert capsys.readouterr() == ("", "")
-    assert out.read_bytes() == CANDIDATE_GOLDEN.read_bytes()
 
 
 def test_schedule_candidate_reports_cover_every_site(
@@ -1435,17 +1406,6 @@ def test_operand_match_refusal_names_the_failed_pattern() -> None:
     assert rejected is not None
     assert "StorageKind.GMEM" in rejected
     assert "StorageKind.SMEM" in rejected
-
-
-def test_schedule_analyze_writes_memory_report(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    source = "tests/fixtures/schedule/hir/gemm_8192x17408x5120_tma_store.py"
-    out = tmp_path / "analyzed.txt"
-
-    assert cli_main(["analyze", source, str(out), "--memory"]) == 0
-    assert capsys.readouterr() == ("", "")
-    assert out.read_bytes() == ANALYZED_GOLDEN.read_bytes()
 
 
 def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path) -> None:
