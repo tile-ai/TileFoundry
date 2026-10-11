@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-from tilefoundry import prim_func
-from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.types import Layout, Mesh, Topology
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 
@@ -15,17 +13,13 @@ from tilefoundry.target import CudaTarget
 def gemm(
     x: Tensor[(2, 4), "bf16"], y: Tensor[(1, 4), "bf16"], scratch: Tensor[(8,), "bf16"], out: Tensor[(2, 4), "bf16"]
 ):
-    with Mesh((Topology("cta", 1),), Layout((1,), (1,)), names=("d0",)) as cta:
-        acc_1 = T.tensor_view(
-            T.ptr_of(scratch[0:0 + 8]), layout=Layout((2, 4), (4, 1)), shape=(2, 4)
-        )
-        with Mesh((Topology("thread", 32),), Layout((32,), (1,)), names=("d0",)) as scope:
+    with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
+        acc_1 = T.tensor_view(T.ptr_of(scratch[0:0 + 8]), layout=(2, 4), shape=(2, 4))
+        with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
             T.copy(x, acc_1)
             for r in range(0, 2, 1):
                 window = T.tensor_view(
-                    T.ptr_of(acc_1[r:r + 1, 0:0 + 4]),
-                    layout=Layout((1, 4), (4, 1)),
-                    shape=(1, 4),
+                    T.ptr_of(acc_1[r:r + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
                 )
                 T.copy(y, window)
         T.copy(acc_1, out)

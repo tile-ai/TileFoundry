@@ -7,39 +7,17 @@ The register copy into the RS fragment requires redistribution; this fixture
 checks TIR and evaluation, not the missing cross-thread shuffle codegen.
 """
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, ReduceKind, T, Tensor, Topology, tf
-from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Split, Swizzle
-from tilefoundry.ir.types import Mesh as ThreadMesh
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 NEG_INF = float("-inf")
 
-_COMPUTE = ThreadMesh(
-    (Topology("thread", 256),),
-    ComposedLayout(None, 128, Layout((4, 8, 4), (32, 4, 1))),
-    ("warp", "lane8", "lane4"),
-)
-ACC = ShardLayout(
-    Layout((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), (Split(2), Split(0), Split(4)), _COMPUTE
-)
 NATURAL = ComposedLayout(Swizzle(3, 4, 3), 0, Layout((64, 64), (64, 1)))
 ROW = Layout((1, 64), (64, 1))
 Q_GROUPED = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), (4, 16)), ((512, 64), (16, 1))))
 K_TRANSPOSED = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((4, 16), (8, 8)), ((16, 1), (512, 64))))
 V_GROUPED = ComposedLayout(
     Swizzle(3, 4, 3), 0, Layout(((4, 2, 8), (1, 64)), ((1024, 512, 64), (1024, 1)))
-)
-P_V_KEYS = ShardLayout(
-    Layout((8, 2, 4, 4, 2, 8), (1, 8, 16, 128, 64, 512)), (Split(2), Split(0), Split(3)), _COMPUTE
-)
-P_RS = ShardLayout(
-    Layout((4, 8, 2, 4, 2, 4, 2), (1024, 1, 8, 16, 64, 128, 512)),
-    (Split(3), Split(1), Split(5)),
-    _COMPUTE,
-)
-O_NATURAL = ShardLayout(
-    Layout((2, 4, 8, 2, 4, 8), (8, 16, 1, 64, 128, 512)), (Split(1), Split(2), Split(4)), _COMPUTE
 )
 
 
@@ -81,10 +59,17 @@ class SparseDecode:
                                 ),
                                 (r, 0),
                             )
-                with th[1, :] as _compute:
+                with Mesh(
+                    th[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")
+                ) as m:
                     qg = tf.bitcast(qs, Q_GROUPED)
                     kt = tf.bitcast(ks, K_TRANSPOSED)
-                    s = tf.zeros(Tensor[(64, 64), "f32", ACC, "rmem"])
+                    s = tf.zeros(Tensor[
+                        (64, 64), "f32",
+                        ((8 @ m.lane8, 2, 4 @ m.warp, 2, 4 @ m.lane4, 8),
+                         (1, 8, 16, 64, 128, 512)),
+                        "rmem",
+                    ])
                     s = tf.schedule(
                         (s, qg, kt),
                         op=T.tiled_mma(
@@ -107,8 +92,18 @@ class SparseDecode:
                     p = tf.exp(s - peak)
                     denom = tf.reduce(p, axes=(1,), keepdim=True, kind=ReduceKind.SUM)
                     p = tf.cast(p / denom, "bf16")
-                    pv = tf.bitcast(p, P_V_KEYS)
-                    pr = tf.schedule((pv,), op=T.copy(rmem_layout=P_RS))
+                    pv = tf.bitcast(
+                        p,
+                        ((8 @ m.lane8, 2, 4 @ m.warp, 4 @ m.lane4, 2, 8),
+                         (1, 8, 16, 128, 64, 512)),
+                    )
+                    pr = tf.schedule(
+                        (pv,),
+                        op=T.copy(rmem_layout=(
+                            (4, 8 @ m.lane8, 2, 4 @ m.warp, 2, 4 @ m.lane4, 2),
+                            (1024, 1, 8, 16, 64, 128, 512),
+                        )),
+                    )
                     ks_view = tf.reshard(
                         ks,
                         ComposedLayout(
@@ -117,7 +112,12 @@ class SparseDecode:
                         "smem",
                     )
                     v = tf.bitcast(ks_view, V_GROUPED)
-                    o = tf.zeros(Tensor[(64, 64), "f32", ACC, "rmem"])
+                    o = tf.zeros(Tensor[
+                        (64, 64), "f32",
+                        ((8 @ m.lane8, 2, 4 @ m.warp, 2, 4 @ m.lane4, 8),
+                         (1, 8, 16, 64, 128, 512)),
+                        "rmem",
+                    ])
                     o = tf.schedule(
                         (o, pr, v),
                         op=T.tiled_mma(
@@ -129,6 +129,10 @@ class SparseDecode:
                             )
                         ),
                     )
-                    out = tf.bitcast(o, O_NATURAL)
+                    out = tf.bitcast(
+                        o,
+                        ((2, 4 @ m.warp, 8 @ m.lane8, 2, 4 @ m.lane4, 8),
+                         (8, 16, 1, 64, 128, 512)),
+                    )
                     result = tf.cast(out, "bf16")
         return result

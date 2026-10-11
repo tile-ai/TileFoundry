@@ -35,12 +35,12 @@ def gemm(
             ) as threads:
                 T.fill(acc, 0.0)
             lhs_stages = (
-                T.tensor_view(4096, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
-                T.tensor_view(20480, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
+                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
+                T.tensor_view(16384, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
             )
             rhs_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1))), shape=(64, 16)),
-                T.tensor_view(2048, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1))), shape=(64, 16)),
+                T.tensor_view(32768, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1))), shape=(64, 16)),
+                T.tensor_view(34816, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1))), shape=(64, 16)),
             )
             for k in range(0, 128, 64):
                 with scope[:1, :32] as scope_1:

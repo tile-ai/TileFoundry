@@ -27,12 +27,12 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
             with Mesh(scope[1:], layout=((4, 8), (1, 4)), names=("d0", "d1")) as threads:
                 T.fill(acc, 0.0)
             lhs_stages = (
+                T.tensor_view(0, dtype="bf16", storage="smem", layout=(16, 16), shape=(16, 16)),
                 T.tensor_view(512, dtype="bf16", storage="smem", layout=(16, 16), shape=(16, 16)),
-                T.tensor_view(1024, dtype="bf16", storage="smem", layout=(16, 16), shape=(16, 16)),
             )
             rhs_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=(16, 8), shape=(16, 8)),
-                T.tensor_view(256, dtype="bf16", storage="smem", layout=(16, 8), shape=(16, 8)),
+                T.tensor_view(1024, dtype="bf16", storage="smem", layout=(16, 8), shape=(16, 8)),
+                T.tensor_view(1280, dtype="bf16", storage="smem", layout=(16, 8), shape=(16, 8)),
             )
             for k in range(0, 32, 16):
                 with scope[:1] as scope_1:

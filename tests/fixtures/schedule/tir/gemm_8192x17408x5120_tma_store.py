@@ -16,6 +16,7 @@ def gemm(
     a: Tensor[(8192, 5120), "bf16"], b: Tensor[(5120, 17408), "bf16"], out: Tensor[(8192, 17408), "bf16"]
 ):
     with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
+        T.fill(out, 0.0)
         acc = T.alloc_tensor(
             tensor_type=Tensor[
                 (128, 256),
@@ -32,7 +33,6 @@ def gemm(
                 "rmem",
             ]
         )
-        T.fill(out, 0.0)
         with Mesh((Topology("thread", 384),), layout=(3, 128), names=("d0", "d1")) as scope:
             for m in range(0, 8192, 128):
                 staged = T.tensor_view(

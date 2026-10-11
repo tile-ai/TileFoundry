@@ -905,8 +905,8 @@ def _check_smem_placement(out: Path, captured: pytest.CaptureResult[str]) -> Non
         "two shared tiles need 16384 bytes"
     )
     lines = lines[5:]
-    assert lines[41].strip() == "ks = T.tensor_view(", "the lowered key tile is at line 42"
-    assert lines[42].strip() == "8192,", "the lowered key tile starts at 8192 bytes"
+    assert lines[29].strip() == "ks = T.tensor_view(", "the lowered key tile is at line 30"
+    assert lines[30].strip() == "8192,", "the lowered key tile starts at 8192 bytes"
 
 
 def _attention_tensor(name: str) -> torch.Tensor:

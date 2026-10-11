@@ -27,12 +27,12 @@ def gemm(
             with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads:
                 T.fill(acc, 0.0)
             lhs_stages = (
+                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 16)), ((256, 32), (16, 1))) | Swizzle(2, 4, 3), shape=(64, 32)),
                 T.tensor_view(4096, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 16)), ((256, 32), (16, 1))) | Swizzle(2, 4, 3), shape=(64, 32)),
-                T.tensor_view(8192, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 16)), ((256, 32), (16, 1))) | Swizzle(2, 4, 3), shape=(64, 32)),
             )
             rhs_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))), shape=(32, 32)),
-                T.tensor_view(2048, dtype="bf16", storage="smem", layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))), shape=(32, 32)),
+                T.tensor_view(8192, dtype="bf16", storage="smem", layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))), shape=(32, 32)),
+                T.tensor_view(10240, dtype="bf16", storage="smem", layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))), shape=(32, 32)),
             )
             for k in range(0, 64, 32):
                 with scope[:1, :32] as scope_1:

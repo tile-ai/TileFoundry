@@ -32,7 +32,7 @@ from tilefoundry.ir.types.shard_layout import (
     shard_layout_of,
     split_target_axes,
 )
-from tilefoundry.ir.types.utils import is_literal_shape
+from tilefoundry.ir.types.utils import is_literal_shape, participant_layout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -59,6 +59,7 @@ def _addresses(layout, count: int):
     """
     if not isinstance(layout, ShardLayout):
         return tuple(apply(layout, coord) for coord in range(count))
+    layout = participant_layout(layout)
     whole = {apply(layout.layout, coord): coord for coord in range(count)}
     if len(whole) != count:
         raise ValueError(f"rmem layout address function is not injective: {layout!r}")
@@ -118,9 +119,13 @@ def _(call: Call, ctx) -> TensorType:
             ctx.error(call, "sharded bitcast requires rmem storage")
         if not isinstance(source.layout, ShardLayout) or not isinstance(layout, ShardLayout):
             ctx.error(call, "sharded bitcast requires ShardLayout at both ends")
-        if source.layout.mesh != layout.mesh:
+        source_layout = participant_layout(source.layout)
+        result_layout = participant_layout(layout)
+        if source_layout.mesh != result_layout.mesh:
             ctx.error(call, "source and result ShardLayout must use the same mesh")
-    for end, held in (("source", source.layout), ("result", layout)):
+    else:
+        source_layout, result_layout = source.layout, layout
+    for end, held in (("source", source_layout), ("result", result_layout)):
         if sharded:
             inner = held.layout
             if (

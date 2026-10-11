@@ -677,7 +677,7 @@ class Lowering(ExprVisitor[Expr]):
     def visit_Bitcast(self, call: Call, cursor: _Cursor) -> Expr:
         source = self.visit(call.args[0], cursor)
         if isinstance(call.type.layout, ShardLayout):
-            frame = self._physical_frame(call.type.layout.mesh)
+            frame = self._physical_frame(participant_layout(call.type.layout).mesh)
             inner = _Cursor()
             value = self._window(
                 source,
