@@ -30,11 +30,10 @@ from tilefoundry.analysis import (
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
-    RegionMemoryMetadata,
     analyze,
 )
 from tilefoundry.analysis.access import Access
-from tilefoundry.analysis.allocation import aligned
+from tilefoundry.analysis.allocation import AllocationConstraintVisitor, aligned
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
@@ -42,7 +41,7 @@ from tilefoundry.analysis.liveness import analyze_liveness
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
-from tilefoundry.ir.core import Call, describe_expr, get_metadata, value_labels
+from tilefoundry.ir.core import Call, describe_expr, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
@@ -611,22 +610,9 @@ def _assert_reported(case: ConcreteCase, report: dict) -> None:
             default=0,
         )
         assert peak["peak_bytes"] >= largest_value
-        aligned_live_upper = max(
-            (
-                sum(
-                    aligned(lifetime["bytes"], _ALLOCATION_ALIGNMENT)
-                    for lifetime in level_lifetimes
-                    if lifetime["defined_at"] <= point <= lifetime["last_used_at"]
-                )
-                for point in range(
-                    max(
-                        (lifetime["last_used_at"] for lifetime in level_lifetimes),
-                        default=-1,
-                    )
-                    + 1
-                )
-            ),
-            default=0,
+        aligned_live_upper = sum(
+            aligned(lifetime["bytes"], _ALLOCATION_ALIGNMENT)
+            for lifetime in level_lifetimes
         )
         if peak["peak_bytes"] > aligned_live_upper:
             over_bound.add((case.id, memory_level))
@@ -674,9 +660,23 @@ def test_every_concrete_program_predicts_coherently(
 
 
 @pytest.mark.parametrize("case", [param for param in INVENTORY if param.id in API_INVENTORY])
-def test_every_internal_record_agrees(case: ConcreteCase) -> None:
-    """API cases check the same report and the invariants that require scopes."""
+def test_every_internal_record_agrees(case: ConcreteCase, monkeypatch: pytest.MonkeyPatch) -> None:
+    """API cases check the same report and the invariants that require scopes.
+
+    Register storage has no byte address: the RMS view's co-location is its
+    required-alias group, and its own AllocationValue interval reaches the use.
+    """
     owner, function = case.program()
+    allocation_models = []
+    if case.id == "rmsnorm_quant_seq2.RmsnormQuantSeq2Module.rmsnorm_quant_seq_2[static]":
+        visit_body = AllocationConstraintVisitor.visit_function_body
+
+        def record_allocation(visitor, function, context):
+            storage = visit_body(visitor, function, context)
+            allocation_models.append(context)
+            return storage
+
+        monkeypatch.setattr(AllocationConstraintVisitor, "visit_function_body", record_allocation)
     result = analyze(owner, function, analysis=FAMILIES, dims=case.dims)
     assert result.module is owner
     report = report_data(
@@ -717,13 +717,14 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
             if isinstance(expr, Call) and isinstance(expr.target, Reshape)
         )
         liveness = analyze_liveness(result.function)
-        source_label = value_labels((reshaped.args[0],))[0]
-        memory = get_metadata(result.function, RegionMemoryMetadata)
-        source_lifetime = next(row for row in memory.lifetimes if row.binding == source_label)
+        model = allocation_models[0]
+        reshaped_value = next(item for item in model.values if item.value is reshaped)
+        source_value = next(item for item in model.values if item.value is reshaped.args[0])
         assert (
-            source_lifetime.last_used_at
-            == liveness.interval_of(reshaped).last_used_at
+            reshaped_value.lifetime.last_used_at
+            == liveness.interval_of(reshaped).last_used_at == 19
         )
+        assert model.groups.find(reshaped_value) is model.groups.find(source_value)
     expected_schedule = EXPECTED_PERSISTENT_SCHEDULES.get(case.id)
     if expected_schedule is not None:
         _assert_persistent_schedule(scopes, expected_schedule)

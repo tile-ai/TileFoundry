@@ -329,7 +329,7 @@ counts one slice per index as an upper bound.
 | `MemoryMetadata.traffic` | One occurrence's per-boundary movement, grouped by storage and communication boundary. | No; projection reads resolved Mesh and topology extents. |
 | `MemoryMetadata.operands` | One occurrence's movement in order `(*call.args, call)`. | No |
 | `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` tensor result, including a carried phi. `None` for tuple results or results that are not address-placed. | No |
-| `MemoryMetadata.offsets` | The byte offset of each physical result slot: each copy of a staged tensor in copy order, or each tuple tensor leaf in flat leaf order. An `rmem` result has no reported offsets. Staged tuple results MUST raise `AnalysisError`. | No |
+| `MemoryMetadata.offsets` | The byte offset of each physical result slot: each copy of a staged tensor in copy order, or each tuple `AllocationValue` in flattened result-index order. An `rmem` result has no reported offsets. Staged tuple results MUST raise `AnalysisError`. | No |
 | `MemoryMetadata.alias` | See [`BufferAlias`](#bufferalias). Only lowering reads it; it MUST NOT appear in analysis reports. | No |
 | `RegionMemoryMetadata.topologies` | The same effective Module topology levels. | No |
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
@@ -468,11 +468,11 @@ are monotonic across the whole Function, including nested and sibling regions.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names differ by the printer's numeric suffix in definition order. A value with neither name nor span is `<value N>` in definition order. A tuple result's tensor leaf appends `[leaf]`, its flat leaf index; tensor results retain the unsuffixed name. | No |
-| `ValueLifetime.memory_level` | Emit one lifetime per tensor leaf's storage box, at the level occupied by its projected Type. | No |
+| `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names differ by the printer's numeric suffix in definition order. A value with neither name nor span is `<value N>` in definition order. A tuple result appends `[index]`, its flattened `AllocationValue.index`; tensor results retain the unsuffixed name. | No |
+| `ValueLifetime.memory_level` | Emit one lifetime per material `AllocationValue`, at the level occupied by its projected Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. A `ScheduleOp` whose selected instruction has a write-only result occupies `buffers` copies of those bytes; a `READ \| WRITE` result occupies one. | `MemoryHierarchyFacts.explicit_levels[].owner` |
 | `ValueLifetime.defined_at` | Definition event on the Function-wide structured SSA timeline. A staged (`buffers > 1`) result starts at the outermost enclosing loop's phi event rather than its own definition event. | No |
-| `ValueLifetime.last_used_at` | Greatest ordinary-consumer, region-entry, loop-backedge, or region-exit use event; the final timeline event for a parameter. | No |
+| `ValueLifetime.last_used_at` | Greatest ordinary-consumer, region-entry, loop-backedge, or region-exit use event belonging to this result index. Static tuple projections use only the selected result; other tuple uses use every result. | No |
 | `ValueLifetime.persistent` | True for parameters and false for body allocations. | No |
 | `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
 
@@ -500,11 +500,11 @@ class BufferAlias:
     input's position or `None` for each Call. `buffer_alias()` returns
     `BufferAlias(buffer, relation)`, describing that input's bytes and the
     result-to-input coordinates, and proves the declaration on every call.
-    `Slice` and `Reshape` alias input zero and MUST NOT receive
-    independent lifetimes. `Tuple`,
-    `MeshRegion`, and `LoopRegion` results and static tuple projections describe
-    bytes already held by their selected body or carry and MUST NOT receive an
-    independent lifetime. Static tuple projections are visitor structural rules, like
+    `Slice` and `Reshape` alias input zero and MUST NOT allocate independent
+    buffers. `Tuple`, `MeshRegion`, and `LoopRegion` results and static tuple
+    projections describe bytes already held by their selected body or carry.
+    They MUST have their own AllocationValue intervals and require the operand's
+    address through constraints. Static tuple projections are visitor structural rules, like
     `Tuple`, `MeshRegion`, and `LoopRegion`, rather than registered views.
     Every other result, including `Transpose` or a result that overwrites
     a destination, MUST allocate its own. Analysis MUST use operation semantics
@@ -514,13 +514,15 @@ class BufferAlias:
     strides stated in every `Layout` component, the shape is literal, and the
     two layouts map every colex coordinate to the same address. An
     address-changing, storage-changing, or sharded Reshard MUST
-    retain its independent lifetime.
+    retain its independent buffer.
   - Bitcast MUST alias its source and allocate no independent buffer. Its
     declared access relation MUST bijectively map result coordinates to source
-    coordinates with the same physical address, preserving the source's
-    lifetime and recording zero traffic.
-  - Registered buffer aliases MUST return their operand's storage without
-    creating a new box and MUST NOT receive independent `buffer_bytes` or
+    coordinates with the same physical address, requiring the source's
+    address and recording zero traffic.
+  - Registered buffer aliases MUST create an `AllocationValue(value, index, lifetime)`
+    with its own SSA interval and the operand's byte span, requiring the same
+    address and alias group. A persistent operand MUST pin its alias at the same
+    address. Aliases MUST NOT receive independent `buffer_bytes` or
     `offsets`. Analysis MUST resolve structural tuple projections to their
     selected element without a coordinate-renaming proof. For other aliases,
     `buffer_alias()` MUST prove that the result-to-operand map is single-valued, injective, and
@@ -559,19 +561,20 @@ class BufferAlias:
     space and using the input's type for widening. Source relations retain their
     defining loop prefix, aligned to the access's enclosing loops; loops internal
     to an escaping region MUST be projected out.
-  - Liveness MUST record only each SSA value's own uses. A storage box's
-    interval MUST span the union of its tensor members' intervals and its uses
-    MUST include all tensor member uses. A tuple SSA value has no bytes: its
-    interval MUST NOT extend its leaf boxes. Each tuple use MUST extend all
-    leaves to that event, except a static tuple projection, whose result's own
-    interval extends only the selected storage. This rule also applies to tuple
-    region parameters bound to their argument's leaf tuple, including captures,
-    synthetic loop uses, and returns. Registered views, region parameters and
-    results, and static tuple projections reuse the corresponding operand or
-    carry storage. Placement interference, register peaks, and in-place conflict
-    checks MUST consume those box intervals and uses. A dynamic tuple projection
-    MUST extend every possible leaf's storage and MUST NOT participate in
-    in-place reuse.
+  - Liveness MUST record each SSA value's own interval. Every tensor SSA value,
+    including views, region parameters and results, and static tuple projections,
+    MUST have its own `AllocationValue`; intervals MUST NOT be merged or extended
+    to include aliases. Every tuple value MUST have one `AllocationValue(value, index)`
+    per flattened tensor result. Its interval runs from the tuple's definition to
+    the last use belonging to that result: a static tuple projection uses only
+    the selected result, while whole-tuple operations, region captures, synthetic
+    loop uses, and returns use every result. Corresponding results MUST be joined
+    by required-alias constraints. Same-group values MAY overlap; different groups
+    with intersecting intervals MUST NOT overlap. Register and other non-address-solved
+    peaks MUST count each live alias group once, including alias values. In-place
+    checks MUST read liveness uses of every group member and reject a result when
+    a member has a later ordinary use. A dynamic tuple projection returns every
+    possible leaf in a Python tuple and MUST NOT participate in in-place reuse.
 
 ##### `MemoryLevelPeak`
 

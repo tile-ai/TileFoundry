@@ -82,20 +82,20 @@ def gemm(
 ), names=("d0", "d1", "d2", "d3")
             ) as threads:
                 T.fill(acc, 0.0)
-            lhs_stages = (T.tensor_view(32768, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=ComposedLayout(
+            lhs_stages = (T.tensor_view(0, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=ComposedLayout(
                     inner=Swizzle(3, 4, 3),
                     offset=0,
                     outer=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))),
-                ), shape=(128, 128)), T.tensor_view(49152, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=ComposedLayout(
+                ), shape=(128, 128)), T.tensor_view(16384, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=ComposedLayout(
                     inner=Swizzle(3, 4, 3),
                     offset=0,
                     outer=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))),
                 ), shape=(128, 128)))
-            rhs_stages = (T.tensor_view(0, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=ComposedLayout(
+            rhs_stages = (T.tensor_view(32768, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=ComposedLayout(
                     inner=Swizzle(3, 4, 3),
                     offset=0,
                     outer=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))),
-                ), shape=(128, 128)), T.tensor_view(16384, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=ComposedLayout(
+                ), shape=(128, 128)), T.tensor_view(49152, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=ComposedLayout(
                     inner=Swizzle(3, 4, 3),
                     offset=0,
                     outer=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))),

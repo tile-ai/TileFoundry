@@ -37,8 +37,8 @@ def gemm(
 ), names=("d0", "d1", "d2")
             ) as threads:
                 T.fill(acc, 0.0)
-            lhs_stages = (T.tensor_view(2048, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))), shape=(64, 32)), T.tensor_view(4096, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))), shape=(64, 32)))
-            rhs_stages = (T.tensor_view(0, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))), shape=(32, 32)), T.tensor_view(1024, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))), shape=(32, 32)))
+            lhs_stages = (T.tensor_view(0, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))), shape=(64, 32)), T.tensor_view(2048, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))), shape=(64, 32)))
+            rhs_stages = (T.tensor_view(4096, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))), shape=(32, 32)), T.tensor_view(5120, dtype='fp8e4m3', storage=StorageKind.SMEM, layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))), shape=(32, 32)))
             for k in range(0, 64, 32):
                 with scope[:1, :32] as scope_1:
                     tile = T.tensor_view(

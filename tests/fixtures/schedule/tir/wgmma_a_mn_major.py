@@ -37,20 +37,20 @@ def gemm(
 ), names=("d0", "d1", "d2")
             ) as threads:
                 T.fill(acc, 0.0)
-            lhs_stages = (T.tensor_view(2048, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
+            lhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                     inner=Swizzle(3, 4, 3),
                     offset=0,
                     outer=Layout(((1, 64), (2, 8)), ((1024, 1), (512, 64))),
-                ), shape=(64, 16)), T.tensor_view(4096, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
+                ), shape=(64, 16)), T.tensor_view(2048, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                     inner=Swizzle(3, 4, 3),
                     offset=0,
                     outer=Layout(((1, 64), (2, 8)), ((1024, 1), (512, 64))),
                 ), shape=(64, 16)))
-            rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
+            rhs_stages = (T.tensor_view(4096, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                     inner=Swizzle(2, 4, 3),
                     offset=0,
                     outer=Layout(((2, 8), (1, 32)), ((256, 32), (512, 1))),
-                ), shape=(16, 32)), T.tensor_view(1024, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
+                ), shape=(16, 32)), T.tensor_view(5120, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                     inner=Swizzle(2, 4, 3),
                     offset=0,
                     outer=Layout(((2, 8), (1, 32)), ((256, 32), (512, 1))),

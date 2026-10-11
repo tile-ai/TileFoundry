@@ -41,10 +41,9 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 from .allocation import (
     AllocationConstraintVisitor,
     AllocationModel,
-    Box,
+    AllocationValue,
     aligned,
     alignment_of,
-    box_labels,
     solve_allocation,
 )
 from .errors import AnalysisError
@@ -68,7 +67,6 @@ from .metadata import (
     Spread,
     Traffic,
     TrafficBytes,
-    ValueLifetime,
 )
 from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
@@ -399,35 +397,8 @@ def add_traffic(
                 _accumulate(into.per_unit.setdefault(name, {}), unit, moved, repeats.loop_trips)
 
 
-def box_lifetimes(boxes: tuple[Box, ...]) -> tuple[ValueLifetime, ...]:
-    """Project storage boxes into the report's definition-ordered lifetimes."""
-    labels = box_labels(boxes)
-    return tuple(
-        ValueLifetime(
-            binding=label,
-            memory_level=box.memory_level,
-            bytes=box.bytes,
-            defined_at=box.defined_at,
-            last_used_at=box.last_used_at,
-            persistent=box.persistent,
-        )
-        for label, box in zip(labels, boxes, strict=True)
-    )
-
-
-def peak_in_window(rows: list[ValueLifetime], entered_at: int, exited_at: int) -> int:
-    """Sum the live bytes at each event in one inclusive timeline window."""
-    peak = 0
-    for point in range(entered_at, exited_at + 1):
-        peak = max(
-            peak,
-            sum(item.bytes for item in rows if item.defined_at <= point <= item.last_used_at),
-        )
-    return peak
-
-
 def coalesced_peak_in_window(
-    values: tuple[Box, ...],
+    values: tuple[AllocationValue, ...],
     model: AllocationModel,
     entered_at: int,
     exited_at: int,
@@ -435,11 +406,13 @@ def coalesced_peak_in_window(
     """Sum one physical buffer per required-alias group at each event."""
     peak = 0
     for point in range(entered_at, exited_at + 1):
-        live: dict[Box, int] = {}
+        live: dict[AllocationValue, int] = {}
         for item in values:
-            if item.defined_at <= point <= item.last_used_at:
+            if item.lifetime.persistent or (
+                item.lifetime.defined_at <= point <= item.lifetime.last_used_at
+            ):
                 group = model.groups.find(item)
-                live[group] = max(live.get(group, 0), item.bytes)
+                live[group] = max(live.get(group, 0), item.lifetime.bytes)
         peak = max(peak, sum(live.values()))
     return peak
 
@@ -464,13 +437,13 @@ def held_in_region(value_mesh: Mesh, region_mesh: Mesh) -> bool:
 
 
 def values_in_region(
-    values: tuple[Box, ...],
+    values: tuple[AllocationValue, ...],
     region: MeshRegion,
     entered_at: int,
     exited_at: int,
     facts: MemoryHierarchyFacts,
     topology_names: tuple[str, ...],
-) -> tuple[Box, ...]:
+) -> tuple[AllocationValue, ...]:
     """Resident values whose lifetimes and ownership intersect one mesh region."""
     positions = {name: index for index, name in enumerate(topology_names)}
     region_positions = tuple(
@@ -479,8 +452,8 @@ def values_in_region(
     outermost_region = min(region_positions)
     result = []
     for item in values:
-        lifetime = item
-        if lifetime.last_used_at < entered_at or lifetime.defined_at > exited_at:
+        lifetime = item.lifetime
+        if (not lifetime.persistent and lifetime.last_used_at < entered_at) or lifetime.defined_at > exited_at:
             continue
         declared = facts.explicit(lifetime.memory_level)
         if declared is None or not declared.owner:
@@ -495,7 +468,8 @@ def values_in_region(
             )
         if outermost_region > owner_position:
             continue
-        layout = shard_layout_of(getattr(item.producer.type, "layout", None))
+        held = leaves_of(item.value.type)[item.index]
+        layout = shard_layout_of(getattr(held, "layout", None))
         if layout is None or not held_in_region(layout.mesh, region.mesh):
             continue
         result.append(item)
@@ -734,9 +708,20 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
 
     allocation.visit_function_body(function, model)
     definitions = {id(interval.value): index for index, interval in enumerate(liveness.intervals)}
-    model.boxes.sort(key=lambda box: (definitions[id(box.producer)], box.leaf))
-    allocation_values = tuple(model.boxes)
-    lifetimes = box_lifetimes(allocation_values)
+    model.values.sort(key=lambda item: (definitions[id(item.value)], item.index))
+    allocation_values = tuple(model.values)
+    material_values = tuple(item for item in allocation_values if item in model.material)
+    producers = {id(item.value): item.value for item in material_values}
+    labels = dict(zip(producers, value_labels(producers.values()), strict=True))
+    lifetimes = tuple(
+        replace(
+            item.lifetime,
+            binding=labels[id(item.value)] + (
+                f"[{item.index}]" if isinstance(item.value.type, TupleType) else ""
+            ),
+        )
+        for item in material_values
+    )
     reuse = (
         reuse_windows(
             context.root,
@@ -771,7 +756,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         context.options if isinstance(context.options, MemoryOptions) else MemoryOptions()
     )
     region_rmem_peaks: list[int] = []
-    claimed_rmem: set[int] = set()
+    claimed_rmem: set[AllocationValue] = set()
     for window in liveness.regions:
         region_values = values_in_region(
             allocation_values,
@@ -782,35 +767,27 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             owner_topologies,
         )
         region_levels = []
-        for name in sorted({item.memory_level for item in region_values}):
-            rows = [
-                row for item, row in zip(allocation_values, lifetimes, strict=True)
-                if item in region_values and item.memory_level == name
-            ]
+        for name in sorted({item.lifetime.memory_level for item in region_values}):
+            resident = tuple(item for item in region_values if item.lifetime.memory_level == name)
             declared = facts.explicit(name)
-            peak = (
-                coalesced_peak_in_window(
-                    tuple(item for item in region_values if item.memory_level == name),
-                    model,
-                    window.entered_at,
-                    window.exited_at,
-                )
-                if name == str(StorageKind.RMEM)
-                else peak_in_window(rows, window.entered_at, window.exited_at)
+            peak = coalesced_peak_in_window(
+                resident, model, window.entered_at, window.exited_at,
             )
+            persistent = {
+                model.groups.find(item): item.lifetime.bytes
+                for item in resident if item.lifetime.persistent
+            }
             region_levels.append(
                 MemoryLevelPeak(
                     memory_level=name,
                     peak_bytes=peak,
-                    persistent_bytes=sum(item.bytes for item in rows if item.persistent),
+                    persistent_bytes=sum(persistent.values()),
                     capacity_bytes=(declared.capacity_bytes if declared is not None else None),
-                )
+                ),
             )
             if name == str(StorageKind.RMEM):
                 region_rmem_peaks.append(peak)
-                claimed_rmem.update(
-                    id(item.producer) for item in region_values if item.memory_level == name
-                )
+                claimed_rmem.update(resident)
         if region_levels:
             attach(
                 window.region,
@@ -821,67 +798,63 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 ),
             )
 
+    offsets: dict[AllocationValue, int] = {}
     levels_list: list[MemoryLevelPeak] = []
     for name in sorted(
-        {item.memory_level for item in lifetimes} | set(memory_context.storage.total)
+        {item.lifetime.memory_level for item in allocation_values} | set(memory_context.storage.total)
     ):
         declared = facts.explicit(name)
-        values = tuple(item for item in allocation_values if item.memory_level == name)
-        rows = [
-            row for item, row in zip(allocation_values, lifetimes, strict=True)
-            if item.memory_level == name
-        ]
+        values = tuple(item for item in allocation_values if item.lifetime.memory_level == name)
         capacity = declared.capacity_bytes if declared is not None else None
         if name in (str(StorageKind.GMEM), str(StorageKind.SMEM)) and values:
-            solved = solve_allocation(
-                name,
-                model,
-                solver_options,
-            )
+            solved = solve_allocation(name, model, solver_options)
+            offsets.update(solved.offsets)
             peak = solved.peak_bytes
             for item in values:
-                if not isinstance(item.producer, (Call, Var)) or item.persistent:
+                if item not in model.material or item.lifetime.persistent:
                     continue
-                if isinstance(item.producer.type, TupleType):
+                if not isinstance(item.value, (Call, Var)) or isinstance(item.value.type, TupleType):
                     continue
-                copies = result_copies(item.producer)
-                buffer_bytes = item.bytes // copies
-                moved = get_metadata(item.producer, MemoryMetadata)
-                if isinstance(item.producer, Var) and moved is None:
+                copies = result_copies(item.value)
+                buffer_bytes = item.lifetime.bytes // copies
+                moved = get_metadata(item.value, MemoryMetadata)
+                if isinstance(item.value, Var) and moved is None:
                     moved = MemoryMetadata()
                 if moved is None:
                     raise AnalysisError("memory: placed Call has no movement record")
                 attach(
-                    item.producer,
+                    item.value,
                     replace(
                         moved,
                         buffer_bytes=buffer_bytes,
                         offsets=tuple(
-                            item.offset + copy * buffer_bytes for copy in range(copies)
+                            solved.offsets[item] + copy * buffer_bytes for copy in range(copies)
                         ),
                     ),
                 )
         elif name == str(StorageKind.RMEM):
-            unclaimed = tuple(item for item in values if id(item.producer) not in claimed_rmem)
+            unclaimed = tuple(item for item in values if item not in claimed_rmem)
             peak = max(
                 max(region_rmem_peaks, default=0),
                 coalesced_peak_in_window(unclaimed, model, 0, liveness.timeline_end),
             )
         else:
-            end = max((item.last_used_at for item in rows), default=-1)
-            peak = peak_in_window(rows, 0, end)
+            peak = coalesced_peak_in_window(values, model, 0, liveness.timeline_end)
+        persistent = {
+            model.groups.find(item): item.lifetime.bytes for item in values if item.lifetime.persistent
+        }
         levels_list.append(
             MemoryLevelPeak(
                 memory_level=name,
                 peak_bytes=peak,
-                persistent_bytes=sum(item.bytes for item in rows if item.persistent),
+                persistent_bytes=sum(persistent.values()),
                 capacity_bytes=capacity,
-            )
+            ),
         )
     levels = tuple(levels_list)
     tuple_results = {
-        id(box.producer): box.producer for box in allocation_values
-        if isinstance(box.producer, Call) and isinstance(box.producer.type, TupleType)
+        id(item.value): item.value for item in material_values
+        if isinstance(item.value, Call) and isinstance(item.value.type, TupleType)
     }
     for producer in tuple_results.values():
         moved = get_metadata(producer, MemoryMetadata)
@@ -893,8 +866,8 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 moved,
                 buffer_bytes=None,
                 offsets=tuple(
-                    box.offset for box in allocation_values
-                    if box.producer is producer and box.offset is not None
+                    offsets[item] for item in material_values
+                    if item.value is producer and item in offsets
                 ),
             ),
         )
