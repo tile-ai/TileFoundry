@@ -527,7 +527,7 @@ def _value_states() -> AstPattern[Any]:
                 AstNodePattern(
                     ast.BinOp,
                     FieldPattern("op", AstNodePattern(ast.MatMult)),
-                    FieldPattern("left", AstNodePattern(ast.expr)),
+                    FieldPattern("left", MeshAxisPattern()),
                     FieldPattern("right", _state_call("P", AstNodePattern(
                         ast.Constant, FieldPattern("value", LiteralPattern(value_type=str)),
                     ))),
@@ -572,10 +572,6 @@ class ValueStatesPattern(ElementPattern):
         for rule in self.BIND_RULES:
             rule.apply(None, node=node, context=context)
         return super().match(node, context)
-
-    @staticmethod
-    def construct(match, children, context):
-        return match.node
 
 
 def _layout_sugar_parts(node: object):
@@ -764,11 +760,10 @@ class PlacementConstructionRule:
         strides = value.strides
         if strides is None and not any(isinstance(attr, (Split, Partial)) for attr in canonical.attrs):
             strides = runtime.compact_row_major(canonical.layout.shape, mul=operator.mul)
-        layout = runtime.Layout(shape=canonical.layout.shape, strides=strides)
         return PlacedLayout(
             shape=value.shape,
             layout=runtime.ShardLayout(
-                layout=layout,
+                layout=runtime.Layout(shape=canonical.layout.shape, strides=strides),
                 attrs=canonical.attrs,
                 mesh=canonical.mesh,
             ),

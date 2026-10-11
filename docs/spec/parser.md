@@ -189,8 +189,8 @@ composed-layout       ::= (placed-layout | plain-layout | expression) '+' dim-ex
                           | ((placed-layout | plain-layout | expression) '+' dim-expr |
                             placed-layout | plain-layout | expression) '|' expression
 value-states          ::= '{' 'B' '(' ')' '}'
-                          | '{' expression '@' 'P' '(' string-literal ')' (',' expression '@' 'P'
-                            '(' string-literal ')')* '}'
+                          | '{' mesh-axis '@' 'P' '(' string-literal ')' (',' mesh-axis '@' 'P' '('
+                            string-literal ')')* '}'
 stated-layout         ::= (placement-operand | composed-layout | expression) '@' value-states
 shape                 ::= '(' (dim-expr (',' dim-expr)*)? ')'
                           | identifier

@@ -245,9 +245,7 @@ The file header starts with `from __future__ import annotations`, a blank line,
 and `from tilefoundry.dsl import *`, without a `noqa` comment. Imports supplied
 by a Target's `to_python()` provider follow unchanged.
 
-Layout text follows [shard §6](./shard.md#6-shardattr) and
-[parser §2](./parser.md#2-syntax-and-rules). The printer preserves complete
-constructors when sugar cannot express the value. Mesh headers omit row-major
+Mesh headers omit row-major
 strides and use the layout keyword. A topology is written by name only when the
 function inherits it from the enclosing module; standalone `prim_func` and
 explicit `@prim_func(target=...)` headers retain `Topology(...)`. String
