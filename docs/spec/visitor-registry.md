@@ -355,10 +355,12 @@ class AccessRelation:
     Attributes:
         relation: attribute; The relation from the Op's iteration space to the coordinates of its own value it reaches.
         values: attribute; Each isl parameter name mapped to the operand element or dimension it is.
+        may_access: attribute; Whether each coordinate accesses one data-dependent element of its image.
     """
 
     relation: "isl.map"
     values: IslParamValues = {}
+    may_access: bool = False
 
 def relations_of(call, ctx) -> tuple[AccessRelation, ...]: ...
 def local_relations_of(call, ctx) -> tuple[AccessRelation, ...]: ...
@@ -387,6 +389,11 @@ def register_access_relation(op_cls: type): ...
     `AccessRelation`, and every helper that builds a boundary hands one over
     already stated. A function handed to `AccessRelation` is kept as the
     relation it is.
+  - When `AccessRelation.may_access` is True, each coordinate accesses one
+    element of its image, chosen by data. Whether the boundary reads or writes
+    is determined by its position in the tuple. `reached_elements` MUST count
+    at most one element per coordinate, taking the minimum of the image size
+    and the coordinate count.
   - Every `AccessRelation.relation` is a relation from the Op's **whole
     iteration space** to the coordinates that boundary reaches, stated in the
     axes the value was written in. Every boundary of one Op shares that space; a

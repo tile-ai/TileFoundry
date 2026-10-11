@@ -307,7 +307,7 @@ def _outer_band(
         return AccessRelation(
             relation,
             {name: access.values[name] for name in names if name in access.values},
-            access.lookup,
+            access.may_access,
         )
 
     return tuple(lifted(access) for access in relations)

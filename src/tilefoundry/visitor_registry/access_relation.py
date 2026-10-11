@@ -53,7 +53,7 @@ class AccessRelation:
 
     relation: "isl.map"
     values: IslParamValues = field(default_factory=dict)
-    lookup: bool = False
+    may_access: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.relation, isl.multi_aff):
@@ -216,7 +216,7 @@ def projected(
     )
     share = _own_iterations(relations, placed, answered, ninputs)
     carried = tuple(
-        _addressed(relation, view[0], bindings, label, call, lookup=access.lookup)
+        _addressed(relation, view[0], bindings, label, call, may_access=access.may_access)
         for relation, view, label, access in zip(placed, views, where, relations, strict=True)
     )
     if share is None:
@@ -298,7 +298,7 @@ def _iterating_over(
         ) from error
     names = _parameter_names(held)
     return AccessRelation(
-        held, {name: bindings[name] for name in names if name in bindings}, access.lookup
+        held, {name: bindings[name] for name in names if name in bindings}, access.may_access
     )
 
 
@@ -447,7 +447,7 @@ def _within_positions(relation: "isl.map", local) -> "isl.map":
 
 
 def _addressed(
-    relation: "isl.map", local, bindings: IslParamValues, where: str, call, *, lookup=False
+    relation: "isl.map", local, bindings: IslParamValues, where: str, call, *, may_access=False
 ) -> AccessRelation:
     """One placed boundary, held to the coordinates the value actually has.
 
@@ -457,7 +457,9 @@ def _addressed(
     held = _within_positions(relation, local)
     names = _parameter_names(held)
     return _held_countable(
-        AccessRelation(held, {name: bindings[name] for name in names if name in bindings}, lookup),
+        AccessRelation(
+            held, {name: bindings[name] for name in names if name in bindings}, may_access
+        ),
         where,
         call,
     )
@@ -699,7 +701,7 @@ def _by_identity(relations: tuple[AccessRelation, ...], rank: int) -> tuple[Acce
         return AccessRelation(
             _renamed(access.relation, targets, taken),
             {canonical[id(value)]: value for value in access.values.values()},
-            access.lookup,
+            access.may_access,
         )
 
     return tuple(renamed(access) for access in relations)
@@ -747,7 +749,7 @@ def _held_to(access: AccessRelation, domain: "isl.set", values: IslParamValues) 
     held = relation.intersect_domain(domain)
     names = _parameter_names(held)
     return AccessRelation(
-        held, {name: values[name] for name in names if name in values}, access.lookup
+        held, {name: values[name] for name in names if name in values}, access.may_access
     )
 
 
@@ -846,7 +848,7 @@ def reached_elements(
     if image.dim(isl.dim_type.PARAM):
         return None
     reached = cardinality(image)
-    if not access.lookup or reached is None:
+    if not access.may_access or reached is None:
         return reached
     relation = settled(access)
     if within is not None:
@@ -943,7 +945,7 @@ def reached_at(
     An Op reasons in logical axes and a participant is indexed by the positions
     its layout made, so the expressions are given per axis and spread over the
     positions holding it. An axis named `free` is one whose coordinate is a value
-    nobody has here -- the element a lookup read decides it -- so the relation
+    nobody has here because data determines it, so this may-access relation
     covers every coordinate that axis could legally name instead of guessing one.
     That keeps the answer bounded, and countable, without a carrier a reader has
     to special-case.
@@ -967,7 +969,7 @@ def reached_at(
     return AccessRelation(
         isl.map(f"{_declared(values)}{{ [{domain}] -> [{', '.join(image)}]{where} }}"),
         values,
-        lookup=bool(free),
+        may_access=bool(free),
     )
 
 
