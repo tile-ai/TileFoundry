@@ -223,47 +223,30 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         """
         value = participant_layout(value)
         layout = value.layout
-        if (
-            isinstance(layout, ComposedLayout)
-            and isinstance(layout.outer, Layout)
-            and all(isinstance(attr, (Broadcast, Partial)) for attr in value.attrs)
-            and ctx is not None
-            and ctx.current_mesh is not None
-        ):
-            current = ctx.current_mesh
-            if all(isinstance(attr, Broadcast) for attr in value.attrs):
-                current = participant_layout(ShardLayout(layout, tuple(
-                    Broadcast() for _ in range(len(flatten(current.layout).shape))
-                ), current)).mesh
-            if current == value.mesh:
-                states = []
-                for index, attr in enumerate(value.attrs):
-                    if isinstance(attr, Partial):
-                        ref = ctx.mesh_axis_alias(value.mesh, index)
-                        if ref is None:
-                            return None
-                        states.append(f"{ref} @ {self.visit(attr, ctx)}")
-                return "(" + self.layout_surface(layout, ctx) + ") @ {" + (
-                    ", ".join(states) if states else "B()"
-                ) + "}"
+        operand = None
+        if isinstance(layout, ComposedLayout) and isinstance(layout.outer, Layout):
+            operand = "(" + self.layout_surface(layout, ctx) + ")"
+        elif isinstance(layout, Layout) and layout.strides is not None:
+            operand = self.layout_surface(layout, ctx)
         if ctx is not None and all(isinstance(attr, Broadcast) for attr in value.attrs):
             current = ctx.current_mesh
-            if current is not None and isinstance(layout, Layout) and layout.strides is not None:
+            if current is not None and operand is not None:
                 current = participant_layout(ShardLayout(layout, tuple(
                     Broadcast() for _ in range(len(flatten(current.layout).shape))
                 ), current)).mesh
                 if current == value.mesh:
-                    operand = self.layout_surface(layout, ctx)
                     return operand + " @ {B()}"
         names = value.mesh.names
         if (
-            not isinstance(layout, Layout)
+            (not isinstance(layout, Layout) and operand is None)
             or not names
             or len(value.attrs) != len(names)
             or ctx is None
         ):
             return None
-        if any(isinstance(entry, tuple) for entry in (*layout.shape, *(layout.strides or ()))):
+        if isinstance(layout, Layout) and any(
+            isinstance(entry, tuple) for entry in (*layout.shape, *(layout.strides or ()))
+        ):
             return None
         refs = tuple(ctx.mesh_axis_alias(value.mesh, index) for index in range(len(names)))
         if any(ref is None for ref in refs):
@@ -274,7 +257,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         for attr, ref in zip(value.attrs, refs, strict=True):
             assert ref is not None
             if isinstance(attr, Split):
-                if attr.axis >= len(layout.shape):
+                if isinstance(layout, ComposedLayout) or attr.axis >= len(layout.shape):
                     return None
                 splits.setdefault(attr.axis, []).append(ref)
             elif isinstance(attr, Partial):
@@ -283,6 +266,8 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
                 return None
         if not splits and not partials:
             return None
+        if isinstance(layout, ComposedLayout):
+            return operand + " @ {" + ", ".join(partials) + "}"
         states = partials
 
         explicit = layout.strides is not None
