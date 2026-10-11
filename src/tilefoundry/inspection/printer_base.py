@@ -223,6 +223,29 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         """
         value = participant_layout(value)
         layout = value.layout
+        if (
+            isinstance(layout, ComposedLayout)
+            and isinstance(layout.outer, Layout)
+            and all(isinstance(attr, (Broadcast, Partial)) for attr in value.attrs)
+            and ctx is not None
+            and ctx.current_mesh is not None
+        ):
+            current = ctx.current_mesh
+            if all(isinstance(attr, Broadcast) for attr in value.attrs):
+                current = participant_layout(ShardLayout(layout, tuple(
+                    Broadcast() for _ in range(len(flatten(current.layout).shape))
+                ), current)).mesh
+            if current == value.mesh:
+                states = []
+                for index, attr in enumerate(value.attrs):
+                    if isinstance(attr, Partial):
+                        ref = ctx.mesh_axis_alias(value.mesh, index)
+                        if ref is None:
+                            return None
+                        states.append(f"{ref} @ {self.visit(attr, ctx)}")
+                return "(" + self.layout_surface(layout, ctx) + ") @ {" + (
+                    ", ".join(states) if states else "B()"
+                ) + "}"
         if ctx is not None and all(isinstance(attr, Broadcast) for attr in value.attrs):
             current = ctx.current_mesh
             if current is not None and isinstance(layout, Layout) and layout.strides is not None:

@@ -617,6 +617,7 @@ levels containing Split or Partial remain part of the distribution.
 | `((8, 16), (1, 8))` | Plain `Layout` with explicit strides |
 | `(8 @ t.w, 16)` | `ShardLayout` splitting a tensor dimension over `t.w` |
 | `(8, 16) @ {B()}` | All-Broadcast `ShardLayout` |
+| `((8, 16) + 4 \| Swizzle(2, 4, 3)) @ {B()}` | All-Broadcast `ShardLayout` based on a `ComposedLayout` |
 | `(8 @ t.w, 16) @ {t.l @ P("sum")}` | Split placement with Partial values on `t.l` |
 | `((8 @ t.w, 16), (16, 1)) @ {t.l @ P("sum")}` | Placement with explicit strides and Partial values |
 | `((8, 16), {})` | Transitional spelling of an all-Broadcast `ShardLayout` |

@@ -433,31 +433,31 @@ def gemm(
                                                 )
                                                 lhs_view = T.tensor_view(
                                                     T.ptr_of(lhs_stages[(k // 64) % 3][o_m:o_m + 64, o_k:o_k + 16]),
-                                                    layout=ShardLayout(
-                                                        layout=ComposedLayout(
-                                                            inner=Swizzle(3, 4, 3),
-                                                            offset=0,
-                                                            outer=Layout(((8, 8), 16), ((512, 64), 1)),
-                                                        ),
-                                                        attrs=(B(), B(), B()),
-                                                        mesh=threads_3,
-                                                    ),
+                                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3)) @ {B()},
                                                     shape=(64, 16),
                                                 )
                                                 rhs_view = T.tensor_view(
                                                     T.ptr_of(rhs_stages[(k // 64) % 3][o_k:o_k + 16, o_n:o_n + 256]),
-                                                    layout=ShardLayout(
-                                                        layout=ComposedLayout(
-                                                            inner=Swizzle(3, 4, 3),
-                                                            offset=0,
-                                                            outer=Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))),
-                                                        ),
-                                                        attrs=(B(), B(), B()),
-                                                        mesh=threads_3,
-                                                    ),
+                                                    layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ {B()},
                                                     shape=(16, 256),
                                                 )
                                                 T.tiled_mma(
+                                                    acc_view,
+                                                    lhs_view,
+                                                    rhs_view,
+                                                    atom=T.cuda.sm90.Wgmma(n=256, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN, mesh=threads_3),
+                                                )
+                                                acc_view_1 = T.tensor_view(
+                                                    T.ptr_of(acc[o_m:o_m + 64, o_n:o_n + 256]),
+                                                    layout=((8 @ threads_3.d1, 2, 4 @ threads_3.d0, 2, 4 @ threads_3.d2, 32), (1, 8, 16, 64, 128, 512)),
+                                                    shape=(64, 256),
+                                                )
+                                                lhs_view_1 = T.tensor_view(
+                                                    T.ptr_of(lhs_stages[(k // 64) % 3][o_m:o_m + 64, o_k + 16:o_k + 16 + 16]),
+                                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ {B()},
+                                                    shape=(64, 16),
+                                                )
+                                                rhs_view_1 = T.tensor_view(
 ```
 
 The three `g / bn / mi` loops and `cta.d0` survive lowering. The three RHS slots

@@ -60,15 +60,7 @@ def gemm(
                                     )
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(lhs_stages[(k // 32) % 2][o_m:o_m + 64, o_k:o_k + 16]),
-                                        layout=ShardLayout(
-                                            layout=ComposedLayout(
-                                                inner=Swizzle(2, 4, 3),
-                                                offset=0,
-                                                outer=Layout(((8, 8), 16), ((256, 32), 1)),
-                                            ),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_3,
-                                        ),
+                                        layout=(Layout(((8, 8), 16), ((256, 32), 1)) | Swizzle(2, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view = T.tensor_view(
@@ -89,15 +81,7 @@ def gemm(
                                     )
                                     lhs_view_1 = T.tensor_view(
                                         T.ptr_of(lhs_stages[(k // 32) % 2][o_m:o_m + 64, o_k + 16:o_k + 16 + 16]),
-                                        layout=ShardLayout(
-                                            layout=ComposedLayout(
-                                                inner=Swizzle(2, 4, 3),
-                                                offset=16,
-                                                outer=Layout(((8, 8), 16), ((256, 32), 1)),
-                                            ),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_3,
-                                        ),
+                                        layout=(Layout(((8, 8), 16), ((256, 32), 1)) + 16 | Swizzle(2, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view_1 = T.tensor_view(

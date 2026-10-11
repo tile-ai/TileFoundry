@@ -625,6 +625,7 @@ class _PlacementCandidate:
     states_written: bool = False
     mesh: Mesh | None = None
     attrs: tuple[object, ...] = ()
+    composed: ComposedLayout | None = None
 
 
 def _placement_meshes(value: _PlacementCandidate, context: MatchContext, match):
@@ -743,10 +744,16 @@ class PlacementConstructionRule:
     STATEMENT: ClassVar[str] = (
         "A placement must construct a valid shard layout. Without splits, partials "
         "or stated strides, it uses row-major strides; Broadcast states do not "
-        "affect this default."
+        "affect this default. A composed operand is retained directly without "
+        "canonical split decomposition."
     )
 
     def apply(self, value, *, match, context):
+        if value.composed is not None:
+            return PlacedLayout(
+                shape=value.shape,
+                layout=runtime.ShardLayout(value.composed, value.attrs, value.mesh),
+            )
         if value.mesh is None:
             return PlacedLayout(
                 shape=value.shape, layout=runtime.Layout(shape=value.shape, strides=value.strides)
@@ -968,8 +975,8 @@ class PlacementOperandPattern(PlacedLayoutPattern):
 @dataclass(frozen=True)
 class StatedLayoutOperandRule:
     STATEMENT: ClassVar[str] = (
-        "States attach to placement dimensions or a plain Layout operand; composed "
-        "operands must use the complete ShardLayout(...) constructor."
+        "States attach to placement dimensions, a plain Layout, or a ComposedLayout "
+        "whose outer is a plain Layout."
     )
 
     def apply(self, value, *, match, context):
@@ -977,9 +984,8 @@ class StatedLayoutOperandRule:
         if isinstance(operand, _PlacementCandidate):
             return dataclasses.replace(operand, states=states, states_written=True)
         if isinstance(operand, ComposedLayout):
-            raise ParseError.from_node(
-                match.node, context,
-                "composed layouts with states must use the complete ShardLayout(...) constructor",
+            return _PlacementCandidate(
+                operand.shape, None, (), states, True, composed=operand,
             )
         if not isinstance(operand, Layout):
             raise ParseError.from_node(
@@ -997,7 +1003,7 @@ class StatedLayoutPattern(ElementPattern):
             ast.BinOp,
             FieldPattern("op", AstNodePattern(ast.MatMult)),
             FieldPattern("left", ChildPattern("operand", ChoicePattern(
-                PlacementOperandPattern(), ComposedLayoutSugarPattern(), StaticValuePattern(),
+                ComposedLayoutSugarPattern(), PlacementOperandPattern(), StaticValuePattern(),
             ), "layout", "layout")),
             FieldPattern("right", ValueStatesPattern()),
         ),

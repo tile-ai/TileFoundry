@@ -65,15 +65,7 @@ def gemm(
                                     )
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(rhs_stages[(k // 16) % 2][o_k:o_k + 16, o_n:o_n + 32]),
-                                        layout=ShardLayout(
-                                            layout=ComposedLayout(
-                                                inner=Swizzle(2, 4, 3),
-                                                offset=0,
-                                                outer=Layout(((2, 8), (1, 32)), ((256, 32), (512, 1))),
-                                            ),
-                                            attrs=(B(), B(), B()),
-                                            mesh=threads_3,
-                                        ),
+                                        layout=(Layout(((2, 8), (1, 32)), ((256, 32), (512, 1))) | Swizzle(2, 4, 3)) @ {B()},
                                         shape=(16, 32),
                                     )
                                     T.tiled_mma(

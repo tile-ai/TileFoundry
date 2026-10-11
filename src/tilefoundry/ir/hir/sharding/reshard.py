@@ -251,7 +251,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
     new_storage = op.storage if op.storage is not None else x_ty.storage
     new_layout = op.layout
-    if isinstance(new_layout, ShardLayout) and new_layout.layout.strides is None:
+    if (
+        isinstance(new_layout, ShardLayout)
+        and isinstance(new_layout.layout, Layout)
+        and new_layout.layout.strides is None
+    ):
         new_layout = _materialize_reshard_strides(new_layout, x_ty, new_storage)
     return TensorType(
         shape=x_ty.shape,
