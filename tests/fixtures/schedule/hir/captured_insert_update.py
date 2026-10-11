@@ -1,8 +1,7 @@
-"""Copy a scheduled row captured by a nested scope into its carried tile.
+"""Write a scheduled row captured by a nested scope into its carried tile.
 
-The indexed copy is lowered when the scope captures row. InsertSlice must
-copy that existing result into the destination window instead of treating
-it as an instruction that can still be redirected to the window.
+Allocation binds the indexed copy to the tile's destination window. Lowering
+uses that decision at the producer, before entering the capturing scope.
 """
 
 from tilefoundry import func, module

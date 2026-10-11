@@ -11,23 +11,43 @@ from typing import Protocol
 import isl
 from ortools.sat.python import cp_model
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var, value_labels
+from tilefoundry.ir.core import (
+    Call,
+    Constant,
+    Expr,
+    Tuple,
+    Var,
+    attach_metadata,
+    get_metadata,
+    value_labels,
+)
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.types import TensorType, TupleType
-from tilefoundry.ir.types.utils import is_literal_shape, local_type_of, tensor_types
+from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.mesh import levels
+from tilefoundry.ir.types.utils import (
+    is_literal_shape,
+    local_type_of,
+    static_dim_value,
+    tensor_types,
+)
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
+from tilefoundry.visitor_registry.access_relation import AccessRelation
 from tilefoundry.visitor_registry.contexts import CostContext
 
-from .access import Access, buffer_alias
+from .access import Access, BufferAlias, buffer_alias
 from .errors import AnalysisError
 from .iteration_scope import IterationScope, walk_scopes
 from .liveness import Liveness, UseEvent, result_copies
+from .metadata import MemoryMetadata
 from .precision import AnalysisPrecision
 
 
@@ -420,6 +440,8 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         self.bound: dict[int, Storage] = {}
         self.members: set[int] = set()
         self.pending: dict[int, list[tuple[Box, int, isl.map]]] = defaultdict(list)
+        self.updates: dict[Box, tuple[Box, Box, isl.map, BufferAlias]] = {}
+        self.definitions: dict[int, IterationScope] = {}
         self.uses: dict[int, list[UseEvent]] = defaultdict(list)
         for use in liveness.uses:
             self.uses[id(use.value)].append(use)
@@ -431,6 +453,73 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             and isinstance(interval.value.args[1], Constant)
             and type(interval.value.args[1].value) is int
         }
+
+    def dispatch_visit(self, node: Expr, ctx: AllocationModel) -> Storage:
+        if id(node) not in self._memo:
+            self.definitions[id(node)] = ctx.current
+        return super().dispatch_visit(node, ctx)
+
+    def update_alias(
+        self, node: Call, update: Box, relation: isl.map, ctx: AllocationModel
+    ) -> BufferAlias | None:
+        """Bind an update's window to values visible at its producer."""
+        source_scope = self.definitions[id(update.producer)]
+        visible: set[IterationScope] = set()
+        cursor: IterationScope | None = source_scope
+        while cursor is not None:
+            visible.add(cursor)
+            cursor = cursor.parent
+        names = tuple(
+            relation.get_dim_name(isl.dim_type.PARAM, axis)
+            for axis in range(relation.dim(isl.dim_type.PARAM))
+        )
+        if any(name not in ctx.current.domain_params for name in names):
+            return None
+        values = {name: ctx.current.domain_params[name] for name in names}
+        for axis, loop in enumerate(ctx.current.enclosing_loops()):
+            name = f"__tf_alias_loop_{axis}"
+            while name in values:
+                name += "_"
+            relation = relation.set_dim_name(isl.dim_type.IN, axis, name)
+            values[name] = loop.induction_var
+        relation = relation.move_dims(
+            isl.dim_type.PARAM, relation.dim(isl.dim_type.PARAM),
+            isl.dim_type.IN, 0, ctx.current.depth,
+        )
+        values = {name: ctx.current.capture_root(value) for name, value in values.items()}
+
+        def is_visible(value: object) -> bool:
+            if isinstance(value, (int, Constant, DimVar)):
+                return True
+            if isinstance(value, Call) and isinstance(value.target, MeshCoord):
+                mesh = value.target.mesh
+                axis = static_dim_value(value.args[0])
+                offset = 0
+                for topology, layout in zip(mesh.topologies, levels(mesh), strict=True):
+                    width = len(flatten(layout.shape))
+                    if axis is None or offset <= axis < offset + width:
+                        name = getattr(topology, "name", topology)
+                        if not any(
+                            isinstance(scope.owner, MeshRegion)
+                            and name in {
+                                getattr(held, "name", held)
+                                for held in scope.owner.mesh.topologies
+                            }
+                            for scope in visible
+                        ):
+                            return False
+                    offset += width
+                return True
+            interval = ctx.liveness.interval_of(value)
+            return (
+                self.definitions.get(id(value)) in visible
+                and interval is not None and interval.defined_at < update.defined_at
+            )
+
+        destination = ctx.current.capture_root(node.args[0])
+        if not is_visible(destination) or not all(is_visible(value) for value in values.values()):
+            return None
+        return BufferAlias(destination, AccessRelation(relation, values))
 
     def share(self, node: Expr, storage: Storage, ctx: AllocationModel) -> Storage:
         """Extend storage by member intervals, or actual uses of a tuple."""
@@ -529,9 +618,19 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         )
         for parameter in node.params[len(node.yield_values):]:
             self.visit(parameter, inner)
-        for result, operand in zip(carried, initials, strict=False):
+        for slot, (result, operand) in enumerate(zip(carried, initials, strict=False)):
             if isinstance(result, Box) and isinstance(operand, Box):
-                self.tie(result, operand, inner)
+                if self.tie(result, operand, inner):
+                    shape = tuple(result.producer.type.shape)
+                    domain = shape_to_isl_set(shape, {})
+                    identity = isl.map.identity(
+                        domain.get_space().map_from_set()
+                    ).intersect_domain(domain)
+                    moved = get_metadata(result.producer, MemoryMetadata) or MemoryMetadata()
+                    attach_metadata(
+                        result.producer,
+                        replace(moved, alias=BufferAlias(node.args[slot], AccessRelation(identity))),
+                    )
         body = self.visit(node.body, inner)
         yields = tuple(self.visit(operand, inner) for operand in node.yield_values)
         for source, slot, relation in self.pending.pop(id(node), ()):
@@ -543,30 +642,31 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         storage = carried[0] if len(carried) == 1 else carried if carried else body
         return self.share(node, storage, ctx)
 
-    def tie(self, result: Box, operand: Box, ctx: AllocationModel) -> None:
+    def tie(self, result: Box, operand: Box, ctx: AllocationModel) -> bool:
         """Require the single backing buffer stated by one loop-carried slot."""
         if result is operand or result.memory_level != operand.memory_level:
-            return
+            return False
         if operand.persistent or result.bytes != operand.bytes:
-            return
+            return False
         ctx.groups.union(result, operand)
         if result.memory_level in ctx.models:
             ctx.models[result.memory_level].add(ctx.address[result] == ctx.address[operand])
+        return True
 
     def alias(
         self, result: Box, operand: Box, relation: isl.map, ctx: AllocationModel
-    ) -> None:
+    ) -> bool:
         """Require one proven logical alias in the physical placement."""
         if result is operand or result.memory_level != operand.memory_level or operand.persistent:
-            return
+            return False
         if is_zero_offset(relation):
             if result.bytes > operand.bytes:
-                return
+                return False
             if result.memory_level in ctx.models:
                 ctx.models[result.memory_level].add(ctx.address[result] == ctx.address[operand])
         else:
             if operand.bytes > result.bytes:
-                return
+                return False
             if result.memory_level in ctx.models:
                 model = ctx.models[result.memory_level]
                 model.add(ctx.address[operand] >= ctx.address[result])
@@ -574,6 +674,19 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                     ctx.address[operand] + operand.bytes <= ctx.address[result] + result.bytes
                 )
         ctx.groups.union(result, operand)
+        joint = self.updates.get(result)
+        if joint is not None and joint[0] is operand:
+            _, update, update_relation, alias = self.updates.pop(result)
+            self.adopt_update(result, update, update_relation, alias, ctx)
+        return True
+
+    def adopt_update(
+        self, result: Box, update: Box, relation: isl.map, alias: BufferAlias, ctx: AllocationModel
+    ) -> None:
+        """Apply the window constraint and publish it together for lowering."""
+        if self.alias(result, update, relation, ctx):
+            moved = get_metadata(update.producer, MemoryMetadata) or MemoryMetadata()
+            attach_metadata(update.producer, replace(moved, alias=alias))
 
     def default_visit_leaf(
         self, node: Expr, operands: tuple[Storage, ...], ctx: AllocationModel
@@ -602,14 +715,32 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 storage = self.storage_of(value)
                 return storage.producer if isinstance(storage, Box) else value
 
-            for operand, relation in operand_to_result_relation(node, ctx.current, producer_of):
+            relations = operand_to_result_relation(node, ctx.current, producer_of)
+            update = None
+            destination = None
+            if isinstance(node.target, InsertSlice):
+                update = self.storage_of(node.args[1])
+                destination = self.storage_of(node.args[0])
+            for operand, relation in relations:
                 storage = self.storage_of(operand)
                 if not isinstance(storage, Box):
                     continue
+                is_update = storage is update and storage is not destination
                 if any(not use.synthetic and use.at > result.defined_at for use in storage.uses):
                     continue
                 if storage.last_used_at <= result.defined_at:
-                    self.alias(result, storage, relation, ctx)
+                    if is_update:
+                        if isinstance(destination, Box):
+                            alias = self.update_alias(node, storage, relation, ctx)
+                            if alias is not None:
+                                if ctx.groups.find(result) is ctx.groups.find(destination):
+                                    self.adopt_update(result, storage, relation, alias, ctx)
+                                else:
+                                    self.updates[result] = (destination, storage, relation, alias)
+                    else:
+                        self.alias(result, storage, relation, ctx)
+                    continue
+                if is_update:
                     continue
                 cursor: IterationScope | None = ctx.current
                 while cursor is not None:

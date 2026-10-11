@@ -24,24 +24,16 @@ def gemm(x: Tensor[(4, 4), "bf16"], idx: Tensor[(2,), "i64"], out: Tensor[(2, 4)
         )
         with Mesh((Topology("thread", 32),), Layout((32,), (1,)), names=("d0",)) as scope:
             T.fill(tile, 0.0)
-            row = T.tensor_view(
-                0,
-                dtype='bf16',
-                storage=StorageKind.SMEM,
-                layout=Layout((1, 4), (4, 1)),
-                shape=(1, 4),
-            )
             for r in range(0, 2, 1):
                 source = T.tensor_view(T.ptr_of(x), layout=Layout((4, 4), (4, 1)), shape=(4, 4))
                 tile_1 = T.tensor_view(
                     T.ptr_of(idx[r:r + 1]), layout=Layout((1,), (1,)), shape=(1,)
                 )
                 with scope[:] as threads:
-                    T.copy_async(source, row, tile_1, fill=0)
                     window = T.tensor_view(
                         T.ptr_of(tile[r:r + 1, 0:0 + 4]),
                         layout=Layout((1, 4), (4, 1)),
                         shape=(1, 4),
                     )
-                    T.copy(row, window)
+                    T.copy_async(source, window, tile_1, fill=0)
         T.copy(tile, out)

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from tilefoundry.ir.core import (
     Call,
     Expr,
+    Var,
     VerifyError,
     describe_expr,
     get_metadata,
@@ -46,7 +47,6 @@ from .allocation import (
     box_labels,
     solve_allocation,
 )
-from .buffer_alias import analyze_buffer_alias
 from .errors import AnalysisError
 from .facts import TARGET_MEMORY_OWNER, MemoryHierarchyFacts
 from .footprint import (
@@ -616,8 +616,6 @@ class MemoryVisitor(ExprVisitor[None]):
 
 def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     """Attach Call movement and Function-wide movement and placement."""
-    alias = analyze_buffer_alias(function, context)
-    attach(function, alias)
     module = context.module
     topology_level = context.topology_level
     facts = context.target.get_facts(MemoryHierarchyFacts)
@@ -842,13 +840,15 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             )
             peak = solved.peak_bytes
             for item in values:
-                if not isinstance(item.producer, Call):
+                if not isinstance(item.producer, (Call, Var)) or item.persistent:
                     continue
                 if isinstance(item.producer.type, TupleType):
                     continue
                 copies = result_copies(item.producer)
                 buffer_bytes = item.bytes // copies
                 moved = get_metadata(item.producer, MemoryMetadata)
+                if isinstance(item.producer, Var) and moved is None:
+                    moved = MemoryMetadata()
                 if moved is None:
                     raise AnalysisError("memory: placed Call has no movement record")
                 attach(

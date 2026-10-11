@@ -14,6 +14,7 @@ import importlib.util
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from itertools import combinations
 from math import prod
 from pathlib import Path
 
@@ -36,7 +37,16 @@ from tilefoundry.cli import main as cli_main
 from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.inspection import PatternPrinter, as_script
-from tilefoundry.ir.core import Call, Op, OpCapability, Var, detach_metadata, get_metadata
+from tilefoundry.ir.core import (
+    Call,
+    Constant,
+    Op,
+    OpCapability,
+    Tuple,
+    Var,
+    detach_metadata,
+    get_metadata,
+)
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_registry import iter_schemas
@@ -63,8 +73,8 @@ from tilefoundry.ir.tir.cuda.memory.copy_async_tensor import CopyAsyncTensor
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Form, Wgmma
-from tilefoundry.ir.tir.memory import Copy
-from tilefoundry.ir.tir.stmts import Evaluate
+from tilefoundry.ir.tir.memory import Copy, TensorView
+from tilefoundry.ir.tir.stmts import Evaluate, For, If, LetStmt, MeshScope, Sequential, While
 from tilefoundry.ir.types import (
     ComposedLayout,
     DType,
@@ -74,6 +84,7 @@ from tilefoundry.ir.types import (
     TensorType,
 )
 from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.layout_algebra import cosize
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.schedule import candidates, finalize
@@ -105,6 +116,7 @@ PLAIN_REFUSED = {
 }
 CANDIDATES_REFUSED = {
     "captured_insert_update": "source has no unscheduled candidate site",
+    "loop_carry_from_param": "source has no unscheduled candidate site",
 }
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
@@ -141,6 +153,7 @@ class _RmemExpectation:
 
 SMEM_GOLDEN = {
     "captured_insert_update": 16,
+    "loop_carry_from_param": 0,
     "sparse_decode": 16_384,
     "scalar_binary": 0,
     "fp8_block_scaled_gemm": 65_536,
@@ -166,6 +179,7 @@ SMEM_GOLDEN = {
 
 RMEM_EXPECTED = {
     "captured_insert_update": {},
+    "loop_carry_from_param": {},
     "sparse_decode": {
         "thread@128:128#0": _RmemExpectation(33_024, "attention intermediates and row reductions"),
         "thread@0:256#0": _RmemExpectation(33_024, "parent envelope of attention compute"),
@@ -1434,6 +1448,81 @@ def test_schedule_analyze_writes_memory_report(
     assert out.read_bytes() == ANALYZED_GOLDEN.read_bytes()
 
 
+def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path) -> None:
+    """Check literal views in lowered TIR, including uses across loop backedges."""
+    views: list[tuple[Var, int, int]] = []
+    defined: dict[int, int] = {}
+    last: dict[int, int] = {}
+    clock = 0
+
+    def use(expressions) -> None:
+        for expression in expressions:
+            for value in collect_exprs(expression):
+                if isinstance(value, Var) and id(value) in defined:
+                    last[id(value)] = clock
+
+    def walk(statement) -> None:
+        nonlocal clock
+        if statement is None:
+            return
+        clock += 1
+        if isinstance(statement, Sequential):
+            for child in statement.body:
+                walk(child)
+        elif isinstance(statement, LetStmt):
+            use((statement.value,))
+            defined[id(statement.var)] = last[id(statement.var)] = clock
+            fields = (
+                statement.value.elements
+                if isinstance(statement.value, Tuple) else (statement.value,)
+            )
+            for field in fields:
+                if (
+                    isinstance(field, Call) and isinstance(field.target, TensorView)
+                    and field.target.storage is StorageKind.SMEM
+                    and isinstance(field.args[0], Constant)
+                ):
+                    span = (
+                        cosize(field.type.layout) if field.type.layout is not None
+                        else prod(field.type.shape)
+                    )
+                    views.append((
+                        statement.var, int(field.args[0].value), span * field.type.dtype.bit_width // 8,
+                    ))
+            walk(statement.body)
+        elif isinstance(statement, (For, While)):
+            use(
+                (statement.start, statement.stop, statement.step)
+                if isinstance(statement, For) else (statement.cond,)
+            )
+            entered = clock
+            walk(statement.body)
+            for key, used in last.items():
+                if defined[key] < entered < used:
+                    last[key] = clock
+        elif isinstance(statement, If):
+            use((statement.cond,))
+            walk(statement.then_body)
+            walk(statement.else_body)
+        elif isinstance(statement, MeshScope):
+            walk(statement.body)
+        elif isinstance(statement, Evaluate):
+            use(statement.args)
+
+    walk(function.body)
+    for (left, start, size), (right, other_start, other_size) in combinations(views, 2):
+        if left is right:
+            continue
+        live = max(defined[id(left)], defined[id(right)]) <= min(
+            last[id(left)], last[id(right)]
+        )
+        overlap = max(start, other_start) < min(start + size, other_start + other_size)
+        assert not (live and overlap), (
+            f"{source.name}: live smem views overlap: "
+            f"{left.name}@{start}+{size}, {right.name}@{other_start}+{other_size}"
+        )
+
+
 @pytest.mark.parametrize("source", HIR, ids=lambda path: path.stem)
 def test_schedule_finalize_writes_verified_tir(
     source: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1446,7 +1535,9 @@ def test_schedule_finalize_writes_verified_tir(
     assert captured.out == ""
     assert captured.err == ""
     assert out.read_bytes() == expected.read_bytes()
-    found = _direct_operand_matches(_prim_in(out))
+    lowered = _prim_in(out)
+    _assert_live_smem_views_do_not_overlap(lowered, source)
+    found = _direct_operand_matches(lowered)
     assert found
     wgmma_lhs = [
         captures

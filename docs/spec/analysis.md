@@ -252,6 +252,7 @@ class MemoryMetadata(IRMetadata):
     footprint: Footprint | None = None
     buffer_bytes: int | None = None
     offsets: tuple[int, ...] = ()
+    alias: BufferAlias | None = None
 
 
 class ReuseWindow:
@@ -327,8 +328,9 @@ counts one slice per index as an upper bound.
 | `MemoryMetadata.topologies` | The effective Module topology levels, coarsest first. | No |
 | `MemoryMetadata.traffic` | One occurrence's per-boundary movement, grouped by storage and communication boundary. | No; projection reads resolved Mesh and topology extents. |
 | `MemoryMetadata.operands` | One occurrence's movement in order `(*call.args, call)`. | No |
-| `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` tensor Call result. `None` for tuple results or results that are not address-placed. | No |
+| `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` tensor result, including a carried phi. `None` for tuple results or results that are not address-placed. | No |
 | `MemoryMetadata.offsets` | The byte offset of each physical result slot: each copy of a staged tensor in copy order, or each tuple tensor leaf in flat leaf order. An `rmem` result has no reported offsets. Staged tuple results MUST raise `AnalysisError`. | No |
+| `MemoryMetadata.alias` | An adopted InsertSlice update window or carried-phi tie, expressed as `BufferAlias(buffer, relation)`. Only lowering reads it; it MUST NOT appear in analysis reports. | No |
 | `RegionMemoryMetadata.topologies` | The same effective Module topology levels. | No |
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
 
@@ -579,13 +581,21 @@ class MemoryLevelPeak:
     Failure to prove that declaration MUST raise `AnalysisError`. `Transpose`
     is not registered: it writes a new value, retains its access permutation,
     and receives its own allocation under the ordinary conflict rules.
-  - The first memory-analysis stage MUST resolve storage ownership once per
-    value. Its
-    `BufferAliasMetadata` MUST carry the value-to-root table and region
-    parameter bindings. Liveness, placement, footprint, and lowering MUST
-    reuse that root table rather than trace producers.
-    Access folding MUST remain in `resolve_access`, using the caller's
-    topology level because projected view coordinates depend on that level.
+  - Allocation MUST return storage for each SSA value and record adopted
+    InsertSlice update windows and carried-phi ties in `MemoryMetadata.alias`.
+    An update window MUST be adopted only together with the InsertSlice's
+    destination alias. Its buffer MUST be the destination resolved through
+    region captures; its relation MUST map producer coordinates to destination
+    coordinates. The destination and SSA parameters MUST be defined in the
+    producer's scope or an ancestor, before the producer's definition event.
+    Constants and dimension variables are always visible;
+    a mesh coordinate is visible only if an enclosing mesh region declares its
+    topology. Lowering MUST execute this decision without reading
+    the InsertSlice's parameters at the producer. An untied carry MUST receive
+    its own storage and a copy of its initial value before entering the loop.
+    Ordinary `smem` aliases use their placed offsets; `rmem` alias groups only
+    estimate peaks. Access folding MUST remain in `resolve_access`, using the
+    caller's topology level because projected view coordinates depend on it.
   - Liveness MUST record only each SSA value's own uses. A storage box's
     interval MUST span the union of its tensor members' intervals and its uses
     MUST include all tensor member uses. A tuple SSA value has no bytes: its
