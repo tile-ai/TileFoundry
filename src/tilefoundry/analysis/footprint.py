@@ -7,7 +7,7 @@ level.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 
 import isl
@@ -511,12 +511,12 @@ def moving_boundaries(
     wave: tuple[int, int],
     ctx: CostContext,
     labels: Mapping[int, str],
-    owners: Mapping[int, Expr],
+    producer_of: Callable[[Expr], Expr],
 ) -> tuple[MovingBoundary, ...]:
     """Collect boundaries that move bytes at *memory_level* in one scope walk.
 
-    The buffer-alias stage resolves every value before this walk, so the shared
-    roots table in owners covers each accessed buffer.
+    Allocation has already visited every value, so each accessed buffer's
+    storage producer is available without chasing its definitions.
     """
     whole = replace(ctx, topology_level=None, topologies=())
     wave_units, declared_units = wave
@@ -642,7 +642,7 @@ def moving_boundaries(
                         mesh_parameters=mesh_parameters,
                         axis_parameters=axis_parameters
                         if _shared_origin(
-                            definitions.get(id(owners[id(access.buffer)])), topology_level, wave
+                            definitions.get(id(producer_of(access.buffer))), topology_level, wave
                         )
                         else (),
                         position=position,
@@ -930,12 +930,12 @@ def reuse_windows(
     declared_units: int,
     ctx: CostContext,
     labels: Mapping[int, str],
-    owners: Mapping[int, Expr],
+    producer_of: Callable[[Expr], Expr],
 ) -> tuple[ReuseWindow, ...]:
     """Describe one cache-residency window per buffer that is read again."""
     wave = (wave_units, declared_units)
     boundaries = moving_boundaries(
-        root, memory_level=memory_level, wave=wave, ctx=ctx, labels=labels, owners=owners
+        root, memory_level=memory_level, wave=wave, ctx=ctx, labels=labels, producer_of=producer_of
     )
     buffers = _by_buffer(boundaries, wave)
     if not buffers or ctx.scope is None:

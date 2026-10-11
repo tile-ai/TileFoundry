@@ -30,6 +30,7 @@ from tilefoundry.analysis import (
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
+    RegionMemoryMetadata,
     analyze,
 )
 from tilefoundry.analysis.access import Access
@@ -41,7 +42,7 @@ from tilefoundry.analysis.liveness import analyze_liveness
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
-from tilefoundry.ir.core import Call, describe_expr, get_metadata
+from tilefoundry.ir.core import Call, describe_expr, get_metadata, value_labels
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
@@ -716,8 +717,11 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
             if isinstance(expr, Call) and isinstance(expr.target, Reshape)
         )
         liveness = analyze_liveness(result.function)
+        source_label = value_labels((reshaped.args[0],))[0]
+        memory = get_metadata(result.function, RegionMemoryMetadata)
+        source_lifetime = next(row for row in memory.lifetimes if row.binding == source_label)
         assert (
-            liveness.interval_of(reshaped.args[0]).last_used_at
+            source_lifetime.last_used_at
             == liveness.interval_of(reshaped).last_used_at
         )
     expected_schedule = EXPECTED_PERSISTENT_SCHEDULES.get(case.id)

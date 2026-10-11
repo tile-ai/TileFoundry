@@ -7,7 +7,6 @@ from dataclasses import dataclass, field, replace
 
 from tilefoundry.ir.core import (
     Call,
-    Constant,
     Expr,
     VerifyError,
     describe_expr,
@@ -39,9 +38,12 @@ from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionSco
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .allocation import (
-    AllocationValue,
-    alias_components,
-    find_aliases,
+    AllocationConstraintVisitor,
+    AllocationModel,
+    Box,
+    aligned,
+    alignment_of,
+    box_labels,
     solve_allocation,
 )
 from .buffer_alias import analyze_buffer_alias
@@ -57,7 +59,7 @@ from .footprint import (
     wave_of,
 )
 from .iteration_scope import IterationScope, Repeats, walk_scopes
-from .liveness import LiveInterval, Liveness, analyze_liveness, result_copies
+from .liveness import analyze_liveness, result_copies
 from .metadata import (
     Breakdown,
     MemoryLevelPeak,
@@ -397,55 +399,20 @@ def add_traffic(
                 _accumulate(into.per_unit.setdefault(name, {}), unit, moved, repeats.loop_trips)
 
 
-def _allocation_intervals(
-    liveness: Liveness, parameter_ids: frozenset[int], owners: dict[int, Expr]
-) -> tuple[LiveInterval, ...]:
-    """Select independently resident intervals from storage-aware liveness."""
-    resident = set(parameter_ids)
-    for interval in liveness.intervals:
-        value = interval.value
-        owner = owners[id(value)]
-        if isinstance(value, (Call, Constant)) and owner is value:
-            resident.add(id(value))
-        if isinstance(value, LoopRegion):
-            resident.update(id(phi) for phi in value.params[: len(value.yield_values)])
-    return tuple(interval for interval in liveness.intervals if id(interval.value) in resident)
-
-
-def _project_allocation_values(
-    liveness: Liveness,
-    parameter_ids: frozenset[int],
-    facts: MemoryHierarchyFacts,
-    local: CostContext,
-    owners: dict[int, Expr],
-) -> tuple[AllocationValue, ...]:
-    """Project structural intervals into the analysed topology window."""
-    intervals = _allocation_intervals(liveness, parameter_ids, owners)
-    result: list[AllocationValue] = []
-    labels = value_labels(interval.value for interval in intervals)
-    for label, interval in zip(labels, intervals, strict=True):
-        expr = interval.value
-        persistent = id(expr) in parameter_ids
-        copies = result_copies(expr)
-        for memory_level, amount in bytes_by_storage(local.local_type_of(expr)).items():
-            if facts.explicit(memory_level) is None:
-                continue
-            result.append(
-                AllocationValue(
-                    expr,
-                    ValueLifetime(
-                        binding=label,
-                        memory_level=memory_level,
-                        bytes=amount * copies,
-                        defined_at=interval.defined_at,
-                        last_used_at=(
-                            liveness.timeline_end if persistent else interval.last_used_at
-                        ),
-                        persistent=persistent,
-                    ),
-                )
-            )
-    return tuple(result)
+def box_lifetimes(boxes: tuple[Box, ...]) -> tuple[ValueLifetime, ...]:
+    """Project storage boxes into the report's definition-ordered lifetimes."""
+    labels = box_labels(boxes)
+    return tuple(
+        ValueLifetime(
+            binding=label,
+            memory_level=box.memory_level,
+            bytes=box.bytes,
+            defined_at=box.defined_at,
+            last_used_at=box.last_used_at,
+            persistent=box.persistent,
+        )
+        for label, box in zip(labels, boxes, strict=True)
+    )
 
 
 def peak_in_window(rows: list[ValueLifetime], entered_at: int, exited_at: int) -> int:
@@ -460,20 +427,19 @@ def peak_in_window(rows: list[ValueLifetime], entered_at: int, exited_at: int) -
 
 
 def coalesced_peak_in_window(
-    values: tuple[AllocationValue, ...],
-    components: dict[int, int],
+    values: tuple[Box, ...],
+    model: AllocationModel,
     entered_at: int,
     exited_at: int,
 ) -> int:
     """Sum one physical buffer per required-alias group at each event."""
     peak = 0
     for point in range(entered_at, exited_at + 1):
-        live: dict[int, int] = {}
+        live: dict[Box, int] = {}
         for item in values:
-            lifetime = item.lifetime
-            if lifetime.defined_at <= point <= lifetime.last_used_at:
-                group = components[id(item.value)]
-                live[group] = max(live.get(group, 0), lifetime.bytes)
+            if item.defined_at <= point <= item.last_used_at:
+                group = model.groups.find(item)
+                live[group] = max(live.get(group, 0), item.bytes)
         peak = max(peak, sum(live.values()))
     return peak
 
@@ -498,13 +464,13 @@ def held_in_region(value_mesh: Mesh, region_mesh: Mesh) -> bool:
 
 
 def values_in_region(
-    values: tuple[AllocationValue, ...],
+    values: tuple[Box, ...],
     region: MeshRegion,
     entered_at: int,
     exited_at: int,
     facts: MemoryHierarchyFacts,
     topology_names: tuple[str, ...],
-) -> tuple[AllocationValue, ...]:
+) -> tuple[Box, ...]:
     """Resident values whose lifetimes and ownership intersect one mesh region."""
     positions = {name: index for index, name in enumerate(topology_names)}
     region_positions = tuple(
@@ -513,7 +479,7 @@ def values_in_region(
     outermost_region = min(region_positions)
     result = []
     for item in values:
-        lifetime = item.lifetime
+        lifetime = item
         if lifetime.last_used_at < entered_at or lifetime.defined_at > exited_at:
             continue
         declared = facts.explicit(lifetime.memory_level)
@@ -529,7 +495,7 @@ def values_in_region(
             )
         if outermost_region > owner_position:
             continue
-        layout = shard_layout_of(getattr(item.value.type, "layout", None))
+        layout = shard_layout_of(getattr(item.producer.type, "layout", None))
         if layout is None or not held_in_region(layout.mesh, region.mesh):
             continue
         result.append(item)
@@ -729,7 +695,49 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     )
     footprint_labels = dict(zip(distinct, value_labels(label_values), strict=True))
     liveness = analyze_liveness(function)
-    owners = alias.roots
+    placement = CostContext(
+        scope=FunctionScope(module, function),
+        topology_level=topology_level,
+        topologies=topologies,
+    )
+    quantities: dict[int, tuple[tuple[str, int] | None, ...]] = {}
+    limits: dict[str, int] = {}
+    for interval in liveness.intervals:
+        held = placement.local_type_of(interval.value)
+        slots = []
+        for leaf in leaves_of(held):
+            quantity = next(
+                ((level, amount) for level, amount in bytes_by_storage(leaf).items()
+                 if facts.explicit(level) is not None),
+                None,
+            )
+            if quantity is None:
+                slots.append(None)
+                continue
+            level, amount = quantity
+            amount *= result_copies(interval.value)
+            slots.append((level, amount))
+            limits[level] = limits.get(level, 0) + aligned(amount, alignment_of(interval.value))
+        quantities[id(interval.value)] = tuple(slots)
+    model = AllocationModel(
+        current=context.root,
+        liveness=liveness,
+        local=placement,
+        quantities=quantities,
+        persistent=frozenset(id(parameter) for parameter in function.params),
+        limits=limits,
+    )
+    allocation = AllocationConstraintVisitor(root_function=function, liveness=liveness)
+
+    def producer_of(value: Expr) -> Expr:
+        storage = allocation.storage_of(value)
+        return storage.producer if isinstance(storage, Box) else value
+
+    allocation.visit_function_body(function, model)
+    definitions = {id(interval.value): index for index, interval in enumerate(liveness.intervals)}
+    model.boxes.sort(key=lambda box: (definitions[id(box.producer)], box.leaf))
+    allocation_values = tuple(model.boxes)
+    lifetimes = box_lifetimes(allocation_values)
     reuse = (
         reuse_windows(
             context.root,
@@ -738,7 +746,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             declared_units=wave[1],
             ctx=locals_by_unit.get(topology_level, whole),
             labels=footprint_labels,
-            owners=owners,
+            producer_of=producer_of,
         )
         if memory_level is not None and wave is not None
         else ()
@@ -761,29 +769,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                     ),
                 ),
             )
-    placement = CostContext(
-        scope=FunctionScope(module, function),
-        topology_level=topology_level,
-        topologies=topologies,
-    )
-    allocation_values = _project_allocation_values(
-        liveness,
-        frozenset(id(parameter) for parameter in function.params),
-        facts,
-        placement,
-        owners,
-    )
-    lifetimes = tuple(item.lifetime for item in allocation_values)
-    rmem_values = tuple(
-        item for item in allocation_values if item.lifetime.memory_level == str(StorageKind.RMEM)
-    )
-    rmem_groups = alias_components(
-        len(rmem_values),
-        find_aliases(rmem_values, liveness, context.root, owners),
-    )
-    rmem_components = {
-        id(item.value): group for item, group in zip(rmem_values, rmem_groups, strict=True)
-    }
     solver_options = (
         context.options if isinstance(context.options, MemoryOptions) else MemoryOptions()
     )
@@ -799,13 +784,16 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             owner_topologies,
         )
         region_levels = []
-        for name in sorted({item.lifetime.memory_level for item in region_values}):
-            rows = [item.lifetime for item in region_values if item.lifetime.memory_level == name]
+        for name in sorted({item.memory_level for item in region_values}):
+            rows = [
+                row for item, row in zip(allocation_values, lifetimes, strict=True)
+                if item in region_values and item.memory_level == name
+            ]
             declared = facts.explicit(name)
             peak = (
                 coalesced_peak_in_window(
-                    tuple(item for item in region_values if item.lifetime.memory_level == name),
-                    rmem_components,
+                    tuple(item for item in region_values if item.memory_level == name),
+                    model,
                     window.entered_at,
                     window.exited_at,
                 )
@@ -823,7 +811,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             if name == str(StorageKind.RMEM):
                 region_rmem_peaks.append(peak)
                 claimed_rmem.update(
-                    id(item.value) for item in region_values if item.lifetime.memory_level == name
+                    id(item.producer) for item in region_values if item.memory_level == name
                 )
         if region_levels:
             attach(
@@ -840,43 +828,44 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         {item.memory_level for item in lifetimes} | set(memory_context.storage.total)
     ):
         declared = facts.explicit(name)
-        values = tuple(item for item in allocation_values if item.lifetime.memory_level == name)
-        rows = [item.lifetime for item in values]
+        values = tuple(item for item in allocation_values if item.memory_level == name)
+        rows = [
+            row for item, row in zip(allocation_values, lifetimes, strict=True)
+            if item.memory_level == name
+        ]
         capacity = declared.capacity_bytes if declared is not None else None
         if name in (str(StorageKind.GMEM), str(StorageKind.SMEM)) and values:
             solved = solve_allocation(
                 name,
-                values,
-                liveness,
-                context.root,
-                owners=owners,
-                options=solver_options,
+                model,
+                solver_options,
             )
             peak = solved.peak_bytes
-            offsets = dict(solved.offsets)
             for item in values:
-                if not isinstance(item.value, Call):
+                if not isinstance(item.producer, Call):
                     continue
-                copies = result_copies(item.value)
-                buffer_bytes = item.lifetime.bytes // copies
-                moved = get_metadata(item.value, MemoryMetadata)
+                if isinstance(item.producer.type, TupleType):
+                    continue
+                copies = result_copies(item.producer)
+                buffer_bytes = item.bytes // copies
+                moved = get_metadata(item.producer, MemoryMetadata)
                 if moved is None:
                     raise AnalysisError("memory: placed Call has no movement record")
                 attach(
-                    item.value,
+                    item.producer,
                     replace(
                         moved,
                         buffer_bytes=buffer_bytes,
                         offsets=tuple(
-                            offsets[id(item.value)] + copy * buffer_bytes for copy in range(copies)
+                            item.offset + copy * buffer_bytes for copy in range(copies)
                         ),
                     ),
                 )
         elif name == str(StorageKind.RMEM):
-            unclaimed = tuple(item for item in values if id(item.value) not in claimed_rmem)
+            unclaimed = tuple(item for item in values if id(item.producer) not in claimed_rmem)
             peak = max(
                 max(region_rmem_peaks, default=0),
-                coalesced_peak_in_window(unclaimed, rmem_components, 0, liveness.timeline_end),
+                coalesced_peak_in_window(unclaimed, model, 0, liveness.timeline_end),
             )
         else:
             end = max((item.last_used_at for item in rows), default=-1)
@@ -890,6 +879,25 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             )
         )
     levels = tuple(levels_list)
+    tuple_results = {
+        id(box.producer): box.producer for box in allocation_values
+        if isinstance(box.producer, Call) and isinstance(box.producer.type, TupleType)
+    }
+    for producer in tuple_results.values():
+        moved = get_metadata(producer, MemoryMetadata)
+        if moved is None:
+            raise AnalysisError("memory: placed Call has no movement record")
+        attach(
+            producer,
+            replace(
+                moved,
+                buffer_bytes=None,
+                offsets=tuple(
+                    box.offset for box in allocation_values
+                    if box.producer is producer and box.offset is not None
+                ),
+            ),
+        )
     errors = tuple(
         f"{item.memory_level} placement peak {format_bytes(item.peak_bytes)} exceeds "
         f"capacity {format_bytes(item.capacity_bytes)}"

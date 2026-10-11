@@ -327,8 +327,8 @@ counts one slice per index as an upper bound.
 | `MemoryMetadata.topologies` | The effective Module topology levels, coarsest first. | No |
 | `MemoryMetadata.traffic` | One occurrence's per-boundary movement, grouped by storage and communication boundary. | No; projection reads resolved Mesh and topology extents. |
 | `MemoryMetadata.operands` | One occurrence's movement in order `(*call.args, call)`. | No |
-| `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` Call result, or `None` when the result is not address-placed. | No |
-| `MemoryMetadata.offsets` | The byte offset of each physical result copy, in copy order. An `rmem` result has no reported offsets. | No |
+| `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` tensor Call result. `None` for tuple results or results that are not address-placed. | No |
+| `MemoryMetadata.offsets` | The byte offset of each physical result slot: each copy of a staged tensor in copy order, or each tuple tensor leaf in flat leaf order. An `rmem` result has no reported offsets. Staged tuple results MUST raise `AnalysisError`. | No |
 | `RegionMemoryMetadata.topologies` | The same effective Module topology levels. | No |
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
 
@@ -466,8 +466,8 @@ are monotonic across the whole Function, including nested and sibling regions.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names differ by the printer's numeric suffix in definition order. A value with neither name nor span is `<value N>` in definition order. | No |
-| `ValueLifetime.memory_level` | Emit one lifetime per storage level occupied by the value's Type. | No |
+| `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names differ by the printer's numeric suffix in definition order. A value with neither name nor span is `<value N>` in definition order. A tuple result's tensor leaf appends `[leaf]`, its flat leaf index; tensor results retain the unsuffixed name. | No |
+| `ValueLifetime.memory_level` | Emit one lifetime per tensor leaf's storage box, at the level occupied by its projected Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. A `ScheduleOp` whose selected instruction has a write-only result occupies `buffers` copies of those bytes; a `READ \| WRITE` result occupies one. | `MemoryHierarchyFacts.explicit_levels[].owner` |
 | `ValueLifetime.defined_at` | Definition event on the Function-wide structured SSA timeline. A staged (`buffers > 1`) result starts at the outermost enclosing loop's phi event rather than its own definition event. | No |
 | `ValueLifetime.last_used_at` | Greatest ordinary-consumer, region-entry, loop-backedge, or region-exit use event; the final timeline event for a parameter. | No |
@@ -569,11 +569,11 @@ class MemoryLevelPeak:
     operand, including a narrowing pointwise operation; an exact contained
     relation MUST keep the operand range inside the result range. These alias
     requirements are mandatory rather than optional placement choices.
-  - Registered buffer aliases MUST follow their named operand to its storage
-    owner and MUST NOT receive independent `buffer_bytes` or `offsets`. Analysis
-    MUST resolve structural tuple projections to their selected element without
-    a coordinate-renaming proof. For other aliases, it MUST prove that the
-    result-to-operand map is single-valued, injective, and
+  - Registered buffer aliases MUST return their operand's storage without
+    creating a new box and MUST NOT receive independent `buffer_bytes` or
+    `offsets`. Analysis MUST resolve structural tuple projections to their
+    selected element without a coordinate-renaming proof. For other aliases,
+    `buffer_alias()` MUST prove that the result-to-operand map is single-valued, injective, and
     contained in the operand's index box, using the call's own unmodified
     declared access relation via `renaming_relation`, not its folded accesses.
     Failure to prove that declaration MUST raise `AnalysisError`. `Transpose`
@@ -586,13 +586,19 @@ class MemoryLevelPeak:
     reuse that root table rather than trace producers.
     Access folding MUST remain in `resolve_access`, using the caller's
     topology level because projected view coordinates depend on that level.
-  - Liveness MUST propagate a use to the root recorded for the same
-    storage-sharing edges: registered buffer aliases to their source, mesh-region
-    results to their body, loop results to their body without carries or their
-    carry parameters otherwise, and tuple projections to their selected element.
-    Chains MUST propagate to the final owner. Placement interference, register
-    peaks, and in-place conflict checks MUST consume this liveness directly,
-    without independently rebuilding shared-storage intervals.
+  - Liveness MUST record only each SSA value's own uses. A storage box's
+    interval MUST span the union of its tensor members' intervals and its uses
+    MUST include all tensor member uses. A tuple SSA value has no bytes: its
+    interval MUST NOT extend its leaf boxes. Each tuple use MUST extend all
+    leaves to that event, except a static tuple projection, whose result's own
+    interval extends only the selected storage. This rule also applies to tuple
+    region parameters bound to their argument's leaf tuple, including captures,
+    synthetic loop uses, and returns. Registered views, region parameters and
+    results, and static tuple projections reuse the corresponding operand or
+    carry storage. Placement interference, register peaks, and in-place conflict
+    checks MUST consume those box intervals and uses. A dynamic tuple projection
+    MUST extend every possible leaf's storage and MUST NOT participate in
+    in-place reuse.
   - Every placed offset MUST be aligned to the greater of 16 bytes and the
     result element width. A staged result's copies MUST be contiguous: copy
     `k` starts at the solved block offset plus `k * buffer_bytes`.

@@ -4,15 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from tilefoundry.ir.core import Call, Expr, Var, get_metadata
+from tilefoundry.ir.core import Call, Expr, Var
 from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
-
-from .metadata import BufferAliasMetadata
 
 
 @dataclass(frozen=True)
@@ -82,14 +80,13 @@ def result_copies(expr: Expr) -> int:
 class LivenessVisitor(ExprVisitor[None]):
     """Build definition/use intervals while preserving structured SSA edges."""
 
-    def __init__(self, function: Function, alias: BufferAliasMetadata) -> None:
+    def __init__(self, function: Function) -> None:
         super().__init__(root_function=function)
         self.point = -1
         self.states: dict[int, LiveInterval] = {}
         self.definition_order: list[int] = []
         self.uses: list[UseEvent] = []
         self.regions: list[RegionInterval] = []
-        self.alias = alias
         self.loop_entries: list[tuple[int, set[int], set[int]]] = []
         for parameter in function.params:
             self.define(parameter, self.next_event())
@@ -121,17 +118,15 @@ class LivenessVisitor(ExprVisitor[None]):
         self.definition_order.append(key)
 
     def use(self, value: Expr, point: int, *, synthetic: bool = False) -> None:
-        """Extend a value and the values sharing its storage through one use."""
-        root = self.alias.roots[id(value)]
-        for used in (value,) if root is value else (value, root):
-            state = self.states.get(id(used))
-            if state is None:
-                raise ValueError(f"liveness: {type(used).__name__} is used before its definition")
-            for entry, outside in (loop_entry[:2] for loop_entry in self.loop_entries):
-                if state.defined_at < entry:
-                    outside.add(id(used))
-            self.states[id(used)] = replace(state, last_used_at=max(state.last_used_at, point))
-            self.uses.append(UseEvent(used, point, synthetic))
+        """Extend the SSA value through one use."""
+        state = self.states.get(id(value))
+        if state is None:
+            raise ValueError(f"liveness: {type(value).__name__} is used before its definition")
+        for entry, outside in (loop_entry[:2] for loop_entry in self.loop_entries):
+            if state.defined_at < entry:
+                outside.add(id(value))
+        self.states[id(value)] = replace(state, last_used_at=max(state.last_used_at, point))
+        self.uses.append(UseEvent(value, point, synthetic))
 
     def finish(self) -> Liveness:
         """Freeze the definition-ordered result."""
@@ -180,10 +175,12 @@ class LivenessVisitor(ExprVisitor[None]):
         entry_use = self.next_event()
         for initial in region.args:
             self.use(initial, entry_use)
+        for parameter in region.params[len(region.yield_values):]:
+            self.define(parameter, entry_use)
 
         phi_definition = self.next_event()
         self.define(region.induction_var, phi_definition)
-        for phi in region.params:
+        for phi in region.params[: len(region.yield_values)]:
             self.define(phi, phi_definition)
 
         self.loop_entries.append((phi_definition, set(), set()))
@@ -214,10 +211,7 @@ def analyze_liveness(function: Function) -> Liveness:
     """Build target-independent intervals for a checked HIR function."""
     if function.body is None:
         raise ValueError(f"liveness: function {function.name!r} has no body")
-    alias = get_metadata(function, BufferAliasMetadata)
-    if alias is None:
-        raise ValueError("liveness: function has no buffer-alias analysis")
-    visitor = LivenessVisitor(function, alias)
+    visitor = LivenessVisitor(function)
     visitor.visit_function_body(function)
     return visitor.finish()
 
