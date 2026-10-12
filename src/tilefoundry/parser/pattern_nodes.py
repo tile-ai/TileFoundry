@@ -863,8 +863,6 @@ class PlacedLayoutPattern(ElementPattern):
                 "rank": len(dims_node.elts),
                 "stride_rank": None if strides_node is None else len(strides_node.elts),
                 "bindings": tuple(bindings),
-                "states": (),
-                "states_written": False,
             },
             children=tuple(children),
         )
@@ -883,11 +881,7 @@ class PlacedLayoutPattern(ElementPattern):
             (*children[child_name], tensor_axis)
             for child_name, tensor_axis in match.captures["bindings"]
         )
-        states = tuple(
-            (*children[child_name], kind, reduction)
-            for child_name, kind, reduction in match.captures.get("states", ())
-        )
-        return _PlacementCandidate(shape, strides, splits, states, match.captures["states_written"])
+        return _PlacementCandidate(shape, strides, splits, ())
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         LayoutStrideRankRule(),

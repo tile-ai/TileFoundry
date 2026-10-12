@@ -13,12 +13,13 @@ from tilefoundry.ir.types import (
     Partial,
     ShardLayout,
     Split,
+    Swizzle,
     TensorType,
     Topology,
     make_shard_tensor_type,
 )
 from tilefoundry.ir.types.dim import DimVar, ceildiv
-from tilefoundry.ir.types.utils import local_type_of, numel, tensor_bytes
+from tilefoundry.ir.types.utils import local_type_of, numel, tensor_bytes, types_compatible
 
 
 def test_tensor_type_equality_over_a_dim_var_shape_entry() -> None:
@@ -240,3 +241,35 @@ def test_local_type_does_not_divide_replicated_or_partial_values(attr) -> None:
     local = local_type_of(tensor, topology_level="cta", topologies=(Topology("cta", 4),))
 
     assert numel(local) == 256
+
+
+@pytest.mark.parametrize(
+    ("declared_layout", "actual_layout", "expected"),
+    [
+        pytest.param(Layout((8, 16), (16, 1)), Layout((8, 16), (1, 8)), False, id="written-strides"),
+        pytest.param(Layout((8, 16), (16, 1)), None, True, id="plain-to-none"),
+        pytest.param(None, Layout((8, 16), (16, 1)), True, id="none-to-plain"),
+        pytest.param(
+            ShardLayout(Layout((8, 16), (16, 1)), (Broadcast(),), Mesh((Topology("thread", 8),), (8,), ("lane",))),
+            Layout((8, 16), (16, 1)), True, id="broadcast-to-plain",
+        ),
+        pytest.param(
+            ShardLayout(Layout((8, 16), (16, 1)), (Broadcast(),), Mesh((Topology("thread", 8),), (8,), ("lane",))),
+            Layout((8, 16), (1, 8)), False, id="broadcast-written-strides",
+        ),
+        pytest.param(
+            ComposedLayout(Swizzle(2, 4, 3), 0, Layout((8, 16), (16, 1))),
+            None, True, id="composed-to-none",
+        ),
+        pytest.param(
+            ShardLayout(Layout((8, 16), (16, 1)), (Split(0),), Mesh((Topology("thread", 8),), (8,), ("lane",))),
+            Layout((8, 16), (16, 1)), False, id="split-to-plain",
+        ),
+    ],
+)
+def test_unsplit_layout_forms_preserve_written_constraints(
+    declared_layout, actual_layout, expected: bool,
+) -> None:
+    declared = TensorType((8, 16), DType.f32, declared_layout, "rmem")
+    actual = TensorType((8, 16), DType.f32, actual_layout, "rmem")
+    assert types_compatible(declared, actual) is expected

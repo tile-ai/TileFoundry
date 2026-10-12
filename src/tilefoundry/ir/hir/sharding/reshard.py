@@ -13,7 +13,6 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, apply
 from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
     ShardLayout,
     Split,
     shard_layout_local_shape,
@@ -21,7 +20,7 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
-from tilefoundry.ir.types.utils import is_literal_shape
+from tilefoundry.ir.types.utils import is_literal_shape, is_unsharded_layout, strip_broadcast_layout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -182,10 +181,9 @@ def _stated_strides(layout) -> bool:
 
 def _plain(layout) -> bool:
     """Plain address functions include full broadcasts with stated strides."""
-    if isinstance(layout, ShardLayout):
-        if not all(isinstance(attr, Broadcast) for attr in layout.attrs):
-            return False
-        layout = layout.layout
+    if not is_unsharded_layout(layout):
+        return False
+    layout = strip_broadcast_layout(layout)
     return (
         isinstance(layout, (Layout, ComposedLayout))
         and shard_layout_of(layout) is None
@@ -208,8 +206,8 @@ def _buffer_alias(call: Call) -> int | None:
         return None
     if not is_literal_shape(result.shape):
         return None
-    source_layout = source.layout.layout if isinstance(source.layout, ShardLayout) else source.layout
-    result_layout = result.layout.layout if isinstance(result.layout, ShardLayout) else result.layout
+    source_layout = strip_broadcast_layout(source.layout)
+    result_layout = strip_broadcast_layout(result.layout)
     return 0 if _same_addresses(source_layout, result_layout, prod(result.shape)) else None
 
 

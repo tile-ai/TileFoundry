@@ -624,9 +624,8 @@ levels containing Split or Partial remain part of the distribution.
 
 Placement covers the current composed mesh scope, or the function mesh in a
 signature; unstated axes are Broadcast. `None`, plain `Layout`, and an
-all-Broadcast `ShardLayout` are compatible forms without a split; regional rmem
-and smem records include values defined in the body or child regions while live,
-counting each alias group once.
+all-Broadcast `ShardLayout` are compatible forms without a split; when both
+layouts are stated, their written shape and stride constraints remain.
 Shared-memory distribution belongs to CTA or coarser levels; author-written tiles
 in thread scope use plain layouts. A `where` clause constrains named topologies;
 acceptance rules are generated in [parser §2](./parser.md#2-syntax-and-rules).

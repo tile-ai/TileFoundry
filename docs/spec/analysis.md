@@ -611,7 +611,7 @@ class MemoryLevelPeak:
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `MemoryLevelPeak.memory_level` | Each storage level with at least one lifetime or traffic entry, sorted by name. | No |
-| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest live-byte total in its inclusive entry-to-exit event window, among levels whose declared owner makes the region eligible and values whose declared holder selects that region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
+| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest live-byte total in its inclusive entry-to-exit event window, counting each alias group once. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
 | `MemoryLevelPeak.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level. | As above |
@@ -621,16 +621,20 @@ class MemoryLevelPeak:
 
 - constraints:
   - `RegionMemoryMetadata` MUST be attached per reachable `Function` and per
-    `MeshRegion` with a live value at any storage level it owns. A mesh-region
+    `MeshRegion` with an eligible live value. Unsplit tensor values defined in
+    the region body or child regions contribute over intersecting lifetimes,
+    independently of the region's depth relative to the storage owner. Split
+    values retain owner eligibility and declared-holder selection. Each alias
+    group counts once; target-owned storage (`gmem`) is excluded. A mesh-region
     record carries only its topology names and per-level peaks; whole-Function
     traffic, footprints, reuse windows, lifetimes, errors, and advisories stay
     on the Function.
   - Every explicit level considered for a mesh-region peak MUST state an owner
     in `MemoryHierarchyFacts`. A missing owner is an error, not a reason to
     treat the level as shared by every region.
-  - A value MUST declare its holder mesh to belong to an eligible `MeshRegion`.
-    No declaration means no region owns it; it MUST NOT be treated as a
-    broadcast or assigned by inference.
+  - A split value MUST declare its holder mesh to belong to an eligible
+    `MeshRegion`. No holder declaration MUST be inferred for a split value;
+    unsplit tensor values use the definition and lifetime rule above.
   - An access relation that keeps a parameter with a stated finite range is
     exact and MAY prove overlap. A widened relation, and one with an unbounded
     parameter, MUST NOT.

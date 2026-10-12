@@ -190,9 +190,7 @@ _SHARED_BYTES_PER_CLOCK = 128
 
 @dataclass(frozen=True)
 class _RmemExpectation:
-    """An rmem peak, or an existing region without an rmem allocation."""
-
-    peak_bytes: int | None
+    peak_bytes: int
     derivation: str
 
 
@@ -223,11 +221,7 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
-    "captured_insert_update": {
-        "thread@0:32#0": _RmemExpectation(
-            None, "the defining thread region holds 16 smem bytes and no rmem allocation",
-        ),
-    },
+    "captured_insert_update": {},
     "loop_carry_from_param": {},
     "sparse_decode": {
         "cta@0:1#0": _RmemExpectation(
@@ -581,9 +575,8 @@ def test_scheduled_hir_program_has_analysis_metadata(
             for region in regions
             if (record := get_metadata(region, RegionMemoryMetadata)) is not None
         )
-        assert bool(region_records) == bool(RMEM_EXPECTED[path.stem])
         if path.stem == "gemm_8192x17408x5120_tma_store":
-            assert len(region_records) == 4
+            assert len(region_records) == 7
         for record in region_records:
             assert record.solver_status == "feasible"
             assert record.topologies == placement.topologies
@@ -603,14 +596,18 @@ def test_scheduled_hir_program_has_analysis_metadata(
         )
         occurrences: dict[str, int] = {}
         observed_rmem = {}
+        observed_smem = {}
         for window in liveness.regions:
             key = _region_key(window.region, occurrences)
             record = get_metadata(window.region, RegionMemoryMetadata)
             peak = record.peak_for("rmem") if record is not None else None
             if peak is not None:
                 observed_rmem[key] = peak.peak_bytes
-            elif record is not None and key in RMEM_EXPECTED[path.stem]:
-                observed_rmem[key] = None
+            smem_peak = record.peak_for("smem") if record is not None else None
+            if smem_peak is not None:
+                observed_smem[key] = smem_peak.peak_bytes
+        if path.stem == "captured_insert_update":
+            assert observed_smem["thread@0:32#0"] == 16
         expected_rmem = {
             key: expectation.peak_bytes
             for key, expectation in RMEM_EXPECTED[path.stem].items()

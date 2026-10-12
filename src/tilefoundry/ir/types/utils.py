@@ -308,12 +308,17 @@ def tile_inner_type(
 
 def is_unsharded_layout(layout: object) -> bool:
     """Recognize the three tensor layout forms that carry no distribution."""
-    return (
-        layout is None
-        or isinstance(layout, Layout)
-        or isinstance(layout, ShardLayout)
-        and all(isinstance(attr, Broadcast) for attr in layout.attrs)
-    )
+    shard = shard_layout_of(layout)
+    if shard is not None:
+        return all(isinstance(attr, Broadcast) for attr in shard.attrs)
+    return layout is None or isinstance(layout, (Layout, ComposedLayout))
+
+
+def strip_broadcast_layout(layout):
+    """Remove a top-level all-Broadcast wrapper, retaining its address function."""
+    if isinstance(layout, ShardLayout) and is_unsharded_layout(layout):
+        return layout.layout
+    return layout
 
 
 def types_compatible(declared: Type, actual: Type) -> bool:
@@ -348,18 +353,26 @@ def types_compatible(declared: Type, actual: Type) -> bool:
         return actual_layout == declared_layout
 
     if isinstance(declared, TensorType):
+        if not isinstance(actual, TensorType):
+            return False
+        if is_unsharded_layout(declared.layout) and is_unsharded_layout(actual.layout):
+            declared_layout = strip_broadcast_layout(declared.layout)
+            actual_layout = strip_broadcast_layout(actual.layout)
+            compatible_layout = (
+                declared_layout is None
+                or actual_layout is None
+                or layout_compatible(declared_layout, actual_layout)
+            )
+        else:
+            compatible_layout = layout_compatible(declared.layout, actual.layout)
         return (
-            isinstance(actual, TensorType)
-            and declared.shape == actual.shape
+            declared.shape == actual.shape
             and declared.dtype == actual.dtype
             and (
                 declared.storage is StorageKind.UMAT
                 or declared.storage == actual.storage
             )
-            and (
-                (is_unsharded_layout(declared.layout) and is_unsharded_layout(actual.layout))
-                or layout_compatible(declared.layout, actual.layout)
-            )
+            and compatible_layout
         )
     if isinstance(declared, TupleType):
         return (
