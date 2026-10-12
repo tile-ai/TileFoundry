@@ -3,14 +3,25 @@
 from pathlib import Path
 
 from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.compile import scaffold
+from tilefoundry.codegen.link_module import link_program
+from tilefoundry.codegen.options import CodegenOptions
+from tilefoundry.ir.core.module import module_functions, target_of
+from tilefoundry.passes.pass_manager import PassManager
+from tilefoundry.passes.transforms import InsertHostEntryPass
+from tilefoundry.target import CpuTarget
 
 
 def run_scaffold(source: str, out_dir: str) -> int:
-    """Require empty output, then delegate project generation to the compiler."""
+    """Require empty output, then run host-entry normalization and skeleton linking."""
     destination = Path(out_dir)
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise ValueError(f"scaffold: output directory {destination} must be empty")
     module = load_authored_ir(source)
-    scaffold(module, destination)
+    prepared = PassManager().add(InsertHostEntryPass()).run(module)
+    entries = tuple(
+        fn for fn in module_functions(prepared) if isinstance(target_of(prepared, fn), CpuTarget)
+    )
+    link_program(
+        prepared, workdir=destination, options=CodegenOptions(emit="skeleton"), entries=entries
+    )
     return 0

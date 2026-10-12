@@ -75,13 +75,10 @@ class CompiledModule(RuntimeModule):
     ``rm(x, out)`` writes into the ones given.
     """
 
-    def __init__(
-        self, type: CallableSignature, fn: Callable, library: object
-    ) -> None:
+    def __init__(self, type: CallableSignature, fn: Callable) -> None:
         super().__init__(name=type.name, entry=type.name)
         self.type = type
         self.fn = fn
-        self.library = library
         self._placement: "Placement | None" = None
 
     def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None:

@@ -7,22 +7,17 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
-from dataclasses import dataclass, replace
-from pathlib import Path
+from dataclasses import dataclass
 
-from tilefoundry.codegen.context_builder import EmissionGroup, build_codegen_context
-from tilefoundry.codegen.cpu.context import CpuCodegenContext
-from tilefoundry.codegen.cuda.context import CudaCodegenContext
-from tilefoundry.codegen.linker import LinkedModule, link_modules
-from tilefoundry.codegen.options import CodegenOptions
+from tilefoundry.codegen.link_module import link_program
 from tilefoundry.inspection import as_script as _as_script
-from tilefoundry.ir.core.module import Module, module_functions, target_of
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.passes.pass_manager import PassManager
 from tilefoundry.passes.transforms import InsertHostEntryPass
 from tilefoundry.runtime.loader import load_linked_module
-from tilefoundry.target import CpuTarget, CudaTarget, Target, default_target
-from tilefoundry.target.base import UnsupportedCapabilityError, _target_summary, target_instance
+from tilefoundry.target import Target, default_target
+from tilefoundry.target.base import _target_summary, target_instance
 
 
 @dataclass(frozen=True)
@@ -103,89 +98,6 @@ def build(
 
     workdir = tempfile.mkdtemp(prefix=f"tilefoundry_build_{mod.entry}_split_")
     return load_linked_module(link_program(mod, workdir=workdir))
-
-
-def scaffold(mod: Module, out_dir: str | Path) -> Path:
-    """Generate and compile a CUDA skeleton project without loading its library."""
-    prepared = _build_default_pipeline().run(mod)
-    entries = tuple(fn for fn in module_functions(prepared) if isinstance(target_of(prepared, fn), CpuTarget))
-    return link_program(
-        prepared, workdir=out_dir, options=CodegenOptions(emit="skeleton"), entries=entries
-    ).library_path
-
-
-def link_program(
-    mod: Module,
-    *,
-    workdir: str | Path,
-    options: CodegenOptions = CodegenOptions(),
-    entries=None,
-) -> LinkedModule:
-    """Emit and link host/device units directly in workdir, without loading."""
-    codegen = build_codegen_context(mod, options)
-    cpu_entry = mod.entry_function()
-    entries = (cpu_entry,) if entries is None else tuple(entries)
-    if not entries:
-        raise ValueError("link_program: expected at least one CPU host entry")
-    for entry in entries:
-        if not isinstance(target_of(mod, entry), CpuTarget):
-            raise ValueError(f"link_program: entry {entry.name!r} is not a CPU host entry")
-
-    generators = {
-        target: target.get_code_generator()
-        for target in dict.fromkeys(group.target for group in codegen.groups)
-    }
-    for group in codegen.groups:
-        if options.emit not in generators[group.target].emits:
-            raise UnsupportedCapabilityError(
-                f"{_target_summary(group.target)}: code generator does not support "
-                f"emit={options.emit!r}"
-            )
-
-    device_modules = []
-    for group in codegen.groups:
-        view = codegen.for_group(group)
-        if isinstance(group.target, CudaTarget):
-            context = CudaCodegenContext(
-                symbols=view.symbols,
-                target=view.target,
-                launches=view.launches,
-                codegen_context=view.codegen,
-            )
-            device_modules.append(
-                generators[group.target].emit(
-                    group.owner, group.functions, group.target, context
-                )
-            )
-    view = codegen.for_group(EmissionGroup(mod, entries[0].target, entries))
-    context = CpuCodegenContext(
-        symbols=view.symbols,
-        target=view.target,
-        resolved_launches=view.resolved_launches,
-        codegen_context=view.codegen,
-    )
-    host_module = (
-        generators[entries[0].target].emit(mod, entries, entries[0].target, context)
-    )
-
-    units = (*device_modules, host_module)
-    loaded_as = None
-    if isinstance(target_of(mod, cpu_entry), CpuTarget):
-        entry_symbol = codegen.symbols.by_function[id(cpu_entry)]
-        loaded_as = replace(entry_symbol.callable, name=entry_symbol.export_name)
-    device_targets = tuple(
-        group.target for group in codegen.groups if isinstance(group.target, CudaTarget)
-    )
-    if not device_targets:
-        raise ValueError(f"tilefoundry.build: module {mod.name!r} has no CUDA device functions")
-    linked_module = link_modules(
-        units,
-        workdir=workdir,
-        lib_name=mod.name,
-        entry=loaded_as,
-        cuda_arch=device_targets[0].arch.removeprefix("sm_"),
-    )
-    return linked_module
 
 
 def compile(
@@ -320,8 +232,6 @@ def _jit_cache_key_payload(
 
 
 __all__ = [
-    "scaffold",
-    "link_program",
     "build",
     "compile",
     "jit",

@@ -13,7 +13,8 @@ from dataclasses import replace
 
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.templates import render
-from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
+from tilefoundry.codegen.linkable_function import LinkableFunction
+from tilefoundry.codegen.linkable_module import LinkableModule
 from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.codegen.signature import (
     CallableSignature,

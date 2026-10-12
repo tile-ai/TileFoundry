@@ -103,7 +103,7 @@ class RuntimeModule:
 ```python
 # src/tilefoundry/runtime/module.py
 class CompiledModule(RuntimeModule):
-    def __init__(self, type: CallableSignature, fn: Callable, library: object) -> None: ...
+    def __init__(self, type: CallableSignature, fn: Callable) -> None: ...
 
     def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None: ...
 
@@ -323,8 +323,9 @@ LinkedModule → load → CompiledModule (fully-loaded, public, callable Runtime
 ([codegen §4.3](./codegen.md#43-linkedmodule)); the loader that turns it into a
 `CompiledModule` is owned here. The loader and `LinkedModule` are not public
 API; only `CompiledModule` (a `RuntimeModule`) is. `load_linked_module` returns
-`CompiledModule(type=linked.entry, fn=entry_callable, library=loaded)`; `name` / `entry` are
-both `linked.entry.name`. Its `forward` implements the out-param calling
+`CompiledModule(type=replace(entry.signature, name=entry.name), fn=entry_callable)`,
+where `entry` is the one `LinkedFunction`; `name` / `entry` are its registration
+name. Its `forward` implements the out-param calling
 convention directly ([§1.1](#11-runtimemodulepy)) — there is no separate function-body object it
 delegates to. The compiled path has no `resource` / `weights` / `states`
 (weights are ordinary entry arguments), so its `load` is the inherited no-op.
@@ -342,13 +343,13 @@ Load contract:
   ([codegen §4.3](./codegen.md#43-linkedmodule))
 - loading uses `tvm_ffi.load_module(...)`
 - immediately after loading, entry binding uses
-  `tvm_ffi.get_global_func(linked.entry.name)`; `RuntimeModule.entry` is this
+  `tvm_ffi.get_global_func(entry.name)`; `RuntimeModule.entry` is this
   dotted registration name
-- `CompiledModule` retains the loaded module object for its lifetime: the
-  global function table does not keep the shared library loaded
+- the loader keeps every library it loads until process exit, because the
+  global registration table does not keep the shared library loaded
 - host registration allows override: another load replaces the global entry,
-  while an existing `CompiledModule` retains its own callable and library
-- a `LinkedModule` with `entry=None` cannot be loaded as a `CompiledModule`
+  while an existing `CompiledModule` retains its own callable
+- the compiled loader requires exactly one `LinkedFunction`
 - callable arguments are DLPack-compatible tensors; `torch.Tensor` is one
   supported caller-side provider but is not the semantic contract itself
 
@@ -387,14 +388,6 @@ def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module: ...
 def build(mod: Module, /, *, target: Target | None = None) -> "RuntimeModule": ...
 
 
-def scaffold(mod: Module, out_dir: str | Path) -> Path: ...
-
-
-def link_program(
-    mod: Module, *, workdir: str | Path, options: CodegenOptions = CodegenOptions(), entries=None
-) -> LinkedModule: ...
-
-
 def compile(mod: Module, /, *, target: Target | None = None) -> "RuntimeModule": ...
 
 
@@ -403,14 +396,6 @@ def jit(
 ) -> "RuntimeModule": ...
 ```
 <!-- /generated -->
-
-- `link_program(mod, *, workdir, options, entries)` emits and links without
-  loading. `entries=None` emits the root entry; an explicit sequence emits
-  those CPU entries, with launcher declarations deduplicated. `scaffold(mod,
-  out_dir)` inserts host entries and links all of them in skeleton mode.
-  Project sources are written directly in `out_dir`, and the library is
-  `out_dir/build/lib<root Module name>.so`. Each `build()` uses a fresh
-  temporary directory.
 
 - constraints:
   - accepts only TileFoundry IR (`Function` / `Module`); raw Python functions

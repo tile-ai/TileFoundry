@@ -30,7 +30,8 @@ flowchart LR
   `ctx.codegen_context.options`; a missing compile context is an error.
   Skeleton emission retains CUDA signatures, parameter views, specialization
   dispatch and launchers, replacing body statements with `// TODO: <fn>`.
-- Project entry points, work directories and loading are owned by
+- Program emission and linking are owned by [§4.3](#43-linkedmodule);
+  runtime compilation entry points and loading are owned by
   [runtime §1.6](./runtime.md#16-compilepy).
 - A module's functions are grouped by equal Target values in source order. Each
   group is emitted by the exact Target's CodeGenerator into one
@@ -255,6 +256,7 @@ emission that produces these calls is owned by [target](./target.md).
 
 ### 4.1 `LinkableFunction`
 
+Defined in `codegen/linkable_function.py`.
 
 One lowered function's pre-link source, in both of its positions.
 
@@ -279,6 +281,8 @@ class LinkableFunction:
     this function, so the two cannot state different parameters.
 
 ### 4.2 `LinkableModule`
+
+Defined in `codegen/linkable_module.py`.
 
 One target's pre-link translation unit.
 
@@ -322,35 +326,75 @@ user-callable.
 ### 4.3 `LinkedModule`
 
 The link output: a loadable artifact plus the host-visible metadata the loader
-needs.
+needs. Defined in `codegen/linked_module.py`.
+`codegen/linked_function.py` separates each registration name from its C++ host
+signature:
 
 ```python
+class LinkedFunction:
+    """One linked function's registration name and host signature.
+
+    Attributes:
+        name: attribute; the dotted registration name.
+        signature: attribute; the host C++ calling convention and name.
+    """
+
+    name: str
+    signature: CallableSignature
+
 class LinkedModule:
-    """Linked library plus the entry's signature.
+    """Linked library plus its exported functions.
 
     Attributes:
         library_path: attribute; produced shared-library path.
         source: attribute; assembled host and device source.
-        entry: attribute; the loaded entry's signature.
+        functions: attribute; the linked functions exported by the library.
     """
 
     library_path: Path
     source: str
-    entry: CallableSignature | None
+    functions: tuple[LinkedFunction, ...]
 ```
 
 - constraints:
+  - `LinkedFunction.name` MUST be the dotted registration name;
+    `signature` MUST retain the host C++ calling convention and its C++ name
+    ([§4.4](#44-signatures)). `codegen/link_function.py:link_function(symbol)`
+    creates this pair from a resolved `FunctionSymbol`.
+  - `LinkedModule.functions` MUST list every emitted host export, in emission
+    order. Compilation supplies one entry; scaffold projects supply every
+    synthesized or selected CPU entry. The compiled runtime loader requires one
+    ([runtime §1.4](./runtime.md#14-runtimeloaderpy)).
   - MUST carry the assembled host + device source — the diagnostic source the
     runtime exposes as `RuntimeModule.source` ([runtime](./runtime.md)).
 
-The `entry` signature is [§4.4](#44-signatures)'s `CallableSignature`: codegen
-produces it and the runtime loader consumes it. `entry=None` denotes a project
-without a CPU runtime entry; the runtime loader rejects it.
+`codegen/link_function.py` owns `link_function`:
 
-The link step consumes the per-target `LinkableModule`s, compiles each with its
-own toolchain, and links them into one `LinkedModule`. `LinkedModule` is
-consumed by the runtime loader ([runtime](./runtime.md)); the concrete compiler
-commands are an implementation detail and not part of the contract.
+```python
+def link_function(symbol: FunctionSymbol) -> LinkedFunction: ...
+```
+
+`codegen/link_module.py` owns `link_program` and `link_modules`:
+
+```python
+def link_program(
+    mod: Module, *, workdir: str | Path,
+    options: CodegenOptions = CodegenOptions(), entries=None,
+) -> LinkedModule: ...
+
+def link_modules(modules, *, workdir, lib_name, functions, **toolchain) -> LinkedModule: ...
+```
+
+`link_program` emits and links without loading. `entries=None` selects the
+root entry; an explicit sequence selects those CPU entries, with launcher
+declarations deduplicated. Sources are written directly in `workdir`; the
+library is `workdir/build/lib<root Module name>.so`. The link step compiles each
+source unit with its own toolchain and links the units into one library.
+`LinkedModule` is consumed by the runtime loader ([runtime](./runtime.md));
+the concrete compiler commands are an implementation detail and not part of
+the contract. `build()` chooses a fresh
+work directory ([runtime §1.6](./runtime.md#16-compilepy)); the scaffold command
+chooses its output directory ([cli](./cli.md#scaffold)).
 
 ### 4.4 Signatures
 
@@ -454,11 +498,12 @@ class CallableSignature(Signature):
     `<name>_shape_<axis>`, or a sharded parameter's `<name>_mesh`). Errors name
     the function path and parameter.
   - the entry the loader is handed ([§4.3](#43-linkedmodule)) is a fourth
-    value of the same shape: its `name` is the TVM FFI registration name, and each
-    `leading` entry is a `ProgramIdSignature` whose `topology_level` names the
-    level whose id the host must supply, because that caller reads the id out
-    of a `Placement` ([shard §5](./shard.md#5-mesh)) instead of writing a C++
-    declaration.
+    value of the same shape: its `name` is the TVM FFI registration name, which
+    the loader combines with the `LinkedFunction`'s `signature` to obtain it,
+    and each `leading` entry is a `ProgramIdSignature` whose `topology_level`
+    names the level whose id the host must supply, because that caller reads
+    the id out of a `Placement` ([shard §5](./shard.md#5-mesh)) instead of writing
+    a C++ declaration.
 
 ```python
 def program_id_params(

@@ -1,6 +1,6 @@
 {# Per-target split-pipeline build: device .cu (nvcc) + host .cpp (host cxx) #}
 {# linked into one host-callable shared library. Mirrors the prior hand-written #}
-{# nvcc/g++ commands; kept in sync with codegen.linker.link_modules. #}
+{# nvcc/g++ commands; kept in sync with codegen.link_module.link_modules. #}
 cmake_minimum_required(VERSION 3.18)
 project({{ name }} LANGUAGES CXX CUDA)
 

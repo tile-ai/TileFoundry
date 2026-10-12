@@ -21,7 +21,8 @@ from tilefoundry.codegen.cuda.abi import (
 from tilefoundry.codegen.cuda.context import CudaCodegenContext, topology_scope_str
 from tilefoundry.codegen.cuda.hir.function import device_functions
 from tilefoundry.codegen.cuda.templates import render
-from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
+from tilefoundry.codegen.linkable_function import LinkableFunction
+from tilefoundry.codegen.linkable_module import LinkableModule
 from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.codegen.signature import CallableSignature
 from tilefoundry.ir.core.module import Module, ModuleFunction

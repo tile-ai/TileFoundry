@@ -57,7 +57,7 @@ truth for the directory's structure and invariants.
 | `inspection/analysis_report.py` | [inspection](./inspection.md) | Presentation of analysis-owned report data as text and annotated source. Analysis owns the structured report data and JSON dump; inspection owns how a human reads it. |
 | `target/<backend>/facts.py` | [target](./target.md) | One backend's Facts projections selected by its Target's `get_facts`. They restate installed documents in the shape a family declared and measure nothing. |
 | `target/facts.py` | [target](./target.md) | Facts used across consumer families, such as topology limits, plus validation for values returned by `Target.get_facts`: the requested frozen-dataclass shape and returned type. A Fact used by one family stays with that family; this module holds no projection registry. |
-| `codegen/` | [codegen](./codegen.md) | Code generation: the immutable `CodeGenerator` service, linkable / linked products and linker, and concrete generators under `<target>/` (mirroring `ir/tir/` file layout — `tir/<category>/<name>.py` emitter, [§2](#2-file-naming-and-content-rules) rule 2). **Not under `ir/`** — codegen is a consumer of IR; `templates/` holds boilerplate only. |
+| `codegen/` | [codegen](./codegen.md) | Code generation: the immutable `CodeGenerator` service; Linkable products in `linkable_function.py` / `linkable_module.py`; Linked products in `linked_function.py` / `linked_module.py`; linking in `link_function.py` / `link_module.py`; and concrete generators under `<target>/` (mirroring `ir/tir/` file layout — `tir/<category>/<name>.py` emitter, [§2](#2-file-naming-and-content-rules) rule 2). **Not under `ir/`** — codegen is a consumer of IR; `templates/` holds boilerplate only. |
 | `codegen/registry.py` | [codegen](./codegen.md) | The compatibility re-export of the immutable `CodeGenerator` descriptor and source-order grouping by equal Target values. It rejects multiple unequal CUDA Target groups before emission and holds no emitter registry. |
 | `runtime/` | [runtime](./runtime.md) | Runtime support (per-target headers, function templates, launch helpers). |
 | `inspection/` | [inspection](./inspection.md) | IR visualisation: DOT, Python printer, web viewer. |
@@ -90,10 +90,10 @@ physical directory layout reflects that boundary directly.
   rather than defining an IR layer. It reads the IR and the `Target` and
   decides nothing over what it measures
   ([architecture §5](./architecture.md#5-analysis--optimization)).
-- `codegen/<target>/` consumes TIR and HIR skeleton signatures. Its TIR subtree mirrors
-  `ir/tir/`: `prim_function` lives in `tir/`, Stmt emitters in
-  `tir/stmts/`, and `memory/` / `nn/` / `arith/` / `reduce/` /
-  `tensor/` each have their own subdirectory. `codegen/<target>/hir/`
+- `codegen/<target>/` consumes TIR; an HIR `Function` enters only for
+  skeleton emission. Its TIR subtree mirrors `ir/tir/`: `prim_function` lives
+  in `tir/`, Stmt emitters in `tir/stmts/`, and `memory/` / `nn/` / `arith/` /
+  `reduce/` / `tensor/` each have their own subdirectory. `codegen/<target>/hir/`
   holds only the skeleton emission of an HIR `Function`.
 - Authored launch attributes belong to `ir/tir/launch.py`; the geometry a
   kernel is launched at is settled where the `Launch` is written

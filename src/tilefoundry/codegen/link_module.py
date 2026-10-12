@@ -1,32 +1,32 @@
 """Linker — the final stage of codegen.
 
-Separately compiles each target's :class:`~tilefoundry.codegen.linkable.LinkableModule`
+Separately compiles each target's :class:`~tilefoundry.codegen.linkable_module.LinkableModule`
 translation unit and links them into one host-callable shared library, returning
-a ``LinkedModule`` (artifact + the entry's signature) for the runtime loader
+a ``LinkedModule`` (artifact + export metadata) for the runtime loader
 to turn into a ``RuntimeModule``.
 """
 from __future__ import annotations
 
 import shutil
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 
-from tilefoundry.codegen.signature import CallableSignature
+from tilefoundry.codegen.context_builder import EmissionGroup, build_codegen_context
+from tilefoundry.codegen.cpu.context import CpuCodegenContext
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
+from tilefoundry.codegen.link_function import link_function
+from tilefoundry.codegen.linked_function import LinkedFunction
+from tilefoundry.codegen.linked_module import LinkedModule
+from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.dump import DumpFlags, DumpScope, dump
+from tilefoundry.ir.core.module import Module, target_of
+from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.target.base import UnsupportedCapabilityError, _target_summary
 
 _TILEFOUNDRY_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_INCLUDE = _TILEFOUNDRY_ROOT / "include"
 _DEFAULT_CUTLASS_INCLUDE = _TILEFOUNDRY_ROOT / "third_party" / "cutlass" / "include"
 _CMAKE_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates" / "cmake"
-
-
-@dataclass(frozen=True)
-class LinkedModule:
-    """Linked .so + the entry's signature. Consumed by the runtime loader."""
-    library_path: Path
-    source: str
-    entry: CallableSignature | None
 
 
 def _render_cmakelists(
@@ -72,7 +72,7 @@ def link_modules(
     *,
     workdir: str | Path,
     lib_name: str,
-    entry: CallableSignature | None,
+    functions: tuple[LinkedFunction, ...],
     nvcc: str = "nvcc",
     host_cxx: str = "g++",
     extra_nvcc_flags: tuple[str, ...] = (),
@@ -167,8 +167,75 @@ def link_modules(
     return LinkedModule(
         library_path=lib,
         source=source,
-        entry=entry,
+        functions=functions,
     )
 
 
-__all__ = ["LinkedModule", "link_modules"]
+def link_program(
+    mod: Module,
+    *,
+    workdir: str | Path,
+    options: CodegenOptions = CodegenOptions(),
+    entries=None,
+) -> LinkedModule:
+    """Emit and link host/device units directly in workdir, without loading."""
+    codegen = build_codegen_context(mod, options)
+    cpu_entry = mod.entry_function()
+    entries = (cpu_entry,) if entries is None else tuple(entries)
+    if not entries:
+        raise ValueError("link_program: expected at least one CPU host entry")
+    for entry in entries:
+        if not isinstance(target_of(mod, entry), CpuTarget):
+            raise ValueError(f"link_program: entry {entry.name!r} is not a CPU host entry")
+
+    generators = {
+        target: target.get_code_generator()
+        for target in dict.fromkeys(group.target for group in codegen.groups)
+    }
+    for group in codegen.groups:
+        if options.emit not in generators[group.target].emits:
+            raise UnsupportedCapabilityError(
+                f"{_target_summary(group.target)}: code generator does not support "
+                f"emit={options.emit!r}"
+            )
+
+    device_modules = []
+    for group in codegen.groups:
+        view = codegen.for_group(group)
+        if isinstance(group.target, CudaTarget):
+            context = CudaCodegenContext(
+                symbols=view.symbols,
+                target=view.target,
+                launches=view.launches,
+                codegen_context=view.codegen,
+            )
+            device_modules.append(
+                generators[group.target].emit(group.owner, group.functions, group.target, context)
+            )
+    view = codegen.for_group(EmissionGroup(mod, entries[0].target, entries))
+    context = CpuCodegenContext(
+        symbols=view.symbols,
+        target=view.target,
+        resolved_launches=view.resolved_launches,
+        codegen_context=view.codegen,
+    )
+    host_module = generators[entries[0].target].emit(mod, entries, entries[0].target, context)
+
+    units = (*device_modules, host_module)
+    functions = tuple(link_function(codegen.symbols.by_function[id(entry)]) for entry in entries)
+    device_targets = tuple(
+        group.target for group in codegen.groups if isinstance(group.target, CudaTarget)
+    )
+    if not device_targets:
+        raise ValueError(f"link_program: module {mod.name!r} has no CUDA device functions")
+    linked_module = link_modules(
+        units,
+        workdir=workdir,
+        lib_name=mod.name,
+        functions=functions,
+        cuda_arch=device_targets[0].arch.removeprefix("sm_"),
+    )
+    return linked_module
+
+
+__all__ = ["link_program", "link_modules"]

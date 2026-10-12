@@ -2,7 +2,7 @@
 
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.tir.prim_function import emit_range_dispatch, wrap_buffer
-from tilefoundry.codegen.linkable import LinkableFunction
+from tilefoundry.codegen.linkable_function import LinkableFunction
 from tilefoundry.codegen.signature import tensor_signature_of
 from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.destination import destination_params
