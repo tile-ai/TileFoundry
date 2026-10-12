@@ -103,7 +103,9 @@ class RuntimeModule:
 ```python
 # src/tilefoundry/runtime/module.py
 class CompiledModule(RuntimeModule):
-    def __init__(self, type: CallableSignature, fn: Callable) -> None: ...
+    def __init__(
+        self, type: CallableSignature, fn: Callable, library: object | None = None
+    ) -> None: ...
 
     def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None: ...
 
@@ -323,7 +325,7 @@ LinkedModule → load → CompiledModule (fully-loaded, public, callable Runtime
 ([codegen §4.3](./codegen.md#43-linkedmodule)); the loader that turns it into a
 `CompiledModule` is owned here. The loader and `LinkedModule` are not public
 API; only `CompiledModule` (a `RuntimeModule`) is. `load_linked_module` returns
-`CompiledModule(type=linked.entry, fn=entry_callable)`; `name` / `entry` are
+`CompiledModule(type=linked.entry, fn=entry_callable, library=loaded)`; `name` / `entry` are
 both `linked.entry.name`. Its `forward` implements the out-param calling
 convention directly ([§1.1](#11-runtimemodulepy)) — there is no separate function-body object it
 delegates to. The compiled path has no `resource` / `weights` / `states`
@@ -341,14 +343,24 @@ Load contract:
 - codegen produces the `LinkedModule` artifact
   ([codegen §4.3](./codegen.md#43-linkedmodule))
 - loading uses `tvm_ffi.load_module(...)`
-- entry binding uses the symbol named by `RuntimeModule.entry`
+- immediately after loading, entry binding uses
+  `tvm_ffi.get_global_func(linked.entry.name)`; `RuntimeModule.entry` is this
+  dotted registration name
+- `CompiledModule` retains the loaded module object for its lifetime: the
+  global function table does not keep the shared library loaded
+- host registration allows override: another load replaces the global entry,
+  while an existing `CompiledModule` retains its own callable and library
+- a `LinkedModule` with `entry=None` cannot be loaded as a `CompiledModule`
 - callable arguments are DLPack-compatible tensors; `torch.Tensor` is one
   supported caller-side provider but is not the semantic contract itself
 
-Generated host wrappers export entry symbols with TVM FFI:
+Generated host wrappers register entry functions with TVM FFI:
 
 ```cpp
-TVM_FFI_DLL_EXPORT_TYPED_FUNC(<entry_symbol>, <entry_function>);
+TVM_FFI_STATIC_INIT_BLOCK() {
+  tvm::ffi::Function::SetGlobal(export_name,
+      tvm::ffi::Function::FromTyped(entry_function, export_name), /*override=*/true);
+}
 ```
 
 The exported function accepts flattened input/output tensor arguments. HIR
@@ -375,6 +387,14 @@ def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module: ...
 
 
 def build(mod: Module, /, *, target: Target | None = None) -> "RuntimeModule": ...
+
+
+def scaffold(mod: Module, out_dir: str | Path) -> Path: ...
+
+
+def link_program(
+    mod: Module, *, workdir: str | Path, options: CodegenOptions = CodegenOptions(), entries=None
+) -> LinkedModule: ...
 
 
 def compile(mod: Module, /, *, target: Target | None = None) -> "RuntimeModule": ...

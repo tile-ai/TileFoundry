@@ -1,7 +1,7 @@
 """The host ``.cpp`` translation unit: one entry, and the launches it makes.
 
 The entry takes runtime tensors, checks each is on the device its parameter's
-storage names, and calls a launch shim per ``Launch`` in its body. Which
+storage names, and calls a launcher per ``Launch`` in its body. Which
 arguments that call takes is the callee's answer, reached through the symbol
 table, so nothing here spells a device type or a device ABI. Output uses only
 TVM FFI, DLPack and standard C++.
@@ -20,6 +20,7 @@ from tilefoundry.codegen.signature import (
     LaunchSignature,
     tensor_signature_of,
 )
+from tilefoundry.codegen.utils import export_name
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.launch import Launch
@@ -145,9 +146,9 @@ def _launch_statements(entry: PrimFunction) -> tuple[Evaluate, ...]:
 
 
 def _as_this_scope_names_it(
-    shim: CallableSignature, forwarded: tuple[Var, ...], launch: Evaluate
+    launcher: CallableSignature, forwarded: tuple[Var, ...], launch: Evaluate
 ) -> CallableSignature:
-    """*shim*'s parameters rewritten as the values this launch passes for them.
+    """*launcher*'s parameters rewritten as the values this launch passes for them.
 
     Order and kind are the callee's and do not change; every name does, because
     a caller writes what its own scope calls the thing. The ids the target
@@ -159,11 +160,11 @@ def _as_this_scope_names_it(
         str(_static_smem(launch.callable.dynamic_smem)),
     )
     return replace(
-        shim,
+        launcher,
         params=tuple(tensor_signature_of(var) for var in forwarded),
         trailing=tuple(
             LaunchSignature(name=value, ctype=signature.ctype)
-            for signature, value in zip(shim.trailing, geometry)
+            for signature, value in zip(launcher.trailing, geometry)
         ),
     )
 
@@ -197,13 +198,13 @@ def _one_launch(
     """The lines one ``Launch`` becomes: the checks it owes, then the call."""
     _reject_unsupported_config(launch.callable)
     forwarded = _forwarded(entry, launch, callee)
-    shim = ctx.signature_of(callee)
-    bound = _as_this_scope_names_it(shim, forwarded, launch)
+    launcher = ctx.signature_of(callee)
+    bound = _as_this_scope_names_it(launcher, forwarded, launch)
     lines = [
         _placement_line(var.name, param.type.storage)
         for var, param in zip(forwarded, callee.params)
     ]
-    lines.append(f"{shim.name}({ctx.arguments(bound, callee.target)});")
+    lines.append(f"{launcher.name}({ctx.arguments(bound, callee.target)});")
     return lines
 
 
@@ -213,8 +214,8 @@ def _declare_callee(callee: PrimFunction, ctx: CpuCodegenContext) -> str:
     Written by the callee's own target, so this unit and the one that defines
     it cannot come to disagree about what the symbol takes.
     """
-    shim = ctx.signature_of(callee)
-    return f'extern "C" void {shim.name}({ctx.parameters(shim, callee.target, exported=True)});'
+    launcher = ctx.signature_of(callee)
+    return f'extern "C" void {launcher.name}({ctx.parameters(launcher, callee.target, exported=True)});'
 
 
 def _host_entry(
@@ -232,7 +233,7 @@ def _host_entry(
             host_symbol=signature.name,
             params=ctx.parameters(signature),
             body_lines=body_lines,
-            entry_name=entry.name,
+            entry_name=export_name(ctx.codegen_context.module, entry),
         ),
     )
 
@@ -249,20 +250,24 @@ def emit_host_module(
     the FFI export names the symbol it exports, so it is written with the
     definition and not in the preamble every declaration follows.
     """
-    if len(functions) != 1:
-        raise ValueError("emit_host_module: expected exactly one CPU host entry")
-    entry = functions[0]
+    if not functions:
+        raise ValueError("emit_host_module: expected at least one CPU host entry")
+    if ctx.codegen_context is None:
+        raise ValueError("host emission requires a CodegenContext")
     declarations: dict[str, str] = {}
-    body_lines: list[str] = []
-    for launch in _launch_statements(entry):
-        callee = ctx.callee_of(launch)
-        declarations[ctx.signature_of(callee).name] = _declare_callee(callee, ctx)
-        body_lines += _one_launch(entry, launch, callee, ctx)
+    emitted = []
+    for entry in functions:
+        body_lines: list[str] = []
+        for launch in _launch_statements(entry):
+            callee = ctx.callee_of(launch)
+            declarations[ctx.signature_of(callee).name] = _declare_callee(callee, ctx)
+            body_lines += _one_launch(entry, launch, callee, ctx)
+        emitted.append(_host_entry(entry, ctx.signature_of(entry), body_lines, ctx))
     return LinkableModule(
         target="cpu",
         language="cpp",
-        preamble=render("cpu_preamble.cpp.j2", shim_decls=list(declarations.values())),
-        functions=(_host_entry(entry, ctx.signature_of(entry), body_lines, ctx),),
+        preamble=render("cpu_preamble.cpp.j2", launcher_decls=list(declarations.values())),
+        functions=tuple(emitted),
     )
 
 

@@ -16,6 +16,7 @@ def test_authored_for_if_square_matches_torch() -> None:
     x = torch.randn(128, dtype=torch.float32, device="cuda")
     expected = x.square()
     runtime = tilefoundry.compile(TirSquare, target=CudaTarget("nvidia.h200_sxm"))
+    assert runtime.name == "TirSquare.square_host"
     runtime(x)
     torch.cuda.synchronize()
     torch.testing.assert_close(x, expected, rtol=0, atol=0)

@@ -38,7 +38,7 @@ class EmitContext:
         symbols: Mapping[int, CallableSignature] | None = None,
         target: Target | None = None,
         resolved_launches: Mapping[int, object] | None = None,
-        codegen_context: object | None = None,
+        codegen_context: "CodegenContext | None" = None,
     ) -> None:
         self.registry = registry
         self.codegen_context = codegen_context

@@ -1,12 +1,14 @@
 """How a CUDA function is called: the symbols it exports and what it takes.
 
-A caller cannot name a device function, only the shim that launches it, so
+A caller cannot name a device function, only the launcher that launches it, so
 that is what CUDA puts in the symbol table. Every spelling here is CUDA's own
 and is registered against this target, so a caller of another target asks for
 it without naming this module.
 """
 
 from __future__ import annotations
+
+import re
 
 from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
@@ -32,51 +34,86 @@ PROGRAM_META_CTYPE = "tilefoundry::ProgramMetaData"
 """The block of ids a kernel hands to the runtime it was compiled against."""
 
 PROGRAM_META = ProgramMetaSignature(name="tilefoundry_meta")
-"""The one block of them a shim fills in and its kernel takes by value."""
+"""The one block of them a launcher fills in and its kernel takes by value."""
 
 _C_ABI = ("void*", "long long")
 """What a buffer and an extent are called where a host unit has to spell them.
 
 A host translation unit compiles without CUDA's headers, so it cannot name
-``__nv_bfloat16``; the shim takes what plain C states and puts the type back
+``__nv_bfloat16``; the launcher takes what plain C states and puts the type back
 on inside the unit that has it.
 """
 
 
-def _identifier(name: str) -> str:
-    """*name* as a plain C identifier -- a mangled variant's ``$`` is not one."""
-    return name.replace("$", "__")
+CPP_KEYWORDS = frozenset(
+    """
+    alignas alignof and and_eq asm atomic_cancel atomic_commit atomic_noexcept auto
+    bitand bitor bool break case catch char char8_t char16_t char32_t class compl
+    concept const consteval constexpr constinit const_cast continue co_await
+    co_return co_yield decltype default delete do double dynamic_cast else enum
+    explicit export extern false float for friend goto if inline int long mutable
+    namespace new noexcept not not_eq nullptr operator or or_eq private protected
+    public reflexpr register reinterpret_cast requires return short signed sizeof
+    static static_assert static_cast struct switch synchronized template this
+    thread_local throw true try typedef typeid typename union unsigned using
+    virtual void volatile wchar_t while xor xor_eq
+""".split()
+)
 
 
-def launch_shim(name: str) -> str:
-    """The ``extern "C"`` symbol of the shim that launches kernel *name*."""
-    return f"tilefoundry_{_identifier(name)}_launch"
+def check_parameter_name(fn_path, name, siblings) -> None:
+    """Reject parameter names that collide with generated parameter views."""
+    if (
+        re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) is None
+        or name in CPP_KEYWORDS
+        or name.startswith("tilefoundry_")
+    ):
+        raise ValueError(f"codegen: invalid parameter {name!r} in {fn_path!r}")
+    occupied = {}
+    for param in siblings:
+        signature = tensor_signature_of(param)
+        generated = [f"{param.name}_tensor"]
+        generated += [signature.extent_name(axis) for axis in signature.dynamic_axes]
+        if isinstance(param.type.layout, ShardLayout):
+            generated.append(f"{param.name}_mesh")
+        for spelling in (param.name, *generated):
+            if spelling in occupied:
+                raise ValueError(
+                    f"codegen: parameter {name!r} in {fn_path!r} collides at "
+                    f"{spelling!r} with parameter {occupied[spelling]!r}"
+                )
+            occupied[spelling] = param.name
 
 
-def device_kernel(name: str) -> str:
-    """The ``__global__`` symbol of the kernel compiled from *name*."""
-    return f"tilefoundry_{_identifier(name)}_kernel"
+def launcher_symbol(symbol: str) -> str:
+    """The C ABI launcher derived from a resolved mangled symbol."""
+    return f"{symbol}_launch"
 
 
-def kernel_signature(shim: CallableSignature, name: str) -> CallableSignature:
+def kernel_symbol(symbol: str) -> str:
+    """The global kernel derived from a resolved mangled symbol."""
+    return f"{symbol}_kernel"
+
+
+def kernel_signature(launcher: CallableSignature, name: str) -> CallableSignature:
     """How the kernel compiled from *name* is called, which is nothing outside this unit.
 
-    It takes *shim*'s own parameters and, where the shim was told ids no card
+    It takes *launcher*'s own parameters and, where the launcher was told ids no card
     can read, the one block of them it hands its threads. The launch geometry
-    stops at the shim, which is what spends it.
+    stops at the launcher, which is what spends it.
     """
     return CallableSignature(
-        name=device_kernel(name),
-        params=shim.params,
-        output_count=shim.output_count,
-        leading=(PROGRAM_META,) if shim.leading else (),
+        name=kernel_symbol(name),
+        params=launcher.params,
+        output_count=launcher.output_count,
+        leading=(PROGRAM_META,) if launcher.leading else (),
     )
 
 
 def kernel_arguments(kernel: CallableSignature, ctx: CudaCodegenContext) -> str:
-    """What the shim hands the kernel: its C ABI values, typed as the kernel declared.
+    """What the launcher hands the kernel: its C ABI values, typed as the kernel declared.
 
-    The boundary is crossed here and nowhere else -- the shim holds what any
+    The boundary is crossed here and nowhere else -- the launcher holds what any
     unit can spell, and the kernel body indexes device types.
     """
     written: list[str] = []
@@ -94,17 +131,17 @@ def kernel_arguments(kernel: CallableSignature, ctx: CudaCodegenContext) -> str:
 
 
 @register_codegen(CudaTarget, Role.CALLEE, PrimFunction)
-def _called_as_shim(
-    fn: PrimFunction, program_ids: tuple[ProgramIdSignature, ...]
+def called_as_launcher(
+    fn: PrimFunction, symbol: str, program_ids: tuple[ProgramIdSignature, ...]
 ) -> CallableSignature:
-    """The one convention of *fn* a caller can reach: its launch shim.
+    """The one convention of *fn* a caller can reach: its launch launcher.
 
     The kernel's own convention is not this one, because nobody outside the
     translation unit can name it. A program that names a level the target
     names such a level is told its id first, and the launch geometry comes last.
     """
     return CallableSignature(
-        name=launch_shim(fn.name),
+        name=launcher_symbol(symbol),
         params=tuple(tensor_signature_of(var) for var in fn.params),
         output_count=fn.output_count,
         leading=program_ids,
@@ -177,8 +214,8 @@ __all__ = [
     "PROGRAM_ID_CTYPE",
     "PROGRAM_META",
     "PROGRAM_META_CTYPE",
-    "device_kernel",
+    "kernel_symbol",
     "kernel_arguments",
     "kernel_signature",
-    "launch_shim",
+    "launcher_symbol",
 ]

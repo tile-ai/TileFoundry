@@ -95,7 +95,7 @@ class CallableSignature(Signature):
 
     ``params`` are the parameters the IR declares, outputs last; ``leading``
     and ``trailing`` are what the convention adds around them. That data is
-    the whole difference between a host entry, a launch shim and a kernel, so
+    the whole difference between a host entry, a launcher and a kernel, so
     a fourth convention is a fourth instance, not a fourth subclass. It is a
     list of signatures and nothing more: how many C++ parameters one of them
     becomes is answered where that one is written out.
@@ -133,7 +133,7 @@ LAUNCH_ABI = (
 """Actual cross-translation-unit scalars on a CPU-to-device Launch edge.
 
 The topology is one-dimensional, so only grid_x and block_x are stated.
-Dynamic shared memory remains because its per-Launch value crosses the shim ABI.
+Dynamic shared memory remains because its per-Launch value crosses the launcher ABI.
 """
 
 
@@ -151,7 +151,7 @@ def program_id_params(module: Module, target: Target) -> tuple[ProgramIdSignatur
 
     A level the target states has no register the device can read, so its id
     has to arrive with the call. This is the one place the question is asked,
-    so a host entry and the shim it calls cannot answer it differently.
+    so a host entry and the launcher it calls cannot answer it differently.
     """
     stated = {
         topology_level.name
@@ -168,7 +168,7 @@ def program_id_params(module: Module, target: Target) -> tuple[ProgramIdSignatur
     )
 
 
-def called_as(fn, program_ids: tuple[ProgramIdSignature, ...] = ()) -> CallableSignature:
+def called_as(fn, symbol: str, program_ids: tuple[ProgramIdSignature, ...] = ()) -> CallableSignature:
     """How *fn* is called, as *fn*'s own target states it.
 
     What a symbol is named and what is added around its parameters is the
@@ -182,7 +182,7 @@ def called_as(fn, program_ids: tuple[ProgramIdSignature, ...] = ()) -> CallableS
             f"codegen: nothing registered for {spelled(key)}, so nothing states "
             f"how {fn.name!r} is called"
         )
-    return convention(fn, program_ids)
+    return convention(fn, symbol, program_ids)
 
 
 __all__ = [

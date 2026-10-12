@@ -9,6 +9,8 @@ import tilefoundry
 from tilefoundry.codegen.context_builder import build_codegen_context
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
+from tilefoundry.codegen.cuda.abi import launcher_symbol
+from tilefoundry.codegen.utils import mangle
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Constant, Var
 from tilefoundry.ir.core.module import Module
@@ -130,6 +132,7 @@ def _source(devices, launches, params) -> str:
     view = root.for_group(group)
     ctx = CpuCodegenContext(
         symbols=view.symbols,
+        codegen_context=view.codegen,
         target=host.target,
         resolved_launches=view.resolved_launches,
     )
@@ -144,23 +147,33 @@ def test_two_launches_keep_order_and_each_block_size() -> None:
         (_launch(first, a, block=32), _launch(second, b, block=64)),
         (a, b),
     )
-    assert source.index("tilefoundry_first_launch") < source.index("tilefoundry_second_launch")
+    mod, _ = _module((first, second), (), ())
+    assert source.index(launcher_symbol(mangle(mod, first))) < source.index(
+        launcher_symbol(mangle(mod, second))
+    )
     assert "1, 32, 0" in source
     assert "1, 64, 0" in source
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_two_launches_compile_and_write_both_outputs() -> None:
+    """Both compiled objects retain their callable and library after registration override."""
     torch.manual_seed(0)
     x0 = torch.randn(1, 128, device="cuda")
     x1 = torch.randn(1, 128, device="cuda")
     out0 = torch.empty_like(x0)
     out1 = torch.empty_like(x1)
-    runtime = tilefoundry.compile(_TwoCopyLaunches, target=CudaTarget("nvidia.h200_sxm"))
-    runtime(x0, out0, x1, out1)
-    torch.cuda.synchronize()
-    torch.testing.assert_close(out0, x0, rtol=0, atol=0)
-    torch.testing.assert_close(out1, x1, rtol=0, atol=0)
+    runtimes = [
+        tilefoundry.compile(_TwoCopyLaunches, target=CudaTarget("nvidia.h200_sxm"))
+        for _ in range(2)
+    ]
+    for runtime in runtimes:
+        out0.fill_(float("nan"))
+        out1.fill_(float("nan"))
+        runtime(x0, out0, x1, out1)
+        torch.cuda.synchronize()
+        torch.testing.assert_close(out0, x0, rtol=0, atol=0)
+        torch.testing.assert_close(out1, x1, rtol=0, atol=0)
 
 
 def test_same_entry_parameter_may_feed_two_launches() -> None:
@@ -181,8 +194,10 @@ def test_same_device_function_can_be_launched_twice() -> None:
     a = _tensor("a")
     device = _device("device")
     source = _source((device,), (_launch(device, a, block=32), _launch(device, a, block=64)), (a,))
-    assert source.count('extern "C" void tilefoundry_device_launch') == 1
-    assert source.count("tilefoundry_device_launch(a.data_ptr()") == 2
+    mod, _ = _module((device,), (), ())
+    symbol = launcher_symbol(mangle(mod, device))
+    assert source.count(f'extern "C" void {symbol}') == 1
+    assert source.count(f"{symbol}(a.data_ptr()") == 2
 
 
 def test_a_parameter_named_like_an_extent_is_still_a_parameter() -> None:
@@ -196,11 +211,13 @@ def test_a_parameter_named_like_an_extent_is_still_a_parameter() -> None:
     )
     source = _source((device,), (_launch(device, a, looks_hidden),), (a, looks_hidden))
     assert "tvm::ffi::Tensor a_shape_0" in source
-    assert "tilefoundry_device_launch(a.data_ptr(), a_shape_0.data_ptr()" in source
+    mod, _ = _module((device,), (), ())
+    symbol = launcher_symbol(mangle(mod, device))
+    assert f"{symbol}(a.data_ptr(), a_shape_0.data_ptr()" in source
 
 
 def test_single_launch_path_remains_available() -> None:
     a = _tensor("a")
     device = _device("device")
     source = _source((device,), (_launch(device, a),), (a,))
-    assert "tilefoundry_device_launch" in source
+    assert launcher_symbol(mangle(_module((device,), (), ())[0], device)) in source

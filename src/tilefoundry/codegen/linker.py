@@ -26,7 +26,7 @@ class LinkedModule:
     """Linked .so + the entry's signature. Consumed by the runtime loader."""
     library_path: Path
     source: str
-    entry: CallableSignature
+    entry: CallableSignature | None
 
 
 def _render_cmakelists(
@@ -72,7 +72,7 @@ def link_modules(
     *,
     workdir: str | Path,
     lib_name: str,
-    entry: CallableSignature,
+    entry: CallableSignature | None,
     nvcc: str = "nvcc",
     host_cxx: str = "g++",
     extra_nvcc_flags: tuple[str, ...] = (),

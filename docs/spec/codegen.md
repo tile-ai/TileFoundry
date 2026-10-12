@@ -22,6 +22,18 @@ flowchart LR
 ## 1. Pipeline
 
 - **Input** is verified TIR. HIR Ops MUST NOT reach codegen.
+- `CodegenOptions.emit` is `"full"` (default) or `"skeleton"` and lives in the
+  compile-wide `CodegenContext`. Emitters read it through
+  `ctx.codegen_context.options`; a missing compile context is an error.
+  Skeleton emission retains CUDA signatures, parameter views, specialization
+  dispatch and launchers, replacing body statements with `// TODO: <fn>`.
+- `link_program(mod, *, workdir, options, entries)` emits and links without
+  loading. `entries=None` emits the root entry; an explicit sequence emits
+  those CPU entries, with launcher declarations deduplicated. `scaffold(mod,
+  out_dir)` inserts host entries and links all of them in skeleton mode.
+  Project sources are written directly in `out_dir`, and the library is
+  `out_dir/build/lib<root Module name>.so`. Each `build()` uses a fresh
+  temporary directory.
 - A module's functions are grouped by equal Target values in source order. Each
   group is emitted by the exact Target's CodeGenerator into one
   `LinkableModule`.
@@ -32,8 +44,8 @@ flowchart LR
   not own the user-facing entry points (`compile` / `build` / `jit`).
 - **Host / device boundary.** A host `LinkableModule` MUST NOT reference CUDA or
   CuTe symbols or types. A CUDA `LinkableModule` owns the kernels and their
-  C-ABI launch shims. The host module invokes device code only through that
-  C-ABI shim.
+  C-ABI launchers. The host module invokes device code only through that
+  C-ABI launcher.
 
 The target-specific generator behavior — how a CPU vs CUDA function emits,
 program-shape / dynamic-CTA accessors, and the `ShardLayout` runtime mapping —
@@ -317,7 +329,7 @@ class LinkedModule:
 
     library_path: Path
     source: str
-    entry: CallableSignature
+    entry: CallableSignature | None
 ```
 
 - constraints:
@@ -325,7 +337,8 @@ class LinkedModule:
     runtime exposes as `RuntimeModule.source` ([runtime](./runtime.md)).
 
 The `entry` signature is [§4.4](#44-signatures)'s `CallableSignature`: codegen
-produces it and the runtime loader consumes it.
+produces it and the runtime loader consumes it. `entry=None` denotes a project
+without a CPU runtime entry; the runtime loader rejects it.
 
 The link step consumes the per-target `LinkableModule`s, compiles each with its
 own toolchain, and links them into one `LinkedModule`. `LinkedModule` is
@@ -403,19 +416,28 @@ class CallableSignature(Signature):
     which is what makes them hidden. Each is its own class, so whoever writes
     one out dispatches on the type instead of reading the name.
   - one compiled function has three C++ conventions — the host entry, the
-    launch shim and the device kernel — and they differ only in `leading` and
+    launcher and the device kernel — and they differ only in `leading` and
     `trailing`. They MUST be three `CallableSignature` values; the class MUST
     NOT be subclassed. Only the first two are reachable by name; the kernel's
     is derived inside the unit that defines it and is not in the table.
-  - every identifier codegen generates carries the `tilefoundry_` prefix: the
-    three symbols, the parameters codegen inserts, and any state a unit emits
-    for itself. How one is spelled belongs to the target whose language it is
-    written in, so each target states its own; there is no neutral module
-    spelling names for all of them. A user's own parameter names are never
-    prefixed, and a name that reaches C++ through one of these is a plain C
-    identifier -- a mangled variant's `$` is not one.
+  - generated function symbols come only from `codegen/utils.py:mangle(root,
+    fn)`: `tilefoundry_` followed by each path segment's decimal length and
+    spelling. `function_path` shares the core IR selector traversal: root
+    Module name, child mount names, function name, and for a variant its
+    display name or `v<index>`. Every segment MUST be a C identifier; invalid
+    segments raise with the complete path. CUDA launcher and kernel names
+    append `_launch` and `_kernel`; CPU functions use the mangled name itself.
+    Calling conventions receive the resolved symbol rather than reconstructing it.
+  - TVM FFI registration names come from `export_name(root, fn)`, the same
+    path joined with dots. For a HIR selector, this is `<root name>.<selector>`.
+    Host wrappers register through `Function::SetGlobal` with override enabled.
+  - user parameter names are used verbatim. They MUST be C identifiers, MUST
+    NOT be C++ keywords or start with `tilefoundry_`, and MUST NOT collide with
+    another parameter or derived view name (`<name>_tensor`, each dynamic
+    `<name>_shape_<axis>`, or a sharded parameter's `<name>_mesh`). Errors name
+    the function path and parameter.
   - the entry the loader is handed ([§4.3](#43-linkedmodule)) is a fourth
-    value of the same shape: its `name` is the exported symbol, and each
+    value of the same shape: its `name` is the TVM FFI registration name, and each
     `leading` entry is a `ProgramIdSignature` whose `topology_level` names the
     level whose id the host must supply, because that caller reads the id out
     of a `Placement` ([shard §5](./shard.md#5-mesh)) instead of writing a C++
@@ -446,7 +468,7 @@ def symbol_table(module: Module, target: Target) -> Mapping[int, CallableSignatu
     calls one, because its prototype compiles to the one symbol and picks
     between the variants inside it ([§5](#5-specialization-dispatch)).
   - a row is what a caller must write and nothing about what an emitter
-    produced. A device function appears as its launch shim, because that is
+    produced. A device function appears as its launcher, because that is
     the only convention a caller can reach; the kernel's own convention is not
     in the table.
 
@@ -463,7 +485,7 @@ variant runs is decided on the device.
     express.
   - Because the geometry is one, the host MUST NOT choose between variants: it
     writes the one call the symbol table names ([§4.4](#44-signatures)). There
-    is no host-side chain over N shims and no per-variant shim.
+    is no host-side chain over N launchers and no per-variant launcher.
   - The prototype's kernel holds every variant as a branch, taken on the extent
     the call already carries -- the parameter the open axis expands into. A
     shape outside every variant's range is a call-contract violation and the

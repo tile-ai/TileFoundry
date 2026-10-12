@@ -6,12 +6,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 
+from tilefoundry.codegen.cuda.abi import check_parameter_name
+from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.codegen.signature import (
     LAUNCH_ABI,
     CallableSignature,
     called_as,
     program_id_params,
 )
+from tilefoundry.codegen.utils import export_name, mangle
 from tilefoundry.ir.core.module import Module, module_functions, owning_module, subtree
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -26,7 +29,7 @@ class FunctionSymbol:
     function: PrimFunction
     ir_name: str
     kernel_name: str | None
-    shim_name: str | None
+    launcher_name: str | None
     host_name: str | None
     owner: Module
     target: Target
@@ -38,7 +41,7 @@ class FunctionSymbolTable:
     """Separate IR and generated-name namespaces shared by every emitter."""
 
     by_function: Mapping[int, FunctionSymbol]
-    by_ir_name: Mapping[str, FunctionSymbol]
+    by_symbol: Mapping[str, FunctionSymbol]
     by_kernel_name: Mapping[str, FunctionSymbol]
 
     @property
@@ -86,6 +89,7 @@ class CodegenContext:
     """Complete compile-wide resolution performed once before emission."""
 
     module: Module
+    options: CodegenOptions
     functions: tuple[PrimFunction, ...]
     ownership: Mapping[int, Module]
     targets: Mapping[int, Target]
@@ -181,7 +185,9 @@ def _launch_statements(function: PrimFunction) -> tuple[Evaluate, ...]:
     )
 
 
-def build_codegen_context(module: Module) -> CodegenContext:
+def build_codegen_context(
+    module: Module, options: CodegenOptions = CodegenOptions()
+) -> CodegenContext:
     """Resolve functions, symbols, Launch edges, domains, and groups once."""
     functions = tuple(module_functions(module))
     if not all(isinstance(function, PrimFunction) for function in functions):
@@ -219,25 +225,28 @@ def build_codegen_context(module: Module) -> CodegenContext:
         raise ValueError(f"codegen: expected one device Target, found {len(device_targets)}")
     program_ids = program_id_params(module, device_targets[0])
     by_function: dict[int, FunctionSymbol] = {}
-    by_ir_name: dict[str, FunctionSymbol] = {}
+    by_symbol: dict[str, FunctionSymbol] = {}
     by_kernel_name: dict[str, FunctionSymbol] = {}
     for function in functions:
-        signature = called_as(function, program_ids)
+        mangled = mangle(module, function)
+        for param in function.params:
+            check_parameter_name(export_name(module, function), param.name, function.params)
+        signature = called_as(function, mangled, program_ids)
         is_device = not isinstance(function.target, CpuTarget)
         symbol = FunctionSymbol(
             function=function,
             ir_name=function.name,
-            kernel_name=function.name if is_device else None,
-            shim_name=signature.name if is_device else None,
+            kernel_name=mangled if is_device else None,
+            launcher_name=signature.name if is_device else None,
             host_name=signature.name if not is_device else None,
             owner=ownership[id(function)],
             target=function.target,
             callable=signature,
         )
-        if function.name in by_ir_name:
-            raise ValueError(f"codegen: duplicate IR function name {function.name!r}")
+        if mangled in by_symbol:
+            raise ValueError(f"codegen: duplicate function symbol {function.name!r}")
         by_function[id(function)] = symbol
-        by_ir_name[function.name] = symbol
+        by_symbol[mangled] = symbol
         if symbol.kernel_name is not None:
             if symbol.kernel_name in by_kernel_name:
                 raise ValueError(f"codegen: duplicate kernel symbol {symbol.kernel_name!r}")
@@ -245,7 +254,7 @@ def build_codegen_context(module: Module) -> CodegenContext:
 
     table = FunctionSymbolTable(
         MappingProxyType(by_function),
-        MappingProxyType(by_ir_name),
+        MappingProxyType(by_symbol),
         MappingProxyType(by_kernel_name),
     )
     edges: list[LaunchEdge] = []
@@ -253,11 +262,21 @@ def build_codegen_context(module: Module) -> CodegenContext:
     for caller in functions:
         for stmt in _launch_statements(caller):
             reference = stmt.args[0]
-            symbol = by_ir_name.get(reference.name)
+            symbol = by_symbol.get(reference.name)
             if symbol is None:
-                raise ValueError(
-                    f"codegen: launch from {caller.name!r} names unknown function {reference.name!r}"
-                )
+                owner = ownership[id(caller)]
+                candidates = [
+                    by_function[id(fn)]
+                    for fn in module_functions(owner)
+                    if fn.name == reference.name
+                ]
+                if len(candidates) != 1:
+                    names = [export_name(module, candidate.function) for candidate in candidates]
+                    raise ValueError(
+                        f"codegen: launch from {caller.name!r} names {reference.name!r} "
+                        f"in owner {owner.name!r}: expected one match, found {len(candidates)} {names}"
+                    )
+                symbol = candidates[0]
             grid_x, block_x = _launch_extents(symbol.owner)
             callable_signature = replace(symbol.callable, trailing=LAUNCH_ABI)
             launch_callables[id(stmt)] = callable_signature
@@ -290,6 +309,7 @@ def build_codegen_context(module: Module) -> CodegenContext:
 
     return CodegenContext(
         module=module,
+        options=options,
         functions=functions,
         ownership=MappingProxyType(ownership),
         targets=MappingProxyType(targets),

@@ -31,6 +31,7 @@ def _host_unit() -> LinkableModule:
     view = root.for_group(group)
     ctx = CpuCodegenContext(
         symbols=view.symbols,
+        codegen_context=view.codegen,
         target=entry.target,
         resolved_launches=view.resolved_launches,
     )

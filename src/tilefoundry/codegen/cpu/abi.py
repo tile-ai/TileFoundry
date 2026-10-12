@@ -25,14 +25,9 @@ PROGRAM_ID_CTYPE = "long long"
 """What an id the process supplies travels as, wide enough for any mesh."""
 
 
-def host_entry(name: str) -> str:
-    """The C++ symbol of *name*'s host entry, which ``main`` would collide with."""
-    return f"tilefoundry_{name.replace('$', '__')}_host"
-
-
 @register_codegen(CpuTarget, Role.CALLEE, PrimFunction)
-def _called_as_entry(
-    fn: PrimFunction, program_ids: tuple[ProgramIdSignature, ...]
+def called_as_entry(
+    fn: PrimFunction, symbol: str, program_ids: tuple[ProgramIdSignature, ...]
 ) -> CallableSignature:
     """A host entry is called by name, and told first what no device can read.
 
@@ -41,7 +36,7 @@ def _called_as_entry(
     only thing that knows which program of the mesh it is running.
     """
     return CallableSignature(
-        name=host_entry(fn.name),
+        name=symbol,
         params=tuple(tensor_signature_of(var) for var in fn.params),
         output_count=fn.output_count,
         leading=program_ids,
@@ -60,4 +55,4 @@ def _declare_program_id(sig: ProgramIdSignature, ctx: EmitContext) -> tuple[str,
     return (f"{PROGRAM_ID_CTYPE} {sig.name}",)
 
 
-__all__ = ["PROGRAM_ID_CTYPE", "TENSOR_CTYPE", "host_entry"]
+__all__ = ["PROGRAM_ID_CTYPE", "TENSOR_CTYPE"]

@@ -103,4 +103,9 @@ def _emit(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
     ctx.bind_extents(params)
     for signature in params:
         _wrap_buffer(signature, ctx)
-    CudaEmitter(context=ctx).visit(fn.body)
+    if ctx.codegen_context is None:
+        raise ValueError("CUDA function emission requires a CodegenContext")
+    if ctx.codegen_context.options.emit == "skeleton":
+        ctx.emit(f"// TODO: {fn.name}")
+    else:
+        CudaEmitter(context=ctx).visit(fn.body)

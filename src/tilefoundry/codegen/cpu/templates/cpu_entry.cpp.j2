@@ -4,4 +4,7 @@ void {{ host_symbol }}({{ params }}) {
 {%- endfor %}
 }
 
-TVM_FFI_DLL_EXPORT_TYPED_FUNC({{ entry_name }}, {{ host_symbol }});
+TVM_FFI_STATIC_INIT_BLOCK() {
+  tvm::ffi::Function::SetGlobal("{{ entry_name }}",
+      tvm::ffi::Function::FromTyped({{ host_symbol }}, "{{ entry_name }}"), /*override=*/true);
+}

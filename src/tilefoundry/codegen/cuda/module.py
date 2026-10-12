@@ -1,4 +1,4 @@
-"""The device ``.cu`` translation unit: one kernel and one shim per function.
+"""The device ``.cu`` translation unit: one kernel and one launcher per function.
 
 Two passes over each function and nothing between them: one writes the
 declaration a caller sees without entering the body, the other writes the
@@ -34,28 +34,30 @@ Geometry = tuple[tuple[object, object, object], tuple[object, object, object]]
 def _emit_function(fn: PrimFunction, ctx: CudaCodegenContext) -> LinkableFunction:
     """*fn* in both of its positions, written from the one convention it is called by.
 
-    A caller can name the shim and nothing else, so that is what the
+    A caller can name the launcher and nothing else, so that is what the
     declaration states; the kernel is defined beside it and named only here.
     """
-    shim = ctx.signature_of(fn)
-    kernel = kernel_signature(shim, fn.name)
+    if ctx.codegen_context is None:
+        raise ValueError("CUDA module emission requires a CodegenContext")
+    launcher = ctx.signature_of(fn)
+    kernel = kernel_signature(launcher, ctx.codegen_context.symbols.by_function[id(fn)].kernel_name)
     return LinkableFunction(
         name=fn.name,
-        declaration=f'extern "C" void {shim.name}({ctx.parameters(shim, exported=True)});',
-        definition=ctx.capture(lambda scope: _define(fn, shim, kernel, scope)),
+        declaration=f'extern "C" void {launcher.name}({ctx.parameters(launcher, exported=True)});',
+        definition=ctx.capture(lambda scope: _define(fn, launcher, kernel, scope)),
     )
 
 
 def _define(
     fn: PrimFunction,
-    shim: CallableSignature,
+    launcher: CallableSignature,
     kernel: CallableSignature,
     ctx: CudaCodegenContext,
 ) -> None:
-    """The kernel and the shim that launches it, in that order."""
+    """The kernel and the launcher that launches it, in that order."""
     _define_kernel(fn, kernel, ctx)
     ctx.blank()
-    _define_shim(shim, kernel, ctx)
+    _define_launcher(launcher, kernel, ctx)
 
 
 def _define_kernel(fn: PrimFunction, kernel: CallableSignature, ctx: CudaCodegenContext) -> None:
@@ -70,14 +72,14 @@ def _define_kernel(fn: PrimFunction, kernel: CallableSignature, ctx: CudaCodegen
     ctx.emit("}")
 
 
-def _define_shim(
-    shim: CallableSignature, kernel: CallableSignature, ctx: CudaCodegenContext
+def _define_launcher(
+    launcher: CallableSignature, kernel: CallableSignature, ctx: CudaCodegenContext
 ) -> None:
     """The ``extern "C"`` entry: the geometry it was handed, spent on one launch."""
-    ctx.emit(f'extern "C" void {shim.name}({ctx.parameters(shim, exported=True)}) {{')
+    ctx.emit(f'extern "C" void {launcher.name}({ctx.parameters(launcher, exported=True)}) {{')
     ctx.indent()
-    _tell_the_block(shim, ctx)
-    grid_x, block_x, smem = (signature.name for signature in shim.trailing)
+    _tell_the_block(launcher, ctx)
+    grid_x, block_x, smem = (signature.name for signature in launcher.trailing)
     ctx.emit(f"dim3 grid({grid_x}, 1, 1);")
     ctx.emit(f"dim3 block({block_x}, 1, 1);")
     ctx.emit(f"{kernel.name}<<<grid, block, {smem}, nullptr>>>({kernel_arguments(kernel, ctx)});")
@@ -85,16 +87,16 @@ def _define_shim(
     ctx.emit("}")
 
 
-def _tell_the_block(shim: CallableSignature, ctx: CudaCodegenContext) -> None:
-    """Gather the ids the shim was told into the block the kernel takes.
+def _tell_the_block(launcher: CallableSignature, ctx: CudaCodegenContext) -> None:
+    """Gather the ids the launcher was told into the block the kernel takes.
 
-    Which levels these are is the signature's answer, so the shim states no
+    Which levels these are is the signature's answer, so the launcher states no
     level of its own: one line per id the convention put in front.
     """
-    if not shim.leading:
+    if not launcher.leading:
         return
     ctx.emit(f"{PROGRAM_META_CTYPE} {PROGRAM_META.name}{{}};")
-    for signature in shim.leading:
+    for signature in launcher.leading:
         scope = topology_scope_str(signature.topology_level)
         ctx.emit(
             f"{PROGRAM_META.name}.program_id[int({scope})] = static_cast<int>({signature.name});"

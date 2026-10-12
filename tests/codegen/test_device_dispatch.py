@@ -12,8 +12,10 @@ from tests.fixtures.tir.square import TirSquare
 from tilefoundry.codegen.context_builder import build_codegen_context
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
+from tilefoundry.codegen.cuda.abi import launcher_symbol
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.module import emit_cuda_module
+from tilefoundry.codegen.utils import mangle
 from tilefoundry.target import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
@@ -29,6 +31,7 @@ def _device_source() -> str:
     _root, group, view = _view(_CUDA)
     ctx = CudaCodegenContext(
         symbols=view.symbols,
+        codegen_context=view.codegen,
         target=_CUDA,
         launches=view.launches,
     )
@@ -40,6 +43,7 @@ def _host_source() -> str:
     _root, group, view = _view(entry.target)
     ctx = CpuCodegenContext(
         symbols=view.symbols,
+        codegen_context=view.codegen,
         target=entry.target,
         resolved_launches=view.resolved_launches,
     )
@@ -49,7 +53,12 @@ def _host_source() -> str:
 def test_a_prototype_becomes_one_kernel_and_one_shim() -> None:
     source = _device_source()
     assert source.count("__global__") == 1
-    assert source.count('extern "C" void tilefoundry_square_device_launch(') == 2
+    assert (
+        source.count(
+            f'extern "C" void {launcher_symbol(mangle(TirSquare, TirSquare.square_device))}('
+        )
+        == 2
+    )
     assert "square_small" not in source
     assert "square_large" not in source
 
@@ -65,5 +74,5 @@ def test_the_kernel_branches_on_the_extent_the_call_carries() -> None:
 def test_the_host_makes_one_call_and_chooses_nothing() -> None:
     """No ``if`` / ``else`` over N shims: the host writes the one call the table names."""
     source = _host_source()
-    assert source.count("tilefoundry_square_device_launch(") == 2
+    assert source.count(f"{launcher_symbol(mangle(TirSquare, TirSquare.square_device))}(") == 2
     assert "else" not in source
