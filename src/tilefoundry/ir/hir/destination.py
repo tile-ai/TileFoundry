@@ -31,8 +31,6 @@ def destination_params(fn: Function) -> tuple[Var, ...]:
             for field in ty.fields:
                 yield from outputs(field)
         elif not isinstance(ty, UnitType):
-            raise TypeError(f"CUDA skeleton: unsupported result type {ty!r} in {fn.name!r}")
+            raise TypeError(f"destination_params: unsupported result type {ty!r} in {fn.name!r}")
 
     return (*fn.params, *outputs(fn.return_type))
-
-

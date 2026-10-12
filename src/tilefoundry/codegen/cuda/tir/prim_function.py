@@ -21,7 +21,7 @@ from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
-def _wrap_buffer(signature: TensorSignature, ctx: CudaCodegenContext) -> None:
+def wrap_buffer(signature: TensorSignature, ctx: CudaCodegenContext) -> None:
     """Wrap one parameter's pointer in the tensor the body indexes it through.
 
     The layout is the envelope the whole dispatch range fits in, so one kernel
@@ -53,13 +53,18 @@ def _dispatch(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
     variants run at one geometry anyway.
     """
     ctx.bind_extents(tensor_signature_of(param) for param in fn.params)
+    emit_range_dispatch(fn, ctx, ctx.emit_node)
+
+
+def emit_range_dispatch(fn, ctx: CudaCodegenContext, emit_branch) -> None:
+    """Emit the common range selection, delegating each selected variant body."""
     for index, variant in enumerate(fn.variants):
         pattern = _range_over_one_dimension(fn, variant)
         subject = _subject(fn, pattern, ctx)
         opening = "if" if index == 0 else "} else if"
         ctx.emit(f"{opening} (({pattern.lo} <= {subject}) && ({subject} <= {pattern.hi})) {{")
         ctx.indent()
-        ctx.emit_node(variant)
+        emit_branch(variant)
         ctx.dedent()
     ctx.emit("} else {")
     ctx.indent()
@@ -102,7 +107,7 @@ def _emit(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
         ctx.register_kernel_param(param)
     ctx.bind_extents(params)
     for signature in params:
-        _wrap_buffer(signature, ctx)
+        wrap_buffer(signature, ctx)
     if ctx.codegen_context is None:
         raise ValueError("CUDA function emission requires a CodegenContext")
     if ctx.codegen_context.options.emit == "skeleton":

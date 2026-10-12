@@ -480,14 +480,13 @@ have empty bodies and variants receive their display-name path segment or
 range rules as TIR, trapping outside the specialization ranges.
 
 HIR functions with equal effective topology hierarchies share a device unit,
-including children that explicitly redeclare the same hierarchy. Same-kernel
-calls require matching hierarchies ([hir §1.1](./hir.md#11-function)),
-so their device functions stay in the same unit; TIR grouping is unchanged.
-HIR result tensor leaves become trailing GMEM destination parameters with no
-layout, named with the shared IR fresh-name rule used by `Names(fn).fresh("out")` in leaf order.
-They receive the same parameter-name checks as declared inputs. A synthesized
-host entry launching HIR uses that HIR function's symbol and registration name;
-its own IR name does not add another path segment.
+including children that explicitly redeclare the same hierarchy; TIR grouping
+is unchanged. HIR same-kernel context rules are owned by
+[hir §1.1](./hir.md#11-function). HIR parameter and naming conventions use
+`destination_params` and function paths from
+[core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path).
+A synthesized host entry launching HIR uses that HIR function's symbol and
+registration name; its own IR name does not add another path segment.
 
 ## 5. Specialization dispatch
 

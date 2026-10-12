@@ -21,9 +21,8 @@ from tilefoundry.codegen.cuda.abi import (
 from tilefoundry.codegen.cuda.context import CudaCodegenContext, topology_scope_str
 from tilefoundry.codegen.cuda.templates import render
 from tilefoundry.codegen.cuda.tir.prim_function import (
-    _range_over_one_dimension,
-    _subject,
-    _wrap_buffer,
+    emit_range_dispatch,
+    wrap_buffer,
 )
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
 from tilefoundry.codegen.registry import CodeGenerator
@@ -99,25 +98,15 @@ def define_hir_kernel(fn: Function, kernel: CallableSignature, ctx: CudaCodegenC
     ctx.dynamic_extents.clear()
     ctx.bind_extents(kernel.params)
     for signature in kernel.params:
-        _wrap_buffer(signature, ctx)
+        wrap_buffer(signature, ctx)
     arguments = ", ".join(f"{param.name}_tensor" for param in kernel.params)
     symbols = ctx.codegen_context.symbols.by_function
     if not fn.variants:
         ctx.emit(f"{symbols[id(fn)].symbol}({arguments});")
         return
-    for index, variant in enumerate(fn.variants):
-        pattern = _range_over_one_dimension(fn, variant)
-        subject = _subject(fn, pattern, ctx)
-        opening = "if" if index == 0 else "} else if"
-        ctx.emit(f"{opening} (({pattern.lo} <= {subject}) && ({subject} <= {pattern.hi})) {{")
-        ctx.indent()
-        ctx.emit(f"{symbols[id(variant)].symbol}({arguments});")
-        ctx.dedent()
-    ctx.emit("} else {")
-    ctx.indent()
-    ctx.emit("__trap();")
-    ctx.dedent()
-    ctx.emit("}")
+    emit_range_dispatch(
+        fn, ctx, lambda variant: ctx.emit(f"{symbols[id(variant)].symbol}({arguments});")
+    )
 
 
 def _define_launcher(

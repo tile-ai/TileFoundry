@@ -55,7 +55,7 @@ from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
-from tilefoundry.visitor_registry.contexts import VerifyContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, VerifyContext
 
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 
@@ -377,19 +377,19 @@ def verify_prim_function(
 
     from tilefoundry.ir.core.module import Module, module_functions  # noqa: PLC0415
 
-    root = module_fns if isinstance(module_fns, Module) else None
-    if root is not None:
-        module_fns = (
-            function
-            for function in module_functions(module_fns)
-            if isinstance(function, PrimFunction)
-        )
-    module_fn_map: dict[str, tuple[PrimFunction, ...]] = {}
+    module_fn_map: dict[str, tuple[PrimFunction | Function, ...]] = {}
+    if isinstance(module_fns, Module):
+        from tilefoundry.ir.core.module import mangle  # noqa: PLC0415
+
+        ctx.scope = FunctionScope(module_fns, fn)
+        functions = module_functions(module_fns)
+        module_fn_map.update({mangle(module_fns, f): (f,) for f in functions if isinstance(f, Function)})
+        module_fns = (f for f in functions if isinstance(f, PrimFunction))
     for f in module_fns:
         module_fn_map[f.name] = (*module_fn_map.get(f.name, ()), f)
 
     bound_var_ids: set[int] = {id(p) for p in fn.params}
-    _walk_stmt(fn.body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
+    _walk_stmt(fn.body, ctx, scope, fn, module_fn_map, bound_var_ids)
 
 
 def _check_param_homogeneity(fn: PrimFunction) -> None:
@@ -411,11 +411,11 @@ def _check_param_homogeneity(fn: PrimFunction) -> None:
         )
 
 
-def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int], root=None):
+def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
     match stmt:
         case Sequential():
             for s in stmt.body:
-                _walk_stmt(s, ctx, scope, fn, module_fn_map, bound_var_ids, root)
+                _walk_stmt(s, ctx, scope, fn, module_fn_map, bound_var_ids)
             return
         case LetStmt():
             if id(stmt.var) in bound_var_ids:
@@ -436,7 +436,7 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int], roo
             _check_embedded_sharding(stmt.value, scope, fn)
 
             bound_var_ids.add(id(stmt.var))
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
             return
         case For():
             _check_rank0_int(ctx, stmt, stmt.start, "For.start")
@@ -457,27 +457,27 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int], roo
                 and iv_ty.dtype in (DType.i32, DType.i64)
             ):
                 raise VerifyError("For.induction_var must be rank-0 integer")
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
             return
         case While():
             _check_rank0_bool(ctx, stmt, stmt.cond)
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
             return
         case If():
             _check_rank0_bool(ctx, stmt, stmt.cond)
-            _walk_stmt(stmt.then_body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
-            _walk_stmt(stmt.else_body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
+            _walk_stmt(stmt.then_body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.else_body, ctx, scope, fn, module_fn_map, bound_var_ids)
             return
         case MeshScope():
             scope.append(stmt.mesh)
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
             scope.pop()
             return
         case Return():
             return
         case Evaluate():
             if isinstance(stmt.callable, Launch):
-                _verify_launch(stmt, fn, module_fn_map, ctx, root)
+                _verify_launch(stmt, fn, module_fn_map, ctx)
             elif isinstance(stmt.callable, SymbolRef):
                 _verify_symbol_call(stmt, fn, module_fn_map, ctx)
             else:
@@ -748,7 +748,7 @@ def _verify_launch_extent(extent, extent_params, ref_name) -> None:
     _LaunchExtentVisitor(extent_params, ref_name).visit(extent)
 
 
-def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx, root=None):
+def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
     """Host-launch checks; full placement validation lands in CUDA lowering.
 
     Host-launch checks; full placement validation lands in CUDA lowering
@@ -781,25 +781,18 @@ def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx, root=None):
     for i, arg in enumerate(forwarded):
         if not isinstance(ctx.type_of(arg), TensorType):
             raise VerifyError(f"Launch of {ref.name!r}: forwarded arg[{i}] must be a tensor")
-    from tilefoundry.ir.core.module import mangle, module_functions, target_of  # noqa: PLC0415
+    from tilefoundry.ir.core.module import target_of  # noqa: PLC0415
     from tilefoundry.ir.hir.destination import destination_params  # noqa: PLC0415
 
-    hir_callees = (
-        [f for f in module_functions(root) if isinstance(f, Function) and mangle(root, f) == ref.name]
-        if root is not None else []
-    )
-    if hir_callees:
-        if len(hir_callees) != 1:
-            raise VerifyError(f"Launch of {ref.name!r}: ambiguous HIR callee")
-        callee = hir_callees[0]
-        if not isinstance(target_of(root, callee), CudaTarget):
+    if not module_fn_map:
+        return
+    callee = _resolve_symbol_ref(ref.name, module_fn_map)
+    if isinstance(callee, Function):
+        if not isinstance(target_of(ctx.scope.module, callee), CudaTarget):
             raise VerifyError(f"Launch callee {callee.name!r} must target a CUDA device")
         expected = callee.type
         params = destination_params(callee)
     else:
-        if not module_fn_map:
-            return
-        callee = _resolve_symbol_ref(ref.name, module_fn_map)
         if not isinstance(callee.target, CudaTarget):
             raise VerifyError(f"Launch callee {callee.name!r} must target a CUDA device")
         expected = callable_type_for_prim_function(callee)
