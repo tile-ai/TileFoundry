@@ -620,13 +620,16 @@ levels containing Split or Partial remain part of the distribution.
 | `((8, 16) + 4 \| Swizzle(2, 4, 3)) @ {B()}` | All-Broadcast `ShardLayout` based on a `ComposedLayout` |
 | `(8 @ t.w, 16) @ {t.l @ P("sum")}` | Split placement with Partial values on `t.l` |
 | `((8 @ t.w, 16), (16, 1)) @ {t.l @ P("sum")}` | Placement with explicit strides and Partial values |
-| `((8, 16), {})` | Transitional spelling of an all-Broadcast `ShardLayout` |
 | `where(layout=(_, _, dim) @ {cta @ B()})` | Broadcast constraint on the named topology `cta` |
 
 Placement covers the current composed mesh scope, or the function mesh in a
-signature; unstated axes are Broadcast. A `where` clause constrains named
-topologies rather than lexical mesh axes. The executable syntax and acceptance
-rules are generated in [parser §2](./parser.md#2-syntax-and-rules).
+signature; unstated axes are Broadcast. `None`, plain `Layout`, and an
+all-Broadcast `ShardLayout` are compatible forms without a split; regional rmem
+and smem records include values defined in the body or child regions while live,
+counting each alias group once.
+Shared-memory distribution belongs to CTA or coarser levels; author-written tiles
+in thread scope use plain layouts. A `where` clause constrains named topologies;
+acceptance rules are generated in [parser §2](./parser.md#2-syntax-and-rules).
 
 ---
 

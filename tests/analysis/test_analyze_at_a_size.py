@@ -146,14 +146,14 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
-    "data_started_window.DataStart.probe[static]": {"gmem": 4_384, "rmem": 8, "smem": 256},
+    "data_started_window.DataStart.probe[static]": {"gmem": 4_384, "rmem": 16, "smem": 256},
     "data_started_window.MeshStart.probe[static]": {"gmem": 4_384, "rmem": 8, "smem": 256},
     "derived_prefill.DerivedPrefill.prefill[prefill_n=64,topology_only=128]": {
         "gmem": 288,
     },
     "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]": {
         "gmem": 526_464,
-        "rmem": 128 * 4,
+        "rmem": 128 * 4 + 8,
         "smem": 2 * 128 * 64 * 2 + 1_044,
     },
     "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 8 * 2 + 8 * 2},
@@ -247,7 +247,7 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 0,
         "smem": 1_408,
     },
-    "mesh_slice_start.OutOfWindow.oob[static]": {"gmem": 5_120, "rmem": 0},
+    "mesh_slice_start.OutOfWindow.oob[static]": {"gmem": 4_096, "rmem": 0},
     "mesh_slice_start.Strided.scan[static]": {
         "gmem": 4_352,
         "rmem": 8,

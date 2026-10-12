@@ -499,15 +499,6 @@ def _layout_strides() -> AstPattern[Any]:
     return pattern
 
 
-def _empty_states() -> AstPattern[Any]:
-    """The transitional empty-state tuple syntax, removed in M7."""
-    return AstNodePattern(
-        ast.Dict,
-        FieldPattern("keys", SequencePattern()),
-        FieldPattern("values", SequencePattern()),
-    )
-
-
 def _state_call(name: str, *args) -> AstPattern[Any]:
     return AstNodePattern(
         ast.Call,
@@ -575,30 +566,12 @@ class ValueStatesPattern(ElementPattern):
 
 
 def _layout_sugar_parts(node: object):
-    """Split layout sugar into its dims, its strides, and its value states.
-
-    ``(d, ...)`` states dims alone. Wrapping the dims in a tuple adds an
-    optional stride tuple and the transitional empty ``{}`` set. Nonempty
-    states are attached by the separate ``layout @ {states}`` production.
-    Return ``None`` when the node is not layout sugar at all.
-    """
+    """Read a dimension tuple, optionally paired with an explicit stride tuple."""
     if not isinstance(node, ast.Tuple):
         return None
-    if not node.elts:
-        return node, None, None
-    head, *extras = node.elts
-    if not extras or not isinstance(head, ast.Tuple):
-        return node, None, None
-    strides: ast.Tuple | None = None
-    states: ast.Set | ast.Dict | None = None
-    for extra in extras:
-        if isinstance(extra, ast.Tuple) and strides is None and states is None:
-            strides = extra
-        elif isinstance(extra, ast.Dict) and not extra.keys and states is None:
-            states = extra
-        else:
-            return None
-    return head, strides, states
+    if len(node.elts) == 2 and all(isinstance(item, ast.Tuple) for item in node.elts):
+        return node.elts[0], node.elts[1]
+    return node, None
 
 
 def _value_state_parts(node: ast.AST):
@@ -713,12 +686,9 @@ class PlacementScopeRule:
             return value
         mesh = _placement_scope(context)
         if mesh is None:
-            message = (
-                "empty braces require a current mesh scope"
-                if value.states_written and not value.states and isinstance(match.node, ast.Tuple)
-                else "placement requires a current mesh scope"
+            raise ParseError.from_node(
+                match.node, context, "placement requires a current mesh scope"
             )
-            raise ParseError.from_node(match.node, context, message)
         keys = axis_keys(mesh)
         attrs = [runtime.Broadcast() for _ in keys]
         for source, source_axis, *state in (*value.splits, *value.states):
@@ -811,20 +781,7 @@ class PlacedLayoutPattern(ElementPattern):
     element_name = "placed_layout"
     syntax = LazyPattern(
         lambda: BindPattern(
-            ChoicePattern(
-                AstNodePattern(
-                    ast.Tuple,
-                    FieldPattern(
-                        "elts",
-                        SequencePattern(_layout_dims(), _layout_strides(), _empty_states()),
-                    ),
-                ),
-                AstNodePattern(
-                    ast.Tuple,
-                    FieldPattern("elts", SequencePattern(_layout_dims(), _empty_states())),
-                ),
-                _placement_operand_syntax(),
-            ),
+            _placement_operand_syntax(),
             PlacedLayoutPattern.enter,
         )
     )
@@ -849,10 +806,9 @@ class PlacedLayoutPattern(ElementPattern):
         parts = _layout_sugar_parts(node)
         if parts is None:
             return None
-        dims_node, strides_node, states_node = parts
+        dims_node, strides_node = parts
         children: list[AstChild] = []
         bindings: list[tuple[str, int]] = []
-        states: list[tuple[str, str, str | None]] = []
         found_placement = False
         for tensor_axis, item in enumerate(dims_node.elts):
             placement = PlacedLayoutPattern._placement_parts(item)
@@ -896,21 +852,7 @@ class PlacedLayoutPattern(ElementPattern):
                         "layout_strides",
                     )
                 )
-        if states_node is not None:
-            for index, item in enumerate(states_node.elts if isinstance(states_node, ast.Set) else ()):
-                state = _value_state_parts(item)
-                if state is None:
-                    return None
-                axis_node, kind, reduction = state
-                axis_context = context.child(situation="mesh_axis", role="mesh_axis")
-                if MeshAxisPattern().match(axis_node, axis_context) is None:
-                    return None
-                child_name = f"state_{index}"
-                states.append((child_name, kind, reduction))
-                children.append(
-                    AstChild(child_name, MeshAxisPattern(), axis_node, "mesh_axis", "mesh_axis")
-                )
-        if not allow_plain and not found_placement and states_node is None and strides_node is None:
+        if not allow_plain and not found_placement and strides_node is None:
             return None
         return dataclasses.replace(
             matched,
@@ -921,8 +863,8 @@ class PlacedLayoutPattern(ElementPattern):
                 "rank": len(dims_node.elts),
                 "stride_rank": None if strides_node is None else len(strides_node.elts),
                 "bindings": tuple(bindings),
-                "states": tuple(states),
-                "states_written": states_node is not None,
+                "states": (),
+                "states_written": False,
             },
             children=tuple(children),
         )

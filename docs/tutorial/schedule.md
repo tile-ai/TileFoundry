@@ -57,11 +57,11 @@ class GRID:
             n = cta.bn * BN
             acc = tf.zeros(Tensor[(BM, BN), "f32", "rmem"])
             for k in tf.tile(K, BK):
-                at = tf.reshard(a[m:m + BM, k], ((BM, BK), {}), "smem")
-                bt = tf.reshard(b[k, n:n + BN], ((BK, BN), {}), "smem")
+                at = tf.reshard(a[m:m + BM, k], (BM, BK), "smem")
+                bt = tf.reshard(b[k, n:n + BN], (BK, BN), "smem")
                 part = tf.matmul(at, bt, out_dtype="f32")
-                acc = acc + tf.reshard(part, ((BM, BN), {}), "rmem")
-            tile_out = tf.reshard(tf.cast(acc, "bf16"), ((BM, BN), {}), "gmem")
+                acc = acc + tf.reshard(part, (BM, BN), "rmem")
+            tile_out = tf.reshard(tf.cast(acc, "bf16"), (BM, BN), "gmem")
             return tf.insert_slice(out, tile_out, (m, n))
 ```
 
@@ -118,11 +118,11 @@ class PERSISTENT:
                     n = nt * BN
                     acc = tf.zeros(Tensor[(BM, BN), "f32", "rmem"])
                     for k in tf.tile(K, BK):
-                        at = tf.reshard(a[m:m + BM, k], ((BM, BK), {}), "smem")
-                        bt = tf.reshard(b[k, n:n + BN], ((BK, BN), {}), "smem")
+                        at = tf.reshard(a[m:m + BM, k], (BM, BK), "smem")
+                        bt = tf.reshard(b[k, n:n + BN], (BK, BN), "smem")
                         part = tf.matmul(at, bt, out_dtype="f32")
-                        acc = acc + tf.reshard(part, ((BM, BN), {}), "rmem")
-                    tile_out = tf.reshard(tf.cast(acc, "bf16"), ((BM, BN), {}), "gmem")
+                        acc = acc + tf.reshard(part, (BM, BN), "rmem")
+                    tile_out = tf.reshard(tf.cast(acc, "bf16"), (BM, BN), "gmem")
                     out = tf.insert_slice(out, tile_out, (m, n))
             return out
 ```
@@ -181,10 +181,10 @@ grep -E 'tf.matmul|candidate   T.cuda.sm90.Wgmma|n=256, dtype=bf16, form=SS|tf.b
 ```
 
 ```text
-  v10:31  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", "smem"]  rhs=Tensor[(64, 256), "bf16", "smem"]
+  v10:31  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", (128, 64), "smem"]  rhs=Tensor[(64, 256), "bf16", (64, 256), "smem"]
     candidate   T.cuda.sm90.Wgmma  needs thread p0:p0+256, p0 % 128 = 0
                   n=256, dtype=bf16, form=SS
-  v12:32  tf.binary  per cta  lhs=Tensor[(128, 256), "f32", "rmem"]  rhs=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "f32", "rmem"]
+  v12:32  tf.binary  per cta  lhs=Tensor[(128, 256), "f32", "rmem"]  rhs=Tensor[(128, 256), "f32", (128, 256), "rmem"]  result=Tensor[(128, 256), "f32", (128, 256), "rmem"]
     default     T.binary
   v13:33  tf.cast  per cta  x=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "bf16", "rmem"]
     default     T.cast

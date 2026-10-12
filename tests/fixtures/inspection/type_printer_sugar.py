@@ -37,13 +37,13 @@ class TypePrinterSugar:
             staged = tf.reshard(tf.square(composed), (8 @ cta.tile, 4, 16), "smem")
             narrowed = tf.cast(staged, dtype="bf16")
             swapped = tf.transpose(narrowed, perm=(0, 2, 1))
-            gathered = tf.reshard(swapped, ((8, 16, 4), {}), "gmem")
+            gathered = tf.reshard(swapped, (8, 16, 4), "gmem")
             seeded = tf.reshard(
                 seed, ((2 @ mesh.warp, 4 @ mesh.lane, 2), (8, 2, 1)), "rmem"
             )
         folded = tf.reshard(acc, (8 @ mesh.warp, 16 @ mesh.lane), "rmem")
         summed = tf.reshard(
-            mixed, ((8, 16), {}), "rmem"
+            mixed, (8, 16), "rmem"
         )
         for _ in range(3):
             folded = tf.square(folded)
@@ -62,18 +62,18 @@ class TypePrinterSugar:
     ):
         with Mesh(("thread",), layout=(8,), names=("lane",)) as lanes:
             split = tf.reshard(x, (8 @ lanes.lane, 16), "rmem")
-            whole = tf.reshard(x, ((8, 16), {}), "rmem")
+            whole = tf.reshard(x, (8, 16), "rmem")
             for _ in range(3):
                 split = tf.square(split)
                 whole = tf.add(whole, whole)
             with Mesh(("thread",), layout=(2, 4), names=("warp", "lane")) as thr:
                 per_warp = tf.reshard(weight, (8 @ thr.warp, 16), "rmem")
                 unfolded = tf.reshard(
-                    per_warp, ((8, 16), {}), "gmem"
+                    per_warp, (8, 16), "gmem"
                 )
             return (
-                tf.reshard(split, ((8, 16), {}), "gmem"),
-                tf.reshard(whole, ((8, 16), {}), "gmem"),
+                tf.reshard(split, (8, 16), "gmem"),
+                tf.reshard(whole, (8, 16), "gmem"),
                 unfolded,
             )
 

@@ -14,15 +14,14 @@ class AsyncStage:
     def async_stage_device(a: Tensor[(128, 4), "f32"], b: Tensor[(128, 4), "f32"]):
         with Mesh((Topology("thread", 128),), layout=(128,), names=("t",)) as m:
             a_view = T.tensor_view(T.ptr_of(a), layout=((128 @ m.t, 4), (4, 1)))
-            shared = T.alloc_tensor(
-                tensor_type=Tensor[(128, 4), "f32", ((128 @ m.t, 4), (4, 1)), "smem"]
-            )
+            shared = T.alloc_tensor(tensor_type=Tensor[(128, 4), "f32", (128, 4), "smem"])
+            shared_view = T.tensor_view(T.ptr_of(shared), layout=((128 @ m.t, 4), (4, 1)))
             b_view = T.tensor_view(T.ptr_of(b), layout=((128 @ m.t, 4), (4, 1)))
-            T.copy_async(a_view, shared)
+            T.copy_async(a_view, shared_view)
             T.cp_async_commit()
             T.cp_async_wait(n=0)
             T.sync(m)
-            T.copy(shared, b_view)
+            T.copy(shared_view, b_view)
 
     @prim_func(target=CpuTarget())
     def async_stage_host(a: Tensor[(128, 4), "f32"], b: Tensor[(128, 4), "f32"]):

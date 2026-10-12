@@ -56,10 +56,10 @@ class GqaOnline:
     @func(mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)))
     def gqa_online_attend(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         pass
@@ -70,10 +70,10 @@ class GqaOnline:
     )
     def head_on_cta(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         with Mesh(("cta",), layout=(NUM_CTA,)) as cta:
@@ -91,7 +91,7 @@ class GqaOnline:
             for i in range(C):
                 i_sh = tf.reshard(
                     tf.reshape(i, new_shape=(1,)),
-                    layout=((1,), {}),
+                    layout=(1,),
                     storage="gmem",
                 )
                 k_i = tf.cast(
@@ -205,10 +205,10 @@ class GqaOnline:
     )
     def ctx_split_kv(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", ((1, C, _HKV, _D), {})],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", ((1, S, _HKV, _D), {})],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         m_p, l_p, o_p = _ctx_partials(q, k_cache, v_cache)

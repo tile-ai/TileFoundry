@@ -67,7 +67,7 @@ class FP8_BLOCK_SCALED_GEMM:
                             (a_scale[:, kb:kb + 1],), op=T.copy(rmem_layout=((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp), (64, 1, 8, 16)))
                         )
                         tile_scale = tf.schedule(
-                            (b_scale[kb:kb + 1, :],), op=T.copy(rmem_layout=((1, 1), {}))
+                            (b_scale[kb:kb + 1, :],), op=T.copy(rmem_layout=(1, 1))
                         )
                         acc = acc + part * row_scale * tile_scale
 

@@ -22,7 +22,7 @@ from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.utils import bytes_by_storage, participant_layout
+from tilefoundry.ir.types.utils import bytes_by_storage, is_unsharded_layout, participant_layout
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.units import format_bytes
@@ -444,7 +444,11 @@ def values_in_region(
     facts: MemoryHierarchyFacts,
     topology_names: tuple[str, ...],
 ) -> tuple[AllocationValue, ...]:
-    """Resident values whose lifetimes and ownership intersect one mesh region."""
+    """Resident values whose lifetimes and ownership intersect one mesh region.
+
+    Unsharded tensor leaves defined in the window contribute while live,
+    including definitions in child regions. Alias groups are counted once.
+    """
     positions = {name: index for index, name in enumerate(topology_names)}
     region_positions = tuple(
         positions[getattr(topology, "name", topology)] for topology in region.mesh.topologies
@@ -466,12 +470,16 @@ def values_in_region(
                 f"memory: level {lifetime.memory_level!r} owner {declared.owner!r} "
                 f"is not a declared topology in {topology_names}"
             )
-        if outermost_region > owner_position:
-            continue
         held = leaves_of(item.value.type)[item.index]
-        layout = shard_layout_of(getattr(held, "layout", None))
-        if layout is None or not held_in_region(participant_layout(layout).mesh, region.mesh):
-            continue
+        if isinstance(held, TensorType) and is_unsharded_layout(held.layout):
+            if not entered_at < lifetime.defined_at < exited_at:
+                continue
+        else:
+            if outermost_region > owner_position:
+                continue
+            layout = shard_layout_of(getattr(held, "layout", None))
+            if layout is None or not held_in_region(participant_layout(layout).mesh, region.mesh):
+                continue
         result.append(item)
     return tuple(result)
 

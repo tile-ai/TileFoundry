@@ -311,44 +311,34 @@ def gemm(
                         T.ptr_of(b_scale[kb:kb + 1, 0:0 + 1]), layout=(1, 1), shape=(1, 1)
                     )
                     with scope_2 as threads_8:
-                        dst_frame_2 = T.tensor_view(
-                            T.ptr_of(tile_scale[0:0 + 1, 0:0 + 1]),
-                            layout=(1, 1) @ {B()},
-                            shape=(1, 1),
-                        )
-                        T.copy(tile_3, dst_frame_2)
+                        T.copy(tile_3, tile_scale)
                         lhs_frame_1 = T.tensor_view(
                             T.ptr_of(value_1[0:0 + 128, 0:0 + 128]),
                             layout=((2 @ threads_8.d0, 8 @ threads_8.d2, 2, 4 @ threads_8.d1, 2, 4 @ threads_8.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),
                             shape=(128, 128),
                         )
-                        rhs_frame_1 = T.tensor_view(
-                            T.ptr_of(tile_scale[0:0 + 1, 0:0 + 1]),
-                            layout=(1, 1) @ {B()},
-                            shape=(1, 1),
-                        )
-                        dst_frame_3 = T.tensor_view(
+                        dst_frame_2 = T.tensor_view(
                             T.ptr_of(value[0:0 + 128, 0:0 + 128]),
                             layout=((2 @ threads_8.d0, 8 @ threads_8.d2, 2, 4 @ threads_8.d1, 2, 4 @ threads_8.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),
                             shape=(128, 128),
                         )
-                        T.binary(lhs_frame_1, rhs_frame_1, dst_frame_3, kind=BinaryKind.MUL)
+                        T.binary(lhs_frame_1, tile_scale, dst_frame_2, kind=BinaryKind.MUL)
                         lhs_frame_2 = T.tensor_view(
                             T.ptr_of(acc[0:0 + 128, 0:0 + 128]),
                             layout=((2 @ threads_8.d0, 8 @ threads_8.d2, 2, 4 @ threads_8.d1, 2, 4 @ threads_8.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),
                             shape=(128, 128),
                         )
-                        rhs_frame_2 = T.tensor_view(
+                        rhs_frame_1 = T.tensor_view(
                             T.ptr_of(value[0:0 + 128, 0:0 + 128]),
                             layout=((2 @ threads_8.d0, 8 @ threads_8.d2, 2, 4 @ threads_8.d1, 2, 4 @ threads_8.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),
                             shape=(128, 128),
                         )
-                        dst_frame_4 = T.tensor_view(
+                        dst_frame_3 = T.tensor_view(
                             T.ptr_of(acc_1[0:0 + 128, 0:0 + 128]),
                             layout=((2 @ threads_8.d0, 8 @ threads_8.d2, 2, 4 @ threads_8.d1, 2, 4 @ threads_8.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),
                             shape=(128, 128),
                         )
-                        T.binary(lhs_frame_2, rhs_frame_2, dst_frame_4, kind=BinaryKind.ADD)
+                        T.binary(lhs_frame_2, rhs_frame_1, dst_frame_3, kind=BinaryKind.ADD)
                     acc_1_view = T.tensor_view(
                         T.ptr_of(acc_1[0:0 + 128, 0:0 + 128]),
                         layout=((2 @ scope_2.d0, 8 @ scope_2.d2, 2, 4 @ scope_2.d1, 2, 4 @ scope_2.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),
@@ -364,12 +354,12 @@ def gemm(
                         layout=((2 @ threads_12.d0, 8 @ threads_12.d2, 2, 4 @ threads_12.d1, 2, 4 @ threads_12.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),
                         shape=(128, 128),
                     )
-                    dst_frame_5 = T.tensor_view(
+                    dst_frame_4 = T.tensor_view(
                         T.ptr_of(result[0:0 + 128, 0:0 + 128]),
                         layout=((2 @ threads_12.d0, 8 @ threads_12.d2, 2, 4 @ threads_12.d1, 2, 4 @ threads_12.d3, 16), (8192, 1, 8, 16, 64, 128, 512)),
                         shape=(128, 128),
                     )
-                    T.cast(src_frame, dst_frame_5, dtype="bf16")
+                    T.cast(src_frame, dst_frame_4, dtype="bf16")
         with Mesh(
             (Topology("thread", 384),), layout=(2, 4, 8, 4) + 128, names=("d0", "d1", "d2", "d3")
         ) as threads_13:

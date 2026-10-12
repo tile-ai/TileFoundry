@@ -152,9 +152,7 @@ layout-dims           ::= '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* '
                           dim-expr) (',' (expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
                           mesh-axis) | dim-expr))*)? ')'
 layout-strides        ::= '(' (dim-expr (',' dim-expr)*)? ')'
-placed-layout         ::= '(' layout-dims ',' layout-strides ',' '{' (':' (',' ':')*)? '}' ')'
-                          | '(' layout-dims ',' '{' (':' (',' ':')*)? '}' ')'
-                          | '(' layout-dims ',' layout-strides ')'
+placed-layout         ::= '(' layout-dims ',' layout-strides ')'
                           | layout-dims
 plain-layout          ::= '(' (dim-expr (',' dim-expr)*)? ')'
 literal               ::= None

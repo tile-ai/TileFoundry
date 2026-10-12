@@ -13,6 +13,7 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, apply
 from tilefoundry.ir.types.shard_layout import (
+    Broadcast,
     ShardLayout,
     Split,
     shard_layout_local_shape,
@@ -180,7 +181,11 @@ def _stated_strides(layout) -> bool:
 
 
 def _plain(layout) -> bool:
-    """Plain address functions have stated strides and no shard component."""
+    """Plain address functions include full broadcasts with stated strides."""
+    if isinstance(layout, ShardLayout):
+        if not all(isinstance(attr, Broadcast) for attr in layout.attrs):
+            return False
+        layout = layout.layout
     return (
         isinstance(layout, (Layout, ComposedLayout))
         and shard_layout_of(layout) is None
@@ -203,7 +208,9 @@ def _buffer_alias(call: Call) -> int | None:
         return None
     if not is_literal_shape(result.shape):
         return None
-    return 0 if _same_addresses(source.layout, result.layout, prod(result.shape)) else None
+    source_layout = source.layout.layout if isinstance(source.layout, ShardLayout) else source.layout
+    result_layout = result.layout.layout if isinstance(result.layout, ShardLayout) else result.layout
+    return 0 if _same_addresses(source_layout, result_layout, prod(result.shape)) else None
 
 
 @register_access_relation(Reshard)

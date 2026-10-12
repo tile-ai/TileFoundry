@@ -190,7 +190,9 @@ _SHARED_BYTES_PER_CLOCK = 128
 
 @dataclass(frozen=True)
 class _RmemExpectation:
-    peak_bytes: int
+    """An rmem peak, or an existing region without an rmem allocation."""
+
+    peak_bytes: int | None
     derivation: str
 
 
@@ -221,13 +223,24 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
-    "captured_insert_update": {},
+    "captured_insert_update": {
+        "thread@0:32#0": _RmemExpectation(
+            None, "the defining thread region holds 16 smem bytes and no rmem allocation",
+        ),
+    },
     "loop_carry_from_param": {},
     "sparse_decode": {
+        "cta@0:1#0": _RmemExpectation(
+            512, "the seven index/mask SSA values form one 512-byte alias group",
+        ),
         "thread@128:128#0": _RmemExpectation(33_024, "attention intermediates and row reductions"),
         "thread@0:256#0": _RmemExpectation(33_024, "parent envelope of attention compute"),
     },
     "scalar_binary": {
+        "cta@0:1#0": _RmemExpectation(
+            132, "the child thread's 128-byte tile/region-result alias chain overlaps "
+            "a 4-byte rhs literal fill",
+        ),
         "thread@0:32#0": _RmemExpectation(
             132,
             "rhs literal materializes in rmem during lowering; the new result reuses "
@@ -235,6 +248,10 @@ RMEM_EXPECTED = {
         ),
     },
     "fp8_block_scaled_gemm": {
+        "cta@0:1#0": _RmemExpectation(
+            4, "the 1x1 f32 tile-scale copy is unsplit; thread-split accumulators "
+            "do not contribute to the CTA record",
+        ),
         "thread@128:256#0": _RmemExpectation(65_536, "128x128 f32 zero accumulator"),
         "thread@128:256#1": _RmemExpectation(
             66_048,
@@ -571,7 +588,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
             assert record.solver_status == "feasible"
             assert record.topologies == placement.topologies
             assert record.peaks
-            assert all(peak.memory_level == "rmem" for peak in record.peaks)
+            assert all(peak.memory_level in ("rmem", "smem") for peak in record.peaks)
             assert not record.traffic.storage.kinds
             assert not record.traffic.communication.kinds
             assert record.footprint is None
@@ -592,6 +609,8 @@ def test_scheduled_hir_program_has_analysis_metadata(
             peak = record.peak_for("rmem") if record is not None else None
             if peak is not None:
                 observed_rmem[key] = peak.peak_bytes
+            elif record is not None and key in RMEM_EXPECTED[path.stem]:
+                observed_rmem[key] = None
         expected_rmem = {
             key: expectation.peak_bytes
             for key, expectation in RMEM_EXPECTED[path.stem].items()

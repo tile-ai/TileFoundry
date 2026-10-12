@@ -539,7 +539,7 @@ class Stage2_Sharded:
             attended = tf.transpose(
                 tf.cast(weighted / normalizer, dtype="bf16"), perm=(0, 2, 1, 3)
             )
-            attended = tf.reshard(attended, ((1, 1, QUERY_HEADS, HEAD_DIM), {}), "gmem")
+            attended = tf.reshard(attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem")
             return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
 
 
@@ -726,7 +726,7 @@ class Stage3_Fused:
                 attended, new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
             )
             attended = tf.reshard(
-                attended, ((1, 1, QUERY_HEADS, HEAD_DIM), {}), "gmem"
+                attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem"
             )
             return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
 
@@ -756,7 +756,7 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 # analysis target=nvidia.h200_sxm module=Stage3_Fused function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:2983360@logical,8628160@total,461024@cta;f32:94080@logical,127488@total,3984@cta other-ops=integer:9@logical,512@total,16@cta;special:33056@logical,33152@total,1036@cta precision=exact
-# memory traffic=gmem:r2.32MB/w4.00MB@logical,r9.21MB/w4.02MB@total,r1.44MB/w4.00MB@cta;rmem:r64.64KB/w64.07KB@logical,r184.00KB/w164.00KB@total,r5.75KB/w5.12KB@cta;smem:r2.62MB/w2.46MB@logical,r8.90MB/w8.61MB@total,r284.71KB/w275.41KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:277:1.00KB;v11:283:512.12KB;v12:285:2.06MB;v2:279:256B;v4:281[0]:1.00KB;v4:281[1]:256B;v68:365:1.00KB;v70:368:512B;v7:282:512.12KB;v8:284:2.06MB;v9:280:256B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:6.81MB;rmem:512B;smem:16.77KB persistent=gmem:2.31MB
+# memory traffic=gmem:r2.32MB/w4.00MB@logical,r9.21MB/w4.02MB@total,r1.44MB/w4.00MB@cta;rmem:r64.64KB/w64.07KB@logical,r184.00KB/w164.00KB@total,r5.75KB/w5.12KB@cta;smem:r2.62MB/w2.46MB@logical,r8.90MB/w8.61MB@total,r284.71KB/w275.41KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:277:1.00KB;v11:283:512.12KB;v12:285:2.06MB;v2:279:256B;v4:281[0]:1.00KB;v4:281[1]:256B;v68:365:1.00KB;v70:368:512B;v7:282:512.12KB;v8:284:2.06MB;v9:280:256B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B footprint-precision=upper_bound peak=gmem:6.81MB;rmem:520B;smem:16.77KB persistent=gmem:2.31MB
 #   buffer=w_o holds=6.44MB time=none space=cta.head,cta.worker reuse=3.88MB fits=yes precision=upper_bound
 # roofline ideal-ns=1599 bound-by=memory
 
@@ -804,13 +804,13 @@ class Stage4_WeightPrepared:
             wv_local = tf.reshard(
                 w_v, (1, HIDDEN, KV_DIM @ cta.head), "smem"
             )
-            hidden_local = tf.reshard(hidden, ((1, 1, HIDDEN), {}), "smem")
+            hidden_local = tf.reshard(hidden, (1, 1, HIDDEN), "smem")
             q_projected = tf.cast(tf.matmul(hidden_local, wq_local, out_dtype="f32"), dtype="bf16")
             k_projected = tf.cast(tf.matmul(hidden_local, wk_local, out_dtype="f32"), dtype="bf16")
             v_projected = tf.cast(tf.matmul(hidden_local, wv_local, out_dtype="f32"), dtype="bf16")
-            q_projected = tf.reshard(q_projected, ((1, 1, HIDDEN), {}), "gmem")
-            k_projected = tf.reshard(k_projected, ((1, 1, KV_DIM), {}), "gmem")
-            v_projected = tf.reshard(v_projected, ((1, 1, KV_DIM), {}), "gmem")
+            q_projected = tf.reshard(q_projected, (1, 1, HIDDEN), "gmem")
+            k_projected = tf.reshard(k_projected, (1, 1, KV_DIM), "gmem")
+            v_projected = tf.reshard(v_projected, (1, 1, KV_DIM), "gmem")
             q = tf.reshape(
                 q_projected, new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
             )
@@ -851,13 +851,13 @@ class Stage4_WeightPrepared:
             )
             attended_local = tf.reshard(
                 tf.reshape(attended, new_shape=(1, 1, HIDDEN)),
-                ((1, 1, HIDDEN), {}),
+                (1, 1, HIDDEN),
                 "smem",
             )
             output_local = tf.cast(
                 tf.matmul(attended_local, w_o_local, out_dtype="f32"), dtype="bf16"
             )
-            return tf.reshard(output_local, ((1, 1, HIDDEN), {}), "gmem")
+            return tf.reshard(output_local, (1, 1, HIDDEN), "gmem")
 
 
 gqa_decode_weight_prepared = Stage4_WeightPrepared.entry_function()
@@ -1037,7 +1037,7 @@ class Stage5_CachePrepared:
                 tf.cast(acc / l, dtype="bf16"), perm=(0, 2, 1, 3)
             )
             attended = tf.reshard(
-                attended, ((1, 1, QUERY_HEADS, HEAD_DIM), {}), "gmem"
+                attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem"
             )
             return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
 

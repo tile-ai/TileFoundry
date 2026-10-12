@@ -306,6 +306,16 @@ def tile_inner_type(
     return TensorType(tuple(inner_shape), type_.dtype, layout, type_.storage)
 
 
+def is_unsharded_layout(layout: object) -> bool:
+    """Recognize the three tensor layout forms that carry no distribution."""
+    return (
+        layout is None
+        or isinstance(layout, Layout)
+        or isinstance(layout, ShardLayout)
+        and all(isinstance(attr, Broadcast) for attr in layout.attrs)
+    )
+
+
 def types_compatible(declared: Type, actual: Type) -> bool:
     """Return whether *actual* may bind a position declared as *declared*.
 
@@ -346,7 +356,10 @@ def types_compatible(declared: Type, actual: Type) -> bool:
                 declared.storage is StorageKind.UMAT
                 or declared.storage == actual.storage
             )
-            and layout_compatible(declared.layout, actual.layout)
+            and (
+                (is_unsharded_layout(declared.layout) and is_unsharded_layout(actual.layout))
+                or layout_compatible(declared.layout, actual.layout)
+            )
         )
     if isinstance(declared, TupleType):
         return (
