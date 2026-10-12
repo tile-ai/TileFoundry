@@ -55,7 +55,7 @@ from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
-from tilefoundry.visitor_registry.contexts import FunctionScope, VerifyContext
+from tilefoundry.visitor_registry.contexts import VerifyContext
 
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 
@@ -375,16 +375,20 @@ def verify_prim_function(
     ctx = VerifyContext()
     scope: list[Mesh] = []
 
-    from tilefoundry.ir.core.module import Module, module_functions  # noqa: PLC0415
+    from tilefoundry.ir.core.module import (  # noqa: PLC0415
+        Module,
+        function_selectors,
+        module_functions,
+    )
 
     module_fn_map: dict[str, tuple[PrimFunction | Function, ...]] = {}
     if isinstance(module_fns, Module):
-        from tilefoundry.ir.core.module import function_selectors  # noqa: PLC0415
-
-        ctx.scope = FunctionScope(module_fns, fn)
-        functions = module_functions(module_fns)
         module_fn_map.update({selector: (f,) for selector, f in function_selectors(module_fns)})
-        module_fns = (f for f in functions if isinstance(f, PrimFunction))
+        module_fns = (
+            function
+            for function in module_functions(module_fns)
+            if isinstance(function, PrimFunction)
+        )
     for f in module_fns:
         module_fn_map[f.name] = (*module_fn_map.get(f.name, ()), f)
 
@@ -755,7 +759,10 @@ def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
     (a launch tensor arg's storage vs the runtime device type).
 
     The launch is ``Evaluate(Launch(...), (SymbolRef(callee), grid_x, grid_y,
-    grid_z, block_x, block_y, block_z, *forwarded))``.
+    grid_z, block_x, block_y, block_z, *forwarded))``. An HIR callee's arguments
+    were written and checked by the host-entry pass that built the Launch
+    ([passes §7.3](docs/spec/passes.md#73-insert_default_host_entry)), so only
+    its selector is resolved here.
     """
     ref = stmt.args[0]
     if not isinstance(ref, SymbolRef):
@@ -781,34 +788,26 @@ def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
     for i, arg in enumerate(forwarded):
         if not isinstance(ctx.type_of(arg), TensorType):
             raise VerifyError(f"Launch of {ref.name!r}: forwarded arg[{i}] must be a tensor")
-    from tilefoundry.ir.core.module import target_of  # noqa: PLC0415
-    from tilefoundry.ir.hir.destination import destination_params  # noqa: PLC0415
-
     if not module_fn_map:
         return
     callee = _resolve_symbol_ref(ref.name, module_fn_map)
     if isinstance(callee, Function):
-        if not isinstance(target_of(ctx.scope.module, callee), CudaTarget):
-            raise VerifyError(f"Launch callee {callee.name!r} must target a CUDA device")
-        expected = callee.type
-        params = destination_params(callee)
-    else:
-        if not isinstance(callee.target, CudaTarget):
-            raise VerifyError(f"Launch callee {callee.name!r} must target a CUDA device")
-        expected = callable_type_for_prim_function(callee)
-        params = callee.params
+        return
+    if not isinstance(callee.target, CudaTarget):
+        raise VerifyError(f"Launch callee {callee.name!r} must target a CUDA device")
+    expected = callable_type_for_prim_function(callee)
     if ref.type != expected:
         raise VerifyError(
             f"Launch callee SymbolRef {ref.name!r}: type {ref.type} != resolved "
             f"callee CallableType {expected}"
         )
 
-    if len(forwarded) != len(params):
+    if len(forwarded) != len(callee.params):
         raise VerifyError(
             f"Launch of {callee.name!r}: forwarded arg count {len(forwarded)} != "
-            f"param count {len(params)}"
+            f"param count {len(callee.params)}"
         )
-    for i, (arg, param) in enumerate(zip(forwarded, params)):
+    for i, (arg, param) in enumerate(zip(forwarded, callee.params)):
         arg_ty = ctx.type_of(arg)
         if arg_ty != param.type:
             raise VerifyError(

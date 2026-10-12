@@ -22,7 +22,6 @@ from tilefoundry.codegen.signature import (
     TensorSignature,
     tensor_signature_of,
 )
-from tilefoundry.ir.hir.destination import destination_params
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shard_layout import ShardLayout
@@ -152,9 +151,8 @@ def called_as_launcher(
 
 
 @register_codegen(CudaTarget, Role.CALLEE, Function)
-def hir_launcher_signature(fn, symbol, program_ids) -> CallableSignature:
-    """Use the same pointer and extent ABI as TIR, appending HIR result buffers."""
-    params = destination_params(fn)
+def hir_launcher_signature(fn, symbol, program_ids, params) -> CallableSignature:
+    """The TIR pointer and extent ABI over the arguments *fn*'s Launch binds."""
     return CallableSignature(
         name=launcher_symbol(symbol),
         params=tuple(tensor_signature_of(param) for param in params),

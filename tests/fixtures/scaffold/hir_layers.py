@@ -53,13 +53,11 @@ class Runtime(RuntimeModule):
         self.library = tvm_ffi.load_module(str(library_path))
         self.weight = torch.randn(8, device="cuda")
         self.leaf_weight = torch.randn(8, device="cuda")
-        self.helper_fn = tvm_ffi.get_global_func("Root.run")
         self.run_fn = tvm_ffi.get_global_func("Root.model")
         self.leaf_fn = tvm_ffi.get_global_func("Root.layers.leaf.run")
 
     def forward(self, x):
-        helper_out, run_out, leaf_out = (torch.empty_like(x) for _ in range(3))
-        self.helper_fn(x, self.weight, helper_out)
-        self.run_fn(helper_out, self.weight, run_out)
+        run_out, leaf_out = (torch.empty_like(x) for _ in range(2))
+        self.run_fn(x, self.weight, run_out)
         self.leaf_fn(run_out, self.leaf_weight, leaf_out)
         return leaf_out

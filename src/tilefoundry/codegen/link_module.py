@@ -19,7 +19,8 @@ from tilefoundry.codegen.linked_function import LinkedFunction
 from tilefoundry.codegen.linked_module import LinkedModule
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.dump import DumpFlags, DumpScope, dump
-from tilefoundry.ir.core.module import Module, target_of
+from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.target.base import UnsupportedCapabilityError, _target_summary
 
@@ -185,7 +186,7 @@ def link_program(
     if not entries:
         raise ValueError("link_program: expected at least one CPU host entry")
     for entry in entries:
-        if not isinstance(target_of(mod, entry), CpuTarget):
+        if not (isinstance(entry, PrimFunction) and isinstance(entry.target, CpuTarget)):
             raise ValueError(f"link_program: entry {entry.name!r} is not a CPU host entry")
 
     generators = {

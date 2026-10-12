@@ -17,12 +17,10 @@ from tilefoundry.codegen.signature import (
 )
 from tilefoundry.ir.core.module import (
     Module,
-    function_paths,
     function_selectors,
     module_functions,
     owning_module,
     subtree,
-    target_of,
 )
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.launch import Launch
@@ -31,12 +29,20 @@ from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.target import CpuTarget, Target
 
 
+def _function_paths(module: Module, prefix: tuple[str, ...] = ()):
+    """Root-relative paths for every declared function, using child mount names."""
+    for function in module.functions:
+        yield (*prefix, function.name), function
+    for child in module.modules:
+        yield from _function_paths(child, (*prefix, child.name))
+
+
 def function_path(root: Module, fn) -> tuple[str, ...]:
     """Use the selector traversal for prototypes and their specialization labels."""
     from tilefoundry.ir.hir.specialize import display_name  # noqa: PLC0415
 
     matches = []
-    for path, function in function_paths(root):
+    for path, function in _function_paths(root):
         if function is fn:
             matches.append((root.name, *path))
         for index, variant in enumerate(function.variants or ()):
@@ -236,7 +242,11 @@ def _launch_statements(function: PrimFunction | Function) -> tuple[Evaluate, ...
 def build_codegen_context(
     module: Module, options: CodegenOptions = CodegenOptions()
 ) -> CodegenContext:
-    """Resolve functions, symbols, Launch edges, domains, and groups once."""
+    """Resolve functions, symbols, Launch edges, domains, and groups once.
+
+    An HIR function enters codegen only as the callee a Launch names, and takes
+    the arguments that Launch binds; Python wraps any other one.
+    """
     functions = tuple(module_functions(module))
     for function in functions:
         if isinstance(function, Function) and options.emit != "skeleton":
@@ -244,6 +254,23 @@ def build_codegen_context(
                 f"codegen: HIR function {export_name(module, function)!r} requires "
                 'emit="skeleton" or lowering to TIR first'
             )
+    selected = function_selectors(module)
+    launched = {
+        stmt.args[0].name: stmt.args[7:]
+        for caller in functions
+        for stmt in _launch_statements(caller)
+    }
+    launch_args = {
+        id(each): launched[selector]
+        for selector, function in selected
+        if selector in launched
+        for each in (function, *function.variants)
+    }
+    functions = tuple(
+        function
+        for function in functions
+        if not isinstance(function, Function) or id(function) in launch_args
+    )
     expanded_list: list[PrimFunction] = []
     seen_expanded: set[int] = set()
     for function in functions:
@@ -259,7 +286,7 @@ def build_codegen_context(
         owner = owning_module(module, function)
         if owner is None:
             raise ValueError(f"codegen: function {function.name!r} has no unique owning Module")
-        target = target_of(module, function)
+        target = function.target if isinstance(function, PrimFunction) else module.resolve_target()
         if target is None:
             raise ValueError(f"codegen: function {function.name!r} has no resolved Target")
         ownership[id(function)] = owner
@@ -276,7 +303,7 @@ def build_codegen_context(
         raise ValueError(f"codegen: expected one device Target, found {len(device_targets)}")
     program_ids = program_id_params(module, device_targets[0])
     by_function: dict[int, FunctionSymbol] = {}
-    selectors = {id(fn): selector for selector, fn in function_selectors(module)}
+    selectors = {id(fn): selector for selector, fn in selected}
     by_selector: dict[str, FunctionSymbol] = {}
     device_functions = tuple(
         fn for fn in identities.values() if not isinstance(targets[id(fn)], CpuTarget)
@@ -293,7 +320,13 @@ def build_codegen_context(
         else:
             mangled = mangle(module, function)
             registered_name = export_name(module, function)
-        signature = called_as(function, mangled, program_ids, target=targets[id(function)])
+        signature = called_as(
+            function,
+            mangled,
+            program_ids,
+            target=targets[id(function)],
+            params=launch_args.get(id(function)),
+        )
         check_parameter_names(registered_name, signature.params)
         symbol = FunctionSymbol(
             function=function,
@@ -345,8 +378,13 @@ def build_codegen_context(
                 )
             )
 
-    domain_rows = (
-        hir_domains(module) if any(isinstance(fn, Function) for fn in functions) else _domains(module)
+    domain_rows = tuple(
+        (owner, tuple(function for function in owned if id(function) in identities))
+        for owner, owned in (
+            hir_domains(module)
+            if any(isinstance(fn, Function) for fn in functions)
+            else _domains(module)
+        )
     )
     topology_domains = {id(function): owner for owner, owned in domain_rows for function in owned}
     groups: list[EmissionGroup] = []

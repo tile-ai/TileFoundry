@@ -19,13 +19,12 @@ from tilefoundry.ir.core.module import (
     function_selectors,
     module_functions,
     owning_module,
-    target_of,
 )
-from tilefoundry.ir.hir.destination import destination_params, fresh_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
+from tilefoundry.ir.types import StorageKind, TensorType, TupleType, UnitType
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.target import CpuTarget, CudaTarget
 
@@ -93,7 +92,9 @@ def _launch_config_of(
 
 def insert_default_host_entry(module: Module) -> Module:
     """Keep CPU entries or synthesize entries according to the module's IR kind."""
-    if isinstance(target_of(module, module.entry_function()), CpuTarget):
+    entry = module.entry_function()
+    runs_on = entry.target if isinstance(entry, PrimFunction) else module.resolve_target()
+    if isinstance(runs_on, CpuTarget):
         return module
     functions = module_functions(module)
     if all(isinstance(fn, PrimFunction) for fn in functions):
@@ -137,14 +138,50 @@ def reject_omitted_child_weights(module: Module) -> None:
                         )
 
 
-def host_entry_for(module: Module, selector: str, fn: Function, taken: set[str]) -> PrimFunction:
-    """Launch one HIR function with its declared inputs and flattened destinations."""
-    params = tuple(Var(name=p.name, type=p.type, is_const=p.is_const) for p in destination_params(fn))
-    owner = owning_module(module, fn)
+def _fresh_name(stem: str, taken: set[str]) -> str:
+    """Reserve *stem*, or its first free ``_1``, ``_2``, ... suffix, in *taken*."""
+    candidate = stem
+    index = 0
+    while candidate in taken:
+        index += 1
+        candidate = f"{stem}_{index}"
+    taken.add(candidate)
+    return candidate
+
+
+def _entry_params(fn: Function) -> tuple[Var, ...]:
+    """*fn*'s declared inputs, then one GMEM destination per tensor result leaf.
+
+    An HIR result has a type and no name, so each destination is named ``out``
+    with the declared parameter names reserved.
+    """
+    taken = {param.name for param in fn.params}
+
+    def destinations(ty):
+        if isinstance(ty, TensorType):
+            yield Var(
+                _fresh_name("out", taken),
+                type=TensorType(tuple(ty.shape), ty.dtype, None, StorageKind.GMEM),
+            )
+        elif isinstance(ty, TupleType):
+            for field in ty.fields:
+                yield from destinations(field)
+        elif not isinstance(ty, UnitType):
+            raise TypeError(
+                f"insert_default_host_entry: unsupported result type {ty!r} in {fn.name!r}"
+            )
+
+    inputs = tuple(Var(name=p.name, type=p.type, is_const=p.is_const) for p in fn.params)
+    return (*inputs, *destinations(fn.return_type))
+
+
+def host_entry_for(owner: Module, selector: str, fn: Function, taken: set[str]) -> PrimFunction:
+    """Launch one Module entry with its declared inputs and flattened destinations."""
+    params = _entry_params(fn)
     grid, block = _launch_config_of(owner)
     launch = launch_call(fn, params, grid, block, symbol=selector)
     return PrimFunction(
-        name=fresh_name(f"{fn.name}_host", taken),
+        name=_fresh_name(f"{fn.name}_host", taken),
         params=params,
         body=Sequential(body=(launch,)),
         output_count=len(params) - len(fn.params),
@@ -153,13 +190,23 @@ def host_entry_for(module: Module, selector: str, fn: Function, taken: set[str])
 
 
 def entries_for_hir_functions(module: Module) -> Module:
-    """Append a host entry per HIR prototype, retaining the authored root entry."""
+    """Append a host entry per Module entry, retaining the authored root entry.
+
+    Python begins a kernel invocation only by entering a Module; any other
+    function runs as a device call inside one, or is wrapped by Python itself.
+    """
+    target = module.resolve_target()
+    if not isinstance(target, CudaTarget):
+        raise ValueError(
+            f"insert_default_host_entry: HIR entries launch on a CUDA target, not {target!r}"
+        )
     reject_omitted_child_weights(module)
     taken = {fn.name for fn in module.functions}
-    entries = tuple(
-        host_entry_for(module, selector, fn, taken)
-        for selector, fn in function_selectors(module)
-    )
+    entries = []
+    for selector, fn in function_selectors(module):
+        owner = owning_module(module, fn)
+        if owner.entry == fn.name:
+            entries.append(host_entry_for(owner, selector, fn, taken))
     return replace(module, functions=(*module.functions, *entries))
 
 

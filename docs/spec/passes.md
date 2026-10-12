@@ -295,17 +295,24 @@ def insert_default_host_entry(module: Module) -> Module:
   - The pass is the scheduled form of the transform and states no rule of its
     own. It is the one pass `build` ([§6](#6-top-level-api)) registers.
   - A CPU entry MUST pass through unchanged.
-  - With no CPU entry, an all-HIR tree MUST gain one CPU entry per authored
-    function, including children and prototypes but excluding variants. Each
-    entry uses `destination_params(fn)`
-    ([hir §1.1](./hir.md#11-function)) and launches by the root-relative selector
+  - With no CPU entry, an all-HIR tree MUST gain one CPU entry per Module
+    whose `entry` is set, root and children alike: Python begins a kernel
+    invocation only by entering one ([hir §1.1](./hir.md#11-function),
+    [core-ir §1](./core-ir.md#1-module)). Any other function gets no entry.
+    The tree's resolved Target MUST be CUDA. Each entry launches the Module
+    entry by its root-relative selector
     ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)) at the owner's
-    effective topology. The authored root entry remains unchanged. The entry's
-    IR name uses `<fn.name>_host`, with the fresh-name suffix on collisions;
-    its emitted C++ and registration names follow the HIR callee's path
-    ([codegen §4.4](./codegen.md#44-signatures)). Post-pass verification MUST validate the HIR
-    callee target, authored CallableType and `destination_params(fn)` forwarding
-    contract ([tir §2.3](./tir.md#23-tir-ops)).
+    effective topology and forwards its own parameters: the declared inputs,
+    then one destination per tensor result leaf in tuple leaf order. A
+    destination keeps the leaf's shape and dtype, with GMEM storage and no
+    layout, and is named `out`, else its first free `_1`, `_2`, ... suffix,
+    with the declared names reserved. A unit result adds none; any other
+    result type MUST be rejected. The pass checks these when it builds the
+    `Launch`, so later stages read them and do not derive them again. The
+    authored root entry remains unchanged. The entry's IR name is
+    `<fn.name>_host`, with the same suffix rule on collisions; its emitted C++
+    and registration names follow the HIR callee's path
+    ([codegen §4.4](./codegen.md#44-signatures)).
   - HIR device calls into a direct child's function with implicit ConstTensor
     arguments MUST be rejected, naming caller, callee and omitted weights and
     requesting explicit weight parameters or orchestration calls.

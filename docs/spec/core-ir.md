@@ -119,8 +119,6 @@ chain and is not copied onto each Module or Function.
   `topologies = ()` declares an explicitly topology-free domain; an explicit
   tuple replaces the inherited hierarchy whole rather than extending it. A
   declared tuple MUST NOT repeat a level name.
-  - `target_of(root, fn)` reads a TIR function's own target or resolves a HIR
-    function's owning Module target; ambiguous ownership MUST be rejected.
   - `resolve_topology(name)` returns the single effective level with that exact
   name and MUST fail, naming the levels that are available, when there is
   none.
@@ -271,9 +269,7 @@ is not a thing a cost can be stated about.
     empty segment MUST be refused.
   - `function_selectors(module)` MUST return every HIR function in the module
     tree paired with its resolving path, in source order and parents before
-    children. It MUST NOT return `PrimFunction` entries. `function_paths(root)`
-    yields declared functions and root-relative segment tuples through the same
-    traversal; `function_selectors` filters it to HIR and joins those segments.
+    children. It MUST NOT return `PrimFunction` entries.
 
 ## 2. `Expr`
 

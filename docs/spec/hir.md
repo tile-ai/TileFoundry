@@ -71,17 +71,6 @@ class Function(Expr):
     that owns it declares the `Target` and the ordered `Topology` hierarchy its
     body runs against ([core-ir §1](./core-ir.md#1-module)).
 
-- The shared `fresh_name(stem, used)` rule reserves the stem when available,
-  otherwise its first available `_1`, `_2`, ... suffix. HIR destination
-  parameters and lowering's `Names.fresh` MUST use this same rule.
-- `destination_params(fn)` MUST return declared HIR inputs followed by each
-  tensor result leaf in tuple leaf order. Destination types retain the result's
-  shape and dtype, with GMEM storage and no layout. Destination names MUST use
-  `fresh_name("out", used)` with declared parameter names reserved, sharing
-  lowering's `Names.fresh` rule. Unit results add no destinations; unsupported
-  result types MUST be rejected. Destinations are ordinary parameters and
-  receive the same parameter-name checks as inputs.
-
 **Kernel invocation.** Entering an HIR `Function` from Python begins one kernel
 invocation. A `Call` from one HIR `Function` to another is a device call inside
 the current kernel invocation and never begins another one, regardless of which

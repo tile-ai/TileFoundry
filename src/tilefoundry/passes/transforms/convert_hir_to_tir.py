@@ -32,7 +32,6 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.param_def import MemoryEffect
-from tilefoundry.ir.hir.destination import fresh_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
@@ -182,7 +181,15 @@ class Names:
         self.used = {param.name for param in authored.params}
 
     def fresh(self, stem: str) -> str:
-        return fresh_name(stem, self.used)
+        if stem not in self.used:
+            self.used.add(stem)
+            return stem
+        index = 1
+        while f"{stem}_{index}" in self.used:
+            index += 1
+        result = f"{stem}_{index}"
+        self.used.add(result)
+        return result
 
     def binding(self, authored: Expr | None, fallback: str = "value") -> str:
         binding = get_metadata(authored, BindingMetadata) if authored is not None else None

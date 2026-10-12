@@ -168,13 +168,19 @@ def program_id_params(module: Module, target: Target) -> tuple[ProgramIdSignatur
 
 
 def called_as(
-    fn, symbol: str, program_ids: tuple[ProgramIdSignature, ...] = (), *, target: Target
+    fn,
+    symbol: str,
+    program_ids: tuple[ProgramIdSignature, ...] = (),
+    *,
+    target: Target,
+    params=None,
 ) -> CallableSignature:
     """How *fn* is called, as *fn*'s own target states it.
 
     What a symbol is named and what is added around its parameters is the
     target's convention, so the answer comes from the target's handlers and
-    a caller of another target reaches it without naming them.
+    a caller of another target reaches it without naming them. An HIR function
+    declares no output parameters; *params* are the arguments its Launch binds.
     """
     key = (type(target), Role.CALLEE, type(fn))
     convention = codegen_registry.lookup(key)
@@ -183,7 +189,9 @@ def called_as(
             f"codegen: nothing registered for {spelled(key)}, so nothing states "
             f"how {fn.name!r} is called"
         )
-    return convention(fn, symbol, program_ids)
+    if params is None:
+        return convention(fn, symbol, program_ids)
+    return convention(fn, symbol, program_ids, params)
 
 
 __all__ = [

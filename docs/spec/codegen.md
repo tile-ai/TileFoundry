@@ -534,9 +534,11 @@ def symbol_table(module: Module, target: Target) -> Mapping[int, CallableSignatu
     the only convention a caller can reach; the kernel's own convention is not
     in the table.
 
-`codegen/cuda/hir/function.py` owns HIR skeleton emission, giving each authored
-function one editable `__device__` body taking cute parameter views, one
-`__global__` entry and one launcher.
+`codegen/cuda/hir/function.py` owns HIR skeleton emission. An HIR function
+enters codegen only as the callee a `Launch` names; Python wraps any other
+function and calls the exported entries. Each launched function gets one
+editable `__device__` body taking cute parameter views, one `__global__` entry
+and one launcher.
 Device bodies (including variants) precede all global entries, ordered stably
 by increasing reachable-function count so callees precede callers. Prototypes
 have empty bodies and variants receive their display-name path segment or
@@ -546,9 +548,10 @@ range rules as TIR, trapping outside the specialization ranges.
 HIR functions with equal effective topology hierarchies share a device unit,
 including children that explicitly redeclare the same hierarchy; TIR grouping
 is unchanged. HIR same-kernel context rules are owned by
-[hir §1.1](./hir.md#11-function). HIR parameters use `destination_params`
-([hir §1.1](./hir.md#11-function)); generated names follow
-[§4.4](#44-signatures).
+[hir §1.1](./hir.md#11-function). An HIR function's parameters are the
+arguments its `Launch` binds
+([passes §7.3](./passes.md#73-insert_default_host_entry)), and its variants
+take the same ones; generated names follow [§4.4](#44-signatures).
 A synthesized host entry launching HIR uses that HIR function's symbol and
 registration name; its own IR name does not add another path segment.
 

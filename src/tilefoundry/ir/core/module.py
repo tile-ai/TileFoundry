@@ -630,29 +630,14 @@ def function_selectors(module: Module, prefix: str = "") -> tuple[tuple[str, Hir
 
     See [core-ir §1.2](docs/spec/core-ir.md#12-selecting-a-node-by-path).
     """
-    return tuple(
-        (prefix + ".".join(path), function)
-        for path, function in function_paths(module)
+    found: list[tuple[str, HirFunction]] = [
+        (f"{prefix}{function.name}", function)
+        for function in module.functions
         if isinstance(function, HirFunction)
-    )
-
-
-def function_paths(module: Module, prefix: tuple[str, ...] = ()):
-    """Root-relative paths for every declared function, using child mount names."""
-    for function in module.functions:
-        yield (*prefix, function.name), function
+    ]
     for child in module.modules:
-        yield from function_paths(child, (*prefix, child.name))
-
-
-def target_of(root: Module, fn):
-    """Resolve a TIR function's target or a HIR function's owning Module target."""
-    if isinstance(fn, PrimFunction):
-        return fn.target
-    owner = owning_module(root, fn)
-    if owner is None:
-        raise ValueError(f"codegen: function {fn.name!r} has no unique owning Module")
-    return owner.resolve_target()
+        found.extend(function_selectors(child, f"{prefix}{child.name}."))
+    return tuple(found)
 
 
 __all__ = [
@@ -661,8 +646,6 @@ __all__ = [
     "ModuleFunction",
     "called_functions",
     "function_selectors",
-    "function_paths",
-    "target_of",
     "module_functions",
     "owning_module",
     "reachable_functions",
