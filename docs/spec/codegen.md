@@ -21,7 +21,10 @@ flowchart LR
 
 ## 1. Pipeline
 
-- **Input** is verified TIR. HIR Ops MUST NOT reach codegen.
+- **Input** is verified TIR for `emit="full"`. HIR `Function` signatures may
+  enter codegen only with `emit="skeleton"`; HIR Ops are not emitted as bodies.
+  Full emission encountering HIR reports its path and requires skeleton mode
+  or prior lowering.
 - `CodegenOptions.emit` is `"full"` (default) or `"skeleton"` and lives in the
   compile-wide `CodegenContext`. Emitters read it through
   `ctx.codegen_context.options`; a missing compile context is an error.
@@ -415,22 +418,18 @@ class CallableSignature(Signature):
     `trailing`. They MUST be three `CallableSignature` values; the class MUST
     NOT be subclassed. Only the first two are reachable by name; the kernel's
     is derived inside the unit that defines it and is not in the table.
-  - generated function symbols come only from `codegen/utils.py:mangle(root,
-    fn)`: `tilefoundry_` followed by each path segment's decimal length and
-    spelling. `function_path` shares the core IR selector traversal: root
-    Module name, child mount names, function name, and for a variant its
-    display name or `v<index>`. Every segment MUST be a C identifier; invalid
-    segments raise with the complete path. CUDA launcher and kernel names
-    derive `_launch` and `_kernel` suffixes through the CUDA target; CPU
-    functions use the mangled name itself. Function symbol roots come from
-    `mangle`, and suffixes come from the target.
-    Calling conventions receive the resolved symbol rather than reconstructing it.
+  - function symbol roots MUST come from the IR's `mangle(root, fn)`;
+    paths, encoding and registration names are owned by
+    [core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path).
+    Target conventions supply suffixes: CUDA derives `_launch` and `_kernel`,
+    while CPU functions use the mangled root. Conventions receive the resolved
+    symbol and target rather than reconstructing them.
   - parameters codegen inserts (`tilefoundry_meta`,
     `tilefoundry_<level>_program_id`) and unit-owned state MUST carry the
     `tilefoundry_` prefix. Their spellings belong to their respective targets.
-  - TVM FFI registration names come from `export_name(root, fn)`, the same
-    path joined with dots. For a HIR selector, this is `<root name>.<selector>`.
-    Host wrappers register through `Function::SetGlobal` with override enabled.
+  - host wrappers use the IR's `export_name(root, fn)` registration name
+    ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)), registering through
+    `Function::SetGlobal` with override enabled.
   - user parameter names are used verbatim. They MUST be C identifiers, MUST
     NOT be C++ keywords or start with `tilefoundry_`, and MUST NOT collide with
     another parameter or derived view name (`<name>_tensor`, each dynamic
@@ -464,13 +463,31 @@ def symbol_table(module: Module, target: Target) -> Mapping[int, CallableSignatu
     device can read, so its id arrives with the call.
   - `symbol_table` states one `CallableSignature` per function in the tree,
     keyed by `id(fn)`, so a call site holds its callee and never asks which
-    module the callee lives in. A specialization variant gets no row: nothing
-    calls one, because its prototype compiles to the one symbol and picks
-    between the variants inside it ([§5](#5-specialization-dispatch)).
+    module the callee lives in. Only device prototypes enter the Launch-target
+    symbol map. Variant identities carry symbol metadata for HIR device bodies;
+    their prototype selects them inside the kernel ([§5](#5-specialization-dispatch)).
   - a row is what a caller must write and nothing about what an emitter
     produced. A device function appears as its launcher, because that is
     the only convention a caller can reach; the kernel's own convention is not
     in the table.
+
+HIR skeleton emission gives each authored function one editable `__device__`
+body taking cute parameter views, one `__global__` entry and one launcher.
+Device bodies (including variants) precede all global entries, ordered stably
+by increasing reachable-function count so callees precede callers. Prototypes
+have empty bodies and variants receive their display-name path segment or
+`v<index>` fallback. Global entries wrap parameters and dispatch by the same
+range rules as TIR, trapping outside the specialization ranges.
+
+HIR functions with equal effective topology hierarchies share a device unit,
+including children that explicitly redeclare the same hierarchy. Same-kernel
+calls require matching hierarchies ([hir §1.1](./hir.md#11-function)),
+so their device functions stay in the same unit; TIR grouping is unchanged.
+HIR result tensor leaves become trailing GMEM destination parameters with no
+layout, named with the shared IR fresh-name rule used by `Names(fn).fresh("out")` in leaf order.
+They receive the same parameter-name checks as declared inputs. A synthesized
+host entry launching HIR uses that HIR function's symbol and registration name;
+its own IR name does not add another path segment.
 
 ## 5. Specialization dispatch
 

@@ -12,7 +12,18 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tilefoundry.ir.core import Var
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import (
+    Module,
+    called_functions,
+    child_module_of,
+    export_name,
+    mangle,
+    module_functions,
+    owning_module,
+    target_of,
+)
+from tilefoundry.ir.hir.destination import destination_params
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
@@ -82,16 +93,19 @@ def _launch_config_of(
 
 
 def insert_default_host_entry(module: Module) -> Module:
-    """Return a module whose entry is host-callable, synthesizing one if it is not.
-
-    A CPU entry passes through. Otherwise the device entry gains a CPU entry
-    that launches it with its own parameters. Whether that call reads as one
-    launch or as a dispatch over variants is the callee's shape to state, so
-    a prototype and a lone kernel take the same route here.
-    """
-    if isinstance(module.entry_function().target, CpuTarget):
+    """Keep CPU entries or synthesize entries according to the module's IR kind."""
+    if isinstance(target_of(module, module.entry_function()), CpuTarget):
         return module
+    functions = module_functions(module)
+    if all(isinstance(fn, PrimFunction) for fn in functions):
+        return entry_for_one_device_function(module)
+    if all(isinstance(fn, Function) for fn in functions):
+        return entries_for_hir_functions(module)
+    raise TypeError("insert_default_host_entry: mixed HIR/TIR device functions are unsupported")
 
+
+def entry_for_one_device_function(module: Module) -> Module:
+    """Preserve the authored TIR single-device-function normalization."""
     device_fn = _device_callee(module)
     entry_params = tuple(Var(type=p.type, name=p.name) for p in device_fn.params)
     grid, block = _launch_config_of(module)
@@ -105,6 +119,44 @@ def insert_default_host_entry(module: Module) -> Module:
         target=CpuTarget(),
     )
     return replace(module, functions=(*module.functions, entry), entry=name)
+
+
+def reject_omitted_child_weights(module: Module) -> None:
+    """Reject device calls that depend on implicit child-owner weight injection."""
+    for fn in module_functions(module):
+        for caller in (fn, *fn.variants):
+            for callee in called_functions(caller):
+                if child_module_of(module, caller, callee) is not None:
+                    weights = [param.name for param in callee.params if param.is_const]
+                    if weights:
+                        raise ValueError(
+                            f"CUDA skeleton: {export_name(module, caller)} calls "
+                            f"{export_name(module, callee)} with omitted weights {weights}; "
+                            "declare the weights as parameters or call from orchestration"
+                        )
+
+
+def host_entry_for(module: Module, fn: Function) -> PrimFunction:
+    """Launch one HIR function with its declared inputs and flattened destinations."""
+    params = tuple(Var(name=p.name, type=p.type, is_const=p.is_const) for p in destination_params(fn))
+    symbol = mangle(module, fn)
+    owner = owning_module(module, fn)
+    grid, block = _launch_config_of(owner)
+    launch = launch_call(fn, params, grid, block, symbol=symbol)
+    return PrimFunction(
+        name=f"{symbol}_host",
+        params=params,
+        body=Sequential(body=(launch,)),
+        output_count=len(params) - len(fn.params),
+        target=CpuTarget(),
+    )
+
+
+def entries_for_hir_functions(module: Module) -> Module:
+    """Append a host entry per HIR prototype, retaining the authored root entry."""
+    reject_omitted_child_weights(module)
+    entries = tuple(host_entry_for(module, fn) for fn in module_functions(module))
+    return replace(module, functions=(*module.functions, *entries))
 
 
 class InsertHostEntryPass(ModulePass):

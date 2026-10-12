@@ -20,10 +20,17 @@ from tilefoundry.codegen.cuda.abi import (
 )
 from tilefoundry.codegen.cuda.context import CudaCodegenContext, topology_scope_str
 from tilefoundry.codegen.cuda.templates import render
+from tilefoundry.codegen.cuda.tir.prim_function import (
+    _range_over_one_dimension,
+    _subject,
+    _wrap_buffer,
+)
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
 from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.codegen.signature import CallableSignature
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, reachable_functions
+from tilefoundry.ir.hir.destination import destination_params
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target import Target
@@ -31,7 +38,7 @@ from tilefoundry.target import Target
 Geometry = tuple[tuple[object, object, object], tuple[object, object, object]]
 
 
-def _emit_function(fn: PrimFunction, ctx: CudaCodegenContext) -> LinkableFunction:
+def _emit_function(fn: PrimFunction | Function, ctx: CudaCodegenContext) -> LinkableFunction:
     """*fn* in both of its positions, written from the one convention it is called by.
 
     A caller can name the launcher and nothing else, so that is what the
@@ -49,7 +56,7 @@ def _emit_function(fn: PrimFunction, ctx: CudaCodegenContext) -> LinkableFunctio
 
 
 def _define(
-    fn: PrimFunction,
+    fn: PrimFunction | Function,
     launcher: CallableSignature,
     kernel: CallableSignature,
     ctx: CudaCodegenContext,
@@ -60,14 +67,55 @@ def _define(
     _define_launcher(launcher, kernel, ctx)
 
 
-def _define_kernel(fn: PrimFunction, kernel: CallableSignature, ctx: CudaCodegenContext) -> None:
+def _define_kernel(fn: PrimFunction | Function, kernel: CallableSignature, ctx: CudaCodegenContext) -> None:
     """The ``__global__``: what it was told, then what it was written to do."""
     ctx.reset_barrier_ids()
     ctx.emit(f"__global__ void {kernel.name}({ctx.parameters(kernel)}) {{")
     ctx.indent()
     if kernel.leading:
         ctx.emit(f"tilefoundry::program_meta({PROGRAM_META.name});")
-    ctx.emit_node(fn)
+    if isinstance(fn, Function):
+        define_hir_kernel(fn, kernel, ctx)
+    else:
+        ctx.emit_node(fn)
+    ctx.dedent()
+    ctx.emit("}")
+
+
+def hir_device_function(fn: Function, ctx: CudaCodegenContext) -> LinkableFunction:
+    """One editable device function receiving the kernel's cute parameter views."""
+    symbol = ctx.codegen_context.symbols.by_function[id(fn)].symbol
+    params = ", ".join(f"auto {param.name}_tensor" for param in destination_params(fn))
+    definition = (
+        f"__device__ void {symbol}({params}) {{\n"
+        f"  // TODO: {fn.name}\n"
+        "}"
+    )
+    return LinkableFunction(name=fn.name, declaration="", definition=definition)
+
+
+def define_hir_kernel(fn: Function, kernel: CallableSignature, ctx: CudaCodegenContext) -> None:
+    """Wrap incoming buffers, then select the device body on the runtime extent."""
+    ctx.dynamic_extents.clear()
+    ctx.bind_extents(kernel.params)
+    for signature in kernel.params:
+        _wrap_buffer(signature, ctx)
+    arguments = ", ".join(f"{param.name}_tensor" for param in kernel.params)
+    symbols = ctx.codegen_context.symbols.by_function
+    if not fn.variants:
+        ctx.emit(f"{symbols[id(fn)].symbol}({arguments});")
+        return
+    for index, variant in enumerate(fn.variants):
+        pattern = _range_over_one_dimension(fn, variant)
+        subject = _subject(fn, pattern, ctx)
+        opening = "if" if index == 0 else "} else if"
+        ctx.emit(f"{opening} (({pattern.lo} <= {subject}) && ({subject} <= {pattern.hi})) {{")
+        ctx.indent()
+        ctx.emit(f"{symbols[id(variant)].symbol}({arguments});")
+        ctx.dedent()
+    ctx.emit("} else {")
+    ctx.indent()
+    ctx.emit("__trap();")
     ctx.dedent()
     ctx.emit("}")
 
@@ -103,7 +151,7 @@ def _tell_the_block(launcher: CallableSignature, ctx: CudaCodegenContext) -> Non
         )
 
 
-def _one_geometry(kernels: tuple[PrimFunction, ...], ctx: CudaCodegenContext) -> Geometry:
+def _one_geometry(kernels: tuple[PrimFunction | Function, ...], ctx: CudaCodegenContext) -> Geometry:
     """The geometry this unit runs at, which every kernel in it states the same.
 
     A unit specializes ``program_dim`` once, so two kernels launched at
@@ -119,7 +167,7 @@ def _one_geometry(kernels: tuple[PrimFunction, ...], ctx: CudaCodegenContext) ->
     return distinct.pop()
 
 
-def _launched_at(fn: PrimFunction, ctx: CudaCodegenContext) -> Geometry:
+def _launched_at(fn: PrimFunction | Function, ctx: CudaCodegenContext) -> Geometry:
     """The geometry *fn*'s call states, which is the only thing that states one."""
     geometry = ctx.launches.get(id(fn))
     if geometry is None:
@@ -152,13 +200,21 @@ def _program_dims(geometry: Geometry) -> list[dict[str, str]]:
 
 
 def emit_cuda_module(
-    module: Module, cuda_fns: tuple[PrimFunction, ...], target: Target, ctx: CudaCodegenContext
+    module: Module, cuda_fns: tuple[PrimFunction | Function, ...], target: Target, ctx: CudaCodegenContext
 ) -> LinkableModule:
     """Emit the device ``.cu`` linkable module for one topology domain."""
-    kernels = tuple(fn for fn in cuda_fns if fn.target == target)
+    kernels = tuple(fn for fn in cuda_fns if ctx.codegen_context.targets[id(fn)] == target)
     if not kernels:
         raise ValueError(f"emit_cuda_module: module {module.name!r} has no CUDA device kernels")
-    functions = tuple(_emit_function(fn, ctx) for fn in kernels)
+    hir_functions = tuple(fn for fn in kernels if isinstance(fn, Function))
+    device_bodies = tuple(
+        fn for prototype in hir_functions for fn in (prototype, *prototype.variants)
+    )
+    device_bodies = tuple(sorted(device_bodies, key=lambda fn: len(reachable_functions(fn))))
+    functions = (
+        *(hir_device_function(fn, ctx) for fn in device_bodies),
+        *(_emit_function(fn, ctx) for fn in kernels),
+    )
     geometry = _one_geometry(kernels, ctx)
     preamble = render(
         "cuda_preamble.cu.j2",

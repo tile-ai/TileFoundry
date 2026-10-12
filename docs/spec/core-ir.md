@@ -271,6 +271,27 @@ is not a thing a cost can be stated about.
     tree paired with its resolving path, in source order and parents before
     children. It MUST NOT return `PrimFunction` entries.
 
+Function naming uses this same selector traversal for HIR and TIR:
+
+- `function_paths(root)` yields declared functions and root-relative segment
+  tuples; `function_selectors` filters it to HIR and joins those segments.
+- `function_path(root, fn)` MUST return the root Module name followed by the
+  selector segments. Child segments are their mount names. Variant paths add
+  the display name or `v<index>` when absent. A function without a unique path
+  MUST be rejected.
+- `mangle(root, fn)` MUST be the unique source of generated function-symbol
+  roots: `tilefoundry_` followed by each segment's decimal length and spelling.
+  Every segment MUST be a C identifier; invalid segments raise with the segment
+  and complete path. Targets may append their own symbol suffixes.
+- `export_name(root, fn)` MUST join this same path with dots. For each HIR
+  selector it equals `<root name>.<selector>`.
+- `target_of(root, fn)` reads a TIR function's own target or resolves a HIR
+  function's owning Module target; ambiguous ownership MUST be rejected.
+- The shared `fresh_name(stem, used)` rule reserves the stem when available,
+  otherwise its first available `_1`, `_2`, ... suffix. HIR destination
+  parameters and lowering's `Names.fresh` MUST use this same rule.
+
+
 ## 2. `Expr`
 
 ```python

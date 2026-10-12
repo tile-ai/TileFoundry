@@ -100,6 +100,7 @@ def launch_call(
     grid,
     block,
     *,
+    symbol=None,
     cluster=None,
     dynamic_smem=0,
     stream=None,
@@ -178,7 +179,7 @@ def launch_call(
     callee_type = getattr(callee, "type", None)
     if not isinstance(callee_type, CallableType):
         callee_type = callable_type_for_prim_function(callee)
-    ref = SymbolRef(name=callee.name, type=callee_type)
+    ref = SymbolRef(name=symbol or callee.name, type=callee_type)
     op = Launch(
         cluster=cluster,
         dynamic_smem=dynamic_smem,

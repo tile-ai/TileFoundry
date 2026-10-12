@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.target import Target
@@ -168,14 +167,16 @@ def program_id_params(module: Module, target: Target) -> tuple[ProgramIdSignatur
     )
 
 
-def called_as(fn, symbol: str, program_ids: tuple[ProgramIdSignature, ...] = ()) -> CallableSignature:
+def called_as(
+    fn, symbol: str, program_ids: tuple[ProgramIdSignature, ...] = (), *, target: Target
+) -> CallableSignature:
     """How *fn* is called, as *fn*'s own target states it.
 
     What a symbol is named and what is added around its parameters is the
     target's convention, so the answer comes from the target's handlers and
     a caller of another target reaches it without naming them.
     """
-    key = (type(fn.target), Role.CALLEE, PrimFunction)
+    key = (type(target), Role.CALLEE, type(fn))
     convention = codegen_registry.lookup(key)
     if convention is None:
         raise RuntimeError(

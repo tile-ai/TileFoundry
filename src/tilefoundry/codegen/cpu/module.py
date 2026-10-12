@@ -168,13 +168,13 @@ def _as_this_scope_names_it(
     )
 
 
-def _forwarded(entry: PrimFunction, launch: Evaluate, callee: PrimFunction) -> tuple[Var, ...]:
+def _forwarded(entry: PrimFunction, launch: Evaluate, signature: CallableSignature) -> tuple[Var, ...]:
     """The entry parameters this launch hands the callee, in the callee's order."""
     args = launch.args[7:]
-    if len(args) != len(callee.params):
+    if len(args) != len(signature.params):
         raise ValueError(
             f"emit_host_module: launch passes {len(args)} args but device function "
-            f"{callee.name!r} has {len(callee.params)} parameters"
+            f"{signature.name!r} has {len(signature.params)} parameters"
         )
     held = {param.name: param for param in entry.params}
     for arg in args:
@@ -196,14 +196,14 @@ def _one_launch(
 ) -> list[str]:
     """The lines one ``Launch`` becomes: the checks it owes, then the call."""
     _reject_unsupported_config(launch.callable)
-    forwarded = _forwarded(entry, launch, callee)
     launcher = ctx.signature_of(callee)
+    forwarded = _forwarded(entry, launch, launcher)
     bound = _as_this_scope_names_it(launcher, forwarded, launch)
     lines = [
         _placement_line(var.name, param.type.storage)
-        for var, param in zip(forwarded, callee.params)
+        for var, param in zip(forwarded, launcher.params)
     ]
-    lines.append(f"{launcher.name}({ctx.arguments(bound, callee.target)});")
+    lines.append(f"{launcher.name}({ctx.arguments(bound, ctx.codegen_context.targets[id(callee)])});")
     return lines
 
 
@@ -214,7 +214,7 @@ def _declare_callee(callee: PrimFunction, ctx: CpuCodegenContext) -> str:
     it cannot come to disagree about what the symbol takes.
     """
     launcher = ctx.signature_of(callee)
-    return f'extern "C" void {launcher.name}({ctx.parameters(launcher, callee.target, exported=True)});'
+    return f'extern "C" void {launcher.name}({ctx.parameters(launcher, ctx.codegen_context.targets[id(callee)], exported=True)});'
 
 
 def _host_entry(

@@ -295,7 +295,21 @@ def insert_default_host_entry(module: Module) -> Module:
   - The pass is the scheduled form of the transform and states no rule of its
     own. It is the one pass `build` ([§6](#6-top-level-api)) registers.
   - A CPU entry MUST pass through unchanged.
-  - With no CPU entry and exactly one CUDA device function, the transform MUST
+  - With no CPU entry, an all-HIR tree MUST gain one CPU entry per authored
+    function, including children and prototypes but excluding variants. Each
+    entry takes declared parameters followed by flattened result tensor leaves
+    (GMEM, no layout), using `Names(fn).fresh("out")` for destinations. It
+    launches by the mangled HIR symbol at the owner's effective topology. The
+    authored root entry remains unchanged. The entry's IR name appends `_host`
+    to the callee's mangled symbol, while its emitted C++ and registration names
+    use the HIR callee's path. Post-pass verification MUST validate the HIR
+    callee target, authored CallableType and `destination_params(fn)` forwarding
+    contract ([tir §2.3](./tir.md#23-tir-ops)).
+  - HIR device calls into a direct child's function with implicit ConstTensor
+    arguments MUST be rejected, naming caller, callee and omitted weights and
+    requesting explicit weight parameters or orchestration calls.
+  - Mixed HIR/TIR device trees MUST be rejected.
+  - With no CPU entry and exactly one CUDA TIR device function, the transform MUST
     synthesize a CPU entry that mirrors that function's parameters and launches
     it. One rule covers both device shapes: whether the call reads as a launch
     or as a dispatch follows from the callee's own shape, a lone kernel and a

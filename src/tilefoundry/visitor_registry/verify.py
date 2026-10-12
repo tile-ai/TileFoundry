@@ -377,7 +377,8 @@ def verify_prim_function(
 
     from tilefoundry.ir.core.module import Module, module_functions  # noqa: PLC0415
 
-    if isinstance(module_fns, Module):
+    root = module_fns if isinstance(module_fns, Module) else None
+    if root is not None:
         module_fns = (
             function
             for function in module_functions(module_fns)
@@ -388,7 +389,7 @@ def verify_prim_function(
         module_fn_map[f.name] = (*module_fn_map.get(f.name, ()), f)
 
     bound_var_ids: set[int] = {id(p) for p in fn.params}
-    _walk_stmt(fn.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+    _walk_stmt(fn.body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
 
 
 def _check_param_homogeneity(fn: PrimFunction) -> None:
@@ -410,11 +411,11 @@ def _check_param_homogeneity(fn: PrimFunction) -> None:
         )
 
 
-def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
+def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int], root=None):
     match stmt:
         case Sequential():
             for s in stmt.body:
-                _walk_stmt(s, ctx, scope, fn, module_fn_map, bound_var_ids)
+                _walk_stmt(s, ctx, scope, fn, module_fn_map, bound_var_ids, root)
             return
         case LetStmt():
             if id(stmt.var) in bound_var_ids:
@@ -435,7 +436,7 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
             _check_embedded_sharding(stmt.value, scope, fn)
 
             bound_var_ids.add(id(stmt.var))
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
             return
         case For():
             _check_rank0_int(ctx, stmt, stmt.start, "For.start")
@@ -456,27 +457,27 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
                 and iv_ty.dtype in (DType.i32, DType.i64)
             ):
                 raise VerifyError("For.induction_var must be rank-0 integer")
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
             return
         case While():
             _check_rank0_bool(ctx, stmt, stmt.cond)
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
             return
         case If():
             _check_rank0_bool(ctx, stmt, stmt.cond)
-            _walk_stmt(stmt.then_body, ctx, scope, fn, module_fn_map, bound_var_ids)
-            _walk_stmt(stmt.else_body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.then_body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
+            _walk_stmt(stmt.else_body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
             return
         case MeshScope():
             scope.append(stmt.mesh)
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids, root)
             scope.pop()
             return
         case Return():
             return
         case Evaluate():
             if isinstance(stmt.callable, Launch):
-                _verify_launch(stmt, fn, module_fn_map, ctx)
+                _verify_launch(stmt, fn, module_fn_map, ctx, root)
             elif isinstance(stmt.callable, SymbolRef):
                 _verify_symbol_call(stmt, fn, module_fn_map, ctx)
             else:
@@ -747,7 +748,7 @@ def _verify_launch_extent(extent, extent_params, ref_name) -> None:
     _LaunchExtentVisitor(extent_params, ref_name).visit(extent)
 
 
-def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
+def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx, root=None):
     """Host-launch checks; full placement validation lands in CUDA lowering.
 
     Host-launch checks; full placement validation lands in CUDA lowering
@@ -780,24 +781,41 @@ def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
     for i, arg in enumerate(forwarded):
         if not isinstance(ctx.type_of(arg), TensorType):
             raise VerifyError(f"Launch of {ref.name!r}: forwarded arg[{i}] must be a tensor")
-    if not module_fn_map:
-        return
-    callee = _resolve_symbol_ref(ref.name, module_fn_map)
-    if not isinstance(callee.target, CudaTarget):
-        raise VerifyError(f"Launch callee {callee.name!r} must target a CUDA device")
-    expected = callable_type_for_prim_function(callee)
+    from tilefoundry.ir.core.module import mangle, module_functions, target_of  # noqa: PLC0415
+    from tilefoundry.ir.hir.destination import destination_params  # noqa: PLC0415
+
+    hir_callees = (
+        [f for f in module_functions(root) if isinstance(f, Function) and mangle(root, f) == ref.name]
+        if root is not None else []
+    )
+    if hir_callees:
+        if len(hir_callees) != 1:
+            raise VerifyError(f"Launch of {ref.name!r}: ambiguous HIR callee")
+        callee = hir_callees[0]
+        if not isinstance(target_of(root, callee), CudaTarget):
+            raise VerifyError(f"Launch callee {callee.name!r} must target a CUDA device")
+        expected = callee.type
+        params = destination_params(callee)
+    else:
+        if not module_fn_map:
+            return
+        callee = _resolve_symbol_ref(ref.name, module_fn_map)
+        if not isinstance(callee.target, CudaTarget):
+            raise VerifyError(f"Launch callee {callee.name!r} must target a CUDA device")
+        expected = callable_type_for_prim_function(callee)
+        params = callee.params
     if ref.type != expected:
         raise VerifyError(
             f"Launch callee SymbolRef {ref.name!r}: type {ref.type} != resolved "
             f"callee CallableType {expected}"
         )
 
-    if len(forwarded) != len(callee.params):
+    if len(forwarded) != len(params):
         raise VerifyError(
             f"Launch of {callee.name!r}: forwarded arg count {len(forwarded)} != "
-            f"param count {len(callee.params)}"
+            f"param count {len(params)}"
         )
-    for i, (arg, param) in enumerate(zip(forwarded, callee.params)):
+    for i, (arg, param) in enumerate(zip(forwarded, params)):
         arg_ty = ctx.type_of(arg)
         if arg_ty != param.type:
             raise VerifyError(

@@ -15,7 +15,7 @@ from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.cuda.abi import launcher_symbol
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.module import emit_cuda_module
-from tilefoundry.codegen.utils import mangle
+from tilefoundry.ir.core.module import mangle
 from tilefoundry.target import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")

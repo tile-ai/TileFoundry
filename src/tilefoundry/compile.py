@@ -16,7 +16,7 @@ from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.linker import LinkedModule, link_modules
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.inspection import as_script as _as_script
-from tilefoundry.ir.core.module import Module, module_functions
+from tilefoundry.ir.core.module import Module, module_functions, target_of
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.passes.pass_manager import PassManager
 from tilefoundry.passes.transforms import InsertHostEntryPass
@@ -108,7 +108,7 @@ def build(
 def scaffold(mod: Module, out_dir: str | Path) -> Path:
     """Generate and compile a CUDA skeleton project without loading its library."""
     prepared = _build_default_pipeline().run(mod)
-    entries = tuple(fn for fn in module_functions(prepared) if isinstance(fn.target, CpuTarget))
+    entries = tuple(fn for fn in module_functions(prepared) if isinstance(target_of(prepared, fn), CpuTarget))
     return link_program(
         prepared, workdir=out_dir, options=CodegenOptions(emit="skeleton"), entries=entries
     ).library_path
@@ -128,7 +128,7 @@ def link_program(
     if not entries:
         raise ValueError("link_program: expected at least one CPU host entry")
     for entry in entries:
-        if not isinstance(entry.target, CpuTarget):
+        if not isinstance(target_of(mod, entry), CpuTarget):
             raise ValueError(f"link_program: entry {entry.name!r} is not a CPU host entry")
 
     device_modules = []
@@ -159,7 +159,7 @@ def link_program(
 
     units = (*device_modules, host_module)
     loaded_as = None
-    if isinstance(cpu_entry.target, CpuTarget):
+    if isinstance(target_of(mod, cpu_entry), CpuTarget):
         entry_symbol = codegen.symbols.by_function[id(cpu_entry)]
         loaded_as = replace(entry_symbol.callable, name=entry_symbol.export_name)
     device_targets = tuple(
