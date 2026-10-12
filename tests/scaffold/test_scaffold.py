@@ -27,16 +27,14 @@ def test_skeleton_builds_and_every_export_is_callable(fixture, tmp_path):
     assert (project / "build" / "libRoot.so").is_file()
     fresh = tmp_path / "standalone"
     subprocess.run(
-        ["cmake", "-S", str(project), "-B", str(fresh)],
+        ["cmake", "-G", "Ninja", "-S", str(project), "-B", str(fresh)],
         check=True,
-        capture_output=True,
         text=True,
         timeout=300,
     )
     subprocess.run(
         ["cmake", "--build", str(fresh), "--parallel", "2"],
         check=True,
-        capture_output=True,
         text=True,
         timeout=300,
     )

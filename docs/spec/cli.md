@@ -142,7 +142,7 @@ and `device_<i>.cu` directly in `OUT_DIR`, compiles the project and returns zero
 on success. The library is `OUT_DIR/build/lib<root Module name>.so`. Generated
 CUDA bodies are editable placeholders; signatures, views, variant dispatch,
 launchers and host registrations remain intact. The project can be rebuilt with
-`cmake -S OUT_DIR -B BUILD_DIR` followed by `cmake --build BUILD_DIR`. Load the
+`cmake -G Ninja -S OUT_DIR -B BUILD_DIR` followed by `cmake --build BUILD_DIR`. Load the
 library and bind the dotted TVM FFI registrations as described in
 [runtime §1.4](./runtime.md#14-runtimeloaderpy), retaining the loaded library
 for every callable's lifetime. Authored host orchestration remains in Python.
