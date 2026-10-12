@@ -9,13 +9,12 @@ one branch on the extent the call already carries.
 from __future__ import annotations
 
 from tests.fixtures.tir.square import TirSquare
-from tilefoundry.codegen.context_builder import build_codegen_context
+from tilefoundry.codegen.context_builder import build_codegen_context, mangle
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.cuda.abi import launcher_symbol
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.module import emit_cuda_module
-from tilefoundry.ir.core.module import mangle
 from tilefoundry.target import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")

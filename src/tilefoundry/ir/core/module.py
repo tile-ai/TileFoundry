@@ -7,7 +7,6 @@ orchestration methods. See [core-ir §1](docs/spec/core-ir.md#1-module).
 from __future__ import annotations
 
 import copy
-import re
 import types
 from dataclasses import dataclass, field
 from dataclasses import replace as _replace
@@ -646,36 +645,6 @@ def function_paths(module: Module, prefix: tuple[str, ...] = ()):
         yield from function_paths(child, (*prefix, child.name))
 
 
-def function_path(root: Module, fn) -> tuple[str, ...]:
-    """Use the selector traversal for prototypes and their specialization labels."""
-    from tilefoundry.ir.hir.specialize import display_name  # noqa: PLC0415
-
-    matches = []
-    for path, function in function_paths(root):
-        if function is fn:
-            matches.append((root.name, *path))
-        for index, variant in enumerate(function.variants or ()):
-            if variant is fn:
-                matches.append((root.name, *path, display_name(variant) or f"v{index}"))
-    if len(matches) != 1:
-        raise ValueError(f"codegen: function {fn.name!r} has no unique path in {root.name!r}")
-    return matches[0]
-
-
-def mangle(root: Module, fn) -> str:
-    """Encode each path segment with its length; reject non-C identifiers."""
-    path = function_path(root, fn)
-    for segment in path:
-        if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", segment) is None:
-            raise ValueError(f"codegen: invalid path segment {segment!r} in {'.'.join(path)!r}")
-    return "tilefoundry_" + "".join(f"{len(segment)}{segment}" for segment in path)
-
-
-def export_name(root: Module, fn) -> str:
-    """The dotted TVM FFI registration name corresponding to a selector."""
-    return ".".join(function_path(root, fn))
-
-
 def target_of(root: Module, fn):
     """Resolve a TIR function's target or a HIR function's owning Module target."""
     if isinstance(fn, PrimFunction):
@@ -693,9 +662,6 @@ __all__ = [
     "called_functions",
     "function_selectors",
     "function_paths",
-    "function_path",
-    "mangle",
-    "export_name",
     "target_of",
     "module_functions",
     "owning_module",

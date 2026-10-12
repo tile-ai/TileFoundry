@@ -379,11 +379,11 @@ def verify_prim_function(
 
     module_fn_map: dict[str, tuple[PrimFunction | Function, ...]] = {}
     if isinstance(module_fns, Module):
-        from tilefoundry.ir.core.module import mangle  # noqa: PLC0415
+        from tilefoundry.ir.core.module import function_selectors  # noqa: PLC0415
 
         ctx.scope = FunctionScope(module_fns, fn)
         functions = module_functions(module_fns)
-        module_fn_map.update({mangle(module_fns, f): (f,) for f in functions if isinstance(f, Function)})
+        module_fn_map.update({selector: (f,) for selector, f in function_selectors(module_fns)})
         module_fns = (f for f in functions if isinstance(f, PrimFunction))
     for f in module_fns:
         module_fn_map[f.name] = (*module_fn_map.get(f.name, ()), f)

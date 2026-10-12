@@ -427,18 +427,27 @@ class CallableSignature(Signature):
     `trailing`. They MUST be three `CallableSignature` values; the class MUST
     NOT be subclassed. Only the first two are reachable by name; the kernel's
     is derived inside the unit that defines it and is not in the table.
-  - function symbol roots MUST come from the IR's `mangle(root, fn)`;
-    paths, encoding and registration names are owned by
-    [core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path).
-    Target conventions supply suffixes: CUDA derives `_launch` and `_kernel`,
-    while CPU functions use the mangled root. Conventions receive the resolved
-    symbol and target rather than reconstructing them.
+  - `function_path(root, fn)` MUST return the root Module name followed by the
+    selector segments. Child segments are their mount names. Variant paths add
+    the display name or `v<index>` when absent. A function without a unique path
+    MUST be rejected.
+  - `mangle(root, fn)` MUST be the unique source of generated function-symbol
+    roots: `tilefoundry_` followed by each segment's decimal length and spelling.
+    Every segment MUST be a C identifier; invalid segments raise with the segment
+    and complete path. Targets may append their own symbol suffixes.
+  - `export_name(root, fn)` MUST join this same path with dots. For each HIR
+    selector it equals `<root name>.<selector>`.
+  - function paths reuse the IR selector traversal
+    ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)). These naming
+    functions live in `codegen/context_builder.py`, which produces FunctionSymbol
+    identities. Target conventions supply suffixes: CUDA derives `_launch` and
+    `_kernel`, while CPU functions use the mangled root. Conventions receive
+    the resolved symbol and target rather than reconstructing them.
   - parameters codegen inserts (`tilefoundry_meta`,
     `tilefoundry_<level>_program_id`) and unit-owned state MUST carry the
     `tilefoundry_` prefix. Their spellings belong to their respective targets.
-  - host wrappers use the IR's `export_name(root, fn)` registration name
-    ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)), registering through
-    `Function::SetGlobal` with override enabled.
+  - host wrappers use `export_name(root, fn)` registration names, registering
+    through `Function::SetGlobal` with override enabled.
   - user parameter names are used verbatim. They MUST be C identifiers, MUST
     NOT be C++ keywords or start with `tilefoundry_`, and MUST NOT collide with
     another parameter or derived view name (`<name>_tensor`, each dynamic
@@ -491,9 +500,9 @@ range rules as TIR, trapping outside the specialization ranges.
 HIR functions with equal effective topology hierarchies share a device unit,
 including children that explicitly redeclare the same hierarchy; TIR grouping
 is unchanged. HIR same-kernel context rules are owned by
-[hir §1.1](./hir.md#11-function). HIR parameter and naming conventions use
-`destination_params` and function paths from
-[core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path).
+[hir §1.1](./hir.md#11-function). HIR parameters use `destination_params`
+([hir §1.1](./hir.md#11-function)); generated names follow
+[§4.4](#44-signatures).
 A synthesized host entry launching HIR uses that HIR function's symbol and
 registration name; its own IR name does not add another path segment.
 

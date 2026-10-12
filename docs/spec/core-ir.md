@@ -119,6 +119,8 @@ chain and is not copied onto each Module or Function.
   `topologies = ()` declares an explicitly topology-free domain; an explicit
   tuple replaces the inherited hierarchy whole rather than extending it. A
   declared tuple MUST NOT repeat a level name.
+  - `target_of(root, fn)` reads a TIR function's own target or resolves a HIR
+    function's owning Module target; ambiguous ownership MUST be rejected.
   - `resolve_topology(name)` returns the single effective level with that exact
   name and MUST fail, naming the levels that are available, when there is
   none.
@@ -269,34 +271,10 @@ is not a thing a cost can be stated about.
     empty segment MUST be refused.
   - `function_selectors(module)` MUST return every HIR function in the module
     tree paired with its resolving path, in source order and parents before
-    children. It MUST NOT return `PrimFunction` entries.
+    children. It MUST NOT return `PrimFunction` entries. `function_paths(root)`
+    yields declared functions and root-relative segment tuples through the same
+    traversal; `function_selectors` filters it to HIR and joins those segments.
 
-Function naming uses this same selector traversal for HIR and TIR:
-
-- `function_paths(root)` yields declared functions and root-relative segment
-  tuples; `function_selectors` filters it to HIR and joins those segments.
-- `function_path(root, fn)` MUST return the root Module name followed by the
-  selector segments. Child segments are their mount names. Variant paths add
-  the display name or `v<index>` when absent. A function without a unique path
-  MUST be rejected.
-- `mangle(root, fn)` MUST be the unique source of generated function-symbol
-  roots: `tilefoundry_` followed by each segment's decimal length and spelling.
-  Every segment MUST be a C identifier; invalid segments raise with the segment
-  and complete path. Targets may append their own symbol suffixes.
-- `export_name(root, fn)` MUST join this same path with dots. For each HIR
-  selector it equals `<root name>.<selector>`.
-- `target_of(root, fn)` reads a TIR function's own target or resolves a HIR
-  function's owning Module target; ambiguous ownership MUST be rejected.
-- The shared `fresh_name(stem, used)` rule reserves the stem when available,
-  otherwise its first available `_1`, `_2`, ... suffix. HIR destination
-  parameters and lowering's `Names.fresh` MUST use this same rule.
-- `destination_params(fn)` MUST return declared HIR inputs followed by each
-  tensor result leaf in tuple leaf order. Destination types retain the result's
-  shape and dtype, with GMEM storage and no layout. Destination names MUST use
-  `fresh_name("out", used)` with declared parameter names reserved, sharing
-  lowering's `Names.fresh` rule. Unit results add no destinations; unsupported
-  result types MUST be rejected. Destinations are ordinary parameters and
-  receive the same parameter-name checks as inputs.
 
 ## 2. `Expr`
 

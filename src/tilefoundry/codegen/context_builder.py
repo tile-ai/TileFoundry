@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -16,8 +17,8 @@ from tilefoundry.codegen.signature import (
 )
 from tilefoundry.ir.core.module import (
     Module,
-    export_name,
-    mangle,
+    function_paths,
+    function_selectors,
     module_functions,
     owning_module,
     subtree,
@@ -28,6 +29,36 @@ from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.target import CpuTarget, Target
+
+
+def function_path(root: Module, fn) -> tuple[str, ...]:
+    """Use the selector traversal for prototypes and their specialization labels."""
+    from tilefoundry.ir.hir.specialize import display_name  # noqa: PLC0415
+
+    matches = []
+    for path, function in function_paths(root):
+        if function is fn:
+            matches.append((root.name, *path))
+        for index, variant in enumerate(function.variants or ()):
+            if variant is fn:
+                matches.append((root.name, *path, display_name(variant) or f"v{index}"))
+    if len(matches) != 1:
+        raise ValueError(f"codegen: function {fn.name!r} has no unique path in {root.name!r}")
+    return matches[0]
+
+
+def mangle(root: Module, fn) -> str:
+    """Encode each path segment with its length; reject non-C identifiers."""
+    path = function_path(root, fn)
+    for segment in path:
+        if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", segment) is None:
+            raise ValueError(f"codegen: invalid path segment {segment!r} in {'.'.join(path)!r}")
+    return "tilefoundry_" + "".join(f"{len(segment)}{segment}" for segment in path)
+
+
+def export_name(root: Module, fn) -> str:
+    """The dotted TVM FFI registration name corresponding to a selector."""
+    return ".".join(function_path(root, fn))
 
 
 @dataclass(frozen=True)
@@ -47,7 +78,6 @@ class FunctionSymbolTable:
     """Separate IR and generated-name namespaces shared by every emitter."""
 
     by_function: Mapping[int, FunctionSymbol]
-    by_symbol: Mapping[str, FunctionSymbol]
 
     @property
     def callables(self) -> Mapping[int, CallableSignature]:
@@ -246,17 +276,17 @@ def build_codegen_context(
         raise ValueError(f"codegen: expected one device Target, found {len(device_targets)}")
     program_ids = program_id_params(module, device_targets[0])
     by_function: dict[int, FunctionSymbol] = {}
-    by_symbol: dict[str, FunctionSymbol] = {}
+    selectors = {id(fn): selector for selector, fn in function_selectors(module)}
+    by_selector: dict[str, FunctionSymbol] = {}
     device_functions = tuple(
         fn for fn in identities.values() if not isinstance(targets[id(fn)], CpuTarget)
     )
     cpu_functions = tuple(
         fn for fn in identities.values() if isinstance(targets[id(fn)], CpuTarget)
     )
-    launch_targets = {id(fn) for fn in functions}
     for function in (*device_functions, *cpu_functions):
         launches = _launch_statements(function)
-        launched = by_symbol.get(launches[0].args[0].name) if len(launches) == 1 else None
+        launched = by_selector.get(launches[0].args[0].name) if len(launches) == 1 else None
         if launched is not None and isinstance(launched.function, Function):
             mangled = launched.symbol
             registered_name = launched.export_name
@@ -274,19 +304,18 @@ def build_codegen_context(
             callable=signature,
         )
         by_function[id(function)] = symbol
-        if id(function) in launch_targets and not isinstance(targets[id(function)], CpuTarget):
-            by_symbol[mangled] = symbol
+        if id(function) in selectors:
+            by_selector[selectors[id(function)]] = symbol
 
     table = FunctionSymbolTable(
         MappingProxyType(by_function),
-        MappingProxyType(by_symbol),
     )
     edges: list[LaunchEdge] = []
     launch_callables: dict[int, CallableSignature] = {}
     for caller in functions:
         for stmt in _launch_statements(caller):
             reference = stmt.args[0]
-            symbol = by_symbol.get(reference.name)
+            symbol = by_selector.get(reference.name)
             if symbol is None:
                 owner = ownership[id(caller)]
                 candidates = [
@@ -355,4 +384,7 @@ __all__ = [
     "FunctionSymbolTable",
     "LaunchEdge",
     "build_codegen_context",
+    "function_path",
+    "mangle",
+    "export_name",
 ]

@@ -6,13 +6,13 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry.codegen.context_builder import build_codegen_context
+from tilefoundry.codegen.context_builder import build_codegen_context, mangle
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.cuda.abi import launcher_symbol
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Constant, Var
-from tilefoundry.ir.core.module import Module, mangle
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential

@@ -904,11 +904,11 @@ block_y, block_z, *forwarded_args)`:
 
 - **callee**: `args[0]` MUST be a `SymbolRef` ([§2.1](#21-symbolref)) resolving to
   a device `PrimFunction` with a CUDA target, or a HIR `Function` by its
-  `mangle(root, fn)` name ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)).
+  root-relative selector ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)).
   A HIR callee's owner MUST resolve to CUDA, and the `SymbolRef.type` MUST equal
   its authored `CallableType`. HIR Launch verification checks forwarded
   parameters against `destination_params(fn)`
-  ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)).
+  ([hir §1.1](./hir.md#11-function)).
 - **grid / block**: `args[1:7]` are the grid then block extents in the fixed
   order `grid_x, grid_y, grid_z, block_x, block_y, block_z`. Each is an `Expr`
   — a `Constant` for a static extent, a `ShapeOf` ([§2.2](#22-shapeof)) for a

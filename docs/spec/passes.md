@@ -298,11 +298,12 @@ def insert_default_host_entry(module: Module) -> Module:
   - With no CPU entry, an all-HIR tree MUST gain one CPU entry per authored
     function, including children and prototypes but excluding variants. Each
     entry uses `destination_params(fn)`
-    ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)) and launches by the
-    mangled HIR symbol at the owner's effective topology. The
-    authored root entry remains unchanged. The entry's IR name appends `_host`
-    to the callee's mangled symbol, while its emitted C++ and registration names
-    use the HIR callee's path. Post-pass verification MUST validate the HIR
+    ([hir §1.1](./hir.md#11-function)) and launches by the root-relative selector
+    ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)) at the owner's
+    effective topology. The authored root entry remains unchanged. The entry's
+    IR name uses `<fn.name>_host`, with the fresh-name suffix on collisions;
+    its emitted C++ and registration names follow the HIR callee's path
+    ([codegen §4.4](./codegen.md#44-signatures)). Post-pass verification MUST validate the HIR
     callee target, authored CallableType and `destination_params(fn)` forwarding
     contract ([tir §2.3](./tir.md#23-tir-ops)).
   - HIR device calls into a direct child's function with implicit ConstTensor

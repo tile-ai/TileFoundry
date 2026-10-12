@@ -16,13 +16,12 @@ from tilefoundry.ir.core.module import (
     Module,
     called_functions,
     child_module_of,
-    export_name,
-    mangle,
+    function_selectors,
     module_functions,
     owning_module,
     target_of,
 )
-from tilefoundry.ir.hir.destination import destination_params
+from tilefoundry.ir.hir.destination import destination_params, fresh_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -123,28 +122,29 @@ def entry_for_one_device_function(module: Module) -> Module:
 
 def reject_omitted_child_weights(module: Module) -> None:
     """Reject device calls that depend on implicit child-owner weight injection."""
-    for fn in module_functions(module):
+    functions = function_selectors(module)
+    selectors = {id(fn): selector for selector, fn in functions}
+    for selector, fn in functions:
         for caller in (fn, *fn.variants):
             for callee in called_functions(caller):
                 if child_module_of(module, caller, callee) is not None:
                     weights = [param.name for param in callee.params if param.is_const]
                     if weights:
                         raise ValueError(
-                            f"CUDA skeleton: {export_name(module, caller)} calls "
-                            f"{export_name(module, callee)} with omitted weights {weights}; "
+                            f"CUDA skeleton: {selector} calls "
+                            f"{selectors[id(callee)]} with omitted weights {weights}; "
                             "declare the weights as parameters or call from orchestration"
                         )
 
 
-def host_entry_for(module: Module, fn: Function) -> PrimFunction:
+def host_entry_for(module: Module, selector: str, fn: Function, taken: set[str]) -> PrimFunction:
     """Launch one HIR function with its declared inputs and flattened destinations."""
     params = tuple(Var(name=p.name, type=p.type, is_const=p.is_const) for p in destination_params(fn))
-    symbol = mangle(module, fn)
     owner = owning_module(module, fn)
     grid, block = _launch_config_of(owner)
-    launch = launch_call(fn, params, grid, block, symbol=symbol)
+    launch = launch_call(fn, params, grid, block, symbol=selector)
     return PrimFunction(
-        name=f"{symbol}_host",
+        name=fresh_name(f"{fn.name}_host", taken),
         params=params,
         body=Sequential(body=(launch,)),
         output_count=len(params) - len(fn.params),
@@ -155,7 +155,11 @@ def host_entry_for(module: Module, fn: Function) -> PrimFunction:
 def entries_for_hir_functions(module: Module) -> Module:
     """Append a host entry per HIR prototype, retaining the authored root entry."""
     reject_omitted_child_weights(module)
-    entries = tuple(host_entry_for(module, fn) for fn in module_functions(module))
+    taken = {fn.name for fn in module.functions}
+    entries = tuple(
+        host_entry_for(module, selector, fn, taken)
+        for selector, fn in function_selectors(module)
+    )
     return replace(module, functions=(*module.functions, *entries))
 
 
