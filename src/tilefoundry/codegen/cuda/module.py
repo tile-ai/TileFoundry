@@ -40,7 +40,7 @@ def _emit_function(fn: PrimFunction, ctx: CudaCodegenContext) -> LinkableFunctio
     if ctx.codegen_context is None:
         raise ValueError("CUDA module emission requires a CodegenContext")
     launcher = ctx.signature_of(fn)
-    kernel = kernel_signature(launcher, ctx.codegen_context.symbols.by_function[id(fn)].kernel_name)
+    kernel = kernel_signature(launcher, ctx.codegen_context.symbols.by_function[id(fn)].symbol)
     return LinkableFunction(
         name=fn.name,
         declaration=f'extern "C" void {launcher.name}({ctx.parameters(launcher, exported=True)});',

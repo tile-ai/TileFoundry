@@ -103,9 +103,7 @@ class RuntimeModule:
 ```python
 # src/tilefoundry/runtime/module.py
 class CompiledModule(RuntimeModule):
-    def __init__(
-        self, type: CallableSignature, fn: Callable, library: object | None = None
-    ) -> None: ...
+    def __init__(self, type: CallableSignature, fn: Callable, library: object) -> None: ...
 
     def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None: ...
 
@@ -405,6 +403,14 @@ def jit(
 ) -> "RuntimeModule": ...
 ```
 <!-- /generated -->
+
+- `link_program(mod, *, workdir, options, entries)` emits and links without
+  loading. `entries=None` emits the root entry; an explicit sequence emits
+  those CPU entries, with launcher declarations deduplicated. `scaffold(mod,
+  out_dir)` inserts host entries and links all of them in skeleton mode.
+  Project sources are written directly in `out_dir`, and the library is
+  `out_dir/build/lib<root Module name>.so`. Each `build()` uses a fresh
+  temporary directory.
 
 - constraints:
   - accepts only TileFoundry IR (`Function` / `Module`); raw Python functions

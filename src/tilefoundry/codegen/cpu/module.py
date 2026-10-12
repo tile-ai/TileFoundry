@@ -20,7 +20,6 @@ from tilefoundry.codegen.signature import (
     LaunchSignature,
     tensor_signature_of,
 )
-from tilefoundry.codegen.utils import export_name
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.launch import Launch
@@ -233,7 +232,7 @@ def _host_entry(
             host_symbol=signature.name,
             params=ctx.parameters(signature),
             body_lines=body_lines,
-            entry_name=export_name(ctx.codegen_context.module, entry),
+            entry_name=ctx.codegen_context.symbols.by_function[id(entry)].export_name,
         ),
     )
 

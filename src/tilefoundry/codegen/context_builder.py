@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 
-from tilefoundry.codegen.cuda.abi import check_parameter_name
+from tilefoundry.codegen.cuda.abi import check_parameter_names
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.codegen.signature import (
     LAUNCH_ABI,
@@ -27,10 +27,8 @@ class FunctionSymbol:
     """Resolved IR identity and generated ABI names for one callable function."""
 
     function: PrimFunction
-    ir_name: str
-    kernel_name: str | None
-    launcher_name: str | None
-    host_name: str | None
+    symbol: str
+    export_name: str
     owner: Module
     target: Target
     callable: CallableSignature
@@ -42,7 +40,6 @@ class FunctionSymbolTable:
 
     by_function: Mapping[int, FunctionSymbol]
     by_symbol: Mapping[str, FunctionSymbol]
-    by_kernel_name: Mapping[str, FunctionSymbol]
 
     @property
     def callables(self) -> Mapping[int, CallableSignature]:
@@ -226,36 +223,25 @@ def build_codegen_context(
     program_ids = program_id_params(module, device_targets[0])
     by_function: dict[int, FunctionSymbol] = {}
     by_symbol: dict[str, FunctionSymbol] = {}
-    by_kernel_name: dict[str, FunctionSymbol] = {}
     for function in functions:
         mangled = mangle(module, function)
-        for param in function.params:
-            check_parameter_name(export_name(module, function), param.name, function.params)
+        registered_name = export_name(module, function)
+        check_parameter_names(registered_name, function.params)
         signature = called_as(function, mangled, program_ids)
-        is_device = not isinstance(function.target, CpuTarget)
         symbol = FunctionSymbol(
             function=function,
-            ir_name=function.name,
-            kernel_name=mangled if is_device else None,
-            launcher_name=signature.name if is_device else None,
-            host_name=signature.name if not is_device else None,
+            symbol=mangled,
+            export_name=registered_name,
             owner=ownership[id(function)],
             target=function.target,
             callable=signature,
         )
-        if mangled in by_symbol:
-            raise ValueError(f"codegen: duplicate function symbol {function.name!r}")
         by_function[id(function)] = symbol
         by_symbol[mangled] = symbol
-        if symbol.kernel_name is not None:
-            if symbol.kernel_name in by_kernel_name:
-                raise ValueError(f"codegen: duplicate kernel symbol {symbol.kernel_name!r}")
-            by_kernel_name[symbol.kernel_name] = symbol
 
     table = FunctionSymbolTable(
         MappingProxyType(by_function),
         MappingProxyType(by_symbol),
-        MappingProxyType(by_kernel_name),
     )
     edges: list[LaunchEdge] = []
     launch_callables: dict[int, CallableSignature] = {}
@@ -271,7 +257,7 @@ def build_codegen_context(
                     if fn.name == reference.name
                 ]
                 if len(candidates) != 1:
-                    names = [export_name(module, candidate.function) for candidate in candidates]
+                    names = [candidate.export_name for candidate in candidates]
                     raise ValueError(
                         f"codegen: launch from {caller.name!r} names {reference.name!r} "
                         f"in owner {owner.name!r}: expected one match, found {len(candidates)} {names}"

@@ -16,7 +16,7 @@ def load_linked_module(linked: "LinkedModule") -> CompiledModule:
         entry_callable = tvm_ffi.get_global_func(linked.entry.name)
     except ValueError as e:
         raise RuntimeError(
-            f"load_linked_module: library {linked.library_path} has no symbol {linked.entry.name!r}"
+            f"load_linked_module: library {linked.library_path} has no registration {linked.entry.name!r}"
         ) from e
     return CompiledModule(type=linked.entry, fn=entry_callable, library=loaded)
 

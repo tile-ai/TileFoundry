@@ -10,12 +10,11 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from tilefoundry.codegen.context_builder import build_codegen_context
+from tilefoundry.codegen.context_builder import EmissionGroup, build_codegen_context
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.linker import LinkedModule, link_modules
 from tilefoundry.codegen.options import CodegenOptions
-from tilefoundry.codegen.utils import export_name
 from tilefoundry.inspection import as_script as _as_script
 from tilefoundry.ir.core.module import Module, module_functions
 from tilefoundry.ir.hir.function import Function as HirFunction
@@ -126,8 +125,11 @@ def link_program(
     codegen = build_codegen_context(mod, options)
     cpu_entry = mod.entry_function()
     entries = (cpu_entry,) if entries is None else tuple(entries)
-    if not entries or any(not isinstance(fn.target, CpuTarget) for fn in entries):
-        raise ValueError("tilefoundry.build: build() accepts pass-prepared TIR CPU host entries")
+    if not entries:
+        raise ValueError("link_program: expected at least one CPU host entry")
+    for entry in entries:
+        if not isinstance(entry.target, CpuTarget):
+            raise ValueError(f"link_program: entry {entry.name!r} is not a CPU host entry")
 
     device_modules = []
     for group in codegen.groups:
@@ -144,13 +146,12 @@ def link_program(
                     group.owner, group.functions, group.target, context
                 )
             )
-    symbols = dict(codegen.symbols.callables)
-    symbols.update({id(edge.callee): edge.callable for edge in codegen.launch_edges})
+    view = codegen.for_group(EmissionGroup(mod, entries[0].target, entries))
     context = CpuCodegenContext(
-        symbols=symbols,
-        target=entries[0].target,
-        resolved_launches={id(edge.launch): edge.callee for edge in codegen.launch_edges},
-        codegen_context=codegen,
+        symbols=view.symbols,
+        target=view.target,
+        resolved_launches=view.resolved_launches,
+        codegen_context=view.codegen,
     )
     host_module = (
         entries[0].target.get_code_generator().emit(mod, entries, entries[0].target, context)
@@ -159,8 +160,8 @@ def link_program(
     units = (*device_modules, host_module)
     loaded_as = None
     if isinstance(cpu_entry.target, CpuTarget):
-        entry_signature = codegen.symbols.by_function[id(cpu_entry)].callable
-        loaded_as = replace(entry_signature, name=export_name(mod, cpu_entry))
+        entry_symbol = codegen.symbols.by_function[id(cpu_entry)]
+        loaded_as = replace(entry_symbol.callable, name=entry_symbol.export_name)
     device_targets = tuple(
         group.target for group in codegen.groups if isinstance(group.target, CudaTarget)
     )

@@ -76,7 +76,7 @@ class CompiledModule(RuntimeModule):
     """
 
     def __init__(
-        self, type: CallableSignature, fn: Callable, library: object | None = None
+        self, type: CallableSignature, fn: Callable, library: object
     ) -> None:
         super().__init__(name=type.name, entry=type.name)
         self.type = type

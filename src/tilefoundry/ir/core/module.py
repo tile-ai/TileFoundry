@@ -25,7 +25,9 @@ from tilefoundry.target.base import Target, target_instance
 
 ModuleFunction = Union[HirFunction, PrimFunction]
 
-_MISSING_PREPARED_WEIGHT = "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
+_MISSING_PREPARED_WEIGHT = (
+    "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
+)
 
 
 def subtree(root: "Module"):
@@ -464,15 +466,15 @@ class Module:
                 value = _fetch(weight_name)
             else:
                 value = _run_bound(
-                    conv,
-                    [_fetch(param.name) for param in conv.params],
-                    device=device,
-                    reading=reading,
+                    conv, [_fetch(param.name) for param in conv.params],
+                    device=device, reading=reading,
                 )
             actual = tensor_type_of(value, like=decl_type)
             if actual.shape != decl_type.shape:
                 source = (
-                    f"converter for weight {key!r}" if conv is not None else f"raw weight {key!r}"
+                    f"converter for weight {key!r}"
+                    if conv is not None
+                    else f"raw weight {key!r}"
                 )
                 raise ValueError(
                     f"Module {self.name!r}: {source} has shape "
@@ -480,7 +482,9 @@ class Module:
                 )
             if not types_compatible(decl_type, actual):
                 source = (
-                    f"converter for weight {key!r}" if conv is not None else f"raw weight {key!r}"
+                    f"converter for weight {key!r}"
+                    if conv is not None
+                    else f"raw weight {key!r}"
                 )
                 raise ValueError(
                     f"Module {self.name!r}: {source} has dtype {value.dtype}, declared "

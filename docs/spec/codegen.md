@@ -27,13 +27,8 @@ flowchart LR
   `ctx.codegen_context.options`; a missing compile context is an error.
   Skeleton emission retains CUDA signatures, parameter views, specialization
   dispatch and launchers, replacing body statements with `// TODO: <fn>`.
-- `link_program(mod, *, workdir, options, entries)` emits and links without
-  loading. `entries=None` emits the root entry; an explicit sequence emits
-  those CPU entries, with launcher declarations deduplicated. `scaffold(mod,
-  out_dir)` inserts host entries and links all of them in skeleton mode.
-  Project sources are written directly in `out_dir`, and the library is
-  `out_dir/build/lib<root Module name>.so`. Each `build()` uses a fresh
-  temporary directory.
+- Project entry points, work directories and loading are owned by
+  [runtime §1.6](./runtime.md#16-compilepy).
 - A module's functions are grouped by equal Target values in source order. Each
   group is emitted by the exact Target's CodeGenerator into one
   `LinkableModule`.
@@ -426,8 +421,13 @@ class CallableSignature(Signature):
     Module name, child mount names, function name, and for a variant its
     display name or `v<index>`. Every segment MUST be a C identifier; invalid
     segments raise with the complete path. CUDA launcher and kernel names
-    append `_launch` and `_kernel`; CPU functions use the mangled name itself.
+    derive `_launch` and `_kernel` suffixes through the CUDA target; CPU
+    functions use the mangled name itself. Function symbol roots come from
+    `mangle`, and suffixes come from the target.
     Calling conventions receive the resolved symbol rather than reconstructing it.
+  - parameters codegen inserts (`tilefoundry_meta`,
+    `tilefoundry_<level>_program_id`) and unit-owned state MUST carry the
+    `tilefoundry_` prefix. Their spellings belong to their respective targets.
   - TVM FFI registration names come from `export_name(root, fn)`, the same
     path joined with dots. For a HIR selector, this is `<root name>.<selector>`.
     Host wrappers register through `Function::SetGlobal` with override enabled.

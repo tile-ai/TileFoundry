@@ -61,28 +61,29 @@ CPP_KEYWORDS = frozenset(
 )
 
 
-def check_parameter_name(fn_path, name, siblings) -> None:
-    """Reject parameter names that collide with generated parameter views."""
-    if (
-        re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) is None
-        or name in CPP_KEYWORDS
-        or name.startswith("tilefoundry_")
-    ):
-        raise ValueError(f"codegen: invalid parameter {name!r} in {fn_path!r}")
+def check_parameter_names(path, params) -> None:
+    """Check parameter spellings and collisions with every generated view name."""
     occupied = {}
-    for param in siblings:
+    for param in params:
+        name = param.name
+        if (
+            re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) is None
+            or name in CPP_KEYWORDS
+            or name.startswith("tilefoundry_")
+        ):
+            raise ValueError(f"codegen: invalid parameter {name!r} in {path!r}")
         signature = tensor_signature_of(param)
-        generated = [f"{param.name}_tensor"]
+        generated = [f"{name}_tensor"]
         generated += [signature.extent_name(axis) for axis in signature.dynamic_axes]
         if isinstance(param.type.layout, ShardLayout):
-            generated.append(f"{param.name}_mesh")
-        for spelling in (param.name, *generated):
+            generated.append(f"{name}_mesh")
+        for spelling in (name, *generated):
             if spelling in occupied:
                 raise ValueError(
-                    f"codegen: parameter {name!r} in {fn_path!r} collides at "
+                    f"codegen: parameter {name!r} in {path!r} collides at "
                     f"{spelling!r} with parameter {occupied[spelling]!r}"
                 )
-            occupied[spelling] = param.name
+            occupied[spelling] = name
 
 
 def launcher_symbol(symbol: str) -> str:
@@ -134,7 +135,7 @@ def kernel_arguments(kernel: CallableSignature, ctx: CudaCodegenContext) -> str:
 def called_as_launcher(
     fn: PrimFunction, symbol: str, program_ids: tuple[ProgramIdSignature, ...]
 ) -> CallableSignature:
-    """The one convention of *fn* a caller can reach: its launch launcher.
+    """The one convention of *fn* a caller can reach: its launcher.
 
     The kernel's own convention is not this one, because nobody outside the
     translation unit can name it. A program that names a level the target
