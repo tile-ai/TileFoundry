@@ -61,6 +61,7 @@ class CodeGenerator:
     emit: Callable[
         [Module, tuple[PrimFunction, ...], Target, CodegenContext], LinkableModule
     ]
+    emits: frozenset[EmitGranularity] = frozenset({"full"})
 
 
 class Target:
@@ -78,6 +79,14 @@ def emit_cuda_module(
 - constraints:
   - A Target MUST return one immutable CodeGenerator descriptor. A subclass MAY
     inherit its base generator without another registration step.
+  - `emits` MUST state the source emission granularities the generator supports;
+    its default is `{"full"}`. Built-in CPU and CUDA generators support both
+    `"full"` and `"skeleton"`. Before any group emits, `link_program` MUST check
+    each group's generator and raise `UnsupportedCapabilityError` naming the
+    Target and requested granularity when unsupported. The CLI MUST delegate
+    Target capability admission to codegen. CUDA skeleton emission MUST reject
+    targets with `device_count` through `UnsupportedCapabilityError` in its
+    generator; those targets require a different project implementation.
   - All generators MUST share the `(module, functions, target, ctx)` callable
     shape. The context is built once per compile and carries what every
     generator has to agree on ([§2.3](#23-codegencontext)); a generator MUST

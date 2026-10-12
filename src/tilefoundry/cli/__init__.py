@@ -31,7 +31,6 @@ from tilefoundry.ir.core import VerifyError
 
 _ANALYSES = ANALYSES
 _COMMANDS = {
-    "scaffold": "generate an editable single-device CUDA project",
     "models": "list the described models, or show one of them",
     "spec": "read one specification: its sections, or one of them",
     "tutorial": "learn the two-step workflow: its pages, or one of them",
@@ -39,6 +38,7 @@ _COMMANDS = {
     "analyze": "report what a program costs: flops, traffic, bounds, timing",
     "target": "list, show, add, or remove compilation targets",
     "schedule": "finalize scheduled HIR and inspect instruction choices",
+    "scaffold": "generate an editable project for the program's Target",
 }
 
 _TARGET_COMMANDS = {
@@ -90,12 +90,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the installed version and exit",
     )
     commands = parser.add_subparsers(dest="command", title="Common commands", metavar="<command>")
-
-    scaffold = commands.add_parser(
-        "scaffold", help=_COMMANDS["scaffold"], description=_COMMANDS["scaffold"]
-    )
-    _add_source_argument(scaffold)
-    scaffold.add_argument("out_dir", metavar="OUT_DIR", help="write the project to an empty directory")
 
     models = commands.add_parser(
         "models", help=_COMMANDS["models"], description=_COMMANDS["models"]
@@ -272,6 +266,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME=EXTENT",
         help="bind one open dimension to a concrete extent; repeat for other dimensions",
     )
+    scaffold = commands.add_parser(
+        "scaffold", help=_COMMANDS["scaffold"], description=_COMMANDS["scaffold"]
+    )
+    _add_source_argument(scaffold)
+    scaffold.add_argument("out_dir", metavar="OUT_DIR", help="write the project to an empty directory")
+
     return parser
 
 

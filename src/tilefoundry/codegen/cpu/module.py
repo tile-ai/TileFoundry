@@ -270,7 +270,7 @@ def emit_host_module(
     )
 
 
-CPU_CODE_GENERATOR = CodeGenerator(emit_host_module)
+CPU_CODE_GENERATOR = CodeGenerator(emit_host_module, emits=frozenset({"full", "skeleton"}))
 
 
 __all__ = ["emit_host_module"]

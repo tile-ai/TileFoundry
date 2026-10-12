@@ -68,6 +68,7 @@ class CodeGenerator:
     emit: Callable[
         ["Module", tuple["PrimFunction", ...], "Target"], "LinkableModule"
     ]
+    emits: frozenset["EmitGranularity"] = frozenset({"full"})
 
 
 __all__ = [

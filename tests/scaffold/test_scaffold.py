@@ -62,7 +62,7 @@ def test_nonempty_output_is_preserved(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("target", ("CpuTarget()", 'CudaTarget("nvidia.h200_sxm", device_count=2)'))
-def test_cli_rejects_targets_outside_single_device_cuda(target, tmp_path, capsys):
+def test_codegen_reports_unsupported_scaffold_targets(target, tmp_path, capsys):
     source = tmp_path / "model.py"
     source.write_text(
         "from tilefoundry.dsl import *\n"
@@ -76,5 +76,6 @@ def test_cli_rejects_targets_outside_single_device_cuda(target, tmp_path, capsys
     )
     project = tmp_path / "project"
     assert cli_main(["scaffold", f"{source}:Root", str(project)]) == 1
-    assert "only single-device CUDA" in capsys.readouterr().err
+    message = "expected one device Target, found 0" if target == "CpuTarget()" else "only single-device CUDA"
+    assert message in capsys.readouterr().err
     assert not project.exists()

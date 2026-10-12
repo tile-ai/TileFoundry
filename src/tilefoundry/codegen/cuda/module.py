@@ -33,6 +33,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target import Target
+from tilefoundry.target.base import UnsupportedCapabilityError, _target_summary
 
 Geometry = tuple[tuple[object, object, object], tuple[object, object, object]]
 
@@ -43,8 +44,6 @@ def _emit_function(fn: PrimFunction | Function, ctx: CudaCodegenContext) -> Link
     A caller can name the launcher and nothing else, so that is what the
     declaration states; the kernel is defined beside it and named only here.
     """
-    if ctx.codegen_context is None:
-        raise ValueError("CUDA module emission requires a CodegenContext")
     launcher = ctx.signature_of(fn)
     kernel = kernel_signature(launcher, ctx.codegen_context.symbols.by_function[id(fn)].symbol)
     return LinkableFunction(
@@ -192,6 +191,13 @@ def emit_cuda_module(
     module: Module, cuda_fns: tuple[PrimFunction | Function, ...], target: Target, ctx: CudaCodegenContext
 ) -> LinkableModule:
     """Emit the device ``.cu`` linkable module for one topology domain."""
+    if ctx.codegen_context is None:
+        raise ValueError("CUDA module emission requires a CodegenContext")
+    if ctx.codegen_context.options.emit == "skeleton" and target.device_count is not None:
+        raise UnsupportedCapabilityError(
+            f"{_target_summary(target)}: skeleton emission supports only single-device CUDA "
+            "targets without device_count"
+        )
     kernels = tuple(fn for fn in cuda_fns if ctx.codegen_context.targets[id(fn)] == target)
     if not kernels:
         raise ValueError(f"emit_cuda_module: module {module.name!r} has no CUDA device kernels")
@@ -217,7 +223,7 @@ def emit_cuda_module(
     return LinkableModule(target="cuda", language="cu", preamble=preamble, functions=functions)
 
 
-CUDA_CODE_GENERATOR = CodeGenerator(emit_cuda_module)
+CUDA_CODE_GENERATOR = CodeGenerator(emit_cuda_module, emits=frozenset({"full", "skeleton"}))
 
 
 __all__ = ["CUDA_CODE_GENERATOR", "emit_cuda_module"]

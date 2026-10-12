@@ -22,7 +22,7 @@ from tilefoundry.passes.pass_manager import PassManager
 from tilefoundry.passes.transforms import InsertHostEntryPass
 from tilefoundry.runtime.loader import load_linked_module
 from tilefoundry.target import CpuTarget, CudaTarget, Target, default_target
-from tilefoundry.target.base import _target_summary, target_instance
+from tilefoundry.target.base import UnsupportedCapabilityError, _target_summary, target_instance
 
 
 @dataclass(frozen=True)
@@ -131,6 +131,17 @@ def link_program(
         if not isinstance(target_of(mod, entry), CpuTarget):
             raise ValueError(f"link_program: entry {entry.name!r} is not a CPU host entry")
 
+    generators = {
+        target: target.get_code_generator()
+        for target in dict.fromkeys(group.target for group in codegen.groups)
+    }
+    for group in codegen.groups:
+        if options.emit not in generators[group.target].emits:
+            raise UnsupportedCapabilityError(
+                f"{_target_summary(group.target)}: code generator does not support "
+                f"emit={options.emit!r}"
+            )
+
     device_modules = []
     for group in codegen.groups:
         view = codegen.for_group(group)
@@ -142,7 +153,7 @@ def link_program(
                 codegen_context=view.codegen,
             )
             device_modules.append(
-                group.target.get_code_generator().emit(
+                generators[group.target].emit(
                     group.owner, group.functions, group.target, context
                 )
             )
@@ -154,7 +165,7 @@ def link_program(
         codegen_context=view.codegen,
     )
     host_module = (
-        entries[0].target.get_code_generator().emit(mod, entries, entries[0].target, context)
+        generators[entries[0].target].emit(mod, entries, entries[0].target, context)
     )
 
     units = (*device_modules, host_module)

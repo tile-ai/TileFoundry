@@ -130,9 +130,11 @@ something chosen for it.
 tilefoundry scaffold SOURCE OUT_DIR
 ```
 
+The project is determined by the generator of the Target resolved by the selected Module.
 `SOURCE` uses the shared authored-Module selector syntax described under
-[Commands](#commands). The command accepts HIR or TIR with a single-device CUDA
-Target and no `device_count`. CPU and multi-device targets MUST be rejected.
+[Commands](#commands). The command accepts HIR or TIR and delegates Target
+capability checks to codegen ([codegen §2.1](./codegen.md#21-target-selected-service)).
+Currently, CUDA Targets without `device_count` can generate skeleton projects.
 `OUT_DIR` MUST be absent or an empty directory; existing nonempty output MUST
 be rejected without overwriting files.
 
