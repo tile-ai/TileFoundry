@@ -124,6 +124,31 @@ so naming the implementation is enough to reach what it is judged against. A
 runtime module that states none MUST be refused rather than compared against
 something chosen for it.
 
+## Scaffold
+
+```text
+tilefoundry scaffold SOURCE OUT_DIR
+```
+
+`SOURCE` uses the shared authored-Module selector syntax described under
+[Commands](#commands). The command accepts HIR or TIR with a single-device CUDA
+Target and no `device_count`. CPU and multi-device targets MUST be rejected;
+multi-device work is tracked in `docs/plans/distributed/scaffold.md`.
+`OUT_DIR` MUST be absent or an empty directory; existing nonempty output MUST
+be rejected without overwriting files.
+
+The command invokes `compile.py:scaffold` in skeleton mode
+([runtime §1.6](./runtime.md#16-compilepy)), writes `CMakeLists.txt`, `host.cpp`
+and `device_<i>.cu` directly in `OUT_DIR`, compiles the project and returns zero
+on success. The library is `OUT_DIR/build/lib<root Module name>.so`. Generated
+CUDA bodies are editable placeholders; signatures, views, variant dispatch,
+launchers and host registrations remain intact. The project can be rebuilt with
+`cmake -S OUT_DIR -B BUILD_DIR` followed by `cmake --build BUILD_DIR`. Load the
+library and bind the dotted TVM FFI registrations as described in
+[runtime §1.4](./runtime.md#14-runtimeloaderpy), retaining the loaded library
+for every callable's lifetime. Authored host orchestration remains in Python.
+
+
 ## Check
 
 `check` is the one command that reports agreement. It runs an implementation and,

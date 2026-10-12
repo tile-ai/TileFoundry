@@ -14,6 +14,7 @@ from tilefoundry.cli.check import add_arguments as add_check_arguments
 from tilefoundry.cli.check import guidance as check_guidance
 from tilefoundry.cli.check import run_check
 from tilefoundry.cli.models import run_models
+from tilefoundry.cli.scaffold import run_scaffold
 from tilefoundry.cli.schedule import run_candidates as run_schedule_candidates
 from tilefoundry.cli.schedule import run_facts as run_schedule_facts
 from tilefoundry.cli.schedule import run_finalize as run_schedule_finalize
@@ -30,6 +31,7 @@ from tilefoundry.ir.core import VerifyError
 
 _ANALYSES = ANALYSES
 _COMMANDS = {
+    "scaffold": "generate an editable single-device CUDA project",
     "models": "list the described models, or show one of them",
     "spec": "read one specification: its sections, or one of them",
     "tutorial": "learn the two-step workflow: its pages, or one of them",
@@ -88,6 +90,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the installed version and exit",
     )
     commands = parser.add_subparsers(dest="command", title="Common commands", metavar="<command>")
+
+    scaffold = commands.add_parser(
+        "scaffold", help=_COMMANDS["scaffold"], description=_COMMANDS["scaffold"]
+    )
+    _add_source_argument(scaffold)
+    scaffold.add_argument("out_dir", metavar="OUT_DIR", help="write the project to an empty directory")
 
     models = commands.add_parser(
         "models", help=_COMMANDS["models"], description=_COMMANDS["models"]
@@ -301,6 +309,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     for warning in registrations.warnings:
         print(f"tilefoundry: warning: {warning}", file=sys.stderr)
+    if args.command == "scaffold":
+        try:
+            return run_scaffold(args.source, args.out_dir)
+        except Exception as error:
+            print(f"tilefoundry scaffold: error: {error}", file=sys.stderr)
+            return 1
     if args.command == "models":
         try:
             return run_models(args.name, source=args.source)
