@@ -23,8 +23,7 @@ def run_scaffold(source: str, out_dir: str) -> int:
         not isinstance(device, CudaTarget) or device.device_count is not None for device in targets
     ):
         raise ValueError(
-            "scaffold supports only single-device CUDA targets without device_count; "
-            "multi-device work is described in docs/plans/distributed/scaffold.md"
+            "scaffold supports only single-device CUDA targets without device_count"
         )
     scaffold(module, destination)
     return 0

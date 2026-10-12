@@ -132,8 +132,7 @@ tilefoundry scaffold SOURCE OUT_DIR
 
 `SOURCE` uses the shared authored-Module selector syntax described under
 [Commands](#commands). The command accepts HIR or TIR with a single-device CUDA
-Target and no `device_count`. CPU and multi-device targets MUST be rejected;
-multi-device work is tracked in `docs/plans/distributed/scaffold.md`.
+Target and no `device_count`. CPU and multi-device targets MUST be rejected.
 `OUT_DIR` MUST be absent or an empty directory; existing nonempty output MUST
 be rejected without overwriting files.
 
@@ -147,7 +146,6 @@ launchers and host registrations remain intact. The project can be rebuilt with
 library and bind the dotted TVM FFI registrations as described in
 [runtime §1.4](./runtime.md#14-runtimeloaderpy), retaining the loaded library
 for every callable's lifetime. Authored host orchestration remains in Python.
-
 
 ## Check
 
