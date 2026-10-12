@@ -275,7 +275,6 @@ is not a thing a cost can be stated about.
     yields declared functions and root-relative segment tuples through the same
     traversal; `function_selectors` filters it to HIR and joins those segments.
 
-
 ## 2. `Expr`
 
 ```python

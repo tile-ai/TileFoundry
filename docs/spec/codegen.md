@@ -434,7 +434,7 @@ class CallableSignature(Signature):
   - `mangle(root, fn)` MUST be the unique source of generated function-symbol
     roots: `tilefoundry_` followed by each segment's decimal length and spelling.
     Every segment MUST be a C identifier; invalid segments raise with the segment
-    and complete path. Targets may append their own symbol suffixes.
+    and complete path.
   - `export_name(root, fn)` MUST join this same path with dots. For each HIR
     selector it equals `<root name>.<selector>`.
   - function paths reuse the IR selector traversal
@@ -489,8 +489,9 @@ def symbol_table(module: Module, target: Target) -> Mapping[int, CallableSignatu
     the only convention a caller can reach; the kernel's own convention is not
     in the table.
 
-HIR skeleton emission gives each authored function one editable `__device__`
-body taking cute parameter views, one `__global__` entry and one launcher.
+`codegen/cuda/hir/function.py` owns HIR skeleton emission, giving each authored
+function one editable `__device__` body taking cute parameter views, one
+`__global__` entry and one launcher.
 Device bodies (including variants) precede all global entries, ordered stably
 by increasing reachable-function count so callees precede callers. Prototypes
 have empty bodies and variants receive their display-name path segment or

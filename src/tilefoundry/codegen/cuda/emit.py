@@ -1,6 +1,6 @@
 """CUDA emitter handler autodiscovery.
 
-Importing this module loads every registered per-Op emitter under ``cuda/tir/``
+Importing this module loads every registered per-Op emitter under ``cuda/tir/`` and ``cuda/hir/``
 so its handler is registered against this target before codegen runs. What a
 function is called and what it takes are answered in ``codegen.signature`` and
 ``codegen.cuda.abi``, not here.
@@ -32,3 +32,5 @@ _discover("tir/stmts", "tilefoundry.codegen.cuda.tir.stmts.")
 _discover("tir/memory", "tilefoundry.codegen.cuda.tir.memory.")
 _discover("tir/nn", "tilefoundry.codegen.cuda.tir.nn.")
 _discover("tir", "tilefoundry.codegen.cuda.tir.")
+
+_discover("hir", "tilefoundry.codegen.cuda.hir.")

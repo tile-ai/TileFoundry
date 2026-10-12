@@ -90,11 +90,11 @@ physical directory layout reflects that boundary directly.
   rather than defining an IR layer. It reads the IR and the `Target` and
   decides nothing over what it measures
   ([architecture §5](./architecture.md#5-analysis--optimization)).
-- `codegen/<target>/` consumes only TIR. The subtree mirrors
+- `codegen/<target>/` consumes TIR and HIR skeleton signatures. Its TIR subtree mirrors
   `ir/tir/`: `prim_function` lives in `tir/`, Stmt emitters in
   `tir/stmts/`, and `memory/` / `nn/` / `arith/` / `reduce/` /
-  `tensor/` each have their own subdirectory. There is no
-  `codegen/<target>/hir/`.
+  `tensor/` each have their own subdirectory. `codegen/<target>/hir/`
+  holds only the skeleton emission of an HIR `Function`.
 - Authored launch attributes belong to `ir/tir/launch.py`; the geometry a
   kernel is launched at is settled where the `Launch` is written
   ([passes §7.3](./passes.md#73-insert_default_host_entry)) and read back off
@@ -174,7 +174,9 @@ registers as dialect `tf`, category `schedule`.
 **Rule 2 — one (node, target) codegen = one file.** Each handler
 lives at `codegen/<target>/tir/<category>/<name>.py`. Stmt emitters,
 Expr-Op emitters, and tag-dispatched (`arith`, `reduce`) emitters
-each get their own file. Codegen consumes TIR only.
+each get their own file. HIR skeleton emission is the sole exception to the
+TIR input rule: its handler lives at `codegen/<target>/hir/function.py` and
+MUST NOT emit HIR operation bodies.
 
 **Rule 3 — what an IR-class file contains:**
 
