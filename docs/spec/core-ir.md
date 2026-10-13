@@ -692,9 +692,12 @@ pattern node that owns them, so a failed formula can reject an alternative.
 Only unresolved formulas are deferred; after structural matching they are
 compiled into one OR-Tools CP-SAT model. An infeasible model is a mismatch,
 while an `UNKNOWN` solver result remains explicitly unknown rather than being
-reported as false. A refusal records the first failed pattern, its subject,
+reported as false. A refusal records the failed pattern, its subject,
 and a snapshot of the bindings; inspection decides how to render that
-evidence. The hand-written predicates in
+evidence. `TensorPattern` matches fields in the order dtype, storage, shape,
+then layout. When an unbound `SwitchPattern` rejects every branch, the refusal
+records that switch itself rather than a failed pattern inside one branch.
+The hand-written predicates in
 `predicates.py` read the layout itself, including its coalesced runs and
 algebraic properties; `Formula` predicates instead read names bound by
 structural patterns.

@@ -59,16 +59,23 @@ class PatternPrinter:
         """Render one structural match refusal at a consumer boundary."""
         if refusal is None:
             return "the pattern did not match"
-        rules = self.rules(refusal.pattern)
-        if rules:
-            reason = f"could not satisfy {rules[0]}"
-        else:
-            reason = (
-                f"{refusal.subject!r} does not match "
-                f"{self.written(refusal.pattern)}"
-            )
+        reason = (
+            self._dispatch("refused", refusal.pattern, refusal.subject)
+            if isinstance(refusal.pattern, Pattern)
+            else self.refused_Pattern(refusal.pattern, refusal.subject)
+        )
         bindings = self._written_bindings(refusal.bindings.items())
         return reason if not bindings else f"{reason} ({bindings})"
+
+    def refused_Pattern(self, pattern, subject) -> str:
+        rules = self.rules(pattern)
+        if rules:
+            return f"could not satisfy {rules[0]}"
+        return f"{subject!r} does not match {self.written(pattern)}"
+
+    def refused_SwitchPattern(self, pattern, subject) -> str:
+        options = ", ".join(self._written_value(value) for value, _ in pattern.branches)
+        return f"{pattern.param} has no matching branch for {subject!r}; branches: {options}"
 
     def declaration(self, op_type) -> dict[str, tuple[str, ...]]:
         """Render declaration sections without flattening them into report text."""
@@ -125,13 +132,15 @@ class PatternPrinter:
         return rendered
 
     def _declared(self, pattern, name: str) -> str:
-        if not any(cls.__name__ == "SwitchPattern" for cls in type(pattern).__mro__):
+        if not any(cls.__name__ in ("SwitchPattern", "TensorPattern") for cls in type(pattern).__mro__):
             return self.described(pattern, name)
         alternatives = tuple(
             (bindings, alternative, self.rules(alternative, name))
             for bindings, alternative in self.alternatives(pattern)
         )
         if not alternatives:
+            return self.described(pattern, name)
+        if len(alternatives) == 1 and not alternatives[0][0]:
             return self.described(pattern, name)
         common = tuple(
             rule
@@ -572,11 +581,42 @@ class PatternPrinter:
         )
 
     def alternatives_SwitchPattern(self, pattern, bindings) -> tuple:
+        known = dict(bindings)
+        if pattern.param in known:
+            branch = next(
+                (branch for value, branch in pattern.branches if value == known[pattern.param]), None
+            )
+            return () if branch is None else self.alternatives(branch, bindings)
         return tuple(
             held
             for value, branch in pattern.branches
             for held in self.alternatives(branch, (*bindings, (pattern.param, value)))
         )
+
+    def alternatives_TensorPattern(self, pattern, bindings) -> tuple:
+        from tilefoundry.ir.pattern.utils import selected_pattern  # noqa: PLC0415
+
+        states = ((bindings, pattern),)
+        for field in ("dtype", "storage"):
+            states = tuple(
+                (held, replace(tensor, **{field: alternative}))
+                for bound, tensor in states
+                for held, alternative in self.alternatives(getattr(tensor, field), bound)
+            )
+        if pattern.shape is not None:
+            for index in range(len(pattern.shape)):
+                states = tuple(
+                    (
+                        held,
+                        replace(
+                            tensor,
+                            shape=(*tensor.shape[:index], alternative, *tensor.shape[index + 1 :]),
+                        ),
+                    )
+                    for bound, tensor in states
+                    for held, alternative in self.alternatives(tensor.shape[index], bound)
+                )
+        return tuple((bound, selected_pattern(tensor, dict(bound))) for bound, tensor in states)
 
     def alternatives_ShardLayoutPattern(self, pattern, bindings) -> tuple:
         return tuple(

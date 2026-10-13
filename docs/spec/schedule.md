@@ -62,7 +62,21 @@ logical Split axes when that projection is possible; if factored splits have
 no local logical box, it compares whole types instead.
 
 Each single-issue operand MUST match the corresponding instruction parameter
-pattern. A source window is matched in the arrangement in which it lies: its
+pattern. `match_instruction(op_type, attributes, operand_types, mesh, *, scope,
+repeat=None, order=None)` returns all accepted instruction instances. The
+operand types include every input parameter, including the destination, in
+schema order. An atom class in `attributes` leaves its parameters open; an
+atom instance requests that exact instruction. Open parameters follow dtype,
+storage form, and layout major before enumerating admitted tile extents.
+`scope` is required and reaches the verifier unchanged, including its target
+capability checks. Explicit schedule inference uses this same matcher with
+the authored instruction attributes, scope, repeat, and order.
+
+Operand, tiling, pattern, and verifier rejections raise `ScheduleRefusal`.
+Errors from implementation code, including `TypeError` and ISL errors,
+propagate to the caller.
+
+A source window is matched in the arrangement in which it lies: its
 address offset is not part of the layout, and an unstated layout uses the
 parent tensor's compact row-major strides. When an instruction reads a plain
 shared-memory arrangement through an all-`Broadcast` `ShardLayoutPattern`, the

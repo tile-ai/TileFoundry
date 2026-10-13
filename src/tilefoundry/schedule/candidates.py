@@ -30,7 +30,7 @@ from tilefoundry.ir.pattern import (
     between_rules,
     declared_execution_mesh,
 )
-from tilefoundry.ir.pattern.utils import variants
+from tilefoundry.ir.pattern.utils import declared_shape, variants
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.int_tuple import flatten
@@ -279,22 +279,6 @@ def _operand_pattern(param: ParamDef, op, bindings: dict) -> TensorPattern | Non
     return pattern if isinstance(pattern, TensorPattern) else None
 
 
-def _declared_shape(pattern: TensorPattern, bindings: dict) -> tuple[int, ...] | None:
-    if pattern.shape is None:
-        return None
-    shape = []
-    for dim in pattern.shape:
-        if isinstance(dim, int) and not isinstance(dim, bool):
-            shape.append(dim)
-            continue
-        name = getattr(dim, "name", None)
-        value = bindings.get(name)
-        if not isinstance(value, int) or isinstance(value, bool):
-            return None
-        shape.append(value)
-    return tuple(shape)
-
-
 def _type_refusals(
     name: str,
     pattern: TensorPattern | None,
@@ -303,7 +287,7 @@ def _type_refusals(
 ) -> tuple[TensorType, tuple[str, ...]]:
     if pattern is None:
         return whole, (f"{name} states no tensor pattern",)
-    shape = _declared_shape(pattern, bindings)
+    shape = declared_shape(pattern, bindings)
     if shape is None:
         shape = tuple(whole.shape)
     single = TensorType(shape, whole.dtype, None, whole.storage)
@@ -323,7 +307,7 @@ def _whole_tiles(site: _Site, op, variant) -> bool:
         pattern = _operand_pattern(param, op, bindings)
         if pattern is None:
             return False
-        shape = _declared_shape(pattern, bindings)
+        shape = declared_shape(pattern, bindings)
         if shape is None:
             continue
         if len(shape) != len(whole.shape) or any(
@@ -391,7 +375,7 @@ def _needs(site: _Site, op, variant) -> str | None:
             bindings = dict(getattr(variant, "bindings", {}))
             operand_pattern = _operand_pattern(param, op, bindings)
             declared = (
-                None if operand_pattern is None else _declared_shape(operand_pattern, bindings)
+                None if operand_pattern is None else declared_shape(operand_pattern, bindings)
             )
             if declared is not None and whole.shape[0] % declared[0] == 0:
                 groups = whole.shape[0] // declared[0]

@@ -36,7 +36,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp, _instruction_schema, operand_relations
+from tilefoundry.ir.hir.schedule import ScheduleOp, instruction_schema, operand_relations
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor._view_layout import derive_view_layout
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -1126,7 +1126,7 @@ class Lowering(ExprVisitor[Expr]):
     @staticmethod
     def _instruction_params(op, operand_count: int | None = None) -> tuple:
         try:
-            params, _writes = _instruction_schema(op, operand_count)
+            params, _writes = instruction_schema(op, operand_count)
         except ValueError as error:
             raise LoweringError(str(error)) from error
         return params

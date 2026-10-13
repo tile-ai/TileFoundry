@@ -232,7 +232,8 @@ class FromAtom(Pattern):
             raise ValueError("an MMA operand reads role A, B or C of its atom")
 
     def read_on(self, op):
-        return getattr(type(op.atom), self.role)
+        declaration = op.atom if isinstance(op.atom, type) else type(op.atom)
+        return getattr(declaration, self.role)
 
 
 def _reversed_modes(modes):

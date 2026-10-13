@@ -5,6 +5,7 @@ from __future__ import annotations
 from tilefoundry.ir.pattern import (
     LayoutPattern,
     ShardLayoutPattern,
+    SwitchPattern,
     TensorPattern,
 )
 from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, Topology
@@ -56,8 +57,8 @@ class Mma(MmaAtom):
     resource = "tensor_core_engine"
 
     C = _fragment((16, 8), DType.f32, _C_FRAGMENT)
-    A = _fragment((16, 16), DType.bf16, _A_FRAGMENT)
-    B = _fragment((16, 8), DType.bf16, _B_FRAGMENT)
+    A = _fragment((16, 16), SwitchPattern("dtype", {DType.bf16: DType.bf16}), _A_FRAGMENT)
+    B = _fragment((16, 8), SwitchPattern("dtype", {DType.bf16: DType.bf16}), _B_FRAGMENT)
 
 
 __all__ = ["Mma", "WARP"]

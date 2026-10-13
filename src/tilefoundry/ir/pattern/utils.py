@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from enum import Enum
 
 from tilefoundry.ir.core.param_def import ParamDef
@@ -143,6 +144,8 @@ def _sharded_on(execution_mesh: MeshPattern) -> OrPattern:
 
 def selected_pattern(pattern, bindings: dict):
     """Resolve declaration branches fixed by already-bound attributes."""
+    if isinstance(pattern, TensorPattern):
+        return replace(pattern, layout=selected_pattern(pattern.layout, bindings))
     if isinstance(pattern, SwitchPattern) and pattern.param in bindings:
         branch = dict(pattern.branches).get(bindings[pattern.param])
         return None if branch is None else selected_pattern(branch, bindings)
@@ -218,6 +221,10 @@ def _finite_options(param: ParamDef, values) -> tuple | None:
 
 def fixed_pattern_value(value, bindings: dict):
     """Resolve one declaration value when every symbolic leaf is bound."""
+    if isinstance(value, SwitchPattern):
+        if value.param not in bindings:
+            return None
+        return fixed_pattern_value(dict(value.branches).get(bindings[value.param]), bindings)
     if isinstance(value, tuple):
         parts = tuple(fixed_pattern_value(item, bindings) for item in value)
         return None if any(item is None for item in parts) else parts

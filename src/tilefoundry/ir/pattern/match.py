@@ -40,7 +40,7 @@ class Match:
 
 @dataclass(frozen=True)
 class Refusal:
-    """The first pattern node rejected during one match attempt."""
+    """The pattern node rejected at this match boundary."""
 
     pattern: object
     subject: object
@@ -252,15 +252,12 @@ class PatternMatcher:
             branch = next((item for value, item in pattern.branches if value == wanted), None)
             return self._fail(pattern, subject) if branch is None else self.match(branch, subject)
         saved = self.snapshot()
-        first_refusal = None
         for value, branch in pattern.branches:
             self.restore(saved)
             self.bindings[pattern.param] = value
             if self.match(branch, subject):
                 return True
-            first_refusal = first_refusal or self.refusal
         self.restore(saved)
-        self.refusal = first_refusal
         return self._fail(pattern, subject)
 
     def _match_mode_trees(
@@ -425,16 +422,16 @@ class PatternMatcher:
     def visit_TensorPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, TensorType):
             return self._fail(pattern, subject)
-        if pattern.shape is not None and (
-            len(pattern.shape) != len(subject.shape)
-            or not all(self.match(place, value) for place, value in zip(pattern.shape, subject.shape))
-        ):
-            return False
         if not self.match(pattern.dtype, subject.dtype):
             return False
         if not (
             subject.storage is StorageKind.UMAT and isinstance(pattern.storage, StorageKind)
         ) and not self.match(pattern.storage, subject.storage):
+            return False
+        if pattern.shape is not None and (
+            len(pattern.shape) != len(subject.shape)
+            or not all(self.match(place, value) for place, value in zip(pattern.shape, subject.shape))
+        ):
             return False
         return pattern.layout is None or self.match(pattern.layout, subject.layout)
 

@@ -437,6 +437,11 @@ shard attrs, and holder mesh. Instruction declarations call the reserved field
 `execution mesh` everywhere, including the standalone facts field and the
 declaration attributes section.
 
+A refusal at a `SwitchPattern` reports its parameter name, actual subject,
+and declared branch values: `param has no matching branch for subject;
+branches: value, ...`. Bindings already established before the switch follow
+in parentheses. It does not report a predicate from a rejected branch.
+
 This report printer is separate from `PythonPrinter`: it does not inherit the
 round-trip source printer, request import or mesh-name registration, or accept
 a `PrintContext`. Pattern IR produces no text; verification may import this
