@@ -53,10 +53,14 @@ class ReachedAddresses:
     reached: isl.set | None
     precision: AnalysisPrecision
     index: int = 0
+    must: isl.set | None = None
+    may_coordinates: int | None = 0
 
     def __post_init__(self) -> None:
         if (self.dtype is None) != (self.reached is None):
             raise ValueError("dtype and reached addresses must be present together")
+        if self.must is None and self.reached is not None:
+            object.__setattr__(self, "must", self.reached)
 
 
 @dataclass(frozen=True)
@@ -180,6 +184,35 @@ def _project_mesh_parameters(reached: isl.set, parameters: tuple[tuple[str, Call
     return reached
 
 
+def _reached_addresses(
+    access: Access,
+    relation: isl.map,
+    dtype: DType,
+    mesh_parameters: tuple[tuple[str, Call], ...],
+    *,
+    precision: AnalysisPrecision,
+) -> ReachedAddresses:
+    """Keep the possible image and the boundary's counting evidence together."""
+    reached = _project_mesh_parameters(relation.range(), mesh_parameters)
+    must = reached
+    may_coordinates = 0
+    if access.may_access:
+        must = isl.set.empty(reached.get_space())
+        may_coordinates = cardinality(relation.domain())
+        if may_coordinates is None:
+            may_coordinates = cardinality(reached)
+    return ReachedAddresses(
+        buffer=access.buffer,
+        output_index=access.output_index,
+        dtype=dtype,
+        reached=reached,
+        precision=precision,
+        index=access.index,
+        must=must,
+        may_coordinates=may_coordinates,
+    )
+
+
 @dataclass
 class MovingBoundary:
     """One moving boundary at this level, with reached addresses cached by window."""
@@ -214,6 +247,12 @@ class MovingBoundary:
             self._relations[window] = relation
         return relation
 
+    def _wave_relation(self, window: int) -> isl.map:
+        relation = self._relation(window)
+        if self.position is not None:
+            relation = _restrict_to_wave(relation, self.position, self.wave_units)
+        return relation
+
     def held(self, window: int) -> isl.set:
         """Return raw reached addresses, retaining every mesh parameter."""
         held = self._held.get(window)
@@ -226,10 +265,9 @@ class MovingBoundary:
         """Return wave-unioned addresses at *window*, computing them once."""
         reached = self._reached.get(window)
         if reached is None:
-            relation = self._relation(window)
-            if self.position is not None:
-                relation = _restrict_to_wave(relation, self.position, self.wave_units)
-            reached = _project_mesh_parameters(relation.range(), self.mesh_parameters)
+            reached = _project_mesh_parameters(
+                self._wave_relation(window).range(), self.mesh_parameters
+            )
             self._reached[window] = reached
         return reached
 
@@ -732,19 +770,13 @@ def reached_by(
         relation = _at_first_iteration(access.relation, window + 1)
         if position is not None:
             relation = _restrict_to_wave(relation, position, wave_units)
-        reached = relation.range()
-        for name, _coordinate in mesh_parameters:
-            axis = reached.find_dim_by_name(isl.dim_type.PARAM, name)
-            if axis >= 0:
-                reached = reached.project_out(isl.dim_type.PARAM, axis, 1)
         result.append(
-            ReachedAddresses(
-                buffer=access.buffer,
-                output_index=access.output_index,
-                dtype=leaves[0].dtype,
-                reached=reached,
+            _reached_addresses(
+                access,
+                relation,
+                leaves[0].dtype,
+                mesh_parameters,
                 precision=AnalysisPrecision.UNKNOWN if refused else access.precision,
-                index=access.index,
             )
         )
     result.extend(_missing_boundaries(call, accesses, operands, ctx))
@@ -831,13 +863,12 @@ def _window_footprints(
                 footprints[key] = None
                 break
             reached.append(
-                ReachedAddresses(
-                    boundary.access.buffer,
-                    boundary.access.output_index,
+                _reached_addresses(
+                    boundary.access,
+                    boundary._wave_relation(window),
                     boundary.dtype,
-                    boundary.reached(window),
-                    boundary.access.precision,
-                    boundary.access.index,
+                    boundary.mesh_parameters,
+                    precision=boundary.access.precision,
                 )
             )
         if key in footprints:
@@ -935,7 +966,15 @@ def merged(items: Iterable[ReachedAddresses]) -> tuple[ReachedAddresses, ...]:
             grouped[key] = replace(previous, precision=precision)
         else:
             grouped[key] = replace(
-                previous, reached=previous.reached.union(item.reached), precision=precision
+                previous,
+                reached=previous.reached.union(item.reached),
+                must=previous.must.union(item.must),
+                may_coordinates=(
+                    None
+                    if previous.may_coordinates is None or item.may_coordinates is None
+                    else previous.may_coordinates + item.may_coordinates
+                ),
+                precision=precision,
             )
     return tuple(grouped.values())
 
@@ -962,6 +1001,10 @@ def footprint_of(
                 else AnalysisPrecision.LOWER_BOUND
             )
             continue
+        if item.may_coordinates is not None:
+            must = cardinality(item.must.coalesce())
+            if must is not None:
+                amount = min(amount, must + item.may_coordinates)
         packed = -(-(amount * item.dtype.bit_width) // 8)
         key = (labels[(id(item.buffer), item.index)], memory_level)
         totals[key] = totals.get(key, 0) + packed

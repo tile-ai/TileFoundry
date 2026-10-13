@@ -890,12 +890,9 @@ def _check_selected_rows(out: Path, captured: pytest.CaptureResult[str]) -> None
         )
     )
     assert gather["operands"][0]["read"] == 8192, "gather reads 64 selected bf16 rows"
-
-
-def _check_table_footprint(out: Path, captured: pytest.CaptureResult[str]) -> None:
-    records = _quiet_json(out, captured)
     footprint = records["function_records"]["memory"]["footprint"]
-    assert footprint["buffers"]["kv"]["gmem"]["total"] == 32768, "the whole table is resident"
+    assert footprint["buffers"]["kv"]["gmem"]["total"] == 8192
+    assert footprint["buffers"]["kv"]["gmem"]["total"] <= gather["operands"][0]["read"]
 
 
 def _check_service_work(out: Path, captured: pytest.CaptureResult[str]) -> None:
@@ -1013,7 +1010,7 @@ FIXTURES = (
         code=1,
     ),
     FixtureCase(
-        "gather reads only the selected rows",
+        "gather reads selected rows and caps the footprint",
         (
             "analyze",
             "tests/fixtures/schedule/plain/sparse_decode.py",
@@ -1022,17 +1019,6 @@ FIXTURES = (
             "--json",
         ),
         _check_selected_rows,
-    ),
-    FixtureCase(
-        "gather retains the whole table footprint",
-        (
-            "analyze",
-            "tests/fixtures/schedule/plain/sparse_decode.py",
-            "{out}",
-            "--memory",
-            "--json",
-        ),
-        _check_table_footprint,
     ),
     FixtureCase(
         "integer and predicate work uses services",

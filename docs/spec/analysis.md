@@ -321,12 +321,9 @@ class Traffic:
 Every traffic amount is what a boundary's own relation reaches. The Op's
 evaluator says which way each boundary moves and whether it materialises
 anything; it does not say how much, and an Op with no relation fails closed.
-When a boundary axis's coordinate is determined by data (`reached_at`'s `free`
-axes), that boundary is a lookup. Its movement MUST be capped at the number of
-domain coordinates when countable: each coordinate selects at most one element
-from the possible image. If the domain count is unknown, the countable image
-remains the movement upper bound. The footprint MUST retain the full possible
-image. Out-of-bounds
+Movement and footprint counting for data-dependent lookup boundaries follow
+[visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation).
+Footprint retains the full possible address image for reuse decisions. Out-of-bounds
 IndexSelect indices with `fill_value` are not statically distinguished; traffic
 counts one slice per index as an upper bound.
 
@@ -413,6 +410,8 @@ class Footprint:
 | `RegionMemoryMetadata.footprint` | The union of every Call's reached addresses below the Function in `logical`. For `total`, group Calls by their enclosing loop/mesh chain, union each group per buffer, multiply by its waves and every enclosing loop's trips, and sum the groups. Absent when no wave can be stated. | As above |
 
 - constraints:
+  - May-access footprint counting MUST follow the cap stated in
+    [visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation).
   - Overlapping ranges into one buffer MUST be unioned before they are counted,
     and the byte count MUST be `ceil(elements * dtype.bit_width / 8)`.
   - Both directions contribute: a load and a store to that level each occupy the

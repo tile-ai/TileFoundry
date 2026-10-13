@@ -1,7 +1,7 @@
 # analysis target=nvidia.h200_sxm module=SparseDecode function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r17.00KB/w0@logical,r17.00KB/w0@total,r17.00KB/w0@cta,r17.00KB/w0@thread;rmem:r181.58KB/w153.52KB@logical,r181.58KB/w153.52KB@total,r181.58KB/w153.52KB@cta,r6.29KB/w2.11KB@thread;smem:r40.00KB/w48.00KB@logical,r40.00KB/w48.00KB@total,r40.00KB/w48.00KB@cta,r18.38KB/w48.00KB@thread footprint=idx:512B;kv:32.00KB;q:128B footprint-precision=exact peak=gmem:64.50KB;rmem:32.25KB;smem:16.00KB persistent=gmem:64.50KB
-#   buffer=kv holds=32.13KB time=r space=none reuse=1.97MB fits=yes precision=exact
+# memory traffic=gmem:r17.00KB/w0@logical,r17.00KB/w0@total,r17.00KB/w0@cta,r17.00KB/w0@thread;rmem:r181.58KB/w153.52KB@logical,r181.58KB/w153.52KB@total,r181.58KB/w153.52KB@cta,r6.29KB/w2.11KB@thread;smem:r40.00KB/w48.00KB@logical,r40.00KB/w48.00KB@total,r40.00KB/w48.00KB@cta,r18.38KB/w48.00KB@thread footprint=idx:512B;kv:128B;q:128B footprint-precision=exact peak=gmem:64.50KB;rmem:32.25KB;smem:16.00KB persistent=gmem:64.50KB
+#   buffer=kv holds=264B time=r space=none reuse=7.88KB fits=yes precision=exact
 
 from __future__ import annotations
 

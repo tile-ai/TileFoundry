@@ -37,6 +37,7 @@ class Access:
     precision: AnalysisPrecision = AnalysisPrecision.EXACT
     output_index: int | None = None
     index: int = 0
+    may_access: bool = False
 
 
 @dataclass(frozen=True)
@@ -340,6 +341,7 @@ def resolve_access(
         precision=precision,
         output_index=output_index,
         index=entry.index,
+        may_access=boundary.may_access,
     )
 
 
