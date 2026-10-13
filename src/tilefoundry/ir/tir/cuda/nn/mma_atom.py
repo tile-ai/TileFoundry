@@ -227,6 +227,7 @@ class AtomPattern(Pattern):
 
     def __init__(self, *declarations):
         object.__setattr__(self, "declarations", tuple(declarations))
+        object.__setattr__(self, "predicates", ())
 
 
 @dataclass(frozen=True)

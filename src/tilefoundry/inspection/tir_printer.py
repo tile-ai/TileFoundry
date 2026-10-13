@@ -347,7 +347,10 @@ def _function_block(fn: PrimFunction) -> list[str]:
         if hasattr(d, "name")
     }
     lines = [f'_{d.name} = DimVar("{d.name}", {d.lo}, {d.hi})' for d in dim_vars.values()]
-    lines.append("@prim_func(target=" + target + ")")
+    attrs = [f"target={target}"]
+    if fn.output_count != 1:
+        attrs.append(f"output_count={fn.output_count}")
+    lines.append(f"@prim_func({', '.join(attrs)})")
     params = ", ".join(
         f"{p.name}: {TirPrinter(context=ctx).visit(p.type, ctx) if isinstance(p.type, (TensorType, PointerType)) else repr(p.type)}"
         for p in fn.params

@@ -7,8 +7,6 @@ otherwise the verbose ``ShardLayout(...)`` form is used.
 
 from __future__ import annotations
 
-import enum
-import math
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -39,19 +37,17 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import (
     canonical_specialization_signature,
     display_name,
     origin_of,
 )
-from tilefoundry.ir.hir.tensor.bitcast import Bitcast
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.types import DType, LayoutBase, TensorType, TupleType
+from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
@@ -146,18 +142,6 @@ class HirPrinter(PythonPrinter):
         """Render one HIR call after expression-level dispatch selected it."""
         target = expr.target
         args_text = ", ".join(self.reference(arg) for arg in expr.args)
-        if isinstance(target, (Reshard, Bitcast)):
-            layout_kw = ""
-            if target.layout is not None:
-                with self.type_surface(indent=self._indent + "    "):
-                    layout_kw = ", layout=" + self.layout_surface(target.layout, ctx)
-            if isinstance(target, Bitcast):
-                return f"bitcast({args_text}{layout_kw})"
-            storage = ""
-            if target.storage is not None:
-                storage_name = target.storage.name.lower()
-                storage = f', storage="{storage_name}"'
-            return f"tf.reshard({args_text}{layout_kw}{storage})"
         if isinstance(target, HirFunction):
             binding = _module_callee_binding(target, self._child_entries)
             return f"{binding or target.name}({args_text})"
@@ -203,41 +187,8 @@ class HirPrinter(PythonPrinter):
             return f"{self.reference(expr.args[0])}[{', '.join(indexers)}]"
 
         alias_name = _kinded_alias_name(target)
-        suppressed = {"kind"} if alias_name is not None else set()
-        attrs: list[str] = []
-        for param in type(target).params():
-            if param.kind != "attribute":
-                continue
-            value = getattr(target, param.name, None)
-            if value is None or param.name in suppressed or param.name == "layout":
-                continue
-            if isinstance(value, str):
-                attrs.append(f'{param.name}="{value}"')
-            elif isinstance(value, DType):
-                attrs.append(f'{param.name}="{value.name}"')
-            elif isinstance(value, enum.Enum) and isinstance(value.value, str):
-                attrs.append(f'{param.name}="{value.value}"')
-            elif isinstance(value, float):
-                if math.isinf(value):
-                    literal = "-1e999" if value < 0 else "1e999"
-                elif math.isnan(value):
-                    literal = "(1e999 - 1e999)"
-                else:
-                    literal = repr(value)
-                attrs.append(f"{param.name}={literal}")
-            elif isinstance(value, (LayoutBase, TensorType)):
-                with self.type_surface(indent=self._indent + "        "):
-                    rendered = (
-                        self.layout_surface(value, ctx)
-                        if isinstance(value, LayoutBase) else self.visit(value, ctx)
-                    )
-                if isinstance(value, TensorType):
-                    rendered = " ".join(rendered.split())
-                attrs.append(f"{param.name}={rendered}")
-            elif isinstance(value, tuple):
-                attrs.append(f"{param.name}={_attr_tuple_str(value, self, ctx)}")
-            else:
-                attrs.append(f"{param.name}={self.print(value, ctx, self._indent + '        ')}")
+        suppressed = frozenset({"kind"}) if alias_name is not None else frozenset()
+        attrs = self.op_attributes(target, ctx, self._indent + "    ", suppressed=suppressed)
         schema = getattr(type(target), "_op_schema", None)
         inputs = tuple(param for param in schema.signature if param.kind == "input") if schema else ()
         arguments = (

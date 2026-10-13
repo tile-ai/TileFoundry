@@ -91,7 +91,7 @@ def _replicated(shape: tuple, storage: str = "rmem"):
         pytest.param(
             (_sharded(8), _sharded(1), _sharded(4, storage="rmem")),
             (0,),
-            r"workspace .* does not match StorageKind.SMEM",
+            r"(?s)workspace .*rmem does not match smem",
             id="outside_shared_memory",
         ),
         pytest.param(

@@ -1057,6 +1057,7 @@ class ModuleBuildContext:
         base: object | None = None,
         key: object | None = None,
         mesh: object | None = None,
+        output_count: int = 1,
     ) -> FuncParserContext:
         topology_scope = {
             getattr(topology, "name", str(index)): topology
@@ -1074,6 +1075,7 @@ class ModuleBuildContext:
             key=key,
             target=self.target,
             mesh=mesh,
+            output_count=output_count,
             hardware_context=_hardware_context(self.target),
             binding_name=binding_name,
         )

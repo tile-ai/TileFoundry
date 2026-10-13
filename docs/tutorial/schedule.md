@@ -389,10 +389,12 @@ from tilefoundry.target import CudaTarget
 
 @prim_func(target=CudaTarget("nvidia.h200_sxm"))
 def gemm(
-    a: Tensor[(8192, 5120), "bf16"], b: Tensor[(5120, 17408), "bf16"], out: Tensor[(8192, 17408), "bf16"]
+    a: Tensor[(8192, 5120), "bf16"], b: Tensor[(5120, 17408), "bf16"], scratch: Tensor[(142606336,), "bf16"], out_2: Tensor[(8192, 17408), "bf16"]
 ):
     with Mesh((Topology("cta", 132),), layout=(132,), names=("d0",)) as cta:
-        T.fill(out, 0.0)
+        out_1 = T.tensor_view(
+            T.ptr_of(scratch[0:0 + 142606336]), layout=(8192, 17408), shape=(8192, 17408)
+        )
         acc = T.alloc_tensor(
             tensor_type=Tensor[
                 (128, 256),
@@ -410,6 +412,7 @@ def gemm(
             ]
         )
         with Mesh((Topology("thread", 384),), layout=(3, 128), names=("d0", "d1")) as scope:
+            T.fill(out_1, 0.0)
             for g in range(0, 4, 1):
                 for bn in range(0, 68, 1):
                     staged_dst = T.tensor_view(
@@ -488,9 +491,6 @@ def gemm(
                                                 lhs_view_1 = T.tensor_view(
                                                     T.ptr_of(lhs_ring_stages[(k // 64) % 3][o_m:o_m + 64, o_k + 16:o_k + 16 + 16]),
                                                     layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ {B()},
-                                                    shape=(64, 16),
-                                                )
-                                                rhs_view_1 = T.tensor_view(
 ```
 
 The three `g / bn / mi` loops and `cta.d0` survive lowering. The three RHS slots
@@ -498,9 +498,10 @@ occupy [0, 98304), the three LHS slots occupy [98304, 147456), and output stagin
 occupies [147456, 212992). The report and views expose those disjoint intervals;
 the TIR continues with the WGMMA issues and writeback.
 
-The initial `T.fill(out, 0.0)` follows this page's `tf.zeros` plus `insert_slice`
-representation of the output; a CUDA implementation need not clear the whole output
-before overwriting every tile.
+The `tf.zeros` result now occupies GMEM scratch and is filled explicitly.
+The final TIR copies the complete scratch result into a separate output parameter,
+copying an additional 285,212,672 bytes. These operations preserve the authored `tf.zeros` plus
+`insert_slice` representation.
 
 ## 7. Implement the TIR for a concrete backend
 

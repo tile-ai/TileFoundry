@@ -7,6 +7,7 @@ instruction issue geometry. This file only turns those two facts into statements
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from math import prod
 
@@ -256,7 +257,6 @@ class Lowering(ExprVisitor[Expr]):
         self.logical: dict[int, TensorType] = {}
         self.staged: dict[int, tuple[Var, LoopRegion | None]] = {}
         self.frames: list[Mesh] = []
-        self.output: Var | None = None
         self.scratch: list[Var] = []
         self.owner_cursors: dict[int, _Cursor] = {}
         self.output_windows = {
@@ -267,7 +267,6 @@ class Lowering(ExprVisitor[Expr]):
             and memory.alias is not None
         }
         self.placed: set[int] = set()
-        self.output_seed: Call | None = None
         self.authored_values: dict[int, Expr] = {}
         if self.function.body is not None and self.authored.body is not None:
             self.authored_values[id(self.function.body)] = self.authored.body
@@ -288,13 +287,7 @@ class Lowering(ExprVisitor[Expr]):
     def run(self) -> PrimFunction:
         if self.function.body is None:
             raise LoweringError(f"{self.function.name!r} has no body to lower")
-        if not isinstance(self.function.return_type, TensorType):
-            raise LoweringError("scheduled lowering currently requires one tensor result")
-
         self.scope_names = _scope_names(self.scopes, self.names)
-        result_type = self.function.return_type
-        out_type = TensorType(tuple(result_type.shape), result_type.dtype, None, StorageKind.GMEM)
-        self.output = Var(self.names.fresh("out"), type=out_type)
         body = self.function.body
         inner = _Cursor()
         self.owner_cursors[id(self.function)] = inner
@@ -306,7 +299,16 @@ class Lowering(ExprVisitor[Expr]):
             result = self.visit(body.body, inner)
         else:
             result = self.visit(body, inner)
-        self._finish(result, inner)
+        outputs: list[Var] = []
+        for value, type_ in self._return_leaves(result, self.function.return_type):
+            if not isinstance(type_, TensorType):
+                raise LoweringError(
+                    f"return position {len(outputs) + 1} has non-tensor type {type_!r}"
+                )
+            out_type = TensorType(tuple(type_.shape), type_.dtype, None, StorageKind.GMEM)
+            output = Var(self.names.fresh("out"), type=out_type)
+            outputs.append(output)
+            self._emit_copy(value, output, inner)
         statements = inner.build()
         if isinstance(body, MeshRegion):
             statements = Sequential(
@@ -318,9 +320,9 @@ class Lowering(ExprVisitor[Expr]):
         params = tuple(self._memo[id(param)][1] for param in self.function.params)
         return PrimFunction(
             self.function.name,
-            (*params, *self.scratch, self.output),
+            (*params, *self.scratch, *outputs),
             statements,
-            output_count=1,
+            output_count=len(outputs),
             target=self.module.resolve_target(),
         )
 
@@ -340,16 +342,6 @@ class Lowering(ExprVisitor[Expr]):
                 return scope.owner
             scope = scope.parent
         return None
-
-    def _ensure_output_seed(self, seed: Call) -> Expr:
-        """Bind one reached gmem zero to the function output at first use."""
-        assert self.output is not None
-        if self.output_seed is not None and self.output_seed is not seed:
-            raise LoweringError("scheduled lowering cannot choose among multiple gmem seeds")
-        self.output_seed = seed
-        self._memo[id(seed)] = (seed, self.output)
-        self.logical[id(self.output)] = seed.type
-        return self.output
 
     def _declare(
         self,
@@ -784,10 +776,6 @@ class Lowering(ExprVisitor[Expr]):
                 self._alias_value(producer, value)
 
     def visit_Zeros(self, call: Call, cursor: _Cursor) -> Expr:
-        if call.type.storage is StorageKind.GMEM:
-            out = self._ensure_output_seed(call)
-            self._emit_fill(out, call.type, self.owner_cursors[id(self.function)])
-            return out
         result = self._declare(
             call,
             call.type,
@@ -1300,10 +1288,21 @@ class Lowering(ExprVisitor[Expr]):
             )
         )
 
-    def _finish(self, result: Expr, cursor: _Cursor) -> None:
-        assert self.output is not None
-        if result is not self.output:
-            self._emit_copy(result, self.output, cursor)
+    def _return_leaves(self, value: Expr, type_: object) -> Iterator[tuple[Expr, object]]:
+        if not isinstance(type_, TupleType):
+            yield value, type_
+            return
+        for index, field in enumerate(type_.fields):
+            element = (
+                value.elements[index]
+                if isinstance(value, Tuple)
+                else Call(
+                    TupleGetItem(),
+                    (value, Constant(index, type=TensorType.scalar(DType.i32))),
+                    type=field,
+                )
+            )
+            yield from self._return_leaves(element, field)
 
 
 @dataclass
@@ -1311,6 +1310,7 @@ class ConvertHIRToTIR(ModulePass):
     """Replace one selected HIR entry with its scheduled TIR function."""
 
     entry: str | None = None
+    dims: Mapping[str, int] | None = None
 
     name = "convert-hir-to-tir"
     requires = ()
@@ -1319,7 +1319,7 @@ class ConvertHIRToTIR(ModulePass):
         authored = module.entry_function() if self.entry is None else module.lookup(self.entry)
         if not isinstance(authored, Function):
             raise LoweringError(f"{getattr(authored, 'name', self.entry)!r} is not an HIR function")
-        result = analyze(module, authored, analysis=("memory",))
+        result = analyze(module, authored, analysis=("memory",), dims=self.dims)
         lowered = Lowering(result, authored).run()
         lowered.metadata = result.function.metadata
         for record in render_analysis(result).summary:

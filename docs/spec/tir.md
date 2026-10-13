@@ -161,6 +161,11 @@ class PrimFunction(Stmt):
     target: Target = field(default_factory=default_target)
 ```
 
+The DSL spelling `prim_func(output_count=N)` records the trailing output
+parameters; omitting it means one output. Scheduled HIR finalization creates
+one GMEM output parameter per tensor return leaf and explicitly copies each
+returned value into it. GMEM `Zeros` uses scratch storage with an explicit fill.
+
 - constraints:
   - itself a `Stmt`, not a separate top-level node; returns no value.
     `verify_prim_function` enforces the rules below.

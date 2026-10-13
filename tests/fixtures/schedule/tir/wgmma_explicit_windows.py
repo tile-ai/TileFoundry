@@ -12,10 +12,10 @@ from tilefoundry.target import CudaTarget
 
 @prim_func(target=CudaTarget("nvidia.h200_sxm"))
 def gemm(
-    a: Tensor[(128, 32), "bf16"], b: Tensor[(32, 64), "bf16", ((32, 64), (1, 32))], out: Tensor[(128, 64), "bf16"]
+    a: Tensor[(128, 32), "bf16"], b: Tensor[(32, 64), "bf16", ((32, 64), (1, 32))], scratch: Tensor[(8192,), "bf16"], out_2: Tensor[(128, 64), "bf16"]
 ):
     with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
-        T.fill(out, 0.0)
+        out_1 = T.tensor_view(T.ptr_of(scratch[0:0 + 8192]), layout=(128, 64), shape=(128, 64))
         acc = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 32), "f32", ((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
@@ -27,6 +27,7 @@ def gemm(
             ]
         )
         with Mesh((Topology("thread", 256),), layout=(2, 128), names=("d0", "d1")) as scope:
+            T.fill(out_1, 0.0)
             for m in range(0, 128, 64):
                 for n in range(0, 64, 32):
                     with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads:
@@ -102,8 +103,9 @@ def gemm(
                                 shape=(64, 32),
                             )
                             window = T.tensor_view(
-                                T.ptr_of(out[m:m + 64, n:n + 32]),
+                                T.ptr_of(out_1[m:m + 64, n:n + 32]),
                                 layout=((64, 32), (64, 1)),
                                 shape=(64, 32),
                             )
                             T.copy(tile_out_view, window)
+        T.copy(out_1, out_2)

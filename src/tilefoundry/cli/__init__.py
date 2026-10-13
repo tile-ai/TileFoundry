@@ -235,6 +235,10 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_finalize.add_argument(
         "--json", action="store_true", help="write an object containing the TIR source"
     )
+    schedule_finalize.add_argument(
+        "--dim", action="append", metavar="NAME=EXTENT",
+        help="bind one extent for an open program dimension",
+    )
     schedule_facts = schedule_commands.add_parser("facts", help=_SCHEDULE_COMMANDS["facts"])
     schedule_facts.set_defaults(_command_parser=schedule_facts)
     schedule_facts.add_argument("--target", required=True, metavar="TARGET")
@@ -371,7 +375,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     out,
                     as_json=args.json,
                 )
-            return run_schedule_finalize(args.source, args.out, as_json=args.json)
+            return run_schedule_finalize(args.source, args.out, as_json=args.json, dims=args.dim)
         except Exception as error:
             print(f"tilefoundry: error: {error}", file=sys.stderr)
             return 1

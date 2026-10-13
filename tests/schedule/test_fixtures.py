@@ -120,6 +120,7 @@ CANDIDATES_REFUSED = {
     "captured_insert_update": "source has no unscheduled candidate site",
     "loop_carry_from_param": "source has no unscheduled candidate site",
     "wgmma_b_nk": "source has no unscheduled candidate site",
+    "two_outputs": "source has no unscheduled candidate site",
 }
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
@@ -200,6 +201,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "two_outputs": 16_640,
     "captured_insert_update": 16,
     "loop_carry_from_param": 0,
     "sparse_decode": 16_384,
@@ -227,6 +229,7 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "two_outputs": {},
     "wgmma_b_nk": {
         "thread@0:128#0": _RmemExpectation(
             4096, "64x16 f32 C fragment, shared by zeros and MMA result"
@@ -490,7 +493,7 @@ def test_plain_program_is_analyzable(name: str) -> None:
 @pytest.mark.parametrize("path", HIR, ids=lambda path: path.stem)
 def test_scheduled_hir_program_is_well_typed(path: Path) -> None:
     program = _module_in(path)
-    entry = next(function for function in program.functions if function.name == "gemm")
+    entry = program.entry_function()
     check_program(program, entry)
 
 
@@ -498,7 +501,7 @@ def test_scheduled_hir_structural_calls_declare_layouts() -> None:
     structural_calls = []
     for path in HIR:
         program = _module_in(path)
-        entry = next(function for function in program.functions if function.name == "gemm")
+        entry = program.entry_function()
         check_program(program, entry)
         structural_calls.extend(
             (path.stem, type(expr.target).__name__, expr)
@@ -518,7 +521,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
     path: Path, analysis: str, metadata_type: type
 ) -> None:
     program = _module_in(path)
-    entry = next(function for function in program.functions if function.name == "gemm")
+    entry = program.entry_function()
     result = analyze(program, entry, analysis=analysis)
     assert metadata_type in result.metadata_types
 
@@ -1068,6 +1071,11 @@ FIXTURES = (
         ("schedule", "facts", "T.cuda.sm90.Wgmma", "--target", "nvidia.h200_sxm", "{out}"),
         partial(_check_golden, golden=WGMMA_FACTS),
     ),
+    FixtureCase(
+        "facts write the tiled MMA atom alternatives",
+        ("schedule", "facts", "T.tiled_mma", "--target", "nvidia.h200_sxm", "{out}"),
+        partial(_check_golden, golden=WGMMA_FACTS.with_name("tiled_mma.facts.txt")),
+    ),
     *(
         FixtureCase(
             name,
@@ -1402,6 +1410,22 @@ def test_schedule_candidates_reports_every_plain_site(
         assert all(item["reason"] for item in row["refused"])
 
     if name == "chunk_rmsnorm":
+        if dims == ("chunks=16",):
+            dim_source = "tests/fixtures/schedule/hir/dim/row_copy.py"
+            finalized = tmp_path / "rows.py"
+            assert (
+                cli_main([
+                    "schedule", "finalize", dim_source, str(finalized), "--dim=rows=128",
+                ])
+                == 0
+            )
+            assert capsys.readouterr() == ("", "")
+            assert _prim_in(finalized).params[-1].type.shape == (128,)
+            missing = tmp_path / "missing_rows.py"
+            assert cli_main(["schedule", "finalize", dim_source, str(missing)]) == 1
+            error = capsys.readouterr().err
+            assert "schedule finalize" in error and "bind it with --dim" in error
+            assert not missing.exists()
         binaries = [row for row in report["lines"] if row["op"] == "tf.binary"]
         assert len(binaries) == 5
         assert all(any(c["id"] == "T.binary" for c in row["candidates"]) for row in binaries)
@@ -1570,6 +1594,17 @@ def test_schedule_finalize_writes_verified_tir(
     assert captured.err == ""
     assert out.read_bytes() == expected.read_bytes()
     lowered = _prim_in(out)
+    if source.stem == "two_outputs":
+        assert lowered.output_count == 2
+        counts = {id(output): 0 for output in lowered.params[-2:]}
+
+        class OutputCopies(StmtVisitor[None]):
+            def visit_Evaluate(self, stmt: Evaluate) -> None:
+                if isinstance(stmt.callable, Copy) and id(stmt.args[-1]) in counts:
+                    counts[id(stmt.args[-1])] += 1
+
+        OutputCopies().visit(lowered.body)
+        assert tuple(counts.values()) == (1, 1)
     _assert_live_smem_views_do_not_overlap(lowered, source)
     found = _direct_operand_matches(lowered)
     assert found

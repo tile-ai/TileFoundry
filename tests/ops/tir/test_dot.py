@@ -69,7 +69,7 @@ def test_refuses_a_destination_wider_than_one_cell() -> None:
 
 def test_refuses_a_workspace_outside_shared_memory() -> None:
     """One warp posts its partial and every thread reads the posted ones."""
-    with pytest.raises(VerifyError, match=r"workspace .* does not match StorageKind.SMEM"):
+    with pytest.raises(VerifyError, match=r"workspace .*gmem does not match smem"):
         verify_prim_function(
             _pf(_sharded(8), _sharded(8), _sharded(1), _sharded(4, storage="gmem"))
         )

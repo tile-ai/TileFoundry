@@ -33,9 +33,14 @@ def _write(out: str, text: str) -> None:
     temporary.replace(destination)
 
 
-def run_finalize(source: str, out: str, *, as_json: bool = False) -> int:
+def run_finalize(
+    source: str, out: str, *, as_json: bool = False, dims: Sequence[str] | None = None
+) -> int:
     """Finalize ``source`` and write the sole requested representation."""
-    function = finalize(load_authored_ir(source))
+    module = load_authored_ir(source)
+    stated = one_extent_per_dim(parse_dims(dims))
+    require_bound_dims(module, module.entry_function(), stated, command="schedule finalize")
+    function = finalize(module, dims=stated)
     rendered = as_script(
         function,
         options=PythonPrintOptions(

@@ -471,7 +471,7 @@ explicit analysis; there is no ordinary `--target` option.
 and the two reports used to choose an instruction. Its subcommands are:
 
 ```text
-tilefoundry schedule finalize SOURCE PATH [--json]
+tilefoundry schedule finalize SOURCE PATH [--json] [--dim NAME=EXTENT ...]
 tilefoundry schedule facts [INSTRUCTION] --target TARGET PATH [--json]
 tilefoundry schedule candidates SOURCE PATH [--json] [--dim NAME=EXTENT ...]
 ```
@@ -489,7 +489,9 @@ than one named declaration with itself. The inventory lists that carrier once,
 while each associated declaration remains addressable by its own exact name.
 With one name, `facts` reports that declaration's capability, execution mesh,
 parameters, operands, and cross-operand constraints; the parameter and operand
-sections are canonical `PatternPrinter.declaration` text.
+sections are canonical `PatternPrinter.declaration` text. A carrier with an
+associated attribute reports execution meshes as alternatives selected by each
+declaration, for example `atom=T.cuda.sm90.Wgmma` and `atom=T.cuda.sm80.Mma`.
 `candidates` reports the instructions whose access relation and operand
 patterns can implement each unscheduled registered HIR site. A target-neutral
 pairing registry decides which TIR carrier families are relevant to each HIR
@@ -512,8 +514,9 @@ candidate discovery; explicitly selecting that Op in `tf.schedule` remains an
 error.
 
 - constraints:
-  - `candidates --dim NAME=EXTENT` MUST bind one extent per dimension before
-    analysis, with the same format and duplicate-dimension validation as Analyze.
+  - `candidates --dim NAME=EXTENT` and `finalize --dim NAME=EXTENT` MUST bind
+    one extent per dimension before analysis, with the same format and
+    duplicate-dimension validation as Analyze.
     An unbound dimension MUST be named with its closed declared interval and
     suggested extents; the command MUST NOT write a report when binding fails.
   - `PATH` is required, is the only report destination, and MUST NOT be partly

@@ -6,7 +6,7 @@ from typing import Any
 
 from tilefoundry.inspection import PatternPrinter
 from tilefoundry.ir.core import OpCapability, op_identifier
-from tilefoundry.ir.pattern import between_rules, declared_execution_mesh
+from tilefoundry.ir.pattern import SwitchPattern, between_rules, declared_execution_mesh
 from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
 
@@ -68,7 +68,23 @@ def one(target: Target, wanted: str | type) -> dict[str, Any]:
     """Describe one supported instruction declaration by its exact name."""
     wanted_id = op_identifier(wanted) if isinstance(wanted, type) else wanted
     op_type, capability = _selection(target, wanted_id)
-    execution_mesh = declared_execution_mesh(op_type)
+    variants = next(
+        (capabilities for carrier, capabilities in capability_families(target) if carrier is op_type),
+        (),
+    )
+    branches = tuple(item for item in variants if item.attribute is not None)
+    if branches:
+        execution_mesh = SwitchPattern(
+            branches[0].attribute,
+            {
+                op_identifier(item.declaration): declared_execution_mesh(
+                    op_type(**{item.attribute: item.declaration})
+                )
+                for item in branches
+            },
+        )
+    else:
+        execution_mesh = declared_execution_mesh(op_type)
     sections = PatternPrinter().declaration(op_type)
     return {
         "target": target.identity,

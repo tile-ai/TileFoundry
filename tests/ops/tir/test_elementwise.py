@@ -168,7 +168,7 @@ def test_binary_refuses_an_operand_outside_register_memory() -> None:
             )
         ),
     )
-    with pytest.raises(VerifyError, match=r"lhs .* does not match StorageKind.RMEM"):
+    with pytest.raises(VerifyError, match=r"lhs .*smem does not match rmem"):
         verify_prim_function(fn)
 
 

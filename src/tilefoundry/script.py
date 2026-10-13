@@ -228,6 +228,7 @@ def _parse_authored(
     target: object | None = None,
     topologies: tuple | None = None,
     mesh: Mesh | None = None,
+    output_count: int = 1,
     module_context=None,
     closure: Mapping[str, Any] | None = None,
 ):
@@ -254,6 +255,7 @@ def _parse_authored(
             base=base,
             key=key,
             mesh=mesh,
+            output_count=output_count,
         )
     else:
         topology_scope = {
@@ -270,6 +272,7 @@ def _parse_authored(
             key=key,
             target=target,
             mesh=mesh,
+            output_count=output_count,
             hardware_context=_hardware_context(target),
             binding_name=binding_name,
         )
@@ -305,6 +308,7 @@ class _DeferredFunction:
     mesh: Mesh | None = None
     base: object | None = None
     key: object | None = None
+    output_count: int = 1
     parsed: object | None = None
     _tilefoundry_deferred: bool = True
 
@@ -320,6 +324,7 @@ class _DeferredFunction:
             base=base,
             key=self.key,
             mesh=self.mesh,
+            output_count=self.output_count,
             module_context=self.module_context,
             closure=self.closure,
         )
@@ -507,12 +512,13 @@ def _converter(self: HirFunction, weight_name: str):
 HirFunction.converter = _converter
 
 
-def prim_func(fn=None, *, target=None):
+def prim_func(fn=None, *, target=None, output_count=1):
     """Decorator: parse a ``@prim_func`` function into a ``tir.PrimFunction``.
 
     The decorated name binds to the resulting IR node. ``target`` (a Target
     object) selects the compilation target; omitted, it uses the
-    normal compile-entry default.
+    normal compile-entry default. ``output_count`` identifies the trailing
+    output parameters and defaults to one.
     """
     if target is not None:
         target_instance(target)
@@ -528,6 +534,7 @@ def prim_func(fn=None, *, target=None):
                 FunctionRole.ROOT,
                 fn_inner.__name__,
                 _capture_function_closure(fn_inner),
+                output_count=output_count,
             )
             module_context.declarations.append(declaration)
             return declaration
@@ -537,6 +544,7 @@ def prim_func(fn=None, *, target=None):
             role=FunctionRole.ROOT,
             binding_name=fn_inner.__name__,
             target=resolved_target,
+            output_count=output_count,
         )
         if module_context is None:
             verify_prim_function(ir)
