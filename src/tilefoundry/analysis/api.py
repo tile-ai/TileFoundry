@@ -175,8 +175,12 @@ def analyze(
     result_module = module
     closure = _closure(module.resolve_target(), roots) if isinstance(module, Module) else ()
     context = build_iteration_scopes(
-        module, function, topology_level=topology_level, dims=dims,
-        analyzers=closure, options=options,
+        module,
+        function,
+        topology_level=topology_level,
+        dims=dims,
+        analyzers=closure,
+        options=options,
     )
     module = context.module
     topology_level = context.topology_level

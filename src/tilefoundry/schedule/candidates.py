@@ -9,16 +9,19 @@ from tilefoundry.analysis.iteration_scope import walk_scopes
 from tilefoundry.inspection import PatternPrinter, PythonPrinter
 from tilefoundry.ir.core import Call, OpCapability, get_metadata, op_identifier, value_label
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
-from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.schedule import ScheduleRefusal, match_instruction
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import StorageKind, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import access_relation_registry
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.candidates import candidate_operands, candidate_ops
+from tilefoundry.visitor_registry.candidates import (
+    candidate_operands,
+    candidate_ops,
+    sole_candidate,
+)
 from tilefoundry.visitor_registry.contexts import FunctionScope
 
 
@@ -32,8 +35,9 @@ def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
     )
 
 
-def candidates(module, entry, *, source: str | None = None,
-               dims: Mapping[str, int] | None = None) -> dict[str, Any]:
+def candidates(
+    module, entry, *, source: str | None = None, dims: Mapping[str, int] | None = None
+) -> dict[str, Any]:
     """Report instructions using the same acceptance boundary as explicit schedule inference."""
     ctx = build_iteration_scopes(module, entry, dims=dims)
     owners = {identity: scope for scope in walk_scopes(ctx.root) for identity in scope.relations}
@@ -44,12 +48,16 @@ def candidates(module, entry, *, source: str | None = None,
     rows = []
     calls = []
     for call in collect_exprs(ctx.root.owner.body):
-        if not isinstance(call, Call) or is_dim_op_call(call) or not isinstance(call.type, TensorType):
+        if (
+            not isinstance(call, Call)
+            or is_dim_op_call(call)
+            or not isinstance(call.type, TensorType)
+        ):
             continue
         instructions = candidate_ops(type(call.target))
         if not instructions or aliased_operand(call) is not None:
             continue
-        if isinstance(call.target, HirBinary) and call.type.shape == ():
+        if call.type.storage is StorageKind.UMAT and call.type.shape == ():
             continue
         calls.append(call)
         scope = owners[id(call)]
@@ -64,28 +72,50 @@ def candidates(module, entry, *, source: str | None = None,
                 attributes, types = candidate_operands(call, op_type)
                 if capability.attribute is not None:
                     attributes[capability.attribute] = capability.declaration
-                instances = match_instruction(op_type, attributes, types, mesh, scope=function_scope)
+                instances = match_instruction(
+                    op_type, attributes, types, mesh, scope=function_scope
+                )
             except ScheduleRefusal as error:
-                refused.append({"id": identifier, **pattern_printer.match_data((error.path,), error.reason)})
+                refused.append(
+                    {"id": identifier, **pattern_printer.match_data((error.path,), error.reason)}
+                )
                 continue
-            candidate = {"id": identifier, **pattern_printer.match_data(tuple(match.path for match in instances))}
-            if len(instructions) == 1 and all(
-                param.kind != "attribute" or param.has_default or hasattr(call.target, param.name)
-                for param in op_type._op_schema.signature
-            ):
+            candidate = {
+                "id": identifier,
+                **pattern_printer.match_data(tuple(match.path for match in instances)),
+            }
+            if sole_candidate(call.target) is not None:
                 candidate["default"] = True
             usable.append(candidate)
-        parameters = [param for param in type(call.target)._op_schema.signature if param.kind == "input"]
-        operands = [f"{param.name}={type_printer.print(arg.type)}" for param, arg in zip(parameters, call.args, strict=True)]
+        parameters = [
+            param for param in type(call.target)._op_schema.signature if param.kind == "input"
+        ]
+        operands = [
+            f"{param.name}={type_printer.print(arg.type)}"
+            for param, arg in zip(parameters, call.args, strict=True)
+        ]
         operands.append(f"result={type_printer.print(call.type)}")
-        rows.append({"line": value_label(call) or type(call.target)._op_schema.name,
-                     "op": op_identifier(type(call.target)),
-                     "scope": "whole program" if level is None else f"per {level}",
-                     "operands": operands, "candidates": usable, "refused": refused})
+        rows.append(
+            {
+                "line": value_label(call) or type(call.target)._op_schema.name,
+                "op": op_identifier(type(call.target)),
+                "scope": "whole program" if level is None else f"per {level}",
+                "operands": operands,
+                "candidates": usable,
+                "refused": refused,
+            }
+        )
     if not calls:
         raise ValueError("source has no unscheduled candidate site")
     if source is None:
-        source = next((span.file for call in calls if (span := get_metadata(call, SourceSpanMetadata)) is not None), module.name)
+        source = next(
+            (
+                span.file
+                for call in calls
+                if (span := get_metadata(call, SourceSpanMetadata)) is not None
+            ),
+            module.name,
+        )
     return {"source": source, "target": ctx.target.identity, "lines": rows}
 
 

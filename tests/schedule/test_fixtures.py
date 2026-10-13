@@ -228,7 +228,9 @@ SMEM_GOLDEN = {
 
 RMEM_EXPECTED = {
     "wgmma_b_nk": {
-        "thread@0:128#0": _RmemExpectation(4096, "64x16 f32 C fragment, shared by zeros and MMA result"),
+        "thread@0:128#0": _RmemExpectation(
+            4096, "64x16 f32 C fragment, shared by zeros and MMA result"
+        ),
     },
     "captured_insert_update": {},
     "loop_carry_from_param": {},
@@ -907,7 +909,7 @@ def _check_gmem_gather_refusal(out: Path, captured: pytest.CaptureResult[str]) -
         "T.copy_async"
     ], "gather keeps its gmem result"
     assert indexed["refused"][0]["reason"].startswith("mesh:")
-    assert "Topology(name='cta'" in indexed["refused"][0]["reason"]
+    assert 'Topology("cta"' in indexed["refused"][0]["reason"]
 
 
 
@@ -1144,9 +1146,7 @@ def test_single_issue_schedule_preserves_instruction_relations() -> None:
     schedule = _copy_schedule_call(repeat=(1,), order=(0,))
     source = schedule.args[0]
     destination_type = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.SMEM)
-    inferred = TypeInferContext(
-        current_mesh=Mesh((Topology("thread", 32),), Layout((32,), (1,)))
-    )
+    inferred = TypeInferContext(current_mesh=Mesh((Topology("thread", 32),), Layout((32,), (1,))))
     inference_type(schedule, inferred)
     scheduled = relations_of(schedule, inferred)
     single = operand_relations(schedule.target.op, (source.type, destination_type))
@@ -1335,7 +1335,8 @@ def test_schedule_candidate_reports_cover_every_site(
     assert all(row["candidates"] or row["refused"] for _name, row in sites)
     assert all(
         row["candidates"] or all(item["reason"].startswith("mesh:") for item in row["refused"])
-        for _name, row in sites if row["op"] == "tf.reshard"
+        for _name, row in sites
+        if row["op"] == "tf.reshard"
     )
     matmuls = [(name, row) for name, row in sites if row["op"] == "tf.matmul"]
     assert len(matmuls) == 8
@@ -1477,8 +1478,8 @@ def test_operand_match_refusal_names_the_failed_pattern() -> None:
 
     RejectOne().visit(function.body)
     assert rejected is not None
-    assert "StorageKind.GMEM" in rejected
-    assert "StorageKind.SMEM" in rejected
+    assert "gmem" in rejected
+    assert "smem" in rejected
 
 
 def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path) -> None:

@@ -493,7 +493,9 @@ sections are canonical `PatternPrinter.declaration` text.
 `candidates` reports the instructions whose access relation and operand
 patterns can implement each unscheduled registered HIR site. A target-neutral
 pairing registry decides which TIR carrier families are relevant to each HIR
-Op; a HIR Op with no pairing is not a candidate site. Target capabilities then
+Op; a HIR Op with no pairing is not a candidate site. Rank-0 UMAT values
+are unmaterialized scalars rather than instruction sites, regardless of their
+HIR operation class. Target capabilities then
 silently remove paired carriers unsupported by the selected target. Every remaining instruction uses the same match entry as explicit
 `tf.schedule`, including field matching, tile projection, verifier, and
 cross-operand checks. The registered callback supplies every operand type,

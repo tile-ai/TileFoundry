@@ -33,14 +33,22 @@ def _matrix_type(type_, reverse):
         axes = layout_axis_to_tensor_axis(
             tuple(prod(flatten(mode)) for mode in local.shape), type_.shape
         )
-        order = tuple(index for axis in reversed(range(len(type_.shape)))
-                      for index, held in enumerate(axes) if held == axis)
-        result = Layout(tuple(local.shape[index] for index in order),
-                        None if local.strides is None else tuple(local.strides[index] for index in order))
+        order = tuple(
+            index
+            for axis in reversed(range(len(type_.shape)))
+            for index, held in enumerate(axes)
+            if held == axis
+        )
+        result = Layout(
+            tuple(local.shape[index] for index in order),
+            None if local.strides is None else tuple(local.strides[index] for index in order),
+        )
         if shard is None:
             return result
         positions = {old: new for new, old in enumerate(order)}
-        attrs = tuple(Split(positions[attr.axis]) if isinstance(attr, Split) else attr for attr in shard.attrs)
+        attrs = tuple(
+            Split(positions[attr.axis]) if isinstance(attr, Split) else attr for attr in shard.attrs
+        )
         return replace(shard, layout=result, attrs=attrs)
 
     return replace(type_, shape=tuple(reversed(type_.shape)), layout=permuted(type_.layout))

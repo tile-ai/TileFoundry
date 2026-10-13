@@ -450,6 +450,9 @@ format. The text starts with the instruction identifier, then two spaces and
 `name=value` entries separated by `, `. A refusal places its
 `<parameter>: <failed-node text>` reason on the next indented line. A successful
 candidate has an empty reason. Type inference uses the same rendering.
+Refusal subjects use the same DSL notation as the report operands; dtype and
+storage values use their surface names. Structural patterns use that notation
+as well, rather than mixing Python repr with DSL text.
 Standalone `refusal` renders the path and reason without an instruction id;
 the former `reason (bindings)` spelling is removed.
 

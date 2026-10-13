@@ -181,15 +181,19 @@ sed -n '/tf.matmul/,+4p; /refused.*T.binary/,+1p; /refused.*T.cast/,+1p' candida
 ```
 
 ```text
+    refused     T.binary
+                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+    refused     T.binary
+                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   v10:31  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", (128, 64), "smem"]  rhs=Tensor[(64, 256), "bf16", (64, 256), "smem"]  result=Tensor[(128, 256), "f32", (128, 256), "rmem"]
     refused     T.cuda.sm90.Wgmma
-                  mesh: Mesh(topologies=(Topology(name='cta', size=4352),), layout=Layout(shape=((64, 68),), strides=((68, 1),)), names=('bm', 'bn')) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8, 4),), ((*gs, 32, 4, 1),))))
+                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8, 4),), ((*gs, 32, 4, 1),))))
     refused     T.cuda.sm80.Mma
-                  mesh: Mesh(topologies=(Topology(name='cta', size=4352),), layout=Layout(shape=((64, 68),), strides=((68, 1),)), names=('bm', 'bn')) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),))))
+                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),))))
     refused     T.binary
-                  mesh: Mesh(topologies=(Topology(name='cta', size=4352),), layout=Layout(shape=((64, 68),), strides=((68, 1),)), names=('bm', 'bn')) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
     refused     T.cast
-                  mesh: Mesh(topologies=(Topology(name='cta', size=4352),), layout=Layout(shape=((64, 68),), strides=((68, 1),)), names=('bm', 'bn')) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
 ```
 
 This baseline has only a CTA mesh. Each instruction shown requires a thread

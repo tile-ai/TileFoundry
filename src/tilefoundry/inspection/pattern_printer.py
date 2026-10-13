@@ -10,7 +10,7 @@ from tilefoundry.ir.core.param_def import collect_param_defs
 from tilefoundry.ir.pattern.pattern import Pattern
 from tilefoundry.ir.pattern.predicates import Formula, failing
 from tilefoundry.ir.pattern.utils import declared_execution_mesh
-from tilefoundry.ir.types import Broadcast, DType, Split
+from tilefoundry.ir.types import Broadcast, DType, Split, StorageKind
 from tilefoundry.ir.types.dim import DimFloorDiv, DimMul, DimVar, is_dim_op_call
 
 _UNNAMED = "_"
@@ -82,8 +82,10 @@ class PatternPrinter:
                 values = merged.setdefault(name, [])
                 if written not in values:
                     values.append(written)
-        return {"path": [{"name": name, "value": "|".join(values)}
-                         for name, values in merged.items()], "reason": reason}
+        return {
+            "path": [{"name": name, "value": "|".join(values)} for name, values in merged.items()],
+            "reason": reason,
+        }
 
     def match_text(self, identifier, data) -> str:
         """Write an instruction and its ordered path, followed by a refusal reason."""
@@ -98,15 +100,25 @@ class PatternPrinter:
         data = self.match_data((path,), self.refusal_reason(refusal))
         return self.match_text("", data).lstrip()
 
+    def _subject_value(self, value) -> str:
+        from .printer_base import PythonPrinter  # noqa: PLC0415
+
+        if isinstance(value, (DType, StorageKind)):
+            return self._written_value(value)
+        return PythonPrinter().print(value)
+
     def refused_Pattern(self, pattern, subject) -> str:
-        return f"{subject!r} does not match {self.written(pattern)}"
+        return f"{self._subject_value(subject)} does not match {self.written(pattern)}"
 
     def refused_Predicate(self, pattern, subject) -> str:
         return "could not satisfy " + "; ".join(self.rules(pattern))
 
     def refused_SwitchPattern(self, pattern, subject) -> str:
         options = ", ".join(self._written_value(value) for value, _ in pattern.branches)
-        return f"{pattern.param} has no matching branch for {subject!r}; branches: {options}"
+        return (
+            f"{pattern.param} has no matching branch for "
+            f"{self._subject_value(subject)}; branches: {options}"
+        )
 
     def declaration(self, op_type) -> dict[str, tuple[str, ...]]:
         """Render declaration sections without flattening them into report text."""
@@ -232,6 +244,8 @@ class PatternPrinter:
             return value.name
         if isinstance(value, Split):
             return f"S({value.axis})"
+        if isinstance(value, StorageKind):
+            return value.name.lower()
         if isinstance(value, Enum):
             return f"{type(value).__name__}.{value.name}"
         if isinstance(value, tuple):

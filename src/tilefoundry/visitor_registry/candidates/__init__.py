@@ -20,7 +20,6 @@ def register_candidates(hir_op: type, tir_ops: tuple[type, ...]):
         if tir_op not in registered:
             registered.append(tir_op)
 
-
     def decorate(callback):
         if hir_op in _CALLBACKS:
             raise ValueError(f"{hir_op.__name__} already has a candidate operand callback")
