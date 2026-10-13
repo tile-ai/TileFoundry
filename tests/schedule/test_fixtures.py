@@ -23,6 +23,7 @@ import pytest
 import torch
 
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
+from tests._source import import_dsl
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program, resolve_program_geometry
 from tilefoundry.analysis.liveness import analyze_liveness, result_copies
@@ -982,7 +983,35 @@ def _check_facts_refusal(out: Path, captured: pytest.CaptureResult[str], *, mess
     assert not out.exists()
 
 
+def _check_finalized_rows(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    assert captured == ("", "")
+    lowered = import_dsl(out.read_text())
+    assert isinstance(lowered, PrimFunction)
+    assert lowered.params[-1].type.shape == (128,)
+
+
+def _check_finalize_unbound_dim(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    assert captured.out == ""
+    assert "schedule finalize" in captured.err
+    assert "bind it with --dim" in captured.err
+    assert not out.exists()
+
+
 FIXTURES = (
+    FixtureCase(
+        "finalize binds an open row dimension",
+        (
+            "schedule", "finalize", "tests/fixtures/schedule/hir/dim/row_copy.py",
+            "{out}", "--dim=rows=128",
+        ),
+        _check_finalized_rows,
+    ),
+    FixtureCase(
+        "finalize refuses an unbound row dimension without output",
+        ("schedule", "finalize", "tests/fixtures/schedule/hir/dim/row_copy.py", "{out}"),
+        _check_finalize_unbound_dim,
+        code=1,
+    ),
     FixtureCase(
         "gather reads only the selected rows",
         (
@@ -1410,22 +1439,6 @@ def test_schedule_candidates_reports_every_plain_site(
         assert all(item["reason"] for item in row["refused"])
 
     if name == "chunk_rmsnorm":
-        if dims == ("chunks=16",):
-            dim_source = "tests/fixtures/schedule/hir/dim/row_copy.py"
-            finalized = tmp_path / "rows.py"
-            assert (
-                cli_main([
-                    "schedule", "finalize", dim_source, str(finalized), "--dim=rows=128",
-                ])
-                == 0
-            )
-            assert capsys.readouterr() == ("", "")
-            assert _prim_in(finalized).params[-1].type.shape == (128,)
-            missing = tmp_path / "missing_rows.py"
-            assert cli_main(["schedule", "finalize", dim_source, str(missing)]) == 1
-            error = capsys.readouterr().err
-            assert "schedule finalize" in error and "bind it with --dim" in error
-            assert not missing.exists()
         binaries = [row for row in report["lines"] if row["op"] == "tf.binary"]
         assert len(binaries) == 5
         assert all(any(c["id"] == "T.binary" for c in row["candidates"]) for row in binaries)
