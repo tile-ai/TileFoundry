@@ -147,7 +147,7 @@ class ModuleList(Expr):
     """
 
     key: str | None
-    elements: tuple[Module, ...]
+    elements: tuple[Module | type[RuntimeModule], ...]
     indexed: bool
 
     __hash__ = object.__hash__
@@ -165,8 +165,16 @@ class ModuleList(Expr):
         else:
             elements = (definition,)
             indexed = False
-        if not elements or not all(isinstance(element, Module) for element in elements):
+        if not elements:
             raise TypeError("ModuleList requires a Module or a non-empty tuple of Modules")
+        if not all(isinstance(element, Module) for element in elements):
+            from tilefoundry.runtime.module import RuntimeModule  # noqa: PLC0415
+
+            if not all(
+                isinstance(element, type) and issubclass(element, RuntimeModule)
+                for element in elements
+            ):
+                raise TypeError("ModuleList requires Modules or runtime module classes")
         self.key = None
         self.elements = elements
         self.indexed = indexed
@@ -182,7 +190,8 @@ class ModuleList(Expr):
             while stop < len(self.elements) and self.elements[stop] is element:
                 stop += 1
             count = stop - start
-            names.append(f"{element.name}*{count}" if count > 1 else element.name)
+            name = element.__name__ if isinstance(element, type) else element.name
+            names.append(f"{name}*{count}" if count > 1 else name)
             start = stop
         elements = ", ".join(names) + ("," if len(names) == 1 else "")
         return f"ModuleList(key={self.key!r}, indexed={self.indexed}, elements=({elements}))"
@@ -231,7 +240,7 @@ def validate_instance_slot(slot: ModuleList, index=MISSING, *, index_type=None):
         return None
     if not slot.indexed:
         raise ValueError(f"single slot {slot.key!r} cannot be indexed")
-    if isinstance(index, Expr):
+    if isinstance(index, Expr) or index_type is not None:
         index_type = index.type if index_type is None else index_type
         from tilefoundry.ir.types.dtype import IntegerDType  # noqa: PLC0415
 
@@ -336,6 +345,8 @@ class Module:
         for key, slot in self.children.items():
             slot.bind(key)
             for child in slot.elements:
+                if not isinstance(child, Module):
+                    raise TypeError(f"Module {self.name!r}: slot {key!r} requires Module definitions")
                 if child.target is not None:
                     raise ValueError(
                         f"Module {self.name!r}: child module {key!r} declares "
@@ -499,16 +510,34 @@ class Module:
 
         [runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)
         """
+        if isinstance(resource, Mapping):
+            from tilefoundry.runtime.resource import DictResource  # noqa: PLC0415
+
+            resource = DictResource(resource)
+        return self._load_under(resource, self.target, (), "")
+
+    def _load_under(self, resource, target, topologies, path: str) -> "LoadedModule":
+        topologies = self.topologies if self.topologies is not None else topologies
+        children = {}
+        for key, slot in self.children.items():
+            base = resource.subtree(key)
+            child_path = f"{path}.{key}" if path else key
+            if slot.indexed:
+                children[key] = tuple(
+                    child._load_under(base.subtree(str(i)), target, topologies, f"{child_path}.{i}")
+                    for i, child in enumerate(slot.elements)
+                )
+            else:
+                children[key] = slot.elements[0]._load_under(base, target, topologies, child_path)
         return LoadedModule(
-            module=self,
-            resource=resource,
-            modules=tuple(child.load(resource.subtree(child.name)) for child in self.modules),
+            module=self, resource=resource, children=children,
+            target=target, topologies=topologies, path=path,
         )
 
     def prepare(self, raw, out_dir: str, *, device: str = "cpu") -> None:
         """Prepare canonical weights and write the safetensors checkpoint."""
         staged: dict[str, object] = {}
-        self._prepare_into(raw, "", staged, device)
+        self._prepare_into(raw, "", staged, device, target=self.target)
         flat = {name: value.detach().contiguous().cpu() for name, value in staged.items()}
 
         import json  # noqa: PLC0415 -- stdlib, only needed here
@@ -524,7 +553,10 @@ class Module:
             json.dumps({"weight_map": {name: shard for name in flat}})
         )
 
-    def _prepare_into(self, raw, prefix: str, flat: dict, device: str) -> "LoadedModule":
+    def _prepare_into(
+        self, raw, prefix: str, flat: dict, device: str, *,
+        target=None, topologies=(), path: str = "",
+    ) -> "LoadedModule":
         """Stage this node's canonical weights, children before their owner.
 
         Converters are HIR bodies on this offline path, making the local
@@ -536,10 +568,25 @@ class Module:
             DictResource,
         )
 
-        children = tuple(
-            child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
-            for child in self.modules
-        )
+        target = self.target if target is None else target
+        topologies = self.topologies if self.topologies is not None else topologies
+        children = {}
+        for key, slot in self.children.items():
+            base = raw.subtree(key)
+            child_path = f"{path}.{key}" if path else key
+            if slot.indexed:
+                children[key] = tuple(
+                    child._prepare_into(
+                        base.subtree(str(i)), f"{prefix}{key}.{i}.", flat, device,
+                        target=target, topologies=topologies, path=f"{child_path}.{i}",
+                    )
+                    for i, child in enumerate(slot.elements)
+                )
+            else:
+                children[key] = slot.elements[0]._prepare_into(
+                    base, f"{prefix}{key}.", flat, device,
+                    target=target, topologies=topologies, path=child_path,
+                )
         converter_map: dict[str, ModuleFunction] = {}
         for fn in self.functions:
             for weight_name, conv in getattr(fn, "converters", ()):
@@ -557,7 +604,8 @@ class Module:
             return value.to(device)
 
         reading = LoadedModule(
-            module=self, resource=DictResource(flat, prefix=prefix), modules=children
+            module=self, resource=DictResource(flat, prefix=prefix), children=children,
+            target=target, topologies=topologies, path=path,
         )
         for weight_name, decl_type in self.weights.items():
             conv = converter_map.get(weight_name)
@@ -603,7 +651,10 @@ class LoadedModule:
 
     module: Module
     resource: object
-    modules: tuple["LoadedModule", ...] = field(default_factory=tuple)
+    children: dict[str, LoadedModule | tuple[LoadedModule, ...]] = field(default_factory=dict)
+    target: Target | None = None
+    topologies: tuple[Topology, ...] = ()
+    path: str = ""
 
     @property
     def name(self) -> str:
@@ -616,20 +667,17 @@ class LoadedModule:
         module = self.module
         matches = tuple(fn for fn in module.functions if fn.name == name)
         if len(matches) == 1:
-            return _replace(self, module=_reentered(module, name))
+            return _replace(
+                self, module=_reentered(module, name, target=self.target, topologies=self.topologies)
+            )
         if len(matches) > 1:
             raise AttributeError(
                 f"LoadedModule {self.name!r}: {name!r} resolves to "
                 f"{len(matches)} entries; one name must map to one function"
             )
-        children = tuple(child for child in self.modules if child.name == name)
-        if len(children) == 1:
-            return children[0]
-        if len(children) > 1:
-            raise AttributeError(
-                f"LoadedModule {self.name!r}: {name!r} resolves to "
-                f"{len(children)} child modules; one name must map to one module"
-            )
+        child = self.children.get(name)
+        if child is not None:
+            return child
         method = module.methods.get(name)
         if method is not None:
             return types.MethodType(method, self)
@@ -646,55 +694,63 @@ class LoadedModule:
         return self.module.entry_function(), self
 
 
-def _reentered(module: Module, entry: str) -> Module:
-    """*module* re-entried at *entry*.
-
-    ``replace`` rebuilds the value without its owner backlink, so a child
-    selected out of a tree would lose the Target and hierarchy it inherits. The
-    copy therefore carries the context it resolved through.
-    """
-    try:
-        target = module.resolve_target()
-    except ValueError:
-        target = module.target
-    return _replace(
-        module,
-        entry=entry,
-        target=target,
-        topologies=module.effective_topologies(),
-    )
+def _reentered(module: Module, entry: str | None, *, target, topologies) -> Module:
+    """Re-root a selected definition with its instance's effective context."""
+    return _replace(module, entry=entry, target=target, topologies=topologies)
 
 
 def select(module: Module, path: str) -> Module:
     """The node dotted *path* names below *module*, as a Module.
 
-    Each segment names a child Module, except that the last may instead name one
-    of the reached Module's own functions -- which selects that Module re-entried
-    at it, so what comes back is always something with a Target and a topology
-    hierarchy to be measured against. An empty *path* is *module* itself.
+    Slots are addressed by key and indexed slots also consume an index segment.
+    The last segment may select a function of the reached definition. Non-empty
+    paths return a re-rooted copy with inherited target and topologies; the
+    empty path returns the input root itself.
 
     See [core-ir §1.2](docs/spec/core-ir.md#12-selecting-a-node-by-path).
     """
+    if not path:
+        return module
     selected = module
-    segments = path.split(".") if path else []
+    topologies = module.effective_topologies()
+    segments = path.split(".")
     if any(not segment for segment in segments):
         raise ValueError(
             f"selector {path!r}: an empty segment names nothing. Dropping it would "
             f"make two different paths mean the same node"
         )
-    for index, name in enumerate(segments):
-        children = {child.name: child for child in selected.modules}
-        if name in children:
-            selected = children[name]
-            continue
-        if index != len(segments) - 1:
-            raise ValueError(
-                f"selector {path!r}: Module {selected.name!r} has no child module {name!r}"
-            )
-
-        selected.lookup(name)
-        return _reentered(selected, name)
-    return selected
+    position = 0
+    entry = selected.entry
+    while position < len(segments):
+        name = segments[position]
+        position += 1
+        slot = selected.children.get(name)
+        if slot is None:
+            if position != len(segments):
+                raise ValueError(
+                    f"selector {path!r}: Module {selected.name!r} has no child module {name!r}"
+                )
+            selected.lookup(name)
+            entry = name
+            break
+        if slot.indexed:
+            if position == len(segments):
+                raise ValueError(f"selector {path!r}: ModuleList slot {name!r} requires an index")
+            try:
+                index = int(segments[position])
+            except ValueError:
+                raise ValueError(
+                    f"selector {path!r}: ModuleList slot {name!r} requires an integer index"
+                ) from None
+            position += 1
+            validate_instance_slot(slot, index)
+            selected = slot.elements[index]
+        else:
+            selected = slot.elements[0]
+        entry = selected.entry
+        if selected.topologies is not None:
+            topologies = selected.topologies
+    return _reentered(selected, entry, target=module.target, topologies=topologies)
 
 
 def function_selectors(module: Module, prefix: str = "") -> tuple[tuple[str, HirFunction], ...]:

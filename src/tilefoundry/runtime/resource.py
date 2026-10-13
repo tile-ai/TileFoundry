@@ -14,7 +14,7 @@ from typing import Any, Callable, Mapping, Protocol, Union
 import torch
 
 from tilefoundry.evaluator.value import to_torch_dtype
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, ModuleList, validate_instance_slot
 from tilefoundry.ir.types.tensor_type import TensorType
 
 
@@ -315,7 +315,7 @@ class DrawnResource:
 
     def __init__(
         self,
-        module: Module,
+        module: Module | ModuleList,
         generator: torch.Generator,
         device: str,
         drawn: dict[str, torch.Tensor] | None = None,
@@ -338,16 +338,20 @@ class DrawnResource:
         return None
 
     def subtree(self, seg: str) -> "DrawnResource":
-        for child in self._module.modules:
-            if child.name == seg:
-                return DrawnResource(
-                    child,
-                    self._generator,
-                    self._device,
-                    drawn=self._drawn,
-                    prefix=f"{self._prefix}{seg}.",
-                )
-        raise KeyError(seg)
+        if isinstance(self._module, ModuleList):
+            try:
+                index = int(seg)
+            except ValueError:
+                raise KeyError(seg) from None
+            validate_instance_slot(self._module, index)
+            child = self._module.elements[index]
+        else:
+            slot = self._module.children[seg]
+            child = slot if slot.indexed else slot.elements[0]
+        return DrawnResource(
+            child, self._generator, self._device, drawn=self._drawn,
+            prefix=f"{self._prefix}{seg}.",
+        )
 
 
 def _extents(type_) -> tuple[int, ...]:

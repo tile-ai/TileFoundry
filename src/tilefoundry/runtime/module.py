@@ -28,15 +28,16 @@ class RuntimeModule:
     entry: str | None
     """Mirrors the IR ``Module`` entry."""
 
-    modules: tuple["RuntimeModule", ...]
-    """The children, registered explicitly in ``__init__``."""
+    children: dict[str, RuntimeModule | tuple[RuntimeModule, ...]]
+    """Instance slots, registered explicitly in ``__init__``."""
 
     def __init__(
-        self, name: str, entry: str | None = None, modules: tuple["RuntimeModule", ...] = ()
+        self, name: str, entry: str | None = None,
+        children: dict[str, RuntimeModule | tuple[RuntimeModule, ...]] | None = None,
     ) -> None:
         self.name = name
         self.entry = entry
-        self.modules = tuple(modules)
+        self.children = {} if children is None else dict(children)
 
     @property
     def module(self):
@@ -54,23 +55,28 @@ class RuntimeModule:
         return self.forward(*args)
 
     def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None:
-        """Recurse ``load`` into every child under its own name prefix.
+        """Recurse ``load`` into each slot under its key and optional index.
 
-        Recurse ``load`` into every child under its own name prefix. Weight
+        Weight
         values are read lazily by each runtime function on first use, and
         *placement* -- which program of the mesh this process is -- reaches
         every child unchanged, because one process is one program throughout
         the tree it loaded.
         """
-        for child in self.modules:
-            child.load(resource.subtree(child.name), placement=placement)
+        for key, child in self.children.items():
+            base = resource.subtree(key)
+            if isinstance(child, tuple):
+                for index, instance in enumerate(child):
+                    instance.load(base.subtree(str(index)), placement=placement)
+            else:
+                child.load(base, placement=placement)
 
 
 class CompiledModule(RuntimeModule):
     """One compiled entry as a ``RuntimeModule``.
 
     One compiled entry as a ``RuntimeModule``: ``load`` is the inherited
-    no-op and ``modules`` is empty (weights are ordinary entry args).
+    no-op and ``children`` is empty (weights are ordinary entry args).
     ``forward``: ``rm(x)`` allocates the trailing ``output_count`` outputs;
     ``rm(x, out)`` writes into the ones given.
     """

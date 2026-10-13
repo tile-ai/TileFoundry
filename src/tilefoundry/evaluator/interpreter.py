@@ -86,26 +86,6 @@ def _bind_dim_vars(params, values) -> dict[str, int]:
     return binding
 
 
-def child_module_instance(loaded_module, callee: Function):
-    """The child module instance a call to *callee* runs against, else ``None``.
-
-    ``None`` is a same-owner call, which binds every declared parameter. A
-    collected call carries no binding record, so which reading supplies the
-    constants is answered by which child owns the callee.
-    """
-    if loaded_module is None or loaded_module.module.owns(callee, derived=True):
-        return None
-    matches = tuple(
-        child for child in loaded_module.modules if child.module.owns(callee, derived=True)
-    )
-    if len(matches) > 1:
-        raise EvalError(
-            f"evaluator: {loaded_module.name!r} holds {len(matches)} child modules owning "
-            f"{callee.name!r}; one call reaches one child"
-        )
-    return matches[0] if matches else None
-
-
 class EvaluatorVisitor(ExprVisitor):
     """``ExprVisitor[Value]`` evaluated with one memo per execution scope."""
 
@@ -134,8 +114,40 @@ class EvaluatorVisitor(ExprVisitor):
     def visit_leaf_Tuple(self, tup: Tuple, operands, ctx: EvaluateContext) -> TupleValue:
         return TupleValue(operands)
 
+    def visit_leaf_ModuleList(self, slot, _operands, ctx: EvaluateContext):
+        if ctx.loaded_module is None:
+            raise EvalError("evaluator: instance call requires a loaded module")
+        return ctx.loaded_module.children[slot.key]
+
     def visit_leaf_Call(self, call: Call, args, ctx: EvaluateContext) -> Value:
+        from tilefoundry.ir.core.module import ModuleList, validate_instance_slot  # noqa: PLC0415
+        from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem  # noqa: PLC0415
+
         target = call.target
+        if isinstance(target, TupleGetItem) and isinstance(call.args[0], ModuleList):
+            slot = ctx.loaded_module.module.children[call.args[0].key]
+            index = args[1]
+            if not isinstance(index, TensorValue) or index.data.numel() != 1:
+                raise EvalError(f"evaluator: ModuleList slot {slot.key!r}: index must be an integer scalar")
+            try:
+                taken = validate_instance_slot(
+                    slot, index.data.item(), index_type=index.type
+                )
+            except ValueError as error:
+                raise EvalError(f"evaluator: {error}") from error
+            return args[0][taken]
+        if isinstance(target, (ModuleList, Call)):
+            if isinstance(target, Call):
+                child, *args = args
+            else:
+                if ctx.loaded_module is None:
+                    raise EvalError("evaluator: instance call requires a loaded module")
+                try:
+                    validate_instance_slot(ctx.loaded_module.module.children[target.key])
+                except ValueError as error:
+                    raise EvalError(f"evaluator: {error}") from error
+                child = ctx.loaded_module.children[target.key]
+            return self._call_function(child.module.entry_function(), args, ctx, child=child)
         if isinstance(target, Function):
             return self._call_function(target, args, ctx)
         try:
@@ -146,8 +158,7 @@ class EvaluatorVisitor(ExprVisitor):
         except Exception as error:
             raise EvalError(f"evaluator: {describe_expr(call)}: {error}") from error
 
-    def _call_function(self, callee: Function, arg_values, ctx: EvaluateContext) -> Value:
-        child = child_module_instance(ctx.loaded_module, callee)
+    def _call_function(self, callee: Function, arg_values, ctx: EvaluateContext, *, child=None) -> Value:
         supplied = [param for param in callee.params if not (child is not None and param.is_const)]
         if len(arg_values) != len(supplied):
             kind = "activation(s)" if child is not None else "args"
@@ -157,7 +168,9 @@ class EvaluatorVisitor(ExprVisitor):
             )
         given = iter(arg_values)
         args = [
-            _child_constant(child, callee, param, ctx.device)
+            TensorValue(
+                data=_read_weight(child, param, ctx.device, callee=callee), type=param.type
+            )
             if child is not None and param.is_const
             else next(given)
             for param in callee.params
@@ -255,6 +268,7 @@ def _read_weight(loaded_module, param, device: str, *, callee: Function | None =
             )
         raise KeyError(
             f"Module {loaded_module.name!r}: missing declared weight {param.name!r}; "
+            f"full key {f'{loaded_module.path}.{param.name}' if loaded_module.path else param.name!r}; "
             f"prepare produces it ({spec_ref_render(_MISSING_PREPARED_WEIGHT)}){detail}"
         ) from error
     actual = tensor_type_of(value, like=param.type)
@@ -280,16 +294,6 @@ def _read_weight(loaded_module, param, device: str, *, callee: Function | None =
             f"{expected}; this runner moves nothing"
         )
     return value
-
-
-def _child_constant(loaded_module, callee: Function, param, device: str) -> TensorValue:
-    """*param*'s constant, read from the child *callee* belongs to.
-
-    Placement is checked at this first-use point; a weight is never moved
-    implicitly to satisfy the requested device.
-    """
-    value = _read_weight(loaded_module, param, device, callee=callee)
-    return TensorValue(data=value, type=param.type)
 
 
 def _run_selected(loaded_module, fn: Function, *activations, device: str | None):
@@ -373,8 +377,8 @@ def _run_bound(fn: Function, args, *, device: str | None = None, reading=None):
     """Evaluate *fn* over fully bound *args*, with *reading* in hand.
 
     The entry a resource reading runs through: every child call reached from
-    here fills its ``ConstTensor`` parameters from the child that owns the
-    callee. It is internal; *device* is the caller's, and ``None`` leaves it to torch.
+    here fills its ``ConstTensor`` parameters from the instance named by the
+    call target. It is internal; *device* is the caller's, and ``None`` leaves it to torch.
     """
     values = _bound_values(fn, args)
     target = _select_variant(fn, values) if fn.variants else fn

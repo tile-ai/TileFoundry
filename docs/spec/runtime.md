@@ -37,10 +37,13 @@ comparison's caller states — a `RuntimeModule` never runs the HIR evaluator.
 class RuntimeModule:
     name: str
     entry: str | None
-    modules: tuple["RuntimeModule", ...]
+    children: dict[str, RuntimeModule | tuple[RuntimeModule, ...]]
 
     def __init__(
-        self, name: str, entry: str | None = None, modules: tuple["RuntimeModule", ...] = ()
+        self,
+        name: str,
+        entry: str | None = None,
+        children: dict[str, RuntimeModule | tuple[RuntimeModule, ...]] | None = None,
     ) -> None: ...
 
     @property
@@ -56,14 +59,16 @@ class RuntimeModule:
 
 - constraints:
   - the base class is authored like a `torch.nn.Module`: subclass it, build
-    the child tree in `__init__` (children registered via `modules=`), write
+    the child tree in `__init__` (children registered via `children=`), write
     the composition in `forward`. Function bodies are `RuntimeFunction`
     attributes called from `forward`. `@runtime_module` (below) generates
     this subclass mechanically from a semantic `Module` and is the normal
     authoring path; a direct subclass remains available for special cases
     (e.g. `CompiledModule`, below).
   - `load(resource, *, placement=None)` (base class): recurses into each child
-    with `resource.subtree(child.name)`, handing every one the same
+    with `resource.subtree(key)` for a single slot, or
+    `resource.subtree(key).subtree(str(i))` for each indexed instance, handing
+    every one the same
     *placement*; the base class itself resolves nothing. One process is one
     program throughout the tree it loaded, so a child MUST NOT be given a
     placement of its own.
@@ -186,27 +191,42 @@ class LoadedModule:
 
     module: Module
     resource: RuntimeResource
-    modules: tuple["LoadedModule", ...]
+    children: dict[str, LoadedModule | tuple[LoadedModule, ...]]
+    target: Target | None
+    topologies: tuple[Topology, ...]
+    path: str
 ```
 
 `LoadedModule` is a frozen resource binding: it stores no tensors. Attribute
 access resolves a function to another callable `LoadedModule` whose `entry`
-names that function, a child to its child reading, and an orchestration method
+names that function, a single child to its reading, an indexed child to its
+ordered tuple of readings, and an orchestration method
 with `types.MethodType`. Calling a loaded module enters `evaluate` once and
 passes only activations; constants come from its resource at first use.
 
 - constraints:
-  - A reading covers its own Module's declared weights and holds one child
-    reading per attached child ([core-ir §1](./core-ir.md#1-module)). A call is
-    read in the reading of the Module owning the callee, so the parameters the
-    call does not supply ([hir §1.1](./hir.md#11-function)) are filled by name
-    from that Module's resource. Which reading applies follows the callee's
-    owner and not the walk's depth, so every sub-evaluation of a body — a called
-    body, one trip of a loop — is read in the reading its call resolved. One
-    Module read twice yields two independent readings, and two attachments of one
-    source Module do not borrow each other's resource.
-  - `Module.prepare` (semantic side, offline, once): walk the tree; for each
-    declared weight, fetch its converter's parameters from `raw` by their
+  - A reading covers its own Module's declared weights and holds one reading
+    per instance in `Module.children` ([core-ir §1](./core-ir.md#1-module)).
+    Function targets retain the current reading and supply every parameter;
+    instance targets select `loaded.children[key]` or `loaded.children[key][i]`
+    and read omitted ConstTensor parameters by name from that instance's resource
+    ([core-ir §2.1](./core-ir.md#21-call)). Each loop trip selects its evaluated
+    index independently. A runtime index outside `[0, N)` MUST be refused with
+    the slot key, index, and N.
+  - Loading and preparation MUST pass the root target and the nearest declared
+    topologies down the instance tree, storing them on each LoadedModule.
+    Selecting a named function from a reading MUST re-enter with that stored
+    context. Definitions and bodies remain shared; independent readings of the
+    same definition MUST NOT borrow each other's resources.
+  - `LoadedModule.path` records only the diagnostic instance path: each single
+    slot adds its key, each indexed slot adds `key.i`, joined with dots. A missing
+    weight diagnostic MUST retain `missing declared weight '<name>'` and include
+    the complete path-plus-weight key, e.g. `layers.3.w`. This MUST NOT extend the
+    RuntimeResource protocol.
+  - `Module.prepare` (semantic side, offline, once): walk every instance,
+    children before their parent, using the same key and index segments as load.
+    Each instance MUST run its definition's converters independently against its
+    own raw subtree. For each declared weight, fetch its converter's parameters by their
     own (raw) names — a one-to-many alias is assembled here via
     `torch.stack` (`prepare`'s only reshaping) — run the converter through
     the evaluator, then strictly validate the result's shape and dtype
@@ -214,16 +234,17 @@ passes only activations; constants come from its resource at first use.
     converter is validated the same way against its raw (or stacked) value,
     unchanged. Output: one safetensors shard plus
     `model.safetensors.index.json`, keyed by clean, dot-joined module paths
-    (e.g. `layer0.attention.w_kv`). Plain directory — no content-hash cache /
+    (e.g. `layers.0.attention.w_kv`). Plain directory — no content-hash cache /
     manifest. The runtime twin never prepares; both twins `load` straight
     from the directory this writes.
   - `Module.load(resource)`: bind this node to `resource` and recurse into
-    each child under `resource.subtree(child.name)`, returning a frozen
-    `LoadedModule` tree. It MUST NOT write bindings onto the `Module`, which
+    each slot under its key and optional index segments, returning a frozen
+    `LoadedModule` tree. A Mapping resource is read through DictResource.
+    It MUST NOT write bindings onto the `Module`, which
     stays pure IR: one `Module` may be read any number of times — two
     checkpoints, two devices — and each reading is independent of the others.
     A child reached from two owners therefore yields one `LoadedModule` per
-    owner rather than one binding the last owner wins. This is the semantic-side
+    instance rather than one binding the last instance wins. This is the semantic-side
     counterpart of the `RuntimeModule` twin's own `load` ([§1.1](#11-runtimemodulepy)).
   - The caller supplies `evaluate(..., device=...)`. Every activation and every
     weight used by the reading MUST already be on that device; a mismatch is
@@ -288,13 +309,19 @@ class Attention:
     `@runtime_func` name set (a tagged method, or a `RuntimeFunction`
     instance class attribute — a heavy kernel that owns its own compilation
     state, standing in for a `@runtime_func`) MUST equal `sem`'s function
-    name set, and the child-attribute name set MUST equal `sem`'s child
-    module name set; missing *or* extra either MUST be rejected.
-  - a child attribute is a `RuntimeModule` **subclass**, not an instance
-    (typically another `@runtime_module` result); the generated `__init__`
-    builds one instance per `sem.modules` entry via `child_cls(ir=<that
-    child's ir Module>)`, so a child class MUST accept the `ir=` constructor
-    keyword (every `@runtime_module` result already does).
+    name set, and the child-attribute name set MUST equal `sem.children`'s
+    key set; missing *or* extra either MUST be rejected. Each slot MUST
+    match both its single/indexed form and its number of elements, and a mismatch
+    diagnostic MUST identify the key and the semantic and runtime counts.
+  - A single child attribute is a RuntimeModule subclass, not an instance.
+    An indexed child is `ModuleList(ChildTwin, N)` or
+    `ModuleList((Twin0, Twin1, ...))`, in the same order as the semantic slot.
+    The generated constructor MUST build one runtime instance per semantic
+    element, passing `ir=<element definition>` and inherited `topologies=`.
+    Child classes MUST accept both constructor keywords. A child's explicit
+    topology tuple replaces inheritance; an omitted declaration MUST inherit
+    from its parent twin. Sharded input and weight projection MUST use this
+    stored effective tuple rather than reading context from the shared definition.
   - weights are filled by name at call time from what `load` bound, so a
     kernel method's caller passes only activations.
   - orchestration methods (`forward` / `init_caches` / …) are reused from the
@@ -487,7 +514,7 @@ class SafetensorsResource:
 class DrawnResource:
     def __init__(
         self,
-        module: Module,
+        module: Module | ModuleList,
         generator: torch.Generator,
         device: str,
         drawn: dict[str, torch.Tensor] | None = None,

@@ -18,7 +18,7 @@ from tests._source import import_dsl
 from tests.fixtures.logical import module_context as context_fixture
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import VerifyError
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, select
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.target import CpuTarget, CudaTarget
 
@@ -33,17 +33,17 @@ def test_the_root_declaration_is_the_only_target_anywhere_below() -> None:
 
     One Target is declared at the outermost Module and every Module below it
     resolves to that one; a child that declares its own is rejected rather than
-    shadowing its owner, and a Module with none says which path it searched.
+    shadowing its instance root, and an undeclared root names the missing target.
     """
     assert _Root.resolve_target() == CudaTarget("nvidia.h200_sxm")
-    assert _Root.inherits.resolve_target() == CudaTarget("nvidia.h200_sxm")
-    assert _Root.topology_free.resolve_target() == CudaTarget("nvidia.h200_sxm")
-    assert _Root.replaces.resolve_target() == CudaTarget("nvidia.h200_sxm")
+    assert select(_Root, "inherits").resolve_target() == CudaTarget("nvidia.h200_sxm")
+    assert select(_Root, "topology_free").resolve_target() == CudaTarget("nvidia.h200_sxm")
+    assert select(_Root, "replaces").resolve_target() == CudaTarget("nvidia.h200_sxm")
 
     forward = _Root.lookup("forward")
     child = Module("child", (forward,), "forward", target=CpuTarget())
     with pytest.raises(ValueError, match="child module 'child' declares its own target"):
-        Module("root", (), "forward", modules=(child,), target=CudaTarget("nvidia.h200_sxm"))
+        Module("root", (), "forward", children={"child": ModuleList(child)}, target=CudaTarget("nvidia.h200_sxm"))
 
     with pytest.raises(ValueError, match="Module 'bare'.*no target is declared"):
         Module("bare", (forward,), "forward").resolve_target()
@@ -74,18 +74,21 @@ def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
     tuple replaces the inherited hierarchy whole rather than extending it.
     """
     assert _Root.inherits.topologies is None
-    assert _Root.inherits.effective_topologies() == (_CTA, _WARP)
-    assert _Root.inherits.resolve_topology("warp") is _WARP
+    inherits = select(_Root, "inherits")
+    assert inherits.effective_topologies() == (_CTA, _WARP)
+    assert inherits.resolve_topology("warp") is _WARP
 
     assert _Root.topology_free.topologies == ()
-    assert _Root.topology_free.effective_topologies() == ()
+    topology_free = select(_Root, "topology_free")
+    assert topology_free.effective_topologies() == ()
     with pytest.raises(ValueError, match="no topology named 'cta'"):
-        _Root.topology_free.resolve_topology("cta")
+        topology_free.resolve_topology("cta")
 
-    assert _Root.replaces.effective_topologies() == (_THREAD,)
-    assert _Root.replaces.resolve_topology("thread") is _THREAD
+    replaces = select(_Root, "replaces")
+    assert replaces.effective_topologies() == (_THREAD,)
+    assert replaces.resolve_topology("thread") is _THREAD
     with pytest.raises(ValueError, match="no topology named 'cta'"):
-        _Root.replaces.resolve_topology("cta")
+        replaces.resolve_topology("cta")
 
 
 @pytest.mark.parametrize("invalid", [[_CTA], (_CTA, object())])

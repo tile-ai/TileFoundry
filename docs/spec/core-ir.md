@@ -256,10 +256,12 @@ is not a thing a cost can be stated about.
 
 - constraints:
   - `select(module, path)` MUST resolve a dotted `path` relative to `module`
-    and return a `Module`. Each segment MUST name a child module, except that
-    the last MAY instead name one of the reached module's own functions and
-    return that module re-entried at it. An empty path is the input module; an
-    empty segment MUST be refused.
+    and return a `Module`. A child segment MUST name a `children` key; an
+    indexed slot MUST be followed by an integer element index in range. The
+    last segment MAY name one of the reached module's own functions. Every
+    non-empty path MUST return a re-rooted copy with the root's exact target
+    and the nearest declared topologies, optionally re-entried at the selected
+    function. An empty path is the input module; an empty segment MUST be refused.
   - `subtree` and `module_functions` MUST enumerate each definition once by
     identity, in DFS order. `function_selectors(module)` MUST return one entry
     per HIR Function definition with its first DFS instance path, including
@@ -279,7 +281,7 @@ class ModuleList(Expr):
     """
 
     key: str | None
-    elements: tuple[Module, ...]
+    elements: tuple[Module | type[RuntimeModule], ...]
     indexed: bool
 
     def __init__(self, definition, count=MISSING): ...
@@ -287,7 +289,10 @@ class ModuleList(Expr):
 
 - constraints:
   - A `ModuleList` is an Expr leaf carrying `key`, `elements`, and `indexed`.
-    Its key is assigned on attachment; its non-empty elements MUST be Modules.
+    Its key is assigned on attachment; its elements MUST be non-empty.
+    Semantic Module slots MUST contain only Module definitions. Runtime twin
+    declarations use RuntimeModule subclasses through the same list surface
+    ([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
     A supplied count MUST be a positive integer, excluding bool.
     One Module without a count creates a non-indexed slot; a count or a tuple
     creates an indexed slot, preserving element order and repeated references.

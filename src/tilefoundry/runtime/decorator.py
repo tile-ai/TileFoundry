@@ -10,8 +10,8 @@ import types
 from dataclasses import replace
 from typing import Callable
 
-from tilefoundry.ir.core.module import Module, _refuse_bare_call
-from tilefoundry.ir.types import Placement
+from tilefoundry.ir.core.module import Module, ModuleList, _refuse_bare_call
+from tilefoundry.ir.types import Placement, Topology
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.runtime.function import RuntimeFunction
@@ -52,6 +52,8 @@ def _is_kernel_impl(value: object) -> bool:
 
 
 def _is_child_impl(value: object) -> bool:
+    if isinstance(value, ModuleList):
+        return all(_is_child_impl(element) for element in value.elements)
     return isinstance(value, type) and issubclass(value, RuntimeModule)
 
 
@@ -101,8 +103,7 @@ class _Twin(RuntimeModule):
         self._resource = resource
         self._placement = placement
         self._bound.clear()
-        for child in self.modules:
-            child.load(resource.subtree(child.name), placement=placement)
+        super().load(resource, placement=placement)
 
     def _to_local(self, value):
         """Into a body: a ``ShardTensor`` projected to this program's slice.
@@ -112,7 +113,7 @@ class _Twin(RuntimeModule):
         body. Named as ``DTensor.to_local``, which answers the same question.
         """
         if isinstance(value, ShardTensor):
-            return value.to_local(self._ir.effective_topologies(), self._placement)
+            return value.to_local(self._topologies, self._placement)
         return value
 
     def _from_local(self, value, declared):
@@ -173,7 +174,7 @@ class _Twin(RuntimeModule):
                 "converter on the model, not a flag on the read side"
             )
         local = ShardTensor(value, declared).to_local(
-            self._ir.effective_topologies(), self._placement
+            self._topologies, self._placement
         )
         self._bound[key] = local if local is value else local.clone()
         return self._bound[key]
@@ -208,6 +209,7 @@ class _Twin(RuntimeModule):
 
 def _check_one_to_one(
     cls_name: str, found_label: str, found: set[str], expected_label: str, expected: set[str],
+    *, detail: str = "",
 ) -> None:
     if found == expected:
         return
@@ -215,7 +217,7 @@ def _check_one_to_one(
     extra = sorted(found - expected)
     raise TypeError(
         f"@runtime_module {cls_name!r}: {found_label} {sorted(found)} must "
-        f"equal {expected_label} {sorted(expected)}; missing {missing}, extra {extra}"
+        f"equal {expected_label} {sorted(expected)}; missing {missing}, extra {extra}{detail}"
     )
 
 
@@ -229,7 +231,7 @@ def runtime_module(sem: Module) -> Callable[[type], type]:
     def _decorate(cls_inner: type) -> type:
         declared = (
             {fn.name for fn in sem.functions}
-            | {child.name for child in sem.modules}
+            | set(sem.children)
             | set(sem.methods)
         )
         reserved = sorted(declared & set(_RESERVED))
@@ -260,30 +262,52 @@ def runtime_module(sem: Module) -> Callable[[type], type]:
             cls_inner.__name__, "@runtime_func names", kernel_names,
             "semantic function names", {fn.name for fn in sem.functions},
         )
+        semantic_counts = {key: len(slot) for key, slot in sem.children.items()}
+        runtime_counts = {
+            key: len(raw[key]) if isinstance(raw[key], ModuleList) else 1
+            for key in child_names
+        }
         _check_one_to_one(
             cls_inner.__name__, "child module names", child_names,
-            "semantic child module names", {m.name for m in sem.modules},
+            "semantic child module names", set(sem.children),
+            detail=f"; semantic N={semantic_counts}, runtime N={runtime_counts}",
         )
 
-        def __init__(self, ir: Module | None = None) -> None:
+        for key, slot in sem.children.items():
+            child_impl = raw[key]
+            runtime_slot = child_impl if isinstance(child_impl, ModuleList) else ModuleList(child_impl)
+            if runtime_slot.indexed != slot.indexed or len(runtime_slot) != len(slot):
+                raise TypeError(
+                    f"@runtime_module {cls_inner.__name__!r}: slot {key!r}: "
+                    f"semantic N={len(slot)}, indexed={slot.indexed}; "
+                    f"runtime N={len(runtime_slot)}, indexed={runtime_slot.indexed}"
+                )
+
+        def __init__(self, ir: Module | None = None, *, topologies: tuple[Topology, ...] = ()) -> None:
             ir = sem if ir is None else ir
             self._ir = ir
+            self._topologies = ir.topologies if ir.topologies is not None else topologies
             self._bound: dict[tuple, object] = {}
             self._resource: RuntimeResource | None = None
             self._placement: Placement | None = None
 
-            children = []
-            for child_ir in ir.modules:
-                child_cls = raw.get(child_ir.name)
-                if child_cls is None:
+            children = {}
+            for key, slot in ir.children.items():
+                child_impl = raw.get(key)
+                if child_impl is None:
                     raise TypeError(
                         f"{cls_inner.__name__}: ir {ir.name!r} has child "
-                        f"{child_ir.name!r}, no matching runtime child class"
+                        f"{key!r}, no matching runtime child class"
                     )
-                child = child_cls(ir=child_ir)
-                setattr(self, child_ir.name, child)
-                children.append(child)
-            RuntimeModule.__init__(self, name=ir.name, entry=ir.entry, modules=tuple(children))
+                definitions = child_impl.elements if isinstance(child_impl, ModuleList) else (child_impl,)
+                instances = tuple(
+                    child_cls(ir=child_ir, topologies=self._topologies)
+                    for child_cls, child_ir in zip(definitions, slot.elements, strict=True)
+                )
+                child = instances if slot.indexed else instances[0]
+                setattr(self, key, child)
+                children[key] = child
+            RuntimeModule.__init__(self, name=ir.name, entry=ir.entry, children=children)
 
             for fn in ir.functions:
                 body = raw.get(fn.name)
