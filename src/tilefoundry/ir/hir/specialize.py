@@ -584,9 +584,6 @@ def _collect_entries(value: object, found: dict[str, object]) -> None:
 
 def is_concrete(fn: Function, scope=None) -> bool:
     """Whether *fn* states extents everywhere a size is required."""
-    from tilefoundry.ir.core.module import reachable_functions  # noqa: PLC0415
-
-    reachable_functions(fn, scope)
     return not _SymbolicDimVisitor().visit_function(fn, scope)
 
 

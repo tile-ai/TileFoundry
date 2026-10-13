@@ -26,7 +26,9 @@ from tilefoundry.target.base import Target, target_instance
 
 ModuleFunction = Union[HirFunction, PrimFunction]
 
-_MISSING_PREPARED_WEIGHT = "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
+_MISSING_PREPARED_WEIGHT = (
+    "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
+)
 
 
 def subtree(root: "Module"):
@@ -59,16 +61,14 @@ def module_functions(root: "Module") -> tuple[ModuleFunction, ...]:
 
 def resolve_callee(call: Call, scope=None):
     """Resolve a function and its scope through an explicit call target."""
-    from tilefoundry.visitor_registry.contexts import TypeInferContext  # noqa: PLC0415
-
     if isinstance(call.target, HirFunction):
-        inner = TypeInferContext(scope=scope).scope_for(call.target)
+        inner = None if scope is None else _replace(scope.enter(call.target), function=call.target)
         return call.target, inner
     if instance_slot(call.target) is None:
         return None, scope
     if scope is None:
         raise ValueError("instance call requires a FunctionScope")
-    inner = TypeInferContext(scope=scope).scope_for(None, call.target)
+    inner = scope.enter(call.target)
     callee = inner.module.entry_function()
     return callee, _replace(inner, function=callee)
 
@@ -669,8 +669,7 @@ class LoadedModule:
         matches = tuple(fn for fn in module.functions if fn.name == name)
         if len(matches) == 1:
             return _replace(
-                self,
-                module=_reentered(module, name, target=self.target, topologies=self.topologies),
+                self, module=_reentered(module, name, target=self.target, topologies=self.topologies)
             )
         if len(matches) > 1:
             raise AttributeError(

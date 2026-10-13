@@ -53,6 +53,27 @@ class FunctionScope:
         if not self.instances:
             object.__setattr__(self, "instances", (ModuleInstance(self.module),))
 
+    def enter(self, target: object) -> FunctionScope:
+        """Enter a target's instance using the current frame's child definitions.
+
+        Targets may retain slots from before replace(); only their key and index
+        locate the definition. A Function target keeps the current instance.
+        """
+        from tilefoundry.ir.core.module import (  # noqa: PLC0415
+            instance_slot,
+            validate_instance_slot,
+        )
+
+        located = instance_slot(target)
+        if located is None:
+            return FunctionScope(self.module, None, self.instances)
+        slot, raw_index = located
+        current_slot = self.module.children[slot.key]
+        index = validate_instance_slot(current_slot, raw_index)
+        module = current_slot.elements[index if isinstance(index, int) else 0]
+        frame = ModuleInstance(module, slot.key, index)
+        return FunctionScope(module, None, (*self.instances, frame))
+
 
 @dataclass
 class TypeInferContext:
@@ -78,20 +99,7 @@ class TypeInferContext:
         """
         if self.scope is None:
             return None
-        from tilefoundry.ir.core.module import (  # noqa: PLC0415
-            instance_slot,
-            validate_instance_slot,
-        )
-
-        located = instance_slot(target)
-        if located is None:
-            return FunctionScope(self.scope.module, callee, self.scope.instances)
-        slot, raw_index = located
-        current_slot = self.scope.module.children[slot.key]
-        index = validate_instance_slot(current_slot, raw_index)
-        module = current_slot.elements[index if isinstance(index, int) else 0]
-        frame = ModuleInstance(module, slot.key, index)
-        return FunctionScope(module, callee, (*self.scope.instances, frame))
+        return replace(self.scope.enter(target), function=callee)
 
     def resolve_target(self):
         """The root instance's target, or None without a declared target."""
