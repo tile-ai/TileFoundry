@@ -510,10 +510,6 @@ class Module:
 
         [runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)
         """
-        if isinstance(resource, Mapping):
-            from tilefoundry.runtime.resource import DictResource  # noqa: PLC0415
-
-            resource = DictResource(resource)
         return self._load_under(resource, self.target, (), "")
 
     def _load_under(self, resource, target, topologies, path: str) -> "LoadedModule":

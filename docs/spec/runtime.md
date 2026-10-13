@@ -239,8 +239,7 @@ passes only activations; constants come from its resource at first use.
     from the directory this writes.
   - `Module.load(resource)`: bind this node to `resource` and recurse into
     each slot under its key and optional index segments, returning a frozen
-    `LoadedModule` tree. A Mapping resource is read through DictResource.
-    It MUST NOT write bindings onto the `Module`, which
+    `LoadedModule` tree. It MUST NOT write bindings onto the `Module`, which
     stays pure IR: one `Module` may be read any number of times — two
     checkpoints, two devices — and each reading is independent of the others.
     A child reached from two owners therefore yields one `LoadedModule` per
