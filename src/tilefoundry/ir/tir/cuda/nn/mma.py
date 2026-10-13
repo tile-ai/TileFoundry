@@ -9,15 +9,6 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import (
-    ComposedLayoutPattern,
-    LayoutPattern,
-    MeshPattern,
-    WildcardPattern,
-)
-from tilefoundry.ir.pattern import (
-    predicates as P,
-)
 from tilefoundry.ir.types import DType, Mesh, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
@@ -39,22 +30,6 @@ _FP_ACC_WIDEN = {
     (DType.bf16, DType.bf16),
     (DType.f32, DType.f32),
 }
-
-
-_WARP_ALIGNED = ComposedLayoutPattern(
-    inner=None,
-    offset=WildcardPattern("p0"),
-    outer=LayoutPattern(
-        ((WildcardPattern("n"),),),
-        ((1,),),
-        predicates=(
-            WildcardPattern("n") % 32 == 0,
-            P.Forward(per_mode=True),
-            P.Injective(per_mode=True),
-        ),
-    ),
-    predicates=(WildcardPattern("p0") % 32 == 0,),
-)
 
 
 @register_op(category="nn", name="tiled_mma")
@@ -93,10 +68,13 @@ class TiledMma(Op):
     execution_mesh = ParamDef(
         kind="attribute",
         annotation=Mesh,
-        pattern=MeshPattern(("thread",), _WARP_ALIGNED),
         optional=True,
         default=None,
     )
+
+    def execution_mesh_pattern(self):
+        """The atom's lane frame, preceded by independent group modes."""
+        return self.atom.execution_mesh_pattern(groups=True)
 
 
 @register_typeinfer(TiledMma)

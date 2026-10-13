@@ -1047,6 +1047,11 @@ T.tiled_mma(acc, lhs, rhs, atom=T.cuda.sm80.Mma())
 - `rhs` MUST match `atom.role("B")` and is read-only.
 - A, B, and C shapes MUST be `(M,K)`, `(K,N)`, and `(M,N)` respectively;
   operands MUST use the atom's declared dtypes and fragment arrangements.
+- `TiledMma` generates its execution-mesh declaration from the atom's lane
+  shape and strides, preceded by zero or more group modes captured by
+  `StarPattern`. The whole matched layout MUST be forward and injective,
+  and its offset MUST be aligned to the atom's participant count. Operand
+  meshes retain the atom's exact lane axes.
 - The active physical mesh MUST satisfy `atom.execution_mesh_pattern()`. If the atom
   carries `mesh=...`, its affine offset and ordered lanes MUST equal the active
   frame.
@@ -1210,7 +1215,9 @@ class CopyAsyncTensor(Op):
     with one contiguous mode and every other byte stride a multiple of 16.
     The shared end is an at-most-five-dimensional box, each extent at most
     256, optionally using a 32-, 64-, or 128-byte TMA swizzle.
-  - Both ends walk the same tile modes. The execution mesh is one aligned warp.
+  - Both ends walk the same tile modes. The execution mesh is one aligned warp,
+    preceded by zero or more size-one modes with arbitrary strides. The whole
+    matched layout MUST be forward and injective; its offset is a multiple of 32.
   - The declaration requires the target's `tma` capability. CUDA codegen MUST
     reject it until host-encoded tensor-map construction exists; this stage
     does not silently lower it to another copy instruction.

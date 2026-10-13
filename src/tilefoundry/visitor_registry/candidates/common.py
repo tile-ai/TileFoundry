@@ -19,7 +19,13 @@ from tilefoundry.ir.tir.where import Where as TirWhere
 
 from . import register_candidates
 
-register_candidates(Reshard, (Copy,))
+
+@register_candidates(Reshard, (Copy,))
+def _reshard_operands(call, instruction):
+    """Reshard states both transfer types; its landing attributes are already in the result."""
+    return {}, (call.args[0].type, call.type)
+
+
 register_candidates(HirBinary, (TirBinary,))
 register_candidates(HirUnary, (TirUnary,))
 register_candidates(HirClamp, (TirClamp,))

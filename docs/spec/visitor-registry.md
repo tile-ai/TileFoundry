@@ -832,3 +832,26 @@ subclass (built on
 [visitor-mutator](./visitor-mutator.md)), and their `Context`
 dataclass. Composition is explicit; there is no hidden
 framework-side magic that auto-binds them.
+
+
+## 11. Instruction candidate mappings
+
+`register_candidates(hir_op, tir_ops)` appends instructions in registration
+order. Used as a decorator, it registers one callback per HIR operation:
+`callback(call, instruction_type) -> (attributes, operand_types)`. A second
+callback is an error. A registration without a decorated callback retains the
+existing callback; an operation without one uses the default mapping.
+
+The default maps READ operands in input order and WRITE operands to `call.type`,
+and copies same-named attributes. A non-default HIR attribute with no
+instruction parameter counterpart raises a `ValueError` naming the HIR field
+and instruction. `instruction_from_hir` applies the same check to automatic
+lowering through `sole_candidate`. Reshard supplies source/result types;
+IndexSelect supplies source/result/index and maps `fill_value` to `fill`;
+MatMul supplies the result as acc and describes lhs/rhs bytes as M,K and K,N,
+permuting shape and strides for KM/NK. It does not invent an accumulator layout.
+
+Target capability records supply an open atom class to the instruction
+matcher. Its frozen result records contain the constructed instruction and
+full ordered matcher path; [schedule](./schedule.md) owns acceptance and
+[inspection](./inspection.md) owns path and refusal rendering.

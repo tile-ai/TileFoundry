@@ -14,6 +14,7 @@ from tilefoundry.ir.pattern import (
     Pattern,
     PatternMatcher,
     ShardLayoutPattern,
+    StarPattern,
     SwitchPattern,
     TensorPattern,
     WildcardPattern,
@@ -31,15 +32,22 @@ from tilefoundry.ir.types.utils import tile_view_layout
 _MISS = object()
 
 
-def execution_mesh_pattern(execution_mesh: Mesh) -> MeshPattern:
+def execution_mesh_pattern(execution_mesh: Mesh, *, groups=False) -> MeshPattern:
     """Any aligned run matching an instruction's execution mesh."""
     (topology,) = execution_mesh.topologies
     per_mode = (P.Forward(per_mode=True), P.Injective(per_mode=True))
+    outer = LayoutPattern.from_layout(execution_mesh.layout, predicates=per_mode)
+    if groups:
+        outer = LayoutPattern(
+            ((StarPattern(WildcardPattern("g")), *outer.shape[0]),),
+            ((StarPattern(WildcardPattern("gs")), *outer.strides[0]),),
+        )
     layout = ComposedLayoutPattern(
         inner=None,
         offset=WildcardPattern("p0"),
-        outer=LayoutPattern.from_layout(execution_mesh.layout, predicates=per_mode),
-        predicates=(WildcardPattern("p0") % topology.size == 0,),
+        outer=outer,
+        predicates=(WildcardPattern("p0") % topology.size == 0,)
+        + ((P.Forward(), P.Injective()) if groups else ()),
     )
     return MeshPattern((topology.name,), layout)
 
@@ -161,8 +169,8 @@ class MmaAtom(Printable):
         return self.execution_mesh
 
     @classmethod
-    def execution_mesh_pattern(cls) -> MeshPattern:
-        return execution_mesh_pattern(cls.execution_mesh)
+    def execution_mesh_pattern(cls, *, groups=False) -> MeshPattern:
+        return execution_mesh_pattern(cls.execution_mesh, groups=groups)
 
     def on(self, mesh: Mesh) -> MmaAtom:
         return type(self)(mesh=mesh, **self.bindings)

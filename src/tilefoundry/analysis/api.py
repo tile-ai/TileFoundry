@@ -107,6 +107,49 @@ def _closure(target: Target, roots: tuple[str, ...]) -> tuple[Analyzer, ...]:
     return tuple(ordered)
 
 
+def build_iteration_scopes(
+    module: Module,
+    function: Function,
+    *,
+    topology_level: str | None = None,
+    dims: Mapping[str, int] | None = None,
+    analyzers: tuple[Analyzer, ...] = (),
+    options: object | None = None,
+) -> AnalyzeContext:
+    """Resolve geometry, check the program, and bind scopes without running analyses."""
+    if not isinstance(module, Module):
+        raise TypeError(
+            f"analyze: expected a Module, got {type(module).__name__}. A Function "
+            "carries no execution context; select the Module that owns it."
+        )
+    if not isinstance(function, Function):
+        raise TypeError(f"analyze: expected an hir.Function, got {type(function).__name__}")
+    if not module.owns(function):
+        raise AnalysisError(
+            f"analyze: {function.name!r} is not a function of module {module.name!r}"
+        )
+    try:
+        module, function = resolve_program_geometry(
+            module,
+            function,
+            dims,
+            TypeInferContext(scope=FunctionScope(module, function)),
+        )
+    except SpecializationError as error:
+        raise AnalysisError(f"analyze: {error}") from None
+
+    target = module.resolve_target()
+    topologies = module.effective_topologies()
+    if topology_level is None:
+        topology_level = topologies[0].name if topologies else None
+
+    function = check_program(module, function, topology_level=topology_level, analyzers=analyzers)
+    context = AnalyzeContext(module, target, topology_level, options)
+    context.root = context.current = ScopeBuilder(module, function, ctx=context).build()
+
+    return context
+
+
 def analyze(
     module: Module,
     function: Function,
@@ -128,39 +171,17 @@ def analyze(
     if topology_level is not None and level is not None and topology_level != level:
         raise ValueError("analyze: topology_level and level disagree")
     topology_level = topology_level if topology_level is not None else level
-    if not isinstance(module, Module):
-        raise TypeError(
-            f"analyze: expected a Module, got {type(module).__name__}. A Function "
-            "carries no execution context; select the Module that owns it."
-        )
-    if not isinstance(function, Function):
-        raise TypeError(f"analyze: expected an hir.Function, got {type(function).__name__}")
-    if not module.owns(function):
-        raise AnalysisError(
-            f"analyze: {function.name!r} is not a function of module {module.name!r}"
-        )
     roots = _roots(analysis)
     result_module = module
-    try:
-        module, function = resolve_program_geometry(
-            module,
-            function,
-            dims,
-            TypeInferContext(scope=FunctionScope(module, function)),
-        )
-    except SpecializationError as error:
-        raise AnalysisError(f"analyze: {error}") from None
-
-    target = module.resolve_target()
-    topologies = module.effective_topologies()
-    if topology_level is None:
-        topology_level = topologies[0].name if topologies else None
-    closure = _closure(target, roots)
-
-    function = check_program(module, function, topology_level=topology_level, analyzers=closure)
+    closure = _closure(module.resolve_target(), roots) if isinstance(module, Module) else ()
+    context = build_iteration_scopes(
+        module, function, topology_level=topology_level, dims=dims,
+        analyzers=closure, options=options,
+    )
+    module = context.module
+    topology_level = context.topology_level
+    function = context.root.owner
     functions = (function,)
-    context = AnalyzeContext(module, target, topology_level, options)
-    context.root = context.current = ScopeBuilder(module, function, ctx=context).build()
 
     order: list[type[IRMetadata]] = []
     written_records: set[tuple[int, type]] = set()
@@ -279,4 +300,4 @@ def _require_owned_writes(
     return written
 
 
-__all__ = ["AnalysisResult", "analyze"]
+__all__ = ["AnalysisResult", "analyze", "build_iteration_scopes"]

@@ -63,14 +63,23 @@ no local logical box, it compares whole types instead.
 
 Each single-issue operand MUST match the corresponding instruction parameter
 pattern. `match_instruction(op_type, attributes, operand_types, mesh, *, scope,
-repeat=None, order=None)` returns all accepted instruction instances. The
+repeat=None, order=None)` returns a tuple of frozen `InstructionMatch(op, path)`
+records. Each op uses the existing constructor; its path contains every binding
+from the closed matcher in binding order. A `ScheduleRefusal` carries the
+rejected path and failed-node reason. Type inference only validates the matches;
+inspection renders their paths. The
 operand types include every input parameter, including the destination, in
 schema order. An atom class in `attributes` leaves its parameters open; an
-atom instance requests that exact instruction. Open matching first reads dtype
+atom instance requests that exact instruction. The execution mesh matches first,
+then the shared input scope check verifies each operand holder and storage.
+ScheduleOp skips that check in the outer type-inference visitor; every explicit
+schedule reaches it through this matcher. Open matching then reads dtype
 and storage form, then enumerates tile extents admitted by the parameter
 patterns, divisibility, and tile projection.
-It reads layout major from the largest projectable tile, then performs the
-closed instruction checks for every projectable extent.
+For each projectable extent it separately matches layout major, solves the
+bindings, constructs an instance, and performs the closed instruction checks.
+A rejected extent does not stop other extents from matching. If none match,
+the refusal comes from the largest projectable extent.
 `scope` is required and reaches the verifier unchanged, including its target
 capability checks. Explicit schedule inference uses this same matcher with
 the authored instruction attributes, scope, repeat, and order.

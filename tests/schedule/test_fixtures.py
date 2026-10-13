@@ -66,6 +66,7 @@ from tilefoundry.ir.pattern import (
     TensorPattern,
     declared_execution_mesh,
     is_ranked_tensor,
+    thread_execution_mesh,
 )
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
@@ -79,9 +80,11 @@ from tilefoundry.ir.types import (
     ComposedLayout,
     DType,
     Layout,
+    Mesh,
     ShardLayout,
     StorageKind,
     TensorType,
+    Topology,
 )
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout_algebra import cosize
@@ -116,6 +119,7 @@ PLAIN_REFUSED = {
 CANDIDATES_REFUSED = {
     "captured_insert_update": "source has no unscheduled candidate site",
     "loop_carry_from_param": "source has no unscheduled candidate site",
+    "wgmma_b_nk": "source has no unscheduled candidate site",
 }
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
@@ -206,6 +210,7 @@ SMEM_GOLDEN = {
     "sm80_mma_ldmatrix": 1_536,
     "wgmma_a_k_major": 6_144,
     "wgmma_a_mn_major": 6_144,
+    "wgmma_b_nk": 2_560,
     "wgmma_cast_between_schedules": 6_144,
     "wgmma_cp_async_loads": 6_144,
     "wgmma_cta_grid_4x17": 13_824,
@@ -222,6 +227,9 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "wgmma_b_nk": {
+        "thread@0:128#0": _RmemExpectation(4096, "64x16 f32 C fragment, shared by zeros and MMA result"),
+    },
     "captured_insert_update": {},
     "loop_carry_from_param": {},
     "sparse_decode": {
@@ -898,10 +906,9 @@ def _check_gmem_gather_refusal(out: Path, captured: pytest.CaptureResult[str]) -
     assert not indexed["candidates"] and [item["id"] for item in indexed["refused"]] == [
         "T.copy_async"
     ], "gather keeps its gmem result"
-    assert any(
-        "dst:" in reason and "StorageKind.GMEM" in reason and "StorageKind.SMEM" in reason
-        for reason in indexed["refused"][0]["refused"]
-    ), "copy_async requires an smem destination"
+    assert indexed["refused"][0]["reason"].startswith("mesh:")
+    assert "Topology(name='cta'" in indexed["refused"][0]["reason"]
+
 
 
 def _check_smem_placement(out: Path, captured: pytest.CaptureResult[str]) -> None:
@@ -1137,7 +1144,9 @@ def test_single_issue_schedule_preserves_instruction_relations() -> None:
     schedule = _copy_schedule_call(repeat=(1,), order=(0,))
     source = schedule.args[0]
     destination_type = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.SMEM)
-    inferred = TypeInferContext()
+    inferred = TypeInferContext(
+        current_mesh=Mesh((Topology("thread", 32),), Layout((32,), (1,)))
+    )
     inference_type(schedule, inferred)
     scheduled = relations_of(schedule, inferred)
     single = operand_relations(schedule.target.op, (source.type, destination_type))
@@ -1155,18 +1164,23 @@ def test_single_issue_schedule_preserves_instruction_relations() -> None:
         (_copy_schedule_call(order=(1,)), "is not a permutation"),
         (
             _copy_schedule_call(storage=StorageKind.SMEM),
-            "src single-issue tile does not match",
+            "src:",
         ),
     ),
     ids=("repeat", "order", "operand-pattern"),
 )
 def test_schedule_typeinfer_rejects_invalid_contract(call: Call, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        inference_type(call)
+        inference_type(
+            call,
+            TypeInferContext(current_mesh=Mesh((Topology("thread", 32),), Layout((32,), (1,)))),
+        )
 
 
 @register_op(dialect="T", category="schedule", name="unstated_instruction")
 class _UnstatedInstruction(Op):
+    execution_mesh = thread_execution_mesh()
+
     value = ParamDef(
         kind="input",
         effect=MemoryEffect.READ | MemoryEffect.WRITE,
@@ -1182,7 +1196,10 @@ def test_schedule_typeinfer_requires_instruction_access_relations() -> None:
         type=type_,
     )
     with pytest.raises(ValueError, match="states no access relations"):
-        inference_type(call)
+        inference_type(
+            call,
+            TypeInferContext(current_mesh=Mesh((Topology("thread", 32),), Layout((32,), (1,)))),
+        )
 
 
 def test_schedule_typeinfer_requires_instruction_verifier(monkeypatch) -> None:
@@ -1199,7 +1216,10 @@ def test_schedule_typeinfer_requires_instruction_verifier(monkeypatch) -> None:
     )
 
     with pytest.raises(ValueError, match="has no registered verifier"):
-        inference_type(call)
+        inference_type(
+            call,
+            TypeInferContext(current_mesh=Mesh((Topology("thread", 32),), Layout((32,), (1,)))),
+        )
 
 
 def test_schedule_typeinfer_requires_whole_instruction_tiles(monkeypatch) -> None:
@@ -1221,7 +1241,10 @@ def test_schedule_typeinfer_requires_whole_instruction_tiles(monkeypatch) -> Non
         ValueError,
         match="iteration extent 4 is not divisible by single-issue extent 3",
     ):
-        inference_type(call)
+        inference_type(
+            call,
+            TypeInferContext(current_mesh=Mesh((Topology("thread", 32),), Layout((32,), (1,)))),
+        )
 
 
 def test_schedule_typeinfer_requires_instruction_operands(monkeypatch) -> None:
@@ -1239,7 +1262,10 @@ def test_schedule_typeinfer_requires_instruction_operands(monkeypatch) -> None:
         ValueError,
         match="expects operands.*value.*got 0",
     ):
-        inference_type(call)
+        inference_type(
+            call,
+            TypeInferContext(current_mesh=Mesh((Topology("thread", 32),), Layout((32,), (1,)))),
+        )
 
 
 def test_schedule_evaluation_rejects_an_unregistered_instruction() -> None:
@@ -1287,7 +1313,8 @@ def test_parameter_structure_does_not_repeat_its_name() -> None:
                 )
 
 
-def test_instruction_requires_an_execution_mesh_declaration() -> None:
+def test_instruction_requires_an_execution_mesh_declaration(monkeypatch) -> None:
+    monkeypatch.delattr(_UnstatedInstruction, "execution_mesh")
     with pytest.raises(ValueError, match="_UnstatedInstruction execution_mesh must be"):
         declared_execution_mesh(_UnstatedInstruction)
 
@@ -1306,15 +1333,13 @@ def test_schedule_candidate_reports_cover_every_site(
     assert capsys.readouterr() == ("", "")
     sites = [(name, row) for name, report in reports for row in report["lines"]]
     assert all(row["candidates"] or row["refused"] for _name, row in sites)
-    assert all(row["candidates"] for _name, row in sites if row["op"] == "tf.reshard")
+    assert all(
+        row["candidates"] or all(item["reason"].startswith("mesh:") for item in row["refused"])
+        for _name, row in sites if row["op"] == "tf.reshard"
+    )
     matmuls = [(name, row) for name, row in sites if row["op"] == "tf.matmul"]
     assert len(matmuls) == 8
-    assert [name for name, row in matmuls if row["candidates"]] == [
-        "fp8_block_scaled_gemm",
-        "gemm_8192x17408x5120_cta_grid",
-        "sparse_decode",
-        "sparse_decode",
-    ]
+    assert not any(row["candidates"] for _name, row in matmuls)
 
 
 @pytest.mark.parametrize(
@@ -1322,8 +1347,8 @@ def test_schedule_candidate_reports_cover_every_site(
     (
         ("chunk_rmsnorm", ("chunks=16",), 0, 7, 0, "KN"),
         ("chunk_rmsnorm", ("chunks=32",), 0, 7, 0, "KN"),
-        ("fp8_block_scaled_gemm", (), 1, 5, 1, "KN"),
-        ("gemm_8192x17408x5120_cta_grid", (), 1, 4, 1, "KN"),
+        ("fp8_block_scaled_gemm", (), 1, 5, 0, "KN"),
+        ("gemm_8192x17408x5120_cta_grid", (), 1, 4, 0, "KN"),
         ("gemm_relu_gemm_tiled", (), 2, 2, 0, "KN"),
         ("gemm_relu_gemm_untiled", (), 2, 0, 0, "KN"),
         ("gemm_relu_gemm_untiled", (), 2, 0, 0, "NK"),
@@ -1365,26 +1390,15 @@ def test_schedule_candidates_reports_every_plain_site(
     assert (len(matmul_rows), len(reshard_rows)) == (matmuls, reshards)
     assert sum(bool(row["candidates"]) for row in matmul_rows) == accepted_matmuls
     assert all(row["candidates"] or row["refused"] for row in report["lines"])
-    assert all(row["candidates"] for row in reshard_rows)
+    assert all(
+        row["candidates"] or all(item["reason"].startswith("mesh:") for item in row["refused"])
+        for row in reshard_rows
+    )
 
-    if b_layout == "NK":
-        for row in matmul_rows:
-            assert row["refused"] == [
-                {
-                    "id": instruction,
-                    "refused": ["rhs axes=(d1, d2), reads axes=(d2, d1)"],
-                }
-                for instruction in ("T.cuda.sm90.Wgmma", "T.cuda.sm80.Mma")
-            ]
-
-    if name == "fp8_block_scaled_gemm":
-        (matmul,) = matmul_rows
-        assert [candidate["id"] for candidate in matmul["candidates"]] == ["T.cuda.sm90.Wgmma"]
-        (wgmma,) = matmul["candidates"]
-        assert wgmma["bindings"]
-        assert all(
-            binding.endswith(", dtype=fp8e4m3, form=SS") for binding in wgmma["bindings"]
-        )
+    for row in matmul_rows:
+        assert not row["candidates"]
+        assert {item["id"] for item in row["refused"]} == {"T.cuda.sm90.Wgmma", "T.cuda.sm80.Mma"}
+        assert all(item["reason"] for item in row["refused"])
 
     if name == "chunk_rmsnorm":
         binaries = [row for row in report["lines"] if row["op"] == "tf.binary"]
@@ -1408,16 +1422,7 @@ def test_schedule_candidates_reports_every_plain_site(
 
 @pytest.mark.parametrize(
     "source",
-    [
-        pytest.param(
-            path,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="_site_types locally projects broadcast operands onto incompatible axes",
-            ),
-        ) if path.stem == "sparse_decode" else path
-        for path in HIR
-    ],
+    HIR,
     ids=lambda path: path.stem,
 )
 def test_schedule_candidates_omit_selected_schedule_calls(

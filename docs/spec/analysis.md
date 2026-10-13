@@ -1,12 +1,19 @@
 # TileFoundry Spec — analysis (authored-HIR metrics + per-stage target facts)
 
 This spec owns TileFoundry's fact layer: everything a later stage decides
-*over*, and nothing that decides anything itself. It has two surfaces:
+*over*, and nothing that decides anything itself. It has three surfaces:
 
 | Surface | Entry | What it states |
 |---|---|---|
 | Program check | `check_program(module, function, topology_level=..., budget=..., analyzers=...)` | an inlined Function view after validating one authored program, its declared topology, and what each requested analysis needs of it |
+| Iteration context | `build_iteration_scopes(module, function, topology_level=..., dims=..., analyzers=(), options=None)` | an `AnalyzeContext` with resolved execution module and bound root/current scopes, without running an analysis family |
 | Composed measurement | `analyze(module, function, analysis=...)` | one or more root analyses and their union dependency closure, leaving typed Metadata on the IR |
+
+`build_iteration_scopes` resolves dimensions, runs `check_program` with the
+supplied analyzer checkers, and builds the scopes. Its `module` is the execution
+module after binding dimensions. `analyze` passes its dependency closure and
+options through this same entry; its `AnalysisResult.module` remains the
+caller's module.
 
 Per-Op semantic derivation — typeinfer, the forward access relation, shard
 propagation — is owned by [semantic-analysis](./semantic-analysis.md), and the
@@ -1496,6 +1503,10 @@ evidence through the same completeness rules as other refused or missing
 boundaries. A mesh scope adds no
 iteration dimension: it keeps its parent's depth and domain, so the first
 `depth` input dimensions of an access relation remain the enclosing loops.
+`IterationScope.execution_mesh()` composes all enclosing MeshRegion meshes
+from outer to inner, matching type inference's current mesh.
+`enclosing_mesh()` returns only the nearest region's mesh.
+
 `IterationScope.domain` is the accumulated authored loop domain;
 `IterationScope.accesses` and `IterationScope.refused` are the shared family
 inputs for movement and footprint conclusions.

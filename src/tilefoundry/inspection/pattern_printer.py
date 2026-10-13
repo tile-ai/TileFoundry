@@ -8,6 +8,7 @@ from enum import Enum
 from tilefoundry.ir.clause.layout import is_layout_wildcard
 from tilefoundry.ir.core.param_def import collect_param_defs
 from tilefoundry.ir.pattern.pattern import Pattern
+from tilefoundry.ir.pattern.predicates import Formula, failing
 from tilefoundry.ir.pattern.utils import declared_execution_mesh
 from tilefoundry.ir.types import Broadcast, DType, Split
 from tilefoundry.ir.types.dim import DimFloorDiv, DimMul, DimVar, is_dim_op_call
@@ -55,23 +56,53 @@ class PatternPrinter:
             return ((tuple(bindings), pattern),)
         return self._dispatch("alternatives", pattern, tuple(bindings))
 
-    def refusal(self, refusal) -> str:
-        """Render one structural match refusal at a consumer boundary."""
+    def refusal_reason(self, refusal, parameter=None) -> str:
+        """The failed node's reason, optionally named by its instruction operand."""
         if refusal is None:
-            return "the pattern did not match"
-        reason = (
-            self._dispatch("refused", refusal.pattern, refusal.subject)
-            if isinstance(refusal.pattern, Pattern)
-            else self.refused_Pattern(refusal.pattern, refusal.subject)
-        )
-        bindings = self._written_bindings(refusal.bindings.items())
-        return reason if not bindings else f"{reason} ({bindings})"
+            reason = "the pattern did not match"
+        else:
+            pattern = refusal.pattern
+            if isinstance(pattern, Formula):
+                failed = failing((pattern,), refusal.bindings)
+                if failed is not None:
+                    pattern = failed
+            reason = (
+                self._dispatch("refused", pattern, refusal.subject)
+                if isinstance(pattern, Pattern)
+                else self.refused_Pattern(pattern, refusal.subject)
+            )
+        return reason if parameter is None else f"{parameter}: {reason}"
+
+    def match_data(self, paths, reason="") -> dict:
+        """Merge ordered match paths without separating parameters from internal captures."""
+        merged = {}
+        for path in paths:
+            for name, value in path:
+                written = getattr(value, "name", str(value))
+                values = merged.setdefault(name, [])
+                if written not in values:
+                    values.append(written)
+        return {"path": [{"name": name, "value": "|".join(values)}
+                         for name, values in merged.items()], "reason": reason}
+
+    def match_text(self, identifier, data) -> str:
+        """Write an instruction and its ordered path, followed by a refusal reason."""
+        path = ", ".join(f"{item['name']}={item['value']}" for item in data["path"])
+        first = identifier + (f"  {path}" if path else "")
+        reason = data["reason"]
+        return first if not reason else f"{first}\n  {reason}"
+
+    def refusal(self, refusal) -> str:
+        """Render structural evidence with the same path/reason form as instruction reports."""
+        path = () if refusal is None else tuple(refusal.bindings.items())
+        data = self.match_data((path,), self.refusal_reason(refusal))
+        return self.match_text("", data).lstrip()
 
     def refused_Pattern(self, pattern, subject) -> str:
-        rules = self.rules(pattern)
-        if rules:
-            return f"could not satisfy {rules[0]}"
         return f"{subject!r} does not match {self.written(pattern)}"
+
+    def refused_Predicate(self, pattern, subject) -> str:
+        return "could not satisfy " + "; ".join(self.rules(pattern))
 
     def refused_SwitchPattern(self, pattern, subject) -> str:
         options = ", ".join(self._written_value(value) for value, _ in pattern.branches)

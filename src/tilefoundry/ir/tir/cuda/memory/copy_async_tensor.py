@@ -14,7 +14,9 @@ from tilefoundry.ir.pattern import (
     DistinctConstraint,
     LayoutPattern,
     MeshPattern,
+    OrPattern,
     SameModesConstraint,
+    StarPattern,
     SwitchPattern,
     SwizzlePattern,
     WildcardPattern,
@@ -134,15 +136,14 @@ def TmaOperandPattern(storage: str, dtype: str) -> SwitchPattern:
 
 def _warp_scope() -> MeshPattern:
     layout = LayoutPattern(
-        ((32,),),
-        ((1,),),
-        predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
+        ((StarPattern(OrPattern(1)), 32),),
+        ((StarPattern(WildcardPattern()), 1),),
     )
     sliced = ComposedLayoutPattern(
         inner=None,
         offset=WildcardPattern("p0"),
         outer=layout,
-        predicates=(WildcardPattern("p0") % 32 == 0,),
+        predicates=(WildcardPattern("p0") % 32 == 0, P.Forward(), P.Injective()),
     )
     return MeshPattern(("thread",), sliced)
 

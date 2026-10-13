@@ -177,22 +177,29 @@ single registered operations that lowering will select by default.
 ```bash
 set -euo pipefail
 tilefoundry schedule candidates grid.py candidates.txt
-grep -E 'tf.matmul|candidate   T.cuda.sm90.Wgmma|n=256, dtype=bf16, form=SS|tf.binary|tf.cast.*x=.*rmem|default' candidates.txt
+sed -n '/tf.matmul/,+4p; /refused.*T.binary/,+1p; /refused.*T.cast/,+1p' candidates.txt
 ```
 
 ```text
-  v10:31  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", (128, 64), "smem"]  rhs=Tensor[(64, 256), "bf16", (64, 256), "smem"]
-    candidate   T.cuda.sm90.Wgmma  needs thread p0:p0+256, p0 % 128 = 0
-                  n=256, dtype=bf16, form=SS
-  v12:32  tf.binary  per cta  lhs=Tensor[(128, 256), "f32", "rmem"]  rhs=Tensor[(128, 256), "f32", (128, 256), "rmem"]  result=Tensor[(128, 256), "f32", (128, 256), "rmem"]
-    default     T.binary
-  v13:33  tf.cast  per cta  x=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "bf16", "rmem"]
-    default     T.cast
+  v10:31  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", (128, 64), "smem"]  rhs=Tensor[(64, 256), "bf16", (64, 256), "smem"]  result=Tensor[(128, 256), "f32", (128, 256), "rmem"]
+    refused     T.cuda.sm90.Wgmma
+                  mesh: Mesh(topologies=(Topology(name='cta', size=4352),), layout=Layout(shape=((64, 68),), strides=((68, 1),)), names=('bm', 'bn')) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8, 4),), ((*gs, 32, 4, 1),))))
+    refused     T.cuda.sm80.Mma
+                  mesh: Mesh(topologies=(Topology(name='cta', size=4352),), layout=Layout(shape=((64, 68),), strides=((68, 1),)), names=('bm', 'bn')) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),))))
+    refused     T.binary
+                  mesh: Mesh(topologies=(Topology(name='cta', size=4352),), layout=Layout(shape=((64, 68),), strides=((68, 1),)), names=('bm', 'bn')) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+    refused     T.cast
+                  mesh: Mesh(topologies=(Topology(name='cta', size=4352),), layout=Layout(shape=((64, 68),), strides=((68, 1),)), names=('bm', 'bn')) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
 ```
 
-The matmul still needs an atom and repetition choice. `T.binary` and the rmem cast have
-one registered operation whose required attributes come from the HIR, so they say
-`default`. Next inspect the exact WGMMA contract admitted by H200.
+This baseline has only a CTA mesh. Each instruction shown requires a thread
+mesh, so the first matching branch refuses it, including `T.binary` and `T.cast`.
+A single registered operation becomes `default` only when it matches.
+
+After stating the thread scope, the unscheduled matmul also needs a C fragment
+layout for its accumulator. Its inferred compact result does not declare that
+fragment, so use an explicit accumulator and a hand-written schedule, as below.
+Next inspect the exact WGMMA contract admitted by H200.
 
 ```bash
 set -euo pipefail

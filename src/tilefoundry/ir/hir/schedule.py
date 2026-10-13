@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from typing import Tuple
 
 import isl
 
 from tilefoundry.evaluator.registry import register_eval, schedule_eval_registry
 from tilefoundry.evaluator.value import EvalError
-from tilefoundry.ir.core import Call, Op, Var
+from tilefoundry.ir.core import Call, Op, Var, op_identifier
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
@@ -19,6 +20,7 @@ from tilefoundry.ir.pattern import (
     is_ranked_tensor,
 )
 from tilefoundry.ir.pattern.utils import (
+    declared_execution_mesh,
     declared_shape,
     selected_pattern,
     variants,
@@ -52,8 +54,28 @@ from tilefoundry.visitor_registry.cost_utils import operation_cost
 from tilefoundry.visitor_registry.verify import verify_between
 
 
+@dataclass(frozen=True)
+class InstructionMatch:
+    """An accepted constructed instruction and its closed matcher's ordered bindings."""
+
+    op: Op
+    path: tuple[tuple[str, object], ...]
+
+
 class ScheduleRefusal(ValueError):
-    """One instruction cannot implement these operands under this scope."""
+    """An instruction's failed node and the bindings reached before that refusal."""
+
+    def __init__(self, reason, *, path=(), instruction=""):
+        self.reason = reason
+        self.path = tuple(path)
+        self.instruction = instruction
+        super().__init__(reason)
+
+    def __str__(self):
+        from tilefoundry.inspection.pattern_printer import PatternPrinter  # noqa: PLC0415
+
+        printer = PatternPrinter()
+        return printer.match_text(self.instruction, printer.match_data((self.path,), self.reason)).lstrip()
 
 
 @register_op(dialect="tf", category="schedule", name="schedule")
@@ -188,7 +210,10 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True, bindings=None)
         TensorType(shape, type_.dtype, type_.layout, type_.storage)
         for shape, type_ in zip(shapes, whole_types, strict=True)
     )
-    single = operand_relations(op, provisional)
+    try:
+        single = operand_relations(op, provisional)
+    except ValueError as error:
+        raise ScheduleRefusal(str(error)) from error
     single_shape = _iteration_shape(single)
     if len(whole_shape) != len(single_shape):
         raise ScheduleRefusal("single-issue and scheduled iteration ranks differ")
@@ -332,10 +357,12 @@ def _schedule_cost(call: Call, ctx) -> Cost:
     return Cost({}, tuple(moved))
 
 
-def _pattern_refusal(matcher: PatternMatcher) -> str:
+def _pattern_refusal(matcher: PatternMatcher, parameter=None) -> ScheduleRefusal:
     from tilefoundry.inspection.pattern_printer import PatternPrinter  # noqa: PLC0415
 
-    return PatternPrinter().refusal(matcher.refusal)
+    refusal = matcher.refusal
+    path = tuple((refusal.bindings if refusal is not None else matcher.bindings).items())
+    return ScheduleRefusal(PatternPrinter().refusal_reason(refusal, parameter), path=path)
 
 
 def _instruction_call(op, operand_types, mesh, *, repeat, order, scope):
@@ -351,20 +378,18 @@ def _instruction_call(op, operand_types, mesh, *, repeat, order, scope):
     return call, ctx
 
 
-def _check_instruction(op, operand_types, mesh, *, repeat, order, scope):
+def _check_instruction(op, operand_types, mesh, *, repeat, order, scope, bindings):
     call, ctx = _instruction_call(op, operand_types, mesh, repeat=repeat, order=order, scope=scope)
     op, params, _writes, patterns, inner, _repeat, _order, _shape = _instruction_view(call, ctx)
     handler = verify_stmt_registry.lookup(type(op))
     if handler is None:
         raise ScheduleRefusal(f"{type(op).__name__} has no registered verifier")
-    matcher = PatternMatcher(dict(getattr(getattr(op, "atom", None), "bindings", {})))
+    matcher = PatternMatcher({**bindings, **dict(getattr(getattr(op, "atom", None), "bindings", {}))})
     for param, pattern, type_ in zip(params, patterns, inner, strict=True):
         if pattern is not None and not matcher.match(pattern, type_):
-            raise ScheduleRefusal(
-                f"{type(op).__name__} {param.name} single-issue tile does not match: {_pattern_refusal(matcher)}"
-            )
+            raise _pattern_refusal(matcher, param.name)
     if not matcher.solve():
-        raise ScheduleRefusal(_pattern_refusal(matcher))
+        raise _pattern_refusal(matcher)
     args = tuple(
         Var(name=param.name, type=type_) for param, type_ in zip(params, inner, strict=True)
     )
@@ -380,16 +405,17 @@ def _check_instruction(op, operand_types, mesh, *, repeat, order, scope):
         handler(target_call, verify_ctx)
         verify_between(target_call, verify_ctx)
     except VerifyError as error:
-        raise ScheduleRefusal(str(error)) from error
+        raise ScheduleRefusal(str(error), path=tuple(matcher.bindings.items())) from error
+    return InstructionMatch(op, tuple(matcher.bindings.items()))
 
 
-def match_instruction(
+def _match_instruction(
     op_type, attributes, operand_types, mesh, *, scope, repeat=None, order=None
-) -> tuple[Op, ...]:
+) -> tuple[InstructionMatch, ...]:
     """Return every instruction instance implementing these types and execution scope.
 
-    Read layout forks from the largest projectable tile before validating each
-    admitted integer tile parameter with the same closed-instruction checks.
+    Read layout forks for each projectable tile, then validate the constructed
+    instance with the same closed-instruction checks.
     """
     op = op_type(**attributes)
     params, _writes = instruction_schema(op, len(operand_types))
@@ -400,22 +426,38 @@ def match_instruction(
     if not all(isinstance(type_, TensorType) for type_ in operand_types):
         raise ScheduleRefusal(f"{op_type.__name__} schedule operands must be tensors")
     atom = getattr(op, "atom", None)
+    initial = {} if isinstance(atom, type) else dict(getattr(atom, "bindings", {}))
+    matcher = PatternMatcher(initial)
+    if not matcher.match(declared_execution_mesh(op), mesh):
+        raise _pattern_refusal(matcher, "mesh")
+    from tilefoundry.visitor_registry.typeinfer import input_scope_refusal  # noqa: PLC0415
+
+    refusal = input_scope_refusal(operand_types, mesh)
+    if refusal is not None:
+        raise ScheduleRefusal(refusal, path=tuple(matcher.bindings.items()))
+    initial = dict(matcher.bindings)
+    patterns = tuple(_operand_pattern(param, op, initial) for param in params)
+    for field in ("dtype", "storage"):
+        matcher = PatternMatcher(initial)
+        for param, pattern, type_ in zip(params, patterns, operand_types, strict=True):
+            if pattern is None:
+                continue
+            fields = replace(
+                pattern, shape=None, layout=None, predicates=(),
+                storage=None if field == "dtype" else pattern.storage,
+            )
+            if not matcher.match(fields, type_):
+                raise _pattern_refusal(matcher, param.name)
     if not isinstance(atom, type):
-        _check_instruction(op, operand_types, mesh, repeat=repeat, order=order, scope=scope)
-        return (op,)
+        try:
+            return (_check_instruction(op, operand_types, mesh, repeat=repeat, order=order, scope=scope, bindings=initial),)
+        except ScheduleRefusal as error:
+            if not error.path:
+                error.path = tuple(matcher.bindings.items())
+            raise
     atom_param = next(param for param in op_type._op_schema.signature if param.name == "atom")
     if atom not in atom_param.pattern.declarations:
         raise ScheduleRefusal(f"{atom.__name__} is not a declared atom of {op_type.__name__}")
-    patterns = tuple(_operand_pattern(param, op, {}) for param in params)
-    matcher = PatternMatcher()
-    for field in ("dtype", "storage"):
-        for param, pattern, type_ in zip(params, patterns, operand_types, strict=True):
-            if pattern is not None and not matcher.match(
-                getattr(pattern, field), getattr(type_, field)
-            ):
-                raise ScheduleRefusal(
-                    f"{op_type.__name__} {param.name} single-issue tile does not match: {_pattern_refusal(matcher)}"
-                )
     bindings = dict(matcher.bindings)
     integers = tuple(
         param for param in atom.parameters if param.annotation is int and param.name not in bindings
@@ -438,11 +480,15 @@ def match_instruction(
         try:
             _instruction_view(call, ctx, fragments=False, bindings=bound)
         except ScheduleRefusal as error:
+            if not error.path:
+                error.path = tuple(bound.items())
             first_refusal = first_refusal or error
             continue
         try:
             view = _instruction_view(call, ctx, bindings=bound)
         except ScheduleRefusal as error:
+            if not error.path:
+                error.path = tuple(bound.items())
             if not divisible_seen:
                 tile_refusal = error
             divisible_seen = True
@@ -455,40 +501,50 @@ def match_instruction(
             or first_refusal
             or ScheduleRefusal(f"{atom.reference_name} has no admitted tile parameters")
         )
-    choice, (_op, _params, _writes, patterns, inner, _repeat, _order, _shape) = tile_choices[0]
-    matcher = PatternMatcher({**bindings, **choice})
-    for param, pattern, type_ in zip(params, patterns, inner, strict=True):
-        if (
-            pattern is not None
-            and pattern.layout is not None
-            and not matcher.match(pattern.layout, type_.layout)
-        ):
-            raise ScheduleRefusal(
-                f"{op_type.__name__} {param.name} single-issue tile does not match: {_pattern_refusal(matcher)}"
-            )
-    if not matcher.solve():
-        raise ScheduleRefusal(_pattern_refusal(matcher))
     parameters = {param.name for param in atom.parameters}
-    solved = {
-        name: value
-        for name, value in matcher.bindings.items()
-        if name in parameters and name not in {param.name for param in integers}
-    }
+    integer_names = {param.name for param in integers}
     accepted = []
     refusal = None
-    for choice, _view in tile_choices:
-        instance = op_type(**{**attributes, "atom": atom(**{**solved, **choice})})
+    for choice, (_op, _params, _writes, patterns, inner, _repeat, _order, _shape) in tile_choices:
+        matcher = PatternMatcher({**bindings, **choice})
         try:
-            _check_instruction(
-                instance, operand_types, mesh, repeat=repeat, order=order, scope=scope
+            for param, pattern, type_ in zip(params, patterns, inner, strict=True):
+                if (
+                    pattern is not None and pattern.layout is not None
+                    and not matcher.match(pattern.layout, type_.layout)
+                ):
+                    raise _pattern_refusal(matcher, param.name)
+            if not matcher.solve():
+                raise _pattern_refusal(matcher)
+            solved = {
+                name: value for name, value in matcher.bindings.items()
+                if name in parameters and name not in integer_names
+            }
+            instance = op_type(**{**attributes, "atom": atom(**{**solved, **choice})})
+            matched = _check_instruction(
+                instance, operand_types, mesh, repeat=repeat, order=order, scope=scope, bindings=initial
             )
         except ScheduleRefusal as error:
+            if not error.path:
+                error.path = tuple(matcher.bindings.items())
             refusal = refusal or error
         else:
-            accepted.append(instance)
+            accepted.append(matched)
     if not accepted:
         raise refusal
     return tuple(accepted)
+
+
+def match_instruction(op_type, attributes, operand_types, mesh, *, scope, repeat=None, order=None) -> tuple[InstructionMatch, ...]:
+    """Match all constructed instructions, preserving their full diagnostic paths."""
+    try:
+        return _match_instruction(op_type, attributes, operand_types, mesh,
+                                  scope=scope, repeat=repeat, order=order)
+    except ScheduleRefusal as error:
+        atom = attributes.get("atom")
+        declaration = atom if isinstance(atom, type) else type(atom) if atom is not None else op_type
+        error.instruction = op_identifier(declaration)
+        raise
 
 
 @register_typeinfer(ScheduleOp)
@@ -521,4 +577,4 @@ def _schedule_result_operand(call: Call) -> int:
     return params.index(writes[0])
 
 
-__all__ = ["ScheduleOp", "ScheduleRefusal", "instruction_schema", "match_instruction", "operand_relations"]
+__all__ = ["ScheduleOp", "ScheduleRefusal", "InstructionMatch", "instruction_schema", "match_instruction", "operand_relations"]

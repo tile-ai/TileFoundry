@@ -494,14 +494,17 @@ sections are canonical `PatternPrinter.declaration` text.
 patterns can implement each unscheduled registered HIR site. A target-neutral
 pairing registry decides which TIR carrier families are relevant to each HIR
 Op; a HIR Op with no pairing is not a candidate site. Target capabilities then
-silently remove paired carriers unsupported by the selected target. Relation
-rank and coordinate projections decide which remaining families enter the
-report; tile extents do not have to equal one instruction issue because
-repetition is a later scheduling choice. Operand dtype, storage, rank,
-divisibility, and cross-operand constraints then decide whether each declaration
-is a candidate or a refusal. A carrier family is reported by its associated
-declaration name, not by the carrier Op name. A site with no accepted
-instruction still reports its refusals.
+silently remove paired carriers unsupported by the selected target. Every remaining instruction uses the same match entry as explicit
+`tf.schedule`, including field matching, tile projection, verifier, and
+cross-operand checks. The registered callback supplies every operand type,
+including the result, and instruction attributes. Each instruction has one
+candidate or refusal entry; carrier variants use their associated declaration
+name. Both kinds show the full ordered matching path. Distinct values across
+accepted instances join with `|`, including all admitted tile extents. A
+refusal places the failed operand/node reason on a second indented line.
+JSON entries contain `path` and `reason`; a candidate has an empty reason.
+There is no `needs` column. A site with no accepted instruction reports its
+refusals, and a missing execution mesh is a refusal rather than an internal error.
 An inventory Op with no access relation is not comparable and is skipped by
 candidate discovery; explicitly selecting that Op in `tf.schedule` remains an
 error.

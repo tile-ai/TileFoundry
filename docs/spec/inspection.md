@@ -439,8 +439,19 @@ declaration attributes section.
 
 A refusal at a `SwitchPattern` reports its parameter name, actual subject,
 and declared branch values: `param has no matching branch for subject;
-branches: value, ...`. Bindings already established before the switch follow
-in parentheses. It does not report a predicate from a rejected branch.
+branches: value, ...`. It does not report a predicate from a rejected branch.
+
+Instruction reports use `match_data(paths, reason="")` and
+`match_text(identifier, data)`. JSON provides `path`, an ordered list of
+`{"name": ..., "value": ...}` entries, and `reason`. Values are printable strings.
+All accepted paths merge by the first occurrence of each name; distinct values
+join with `|`. Parameters and internal pattern captures receive the same
+format. The text starts with the instruction identifier, then two spaces and
+`name=value` entries separated by `, `. A refusal places its
+`<parameter>: <failed-node text>` reason on the next indented line. A successful
+candidate has an empty reason. Type inference uses the same rendering.
+Standalone `refusal` renders the path and reason without an instruction id;
+the former `reason (bindings)` spelling is removed.
 
 This report printer is separate from `PythonPrinter`: it does not inherit the
 round-trip source printer, request import or mesh-name registration, or accept

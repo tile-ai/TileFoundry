@@ -159,6 +159,16 @@ class IterationScope:
             cursor = cursor.parent
         return None
 
+    def execution_mesh(self) -> Mesh | None:
+        """Compose every enclosing mesh in the same order as type inference."""
+        meshes = []
+        cursor: IterationScope | None = self
+        while cursor is not None:
+            if isinstance(cursor.owner, MeshRegion):
+                meshes.append(cursor.owner.mesh)
+            cursor = cursor.parent
+        return make_mesh(*reversed(meshes)) if meshes else None
+
     def mesh_positions(self, unit: str | None) -> int:
         """Count positions in the composed enclosing meshes at a topology unit."""
         meshes = []

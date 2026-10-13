@@ -29,6 +29,33 @@ from .contexts import FunctionScope, TypeInferContext, TypeInferResults
 from .registries import typeinfer_registry
 
 
+def input_scope_refusal(operand_types, mesh) -> str | None:
+    """The first input whose holder or storage does not reach its execution scope."""
+    if mesh is None:
+        return None
+    for index, arg_type in enumerate(operand_types):
+        layout = getattr(arg_type, "layout", None)
+        if not isinstance(layout, ShardLayout):
+            continue
+        try:
+            projected = participant_layout(layout)
+            covered = covered_by_scope(projected.mesh, mesh)
+        except ValueError as error:
+            return str(error)
+        if not covered:
+            return (
+                f"input {index} is laid out more finely than the scope it "
+                "runs in; write it inside that scope, or reshard it back first"
+            )
+        if not storage_reaches(arg_type.storage, projected.mesh, mesh):
+            return (
+                f"input {index} is laid out more coarsely and kept in "
+                f"{arg_type.storage.name.lower()}, which does not reach the units "
+                "this runs on; reshard it to smem or gmem first"
+            )
+    return None
+
+
 class TypeInferVisitor(ExprVisitor[Type]):
     """Derive one type for each ``Expr`` kind.
 
@@ -94,29 +121,12 @@ class TypeInferVisitor(ExprVisitor[Type]):
 
     def visit_leaf_Call(self, call: Call, arg_types, ctx: TypeInferContext) -> Type:
         target = call.target
-        if ctx.current_mesh is not None and not isinstance(target, HirReshard):
-            for index, arg_type in enumerate(arg_types):
-                layout = getattr(arg_type, "layout", None)
-                if not isinstance(layout, ShardLayout):
-                    continue
-                try:
-                    projected = participant_layout(layout)
-                    covered = covered_by_scope(projected.mesh, ctx.current_mesh)
-                except ValueError as error:
-                    ctx.error(call, str(error))
-                if not covered:
-                    ctx.error(
-                        call,
-                        f"input {index} is laid out more finely than the scope it "
-                        "runs in; write it inside that scope, or reshard it back first",
-                    )
-                if not storage_reaches(arg_type.storage, projected.mesh, ctx.current_mesh):
-                    ctx.error(
-                        call,
-                        f"input {index} is laid out more coarsely and kept in "
-                        f"{arg_type.storage.name.lower()}, which does not reach the units "
-                        "this runs on; reshard it to smem or gmem first",
-                    )
+        from tilefoundry.ir.hir.schedule import ScheduleOp  # noqa: PLC0415
+
+        if not isinstance(target, (HirReshard, ScheduleOp)):
+            refusal = input_scope_refusal(arg_types, ctx.current_mesh)
+            if refusal is not None:
+                ctx.error(call, refusal)
         if isinstance(target, Function):
             return self._call_function(call, target, arg_types, ctx)
         op_cls = type(target)
@@ -312,4 +322,5 @@ def inference_type(
 __all__ = [
     "TypeInferVisitor",
     "inference_type",
+    "input_scope_refusal",
 ]

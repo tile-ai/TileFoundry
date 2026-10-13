@@ -114,16 +114,17 @@ def thread_execution_mesh() -> MeshPattern:
     return MeshPattern(("thread",), _THREAD_EXECUTION_LAYOUT)
 
 
-def declared_execution_mesh(op_type: type) -> MeshPattern:
+def declared_execution_mesh(op_type) -> MeshPattern:
     """Return one op's reserved execution-mesh declaration or reject it."""
+    declaration = op_type if isinstance(op_type, type) else type(op_type)
     factory = getattr(op_type, "execution_mesh_pattern", None)
     if callable(factory):
         declared = factory()
     else:
-        stated = getattr(op_type, "execution_mesh", None)
+        stated = getattr(declaration, "execution_mesh", None)
         declared = stated.pattern if isinstance(stated, ParamDef) else stated
     if not isinstance(declared, MeshPattern):
-        name = getattr(op_type, "reference_name", "") or op_type.__name__
+        name = getattr(declaration, "reference_name", "") or declaration.__name__
         raise ValueError(
             f"{name} execution_mesh must be a constant, ParamDef, or operand mesh reference"
         )
