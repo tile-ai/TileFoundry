@@ -28,17 +28,25 @@ class TypeInferResults:
 
 
 @dataclass(frozen=True)
-class FunctionScope:
-    """Where a walk is reading: one Module tree, and whose body it is in.
-
-    A `Function` carries no execution context and one object is reachable from
-    more than one program, so anything answered about the function being read --
-    which Module owns it, what it may reach -- is answered within the tree the
-    walk was given rather than globally.
-    """
+class ModuleInstance:
+    """A definition reached through one slot in the current instance path."""
 
     module: Module
-    function: Function
+    key: str | None = None
+    index: int | Expr | None = None
+
+
+@dataclass(frozen=True)
+class FunctionScope:
+    """The current body and its explicit root-to-current instance stack."""
+
+    module: Module
+    function: Function | None
+    instances: tuple[ModuleInstance, ...] = ()
+
+    def __post_init__(self):
+        if not self.instances:
+            object.__setattr__(self, "instances", (ModuleInstance(self.module),))
 
 
 @dataclass
@@ -53,46 +61,38 @@ class TypeInferContext:
     scope: FunctionScope | None = None
     current_mesh: Mesh | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
-    instantiated_memo: dict[tuple[int, tuple[Type, ...], Mesh | None], Type] = field(
+    instantiated_memo: dict[tuple, Type] = field(
         default_factory=dict, repr=False, compare=False
     )
 
-    def child_for(self, callee: object):
-        """Return the direct child module that owns *callee*, if any."""
-        if self.scope is None or self.scope.module is None:
-            return None
-        from tilefoundry.ir.core.module import child_module_of  # noqa: PLC0415
+    def scope_for(self, callee: object, target=None) -> FunctionScope | None:
+        """Enter a callee using the target's slot key, never owner searches.
 
-        return child_module_of(self.scope.module, self.scope.function, callee)
-
-    def scope_for(self, callee: object) -> FunctionScope | None:
-        """Return the runtime scope in which *callee*'s body is read."""
+        Targets can hold slots from the original tree after replace(), so the
+        current frame's children supply the definition.
+        """
         if self.scope is None:
-            child = self.child_for(callee)
-            return None if child is None else FunctionScope(child, callee)
-        child = self.child_for(callee)
-        return FunctionScope(child or self.scope.module, callee)
+            return None
+        from tilefoundry.ir.core.module import instance_slot  # noqa: PLC0415
+
+        located = instance_slot(target)
+        if located is None:
+            return FunctionScope(self.scope.module, callee, self.scope.instances)
+        slot, index = located
+        current_slot = self.scope.module.children[slot.key]
+        module = current_slot.elements[index if isinstance(index, int) else 0]
+        frame = ModuleInstance(module, slot.key, index)
+        return FunctionScope(module, callee, (*self.scope.instances, frame))
 
     def resolve_target(self):
-        """The Target whose rules apply here, or None where no Module in scope declares one."""
+        """The root instance's target, or None without a declared target."""
         if self.scope is None:
             return None
-        try:
-            return self.scope.module.resolve_target()
-        except ValueError:
-            return None
+        return self.scope.instances[0].module.target
 
-    def for_callee(self, callee: object) -> TypeInferContext:
-        """Move to *callee* with a fresh scope memo and the shared call cache.
-
-        The callee inherits the call site's mesh. A MeshRegion in its body
-        composes that scope using the same rules as an authored nested region.
-        """
-        return replace(
-            self,
-            scope=self.scope_for(callee),
-            memo={},
-        )
+    def for_callee(self, callee: object, target=None) -> TypeInferContext:
+        """Enter a body with fresh bindings and the shared instantiation cache."""
+        return replace(self, scope=self.scope_for(callee, target), memo={})
 
     def type_of(self, expr: Expr) -> Type:
         """The type this inference derived or bound for *expr*.
@@ -247,6 +247,7 @@ class Cost:
 
 __all__ = [
     "FunctionScope",
+    "ModuleInstance",
     "TypeInferContext",
     "VerifyContext",
     "CostContext",

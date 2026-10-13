@@ -17,6 +17,7 @@ from tilefoundry.dsl._tensor import ConstTensor, Tensor
 
 from tilefoundry.script import func, prim_func
 from tilefoundry.module import module
+from tilefoundry.ir.core.module import ModuleList
 from tilefoundry.ir import types as _types
 from tilefoundry.ir.types import *
 from tilefoundry.ir.pattern import RangePattern, Pattern
@@ -30,6 +31,7 @@ __all__ = [
     "Tensor",
     "func",
     "module",
+    "ModuleList",
     "prim_func",
     *_types.__all__,
     "Pattern",

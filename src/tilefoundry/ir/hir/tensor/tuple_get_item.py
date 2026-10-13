@@ -7,7 +7,7 @@ from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor, is_scalar_tensor
+from tilefoundry.ir.pattern import is_scalar_tensor
 from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -29,7 +29,7 @@ class TupleGetItem(Op):
     SSA expression model. See [hir §1](docs/spec/hir.md#1-hir-expr-constructs).
     """
 
-    tuple_value = ParamDef(kind="input", pattern=is_ranked_tensor())
+    tuple_value = ParamDef(kind="input")
     index = ParamDef(kind="input", pattern=is_scalar_tensor())
 
 
@@ -68,6 +68,29 @@ def _access_relations(call: "Call", ctx: "AccessContext") -> tuple[AccessRelatio
 
 @register_typeinfer(TupleGetItem)
 def _(call: "Call", ctx: "TypeInferContext"):
+    from tilefoundry.ir.core.module import ModuleList  # noqa: PLC0415
+    from tilefoundry.ir.types.tensor_type import DType, TensorType  # noqa: PLC0415
+
+    slot = call.args[0]
+    if isinstance(slot, ModuleList):
+        if ctx.scope is not None:
+            slot = ctx.scope.module.children[slot.key]
+        if not slot.indexed:
+            ctx.error(call, f"single slot {slot.key!r} cannot be indexed")
+        index_type = ctx.type_of(call.args[1])
+        if (
+            not isinstance(index_type, TensorType)
+            or index_type.shape != ()
+            or index_type.dtype not in (DType.i32, DType.i64)
+        ):
+            ctx.error(call, f"ModuleList slot {slot.key!r}: index must be an integer scalar")
+        index = call.args[1]
+        if isinstance(index, Constant):
+            taken = index.value
+            if isinstance(taken, bool) or not isinstance(taken, int) or not 0 <= taken < len(slot):
+                ctx.error(call, f"ModuleList slot {slot.key!r}: index {taken!r} out of range for N={len(slot)}")
+        elif any(element is not slot.elements[0] for element in slot.elements[1:]):
+            ctx.error(call, f"ModuleList slot {slot.key!r}: variable index requires the same definition")
     tup_ty = ctx.type_of(call.args[0])
     if not isinstance(tup_ty, TupleType):
         ctx.error(call, "TupleGetItem on non-TupleType")

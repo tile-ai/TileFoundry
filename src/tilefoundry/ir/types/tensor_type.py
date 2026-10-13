@@ -93,7 +93,7 @@ class TensorType:
 
 @dataclass(frozen=True)
 class TupleType:
-    fields: tuple[Union["TensorType", "TupleType"], ...]
+    fields: tuple[Union["TensorType", "TupleType", "CallableType"], ...]
 
 
 @dataclass(frozen=True)

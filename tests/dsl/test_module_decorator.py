@@ -65,7 +65,7 @@ def test_attribute_access_ambiguous_name_and_real_fields():
     """Test attribute access ambiguous name and real fields.
 
     A duplicated function name is ambiguous under attribute access (raises),
-    real Module fields are never intercepted, and ``function_named`` returns all
+    real Module fields are never intercepted, and ``lookup`` refuses ambiguous
     matches — the core-ir [parser §2](docs/spec/parser.md#2-syntax-and-rules) ambiguity rule.
     """
     base = _Demo.lookup("leaf")
@@ -76,7 +76,8 @@ def test_attribute_access_ambiguous_name_and_real_fields():
     assert len(mod.functions) == 2
     with pytest.raises(AttributeError):
         mod.dup
-    assert len(mod.function_named("dup")) == 2
+    with pytest.raises(ValueError, match="exactly one"):
+        mod.lookup("dup")
 
 
 def test_collects_orchestration_method_and_rejects_other_members():

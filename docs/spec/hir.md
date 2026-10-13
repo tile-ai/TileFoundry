@@ -128,8 +128,9 @@ the function signature and is the result component projected into
 `return_type`. The projection is fixed at construction and stays
 consistent across construction sites.
 
-**Call typing — visitor-scoped inference.** A `Call` keeps its authored
-`Function` template as `target`. Its result type is inferred by seeding a new
+**Call typing — visitor-scoped inference.** A same-module `Call` keeps its authored
+`Function` template as `target`; an instance call keeps its ModuleList slot or
+`TupleGetItem(ModuleList, index)` target ([core-ir §2.1](./core-ir.md#21-call)). Its result type is inferred by seeding a new
 visitor memo with the actual argument types bound to the callee's formal
 parameters, then walking the callee body in a child context that retains the
 call site's mesh. A callee without a mesh declaration runs in that scope;
@@ -145,24 +146,19 @@ parameter propagates through the body, including through a `Tuple` or
 Within one inference traversal, repeated calls to the same `Function` object
 with equal argument types and equal call-site mesh scopes MUST reuse the
 previously inferred result type. The cache key uses callee identity, the
-argument-type tuple, and the call-site mesh; the cached value is
+argument-type tuple, call-site mesh, and instance definition stack; the cached value is
 only a `Type`, never a derived `Function` or a replacement `Call.target`.
 
-Argument types bind to supplied parameters in order. A `ConstTensor` parameter
-owned by a direct child module is omitted from `Call.args` and keeps its
-declared type in the callee visitor memo; no value it stands for enters the IR,
-and what fills it comes from outside
-([runtime §1.3](./runtime.md#13-runtimedecoratorpy)). The
-child-module resolver in the walk context
-([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)) decides
-whether this omission is available before collection.
-
-Omitting a parameter is valid only where, within that scope, the callee is
-uniquely owned by a direct child of the caller's owner
-([core-ir §1](./core-ir.md#1-module)); before collection the authored binding
-answers the same question of the child it names. Ownership that is missing,
-ambiguous, or not a direct child supplies every declared parameter, so a
-standalone or low-level call cannot acquire implicit constants.
+Argument types bind to supplied parameters in order. A Function target supplies
+all parameters. An instance target enters its slot in the current Module's
+`children` and calls the reached definition's entry, omitting ConstTensor
+parameters from `Call.args`. Their declared types seed the callee visitor memo;
+values are supplied by that instance's resource
+([runtime §1.3](./runtime.md#13-runtimedecoratorpy)). The explicit instance stack
+retains the root target and the nearest topology declaration, without owner
+searches or parent backlinks. A rebuilt tree is authoritative: the call's target
+supplies a slot key and index, while the definition is looked up in the current
+frame's `children`.
 
 Caller and callee MUST resolve one effective `Target` and one effective topology
 hierarchy: a same-kernel call is one execution context, whichever `Module` owns

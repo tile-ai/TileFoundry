@@ -120,7 +120,27 @@ class TypeInferVisitor(ExprVisitor[Type]):
         return c.type
 
     def visit_leaf_Call(self, call: Call, arg_types, ctx: TypeInferContext) -> Type:
+        from tilefoundry.ir.core.module import instance_slot  # noqa: PLC0415
+
         target = call.target
+        if isinstance(target, Call):
+            arg_types = arg_types[1:]
+        try:
+            located = instance_slot(target)
+        except ValueError as error:
+            ctx.error(call, str(error))
+        child_scope = None
+        if located is not None:
+            if ctx.scope is None:
+                ctx.error(call, "instance call requires a module scope")
+            slot, index = located
+            try:
+                current = ctx.scope.module.children[slot.key]
+                child = current.elements[index if isinstance(index, int) else 0]
+                target = child.entry_function()
+                child_scope = ctx.scope_for(target, call.target)
+            except (KeyError, ValueError) as error:
+                ctx.error(call, str(error))
         from tilefoundry.ir.hir.schedule import ScheduleOp  # noqa: PLC0415
 
         if not isinstance(target, (HirReshard, ScheduleOp)):
@@ -128,7 +148,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
             if refusal is not None:
                 ctx.error(call, refusal)
         if isinstance(target, Function):
-            return self._call_function(call, target, arg_types, ctx)
+            return self._call_function(call, target, arg_types, ctx, child_scope=child_scope)
         op_cls = type(target)
         fn = self._target_rule(op_cls, ctx) or typeinfer_registry.lookup(op_cls)
         if fn is None:
@@ -149,13 +169,15 @@ class TypeInferVisitor(ExprVisitor[Type]):
         callee: Function,
         arg_types: tuple[Type, ...],
         ctx: TypeInferContext,
+        *,
+        child_scope: FunctionScope | None = None,
     ) -> Type:
-        child = ctx.child_for(callee)
+        child = child_scope is not None
         supplied = tuple(
-            param for param in callee.params if not (child is not None and param.is_const)
+            param for param in callee.params if not (child and param.is_const)
         )
         if len(arg_types) != len(supplied):
-            kind = "activation(s)" if child is not None else "parameter(s)"
+            kind = "activation(s)" if child else "parameter(s)"
             ctx.error(
                 call,
                 f"hir Function call {callee.name!r}: arity mismatch — "
@@ -165,7 +187,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         given = iter(enumerate(arg_types))
         memo = {}
         for param in callee.params:
-            if child is not None and param.is_const:
+            if child and param.is_const:
                 memo[id(param)] = (param, param.annotation)
                 continue
             index, arg_type = next(given)
@@ -181,15 +203,24 @@ class TypeInferVisitor(ExprVisitor[Type]):
         if callee.body is None or callee.variants:
             return callee.return_type
 
-        key = (id(callee), arg_types, ctx.current_mesh)
+        inner = replace(ctx, scope=child_scope, memo={}) if child else ctx.for_callee(callee)
+        instances = () if inner.scope is None else tuple(id(frame.module) for frame in inner.scope.instances)
+        key = (id(callee), arg_types, ctx.current_mesh, instances)
         cached = ctx.instantiated_memo.get(key)
         if cached is not None:
             return cached
         result = TypeInferVisitor(memo=memo, owns_body=False, ranges=False).visit(
-            callee.body, ctx.for_callee(callee)
+            callee.body, inner
         )
         ctx.instantiated_memo[key] = result
         return result
+
+    def visit_leaf_ModuleList(self, slot, _operands, ctx: TypeInferContext) -> Type:
+        try:
+            current = ctx.scope.module.children[slot.key] if ctx.scope is not None else slot
+            return current.type
+        except (KeyError, ValueError) as error:
+            ctx.error(slot, str(error))
 
     def visit_leaf_Tuple(self, tup: Tuple, operands, ctx: TypeInferContext) -> Type:
         """Visit Tuple.
@@ -280,7 +311,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
     def visit_Function(self, fn: Function, ctx: TypeInferContext) -> Type:
         """Refresh one complete function after binding its parameter types."""
         if ctx.scope is not None and ctx.scope.function is not fn:
-            ctx = replace(ctx, scope=FunctionScope(ctx.scope.module, fn))
+            ctx = replace(ctx, scope=FunctionScope(ctx.scope.module, fn, ctx.scope.instances))
         memo = {id(param): (param, param.annotation) for param in fn.params}
         if fn.body is not None:
             TypeInferVisitor(

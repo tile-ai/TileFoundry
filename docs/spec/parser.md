@@ -62,11 +62,23 @@ statement span and their carry binding name.
 optional base/key for one parse. Call types inferred while parsing use that target's rules
 ([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)), so in a Module that
 declares its Target a type the parser records is the type the built Module later infers. A
-callee's own owner chain answers first; a child the Module being built will hold has no
-Target of its own yet, so it is typed with the Target that Module declares, and any other
-scope without a Target is typed with none. `FunctionRole` is `ROOT`, `VARIANT`, or `CONVERTER`.
+pending Module is the instance stack's root and supplies its declared Target;
+entering a child follows the target's slot key and index in the current frame.
+The same stack is retained through same-module Function calls. `FunctionRole` is `ROOT`, `VARIANT`, or `CONVERTER`.
 `ParseError` is the single authored-source diagnostic type and includes source location and
 recursive parse situation. These are the only public parser symbols.
+
+Class-body `Module` members become single ModuleList slots under their attribute
+keys; authored `ModuleList(definition, N)` or `ModuleList((d0, d1, ...))` members
+remain indexed slots. Lists and tuples of Modules are refused. Definitions are
+shared, and duplicate slot objects under different keys are refused.
+`child(x)` targets the single slot; `layers[i](x)` targets
+`TupleGetItem(ModuleList, i)`. A constant index must be in range; a variable index
+must be an integer scalar and the list must contain one shared definition.
+Calling a global Module outside a class-body slot, indexing a single slot,
+calling an indexed slot without an index, and calling non-entry instance methods
+are refused. Containers without entries can occupy slots; calling them reports
+the existing no-entry diagnostic.
 
 ### 1.5 Mesh declarations and region captures
 
@@ -250,8 +262,8 @@ variadic-inputs       ::= '[' (runtime-expression (',' runtime-expression)*)? ']
                           | expression
 op-value              ::= primary '(' ((expression | keyword-name '=' expression) (',' (expression |
                           keyword-name '=' expression))*)? ')'
-op-call               ::= primary '(' ((expression | keyword-name '=' expression) (',' (expression |
-                          keyword-name '=' expression))*)? ')'
+op-call               ::= (primary | expression '[' expression ']') '(' ((expression | keyword-name
+                          '=' expression) (',' (expression | keyword-name '=' expression))*)? ')'
 launch                ::= callee '(' ')'
 slice-endpoint-binary ::= index-endpoint dim-op index-endpoint
 mesh-coordinate       ::= identifier '.' string-literal

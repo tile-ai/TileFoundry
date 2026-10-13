@@ -83,7 +83,7 @@ def module(
     declares the ordered parallel-resource hierarchy; omitting it inherits the
     owning Module's hierarchy and ``()`` declares a topology-free Module.
     """
-    from tilefoundry.ir.core.module import Module  # noqa: PLC0415 — avoid import cycle
+    from tilefoundry.ir.core.module import Module, ModuleList  # noqa: PLC0415 — avoid import cycle
     from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
     from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
     from tilefoundry.target.base import target_instance  # noqa: PLC0415
@@ -124,9 +124,8 @@ def module(
                 del _DECLARING[index:]
                 break
         functions = []
-        child_modules = []
+        children = {}
         methods = {}
-        attached: dict[str, Module] = {}
         for name, value in vars(cls_inner).items():
             if name == "__call__":
 
@@ -139,19 +138,18 @@ def module(
                 )
             if name.startswith("__") and name.endswith("__"):
                 continue
-            if isinstance(value, Module):
-
-
-                child = value if value.name == name else value.renamed(name)
-                child_modules.append(child)
-                attached[name] = child
+            if isinstance(value, (Module, ModuleList)):
+                slot = ModuleList(value) if isinstance(value, Module) else value
+                slot.bind(name)
+                children[name] = slot
                 continue
             if isinstance(value, (tuple, list)) and value and all(
                 isinstance(m, Module) for m in value
             ):
-
-                child_modules.extend(value)
-                continue
+                raise TypeError(
+                    f"@module {cls_inner.__name__!r}: member {name!r} is a list/tuple of Modules; "
+                    "use ModuleList(definition, N) instead"
+                )
             if isinstance(value, (HirFunction, PrimFunction)):
                 functions.append(value)
                 continue
@@ -161,7 +159,7 @@ def module(
             raise TypeError(
                 f"@module {cls_inner.__name__!r}: member {name!r} is a "
                 f"{type(value).__name__}, not an @func / @prim_func result, a "
-                f"Module (or tuple/list of Modules), or a plain function; a "
+                f"Module / ModuleList, or a plain function; a "
                 f"@module class body may contain only these three member kinds"
             )
 
@@ -169,7 +167,7 @@ def module(
             fn for fn in functions
             if id(fn) not in mine.owned and not getattr(fn, "specializations", ())
         ]
-        if not functions and not child_modules and not methods:
+        if not functions and not children and not methods:
             raise TypeError(
                 f"@module {cls_inner.__name__!r}: empty class body; a Module must "
                 f"declare at least one @func / @prim_func, child Module, or "
@@ -183,14 +181,6 @@ def module(
                 f"{dupes} (a class-body alias of a DSL function is not allowed; "
                 f"one name maps to one function)"
             )
-        mod_names = [m.name for m in child_modules]
-        mod_dupes = sorted({n for n in mod_names if mod_names.count(n) > 1})
-        if mod_dupes:
-            raise ValueError(
-                f"@module {cls_inner.__name__!r}: duplicate child module name(s) "
-                f"{mod_dupes} (a class-body alias of a nested @module is not "
-                f"allowed; one name maps to one child module)"
-            )
         if entry is not None and entry not in names:
             raise ValueError(
                 f"@module {cls_inner.__name__!r}: entry {entry!r} names no "
@@ -200,7 +190,7 @@ def module(
             name=cls_inner.__name__,
             functions=tuple(functions),
             entry=entry,
-            modules=tuple(child_modules),
+            children=children,
             target=resolved_target,
             topologies=declared_topologies,
             methods=methods,

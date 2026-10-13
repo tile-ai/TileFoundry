@@ -2790,7 +2790,7 @@ class CallPattern(ElementPattern):
         lambda: BindPattern(
             AstNodePattern(
                 ast.Call,
-                FieldPattern("func", ReferencePattern()),
+                FieldPattern("func", ChoicePattern(ReferencePattern(), AstNodePattern(ast.Subscript))),
                 FieldPattern("args", RepeatPattern(AstNodePattern(ast.expr))),
                 FieldPattern(
                     "keywords",
@@ -2958,46 +2958,69 @@ class CallPattern(ElementPattern):
         node: object, context: MatchContext, matched: AstMatch[Any]
     ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Call)
-        module_owner = None
-        try:
-            callee = _resolve_reference(node.func, context)
-        except ParseError:
-            return None
-        if isinstance(callee, runtime.Module):
-            module_owner = callee
-            if node.keywords:
-                return PatternFailure(
-                    "op_call", node, "a module call takes positional arguments only"
-                )
+        instance_target = None
+        target_child = ()
+        if isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Subscript):
+                return PatternFailure("op_call", node.func, "only calling an instance entry is supported")
             try:
-                callee = callee.entry_function()
-            except ValueError as error:
-                return PatternFailure("op_call", node.func, str(error))
-        if isinstance(callee, runtime.Function):
-            if node.keywords:
+                owner = _resolve_reference(node.func.value, context)
+            except ParseError:
+                owner = None
+            if isinstance(owner, runtime.ModuleList):
+                return PatternFailure("op_call", node.func, "only calling an instance entry is supported")
+        if isinstance(node.func, ast.Subscript):
+            try:
+                slot = _resolve_reference(node.func.value, context)
+            except ParseError:
+                return None
+            if not isinstance(slot, runtime.ModuleList):
+                return None
+            if not slot.indexed:
+                return PatternFailure("op_call", node.func, f"single slot {slot.key!r} cannot be indexed")
+            instance_target = slot
+            target_child = (AstChild("target", ExpressionPattern(), node.func, "call_target", "target"),)
+            callee = slot
+        else:
+            try:
+                callee = _resolve_reference(node.func, context)
+            except ParseError:
+                return None
+            if isinstance(callee, runtime.Module):
                 return PatternFailure(
-                    "op_call", node, "a function call takes positional arguments only"
+                    "op_call", node.func,
+                    "instance calls must use a slot name in the @module class body",
                 )
+            if isinstance(callee, runtime.ModuleList):
+                if callee.indexed:
+                    return PatternFailure("op_call", node.func, f"ModuleList slot {callee.key!r} must be indexed before calling")
+                instance_target = callee
+        if instance_target is not None:
+            binding = node.func.value if isinstance(node.func, ast.Subscript) else node.func
+            module = context.function.module
+            if (
+                module is None
+                or not isinstance(binding, ast.Name)
+                or module.module_scope.lookup(binding.id) is not instance_target
+            ):
+                return PatternFailure(
+                    "op_call", node.func,
+                    "instance calls must use a slot name in the @module class body",
+                )
+        if instance_target is not None or isinstance(callee, runtime.Function):
+            if node.keywords:
+                return PatternFailure("op_call", node, "a function call takes positional arguments only")
             return dataclasses.replace(
                 matched,
                 pattern_id="call.function",
                 branch_id="function_call",
-                captures={
-                    **matched.captures,
-                    "callee": callee,
-                    "module_owner": locals().get("module_owner"),
-                    "module_binding": (node.func.id if isinstance(node.func, ast.Name) else None),
-                },
-                children=tuple(
+                captures={**matched.captures, "callee": callee, "instance_target": instance_target},
+                children=(*target_child, *(
                     AstChild(
-                        f"arg_{index}",
-                        ExpressionPattern(),
-                        argument,
-                        "call_argument",
-                        "argument",
+                        f"arg_{index}", ExpressionPattern(), argument, "call_argument", "argument"
                     )
                     for index, argument in enumerate(node.args)
-                ),
+                )),
             )
         schema = (
             callee if isinstance(callee, runtime.OpSchema) else getattr(callee, "_op_schema", None)
@@ -3063,20 +3086,26 @@ class CallPattern(ElementPattern):
             )
         elif match.branch_id == "function_call":
             callee = match.captures["callee"]
-            args = tuple(children.values())
-            module_owner = match.captures.get("module_owner")
-            if module_owner is not None and context.function.module is None:
-                raise ParseError.from_node(
-                    match.node,
-                    context,
-                    "a Module call is only valid inside a @module class body",
-                )
-            placeholder = runtime.Call(
-                type=callee.return_type,
-                target=callee,
-                args=args,
+            target = children.get("target", callee)
+            if match.captures.get("instance_target") is not None:
+                if context.function.module is None:
+                    raise ParseError.from_node(
+                        match.node, context, "a Module call is only valid inside a @module class body"
+                    )
+                from tilefoundry.ir.core.module import instance_slot  # noqa: PLC0415
+
+                try:
+                    slot, index = instance_slot(target)
+                    entry = slot.elements[index if isinstance(index, int) else 0].entry_function()
+                except ValueError as error:
+                    raise ParseError.from_node(match.node, context, str(error)) from error
+                return_type = entry.return_type
+            else:
+                return_type = callee.return_type
+            return runtime.Call(
+                type=return_type, target=target,
+                args=tuple(value for name, value in children.items() if name.startswith("arg_")),
             )
-            return placeholder
         raise RuntimeError(f"no constructor branch for {match.branch_id!r}")
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
@@ -3554,6 +3583,14 @@ class SubscriptExpressionPattern(ElementPattern):
         _note_authored_call(match.node, context)
         value = children["value"]
         index = children["index"]
+        if isinstance(value, runtime.ModuleList):
+            if not value.indexed:
+                raise ParseError.from_node(match.node, context, f"single slot {value.key!r} cannot be indexed")
+            if isinstance(index, bool) or not isinstance(index, (int, runtime.Expr)):
+                raise ParseError.from_node(match.node, context, "ModuleList index must be an integer scalar")
+            if isinstance(index, int):
+                index = _constant(index)
+            return _infer_call(runtime.TupleGetItem(), (value, index), context)
         if isinstance(value.type, runtime.TupleType):
             if isinstance(index, bool) or not isinstance(index, (int, runtime.Expr)):
                 raise ParseError.from_node(

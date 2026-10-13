@@ -32,7 +32,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.expr import Tuple as IrTuple
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -213,6 +213,8 @@ def _unsourced_calls(value: Call) -> tuple[Call, ...]:
                 continue
             found.append(expr)
             pending.extend(reversed(expr.args))
+            if isinstance(expr.target, Call):
+                pending.append(expr.target)
         elif isinstance(expr, IrTuple):
             pending.extend(reversed(expr.elements))
     return tuple(found)
@@ -276,6 +278,7 @@ runtime = SimpleNamespace(
     MeshCoord=MeshCoord,
     Mesh=Mesh,
     Module=Module,
+    ModuleList=ModuleList,
     OpSchema=OpSchema,
     PrimFunction=PrimFunction,
     Reshard=Reshard,
@@ -914,63 +917,14 @@ class FuncParserContext:
         return self.key if self.role is FunctionRole.CONVERTER else None
 
 
-@dataclass(frozen=True)
-class ParserChildModuleResolver:
-    """Resolve callees owned by authored child modules during parsing."""
-
-    module_scope: object | None
-
-    def child_for(self, callee: object):
-        if self.module_scope is None:
-            return None
-        for _name, child in self.module_scope.items():
-            if getattr(child, "owns", lambda *_args, **_kwargs: False)(callee, derived=True):
-                return child
-        return None
-
-    def will_hold(self, module: object) -> bool:
-        """Whether *module* is in a child subtree the Module being built will hold."""
-        if self.module_scope is None:
-            return False
-        pending = [child for _name, child in self.module_scope.items()]
-        while pending:
-            node = pending.pop()
-            if node is module:
-                return True
-            pending.extend(getattr(node, "modules", ()))
-        return False
-
-
 @dataclass
 class ParserTypeInferContext(TypeInferContext):
-    """Type inference state bound alongside names in parser lexical frames."""
+    """The pending root carries the target until its Module is finalized."""
 
-    child_resolver: ParserChildModuleResolver | None = None
     parser_target: object | None = None
 
     def resolve_target(self):
-        """The Target whose rules apply while parsing.
-
-        A scope whose owner chain declares a Target answers with it. A child the
-        Module being built will hold has no Target of its own yet, so it takes
-        the one this build will give it; any other scope without a Target has
-        none. Outside a scope, the parsed function's Target applies.
-        """
-        if self.scope is None:
-            return self.parser_target
-        target = super().resolve_target()
-        if (
-            target is None
-            and self.child_resolver is not None
-            and self.child_resolver.will_hold(self.scope.module)
-        ):
-            return self.parser_target
-        return target
-
-    def child_for(self, callee: object):
-        if self.child_resolver is not None:
-            return self.child_resolver.child_for(callee)
-        return super().child_for(callee)
+        return super().resolve_target() or self.parser_target
 
 
 @dataclass(frozen=True)
@@ -1166,6 +1120,10 @@ class ModuleBuildContext:
             value = rule.apply(value, module=self)
         return value
 
+    @property
+    def children(self):
+        return {name: value for name, value in self.module_scope.items() if isinstance(value, ModuleList)}
+
     def _finalize(self, cls: type) -> object:
         if self._consumed:
             raise RuntimeError(
@@ -1174,7 +1132,7 @@ class ModuleBuildContext:
         self._consumed = True
         consume_module_context(self)
         functions: list[object] = []
-        modules: list[object] = []
+        children: dict[str, ModuleList] = {}
         module_bindings: dict[str, object] = {}
         methods: dict[str, object] = {}
         for name, value in vars(cls).items():
@@ -1185,19 +1143,20 @@ class ModuleBuildContext:
                 )
             if name.startswith("__") and name.endswith("__"):
                 continue
-            if isinstance(value, runtime.Module):
-                child = _unshared(value, name)
-                modules.append(child)
-                module_bindings[name] = child
+            if isinstance(value, (runtime.Module, runtime.ModuleList)):
+                slot = runtime.ModuleList(value) if isinstance(value, runtime.Module) else value
+                slot.bind(name)
+                children[name] = slot
+                module_bindings[name] = slot
             elif (
                 isinstance(value, (tuple, list))
                 and value
                 and all(isinstance(item, runtime.Module) for item in value)
             ):
-                children = tuple(_unshared(item, item.name) for item in value)
-                modules.extend(children)
-                for child in children:
-                    module_bindings[child.name] = child
+                raise TypeError(
+                    f"@module {cls.__name__!r}: member {name!r} is a list/tuple of Modules; "
+                    "use ModuleList(definition, N) instead"
+                )
             elif isinstance(value, (runtime.Function, runtime.PrimFunction)):
                 if id(value) in self.owned:
                     continue
@@ -1210,7 +1169,7 @@ class ModuleBuildContext:
                 raise TypeError(
                     f"@module {cls.__name__!r}: member {name!r} is a "
                     f"{type(value).__name__}, not an @func / @prim_func result, a "
-                    "Module (or tuple/list of Modules), or a plain function; a "
+                    "Module / ModuleList, or a plain function; a "
                     "@module class body may contain only these three member kinds"
                 )
         for binding, role in self.bindings.items():
@@ -1235,7 +1194,7 @@ class ModuleBuildContext:
                 f"@module {cls.__name__!r}: duplicate function name(s) {duplicates} "
                 "(a class-body alias of a DSL function is not allowed)"
             )
-        if not functions and not modules and not methods:
+        if not functions and not children and not methods:
             raise TypeError(
                 f"@module {cls.__name__!r}: empty class body; declare a Function, "
                 "child Module, or orchestration method"
@@ -1248,7 +1207,7 @@ class ModuleBuildContext:
             name=cls.__name__,
             functions=tuple(functions),
             entry=self.entry,
-            modules=tuple(modules),
+            children=children,
             target=self.target,
             topologies=self.topologies,
             methods=methods,
@@ -1269,23 +1228,6 @@ class ModuleBuildContext:
             elif isinstance(function, runtime.PrimFunction):
                 verify_prim_function(function, module_fns=result)
         return result
-
-
-def _unshared(child, name: str):
-    """The child this build will hold, independent of any other owner.
-
-    A child resolves its Target through the owner that holds it, and placing it
-    here must not change what another owner's subtree resolves. A child another
-    owner already holds is therefore copied and detached from that owner; the
-    copy keeps the ownership inside its own subtree.
-    """
-    placed = child if child.name == name else child.renamed(name)
-    if child._parent is None:
-        return placed
-    if placed is child:
-        placed = child.cloned()
-    placed._parent = None
-    return placed
 
 
 _MODULE_CONTEXTS: list[ModuleBuildContext] = []
@@ -1359,11 +1301,6 @@ class MatchContext:
     @classmethod
     def from_function(cls, function: FuncParserContext) -> MatchContext:
         scope = LexicalScope()
-        provider = (
-            ParserChildModuleResolver(function.module_scope)
-            if function.module_scope is not None
-            else None
-        )
         resolved_mesh = None
         context = cls(
             function=function,
@@ -1385,7 +1322,7 @@ class MatchContext:
         scope.define(
             _TYPE_INFER_CONTEXT,
             ParserTypeInferContext(
-                child_resolver=provider,
+                scope=FunctionScope(function.module, None) if function.module is not None else None,
                 current_mesh=resolved_mesh,
                 parser_target=function.target,
             ),
@@ -1411,14 +1348,12 @@ class MatchContext:
         switching_function = function is not None and function is not self.function
         if switching_function:
             scope = LexicalScope()
-            provider = (
-                ParserChildModuleResolver(function.module_scope)
-                if function is not None and function.module_scope is not None
-                else None
-            )
             scope.define(
                 _TYPE_INFER_CONTEXT,
-                ParserTypeInferContext(child_resolver=provider, parser_target=function.target),
+                ParserTypeInferContext(
+                    scope=FunctionScope(function.module, None) if function.module is not None else None,
+                    parser_target=function.target,
+                ),
             )
         else:
             scope = self.lexical_scope.fork() if isolated_scope else self.lexical_scope
