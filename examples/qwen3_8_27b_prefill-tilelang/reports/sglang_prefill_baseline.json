@@ -1,0 +1,57 @@
+{
+ "sglang": "0.5.21",
+ "ckpt": "<the published Qwen3.8-27B checkpoint>",
+ "label": "gpu2-final",
+ "tp": 1,
+ "chunked_prefill_size": 8192,
+ "disable_radix_cache": true,
+ "peak_tflops": 989.0,
+ "when": "2026-10-12 13:31:10",
+ "rows": [
+  {
+   "n": 1024,
+   "latency_ms": 89.06481880694628,
+   "spread_ms": 11.802027933299541,
+   "idle_wakeup_ms": 42.64774499461055,
+   "prefill_tok_s": 11497.2445205282,
+   "flop": 50949854855168,
+   "tflop_s": 572.0536519094602,
+   "pct_peak_nominal": 57.8416230444348,
+   "pct_peak_at_clock": 76.35094241865393,
+   "peak_at_clock_tflops": 749.2424242424242,
+   "roofline_ms": 51.51653675952275,
+   "reps": 7,
+   "sm_clock_mhz": 1500.0
+  },
+  {
+   "n": 4096,
+   "latency_ms": 317.11403792724013,
+   "spread_ms": 37.432365119457245,
+   "idle_wakeup_ms": 42.64774499461055,
+   "prefill_tok_s": 12916.489054766482,
+   "flop": 206273320583168,
+   "tflop_s": 650.4704803717839,
+   "pct_peak_nominal": 65.77052379896702,
+   "pct_peak_at_clock": 87.69403173195603,
+   "peak_at_clock_tflops": 741.75,
+   "roofline_ms": 208.56756378480083,
+   "reps": 7,
+   "sm_clock_mhz": 1485.0
+  },
+  {
+   "n": 8192,
+   "latency_ms": 638.2452351972461,
+   "spread_ms": 32.09215356037021,
+   "idle_wakeup_ms": 42.64774499461055,
+   "prefill_tok_s": 12835.191785596815,
+   "flop": 419143710932992,
+   "tflop_s": 656.7126361757453,
+   "pct_peak_nominal": 66.40168212090448,
+   "pct_peak_at_clock": 87.6502203995939,
+   "peak_at_clock_tflops": 749.2424242424242,
+   "roofline_ms": 423.80557222749445,
+   "reps": 7,
+   "sm_clock_mhz": 1500.0
+  }
+ ]
+}
