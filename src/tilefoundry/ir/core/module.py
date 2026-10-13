@@ -26,9 +26,7 @@ from tilefoundry.target.base import Target, target_instance
 
 ModuleFunction = Union[HirFunction, PrimFunction]
 
-_MISSING_PREPARED_WEIGHT = (
-    "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
-)
+_MISSING_PREPARED_WEIGHT = "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
 
 
 def subtree(root: "Module"):
@@ -59,68 +57,75 @@ def module_functions(root: "Module") -> tuple[ModuleFunction, ...]:
     return tuple(found)
 
 
-def owning_module(root: "Module", function: object) -> "Module | None":
-    """The one node of *root*'s subtree that owns *function*, else ``None``.
+def resolve_callee(call: Call, scope=None):
+    """Resolve a function and its scope through an explicit call target."""
+    from tilefoundry.visitor_registry.contexts import TypeInferContext  # noqa: PLC0415
 
-    A Function carries no execution context and one object is reachable from
-    more than one program, so the question is asked within a supplied tree. It
-    is answered by identity and by recorded origin, never by a name a copy
-    keeps. None covers both no owner and more than one: an unanswerable
-    question states nothing rather than defaulting to the root.
-    """
-    found: "Module | None" = None
-    for node in subtree(root):
-        if node.owns(function, derived=True):
-            if found is not None:
-                return None
-            found = node
-    return found
+    if isinstance(call.target, HirFunction):
+        inner = TypeInferContext(scope=scope).scope_for(call.target)
+        return call.target, inner
+    if instance_slot(call.target) is None:
+        return None, scope
+    if scope is None:
+        raise ValueError("instance call requires a FunctionScope")
+    inner = TypeInferContext(scope=scope).scope_for(None, call.target)
+    callee = inner.module.entry_function()
+    return callee, _replace(inner, function=callee)
 
 
-def child_module_of(root: "Module", caller: object, callee: object) -> "Module | None":
-    """The direct child of *caller*'s owner that owns *callee*, else ``None``.
-
-    What a collected call no longer carries: the parser's binding record is
-    consumed, so which calls supply activations alone is re-derived from
-    ownership within *root*. It fails closed -- a same-owner call, and one
-    whose ends no single node owns, keeps its exact declared arity.
-    """
-    if not isinstance(callee, HirFunction) or caller is None:
-        return None
-    owner = owning_module(root, caller)
-    called = owning_module(root, callee)
-    if owner is None or called is None or called is owner:
-        return None
-    return called if any(child is called for slot in owner.children.values() for child in slot.elements) else None
-
-
-def called_functions(function: HirFunction) -> tuple[HirFunction, ...]:
-    """Every HIR Function called directly by *function*, in definition order."""
-    from tilefoundry.ir.core.expr import Call  # noqa: PLC0415 -- cycle
+def called_function_scopes(function: HirFunction, scope=None):
+    """Direct call edges with the instance context each edge enters."""
     from tilefoundry.ir.visitor import collect_exprs  # noqa: PLC0415 -- cycle
 
-    return tuple(
-        expr.target
-        for expr in collect_exprs(function.body)
-        if isinstance(expr, Call) and isinstance(expr.target, HirFunction)
-    )
+    for expr in collect_exprs(function.body):
+        if isinstance(expr, Call):
+            callee, inner = resolve_callee(expr, scope)
+            if isinstance(callee, HirFunction):
+                yield callee, inner
 
 
-def reachable_functions(root: HirFunction) -> tuple[HirFunction, ...]:
-    """*root* and every HIR Function it calls, callers before callees."""
-    reached: list[HirFunction] = []
-    seen: set[int] = set()
+def called_functions(function: HirFunction, scope=None) -> tuple[HirFunction, ...]:
+    """Directly called definitions once, in operand-before-consumer order."""
+    found = {}
+    for callee, _inner in called_function_scopes(function, scope):
+        found.setdefault(id(callee), callee)
+    return tuple(found.values())
 
-    def visit(function: HirFunction) -> None:
-        if id(function) in seen:
+
+def reachable_function_scopes(root: HirFunction, scope=None):
+    """Reached bodies and their instance paths, without expanding recursive edges."""
+    seen = set()
+
+    def visit(function, current, active):
+        frames = (
+            ()
+            if current is None
+            else tuple(
+                (
+                    id(frame.module),
+                    frame.key,
+                    id(frame.index) if isinstance(frame.index, Expr) else frame.index,
+                )
+                for frame in current.instances
+            )
+        )
+        key = (id(function), frames)
+        if key in seen or id(function) in active:
             return
-        seen.add(id(function))
-        reached.append(function)
-        for callee in called_functions(function):
-            visit(callee)
+        seen.add(key)
+        yield function, current
+        for callee, inner in called_function_scopes(function, current):
+            yield from visit(callee, inner, active | {id(function)})
 
-    visit(root)
-    return tuple(reached)
+    yield from visit(root, scope, frozenset())
+
+
+def reachable_functions(root: HirFunction, scope=None) -> tuple[HirFunction, ...]:
+    """Reached definitions once by identity, callers before callees."""
+    found = {}
+    for function, _inner in reachable_function_scopes(root, scope):
+        found.setdefault(id(function), function)
+    return tuple(found.values())
 
 
 def _refuse_bare_call(module: "Module", kind: str) -> None:
@@ -664,7 +669,8 @@ class LoadedModule:
         matches = tuple(fn for fn in module.functions if fn.name == name)
         if len(matches) == 1:
             return _replace(
-                self, module=_reentered(module, name, target=self.target, topologies=self.topologies)
+                self,
+                module=_reentered(module, name, target=self.target, topologies=self.topologies),
             )
         if len(matches) > 1:
             raise AttributeError(
@@ -749,6 +755,32 @@ def select(module: Module, path: str) -> Module:
     return _reentered(selected, entry, target=module.target, topologies=topologies)
 
 
+def function_scopes(module: Module, prefix: str = ""):
+    """Declared functions with their first DFS selector and explicit instance scope."""
+    from tilefoundry.visitor_registry.contexts import FunctionScope, ModuleInstance  # noqa: PLC0415
+
+    seen: set[int] = set()
+    functions: set[int] = set()
+
+    def visit(node, path, frames):
+        if id(node) in seen:
+            return
+        seen.add(id(node))
+        for function in node.functions:
+            if id(function) not in functions:
+                functions.add(id(function))
+                yield f"{path}{function.name}", FunctionScope(node, function, frames)
+        for key, slot in node.children.items():
+            for index, child in enumerate(slot.elements):
+                taken = index if slot.indexed else None
+                suffix = f"{key}.{index}." if slot.indexed else f"{key}."
+                yield from visit(
+                    child, f"{path}{suffix}", (*frames, ModuleInstance(child, key, taken))
+                )
+
+    yield from visit(module, prefix, (ModuleInstance(module),))
+
+
 def function_selectors(module: Module, prefix: str = "") -> tuple[tuple[str, HirFunction], ...]:
     """One selector per definition, using its first DFS instance path.
 
@@ -758,25 +790,11 @@ def function_selectors(module: Module, prefix: str = "") -> tuple[tuple[str, Hir
 
     See [core-ir §1.2](docs/spec/core-ir.md#12-selecting-a-node-by-path).
     """
-    seen: set[int] = set()
-    functions: set[int] = set()
-    found = []
-
-    def visit(node, path):
-        if id(node) in seen:
-            return
-        seen.add(id(node))
-        for function in node.functions:
-            if isinstance(function, HirFunction) and id(function) not in functions:
-                functions.add(id(function))
-                found.append((f"{path}{function.name}", function))
-        for key, slot in node.children.items():
-            for index, child in enumerate(slot.elements):
-                suffix = f"{key}.{index}." if slot.indexed else f"{key}."
-                visit(child, f"{path}{suffix}")
-
-    visit(module, prefix)
-    return tuple(found)
+    return tuple(
+        (selector, scope.function)
+        for selector, scope in function_scopes(module, prefix)
+        if isinstance(scope.function, HirFunction)
+    )
 
 
 __all__ = [
@@ -787,9 +805,12 @@ __all__ = [
     "validate_instance_slot",
     "ModuleFunction",
     "called_functions",
+    "called_function_scopes",
+    "reachable_function_scopes",
+    "resolve_callee",
+    "function_scopes",
     "function_selectors",
     "module_functions",
-    "owning_module",
     "reachable_functions",
     "select",
 ]

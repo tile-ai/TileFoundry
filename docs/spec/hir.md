@@ -1761,11 +1761,12 @@ def specialize_concretely(
     ...
 
 
-def residual_dims(fn: Function) -> tuple[str, ...]:
+def residual_dims(fn: Function, scope: FunctionScope | None = None) -> tuple[str, ...]:
     """Return every dimension still stated as a range.
 
     Args:
         fn: Function to inspect recursively.
+        scope: Current instance stack, required for instance targets.
 
     Returns:
         Residual dimension names.
@@ -1773,11 +1774,12 @@ def residual_dims(fn: Function) -> tuple[str, ...]:
     ...
 
 
-def dim_vars_reached(fn: Function) -> dict[str, object]:
+def dim_vars_reached(fn: Function, scope: FunctionScope | None = None) -> dict[str, object]:
     """Return residual dimension declarations by name.
 
     Args:
         fn: Function to inspect recursively.
+        scope: Current instance stack, required for instance targets.
 
     Returns:
         Residual dimension declarations.
@@ -1785,11 +1787,12 @@ def dim_vars_reached(fn: Function) -> dict[str, object]:
     ...
 
 
-def is_concrete(fn: Function) -> bool:
+def is_concrete(fn: Function, scope: FunctionScope | None = None) -> bool:
     """Return whether no required extent remains symbolic.
 
     Args:
         fn: Function to inspect.
+        scope: Current instance stack, required for instance targets.
 
     Returns:
         Whether the function is concrete.
@@ -1823,3 +1826,8 @@ def is_concrete(fn: Function) -> bool:
     and called functions. `is_concrete` additionally checks the return type and
     is false exactly when a reachable required extent still contains a `DimVar`;
     runtime values without a `DimVar` are rejected later by their consumer.
+  - Instance dimension scans MUST receive a `FunctionScope` and recurse through
+    element entries using the current frame's children ([core-ir §2.1](./core-ir.md#21-call)).
+    Function-only graphs retain the scope-free query API. Dimension instantiation
+    MUST preserve instance targets and shared element definitions; it MAY rebuild
+    the index operand of a computed target.

@@ -472,18 +472,24 @@ class CallableSignature(Signature):
     NOT be subclassed. Only the first two are reachable by name; the kernel's
     is derived inside the unit that defines it and is not in the table.
   - `function_path(root, fn)` MUST return the root Module name followed by the
-    selector segments. Child segments are their mount names. Variant paths add
-    the display name or `v<index>` when absent. A function without a unique path
+    selector segments of the first DFS instance path for each definition. Child
+    segments are slot keys and, for indexed slots, decimal indices. Variant paths add
+    the display name or `v<index>` when absent. A function outside the tree
     MUST be rejected.
   - `mangle(root, fn)` MUST be the unique source of generated function-symbol
-    roots: `tilefoundry_` followed by each segment's decimal length and spelling.
-    Every segment MUST be a C identifier; invalid segments raise with the segment
-    and complete path.
+    roots: `tilefoundry_` followed by encoded path segments. C identifier
+    segments retain decimal length followed by spelling. Pure decimal index
+    segments use `I<decimal length>_<digits>`; all other segments raise with the
+    segment and complete path. The `I` tag distinguishes indices from identifier
+    length prefixes, and the underscore delimits an index's length before its
+    fixed-length payload, keeping the encoding injective.
   - `export_name(root, fn)` MUST join this same path with dots. For each HIR
     selector it equals `<root name>.<selector>`.
   - function paths reuse the IR selector traversal
-    ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)). These naming
-    functions live in `codegen/context_builder.py`, which produces FunctionSymbol
+    ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)). This
+    traversal emits each definition once using its first DFS instance path,
+    including index segments. These naming functions live in
+    `codegen/context_builder.py`, which produces FunctionSymbol
     identities. Target conventions supply suffixes: CUDA derives `_launch` and
     `_kernel`, while CPU functions use the mangled root. Conventions receive
     the resolved symbol and target rather than reconstructing them.

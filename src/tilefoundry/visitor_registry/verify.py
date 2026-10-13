@@ -390,7 +390,9 @@ def verify_prim_function(
             if isinstance(function, PrimFunction)
         )
     for f in module_fns:
-        module_fn_map[f.name] = (*module_fn_map.get(f.name, ()), f)
+        prior = module_fn_map.get(f.name, ())
+        if all(candidate is not f for candidate in prior):
+            module_fn_map[f.name] = (*prior, f)
 
     bound_var_ids: set[int] = {id(p) for p in fn.params}
     _walk_stmt(fn.body, ctx, scope, fn, module_fn_map, bound_var_ids)
@@ -854,10 +856,15 @@ def verify_module(fns) -> None:
     is never a variant, and every entry is callable (``body is None`` only when
     it carries variants).
     """
-    from tilefoundry.ir.core.module import Module, module_functions  # noqa: PLC0415
+    from tilefoundry.ir.core.module import Module, module_functions, subtree  # noqa: PLC0415
 
-    if isinstance(fns, Module):
-        fns = module_functions(fns)
+    root = fns if isinstance(fns, Module) else None
+    if root is not None:
+        groups = tuple(node.functions for node in subtree(root))
+        fns = module_functions(root)
+    else:
+        groups = (tuple(fns),)
+        fns = groups[0]
     prim_fns = [f for f in fns if isinstance(f, PrimFunction)]
     prim_fns_with_variants = [variant for f in prim_fns for variant in (f, *f.variants)]
     for f in fns:
@@ -875,20 +882,21 @@ def verify_module(fns) -> None:
                     f"module function must be callable"
                 )
         elif isinstance(f, PrimFunction):
-            verify_prim_function(f, module_fns=prim_fns_with_variants)
+            verify_prim_function(f, module_fns=root if root is not None else prim_fns_with_variants)
         else:
             raise VerifyError(f"verify_module: unknown function type {type(f).__name__}")
 
-    by_name: dict[str, list] = {}
-    for f in fns:
-        by_name.setdefault(f.name, []).append(f)
-    for name, group in by_name.items():
-        if len(group) > 1:
-            raise VerifyError(
-                f"verify_module: {name!r} appears {len(group)} times; one name "
-                f"maps to one function (specialization variants live on "
-                f"Function.variants)"
-            )
+    for functions in groups:
+        by_name: dict[str, list] = {}
+        for f in functions:
+            by_name.setdefault(f.name, []).append(f)
+        for name, group in by_name.items():
+            if len(group) > 1:
+                raise VerifyError(
+                    f"verify_module: {name!r} appears {len(group)} times; one name "
+                    f"maps to one local function (specialization variants live on "
+                    f"Function.variants)"
+                )
 
 
 __all__ = [

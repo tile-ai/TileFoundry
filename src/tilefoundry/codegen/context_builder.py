@@ -17,10 +17,10 @@ from tilefoundry.codegen.signature import (
 )
 from tilefoundry.ir.core.module import (
     Module,
+    function_scopes,
     function_selectors,
     module_functions,
-    owning_module,
-    subtree,
+    select,
 )
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.launch import Launch
@@ -31,10 +31,8 @@ from tilefoundry.target import CpuTarget, Target
 
 def _function_paths(module: Module, prefix: tuple[str, ...] = ()):
     """Root-relative paths for every declared function, using child mount names."""
-    for function in module.functions:
-        yield (*prefix, function.name), function
-    for child in module.modules:
-        yield from _function_paths(child, (*prefix, child.name))
+    for selector, scope in function_scopes(module):
+        yield (*prefix, *selector.split(".")), scope.function
 
 
 def function_path(root: Module, fn) -> tuple[str, ...]:
@@ -54,12 +52,15 @@ def function_path(root: Module, fn) -> tuple[str, ...]:
 
 
 def mangle(root: Module, fn) -> str:
-    """Encode each path segment with its length; reject non-C identifiers."""
+    """Encode identifiers by length and decimal indices with a distinct I tag."""
     path = function_path(root, fn)
     for segment in path:
-        if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", segment) is None:
+        if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*|[0-9]+", segment) is None:
             raise ValueError(f"codegen: invalid path segment {segment!r} in {'.'.join(path)!r}")
-    return "tilefoundry_" + "".join(f"{len(segment)}{segment}" for segment in path)
+    return "tilefoundry_" + "".join(
+        f"I{len(segment)}_{segment}" if segment.isdecimal() else f"{len(segment)}{segment}"
+        for segment in path
+    )
 
 
 def export_name(root: Module, fn) -> str:
@@ -171,38 +172,45 @@ class CodegenContext:
         )
 
 
-def _domain_functions(node: Module) -> tuple[PrimFunction | Function, ...]:
-    inherited = tuple(
-        function
-        for child in node.modules
-        if child.topologies is None
-        for function in _domain_functions(child)
-    )
-    return (*node.functions, *inherited)
-
-
-def _domains(root: Module) -> tuple[tuple[Module, tuple[PrimFunction | Function, ...]], ...]:
-    domains = [(root, _domain_functions(root))]
-    for node in subtree(root):
-        domains.extend(
-            (child, _domain_functions(child))
-            for child in node.modules
-            if child.topologies is not None
+def _domains(root: Module):
+    """Group each definition under its first path's nearest topology declaration."""
+    rows = {}
+    for selector, scope in function_scopes(root):
+        declared = next(
+            (
+                frame.module
+                for frame in reversed(scope.instances)
+                if frame.module.topologies is not None
+            ),
+            root,
         )
-    return tuple(domains)
+        row = rows.get(id(declared))
+        if row is None:
+            segments = []
+            for frame in scope.instances[1:]:
+                segments.append(frame.key)
+                if frame.index is not None:
+                    segments.append(str(frame.index))
+                if frame.module is declared:
+                    break
+            owner = root if declared is root else select(root, ".".join(segments))
+            row = (owner, [])
+            rows[id(declared)] = row
+        row[1].append(scope.function)
+    return tuple((owner, tuple(functions)) for owner, functions in rows.values())
 
 
 def hir_domains(root: Module):
-    """Coalesce HIR owners by equal effective topology hierarchy."""
-    domains = []
-    for owner in subtree(root):
+    """Coalesce first-instance definition contexts by equal effective hierarchy."""
+    rows = []
+    for owner, functions in _domains(root):
         hierarchy = owner.effective_topologies()
-        row = next((row for row in domains if row[0].effective_topologies() == hierarchy), None)
+        row = next((row for row in rows if row[0].effective_topologies() == hierarchy), None)
         if row is None:
-            domains.append((owner, list(owner.functions)))
+            rows.append((owner, list(functions)))
         else:
-            row[1].extend(owner.functions)
-    return tuple((owner, tuple(functions)) for owner, functions in domains)
+            row[1].extend(functions)
+    return tuple((owner, tuple(functions)) for owner, functions in rows)
 
 
 def _product(values: tuple[object, ...]) -> object:
@@ -239,6 +247,23 @@ def _launch_statements(function: PrimFunction | Function) -> tuple[Evaluate, ...
     )
 
 
+def _resolve_launch_definition(root, scope, name):
+    for node in (scope.module, root):
+        try:
+            return select(node, name).entry_function()
+        except ValueError:
+            pass
+    matches = tuple(
+        function for function in module_functions(scope.module) if function.name == name
+    )
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError(
+        f"codegen: launch from {scope.function.name!r} names {name!r}: "
+        f"expected one match, found {len(matches)}"
+    )
+
+
 def build_codegen_context(
     module: Module, options: CodegenOptions = CodegenOptions()
 ) -> CodegenContext:
@@ -255,15 +280,22 @@ def build_codegen_context(
                 'emit="skeleton" or lowering to TIR first'
             )
     selected = function_selectors(module)
+    contexts = {
+        id(each): (selector, scope)
+        for selector, scope in function_scopes(module)
+        for each in (scope.function, *scope.function.variants)
+    }
     launched = {
-        stmt.args[0].name: stmt.args[7:]
+        id(
+            _resolve_launch_definition(module, contexts[id(caller)][1], stmt.args[0].name)
+        ): stmt.args[7:]
         for caller in functions
         for stmt in _launch_statements(caller)
     }
     launch_args = {
-        id(each): launched[selector]
-        for selector, function in selected
-        if selector in launched
+        id(each): launched[id(function)]
+        for _selector, function in selected
+        if id(function) in launched
         for each in (function, *function.variants)
     }
     functions = tuple(
@@ -283,9 +315,8 @@ def build_codegen_context(
     ownership: dict[int, Module] = {}
     targets: dict[int, Target] = {}
     for function in identities.values():
-        owner = owning_module(module, function)
-        if owner is None:
-            raise ValueError(f"codegen: function {function.name!r} has no unique owning Module")
+        selector, scope = contexts[id(function)]
+        owner = select(module, selector.rpartition(".")[0])
         target = function.target if isinstance(function, PrimFunction) else module.resolve_target()
         if target is None:
             raise ValueError(f"codegen: function {function.name!r} has no resolved Target")
@@ -348,21 +379,8 @@ def build_codegen_context(
     for caller in functions:
         for stmt in _launch_statements(caller):
             reference = stmt.args[0]
-            symbol = by_selector.get(reference.name)
-            if symbol is None:
-                owner = ownership[id(caller)]
-                candidates = [
-                    by_function[id(fn)]
-                    for fn in module_functions(owner)
-                    if fn.name == reference.name
-                ]
-                if len(candidates) != 1:
-                    names = [candidate.export_name for candidate in candidates]
-                    raise ValueError(
-                        f"codegen: launch from {caller.name!r} names {reference.name!r} "
-                        f"in owner {owner.name!r}: expected one match, found {len(candidates)} {names}"
-                    )
-                symbol = candidates[0]
+            callee = _resolve_launch_definition(module, contexts[id(caller)][1], reference.name)
+            symbol = by_function[id(callee)]
             grid_x, block_x = _launch_extents(symbol.owner)
             callable_signature = replace(symbol.callable, trailing=LAUNCH_ABI)
             launch_callables[id(stmt)] = callable_signature

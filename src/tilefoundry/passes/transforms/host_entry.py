@@ -11,20 +11,22 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from tilefoundry.ir.core import Var
+from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.module import (
     Module,
-    called_functions,
-    child_module_of,
+    function_scopes,
     function_selectors,
+    instance_slot,
     module_functions,
-    owning_module,
+    resolve_callee,
+    select,
 )
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types import StorageKind, TensorType, TupleType, UnitType
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.target import CpuTarget, CudaTarget
 
@@ -125,17 +127,20 @@ def reject_omitted_child_weights(module: Module) -> None:
     """Reject device calls that depend on implicit child-owner weight injection."""
     functions = function_selectors(module)
     selectors = {id(fn): selector for selector, fn in functions}
+    scopes = {id(scope.function): scope for _selector, scope in function_scopes(module)}
     for selector, fn in functions:
         for caller in (fn, *fn.variants):
-            for callee in called_functions(caller):
-                if child_module_of(module, caller, callee) is not None:
-                    weights = [param.name for param in callee.params if param.is_const]
-                    if weights:
-                        raise ValueError(
-                            f"CUDA skeleton: {selector} calls "
-                            f"{selectors[id(callee)]} with omitted weights {weights}; "
-                            "declare the weights as parameters or call from orchestration"
-                        )
+            for call in collect_exprs(caller.body):
+                if not isinstance(call, Call) or instance_slot(call.target) is None:
+                    continue
+                callee, _inner = resolve_callee(call, scopes[id(fn)])
+                weights = [param.name for param in callee.params if param.is_const]
+                if weights:
+                    raise ValueError(
+                        f"CUDA skeleton: {selector} calls "
+                        f"{selectors[id(callee)]} with omitted weights {weights}; "
+                        "declare the weights as parameters or call from orchestration"
+                    )
 
 
 def _fresh_name(stem: str, taken: set[str]) -> str:
@@ -204,7 +209,7 @@ def entries_for_hir_functions(module: Module) -> Module:
     taken = {fn.name for fn in module.functions}
     entries = []
     for selector, fn in function_selectors(module):
-        owner = owning_module(module, fn)
+        owner = select(module, selector.rpartition(".")[0])
         if owner.entry == fn.name:
             entries.append(host_entry_for(owner, selector, fn, taken))
     return replace(module, functions=(*module.functions, *entries))

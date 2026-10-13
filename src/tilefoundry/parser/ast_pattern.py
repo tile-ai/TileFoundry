@@ -1585,6 +1585,15 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
         raise ParseError.from_node(node, context, f"undefined static name {node.id!r}")
     if isinstance(node, ast.Attribute):
         owner = _resolve_reference(node.value, context)
+        if isinstance(owner, ModuleList):
+            if owner.indexed:
+                raise ParseError.from_node(
+                    node, context, "indexed ModuleList static function references are unsupported"
+                )
+            try:
+                return owner.elements[0].lookup(node.attr)
+            except ValueError as error:
+                raise ParseError.from_node(node, context, str(error)) from error
         try:
             return getattr(owner, node.attr)
         except AttributeError as error:

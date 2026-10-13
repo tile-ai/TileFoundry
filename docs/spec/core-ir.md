@@ -201,17 +201,21 @@ step.
 The shared HIR call-graph queries are:
 
 ```python
-def called_functions(function: HirFunction) -> tuple[HirFunction, ...]: ...
-def reachable_functions(root: HirFunction) -> tuple[HirFunction, ...]: ...
+def called_functions(function: HirFunction, scope: FunctionScope | None = None) -> tuple[HirFunction, ...]: ...
+def reachable_functions(root: HirFunction, scope: FunctionScope | None = None) -> tuple[HirFunction, ...]: ...
 ```
 
 - constraints:
   - `called_functions` MUST return each direct Function-call target in the
-    body's operand-before-consumer definition order. Repeated call sites remain
-    repeated entries.
+    body's operand-before-consumer definition order, deduplicated by Function
+    identity. Instance targets resolve to the selected element's entry.
   - `reachable_functions` MUST return the root followed by its transitively
     called Functions, callers before callees and deduplicated by Function
     identity.
+
+  - Function targets MAY be queried without a scope. Instance targets MUST
+    receive a `FunctionScope`; missing scope raises explicitly. Each recursive
+    instance call pushes the selected child frame using [§2.1](#21-call).
 
 ### 1.1 Function access
 
