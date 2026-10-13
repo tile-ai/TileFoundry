@@ -19,7 +19,6 @@ from tilefoundry.ir.pattern import (
 )
 from tilefoundry.ir.pattern.utils import (
     declared_shape,
-    declared_write_type,
     selected_pattern,
 )
 from tilefoundry.ir.types import TensorType, UnitType
@@ -40,6 +39,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     relations_of,
 )
+from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes, VerifyContext
 from tilefoundry.visitor_registry.cost_utils import operation_cost
 from tilefoundry.visitor_registry.verify import verify_between
@@ -53,7 +53,6 @@ class ScheduleOp(Op):
     op = ParamDef(kind="attribute", annotation=Op)
     repeat = ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     order = ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
-    buffers = ParamDef(kind="attribute", annotation=int, default=1)
 
     def __init__(self, **attrs) -> None:
         super().__init__(**attrs)
@@ -66,8 +65,6 @@ class ScheduleOp(Op):
             not isinstance(self.order, tuple) or any(type(value) is not int for value in self.order)
         ):
             raise ValueError("schedule order must be a tuple of integer positions")
-        if type(self.buffers) is not int or self.buffers < 1:
-            raise ValueError("schedule buffers must be a positive integer")
 
 
 @register_eval(ScheduleOp)
@@ -127,19 +124,11 @@ def _instruction_schema(
     if any(param.effect is None for param in params):
         raise ValueError(f"{type(op).__name__} does not declare every operand's memory effect")
     if operand_count is not None:
-        required_reads = sum(
-            bool(param.effect & MemoryEffect.READ)
-            for param in params
-            if not param.optional
-        )
-        optional_reads = tuple(
-            param for param in params if param.optional and param.effect & MemoryEffect.READ
-        )
-        supplied_optional = operand_count - required_reads
-        included = {id(param) for param in optional_reads[: max(0, supplied_optional)]}
-        params = tuple(
-            param for param in params if not param.optional or id(param) in included
-        )
+        required = sum(not param.optional for param in params)
+        optional = tuple(param for param in params if param.optional)
+        supplied_optional = operand_count - required
+        included = {id(param) for param in optional[: max(0, supplied_optional)]}
+        params = tuple(param for param in params if not param.optional or id(param) in included)
     reads = tuple(param for param in params if param.effect & MemoryEffect.READ)
     writes = tuple(param for param in params if param.effect & MemoryEffect.WRITE)
     if not writes:
@@ -151,28 +140,18 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
     schedule = call.target
     op = schedule.op
     params, reads, writes = _instruction_schema(op, len(call.args))
-    if len(call.args) != len(reads):
-        raise ValueError(f"{type(op).__name__} reads {len(reads)} operands, got {len(call.args)}")
+    if len(call.args) != len(params):
+        raise ValueError(
+            f"{type(op).__name__} expects operands {tuple(param.name for param in params)}, got {len(call.args)}"
+        )
     bindings = dict(getattr(getattr(op, "atom", None), "bindings", {}))
     patterns = tuple(_operand_pattern(param, op, bindings) for param in params)
-    whole = {param.name: ctx.type_of(arg) for param, arg in zip(reads, call.args, strict=True)}
+    whole = {param.name: ctx.type_of(arg) for param, arg in zip(params, call.args, strict=True)}
     if not all(isinstance(type_, TensorType) for type_ in whole.values()):
         raise ValueError(f"{type(op).__name__} schedule operands must be tensors")
-    for param, pattern in zip(params, patterns, strict=True):
-        if param.effect == MemoryEffect.WRITE and pattern is None:
-            raise ValueError(
-                f"{type(op).__name__} {param.name} is write-only and declares no result shape"
-            )
-    whole_relations = operand_relations(
-        op, tuple(whole.get(param.name, UnitType()) for param in params)
-    )
+    whole_relations = operand_relations(op, tuple(whole[param.name] for param in params))
     whole_shape = _iteration_shape(whole_relations)
     operands = whole_relations[: len(params)]
-    read_boundaries = tuple(
-        boundary
-        for param, boundary in zip(params, operands, strict=True)
-        if param.effect & MemoryEffect.READ
-    )
     write_boundaries = tuple(
         boundary
         for param, boundary in zip(params, operands, strict=True)
@@ -182,7 +161,7 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
         *(involved_dims(boundary.relation) for boundary in write_boundaries)
     )
     if fragments and getattr(op, "atom", None) is None:
-        for type_, boundary in zip(whole.values(), read_boundaries, strict=True):
+        for type_, boundary in zip(whole.values(), operands, strict=True):
             layout = shard_layout_of(type_.layout)
             if layout is None:
                 continue
@@ -193,19 +172,6 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
             ):
                 fragments = False
                 break
-    outputs = {}
-    for param, pattern in zip(params, patterns, strict=True):
-        if param.effect & MemoryEffect.WRITE and not param.effect & MemoryEffect.READ:
-            outputs[param.name] = declared_write_type(
-                op,
-                param,
-                pattern,
-                whole,
-                ctx.current_mesh,
-                (*read_boundaries, write_boundaries[writes.index(param)]),
-                collapsed,
-            )
-    whole.update(outputs)
     whole_types = tuple(whole[param.name] for param in params)
     shapes = tuple(
         _declared_shape(pattern, bindings) or tuple(type_.shape)
@@ -238,20 +204,10 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
     if sorted(order) != list(range(len(repeat))):
         raise ValueError(f"order {order} is not a permutation of iteration dimensions")
     participant = getattr(getattr(op, "atom", None), "required_execution_mesh", None)
-    read_args = dict(zip((param.name for param in reads), call.args, strict=True))
     inner_types = (
         tuple(
             tile_inner_type(
-                (
-                    TensorType(
-                        type_.shape,
-                        type_.dtype,
-                        ctx.type_of(read_args[param.name]).layout,
-                        type_.storage,
-                    )
-                    if param.name in read_args
-                    else type_
-                ),
+                type_,
                 shape,
                 counts=tuple(
                     1 if axis is None else repeat[axis]
@@ -265,8 +221,8 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
                     else None
                 ),
             )
-            for param, type_, shape, pattern, boundary in zip(
-                params, whole_types, shapes, patterns, single[: len(params)], strict=True
+            for type_, shape, pattern, boundary in zip(
+                whole_types, shapes, patterns, single[: len(params)], strict=True
             )
         )
         if fragments
@@ -319,14 +275,7 @@ def _schedule_access_relation(call: Call, ctx) -> tuple[AccessRelation, ...]:
         call, ctx, fragments=False
     )
     scheduled = _outer_band(operand_relations(op, inner), repeat, order, shape)
-    return (
-        *(
-            boundary
-            for param, boundary in zip(params, scheduled[: len(params)], strict=True)
-            if param.effect & MemoryEffect.READ
-        ),
-        *scheduled[len(params) :],
-    )
+    return scheduled
 
 
 @register_cost_evaluator(ScheduleOp)
@@ -334,6 +283,7 @@ def _schedule_cost(call: Call, ctx) -> Cost:
     stated = relations_of(call, ctx)
     local = projected(stated, call, ctx)
     types = (*(ctx.local_type_of(arg) for arg in call.args), ctx.local_output_type(call))
+    params, _reads, writes = _instruction_schema(call.target.op, len(call.args))
     moved = []
     for index, (type_, boundary) in enumerate(zip(types, local, strict=True)):
         if not isinstance(type_, TensorType):
@@ -343,10 +293,15 @@ def _schedule_cost(call: Call, ctx) -> Cost:
             raise ValueError(f"ScheduleOp boundary {index} has no finite traffic")
         amount = -(-(elements * type_.dtype.bit_width) // 8)
         moved.append(
-            TrafficBytes(write=amount) if index == len(call.args) else TrafficBytes(read=amount)
+            TrafficBytes(
+                read=amount
+                if index < len(params) and params[index].effect & MemoryEffect.READ
+                else 0,
+                write=amount
+                if index < len(params) and params[index].effect & MemoryEffect.WRITE
+                else 0,
+            )
         )
-    op = call.target.op
-    _params, reads, writes = _instruction_schema(op, len(call.args))
     if any(param.effect & MemoryEffect.READ for param in writes):
         iterations = cardinality(iteration_universe(local))
         if iterations is None:
@@ -354,7 +309,7 @@ def _schedule_cost(call: Call, ctx) -> Cost:
         dtype = next(
             (
                 type_.dtype
-                for param, type_ in zip(reads, types, strict=False)
+                for param, type_ in zip(params, types, strict=False)
                 if not param.effect & MemoryEffect.WRITE and isinstance(type_, TensorType)
             ),
             types[-1].dtype,
@@ -404,9 +359,13 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
     handler(target_call, verify_ctx)
     verify_between(target_call, verify_ctx)
     result = writes[0]
-    if result.effect & MemoryEffect.READ:
-        return ctx.type_of(call.args[reads.index(result)])
-    return inner[params.index(result)]
+    return ctx.type_of(call.args[params.index(result)])
+
+
+@register_buffer_alias(ScheduleOp)
+def _schedule_result_operand(call: Call) -> int:
+    params, _reads, writes = _instruction_schema(call.target.op, len(call.args))
+    return params.index(writes[0])
 
 
 __all__ = ["ScheduleOp", "operand_relations"]

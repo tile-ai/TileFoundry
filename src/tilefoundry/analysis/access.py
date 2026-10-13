@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import isl
 
 from tilefoundry.ir.core import Call, Constant, Expr, Var
+from tilefoundry.ir.hir.schedule import ScheduleOp, _instruction_schema
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.isl_interop import IslParamValues, dim_to_isl_pw_aff, shape_to_isl_set
 from tilefoundry.ir.types import TensorType, TupleType
@@ -101,10 +102,14 @@ def buffer_alias(
         or not relation.relation.is_injective()
         or not relation.relation.range().is_subset(box)
     ):
-        param = tuple(
-            param for param in type(call.target)._op_schema.signature
-            if param.kind == "input"
-        )[position]
+        params = (
+            _instruction_schema(call.target.op, len(call.args))[0]
+            if isinstance(call.target, ScheduleOp)
+            else tuple(
+                param for param in type(call.target)._op_schema.signature if param.kind == "input"
+            )
+        )
+        param = params[position]
         raise AnalysisError(
             f"{type(call.target).__name__} declares its result is {param.name}'s bytes, "
             f"but its access relation {relation.relation} is not single-valued, injective, "

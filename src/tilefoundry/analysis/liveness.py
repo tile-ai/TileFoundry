@@ -5,11 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from tilefoundry.ir.core import Call, Expr, Var
-from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp
+from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 
 
@@ -55,26 +54,8 @@ class Liveness:
 
 
 def result_copies(expr: Expr) -> int:
-    """Physical result slots represented by one scheduled SSA value."""
-    if not isinstance(expr, Call) or not isinstance(expr.target, ScheduleOp):
-        return 1
-    op = expr.target.op
-    schema = getattr(type(op), "_op_schema", None)
-    if schema is None:
-        return 1
-    result = next(
-        (
-            param
-            for param in schema.signature
-            if param.kind == "input"
-            and param.effect is not None
-            and param.effect & MemoryEffect.WRITE
-        ),
-        None,
-    )
-    if result is None or result.effect & MemoryEffect.READ:
-        return 1
-    return expr.target.buffers
+    """Physical slots declared for one tensor storage value."""
+    return expr.target.buffers if isinstance(expr, Call) and isinstance(expr.target, Empty) else 1
 
 
 class LivenessVisitor(ExprVisitor[None]):

@@ -754,6 +754,27 @@ class Lowering(ExprVisitor[Expr]):
         )
         return result
 
+    def visit_Empty(self, call: Call, cursor: _Cursor) -> Expr:
+        window = self.output_windows.get(id(call))
+        if window is not None:
+            self._alias_value(call, window.buffer)
+            for value in window.relation.values.values():
+                if (
+                    isinstance(value, Expr)
+                    and not isinstance(value, Constant)
+                    and not (isinstance(value, Call) and isinstance(value.target, MeshCoord))
+                ):
+                    self._alias_value(call, value)
+            return self._output_window(window, call.type, cursor)
+        staged = call.type.storage in (StorageKind.SMEM, StorageKind.GMEM)
+        if call.type.storage is StorageKind.RMEM and call.target.buffers != 1:
+            raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
+        owner = self._staging_owner(call) if staged else self.function
+        destination = self.owner_cursors.get(id(owner))
+        if destination is None:
+            raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
+        return self._declare(call, call.type, call.target.buffers, destination)
+
     def visit_Zeros(self, call: Call, cursor: _Cursor) -> Expr:
         if call.type.storage is StorageKind.GMEM:
             out = self._ensure_output_seed(call)
@@ -784,7 +805,7 @@ class Lowering(ExprVisitor[Expr]):
     def visit_IndexSelect(self, call: Call, cursor: _Cursor) -> Expr:
         raise LoweringError(
             f"{_label(call)} is an unscheduled IndexSelect; write "
-            "tf.schedule((x, idx), op=T.copy_async(smem_layout=..., fill=...))"
+            "tf.schedule((x, tf.empty(...), idx), op=T.copy_async(fill=...))"
         )
 
     def visit_InsertSlice(self, call: Call, cursor: _Cursor) -> Expr:
@@ -852,11 +873,21 @@ class Lowering(ExprVisitor[Expr]):
             )
         scope = self.scope_for_call.get(id(call))
         mesh = scope.enclosing_mesh() if scope is not None else None
-        params = self._instruction_params(op, len(call.args))
+        operand_count = len(call.args)
+        if not isinstance(call.target, ScheduleOp):
+            operand_count += sum(
+                param.kind == "input" and param.effect == MemoryEffect.WRITE and not param.optional
+                for param in type(op)._op_schema.signature
+            )
+        params = self._instruction_params(op, operand_count)
         reads = tuple(param for param in params if param.effect & MemoryEffect.READ)
         writes = tuple(param for param in params if param.effect & MemoryEffect.WRITE)
         produced = tuple(param for param in writes if not param.effect & MemoryEffect.READ)
         output_window = self.output_windows.get(id(call))
+        destination_operand = None
+        if isinstance(call.target, ScheduleOp) and produced:
+            destination_operand = call.args[params.index(produced[0])]
+            output_window = self.output_windows.get(id(destination_operand))
         if output_window is not None:
             self._alias_value(call, output_window.buffer)
             for value in output_window.relation.values.values():
@@ -866,27 +897,30 @@ class Lowering(ExprVisitor[Expr]):
                 ):
                     self._alias_value(call, value)
         written = None
-        buffers = call.target.buffers if isinstance(call.target, ScheduleOp) else 1
-        if produced and output_window is None:
+        if produced and output_window is None and not isinstance(call.target, ScheduleOp):
             staged = isinstance(call.type, TensorType) and call.type.storage in (
                 StorageKind.SMEM,
                 StorageKind.GMEM,
             )
-            if (
-                isinstance(call.type, TensorType)
-                and call.type.storage is StorageKind.RMEM
-                and buffers != 1
-            ):
-                raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
             if staged:
                 destination = self.owner_cursors.get(id(self._staging_owner(call)))
             else:
                 destination = self.owner_cursors[id(self.function)]
             if destination is None:
                 raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
-            written = self._declare(call, call.type, buffers, destination)
+            written = self._declare(call, call.type, 1, destination)
+        if destination_operand is not None and output_window is None:
+            written = self.visit(destination_operand, cursor)
         read_values = {}
-        for param, operand in zip(reads, call.args, strict=True):
+        supplied = params if isinstance(call.target, ScheduleOp) else reads
+        for param, operand in zip(supplied, call.args, strict=True):
+            if param.effect == MemoryEffect.WRITE and output_window is not None:
+                self._alias_value(operand, output_window.buffer)
+                for coordinate in output_window.relation.values.values():
+                    if isinstance(coordinate, Expr) and not isinstance(coordinate, Constant) and not (isinstance(coordinate, Call) and isinstance(coordinate.target, MeshCoord)):
+                        self._alias_value(operand, coordinate)
+                read_values[param.name] = None
+                continue
             value = self.visit(operand, cursor)
             if (
                 isinstance(op, CopyAsync)
@@ -925,11 +959,17 @@ class Lowering(ExprVisitor[Expr]):
                 self.logical[id(scalar)] = scalar_type
                 value = scalar
             read_values[param.name] = value
+            if param.effect & MemoryEffect.WRITE and not param.effect & MemoryEffect.READ:
+                written = value
         if id(call) in self.staged:
             written = self._stage(call)
         operands: list[tuple[str, Expr | None]] = []
         for param in params:
-            value = read_values[param.name] if param.effect & MemoryEffect.READ else written
+            value = (
+                read_values[param.name]
+                if isinstance(call.target, ScheduleOp) or param.effect & MemoryEffect.READ
+                else written
+            )
             if value is None and output_window is None:
                 raise LoweringError(f"{_label(call)} has no storage for {param.name}")
             operands.append((param.name, value))
@@ -937,6 +977,8 @@ class Lowering(ExprVisitor[Expr]):
         written = self._emit_instruction(
             call, op, tuple(operands), mesh, output_window, written, cursor
         )
+        if destination_operand is not None and written is not None:
+            self._memo[id(destination_operand)] = (destination_operand, written)
         result_param = next(param for param in params if param.effect & MemoryEffect.WRITE)
         if result_param.effect & MemoryEffect.READ:
             return read_values[result_param.name]
@@ -1015,8 +1057,7 @@ class Lowering(ExprVisitor[Expr]):
             raise LoweringError(f"{_label(call)} {error}") from error
         if len(whole) != len(tile):
             raise LoweringError(
-                f"{_label(call)} whole and atom iteration ranks differ: "
-                f"{len(whole)} vs {len(tile)}"
+                f"{_label(call)} whole and atom iteration ranks differ: {len(whole)} vs {len(tile)}"
             )
         repeat = tuple(full // part for full, part in zip(whole, tile, strict=True))
         if any(full % part for full, part in zip(whole, tile, strict=True)):
@@ -1075,10 +1116,24 @@ class Lowering(ExprVisitor[Expr]):
                 counter = Var(self.names.fresh(f"o_{axis_names[axis]}"), type=_INDEX)
                 body = _Cursor()
                 for copy in range(beside):
-                    start = counter if copy == 0 else simplify_dim(DimAdd, (counter, copy * tile[axis]))
-                    for statement in emit(depth + 1, {**offsets, axis: start}, {**copies, axis: copy}).body:
+                    start = (
+                        counter if copy == 0 else simplify_dim(DimAdd, (counter, copy * tile[axis]))
+                    )
+                    for statement in emit(
+                        depth + 1, {**offsets, axis: start}, {**copies, axis: copy}
+                    ).body:
                         body.add(statement)
-                return Sequential((For(counter, i64_const(low), i64_const(low + extent), i64_const(tile[axis] * beside), body.build()),))
+                return Sequential(
+                    (
+                        For(
+                            counter,
+                            i64_const(low),
+                            i64_const(low + extent),
+                            i64_const(tile[axis] * beside),
+                            body.build(),
+                        ),
+                    )
+                )
 
             body = emit(0, {}, {})
             cursor.add(MeshScope(frame, Var(self.names.fresh("threads"), type=_BINDING), body))
@@ -1106,14 +1161,8 @@ class Lowering(ExprVisitor[Expr]):
         if any(param.effect is None for param in params):
             raise LoweringError(f"{type(op).__name__} does not declare every operand memory effect")
         if operand_count is not None:
-            required_reads = sum(
-                bool(param.effect & MemoryEffect.READ)
-                for param in params
-                if not param.optional
-            )
-            optional_reads = tuple(
-                param for param in params if param.optional and param.effect & MemoryEffect.READ
-            )
+            required_reads = sum(not param.optional for param in params)
+            optional_reads = tuple(param for param in params if param.optional)
             supplied_optional = operand_count - required_reads
             included = {id(param) for param in optional_reads[: max(0, supplied_optional)]}
             params = tuple(

@@ -34,13 +34,13 @@ def gemm(
                 scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
             ) as threads:
                 T.fill(acc, 0.0)
-            lhs_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
-                T.tensor_view(16384, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
+            value_stages = (
+                T.tensor_view(4096, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
+                T.tensor_view(20480, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
             )
-            rhs_stages = (
-                T.tensor_view(32768, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1))), shape=(64, 16)),
-                T.tensor_view(34816, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1))), shape=(64, 16)),
+            value_1_stages = (
+                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1))), shape=(64, 16)),
+                T.tensor_view(2048, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (2, 8)), ((256, 64, 8), (128, 1))), shape=(64, 16)),
             )
             for k in range(0, 128, 64):
                 with scope[:1, :32] as scope_1:
@@ -50,12 +50,12 @@ def gemm(
                         shape=(128, 64),
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_1:
-                        T.copy_async_tensor(tile, lhs_stages[(k // 64) % 2])
+                        T.copy_async_tensor(tile, value_stages[(k // 64) % 2])
                     tile_1 = T.tensor_view(
                         T.ptr_of(b[k:k + 64, 0:0 + 16]), layout=(64, 16), shape=(64, 16)
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
-                        T.copy_async_tensor(tile_1, rhs_stages[(k // 64) % 2])
+                        T.copy_async_tensor(tile_1, value_1_stages[(k // 64) % 2])
                 with Mesh(
                     scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
                 ) as scope_2:
@@ -71,12 +71,12 @@ def gemm(
                                         shape=(64, 16),
                                     )
                                     lhs_view = T.tensor_view(
-                                        T.ptr_of(lhs_stages[(k // 64) % 2][o_m:o_m + 64, o_k:o_k + 16]),
+                                        T.ptr_of(value_stages[(k // 64) % 2][o_m:o_m + 64, o_k:o_k + 16]),
                                         layout=(Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view = T.tensor_view(
-                                        T.ptr_of(rhs_stages[(k // 64) % 2][o_k:o_k + 16, o_n:o_n + 16]),
+                                        T.ptr_of(value_1_stages[(k // 64) % 2][o_k:o_k + 16, o_n:o_n + 16]),
                                         layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
@@ -92,12 +92,12 @@ def gemm(
                                         shape=(64, 16),
                                     )
                                     lhs_view_1 = T.tensor_view(
-                                        T.ptr_of(lhs_stages[(k // 64) % 2][o_m:o_m + 64, o_k + 16:o_k + 16 + 16]),
+                                        T.ptr_of(value_stages[(k // 64) % 2][o_m:o_m + 64, o_k + 16:o_k + 16 + 16]),
                                         layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view_1 = T.tensor_view(
-                                        T.ptr_of(rhs_stages[(k // 64) % 2][o_k + 16:o_k + 16 + 16, o_n:o_n + 16]),
+                                        T.ptr_of(value_1_stages[(k // 64) % 2][o_k + 16:o_k + 16 + 16, o_n:o_n + 16]),
                                         layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
@@ -113,12 +113,12 @@ def gemm(
                                         shape=(64, 16),
                                     )
                                     lhs_view_2 = T.tensor_view(
-                                        T.ptr_of(lhs_stages[(k // 64) % 2][o_m:o_m + 64, o_k + 32:o_k + 32 + 16]),
+                                        T.ptr_of(value_stages[(k // 64) % 2][o_m:o_m + 64, o_k + 32:o_k + 32 + 16]),
                                         layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 32 | Swizzle(3, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view_2 = T.tensor_view(
-                                        T.ptr_of(rhs_stages[(k // 64) % 2][o_k + 32:o_k + 32 + 16, o_n:o_n + 16]),
+                                        T.ptr_of(value_1_stages[(k // 64) % 2][o_k + 32:o_k + 32 + 16, o_n:o_n + 16]),
                                         layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
@@ -134,12 +134,12 @@ def gemm(
                                         shape=(64, 16),
                                     )
                                     lhs_view_3 = T.tensor_view(
-                                        T.ptr_of(lhs_stages[(k // 64) % 2][o_m:o_m + 64, o_k + 48:o_k + 48 + 16]),
+                                        T.ptr_of(value_stages[(k // 64) % 2][o_m:o_m + 64, o_k + 48:o_k + 48 + 16]),
                                         layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 48 | Swizzle(3, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view_3 = T.tensor_view(
-                                        T.ptr_of(rhs_stages[(k // 64) % 2][o_k + 48:o_k + 48 + 16, o_n:o_n + 16]),
+                                        T.ptr_of(value_1_stages[(k // 64) % 2][o_k + 48:o_k + 48 + 16, o_n:o_n + 16]),
                                         layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
@@ -161,12 +161,12 @@ def gemm(
                                         shape=(64, 16),
                                     )
                                     lhs_view_4 = T.tensor_view(
-                                        T.ptr_of(lhs_stages[(k // 64) % 2][o_m_1:o_m_1 + 64, o_k_1:o_k_1 + 16]),
+                                        T.ptr_of(value_stages[(k // 64) % 2][o_m_1:o_m_1 + 64, o_k_1:o_k_1 + 16]),
                                         layout=(Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view_4 = T.tensor_view(
-                                        T.ptr_of(rhs_stages[(k // 64) % 2][o_k_1:o_k_1 + 16, o_n_1:o_n_1 + 16]),
+                                        T.ptr_of(value_1_stages[(k // 64) % 2][o_k_1:o_k_1 + 16, o_n_1:o_n_1 + 16]),
                                         layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
@@ -182,12 +182,12 @@ def gemm(
                                         shape=(64, 16),
                                     )
                                     lhs_view_5 = T.tensor_view(
-                                        T.ptr_of(lhs_stages[(k // 64) % 2][o_m_1:o_m_1 + 64, o_k_1 + 16:o_k_1 + 16 + 16]),
+                                        T.ptr_of(value_stages[(k // 64) % 2][o_m_1:o_m_1 + 64, o_k_1 + 16:o_k_1 + 16 + 16]),
                                         layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view_5 = T.tensor_view(
-                                        T.ptr_of(rhs_stages[(k // 64) % 2][o_k_1 + 16:o_k_1 + 16 + 16, o_n_1:o_n_1 + 16]),
+                                        T.ptr_of(value_1_stages[(k // 64) % 2][o_k_1 + 16:o_k_1 + 16 + 16, o_n_1:o_n_1 + 16]),
                                         layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
@@ -203,12 +203,12 @@ def gemm(
                                         shape=(64, 16),
                                     )
                                     lhs_view_6 = T.tensor_view(
-                                        T.ptr_of(lhs_stages[(k // 64) % 2][o_m_1:o_m_1 + 64, o_k_1 + 32:o_k_1 + 32 + 16]),
+                                        T.ptr_of(value_stages[(k // 64) % 2][o_m_1:o_m_1 + 64, o_k_1 + 32:o_k_1 + 32 + 16]),
                                         layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 32 | Swizzle(3, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view_6 = T.tensor_view(
-                                        T.ptr_of(rhs_stages[(k // 64) % 2][o_k_1 + 32:o_k_1 + 32 + 16, o_n_1:o_n_1 + 16]),
+                                        T.ptr_of(value_1_stages[(k // 64) % 2][o_k_1 + 32:o_k_1 + 32 + 16, o_n_1:o_n_1 + 16]),
                                         layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )
@@ -224,12 +224,12 @@ def gemm(
                                         shape=(64, 16),
                                     )
                                     lhs_view_7 = T.tensor_view(
-                                        T.ptr_of(lhs_stages[(k // 64) % 2][o_m_1:o_m_1 + 64, o_k_1 + 48:o_k_1 + 48 + 16]),
+                                        T.ptr_of(value_stages[(k // 64) % 2][o_m_1:o_m_1 + 64, o_k_1 + 48:o_k_1 + 48 + 16]),
                                         layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 48 | Swizzle(3, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view_7 = T.tensor_view(
-                                        T.ptr_of(rhs_stages[(k // 64) % 2][o_k_1 + 48:o_k_1 + 48 + 16, o_n_1:o_n_1 + 16]),
+                                        T.ptr_of(value_1_stages[(k // 64) % 2][o_k_1 + 48:o_k_1 + 48 + 16, o_n_1:o_n_1 + 16]),
                                         layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 16),
                                     )

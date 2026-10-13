@@ -45,14 +45,14 @@ class WGMMA_TWO_SCHEDULES:
                 for k in tf.tile(K, BK):
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
-                            (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=a_smem),
-                            buffers=STAGES,
+                            (a[:, k], tf.empty(Tensor[(64, 16), "bf16", a_smem, "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
                         rhs = tf.schedule(
-                            (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=b_smem),
-                            buffers=STAGES,
+                            (b[k, :], tf.empty(Tensor[(16, 32), "bf16", b_smem, "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
@@ -63,14 +63,14 @@ class WGMMA_TWO_SCHEDULES:
 
                     with threads[0, :32] as _loader:
                         lhs_2 = tf.schedule(
-                            (c[:, k],),
-                            op=T.copy_async_tensor(smem_layout=a_smem),
-                            buffers=STAGES,
+                            (c[:, k], tf.empty(Tensor[(64, 16), "bf16", a_smem, "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
                         rhs_2 = tf.schedule(
-                            (d[k, :],),
-                            op=T.copy_async_tensor(smem_layout=b_smem),
-                            buffers=STAGES,
+                            (d[k, :], tf.empty(Tensor[(16, 32), "bf16", b_smem, "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:

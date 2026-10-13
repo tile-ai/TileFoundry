@@ -212,6 +212,9 @@ class EvaluatorVisitor(ExprVisitor):
 - A `Var` resolves to its binding in the current environment; a
   `Constant` ([core-ir §2](./core-ir.md#2-expr)) materialises to a torch
   tensor of its `TensorType` (a scalar becomes a rank-0 tensor).
+- `Empty` materializes deterministic zeros of its declared shape and dtype
+  for reference evaluation. Its program contents remain undefined; native
+  lowering performs no initialization.
 - A `Call` whose `target` is an `Op` evaluates its operands, then
   dispatches through `eval_registry`
   ([§3](#3-register_eval-and-the-eval-context)).

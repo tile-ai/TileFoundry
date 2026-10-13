@@ -23,7 +23,7 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
-from tilefoundry.ir.types import Layout, Mesh, Swizzle, UnitType
+from tilefoundry.ir.types import Mesh, Swizzle, UnitType
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
@@ -175,12 +175,6 @@ class CopyAsyncTensor(Op):
     between = (
         DistinctConstraint("storage", "src", "dst"),
         SameModesConstraint("src", "dst"),
-    )
-    smem_layout = ParamDef(
-        kind="attribute",
-        annotation=Layout,
-        optional=True,
-        default=None,
     )
     execution_mesh = ParamDef(
         kind="attribute",

@@ -2,7 +2,7 @@
 
 A WGMMA reads its operands out of shared memory in a descriptor arrangement and
 cannot move them, so whatever fills that tile has to put the bytes down that
-way.  A TMA says so with ``smem_layout`` and a ``cp.async`` says so with the
+way. Both transfers declare their landing arrangements on ``tf.empty``; the
 same word: it is the transfer's own decision either way, and the consumer only
 requires that the decision was made.  Nothing about the consumer changes, so
 this kernel is ``wgmma_a_k_major.py`` instruction for instruction, with
@@ -44,14 +44,14 @@ class WGMMA_CP_ASYNC_LOADS:
                 for k in tf.tile(K, BK):
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
-                            (a[:, k],),
-                            op=T.copy_async(smem_layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))),
-                            buffers=STAGES,
+                            (a[:, k], tf.empty(Tensor[(64, 16), "bf16", Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), "smem"], buffers=STAGES),),
+                            op=T.copy_async(),
+
                         )
                         rhs = tf.schedule(
-                            (b[k, :],),
-                            op=T.copy_async(smem_layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1)))),
-                            buffers=STAGES,
+                            (b[k, :], tf.empty(Tensor[(16, 32), "bf16", Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), "smem"], buffers=STAGES),),
+                            op=T.copy_async(),
+
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:

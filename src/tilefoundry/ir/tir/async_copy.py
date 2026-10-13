@@ -37,8 +37,8 @@ def is_indexed_copy(args) -> bool:
 
 
 def is_indexed_schedule(args) -> bool:
-    """A HIR CopyAsync schedule supplies only its reads: src and index."""
-    return len(args) == 2
+    """A scheduled CopyAsync includes the optional index after src and dst."""
+    return is_indexed_copy(args)
 
 
 class _CopyModes(SameModesConstraint):
@@ -128,12 +128,6 @@ class CopyAsync(Op):
         pattern=TensorPattern(shape=(None,), dtype=OrPattern(DType.i32, DType.i64)),
     )
     fill = ParamDef(kind="attribute", annotation=float | None, default=None)
-    smem_layout = ParamDef(
-        kind="attribute",
-        annotation=Layout,
-        optional=True,
-        default=None,
-    )
 
 
 @register_typeinfer(CopyAsync)
@@ -155,7 +149,7 @@ def _copy_async_access(call, ctx):
 def _eval_scheduled_copy_async(ctx):
     if not is_indexed_schedule(ctx.args):
         return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
-    source, index = (arg.data for arg in ctx.args)
+    source, index = ctx.args[0].data, ctx.args[2].data
     return TensorValue(data=gather(source, index, 0, ctx.op.fill), type=ctx.result_type)
 
 

@@ -41,9 +41,9 @@ class ChunkRmsNorm:
                 scale = tf.reshard(gamma, (D,), "rmem")
                 bias = tf.reshard(beta, (D,), "rmem")
                 mean = tf.reduce(tf.square(row), axes=(-1,), keepdim=True, kind=ReduceKind.MEAN)
-                shifted = tf.schedule((mean, EPS), op=T.binary(kind=BinaryKind.ADD))
+                shifted = tf.schedule((mean, EPS, tf.empty(Tensor[(H, T_LEN, 1), "f32", (H @ cta.head, T_LEN @ (cta.chunk, lanes.row), 1), "rmem"]),), op=T.binary(kind=BinaryKind.ADD))
                 inv = tf.rsqrt(shifted)
-                normed = tf.schedule((inv, row), op=T.binary(kind=BinaryKind.MUL))
+                normed = tf.schedule((inv, row, tf.empty(Tensor[(H, T_LEN, D), "f32", (H @ cta.head, T_LEN @ (cta.chunk, lanes.row), D), "rmem"]),), op=T.binary(kind=BinaryKind.MUL))
                 scaled = normed * scale
                 affine = bias + scaled
                 mixed = affine * (1.0 - gate_row)

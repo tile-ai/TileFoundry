@@ -1151,9 +1151,7 @@ operation and is not an HIR op.
     MUST fail closed.
   - `IndexSelect` is a pure value operation, not a copy. To stage dim-0
     selections into shared memory, schedule its inputs as
-    `tf.schedule((x, index), op=T.copy_async(smem_layout=..., fill=f))`.
-    Its CopyAsync candidate declares the result landing in smem, using the
-    instruction's write type rather than the pure value's source storage.
+    `tf.schedule((x, tf.empty(Tensor[... , "smem"]), index), op=T.copy_async(fill=f))`.
     The indexed instruction has no TMA candidate. Unscheduled `IndexSelect`
     MUST fail lowering with this scheduling form in the diagnostic; copying
     its already computed result with `CopyAsync` is not supported.
@@ -1173,6 +1171,24 @@ operation and is not an HIR op.
     slices before writing those slices. `IndexCopy` charges no arithmetic and
     does not read the overwritten `dst` slices. Neither cost scales with the
     full `dst` extent.
+
+##### Empty
+
+```python
+class Empty(Op):
+    """Declare storage without initializing its contents."""
+    type: TensorType
+    buffers: int = 1
+```
+
+- `tf.empty(type, buffers=1)` produces exactly the complete `TensorType`
+  supplied by the author. Its contents are undefined; it declares the
+  write-only operand of a [schedule](./schedule.md#2-operand-and-result-roles).
+- `buffers` MUST be a positive integer. Staging ownership and rotation follow
+  [schedule §5](./schedule.md#5-buffers-and-cost).
+- Its access relation states the same result boundary as `Zeros`, with no
+  inputs. Its cost has no traffic and no arithmetic. Lowering declares storage
+  without filling it.
 
 ##### Zeros
 ```python

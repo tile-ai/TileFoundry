@@ -35,6 +35,7 @@ from tilefoundry.ir.types.utils import (
     tensor_bytes,
 )
 from tilefoundry.utils.isl_utils import cardinality
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 
 from .registries import DispatchRegistry
 
@@ -318,7 +319,7 @@ def renaming_relation(call, ctx, local_relations: tuple[AccessRelation, ...]) ->
             "one leaf of it rather than a coordinate change to fold"
         )
     written = local_relations[len(call.args)].relation
-    reads = local_relations[0].relation
+    reads = local_relations[aliased_operand(call)].relation
     folded = written.reverse().apply_range(reads)
     bindings = _values_of(local_relations)
     names = _parameter_names(folded)
@@ -410,10 +411,7 @@ def _placed(
     name. A value with no placement is addressed at its own coordinates.
     """
     relation = access.relation
-    if (
-        not isinstance(local, TensorType)
-        or not isinstance(logical, TensorType)
-    ):
+    if not isinstance(local, TensorType) or not isinstance(logical, TensorType):
         return relation
     if relation.dim(isl.dim_type.OUT) != len(logical.shape):
         raise ValueError(

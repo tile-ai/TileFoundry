@@ -712,6 +712,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         self, node: Expr, operands: tuple[Storage, ...], ctx: AllocationModel
     ) -> Storage:
         """Apply ordinary aliases now and defer carry aliases until loop yields."""
+        alias = None
         if isinstance(node, Call):
             if isinstance(node.target, TupleGetItem):
                 if operands[0] is None:
@@ -736,9 +737,10 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 if id(node) in ctx.current.relations else ()
             )
             alias = buffer_alias(node, logical, local_relations)
-            if alias is not None:
-                return self.same_storage(node, self.storage_of(alias.buffer), ctx)
-        result = self.allocate(node, ctx)
+        result = (
+            self.same_storage(node, self.storage_of(alias.buffer), ctx)
+            if alias is not None else self.allocate(node, ctx)
+        )
         if isinstance(node, Call) and isinstance(result, AllocationValue):
             update = None
             destination = None

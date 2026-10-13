@@ -25,8 +25,8 @@ class CapturedInsertUpdate:
                 tile = tf.zeros(Tensor[(2, 4), "bf16", Layout((2, 4), (4, 1)), "smem"])
                 for r in range(2):
                     row = tf.schedule(
-                        (x, idx[r : r + 1]),
-                        op=T.copy_async(smem_layout=Layout((1, 4), (4, 1)), fill=0),
+                        (x, tf.empty(Tensor[(1, 4), "bf16", (1, 4), "smem"]), idx[r : r + 1],),
+                        op=T.copy_async(fill=0),
                     )
                     with threads[:] as _carry:
                         tile = tf.insert_slice(tile, row, (r, 0))

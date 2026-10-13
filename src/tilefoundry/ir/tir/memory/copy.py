@@ -14,7 +14,7 @@ from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import utils
-from tilefoundry.ir.types import LayoutBase, UnitType
+from tilefoundry.ir.types import UnitType
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
@@ -45,8 +45,6 @@ class Copy(Op):
         effect=MemoryEffect.WRITE,
         pattern=utils.operand_tile(1, execution_mesh=execution_mesh),
     )
-    rmem_layout = ParamDef(kind="attribute", annotation=LayoutBase, optional=True, default=None)
-    smem_layout = ParamDef(kind="attribute", annotation=LayoutBase, optional=True, default=None)
 
 
 @register_typeinfer(Copy)

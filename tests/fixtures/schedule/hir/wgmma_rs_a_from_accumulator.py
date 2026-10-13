@@ -47,14 +47,14 @@ class WGMMA_RS_A_FROM_ACCUMULATOR:
                 for k in tf.tile(K, BK):
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
-                            (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))),
-                            buffers=STAGES,
+                            (a[:, k], tf.empty(Tensor[(64, 16), "bf16", Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
                         rhs = tf.schedule(
-                            (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1)))),
-                            buffers=STAGES,
+                            (b[k, :], tf.empty(Tensor[(16, 16), "bf16", Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))), "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
@@ -70,9 +70,9 @@ class WGMMA_RS_A_FROM_ACCUMULATOR:
                 for j in tf.tile(N0, BK):
                     with threads[0, :32] as _loader:
                         rhs = tf.schedule(
-                            (b1[j, :],),
-                            op=T.copy_async_tensor(smem_layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1)))),
-                            buffers=STAGES,
+                            (b1[j, :], tf.empty(Tensor[(16, 32), "bf16", Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:

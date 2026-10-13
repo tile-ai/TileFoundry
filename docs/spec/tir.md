@@ -570,8 +570,7 @@ class Copy(Op):
     relation walks `src` and reaches `dst` at the row-major reshape of each
     coordinate.
   - `execution_mesh` is the mesh declaration shared by every rmem operand's
-    `ShardLayoutPattern.mesh`. `rmem_layout` and `smem_layout` optionally state
-    the author's landing arrangements.
+    `ShardLayoutPattern.mesh`.
 
 ##### Fill
 ```python
@@ -1076,14 +1075,12 @@ class CopyAsync(Op):
         dst: input; smem staging destination.
         index: optional third positional input; rank-1 i32/i64 row indices.
         fill: attribute; optional out-of-range row value.
-        smem_layout: attribute; optional landing arrangement.
     """
 
     src: Tensor
     dst: Tensor
     index: Tensor | None = None
     fill: float | None = None
-    smem_layout: Layout | None = None
     execution_mesh: MeshPattern
 ```
 - constraints:
@@ -1204,7 +1201,6 @@ landed in shared memory, rather than carrying an explicit mbarrier operand.
 class CopyAsyncTensor(Op):
     src: Tensor
     dst: Tensor
-    smem_layout: Layout | None = None
     execution_mesh: Mesh | None = None
 ```
 
@@ -1234,8 +1230,7 @@ class LdMatrix(Op):
     agree under the ordinary `Copy` verifier.
   - One canonical SM80 warp issues the operation. It requires the target's
     `tensor_core` capability and lowers to `tilefoundry::ops::ldmatrix`.
-  - The destination layout is the atom's declaration, not a caller-selectable
-    `rmem_layout` attribute.
+  - The destination layout is the atom's declaration.
 
 #### Barrier object Ops (`tir.sync.mbarrier_*`)
 

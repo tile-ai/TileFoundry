@@ -42,14 +42,14 @@ class WGMMA_A_K_MAJOR:
                     with threads[0, :32] as _loader:
                         a = tf.transpose(at[k, :], (1, 0))
                         lhs = tf.schedule(
-                            (a,),
-                            op=T.copy_async_tensor(smem_layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1)))),
-                            buffers=STAGES,
+                            (a, tf.empty(Tensor[(64, 32), "fp8e4m3", Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))), "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
                         rhs = tf.schedule(
-                            (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16)))),
-                            buffers=STAGES,
+                            (b[k, :], tf.empty(Tensor[(32, 32), "fp8e4m3", Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))), "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:

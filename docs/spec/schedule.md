@@ -16,16 +16,15 @@ result = tf.schedule(
     op=T.some_instruction(...),
     repeat=None,
     order=None,
-    buffers=1,
 )
 ```
 
 `operands` is one variadic input. Its tuple syntax is flattened into the
 `ScheduleOp` call arguments; it is not an IR `Tuple` value. `op` is one
 registered TIR `Op` instance. `repeat` and `order`, when present, are tuples of
-integers. `buffers` is a positive integer.
+integers.
 
-These five parameters are the complete authored contract. In particular, a
+These four parameters are the complete authored contract. In particular, a
 schedule has no separate operand mapping, instruction scope, access map, or
 capability field.
 
@@ -41,25 +40,18 @@ attribute with no same-named HIR value, require an explicit `tf.schedule`.
 
 The selected instruction's input `ParamDef`s determine the schedule boundary:
 
-- Parameters whose `effect` contains `READ` consume schedule operands, in
-  declaration order.
-- Parameters whose `effect` contains `WRITE` produce schedule results, in
-  declaration order.
-- A `READ | WRITE` parameter is present on both sides. Its result has exactly
-  the type of the value passed for that parameter.
-- An input parameter declared `optional=True` is absent from both sides when
-  the authored schedule does not supply it. Supplying it preserves its declared
-  effects. This applies equally to the optional workspace operands of `Reduce`
-  and `Dot`; it does not allocate a workspace on the author's behalf.
-- A write-only result takes fixed shape, dtype, layout, and storage facts from
-  the instruction's own declarations. Its shape is the image of the write
-  access map over the instruction's iteration domain. Its dtype comes from
-  the instruction's `dtype` attribute, then the parameter pattern, then the
-  read tile. Its storage follows the destination pattern and layout attributes;
-  an unstated storage inherits the read tile's storage. Unless a layout is
-  explicitly declared, shard propagation uses the read types and the same
-  access relations, with completely collapsed axes becoming `Broadcast` and
-  receiving fresh strides. A result without a derived shard layout is compact.
+- All input parameters consume explicit operands in schema order, including
+  `READ`, `READ | WRITE`, and `WRITE` parameters.
+- The result has exactly the type and bytes of the first `WRITE` operand.
+  This applies equally to a read/write accumulator and a write-only destination.
+- A write-only destination is declared with `tf.empty(Tensor[...], buffers=N)`.
+  Its complete shape, dtype, layout, and storage come from the program; the
+  instruction checks that type against its parameter pattern.
+- Optional input parameters are omitted from both sides when not supplied.
+  Supplying them preserves their declared effects. No workspace is allocated
+  on the author's behalf.
+- Operand count MUST match the supplied instruction parameters. A mismatch
+  names the instruction, expected parameter names, and actual count.
 
 Automatic selection and explicit `tf.schedule` use the same instruction
 lowering and emission path. An instruction declaring an `atom` uses that atom's
@@ -141,9 +133,11 @@ convention defined by
 
 ## 5. Buffers and cost
 
-`buffers` defaults to one. It multiplies the live result-tile occupancy of a
-schedule whose selected instruction has a write-only result. A `READ | WRITE`
-accumulator occupies one result tile regardless of `buffers`.
+`tf.empty` has a positive integer `buffers` attribute, defaulting to one.
+It declares N physical slots that rotate across iterations of the innermost
+surrounding loop. Their declaration uses the existing staging owner outside
+that loop. `ScheduleOp` has no `buffers` attribute. Storage and staging belong
+to the explicit destination operand.
 
 Schedule traffic is derived from the scheduled access relation. A transfer has
 no floating-point work. An MMA reports one multiply and one add per contraction
@@ -181,7 +175,7 @@ produce the source tensor's logical data with the schedule result type. A tiled
 MMA produces `acc + torch.matmul(lhs.to(acc.dtype), rhs.to(acc.dtype))`: the
 operands widen to the accumulator dtype first, as the instruction does, so no
 product or partial sum is rounded to the operand dtype.
-`repeat`, `order`, and `buffers` describe execution and storage rather than a
+`repeat`, `order`, and the destination's `buffers` describe execution and storage rather than a
 second logical computation over the whole scheduled operands.
 
 A selected instruction with no schedule-evaluation handler MUST fail reference

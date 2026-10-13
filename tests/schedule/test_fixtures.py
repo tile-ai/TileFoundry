@@ -57,6 +57,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp, operand_relations
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
+from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.transpose import Transpose
@@ -508,20 +509,6 @@ def test_scheduled_hir_program_has_analysis_metadata(
 ) -> None:
     program = _module_in(path)
     entry = next(function for function in program.functions if function.name == "gemm")
-    if path.stem == "wgmma_tma_3stage":
-        read_write = []
-        for expr in collect_exprs(entry.body):
-            if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp):
-                schema = type(expr.target.op)._op_schema
-                writes = tuple(
-                    param
-                    for param in schema.signature
-                    if param.kind == "input" and param.effect & MemoryEffect.WRITE
-                )
-                if writes[0].effect & MemoryEffect.READ:
-                    read_write.append(expr)
-        assert len(read_write) == 1
-        read_write[0].target.buffers = 3
     result = analyze(program, entry, analysis=analysis)
     assert metadata_type in result.metadata_types
 
@@ -540,7 +527,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
                 expr.target.op, (Copy, CopyAsync, CopyAsyncTensor)
             ):
                 tile = prod(expr.type.shape) * expr.type.dtype.bit_width // 8
-                assert record.operands[-1].write == tile, "a copy writes its whole tile"
+                assert record.operands[1].write == tile, "a copy writes its whole tile"
             if isinstance(expr.target, ScheduleOp) and isinstance(expr.target.op, TiledMma):
                 for operand, moved in zip(expr.args, record.operands, strict=False):
                     if operand.type.storage is StorageKind.SMEM:
@@ -563,7 +550,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
         smem = sorted(item.bytes for item in lifetimes if item.memory_level == "smem")
         rmem = sorted(item.bytes for item in lifetimes if item.memory_level == "rmem")
         assert smem == sorted((512 * 3, 4096 * 3))
-        assert rmem == [4096, 8192, 8192, 8192]
+        assert rmem == [4096, 8192, 8192]
 
     if analysis == "memory":
         placement = get_metadata(result.function, RegionMemoryMetadata)
@@ -637,11 +624,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
         for use in liveness.uses:
             interval = intervals[id(use.value)]
             for phi, backedge in loop_bounds:
-                if (
-                    not use.synthetic
-                    and phi < use.at < backedge
-                    and interval.defined_at < phi
-                ):
+                if not use.synthetic and phi < use.at < backedge and interval.defined_at < phi:
                     outside_uses += 1
                     assert interval.last_used_at >= backedge
         if loop_bounds:
@@ -651,6 +634,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
             if result_copies(interval.value) == 1:
                 continue
             assert (interval.defined_at, interval.last_used_at) in loop_bounds
+
 
 @pytest.mark.parametrize("path", HIR, ids=lambda path: path.stem)
 def test_schedule_memory_report_carries_allocations(
@@ -692,6 +676,7 @@ def test_schedule_memory_report_carries_allocations(
         for offset in offsets:
             assert offset % 16 == 0
             assert offset + allocation["buffer_bytes"] <= peaks[storage]
+
 
 @pytest.mark.parametrize(
     ("fixture", "n", "bound_by"),
@@ -748,11 +733,18 @@ def _copy_schedule_call(
     type_ = TensorType((4,), DType.bf16, layout, storage)
     return Call(
         target=ScheduleOp(
-            op=CopyAsync(smem_layout=layout),
+            op=CopyAsync(),
             repeat=repeat,
             order=order,
         ),
-        args=(Var(name="src", type=type_),),
+        args=(
+            Var(name="src", type=type_),
+            Call(
+                Empty(type=replace(type_, storage=StorageKind.SMEM)),
+                (),
+                type=replace(type_, storage=StorageKind.SMEM),
+            ),
+        ),
         type=type_,
     )
 
@@ -782,8 +774,8 @@ def test_schedule_copy_evaluates_to_the_source_value() -> None:
     source = torch.arange(4, dtype=torch.bfloat16)
 
     result = _evaluate_call(
-        ScheduleOp(op=CopyAsync(smem_layout=layout)),
-        ((source_type, source),),
+        ScheduleOp(op=CopyAsync()),
+        ((source_type, source), (result_type, torch.zeros_like(source))),
         result_type,
     )
 
@@ -836,7 +828,9 @@ def test_fp8_block_scaled_gemm_matches_its_block_scaled_reference() -> None:
     block's own positive row and tile scales; the scales differ across blocks,
     so scaling a running total instead of each block would not match.
     """
-    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "fp8_block_scaled_gemm.py"
+    source = (
+        Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "fp8_block_scaled_gemm.py"
+    )
     module = _module_in(source)
     m, n, k, block = 128, 128, 512, 128
     generator = torch.Generator().manual_seed(0)
@@ -1073,9 +1067,16 @@ FIXTURES = (
         )
         for name, target, options, expected in (
             ("facts list CUDA instructions as text", "nvidia.h200_sxm", (), _H200_FACTS_TEXT),
-            ("facts list CUDA instructions as JSON", "nvidia.h200_sxm", ("--json",), _H200_FACTS_JSON),
             (
-                "CPU facts list only target neutral instructions", "cpu", (),
+                "facts list CUDA instructions as JSON",
+                "nvidia.h200_sxm",
+                ("--json",),
+                _H200_FACTS_JSON,
+            ),
+            (
+                "CPU facts list only target neutral instructions",
+                "cpu",
+                (),
                 _TARGET_NEUTRAL_FACTS.format(target="cpu"),
             ),
             (
@@ -1146,10 +1147,7 @@ def test_single_issue_schedule_preserves_instruction_relations() -> None:
     inferred = TypeInferContext()
     inference_type(schedule, inferred)
     scheduled = relations_of(schedule, inferred)
-    source, _destination, *result = operand_relations(
-        schedule.target.op, (source.type, destination_type)
-    )
-    single = (source, *result)
+    single = operand_relations(schedule.target.op, (source.type, destination_type))
     assert len(scheduled) == len(single)
     assert all(
         left.relation.is_equal(right.relation)
@@ -1233,7 +1231,7 @@ def test_schedule_typeinfer_requires_whole_instruction_tiles(monkeypatch) -> Non
         inference_type(call)
 
 
-def test_schedule_typeinfer_requires_declared_write_type(monkeypatch) -> None:
+def test_schedule_typeinfer_requires_instruction_operands(monkeypatch) -> None:
     type_ = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.RMEM)
     call = Call(
         target=ScheduleOp(op=_UnstatedInstruction()),
@@ -1246,7 +1244,7 @@ def test_schedule_typeinfer_requires_declared_write_type(monkeypatch) -> None:
 
     with pytest.raises(
         ValueError,
-        match="value is write-only and declares no result shape",
+        match="expects operands.*value.*got 0",
     ):
         inference_type(call)
 
@@ -1669,7 +1667,7 @@ def test_lowering_rejects_addressable_result_without_offsets(
         expr
         for expr in collect_exprs(result.function.body)
         if isinstance(expr, Call)
-        and isinstance(expr.target, ScheduleOp)
+        and isinstance(expr.target, Empty)
         and expr.type.storage is StorageKind.SMEM
     )
     detach_metadata(addressable, MemoryMetadata)

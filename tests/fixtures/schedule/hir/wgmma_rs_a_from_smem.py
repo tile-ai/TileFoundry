@@ -46,20 +46,20 @@ class WGMMA_RS_A_FROM_SMEM:
                 for k in tf.tile(K, BK):
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
-                            (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1)))),
-                            buffers=STAGES,
+                            (a[:, k], tf.empty(Tensor[(64, 32), "fp8e4m3", Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))), "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
                         rhs = tf.schedule(
-                            (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16)))),
-                            buffers=STAGES,
+                            (b[k, :], tf.empty(Tensor[(32, 32), "fp8e4m3", Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))), "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                         frag = tf.schedule(
-                            (lhs,),
-                            op=T.copy(rmem_layout=((8 @ _compute.lane8, 2, 4 @ _compute.warp, 4, 4 @ _compute.lane4, 2), (1, 8, 16, 64, 256, 1024))),
+                            (lhs, tf.empty(Tensor[(64, 32), "fp8e4m3", ShardLayout( layout=Layout((8, 2, 4, 4, 4, 2), (1, 8, 16, 64, 256, 1024)), attrs=(S(2), S(0), S(4)), mesh=_compute, ), "rmem"]),),
+                            op=T.copy(),
                         )
                         acc = tf.schedule(
                             (acc, frag, rhs),

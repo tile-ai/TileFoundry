@@ -37,6 +37,7 @@ from tilefoundry.ir.hir.tensor.bitcast import Bitcast
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.hir.tensor.concat import Concat
+from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.index_add import IndexAdd
 from tilefoundry.ir.hir.tensor.index_copy import IndexCopy
@@ -567,10 +568,20 @@ def _reshard(call: Call, ctx: CostContext) -> Cost:
     sent = _sent(source, destination)
     if source.storage == destination.storage:
         return Cost({}, idle(call), sent=sent)
-    return Cost({}, (
-        TrafficBytes(read=tensor_bytes(source)),
-        TrafficBytes(write=tensor_bytes(destination)),
-    ), sent=sent)
+    return Cost(
+        {},
+        (
+            TrafficBytes(read=tensor_bytes(source)),
+            TrafficBytes(write=tensor_bytes(destination)),
+        ),
+        sent=sent,
+    )
 
 
 __all__ = ["tensor_bytes"]
+
+
+@register_cost_evaluator(Empty)
+def _empty(call: Call, ctx: CostContext) -> Cost:
+    """Storage declarations perform no arithmetic or memory traffic."""
+    return Cost({}, idle(call))

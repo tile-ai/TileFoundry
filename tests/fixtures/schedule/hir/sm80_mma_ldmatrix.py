@@ -40,19 +40,19 @@ class SM80_MMA_LDMATRIX:
                 for k in tf.tile(K, BK):
                     with threads[0, :32] as _loader:
                         lhs = tf.schedule(
-                            (a[:, k],),
-                            op=T.copy_async_tensor(smem_layout=(16, 16)),
-                            buffers=STAGES,
+                            (a[:, k], tf.empty(Tensor[(16, 16), "bf16", (16, 16), "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
                         rhs = tf.schedule(
-                            (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=(16, 8)),
-                            buffers=STAGES,
+                            (b[k, :], tf.empty(Tensor[(16, 8), "bf16", (16, 8), "smem"], buffers=STAGES),),
+                            op=T.copy_async_tensor(),
+
                         )
 
                     with Mesh(threads[1, :], layout=((4, 8), (1, 4)), names=("warp", "lane")) as _compute:
-                        lhs_frag = tf.schedule((lhs,), op=T.ldmatrix())
-                        rhs_frag = tf.schedule((rhs,), op=T.copy(rmem_layout=((8 @ _compute.lane, 2, 4 @ _compute.warp, 2), (1, 8, 16, 64))))
+                        lhs_frag = tf.schedule((lhs, tf.empty(Tensor[(16, 16), "bf16", ShardLayout( layout=Layout((2, 4, 2, 8, 2), (1, 2, 8, 16, 128)), attrs=(S(1), S(3)), mesh=_compute, ), "rmem"]),), op=T.ldmatrix())
+                        rhs_frag = tf.schedule((rhs, tf.empty(Tensor[(16, 8), "bf16", ShardLayout( layout=Layout((8, 2, 4, 2), (1, 8, 16, 64)), attrs=(S(2), S(0)), mesh=_compute, ), "rmem"]),), op=T.copy())
                         acc = tf.schedule(
                             (acc, lhs_frag, rhs_frag),
                             op=T.tiled_mma(atom=warp),
