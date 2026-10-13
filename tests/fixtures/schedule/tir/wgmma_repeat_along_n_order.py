@@ -34,11 +34,11 @@ def gemm(
                 scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
             ) as threads:
                 T.fill(acc, 0.0)
-            value_stages = (
+            lhs_ring_stages = (
                 T.tensor_view(16384, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))), shape=(128, 16)),
                 T.tensor_view(20480, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))), shape=(128, 16)),
             )
-            value_1_stages = (
+            rhs_ring_stages = (
                 T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8, 8)), ((64, 8), (1024, 128, 1))), shape=(16, 256)),
                 T.tensor_view(8192, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8, 8)), ((64, 8), (1024, 128, 1))), shape=(16, 256)),
             )
@@ -50,12 +50,12 @@ def gemm(
                         shape=(128, 16),
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_1:
-                        T.copy_async_tensor(tile, value_stages[(k // 16) % 2])
+                        T.copy_async_tensor(tile, lhs_ring_stages[(k // 16) % 2])
                     tile_1 = T.tensor_view(
                         T.ptr_of(b[k:k + 16, 0:0 + 256]), layout=(16, 256), shape=(16, 256)
                     )
                     with Mesh(scope_1, layout=(32,), names=("d0",)) as threads_2:
-                        T.copy_async_tensor(tile_1, value_1_stages[(k // 16) % 2])
+                        T.copy_async_tensor(tile_1, rhs_ring_stages[(k // 16) % 2])
                 with Mesh(
                     scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
                 ) as scope_2:
@@ -71,12 +71,12 @@ def gemm(
                                         shape=(64, 64),
                                     )
                                     lhs_view = T.tensor_view(
-                                        T.ptr_of(value_stages[(k // 16) % 2][o_m:o_m + 64, o_k:o_k + 16]),
+                                        T.ptr_of(lhs_ring_stages[(k // 16) % 2][o_m:o_m + 64, o_k:o_k + 16]),
                                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view = T.tensor_view(
-                                        T.ptr_of(value_1_stages[(k // 16) % 2][o_k:o_k + 16, o_n:o_n + 64]),
+                                        T.ptr_of(rhs_ring_stages[(k // 16) % 2][o_k:o_k + 16, o_n:o_n + 64]),
                                         layout=Layout(((2, 8), (8, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 64),
                                     )
@@ -98,12 +98,12 @@ def gemm(
                                         shape=(64, 64),
                                     )
                                     lhs_view_1 = T.tensor_view(
-                                        T.ptr_of(value_stages[(k // 16) % 2][o_m_1:o_m_1 + 64, o_k_1:o_k_1 + 16]),
+                                        T.ptr_of(lhs_ring_stages[(k // 16) % 2][o_m_1:o_m_1 + 64, o_k_1:o_k_1 + 16]),
                                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                                         shape=(64, 16),
                                     )
                                     rhs_view_1 = T.tensor_view(
-                                        T.ptr_of(value_1_stages[(k // 16) % 2][o_k_1:o_k_1 + 16, o_n_1:o_n_1 + 64]),
+                                        T.ptr_of(rhs_ring_stages[(k // 16) % 2][o_k_1:o_k_1 + 16, o_n_1:o_n_1 + 64]),
                                         layout=Layout(((2, 8), (8, 8)), ((64, 8), (128, 1))) @ {B()},
                                         shape=(16, 64),
                                     )

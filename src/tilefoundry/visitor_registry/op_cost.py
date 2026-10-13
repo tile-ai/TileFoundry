@@ -488,6 +488,12 @@ def _zeros(call: Call, ctx: CostContext) -> Cost:
     return Cost({}, (TrafficBytes(write=tensor_bytes(output)),))
 
 
+@register_cost_evaluator(Empty)
+def _empty(call: Call, ctx: CostContext) -> Cost:
+    """Storage declarations perform no arithmetic or memory traffic."""
+    return Cost({}, idle(call))
+
+
 @register_cost_evaluator(RepeatInterleave)
 def _repeat_interleave(call: Call, ctx: CostContext) -> Cost:
     inputs = input_types(call, ctx)
@@ -568,20 +574,10 @@ def _reshard(call: Call, ctx: CostContext) -> Cost:
     sent = _sent(source, destination)
     if source.storage == destination.storage:
         return Cost({}, idle(call), sent=sent)
-    return Cost(
-        {},
-        (
-            TrafficBytes(read=tensor_bytes(source)),
-            TrafficBytes(write=tensor_bytes(destination)),
-        ),
-        sent=sent,
-    )
+    return Cost({}, (
+        TrafficBytes(read=tensor_bytes(source)),
+        TrafficBytes(write=tensor_bytes(destination)),
+    ), sent=sent)
 
 
 __all__ = ["tensor_bytes"]
-
-
-@register_cost_evaluator(Empty)
-def _empty(call: Call, ctx: CostContext) -> Cost:
-    """Storage declarations perform no arithmetic or memory traffic."""
-    return Cost({}, idle(call))

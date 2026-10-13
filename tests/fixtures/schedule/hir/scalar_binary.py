@@ -21,9 +21,37 @@ class ScalarBinary:
     def gemm(x: Tensor[(32,), "f32"], lhs: Tensor[(1,), "f32"]) -> Tensor[(32,), "f32", "rmem"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(32,), names=("lane",)) as _threads:
-                held = tf.schedule((x, tf.empty(Tensor[(32,), "f32", (32,), "rmem"]),), op=T.copy())
-                shifted = tf.schedule((held, 0.25, tf.empty(Tensor[(32,), "f32", (32,), "rmem"]),), op=T.binary(kind=BinaryKind.ADD))
+                held_dst = tf.empty(
+                    Tensor[
+                        (32,), "f32",
+                        (32,),
+                        "rmem",
+                    ],
+                )
+                held = tf.schedule((x, held_dst), op=T.copy())
+                shifted_dst = tf.empty(
+                    Tensor[
+                        (32,), "f32",
+                        (32,),
+                        "rmem",
+                    ],
+                )
+                shifted = tf.schedule((held, 0.25, shifted_dst), op=T.binary(kind=BinaryKind.ADD))
                 offset = 1.0 - shifted
                 scaled = offset * 0.5
-                left = tf.schedule((lhs, tf.empty(Tensor[(1,), "f32", (1,), "rmem"]),), op=T.copy())
-                return tf.schedule((left, scaled, tf.empty(Tensor[(32,), "f32", (32,), "rmem"]),), op=T.binary(kind=BinaryKind.MUL))
+                left_dst = tf.empty(
+                    Tensor[
+                        (1,), "f32",
+                        (1,),
+                        "rmem",
+                    ],
+                )
+                left = tf.schedule((lhs, left_dst), op=T.copy())
+                result_dst = tf.empty(
+                    Tensor[
+                        (32,), "f32",
+                        (32,),
+                        "rmem",
+                    ],
+                )
+                return tf.schedule((left, scaled, result_dst), op=T.binary(kind=BinaryKind.MUL))

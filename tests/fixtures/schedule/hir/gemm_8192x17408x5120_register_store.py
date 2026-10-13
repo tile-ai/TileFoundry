@@ -45,15 +45,29 @@ class GEMM_8192X17408X5120_REGISTER_STORE:
 
                         for k in tf.tile(K, BK):
                             with threads[0, :32] as _loader:
+                                lhs_ring = tf.empty(
+                                    Tensor[
+                                        (128, 64), "bf16",
+                                        Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                                        "smem",
+                                    ],
+                                    buffers=STAGES,
+                                )
                                 lhs = tf.schedule(
-                                    (a[m, k], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES),),
+                                    (a[m, k], lhs_ring),
                                     op=T.copy_async_tensor(),
-
+                                )
+                                rhs_ring = tf.empty(
+                                    Tensor[
+                                        (64, 256), "bf16",
+                                        Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                                        "smem",
+                                    ],
+                                    buffers=STAGES,
                                 )
                                 rhs = tf.schedule(
-                                    (b[k, n], tf.empty(Tensor[(64, 256), "bf16", Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES),),
+                                    (b[k, n], rhs_ring),
                                     op=T.copy_async_tensor(),
-
                                 )
 
                             with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:

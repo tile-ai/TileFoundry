@@ -624,7 +624,11 @@ def test_scheduled_hir_program_has_analysis_metadata(
         for use in liveness.uses:
             interval = intervals[id(use.value)]
             for phi, backedge in loop_bounds:
-                if not use.synthetic and phi < use.at < backedge and interval.defined_at < phi:
+                if (
+                    not use.synthetic
+                    and phi < use.at < backedge
+                    and interval.defined_at < phi
+                ):
                     outside_uses += 1
                     assert interval.last_used_at >= backedge
         if loop_bounds:
@@ -634,7 +638,6 @@ def test_scheduled_hir_program_has_analysis_metadata(
             if result_copies(interval.value) == 1:
                 continue
             assert (interval.defined_at, interval.last_used_at) in loop_bounds
-
 
 @pytest.mark.parametrize("path", HIR, ids=lambda path: path.stem)
 def test_schedule_memory_report_carries_allocations(
@@ -676,7 +679,6 @@ def test_schedule_memory_report_carries_allocations(
         for offset in offsets:
             assert offset % 16 == 0
             assert offset + allocation["buffer_bytes"] <= peaks[storage]
-
 
 @pytest.mark.parametrize(
     ("fixture", "n", "bound_by"),
@@ -828,9 +830,7 @@ def test_fp8_block_scaled_gemm_matches_its_block_scaled_reference() -> None:
     block's own positive row and tile scales; the scales differ across blocks,
     so scaling a running total instead of each block would not match.
     """
-    source = (
-        Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "fp8_block_scaled_gemm.py"
-    )
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "fp8_block_scaled_gemm.py"
     module = _module_in(source)
     m, n, k, block = 128, 128, 512, 128
     generator = torch.Generator().manual_seed(0)
@@ -1067,16 +1067,9 @@ FIXTURES = (
         )
         for name, target, options, expected in (
             ("facts list CUDA instructions as text", "nvidia.h200_sxm", (), _H200_FACTS_TEXT),
+            ("facts list CUDA instructions as JSON", "nvidia.h200_sxm", ("--json",), _H200_FACTS_JSON),
             (
-                "facts list CUDA instructions as JSON",
-                "nvidia.h200_sxm",
-                ("--json",),
-                _H200_FACTS_JSON,
-            ),
-            (
-                "CPU facts list only target neutral instructions",
-                "cpu",
-                (),
+                "CPU facts list only target neutral instructions", "cpu", (),
                 _TARGET_NEUTRAL_FACTS.format(target="cpu"),
             ),
             (

@@ -290,8 +290,16 @@ def time_axis(boundary: MovingBoundary) -> int | None:
     First-iteration restrictions give held(axis) <= held(axis - 1), so only
     the reverse inclusion remains to prove equality.
     """
+    value = (
+        boundary.call.args[boundary.access.input_index]
+        if boundary.access.input_index is not None else boundary.access.buffer
+    )
     for axis, loop_scope in enumerate(_loop_scopes(boundary.scope)):
-        if loop_scope.trips() <= 1 or loop_scope.is_variant(boundary.access.buffer):
+        if (
+            loop_scope.trips() <= 1
+            or loop_scope.is_variant(boundary.access.buffer)
+            or loop_scope.is_variant(value)
+        ):
             continue
         if boundary.held(axis - 1).is_subset(boundary.held(axis)):
             return axis

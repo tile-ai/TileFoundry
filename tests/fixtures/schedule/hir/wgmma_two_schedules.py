@@ -44,15 +44,29 @@ class WGMMA_TWO_SCHEDULES:
 
                 for k in tf.tile(K, BK):
                     with threads[0, :32] as _loader:
+                        lhs_ring = tf.empty(
+                            Tensor[
+                                (64, 16), "bf16",
+                                a_smem,
+                                "smem",
+                            ],
+                            buffers=STAGES,
+                        )
                         lhs = tf.schedule(
-                            (a[:, k], tf.empty(Tensor[(64, 16), "bf16", a_smem, "smem"], buffers=STAGES),),
+                            (a[:, k], lhs_ring),
                             op=T.copy_async_tensor(),
-
+                        )
+                        rhs_ring = tf.empty(
+                            Tensor[
+                                (16, 32), "bf16",
+                                b_smem,
+                                "smem",
+                            ],
+                            buffers=STAGES,
                         )
                         rhs = tf.schedule(
-                            (b[k, :], tf.empty(Tensor[(16, 32), "bf16", b_smem, "smem"], buffers=STAGES),),
+                            (b[k, :], rhs_ring),
                             op=T.copy_async_tensor(),
-
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
@@ -62,15 +76,29 @@ class WGMMA_TWO_SCHEDULES:
                         )
 
                     with threads[0, :32] as _loader:
+                        lhs_2_ring = tf.empty(
+                            Tensor[
+                                (64, 16), "bf16",
+                                a_smem,
+                                "smem",
+                            ],
+                            buffers=STAGES,
+                        )
                         lhs_2 = tf.schedule(
-                            (c[:, k], tf.empty(Tensor[(64, 16), "bf16", a_smem, "smem"], buffers=STAGES),),
+                            (c[:, k], lhs_2_ring),
                             op=T.copy_async_tensor(),
-
+                        )
+                        rhs_2_ring = tf.empty(
+                            Tensor[
+                                (16, 32), "bf16",
+                                b_smem,
+                                "smem",
+                            ],
+                            buffers=STAGES,
                         )
                         rhs_2 = tf.schedule(
-                            (d[k, :], tf.empty(Tensor[(16, 32), "bf16", b_smem, "smem"], buffers=STAGES),),
+                            (d[k, :], rhs_2_ring),
                             op=T.copy_async_tensor(),
-
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:

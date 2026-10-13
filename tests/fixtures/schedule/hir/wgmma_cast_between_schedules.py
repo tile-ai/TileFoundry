@@ -43,22 +43,47 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
 
                 for k in tf.tile(K, BK):
                     with Mesh(threads[0, :32], layout=(32,), names=("lane",)) as _loader:
+                        lhs_ring = tf.empty(
+                            Tensor[
+                                (64, 16), "bf16",
+                                Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                                "smem",
+                            ],
+                            buffers=STAGES,
+                        )
                         lhs = tf.schedule(
-                            (a[:, k], tf.empty(Tensor[(64, 16), "bf16", Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), "smem"], buffers=STAGES),),
+                            (a[:, k], lhs_ring),
                             op=T.copy_async_tensor(),
-
                         )
 
                     with Mesh(threads[0, :32], layout=(32,), names=("lane",)) as _loader:
+                        b_tile_dst = tf.empty(
+                            Tensor[
+                                (16, 32), "f32",
+                                ShardLayout(
+                                    layout=Layout((32, 16), (16, 1)),
+                                    attrs=(S(0),),
+                                    mesh=_loader,
+                                ),
+                                "rmem",
+                            ],
+                        )
                         b_tile = tf.schedule(
-                            (b_f32[k, :], tf.empty(Tensor[(16, 32), "f32", ShardLayout( layout=Layout((32, 16), (16, 1)), attrs=(S(0),), mesh=_loader, ), "rmem"]),),
+                            (b_f32[k, :], b_tile_dst),
                             op=T.copy(),
                         )
                         b = tf.cast(b_tile, dtype="bf16")
+                        rhs_ring = tf.empty(
+                            Tensor[
+                                (16, 32), "bf16",
+                                Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
+                                "smem",
+                            ],
+                            buffers=STAGES,
+                        )
                         rhs = tf.schedule(
-                            (b, tf.empty(Tensor[(16, 32), "bf16", Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), "smem"], buffers=STAGES),),
+                            (b, rhs_ring),
                             op=T.copy(),
-
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
@@ -68,10 +93,32 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                         )
 
                 with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
-                    bias_r = tf.schedule((bias, tf.empty(Tensor[(64, 32), "f32", ShardLayout( layout=Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), attrs=(S(2), S(0), S(4)), mesh=_compute, ), "rmem"]),), op=T.copy())
+                    bias_r_dst = tf.empty(
+                        Tensor[
+                            (64, 32), "f32",
+                            ShardLayout(
+                                layout=Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)),
+                                attrs=(S(2), S(0), S(4)),
+                                mesh=_compute,
+                            ),
+                            "rmem",
+                        ],
+                    )
+                    bias_r = tf.schedule((bias, bias_r_dst), op=T.copy())
                     acc = tf.relu(acc + bias_r)
+                    explicit_dst = tf.empty(
+                        Tensor[
+                            (64, 1), "f32",
+                            ShardLayout(
+                                layout=Layout((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)),
+                                attrs=(S(2), S(0), B()),
+                                mesh=_compute,
+                            ),
+                            "rmem",
+                        ],
+                    )
                     explicit = tf.schedule(
-                        (acc, tf.empty(Tensor[(64, 1), "f32", ShardLayout( layout=Layout((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)), attrs=(S(2), S(0), B()), mesh=_compute, ), "rmem"]),),
+                        (acc, explicit_dst),
                         op=T.reduce(
                             axes=(1,), keepdim=True, kind=ReduceKind.SUM
                         ),

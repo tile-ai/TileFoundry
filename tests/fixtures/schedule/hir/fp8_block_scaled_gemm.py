@@ -45,15 +45,29 @@ class FP8_BLOCK_SCALED_GEMM:
 
                 for kb in range(K_BLOCKS):
                     with threads[0, :32] as _loader:
+                        lhs_ring = tf.empty(
+                            Tensor[
+                                (128, 128), "fp8e4m3",
+                                Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3),
+                                "smem",
+                            ],
+                            buffers=STAGES,
+                        )
                         lhs = tf.schedule(
-                            (a[:, kb * BLOCK:kb * BLOCK + BLOCK], tf.empty(Tensor[(128, 128), "fp8e4m3", Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES),),
+                            (a[:, kb * BLOCK:kb * BLOCK + BLOCK], lhs_ring),
                             op=T.copy_async_tensor(),
-
+                        )
+                        rhs_ring = tf.empty(
+                            Tensor[
+                                (128, 128), "fp8e4m3",
+                                Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3),
+                                "smem",
+                            ],
+                            buffers=STAGES,
                         )
                         rhs = tf.schedule(
-                            (b[kb * BLOCK:kb * BLOCK + BLOCK, :], tf.empty(Tensor[(128, 128), "fp8e4m3", Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES),),
+                            (b[kb * BLOCK:kb * BLOCK + BLOCK, :], rhs_ring),
                             op=T.copy_async_tensor(),
-
                         )
 
                     with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
@@ -63,11 +77,29 @@ class FP8_BLOCK_SCALED_GEMM:
                             op=T.tiled_mma(atom=wgmma),
                             repeat=(2, 1, 4),
                         )
+                        row_scale_dst = tf.empty(
+                            Tensor[
+                                (128, 1), "f32",
+                                ShardLayout(
+                                    layout=Layout((2, 8, 2, 4), (64, 1, 8, 16)),
+                                    attrs=(S(0), S(3), S(1), B()),
+                                    mesh=_compute,
+                                ),
+                                "rmem",
+                            ],
+                        )
                         row_scale = tf.schedule(
-                            (a_scale[:, kb:kb + 1], tf.empty(Tensor[(128, 1), "f32", ShardLayout( layout=Layout((2, 8, 2, 4), (64, 1, 8, 16)), attrs=(S(0), S(3), S(1), B()), mesh=_compute, ), "rmem"]),), op=T.copy()
+                            (a_scale[:, kb:kb + 1], row_scale_dst), op=T.copy()
+                        )
+                        tile_scale_dst = tf.empty(
+                            Tensor[
+                                (1, 1), "f32",
+                                (1, 1),
+                                "rmem",
+                            ],
                         )
                         tile_scale = tf.schedule(
-                            (b_scale[kb:kb + 1, :], tf.empty(Tensor[(1, 1), "f32", (1, 1), "rmem"]),), op=T.copy()
+                            (b_scale[kb:kb + 1, :], tile_scale_dst), op=T.copy()
                         )
                         acc = acc + part * row_scale * tile_scale
 

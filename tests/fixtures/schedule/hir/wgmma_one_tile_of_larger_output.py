@@ -46,15 +46,29 @@ class WGMMA_ONE_TILE_OF_LARGER_OUTPUT:
 
                 for k in tf.tile(K, BK):
                     with threads[0, :32] as _loader:
+                        lhs_ring = tf.empty(
+                            Tensor[
+                                (64, 16), "bf16",
+                                Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                                "smem",
+                            ],
+                            buffers=STAGES,
+                        )
                         lhs = tf.schedule(
-                            (a[:, k], tf.empty(Tensor[(64, 16), "bf16", Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), "smem"], buffers=STAGES),),
+                            (a[:, k], lhs_ring),
                             op=T.copy_async_tensor(),
-
+                        )
+                        rhs_ring = tf.empty(
+                            Tensor[
+                                (16, 32), "bf16",
+                                Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
+                                "smem",
+                            ],
+                            buffers=STAGES,
                         )
                         rhs = tf.schedule(
-                            (b[k, :], tf.empty(Tensor[(16, 32), "bf16", Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), "smem"], buffers=STAGES),),
+                            (b[k, :], rhs_ring),
                             op=T.copy_async_tensor(),
-
                         )
 
                     with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:

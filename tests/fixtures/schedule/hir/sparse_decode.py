@@ -45,17 +45,31 @@ class SparseDecode:
                     for r in range(64):
                         row_index = idx[r : r + 1]
                         with th[0, :32] as _carry:
+                            qs_dst = tf.empty(
+                                Tensor[
+                                    (1, 64), "bf16",
+                                    (1, 64),
+                                    "smem",
+                                ],
+                            )
                             qs = tf.insert_slice(
                                 qs,
                                 tf.schedule(
-                                    (query[r : r + 1, :], tf.empty(Tensor[(1, 64), "bf16", (1, 64), "smem"]),), op=T.copy_async()
+                                    (query[r : r + 1, :], qs_dst), op=T.copy_async()
                                 ),
                                 (r, 0),
+                            )
+                            ks_dst = tf.empty(
+                                Tensor[
+                                    (1, 64), "bf16",
+                                    (1, 64),
+                                    "smem",
+                                ],
                             )
                             ks = tf.insert_slice(
                                 ks,
                                 tf.schedule(
-                                    (table, tf.empty(Tensor[(1, 64), "bf16", (1, 64), "smem"]), row_index,), op=T.copy_async(fill=0)
+                                    (table, ks_dst, row_index), op=T.copy_async(fill=0)
                                 ),
                                 (r, 0),
                             )
@@ -82,7 +96,14 @@ class SparseDecode:
                             )
                         ),
                     )
-                    ii = tf.schedule((idx, tf.empty(Tensor[(64,), "i64", (64,), "rmem"]),), op=T.copy())
+                    ii_dst = tf.empty(
+                        Tensor[
+                            (64,), "i64",
+                            (64,),
+                            "rmem",
+                        ],
+                    )
+                    ii = tf.schedule((idx, ii_dst), op=T.copy())
                     ii = ii + 0
                     live = tf.binary(ii >= 0, ii < 256, kind="and")
                     live = tf.bitcast(live, Layout(((8, 8),), ((8, 1),)))
@@ -97,8 +118,19 @@ class SparseDecode:
                         ((8 @ m.lane8, 2, 4 @ m.warp, 4 @ m.lane4, 2, 8),
                          (1, 8, 16, 128, 64, 512)),
                     )
+                    pr_dst = tf.empty(
+                        Tensor[
+                            (64, 64), "bf16",
+                            ShardLayout(
+                                layout=Layout((4, 8, 2, 4, 2, 4, 2), (1024, 1, 8, 16, 64, 128, 512)),
+                                attrs=(S(3), S(1), S(5)),
+                                mesh=m,
+                            ),
+                            "rmem",
+                        ],
+                    )
                     pr = tf.schedule(
-                        (pv, tf.empty(Tensor[(64, 64), "bf16", ShardLayout( layout=Layout((4, 8, 2, 4, 2, 4, 2), (1024, 1, 8, 16, 64, 128, 512)), attrs=(S(3), S(1), S(5)), mesh=m, ), "rmem"]),),
+                        (pv, pr_dst),
                         op=T.copy(),
                     )
                     ks_view = tf.reshard(

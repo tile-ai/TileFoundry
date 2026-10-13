@@ -49,7 +49,7 @@ def gemm(
                 (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
         )
-        value = T.alloc_tensor(
+        pr_dst = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 64),
                 "bf16",
@@ -62,7 +62,7 @@ def gemm(
                 (64, 64), "bf16", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
         )
-        value_1 = T.alloc_tensor(
+        value = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
@@ -72,7 +72,7 @@ def gemm(
                 (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
         )
-        value_2 = T.alloc_tensor(
+        value_1 = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
@@ -83,10 +83,10 @@ def gemm(
             ]
         )
         live = T.alloc_tensor(tensor_type=Tensor[(64,), "bool", (64,), "rmem"])
-        value_3 = T.alloc_tensor(tensor_type=Tensor[(64,), "bool", (64,), "rmem"])
+        value_2 = T.alloc_tensor(tensor_type=Tensor[(64,), "bool", (64,), "rmem"])
         ii = T.alloc_tensor(tensor_type=Tensor[(64,), "i64", (64,), "rmem"])
-        value_4 = T.alloc_tensor(tensor_type=Tensor[(64,), "i64", (64,), "rmem"])
-        value_5 = T.alloc_tensor(tensor_type=Tensor[(64,), "bool", (64,), "rmem"])
+        ii_dst = T.alloc_tensor(tensor_type=Tensor[(64,), "i64", (64,), "rmem"])
+        value_3 = T.alloc_tensor(tensor_type=Tensor[(64,), "bool", (64,), "rmem"])
         s_1 = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
@@ -125,20 +125,20 @@ def gemm(
             with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_3:
                 with scope_3 as threads_2:
                     T.fill(o, 0.0)
-                    T.copy(idx, value_4)
+                    T.copy(idx, ii_dst)
                 scalar = T.alloc_tensor(tensor_type=Tensor[(), "i64", "rmem"])
                 T.fill(scalar, 0)
                 with scope_3 as threads_4:
-                    T.binary(value_4, scalar, ii, kind=BinaryKind.ADD)
+                    T.binary(ii_dst, scalar, ii, kind=BinaryKind.ADD)
                 scalar_1 = T.alloc_tensor(tensor_type=Tensor[(), "i64", "rmem"])
                 T.fill(scalar_1, 0)
                 with scope_3 as threads_5:
-                    T.binary(ii, scalar_1, value_3, kind=BinaryKind.GE)
+                    T.binary(ii, scalar_1, value_2, kind=BinaryKind.GE)
                 scalar_2 = T.alloc_tensor(tensor_type=Tensor[(), "i64", "rmem"])
                 T.fill(scalar_2, 256)
                 with scope_3 as threads_6:
-                    T.binary(ii, scalar_2, value_5, kind=BinaryKind.LT)
-                    T.binary(value_3, value_5, live, kind=BinaryKind.AND)
+                    T.binary(ii, scalar_2, value_3, kind=BinaryKind.LT)
+                    T.binary(value_2, value_3, live, kind=BinaryKind.AND)
                 tile_5 = T.tensor_view(
                     T.ptr_of(live[0:0 + 64]), layout=Layout(((8, 8),), ((8, 1),)), shape=(64,)
                 )
@@ -287,13 +287,13 @@ def gemm(
                         shape=(64, 1),
                     )
                     dst_frame_2 = T.tensor_view(
-                        T.ptr_of(value_2[0:0 + 64, 0:0 + 64]),
+                        T.ptr_of(value_1[0:0 + 64, 0:0 + 64]),
                         layout=((8 @ threads_10.d1, 2, 4 @ threads_10.d0, 2, 4 @ threads_10.d2, 8), (1, 8, 16, 64, 128, 512)),
                         shape=(64, 64),
                     )
                     T.binary(lhs_frame_1, rhs_frame, dst_frame_2, kind=BinaryKind.SUB)
                     src_frame_1 = T.tensor_view(
-                        T.ptr_of(value_2[0:0 + 64, 0:0 + 64]),
+                        T.ptr_of(value_1[0:0 + 64, 0:0 + 64]),
                         layout=((8 @ threads_10.d1, 2, 4 @ threads_10.d0, 2, 4 @ threads_10.d2, 8), (1, 8, 16, 64, 128, 512)),
                         shape=(64, 64),
                     )
@@ -331,13 +331,13 @@ def gemm(
                         shape=(64, 1),
                     )
                     dst_frame_5 = T.tensor_view(
-                        T.ptr_of(value_1[0:0 + 64, 0:0 + 64]),
+                        T.ptr_of(value[0:0 + 64, 0:0 + 64]),
                         layout=((8 @ threads_10.d1, 2, 4 @ threads_10.d0, 2, 4 @ threads_10.d2, 8), (1, 8, 16, 64, 128, 512)),
                         shape=(64, 64),
                     )
                     T.binary(lhs_frame_2, rhs_frame_1, dst_frame_5, kind=BinaryKind.DIV)
                     src_frame_3 = T.tensor_view(
-                        T.ptr_of(value_1[0:0 + 64, 0:0 + 64]),
+                        T.ptr_of(value[0:0 + 64, 0:0 + 64]),
                         layout=((8 @ threads_10.d1, 2, 4 @ threads_10.d0, 2, 4 @ threads_10.d2, 8), (1, 8, 16, 64, 128, 512)),
                         shape=(64, 64),
                     )
@@ -353,7 +353,7 @@ def gemm(
                         shape=(64, 64),
                     )
                     dst_frame_7 = T.tensor_view(
-                        T.ptr_of(value[0:0 + 64, 0:0 + 64]),
+                        T.ptr_of(pr_dst[0:0 + 64, 0:0 + 64]),
                         layout=((4, 8 @ threads_10.d1, 2, 4 @ threads_10.d0, 2, 4 @ threads_10.d2, 2), (1024, 1, 8, 16, 64, 128, 512)),
                         shape=(64, 64),
                     )
@@ -378,7 +378,7 @@ def gemm(
                                     shape=(64, 64),
                                 )
                                 lhs_view_4 = T.tensor_view(
-                                    T.ptr_of(value[o_m_1:o_m_1 + 64, o_k_1:o_k_1 + 16]),
+                                    T.ptr_of(pr_dst[o_m_1:o_m_1 + 64, o_k_1:o_k_1 + 16]),
                                     layout=((8 @ threads_19.d1, 2, 4 @ threads_19.d0, 2, 4 @ threads_19.d2, 2), (1, 8, 16, 64, 128, 512)),
                                     shape=(64, 16),
                                 )

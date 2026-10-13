@@ -129,17 +129,16 @@ def _instruction_schema(
         supplied_optional = operand_count - required
         included = {id(param) for param in optional[: max(0, supplied_optional)]}
         params = tuple(param for param in params if not param.optional or id(param) in included)
-    reads = tuple(param for param in params if param.effect & MemoryEffect.READ)
     writes = tuple(param for param in params if param.effect & MemoryEffect.WRITE)
     if not writes:
         raise ValueError(f"{type(op).__name__} writes no result operand")
-    return params, reads, writes
+    return params, writes
 
 
 def _instruction_view(call: Call, ctx, *, fragments: bool = True):
     schedule = call.target
     op = schedule.op
-    params, reads, writes = _instruction_schema(op, len(call.args))
+    params, writes = _instruction_schema(op, len(call.args))
     if len(call.args) != len(params):
         raise ValueError(
             f"{type(op).__name__} expects operands {tuple(param.name for param in params)}, got {len(call.args)}"
@@ -228,7 +227,7 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
         if fragments
         else provisional
     )
-    return op, params, reads, writes, patterns, inner_types, repeat, order, single_shape
+    return op, params, writes, patterns, inner_types, repeat, order, single_shape
 
 
 def _outer_band(
@@ -271,7 +270,7 @@ def _outer_band(
 
 @register_access_relation(ScheduleOp)
 def _schedule_access_relation(call: Call, ctx) -> tuple[AccessRelation, ...]:
-    op, params, _reads, _writes, _patterns, inner, repeat, order, shape = _instruction_view(
+    op, params, _writes, _patterns, inner, repeat, order, shape = _instruction_view(
         call, ctx, fragments=False
     )
     scheduled = _outer_band(operand_relations(op, inner), repeat, order, shape)
@@ -283,7 +282,7 @@ def _schedule_cost(call: Call, ctx) -> Cost:
     stated = relations_of(call, ctx)
     local = projected(stated, call, ctx)
     types = (*(ctx.local_type_of(arg) for arg in call.args), ctx.local_output_type(call))
-    params, _reads, writes = _instruction_schema(call.target.op, len(call.args))
+    params, writes = _instruction_schema(call.target.op, len(call.args))
     moved = []
     for index, (type_, boundary) in enumerate(zip(types, local, strict=True)):
         if not isinstance(type_, TensorType):
@@ -321,7 +320,7 @@ def _schedule_cost(call: Call, ctx) -> Cost:
 @register_typeinfer(ScheduleOp)
 def _infer_schedule(call: Call, ctx) -> TensorType:
     try:
-        op, params, reads, writes, patterns, inner, _repeat, _order, _shape = _instruction_view(
+        op, params, writes, patterns, inner, _repeat, _order, _shape = _instruction_view(
             call, ctx
         )
     except (TypeError, ValueError) as error:
@@ -364,7 +363,7 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
 
 @register_buffer_alias(ScheduleOp)
 def _schedule_result_operand(call: Call) -> int:
-    params, _reads, writes = _instruction_schema(call.target.op, len(call.args))
+    params, writes = _instruction_schema(call.target.op, len(call.args))
     return params.index(writes[0])
 
 

@@ -45,15 +45,29 @@ class GEMM_8192X17408X5120_TMA_STORE:
 
                         for k in tf.tile(K, BK):
                             with threads[0, :32] as _loader:
+                                lhs_ring = tf.empty(
+                                    Tensor[
+                                        (128, 64), "bf16",
+                                        Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                                        "smem",
+                                    ],
+                                    buffers=STAGES,
+                                )
                                 lhs = tf.schedule(
-                                    (a[m, k], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES),),
+                                    (a[m, k], lhs_ring),
                                     op=T.copy_async_tensor(),
-
+                                )
+                                rhs_ring = tf.empty(
+                                    Tensor[
+                                        (64, 256), "bf16",
+                                        Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                                        "smem",
+                                    ],
+                                    buffers=STAGES,
                                 )
                                 rhs = tf.schedule(
-                                    (b[k, n], tf.empty(Tensor[(64, 256), "bf16", Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES),),
+                                    (b[k, n], rhs_ring),
                                     op=T.copy_async_tensor(),
-
                                 )
 
                             with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
@@ -65,9 +79,17 @@ class GEMM_8192X17408X5120_TMA_STORE:
 
                         with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                             tile_out = tf.cast(acc, dtype="bf16")
-                            staged = tf.schedule((tile_out, tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"]),), op=T.copy())
+                            staged_dst = tf.empty(
+                                Tensor[
+                                    (128, 256), "bf16",
+                                    Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3),
+                                    "smem",
+                                ],
+                            )
+                            staged = tf.schedule((tile_out, staged_dst), op=T.copy())
 
                         with threads[0, :32] as _storer:
-                            tile = tf.schedule((staged, tf.empty(Tensor[(128, 256), "bf16", (128, 256)]),), op=T.copy_async_tensor())
+                            tile_dst = tf.empty(Tensor[(128, 256), "bf16", (128, 256)])
+                            tile = tf.schedule((staged, tile_dst), op=T.copy_async_tensor())
                             out = tf.insert_slice(out, tile, (m, n))
                 return out

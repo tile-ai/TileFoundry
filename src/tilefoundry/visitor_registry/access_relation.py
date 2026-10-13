@@ -411,7 +411,10 @@ def _placed(
     name. A value with no placement is addressed at its own coordinates.
     """
     relation = access.relation
-    if not isinstance(local, TensorType) or not isinstance(logical, TensorType):
+    if (
+        not isinstance(local, TensorType)
+        or not isinstance(logical, TensorType)
+    ):
         return relation
     if relation.dim(isl.dim_type.OUT) != len(logical.shape):
         raise ValueError(

@@ -1151,7 +1151,7 @@ operation and is not an HIR op.
     MUST fail closed.
   - `IndexSelect` is a pure value operation, not a copy. To stage dim-0
     selections into shared memory, schedule its inputs as
-    `tf.schedule((x, tf.empty(Tensor[... , "smem"]), index), op=T.copy_async(fill=f))`.
+    `tf.schedule((x, tf.empty(Tensor[..., "smem"]), index), op=T.copy_async(fill=f))`.
     The indexed instruction has no TMA candidate. Unscheduled `IndexSelect`
     MUST fail lowering with this scheduling form in the diagnostic; copying
     its already computed result with `CopyAsync` is not supported.

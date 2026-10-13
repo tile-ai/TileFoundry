@@ -36,11 +36,6 @@ def is_indexed_copy(args) -> bool:
     return len(args) == 3
 
 
-def is_indexed_schedule(args) -> bool:
-    """A scheduled CopyAsync includes the optional index after src and dst."""
-    return is_indexed_copy(args)
-
-
 class _CopyModes(SameModesConstraint):
     """An indexed transfer's contiguous vector must stay inside one row."""
 
@@ -147,7 +142,7 @@ def _copy_async_access(call, ctx):
 
 @register_schedule_eval(CopyAsync)
 def _eval_scheduled_copy_async(ctx):
-    if not is_indexed_schedule(ctx.args):
+    if not is_indexed_copy(ctx.args):
         return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
     source, index = ctx.args[0].data, ctx.args[2].data
     return TensorValue(data=gather(source, index, 0, ctx.op.fill), type=ctx.result_type)
