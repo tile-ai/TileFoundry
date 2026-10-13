@@ -68,29 +68,19 @@ def _access_relations(call: "Call", ctx: "AccessContext") -> tuple[AccessRelatio
 
 @register_typeinfer(TupleGetItem)
 def _(call: "Call", ctx: "TypeInferContext"):
-    from tilefoundry.ir.core.module import ModuleList  # noqa: PLC0415
-    from tilefoundry.ir.types.tensor_type import DType, TensorType  # noqa: PLC0415
+    from tilefoundry.ir.core.module import ModuleList, validate_instance_slot  # noqa: PLC0415
 
     slot = call.args[0]
     if isinstance(slot, ModuleList):
         if ctx.scope is not None:
             slot = ctx.scope.module.children[slot.key]
-        if not slot.indexed:
-            ctx.error(call, f"single slot {slot.key!r} cannot be indexed")
-        index_type = ctx.type_of(call.args[1])
-        if (
-            not isinstance(index_type, TensorType)
-            or index_type.shape != ()
-            or index_type.dtype not in (DType.i32, DType.i64)
-        ):
-            ctx.error(call, f"ModuleList slot {slot.key!r}: index must be an integer scalar")
-        index = call.args[1]
-        if isinstance(index, Constant):
-            taken = index.value
-            if isinstance(taken, bool) or not isinstance(taken, int) or not 0 <= taken < len(slot):
-                ctx.error(call, f"ModuleList slot {slot.key!r}: index {taken!r} out of range for N={len(slot)}")
-        elif any(element is not slot.elements[0] for element in slot.elements[1:]):
-            ctx.error(call, f"ModuleList slot {slot.key!r}: variable index requires the same definition")
+        try:
+            index = validate_instance_slot(
+                slot, call.args[1], index_type=ctx.type_of(call.args[1])
+            )
+        except ValueError as error:
+            ctx.error(call, str(error))
+        return ctx.type_of(call.args[0]).fields[index if isinstance(index, int) else 0]
     tup_ty = ctx.type_of(call.args[0])
     if not isinstance(tup_ty, TupleType):
         ctx.error(call, "TupleGetItem on non-TupleType")

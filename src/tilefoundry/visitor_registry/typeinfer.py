@@ -125,20 +125,14 @@ class TypeInferVisitor(ExprVisitor[Type]):
         target = call.target
         if isinstance(target, Call):
             arg_types = arg_types[1:]
-        try:
-            located = instance_slot(target)
-        except ValueError as error:
-            ctx.error(call, str(error))
         child_scope = None
-        if located is not None:
+        if instance_slot(target) is not None:
             if ctx.scope is None:
                 ctx.error(call, "instance call requires a module scope")
-            slot, index = located
             try:
-                current = ctx.scope.module.children[slot.key]
-                child = current.elements[index if isinstance(index, int) else 0]
-                target = child.entry_function()
-                child_scope = ctx.scope_for(target, call.target)
+                child_scope = ctx.scope_for(None, call.target)
+                target = child_scope.module.entry_function()
+                child_scope = replace(child_scope, function=target)
             except (KeyError, ValueError) as error:
                 ctx.error(call, str(error))
         from tilefoundry.ir.hir.schedule import ScheduleOp  # noqa: PLC0415

@@ -2334,7 +2334,10 @@ class NamePattern(ElementPattern):
         name = match.captures["name"]
         value = context.lexical_scope.lookup(name)
         if value is None:
-            value = context.function.closure.get(name)
+            try:
+                value = _resolve_reference(match.node, context)
+            except ParseError:
+                pass
         if isinstance(value, slice):
             value = value.start
         if isinstance(value, runtime.Expr):
@@ -2961,10 +2964,13 @@ class CallPattern(ElementPattern):
         instance_target = None
         target_child = ()
         if isinstance(node.func, ast.Attribute):
-            if isinstance(node.func.value, ast.Subscript):
-                return PatternFailure("op_call", node.func, "only calling an instance entry is supported")
+            reference = (
+                node.func.value.value
+                if isinstance(node.func.value, ast.Subscript)
+                else node.func.value
+            )
             try:
-                owner = _resolve_reference(node.func.value, context)
+                owner = _resolve_reference(reference, context)
             except ParseError:
                 owner = None
             if isinstance(owner, runtime.ModuleList):
@@ -2976,8 +2982,6 @@ class CallPattern(ElementPattern):
                 return None
             if not isinstance(slot, runtime.ModuleList):
                 return None
-            if not slot.indexed:
-                return PatternFailure("op_call", node.func, f"single slot {slot.key!r} cannot be indexed")
             instance_target = slot
             target_child = (AstChild("target", ExpressionPattern(), node.func, "call_target", "target"),)
             callee = slot
@@ -2992,8 +2996,12 @@ class CallPattern(ElementPattern):
                     "instance calls must use a slot name in the @module class body",
                 )
             if isinstance(callee, runtime.ModuleList):
-                if callee.indexed:
-                    return PatternFailure("op_call", node.func, f"ModuleList slot {callee.key!r} must be indexed before calling")
+                from tilefoundry.ir.core.module import validate_instance_slot  # noqa: PLC0415
+
+                try:
+                    validate_instance_slot(callee)
+                except ValueError as error:
+                    return PatternFailure("op_call", node.func, str(error))
                 instance_target = callee
         if instance_target is not None:
             binding = node.func.value if isinstance(node.func, ast.Subscript) else node.func
@@ -3092,14 +3100,10 @@ class CallPattern(ElementPattern):
                     raise ParseError.from_node(
                         match.node, context, "a Module call is only valid inside a @module class body"
                     )
-                from tilefoundry.ir.core.module import instance_slot  # noqa: PLC0415
-
                 try:
-                    slot, index = instance_slot(target)
-                    entry = slot.elements[index if isinstance(index, int) else 0].entry_function()
+                    return_type = target.type.return_type
                 except ValueError as error:
                     raise ParseError.from_node(match.node, context, str(error)) from error
-                return_type = entry.return_type
             else:
                 return_type = callee.return_type
             return runtime.Call(
@@ -3584,10 +3588,12 @@ class SubscriptExpressionPattern(ElementPattern):
         value = children["value"]
         index = children["index"]
         if isinstance(value, runtime.ModuleList):
-            if not value.indexed:
-                raise ParseError.from_node(match.node, context, f"single slot {value.key!r} cannot be indexed")
-            if isinstance(index, bool) or not isinstance(index, (int, runtime.Expr)):
-                raise ParseError.from_node(match.node, context, "ModuleList index must be an integer scalar")
+            from tilefoundry.ir.core.module import validate_instance_slot  # noqa: PLC0415
+
+            try:
+                validate_instance_slot(value, index)
+            except ValueError as error:
+                raise ParseError.from_node(match.node, context, str(error)) from error
             if isinstance(index, int):
                 index = _constant(index)
             return _infer_call(runtime.TupleGetItem(), (value, index), context)

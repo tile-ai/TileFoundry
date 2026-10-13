@@ -172,6 +172,21 @@ class ModuleList(Expr):
         self.indexed = indexed
         self.metadata = ()
 
+    def __repr__(self) -> str:
+        """Describe the slot without projecting types or expanding definitions."""
+        names = []
+        start = 0
+        while start < len(self.elements):
+            element = self.elements[start]
+            stop = start + 1
+            while stop < len(self.elements) and self.elements[stop] is element:
+                stop += 1
+            count = stop - start
+            names.append(f"{element.name}*{count}" if count > 1 else element.name)
+            start = stop
+        elements = ", ".join(names) + ("," if len(names) == 1 else "")
+        return f"ModuleList(key={self.key!r}, indexed={self.indexed}, elements=({elements}))"
+
     @property
     def type(self):
         signatures = tuple(
@@ -204,30 +219,58 @@ class ModuleList(Expr):
         return self.elements[index]
 
 
+def validate_instance_slot(slot: ModuleList, index=MISSING, *, index_type=None):
+    """Validate one entry call or subscript, returning its normalized index.
+
+    Callers supply the current frame's slot when a tree has been rebuilt.
+    Variable expressions remain expressions in the instance stack.
+    """
+    if index is MISSING:
+        if slot.indexed:
+            raise ValueError(f"ModuleList slot {slot.key!r} must be indexed before calling")
+        return None
+    if not slot.indexed:
+        raise ValueError(f"single slot {slot.key!r} cannot be indexed")
+    if isinstance(index, Expr):
+        index_type = index.type if index_type is None else index_type
+        from tilefoundry.ir.types.dtype import IntegerDType  # noqa: PLC0415
+
+        if (
+            not isinstance(index_type, TensorType)
+            or index_type.shape != ()
+            or not isinstance(index_type.dtype, IntegerDType)
+        ):
+            raise ValueError(f"ModuleList slot {slot.key!r}: index must be an integer scalar")
+    if isinstance(index, Constant):
+        index = index.value
+    if isinstance(index, bool) or not isinstance(index, (int, Expr)):
+        raise ValueError(f"ModuleList slot {slot.key!r}: index must be an integer scalar")
+    if isinstance(index, int):
+        if not 0 <= index < len(slot):
+            raise ValueError(
+                f"ModuleList slot {slot.key!r}: index {index!r} out of range for N={len(slot)}"
+            )
+    elif any(element is not slot.elements[0] for element in slot.elements[1:]):
+        raise ValueError(f"ModuleList slot {slot.key!r}: variable index requires the same definition")
+    return index
+
+
 def instance_slot(target):
-    """The slot and optional index carried by an instance-call target."""
+    """Decode the slot and raw index carried by an instance-call target.
+
+    Decoding does not validate stale target definitions. Validation uses the
+    current frame's slot through ``validate_instance_slot``.
+    """
     from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem  # noqa: PLC0415
 
     if isinstance(target, ModuleList):
-        if target.indexed:
-            raise ValueError(f"ModuleList slot {target.key!r} must be indexed before calling")
-        return target, None
+        return target, MISSING
     if (
         isinstance(target, Call)
         and isinstance(target.target, TupleGetItem)
         and isinstance(target.args[0], ModuleList)
     ):
-        slot, index = target.args
-        if not slot.indexed:
-            raise ValueError(f"single slot {slot.key!r} cannot be indexed")
-        if isinstance(index, Constant):
-            taken = index.value
-            if isinstance(taken, bool) or not isinstance(taken, int) or not 0 <= taken < len(slot):
-                raise ValueError(f"ModuleList slot {slot.key!r}: index {taken!r} out of range for N={len(slot)}")
-            return slot, taken
-        if any(element is not slot.elements[0] for element in slot.elements[1:]):
-            raise ValueError(f"ModuleList slot {slot.key!r}: variable index requires the same definition")
-        return slot, index
+        return target.args
     return None
 
 
@@ -655,7 +698,14 @@ def select(module: Module, path: str) -> Module:
 
 
 def function_selectors(module: Module, prefix: str = "") -> tuple[tuple[str, HirFunction], ...]:
-    """One selector per definition, using its first DFS instance path."""
+    """One selector per definition, using its first DFS instance path.
+
+    Paths are root-relative and dotted: a leaf is qualified by the slot keys
+    and indices through which its definition was first reached. PrimFunction
+    implementations are excluded from this HIR inventory.
+
+    See [core-ir §1.2](docs/spec/core-ir.md#12-selecting-a-node-by-path).
+    """
     seen: set[int] = set()
     functions: set[int] = set()
     found = []
@@ -682,6 +732,7 @@ __all__ = [
     "Module",
     "ModuleList",
     "instance_slot",
+    "validate_instance_slot",
     "ModuleFunction",
     "called_functions",
     "function_selectors",

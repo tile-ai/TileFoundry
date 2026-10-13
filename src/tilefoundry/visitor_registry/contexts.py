@@ -38,7 +38,12 @@ class ModuleInstance:
 
 @dataclass(frozen=True)
 class FunctionScope:
-    """The current body and its explicit root-to-current instance stack."""
+    """The current body and its explicit root-to-current instance stack.
+
+    A Function carries no execution context and a shared definition can be
+    reached through several instance paths. The supplied stack answers where
+    the current body runs and what it may reach within this invocation.
+    """
 
     module: Module
     function: Function | None
@@ -73,13 +78,17 @@ class TypeInferContext:
         """
         if self.scope is None:
             return None
-        from tilefoundry.ir.core.module import instance_slot  # noqa: PLC0415
+        from tilefoundry.ir.core.module import (  # noqa: PLC0415
+            instance_slot,
+            validate_instance_slot,
+        )
 
         located = instance_slot(target)
         if located is None:
             return FunctionScope(self.scope.module, callee, self.scope.instances)
-        slot, index = located
+        slot, raw_index = located
         current_slot = self.scope.module.children[slot.key]
+        index = validate_instance_slot(current_slot, raw_index)
         module = current_slot.elements[index if isinstance(index, int) else 0]
         frame = ModuleInstance(module, slot.key, index)
         return FunctionScope(module, callee, (*self.scope.instances, frame))

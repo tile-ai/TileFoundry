@@ -149,16 +149,11 @@ previously inferred result type. The cache key uses callee identity, the
 argument-type tuple, call-site mesh, and instance definition stack; the cached value is
 only a `Type`, never a derived `Function` or a replacement `Call.target`.
 
-Argument types bind to supplied parameters in order. A Function target supplies
-all parameters. An instance target enters its slot in the current Module's
-`children` and calls the reached definition's entry, omitting ConstTensor
-parameters from `Call.args`. Their declared types seed the callee visitor memo;
-values are supplied by that instance's resource
-([runtime §1.3](./runtime.md#13-runtimedecoratorpy)). The explicit instance stack
-retains the root target and the nearest topology declaration, without owner
-searches or parent backlinks. A rebuilt tree is authoritative: the call's target
-supplies a slot key and index, while the definition is looked up in the current
-frame's `children`.
+Argument types bind to supplied parameters in order, following the target and
+instance-resolution rules in [core-ir §2.1](./core-ir.md#21-call). For an omitted
+ConstTensor parameter, its declared type seeds the callee visitor memo; its
+value comes from the instance's resource
+([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
 
 Caller and callee MUST resolve one effective `Target` and one effective topology
 hierarchy: a same-kernel call is one execution context, whichever `Module` owns
