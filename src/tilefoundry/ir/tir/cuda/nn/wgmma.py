@@ -239,6 +239,12 @@ def _b_layout(dtype: DType) -> ShardLayoutPattern:
 _A_MAJOR_16 = SwitchPattern("form", {Form.SS: OrPattern(*tuple(Major)), Form.RS: Major.K})
 
 
+_OPERAND_DTYPE = SwitchPattern("dtype", {dtype: dtype for dtype in DTYPES})
+_K_ELEMENTS = SwitchPattern(
+    "dtype", {dtype: _mma_k_elements(dtype.bit_width // 8) for dtype in DTYPES}
+)
+
+
 class Wgmma(MmaAtom):
     """A warpgroup MMA, 64 x n x k, accumulating in F32; k is 32 bytes of the operand dtype."""
 
@@ -310,19 +316,19 @@ class Wgmma(MmaAtom):
         predicates=(8 * c == n_extent,),
     )
     A = TensorPattern(
-        dtype=SwitchPattern("dtype", {dtype: dtype for dtype in DTYPES}),
+        dtype=_OPERAND_DTYPE,
         storage=SwitchPattern("form", {Form.SS: S.SMEM, Form.RS: S.RMEM}),
         shape=(
             64,
-            SwitchPattern("dtype", {dtype: _mma_k_elements(dtype.bit_width // 8) for dtype in DTYPES}),
+            _K_ELEMENTS,
         ),
         layout=SwitchPattern("dtype", {dtype: _a_layout(dtype) for dtype in DTYPES}),
     )
     B = TensorPattern(
-        dtype=SwitchPattern("dtype", {dtype: dtype for dtype in DTYPES}),
+        dtype=_OPERAND_DTYPE,
         storage=S.SMEM,
         shape=(
-            SwitchPattern("dtype", {dtype: _mma_k_elements(dtype.bit_width // 8) for dtype in DTYPES}),
+            _K_ELEMENTS,
             N,
         ),
         layout=SwitchPattern("dtype", {dtype: _b_layout(dtype) for dtype in DTYPES}),

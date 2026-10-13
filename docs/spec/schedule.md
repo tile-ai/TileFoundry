@@ -66,8 +66,11 @@ pattern. `match_instruction(op_type, attributes, operand_types, mesh, *, scope,
 repeat=None, order=None)` returns all accepted instruction instances. The
 operand types include every input parameter, including the destination, in
 schema order. An atom class in `attributes` leaves its parameters open; an
-atom instance requests that exact instruction. Open parameters follow dtype,
-storage form, and layout major before enumerating admitted tile extents.
+atom instance requests that exact instruction. Open matching first reads dtype
+and storage form, then enumerates tile extents admitted by the parameter
+patterns, divisibility, and tile projection.
+It reads layout major from the largest projectable tile, then performs the
+closed instruction checks for every projectable extent.
 `scope` is required and reaches the verifier unchanged, including its target
 capability checks. Explicit schedule inference uses this same matcher with
 the authored instruction attributes, scope, repeat, and order.

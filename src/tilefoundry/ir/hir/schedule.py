@@ -34,7 +34,6 @@ from tilefoundry.visitor_registry import (
 )
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
-    access_relation_registry,
     iteration_universe,
     projected,
     projected_axes,
@@ -147,10 +146,6 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True, bindings=None)
     schedule = call.target
     op = schedule.op
     params, writes = instruction_schema(op, len(call.args))
-    if len(call.args) != len(params):
-        raise ScheduleRefusal(
-            f"{type(op).__name__} expects operands {tuple(param.name for param in params)}, got {len(call.args)}"
-        )
     bindings = (
         dict(getattr(getattr(op, "atom", None), "bindings", {}))
         if bindings is None
@@ -158,9 +153,10 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True, bindings=None)
     )
     patterns = tuple(_operand_pattern(param, op, bindings) for param in params)
     whole = {param.name: ctx.type_of(arg) for param, arg in zip(params, call.args, strict=True)}
-    if not all(isinstance(type_, TensorType) for type_ in whole.values()):
-        raise ScheduleRefusal(f"{type(op).__name__} schedule operands must be tensors")
-    whole_relations = operand_relations(op, tuple(whole[param.name] for param in params))
+    try:
+        whole_relations = operand_relations(op, tuple(whole[param.name] for param in params))
+    except ValueError as error:
+        raise ScheduleRefusal(str(error)) from error
     whole_shape = _iteration_shape(whole_relations)
     operands = whole_relations[: len(params)]
     write_boundaries = tuple(
@@ -403,11 +399,6 @@ def match_instruction(
         )
     if not all(isinstance(type_, TensorType) for type_ in operand_types):
         raise ScheduleRefusal(f"{op_type.__name__} schedule operands must be tensors")
-    if access_relation_registry.lookup(op_type) is None:
-        raise ScheduleRefusal(
-            f"{op_type.__name__} states no access relations, and there is no "
-            "fallback: register one with register_access_relation"
-        )
     atom = getattr(op, "atom", None)
     if not isinstance(atom, type):
         _check_instruction(op, operand_types, mesh, repeat=repeat, order=order, scope=scope)
@@ -472,11 +463,11 @@ def match_instruction(
             and pattern.layout is not None
             and not matcher.match(pattern.layout, type_.layout)
         ):
-            raise tile_refusal or ScheduleRefusal(
+            raise ScheduleRefusal(
                 f"{op_type.__name__} {param.name} single-issue tile does not match: {_pattern_refusal(matcher)}"
             )
     if not matcher.solve():
-        raise tile_refusal or ScheduleRefusal(_pattern_refusal(matcher))
+        raise ScheduleRefusal(_pattern_refusal(matcher))
     parameters = {param.name for param in atom.parameters}
     solved = {
         name: value
@@ -496,7 +487,7 @@ def match_instruction(
         else:
             accepted.append(instance)
     if not accepted:
-        raise tile_refusal or refusal
+        raise refusal
     return tuple(accepted)
 
 
