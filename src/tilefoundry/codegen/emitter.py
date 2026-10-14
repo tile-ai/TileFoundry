@@ -10,7 +10,9 @@ from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import (
 )
 from tilefoundry.codegen.cuda.tir.stmts.scalar_expr import render_scalar_expr
 from tilefoundry.ir.core import Call, Tuple
+from tilefoundry.ir.core.module import ModuleList
 from tilefoundry.ir.tir.abort import Abort
+from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import (
     Evaluate,
     For,
@@ -107,6 +109,8 @@ class CppEmitter(StmtVisitor[None]):
 
     def visit_Evaluate(self, node: Evaluate) -> None:
         op = node.callable
+        if isinstance(op, (PrimFunction, ModuleList, Call)):
+            raise RuntimeError(f"no codegen handler for Op {type(op).__name__}")
         self.emit_evaluate_op(Call(type=UnitType(), target=op, args=node.args))
 
     def visit_MeshScope(self, node: MeshScope) -> None:

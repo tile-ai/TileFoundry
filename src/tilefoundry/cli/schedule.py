@@ -16,6 +16,8 @@ from tilefoundry.cli.source import (
 from tilefoundry.cli.target import target_by_identity
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
+from tilefoundry.ir.module_utils import list_call_paths
+from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.schedule import (
     candidates,
     finalize,
@@ -40,7 +42,9 @@ def run_finalize(
     module = load_authored_ir(source)
     stated = one_extent_per_dim(parse_dims(dims))
     require_bound_dims(module, module.entry_function(), stated, command="schedule finalize")
-    function = finalize(module, dims=stated)
+    module = finalize(module, dims=stated)
+    functions = tuple(fn for frame in list_call_paths(module).values() for fn in (frame.function,) if isinstance(fn, PrimFunction))
+    function = module.entry_function() if len(functions) == 1 else module
     rendered = as_script(
         function,
         options=PythonPrintOptions(

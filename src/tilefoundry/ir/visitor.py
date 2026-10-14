@@ -174,6 +174,8 @@ def _stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
     (For.induction_var, LetStmt.var, MeshScope.binding) are intentionally
     excluded — a rewrite must not turn a binding site into a non-Var.
     """
+    from tilefoundry.ir.core.module import ModuleList  # noqa: PLC0415 -- cycle
+
     match stmt:
         case LetStmt():
             return ("value",)
@@ -181,7 +183,7 @@ def _stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
             return ("start", "stop", "step")
         case While() | If():
             return ("cond",)
-        case Evaluate(callable=SymbolRef()):
+        case Evaluate(callable=SymbolRef() | Call() | ModuleList()):
             return ("callable", "args")
         case Evaluate():
             return ("args",)

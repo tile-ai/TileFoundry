@@ -77,9 +77,9 @@ class Return(Stmt):
 
 @dataclass(unsafe_hash=True)
 class Evaluate(Stmt):
-    """Place a value-less effect Op or symbol invocation in statement position."""
+    """Place a value-less effect Op or retained function invocation in statement position."""
 
-    callable: "Op | SymbolRef"  # noqa: A003 -- spec field name
+    callable: "Op | SymbolRef | PrimFunction | ModuleList | Call"  # noqa: A003 -- spec field name
     args: tuple[Expr, ...]
 
 

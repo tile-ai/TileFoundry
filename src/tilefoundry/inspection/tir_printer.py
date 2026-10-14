@@ -8,9 +8,10 @@ from tilefoundry.inspection.print_context import TirPrintContext
 from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var, get_metadata
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor
@@ -269,6 +270,16 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         return ", ".join(self.visit(arg) for arg in args)
 
     def _emit_evaluate(self, stmt):
+        target = stmt.callable
+        slot = target if isinstance(target, ModuleList) else (
+            target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
+            and isinstance(target.args[0], ModuleList) else None
+        )
+        if isinstance(target, PrimFunction) or slot is not None:
+            head = target.name if slot is None else slot.key
+            if isinstance(target, Call):
+                head += f"[{self.visit(target.args[1])}]"
+            return [f"{self.indent}{head}({', '.join(self.visit(arg) for arg in stmt.args)})"]
         handler = _STMT_PRINTERS.get(type(stmt.callable)) or (
             _STMT_PRINTERS.get(Op) if isinstance(stmt.callable, Op) else None
         )
@@ -353,10 +364,16 @@ def _function_block(fn: PrimFunction, *, symbol_bindings=None) -> list[str]:
     if fn.output_count != 1:
         attrs.append(f"output_count={fn.output_count}")
     lines.append(f"@prim_func({', '.join(attrs)})")
-    params = ", ".join(
-        f"{p.name}: {TirPrinter(context=ctx).visit(p.type, ctx) if isinstance(p.type, (TensorType, PointerType)) else repr(p.type)}"
-        for p in fn.params
-    )
+    parameters = []
+    for param in fn.params:
+        annotation = (
+            TirPrinter(context=ctx).visit(param.type, ctx)
+            if isinstance(param.type, (TensorType, PointerType)) else repr(param.type)
+        )
+        if param.is_const and isinstance(param.type, TensorType):
+            annotation = annotation.replace("Tensor[", "ConstTensor[", 1)
+        parameters.append(f"{param.name}: {annotation}")
+    params = ", ".join(parameters)
     definition = f"def {_binding_name(fn.name)}({params}):"
     if len(definition) + 4 <= _LINE_LENGTH:
         lines.append(definition)

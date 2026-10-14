@@ -20,7 +20,7 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.callable_type import callable_type_for
 from tilefoundry.ir.types.mesh import Topology
 from tilefoundry.ir.types.substitute import canonicalize_topology_dims
-from tilefoundry.ir.types.tensor_type import TensorType, TupleType
+from tilefoundry.ir.types.tensor_type import TensorType, TupleType, UnitType
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.target.base import Target, target_instance
 
@@ -93,7 +93,8 @@ class ModuleList(Expr):
     def type(self):
         signatures = tuple(
             callable_type_for(
-                (param for param in entry.params if not param.is_const), entry.return_type
+                (param for param in entry.params if not param.is_const),
+                UnitType() if isinstance(entry, PrimFunction) else entry.return_type
             )
             for entry in (element.entry_function() for element in self.elements)
         )

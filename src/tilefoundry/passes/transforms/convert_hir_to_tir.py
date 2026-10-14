@@ -1,6 +1,6 @@
 """Lower scheduled HIR to effect-form TIR.
 
-The pass consumes the checked, inlined view produced by ``analyze(memory)``.
+The pass consumes the checked, retained-call program produced by ``analyze(memory)``.
 Memory metadata owns storage addresses; registered access relations own
 instruction issue geometry. This file only turns those two facts into statements.
 """
@@ -8,7 +8,7 @@ instruction issue geometry. This file only turns those two facts into statements
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from math import prod
 
 import isl
@@ -31,7 +31,7 @@ from tilefoundry.ir.core import (
     op_identifier,
 )
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -39,6 +39,7 @@ from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp, instruction_schema, operand_relations
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.hir.tensor._view_layout import derive_view_layout
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -87,7 +88,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import candidate_ops, sole_candidate
-from tilefoundry.visitor_registry.contexts import CallFrame, TypeInferContext
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.registries import typeinfer_registry
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
@@ -205,7 +206,7 @@ def _scope_names(root: IterationScope, names: Names) -> dict[int, str]:
     found = {}
     for scope in walk_scopes(root):
         region = scope.owner
-        if not isinstance(region, MeshRegion) or region is root.owner.body:
+        if scope.invocation is not root.invocation or not isinstance(region, MeshRegion) or region is root.invocation.function.body:
             continue
         if not (isinstance(region.body, Call) and isinstance(region.body.target, Zeros)):
             found[id(region)] = names.fresh("scope")
@@ -228,6 +229,15 @@ def _storage_type(type_: TensorType) -> TensorType:
     return replace(type_, layout=_plain_layout(type_))
 
 
+def _callee_tensor_type(type_: TensorType) -> TensorType:
+    physical = _storage_type(type_)
+    if physical.storage is StorageKind.GMEM and physical.layout is None:
+        physical = replace(
+            physical, layout=Layout(tuple(physical.shape), tuple(compact_row_major(tuple(physical.shape))))
+        )
+    return physical
+
+
 def _with_frame(type_: TensorType, frame: Mesh) -> TensorType:
     layout = type_.layout
     if isinstance(layout, ShardLayout):
@@ -248,11 +258,15 @@ class Lowering(ExprVisitor[Expr]):
 
     result: AnalysisResult
     authored: Function
+    invocation: IterationScope | None = None
+    callees: dict[int, Lowering] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         ExprVisitor.__init__(self)
-        self.module = self.result.module
-        self.function = self.result.function
+        self.module = self.result.program.module
+        self.invocation = self.result.scopes.invocation if self.invocation is None else self.invocation
+        self.function = self.invocation.function
+        self.read = self.result.records.definition_reader(self.function)
         self.names = Names(self.authored)
         self.logical: dict[int, TensorType] = {}
         self.staged: dict[int, tuple[Var, LoopRegion | None]] = {}
@@ -264,7 +278,7 @@ class Lowering(ExprVisitor[Expr]):
             id(call): memory.alias
             for call in collect_exprs(self.function.body)
             if isinstance(call, Call)
-            and (memory := get_metadata(call, MemoryMetadata)) is not None
+            and (memory := self.read(call, MemoryMetadata)) is not None
             and memory.alias is not None
         }
         self.placed: set[int] = set()
@@ -272,16 +286,20 @@ class Lowering(ExprVisitor[Expr]):
         self.authored_values: dict[int, Expr] = {}
         if self.function.body is not None and self.authored.body is not None:
             self.authored_values[id(self.function.body)] = self.authored.body
-        self.scopes = self.result.scopes
+        self.scopes = self.invocation
         self.scope_for_call = {
             expr_id: scope
             for scope in walk_scopes(self.scopes)
+            if scope.invocation is self.invocation
             for expr_id, (call, _relations) in scope.relations.items()
             if id(call) == expr_id
         }
-        self.type_ctx = TypeInferContext(frame=CallFrame(self.module, self.function))
+        self.type_ctx = TypeInferContext(frame=self.invocation.frame)
         for param in self.function.params:
-            physical = Var(param.name, type=param.type, is_const=param.is_const)
+            type_ = param.type
+            if self.invocation.parent is not None and isinstance(type_, TensorType):
+                type_ = _callee_tensor_type(type_)
+            physical = Var(param.name, type=type_, is_const=param.is_const)
             self._memo[id(param)] = (param, physical)
             if isinstance(param.type, TensorType):
                 self.logical[id(physical)] = param.type
@@ -294,9 +312,18 @@ class Lowering(ExprVisitor[Expr]):
 
         self.scope_names = _scope_names(self.scopes, self.names)
         result_type = self.function.return_type
-        out_type = TensorType(tuple(result_type.shape), result_type.dtype, None, StorageKind.GMEM)
+        storage = StorageKind.GMEM if self.invocation.parent is None else result_type.storage
+        out_type = TensorType(tuple(result_type.shape), result_type.dtype, None, storage)
+        if self.invocation.parent is not None:
+            out_type = _callee_tensor_type(result_type)
         self.output = Var(self.names.fresh("out"), type=out_type)
         body = self.function.body
+        returned = body
+        while isinstance(returned, MeshRegion):
+            returned = returned.body
+        self.return_value = returned
+        source = self.invocation.tables["sources"]["narrow"].get(id(body))
+        self.return_source = source if isinstance(source, BufferAlias) else None
         inner = _Cursor()
         self.owner_cursors[id(self.function)] = inner
         if isinstance(body, MeshRegion):
@@ -336,7 +363,7 @@ class Lowering(ExprVisitor[Expr]):
 
     def _staging_loop(self, expr: Call) -> LoopRegion | None:
         scope = self.scope_for_call.get(id(expr))
-        while scope is not None:
+        while scope is not None and scope.invocation is self.invocation:
             if isinstance(scope.owner, LoopRegion):
                 return scope.owner
             scope = scope.parent
@@ -361,6 +388,15 @@ class Lowering(ExprVisitor[Expr]):
     ) -> Expr:
         if not isinstance(type_, TensorType):
             raise LoweringError(f"{_label(expr)} has non-tensor material result {type_!r}")
+        if self.invocation.result_tied and (
+            expr is self.return_value or (
+                self.return_source is not None
+                and self.return_source.invocation is self.invocation
+                and expr is self.return_source.buffer
+            )
+        ):
+            self.logical[id(self.output)] = type_
+            return self.output
         storage_type = _storage_type(type_)
         stem = self.names.binding(
             self.authored_values.get(id(expr)), expr.name if isinstance(expr, Var) else "value"
@@ -378,7 +414,7 @@ class Lowering(ExprVisitor[Expr]):
                 f"{_label(expr)} has addressable result in unsupported storage "
                 f"{storage_type.storage}"
             )
-        memory = get_metadata(expr, MemoryMetadata)
+        memory = self.read(expr, MemoryMetadata)
         offsets = () if memory is None else memory.offsets
         if not offsets:
             raise LoweringError(
@@ -394,6 +430,8 @@ class Lowering(ExprVisitor[Expr]):
                 raise LoweringError(f"{_label(expr)} uses staged internal gmem")
             elements = prod(tuple(storage_type.shape))
             scratch_type = TensorType((elements,), storage_type.dtype, None, StorageKind.GMEM)
+            if self.invocation.parent is not None:
+                scratch_type = _callee_tensor_type(scratch_type)
             scratch = Var(self.names.fresh("scratch"), type=scratch_type)
             self.scratch.append(scratch)
             desired = replace(
@@ -526,7 +564,7 @@ class Lowering(ExprVisitor[Expr]):
         carried_values = []
         for param in loop.params[: len(loop.yield_values)]:
             initial = self._known(param)
-            memory = get_metadata(param, MemoryMetadata)
+            memory = self.read(param, MemoryMetadata)
             if memory is not None and memory.alias is not None:
                 carried = self._alias_value(param, memory.alias.buffer)
             else:
@@ -592,6 +630,8 @@ class Lowering(ExprVisitor[Expr]):
 
     def visit_Call(self, call: Call, cursor: _Cursor) -> Expr:
         target = call.target
+        if id(call) in self.invocation.callees:
+            return self._lower_call(call, cursor)
         if is_dim_op_call(call):
             result = self._dim(call)
         else:
@@ -601,6 +641,37 @@ class Lowering(ExprVisitor[Expr]):
             else:
                 result = visitor(call, cursor)
         return result
+
+    def _lower_call(self, call: Call, cursor: _Cursor) -> Expr:
+        child = self.invocation.callees[id(call)]
+        lowering = self.callees[id(child.function)]
+        args = tuple(self.visit(arg, cursor) for arg in call.args)
+        destination = self._declare(call, call.type, 1, cursor)
+        scratch = []
+        for param in lowering.scratch:
+            forwarded = Var(self.names.fresh(param.name), type=param.type)
+            self.scratch.append(forwarded)
+            scratch.append(forwarded)
+        target = call.target
+        if isinstance(target, Function):
+            target = lowering.lowered
+        elif isinstance(target, Call):
+            target = replace(target, args=(target.args[0], self._dim(target.args[1])))
+        params = tuple(
+            param for param in lowering.lowered.params
+            if isinstance(call.target, Function) or not param.is_const
+        )
+        supplied = (*args, *scratch, destination)
+        passed = []
+        for value, param in zip(supplied, params, strict=True):
+            if isinstance(param.type, TensorType) and value.type != param.type:
+                value = self._window(
+                    value, tuple(i64_const(0) for _ in value.type.shape), tuple(value.type.shape),
+                    param.type, cursor, "argument", whole_tensor=True,
+                )
+            passed.append(value)
+        cursor.add(Evaluate(target, tuple(passed)))
+        return destination
 
     def _lower_automatic_instruction(self, call: Call, cursor: _Cursor) -> Expr:
         target = call.target
@@ -1304,6 +1375,11 @@ class Lowering(ExprVisitor[Expr]):
     def _finish(self, result: Expr, cursor: _Cursor) -> None:
         assert self.output is not None
         if result is not self.output:
+            if self.invocation.parent is not None and self.function.return_type.storage is not StorageKind.SMEM:
+                raise LoweringError(
+                    f"callee {self.function.name!r} at {self.invocation.label!r} does not write its "
+                    "output; write an explicit tf.schedule copy in HIR"
+                )
             self._emit_copy(result, self.output, cursor)
 
 
@@ -1322,15 +1398,42 @@ class ConvertHIRToTIR(ModulePass):
         if not isinstance(authored, Function):
             raise LoweringError(f"{getattr(authored, 'name', self.entry)!r} is not an HIR function")
         result = analyze(module, authored, analysis=("memory",), dims=self.dims)
-        lowered = Lowering(result, authored).run()
-        lowered.metadata = result.function.metadata
+        for invocation in result.invocations[1:]:
+            if not invocation.result_tied and invocation.function.return_type.storage is not StorageKind.SMEM:
+                raise LoweringError(
+                    f"callee {invocation.function.name!r} at {invocation.label!r} has no return bound to its "
+                    "caller destination; write an explicit tf.schedule copy in HIR"
+                )
+        lowered = {}
+        for body in result.program.callee_first():
+            invocation = next(invocation for invocation in result.invocations if invocation.function is body)
+            lowering = Lowering(result, origin_of(body) or body, invocation, lowered)
+            lowering.lowered = lowering.run()
+            lowered[id(body)] = lowering
+        root = lowered[id(result.function)].lowered
+        root.metadata = result.function.metadata
         for record in render_analysis(result).summary:
             if isinstance(record, (ReportIdentity, ReportSelection)):
-                attach_metadata(lowered, record)
-        functions = tuple(
-            lowered if function is authored else function for function in module.functions
-        )
-        return replace(module, functions=functions)
+                attach_metadata(root, record)
+        replacements = {
+            identity: lowered[id(body)].lowered
+            for identity, body in result.program.definitions.items()
+        }
+        modules = {}
+
+        def rebuild(node):
+            if id(node) in modules:
+                return modules[id(node)]
+            children = {}
+            for key, slot in node.children.items():
+                elements = tuple(rebuild(child) for child in slot.elements)
+                children[key] = ModuleList(elements if slot.indexed else elements[0])
+            functions = tuple(replacements.get(id(function), function) for function in node.functions)
+            rebuilt = replace(node, functions=functions, children=children)
+            modules[id(node)] = rebuilt
+            return rebuilt
+
+        return rebuild(result.program.module)
 
 
 __all__ = ["ConvertHIRToTIR", "LoweringError"]
