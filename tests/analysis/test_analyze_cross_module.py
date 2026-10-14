@@ -1,8 +1,8 @@
 """Analyze a root that reaches a child Module as one kernel.
 
-A call into a child is device work in the current invocation, so its cost lands
+A call into a child is device work in the current occurrence, so its cost lands
 in the caller's totals and repeating the site or looping over it multiplies that
-work rather than adding an invocation. What the fixed-dimension query has to
+work rather than adding an occurrence. What the fixed-dimension query has to
 establish first is that the two ends share one execution context.
 
 No GPU, no codegen, no runtime.
@@ -23,7 +23,7 @@ from tests.models.qwen3_1_7b.model import Qwen3_1_7B
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.invocation import invocation_values
+from tilefoundry.analysis.iteration_scope import occurrence_path, walk_scopes
 from tilefoundry.analysis.metadata import ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.dsl import *
@@ -53,13 +53,13 @@ _CTA = (Topology("cta", 132),)
 
 
 def _matmul_records(result) -> tuple[tuple[ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata], ...]:
-    """Both halves of each invocation's MatMul record."""
+    """Both halves of each occurrence's MatMul record."""
     records = []
-    for invocation, expr in invocation_values(result.invocations[0]):
+    for occurrence, expr in ((scope, expr) for scope in walk_scopes(result.scopes) if scope.frame is not None for expr in collect_exprs(scope.frame.function.body)):
         if not isinstance(expr, Call) or not isinstance(expr.target, MatMul):
             continue
-        record = result.records.get(invocation, expr, ComputeCostMetadata)
-        moved = result.records.get(invocation, expr, MemoryMetadata)
+        record = get_metadata(expr, ComputeCostMetadata)
+        moved = get_metadata(expr, MemoryMetadata)
         assert record is not None
         records.append((record, moved))
     return tuple(records)
@@ -286,14 +286,14 @@ def _call_program(definition, *, count=1, indexed=False, name="run"):
 
 
 @pytest.mark.parametrize(
-    "kind,flops,traffic,peak,persistent,invocations",
+    "kind,flops,traffic,peak,persistent,occurrences",
     [("cross", 512, 512, 512, 384, 1), ("twice", 1056, 1408, 512, 384, 2),
      ("looped", 1536, 1536, 512, 384, 1),
      ("one", 4, 48, 48, 32, 1), ("unrolled", 12, 144, 80, 64, 3),
      ("stacked", 12, 144, 80, 64, 1)],
 )
 def test_retained_calls_match_the_memory_and_work_acceptance_values(
-    kind, flops, traffic, peak, persistent, invocations
+    kind, flops, traffic, peak, persistent, occurrences
 ):
     roots = {
         "cross": CrossModule,
@@ -311,14 +311,14 @@ def test_retained_calls_match_the_memory_and_work_acceptance_values(
     assert cost.flops.of("f32").total == flops
     assert moved.traffic.storage.of("gmem").total.total_bytes == traffic
     assert (region.peak_bytes, region.persistent_bytes) == (peak, persistent)
-    assert len({id(inv.function) for inv in result.invocations}) == 2
-    assert len(result.invocations) - 1 == invocations
+    assert len(result.functions) == 2
+    assert len([scope for scope in walk_scopes(result.scopes) if scope.frame is not None]) - 1 == occurrences
     if kind == "stacked":
-        assert result.invocations[1].label == "run/layers[i]"
+        assert occurrence_path(next(scope for scope in walk_scopes(result.scopes) if isinstance(scope.owner, Call))) == "v1"
         assert sum(isinstance(node, LoopRegion) for node in collect_exprs(result.function.body)) == 1
-    for invocation in result.invocations[1:]:
-        assert get_metadata(invocation.function.body, ComputeCostMetadata) is None
-        assert result.records.get(invocation, invocation.function.body, ComputeCostMetadata) is not None
+    for occurrence in [scope for scope in walk_scopes(result.scopes) if scope.frame is not None][1:]:
+        assert get_metadata(occurrence.frame.function.body, ComputeCostMetadata) is not None
+        assert get_metadata(occurrence.owner, ComputeCostMetadata) == get_metadata(occurrence.frame.function, ComputeCostMetadata)
 
 
 def test_derived_nodes_and_bodies_do_not_grow_with_indexed_instance_count():
@@ -369,7 +369,7 @@ def test_one_definition_rejects_different_call_signatures(difference):
         first = MeshRegion(Mesh(_CTA, Layout((1,), (1,)), ("first",)), first, type=type_)
         second = MeshRegion(Mesh(_CTA, Layout((1,), (1,)), ("second",)), second, type=changed)
     root = _direct_program(callee, (left, right), (first, second))
-    with pytest.raises(AnalysisError, match="callee 'helper'.*root/helper#0.*root/helper#1.*versus"):
+    with pytest.raises(AnalysisError, match="callee 'helper'.*root/v0.*root/v1.*versus"):
         check_program(root, root.entry_function())
 
 
@@ -387,7 +387,7 @@ def test_recursive_call_paths_and_missing_callee_bodies_are_diagnosed():
 
 @dataclass(frozen=True)
 class _WriteGuardTarget(Target):
-    name: ClassVar[str] = "test.invocation.write.guard"
+    name: ClassVar[str] = "test.occurrence.write.guard"
     algorithm: object = None
 
     def get_analyzer(self, selector):
@@ -396,11 +396,11 @@ class _WriteGuardTarget(Target):
 
 def test_an_analyzer_cannot_write_records_on_a_shared_derived_callee():
     def write_on_definition(_function, context):
-        attach_metadata(context.records.invocations[1].function.body, ComputeCostMetadata())
+        attach_metadata(next(scope.frame.function.body for scope in walk_scopes(context.root) if isinstance(scope.owner, Call)), MemoryMetadata())
 
     target = _WriteGuardTarget(Analyzer("bad", write_on_definition, produces=(ComputeCostMetadata,)))
     root = replace(CrossModule, target=target, topologies=None)
-    with pytest.raises(AnalysisError, match="callee metadata outside InvocationRecords"):
+    with pytest.raises(AnalysisError, match="changed Metadata it does not declare"):
         analyze(root, root.entry_function(), analysis="bad")
 
 
@@ -439,7 +439,7 @@ def test_repeated_callee_temporaries_require_one_shared_memory_placement():
     with pytest.raises(AnalysisError, match="callee 'helper' node.*incompatible placement") as error:
         analyze(root, function, analysis="memory")
     message = str(error.value)
-    assert "root/helper#0" in message and "root/helper#1" in message
+    assert "v1" in message and "v4" in message
     assert "((0,), 128, None) versus ((128,), 128, None)" in message
 
 
@@ -489,6 +489,6 @@ def test_repeated_callee_placement_compares_alias_even_at_the_same_offset():
     with pytest.raises(AnalysisError, match="callee 'helper' node.*incompatible placement") as error:
         analyze(root, function, analysis="memory")
     message = str(error.value)
-    assert "root/helper#0" in message and "root/helper#1" in message
+    assert "v0" in message and "v1" in message
     assert message.count("((0,), 64,") == 2
     assert "[1 + i0]" in message and "[2 + i0]" in message

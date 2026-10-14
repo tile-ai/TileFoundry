@@ -229,9 +229,9 @@ def test_the_mlp_costs_its_three_matrices(tf, shipped_source) -> None:
     source = shipped_source(MODEL)
     authored = _reported(tf, source, "mlp", None)
     placed = _reported(tf, source, "placed_mlp", None)
-    authored_flops = authored["totals"]["flops"][DT]
-    stated = placed["function_records"]["compute-cost"]["flops"]
-    topologies = placed["function_records"]["compute-cost"]["topologies"]
+    authored_flops = authored["functions"][0]['totals']["flops"][DT]
+    stated = placed["functions"][0]['function_records']["compute-cost"]["flops"]
+    topologies = placed["functions"][0]['function_records']["compute-cost"]["topologies"]
     placed_flops = stated[DT]["total"]
     per_unit = dict(zip(topologies, stated[DT]["per_unit"]))
 
@@ -245,7 +245,7 @@ def test_the_attention_costs_its_projections_and_its_context(tf, shipped_source)
     data = _reported(tf, shipped_source(MODEL), "self_attention", {"ctx_len": CTX})
 
     _holds(
-        data["totals"]["flops"][DT],
+        data["functions"][0]['totals']["flops"][DT],
         _projection_flops() + _attention_flops(CTX),
         "self_attention",
     )
@@ -261,7 +261,7 @@ def test_the_layer_costs_its_two_halves_and_nothing_else(tf, shipped_source) -> 
     data = _reported(tf, shipped_source(MODEL), "decoder_layer", {"ctx_len": CTX})
 
     _holds(
-        data["totals"]["flops"][DT],
+        data["functions"][0]['totals']["flops"][DT],
         _mlp_matmul_flops() + _projection_flops() + _attention_flops(CTX),
         "decoder_layer",
     )
@@ -287,7 +287,7 @@ def test_the_layer_reads_at_least_its_weights_and_its_cache(tf, shipped_source) 
     cache = BYTES_PER * 2 * CTX * CONFIG.num_key_value_heads * CONFIG.head_dim
 
     rope_rows = 2 * 2 * CONFIG.head_dim * BYTES_PER
-    read = data["totals"]["traffic"]["gmem"]["read"]
+    read = data["functions"][0]['totals']["traffic"]["gmem"]["read"]
 
     assert read >= weights + cache + rope_rows, (
         f"the step reads {read} B, less than the {weights} B of weights, "
@@ -305,10 +305,10 @@ def test_a_decode_step_is_bound_by_memory(tf, shipped_source) -> None:
     """
     data = _reported(tf, shipped_source(MODEL), "decoder_layer", {"ctx_len": CTX})
 
-    bound = data["function_records"]["roofline"]
+    bound = data["functions"][0]['function_records']["roofline"]
     assert bound["bound_by"] == "memory", (
         f"a one-token decode step is reported as {bound['bound_by']}-bound; it "
-        f"moves {data['totals']['traffic']['gmem']['read']} B to do "
-        f"{data['totals']['flops']['f32']} flops"
+        f"moves {data["functions"][0]['totals']['traffic']['gmem']['read']} B to do "
+        f"{data["functions"][0]['totals']['flops']['f32']} flops"
     )
     assert bound["ideal_ns"] > 0

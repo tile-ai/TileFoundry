@@ -11,13 +11,14 @@ from tilefoundry.analysis import (
     RooflineMetadata,
     analyze,
 )
-from tilefoundry.analysis.invocation import invocation_values
+from tilefoundry.analysis.iteration_scope import walk_scopes
 from tilefoundry.analysis.metadata import shares
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
@@ -84,7 +85,7 @@ def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
 
 
 def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
-    """Stepping into invocations preserves repetition and counts the escaped value once."""
+    """Stepping into occurrences preserves repetition and counts the escaped value once."""
     helper = analyze(
         RegionBoundaries,
         RegionBoundaries.lookup("helper"),
@@ -111,8 +112,8 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
         level: spread.total.total_bytes for level, spread in moved.traffic.storage.kinds
     } == {"gmem": 384, "smem": 64, "rmem": 720}
     binaries = [
-        result.records.get(invocation, expr, ComputeCostMetadata)
-        for invocation, expr in invocation_values(result.invocations[0])
+        get_metadata(expr, ComputeCostMetadata)
+        for occurrence, expr in ((scope, expr) for scope in walk_scopes(result.scopes) if scope.frame is not None for expr in collect_exprs(scope.frame.function.body))
         if isinstance(expr, Call) and isinstance(expr.target, Binary)
     ]
     binary_flops = sorted(shares(item.flops, item.topologies)["f32"] for item in binaries)

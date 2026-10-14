@@ -218,7 +218,6 @@ class PythonPrintOptions:
     show_types: bool = False
     comment_metadata_types: tuple[type[IRMetadata], ...] = ()
     comment_opt_in: frozenset[str] = frozenset()
-    metadata_of: object = get_metadata
 
 
 @dataclass(frozen=True)
@@ -266,7 +265,7 @@ def _comments(expr: Expr, options: PythonPrintOptions, printer: PythonPrinter, c
     if options.show_types and not isinstance(expr, (LoopRegion, MeshRegion)):
         comments.append(_compact_type(expr.type, printer, ctx))
     for metadata_type in options.comment_metadata_types:
-        metadata = options.metadata_of(expr, metadata_type)
+        metadata = get_metadata(expr, metadata_type)
         if metadata is None:
             continue
         comment = render_comment(metadata, opt_in=options.comment_opt_in)

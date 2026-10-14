@@ -15,7 +15,6 @@ from dataclasses import dataclass
 
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.invocation import InvocationRecords
 from tilefoundry.analysis.iteration_scope import IterationScope, ScopeBuilder
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
@@ -38,7 +37,7 @@ class AnalysisResult:
 
     ``executed`` records dependency order and ``metadata_types`` lists records
     actually written, excluding analyses that matched nothing. ``function`` is
-    the derived root that carries root-invocation records; ``module`` remains the call's
+    the derived root that carries root-occurrence records; ``module`` remains the call's
     execution domain.
     """
 
@@ -49,8 +48,7 @@ class AnalysisResult:
     topology_level: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
-    records: InvocationRecords
-    invocations: tuple[IterationScope, ...]
+    functions: tuple[Function, ...]
 
     @property
     def level(self) -> str | None:
@@ -144,7 +142,7 @@ def build_iteration_scopes(
     except (SpecializationError, DimSubstitutionError) as error:
         raise AnalysisError(f"analyze: {error}") from None
     context = AnalyzeContext(
-        module, target, topology_level, options, records=InvocationRecords()
+        module, target, topology_level, options
     )
     context.root = context.current = ScopeBuilder(module, function, ctx=context).build()
 
@@ -187,7 +185,6 @@ def analyze(
     topology_level = context.topology_level
     function = context.root.owner
     functions = tuple(frame.function for frame in CallFrameVisitor.walk_frames(context.root.frame))
-    invocation_records = context.records
 
     order: list[type[IRMetadata]] = []
     written_records: set[tuple] = set()
@@ -196,16 +193,14 @@ def analyze(
     )
     authored_before = _metadata_snapshot(authored)
     for algorithm in closure:
-        before = invocation_records.snapshot(functions)
-        body_before = _metadata_snapshot(functions[1:])
+        before = _metadata_snapshot(functions)
         try:
             algorithm.run(function, context)
         except UnsupportedCapabilityError as error:
             raise AnalysisError(f"{algorithm.selector}: {error}") from None
         if _metadata_snapshot(authored) != authored_before:
             raise AnalysisError(f"{algorithm.selector!r} changed authored IR metadata")
-        after = invocation_records.snapshot(functions)
-        _require_invocation_writes(algorithm, body_before, _metadata_snapshot(functions[1:]))
+        after = _metadata_snapshot(functions)
         records = _require_owned_writes(algorithm, before, after)
         written_records |= records
         written = {key[-1] for key in records}
@@ -213,7 +208,7 @@ def analyze(
             if metadata_type in written and metadata_type not in order:
                 order.append(metadata_type)
 
-    final = invocation_records.snapshot(functions)
+    final = _metadata_snapshot(functions)
     surviving = {
         metadata_type for key in written_records & final.keys() for metadata_type in (key[-1],)
     }
@@ -226,8 +221,7 @@ def analyze(
         topology_level=topology_level,
         executed=tuple(algorithm.selector for algorithm in closure),
         metadata_types=tuple(item for item in order if item in surviving),
-        records=invocation_records,
-        invocations=tuple(invocation_records.invocations),
+        functions=functions,
     )
     dump(
         "analysis.json",
@@ -239,8 +233,7 @@ def analyze(
                 topology_level=result.topology_level,
                 executed=result.executed,
                 metadata_types=result.metadata_types,
-                invocations=result.invocations,
-                records=result.records,
+                functions=result.functions,
             )
         ),
         DumpFlags.ANALYSIS,
@@ -314,14 +307,6 @@ def _require_owned_writes(
             f"{sorted(item.__name__ for item in owned)}"
         )
     return written
-
-
-def _require_invocation_writes(algorithm, before, after):
-    """Shared derived callee nodes cannot own invocation-specific records."""
-    if before != after:
-        raise AnalysisError(
-            f"{algorithm.selector!r} wrote derived callee metadata outside InvocationRecords"
-        )
 
 
 __all__ = ["AnalysisResult", "analyze", "build_iteration_scopes"]

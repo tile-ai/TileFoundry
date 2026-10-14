@@ -19,7 +19,6 @@ from tilefoundry.target.facts import TopologyFacts
 from .compute_cost import local_duration_ns
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
-from .invocation import InvocationWalker
 from .iteration_scope import IterationScope
 from .metadata import (
     ComputeCostMetadata,
@@ -43,8 +42,34 @@ class PerformanceContext(AnalyzeContext):
     occurrences: list[tuple[IterationScope, Call, int]] = field(default_factory=list)
 
 
-class PerformanceVisitor(InvocationWalker, ExprVisitor[None]):
+class PerformanceVisitor(ExprVisitor[None]):
     """Collect one duration per Call in authored order."""
+
+    def __init__(self):
+        super().__init__()
+        self.durations = {}
+
+    def visit_Call(self, call, ctx):
+        child = next((scope for scope in ctx.current.children if scope.owner is call), None)
+        if child is None:
+            return self.default_visit_leaf(call, self.visit_operands(call, ctx), ctx)
+        for arg in call.args:
+            self.visit(arg, ctx)
+        if isinstance(child.index, Expr):
+            self.visit(child.index, ctx)
+        function = child.frame.function
+        if id(function) not in self.durations:
+            inner = replace(ctx, current=child, occurrences=[])
+            memo, self._memo = self._memo, {}
+            try:
+                self.visit(function.body, inner)
+            finally:
+                self._memo = memo
+            duration = schedule(inner.occurrences, inner, origin=child)
+            self.durations[id(function)] = duration
+            attach(function, PerformanceSummaryMetadata(
+                TimelineMetadata(start_ns=0, end_ns=duration), waves=1))
+        ctx.occurrences.append((ctx.current, call, self.durations[id(function)]))
 
     def visit_MeshRegion(self, expr: MeshRegion, ctx: PerformanceContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
@@ -66,9 +91,9 @@ class PerformanceVisitor(InvocationWalker, ExprVisitor[None]):
     ) -> None:
         if not isinstance(expr, Call):
             return
-        scope = ctx.current if id(expr) in ctx.current.accesses["narrow"] else ctx.root
-        cost = self.record(expr, ComputeCostMetadata, ctx)
-        moved = self.record(expr, MemoryMetadata, ctx)
+        scope = ctx.current
+        cost = get_metadata(expr, ComputeCostMetadata)
+        moved = get_metadata(expr, MemoryMetadata)
         if cost is None or moved is None:
             raise AnalysisError(f"performance: missing compute/memory record for {expr!r}")
         if ctx.facts is None or ctx.services is None:
@@ -81,6 +106,62 @@ class PerformanceVisitor(InvocationWalker, ExprVisitor[None]):
             topology_level=ctx.topology_level,
         )
         ctx.occurrences.append((scope, expr, duration))
+
+
+def schedule(occurrences, context, *, origin):
+    """Schedule one definition relative to its function or call scope."""
+    scope_periods: dict[object, int] = defaultdict(int)
+    for scope, call, duration in occurrences:
+        if not (
+            (scope.depth - origin.depth) == 2
+            and isinstance(call.target, Binary)
+            and getattr(call.type, "shape", ()) == ()
+        ):
+            scope_periods[scope] += duration
+
+    cursor = 0
+    total_cursor = 0
+    records = []
+    for scope, call, duration in occurrences:
+        if not duration:
+            continue
+        trips = scope.repeats_of(call, context.topology_level, stop=origin).loop_trips
+        scheduled = duration * trips
+        serialize_boundary = (
+            ((scope.depth - origin.depth) >= 4 and getattr(call.type, "shape", ()) != ())
+            or (
+                (scope.depth - origin.depth) == 2
+                and isinstance(call.target, Binary)
+                and getattr(call.type, "shape", ()) == ()
+            )
+        )
+        start = cursor
+        if serialize_boundary:
+            trips = 1
+            stride = 0
+            end = start + scheduled
+            cursor += scheduled
+        else:
+            stride = scope_periods[scope] if trips > 1 else 0
+            end = start + duration
+            cursor += duration if (scope.depth - origin.depth) < 4 else scheduled
+        records.append((call, start, end, trips, stride, scheduled))
+        total_cursor += scheduled
+    for call, start, end, trips, stride, scheduled in records:
+        if end + (trips - 1) * stride > total_cursor:
+            end, trips, stride = start + scheduled, 1, 0
+        attach(
+            call,
+            PerformanceMetadata(
+                TimelineMetadata(
+                    start_ns=start,
+                    end_ns=end,
+                    trips=trips,
+                    stride_ns=stride,
+                )
+            ),
+        )
+    return total_cursor
 
 
 def analyze_performance(function: Function, context: AnalyzeContext) -> None:
@@ -96,68 +177,11 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
         options=context.options,
         root=context.root,
         current=context.current,
-        records=context.records,
         facts=facts,
         services=services,
     )
     PerformanceVisitor().visit(function.body, performance_context)
-    def period_scope(scope):
-        while isinstance(scope.owner, Call):
-            scope = scope.parent
-        return scope
-
-    scope_periods: dict[object, int] = defaultdict(int)
-    for scope, call, duration in performance_context.occurrences:
-        if not (
-            scope.depth == 2
-            and isinstance(call.target, Binary)
-            and getattr(call.type, "shape", ()) == ()
-        ):
-            scope_periods[period_scope(scope)] += duration
-
-    cursor = 0
-    total_cursor = 0
-    records = []
-    for scope, call, duration in performance_context.occurrences:
-        if not duration:
-            continue
-        trips = scope.repeats_of(call, context.topology_level).loop_trips
-        scheduled = duration * trips
-        serialize_boundary = (
-            (scope.depth >= 4 and getattr(call.type, "shape", ()) != ())
-            or (
-                scope.depth == 2
-                and isinstance(call.target, Binary)
-                and getattr(call.type, "shape", ()) == ()
-            )
-        )
-        start = cursor
-        if serialize_boundary:
-            trips = 1
-            stride = 0
-            end = start + scheduled
-            cursor += scheduled
-        else:
-            stride = scope_periods[period_scope(scope)] if trips > 1 else 0
-            end = start + duration
-            cursor += duration if scope.depth < 4 else scheduled
-        records.append((scope.invocation, call, start, end, trips, stride, scheduled))
-        total_cursor += scheduled
-    for invocation, call, start, end, trips, stride, scheduled in records:
-        if end + (trips - 1) * stride > total_cursor:
-            end, trips, stride = start + scheduled, 1, 0
-        context.records.attach(
-            invocation,
-            call,
-            PerformanceMetadata(
-                TimelineMetadata(
-                    start_ns=start,
-                    end_ns=end,
-                    trips=trips,
-                    stride_ns=stride,
-                )
-            ),
-        )
+    total_cursor = schedule(performance_context.occurrences, context, origin=context.root)
     summary_end = total_cursor
     roofline = get_metadata(function, RooflineMetadata)
     if roofline is not None:

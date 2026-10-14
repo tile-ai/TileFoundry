@@ -52,55 +52,33 @@ def selected_types(result: AnalysisResult) -> tuple[type[IRMetadata], ...]:
 def render_analysis(result: AnalysisResult, *, operands: bool = False) -> AnalysisRendering:
     """Render one result once for both annotated source and report data."""
     selected_types_ = selected_types(result)
-    rendered = HirPrinter().render(
-        result.function,
-        options=PythonPrintOptions(
-            show_types=True,
-            comment_metadata_types=selected_types_,
-            comment_opt_in=frozenset({"operands"}) if operands else frozenset(),
-        ),
-    )
-    labels = {
-        expr_id: f"{statement.value}:{statement.line}"
-        for expr_id, statement in rendered.statements.items()
-    }
-    labels = {(None, identity): label for identity, label in labels.items()}
-    sources = [rendered.source]
-    if len(result.invocations) > 1:
-        for invocation in result.invocations[1:]:
-            child = HirPrinter().render(
-                invocation.function,
-                options=PythonPrintOptions(
-                    show_types=True,
-                    comment_metadata_types=selected_types_,
-                    comment_opt_in=frozenset({"operands"}) if operands else frozenset(),
-                    metadata_of=result.records.reader(invocation),
-                ),
-            )
-            sources.extend((f"# invocation: {invocation.label}\n", child.source))
-            labels.update(
-                {
-                    (invocation.key, identity): f"{statement.value}:{statement.line}"
-                    for identity, statement in child.statements.items()
-                }
-            )
+    labels, sources = {}, []
+    for function in result.functions:
+        rendered = HirPrinter().render(
+            function,
+            options=PythonPrintOptions(
+                show_types=True, comment_metadata_types=selected_types_,
+                comment_opt_in=frozenset({"operands"}) if operands else frozenset(),
+            ),
+        )
+        sources.append(rendered.source)
+        labels.update({identity: f"{statement.value}:{statement.line}"
+                       for identity, statement in rendered.statements.items()})
     data = report_data(
-        module=result.module,
-        function=result.function,
-        analyses=result.analyses,
-        topology_level=result.topology_level,
-        executed=result.executed,
-        metadata_types=result.metadata_types,
-        call_labels=labels,
-        invocations=result.invocations,
-        records=result.records,
+        module=result.module, function=result.function, analyses=result.analyses,
+        topology_level=result.topology_level, executed=result.executed,
+        metadata_types=result.metadata_types, labels=labels, functions=result.functions,
     )
-    function_records = data["function_records"]
     selected = frozenset(selected_types_)
+    summaries = tuple(
+        _summary(function, {**data, **row}, row["function_records"], selected)
+        for function, row in zip(result.functions, data["functions"], strict=True)
+    )
     return AnalysisRendering(
         data=data,
-        annotated="\n".join(sources),
-        summary=_summary(result.function, data, function_records, selected),
+        annotated="\n".join((render_summary(summary) + "\n\n" if index else "") + source
+                            for index, (summary, source) in enumerate(zip(summaries, sources, strict=True))),
+        summary=summaries[0],
     )
 
 
@@ -111,14 +89,15 @@ def _summary(
     selected: frozenset[type[IRMetadata]],
 ) -> tuple[IRMetadata, ...]:
     """One record per summary line: identity, selection, then findings."""
+    module_name, _, function_name = data["function"].rpartition(".")
     wave = data["wave"]
     counted = wave["counted"]
     declared = wave["declared"]
     views: list[IRMetadata] = [
         ReportIdentity(
             target=data["target"],
-            module=data["module"],
-            function=data["function"],
+            module=module_name,
+            function=function_name,
             topology=data["topology"] or "none",
             wave=f"{counted}/{declared}" if counted and declared else "",
         ),
@@ -138,7 +117,7 @@ def _summary(
         summary = get_metadata(function, PerformanceSummaryMetadata)
         views.append(
             PerformanceSummaryView(
-                root=f"{data['module']}::{data['function']}",
+                root=f"{module_name}::{function_name}",
                 predicted_ns=summary.timeline.end_ns - summary.timeline.start_ns,
                 waves=summary.waves,
             )

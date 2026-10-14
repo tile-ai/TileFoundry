@@ -177,7 +177,7 @@ def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(tmp_path, capsy
     assert capsys.readouterr().out == ""
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["module"] == "Sound"
-    assert report["totals"]["flops"]
+    assert report["functions"][0]['totals']["flops"]
 
     assert (
         cli.main(["analyze", str(source), str(tmp_path / "bad.json"), "--compute-cost", "--json"])
@@ -711,7 +711,7 @@ def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys
     assert "leaf(x)" in expanded
 
 
-def test_analyze_reports_retained_invocations_from_one_rendering(tmp_path) -> None:
+def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> None:
     source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
     selector = f"{source}:MoEMegaKernel"
     flags = ["--compute-cost", "--memory", "--roofline", "--performance"]
@@ -751,7 +751,7 @@ def test_analyze_reports_retained_invocations_from_one_rendering(tmp_path) -> No
             "performance",
         ]
     )
-    assert set(payload["function_records"]) == {
+    assert set(payload["functions"][0]['function_records']) == {
         "compute-cost",
         "memory",
         "roofline",
@@ -759,18 +759,18 @@ def test_analyze_reports_retained_invocations_from_one_rendering(tmp_path) -> No
     }
     assert "v0 = routed_expert(tokens)" in annotated
     assert "v1 = shared_expert(tokens)" in annotated
-    assert "# invocation: experts/routed_expert" in annotated
-    assert "# invocation: experts/shared_expert" in annotated
+    assert "function=routed_expert" in annotated
+    assert "function=shared_expert" in annotated
     assert annotated.count("reshard(tokens") == 2
     assert "v0 = tf.reshard(tokens" in annotated
     assert annotated.count("v0 = tf.reshard(tokens") == 2
     assert "with mesh[:120] as cta:" in annotated
     assert "with mesh[120:] as cta:" in annotated
 
-    summary = payload["function_records"]["performance"]
-    cost = payload["function_records"]["compute-cost"]
-    moved = payload["function_records"]["memory"]
-    bound = payload["function_records"]["roofline"]
+    summary = payload["functions"][0]['function_records']["performance"]
+    cost = payload["functions"][0]['function_records']["compute-cost"]
+    moved = payload["functions"][0]['function_records']["memory"]
+    bound = payload["functions"][0]['function_records']["roofline"]
     assert payload["wave"] == {"counted": 132, "declared": 132}
     assert "cache" not in payload
     assert not {
@@ -790,20 +790,20 @@ def test_analyze_reports_retained_invocations_from_one_rendering(tmp_path) -> No
         f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']} precision=exact",
         "# memory traffic=gmem:r120.00KB/w90.00KB@logical,"
         "r7.79MB/w3.93MB@total,r62.75KB/w32.75KB@cta "
-        "footprint=experts/routed_expert/v0:27:256B;"
-        "experts/routed_expert/v1:28:256B;experts/routed_expert/v2:29:30.00KB;"
-        "experts/shared_expert/v0:35:2.50KB;experts/shared_expert/v1:36:2.50KB;"
-        "experts/shared_expert/v2:37:30.00KB;v2:42:30.00KB "
+        "footprint=v0/v0:27:256B;"
+        "v0/v1:28:256B;v0/v2:29:30.00KB;"
+        "v1/v0:35:2.50KB;v1/v1:36:2.50KB;"
+        "v1/v2:37:30.00KB;v2:42:30.00KB "
         "footprint-precision=exact peak=gmem:62.50KB persistent=gmem:30.00KB",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
         f"predicted-ns={summary['timeline']['end_ns']} "
         f"waves={summary['waves']}",
     ]
-    assert payload["totals"]["flops"] == {
+    assert payload["functions"][0]['totals']["flops"] == {
         name: spread["total"] for name, spread in cost["flops"].items()
     }
-    assert payload["totals"]["traffic"] == {
+    assert payload["functions"][0]['totals']["traffic"] == {
         name: value["total"] for name, value in moved["traffic"]["storage"].items()
     }
 
@@ -822,31 +822,31 @@ def test_analyze_reports_retained_invocations_from_one_rendering(tmp_path) -> No
     assert 'Tensor[(120, 64), "f32", ((12 @ mesh.tile, 10, 64), (640, 64, 1))]' in annotated_types
     assert 'Tensor[(120, 64), "f32", (120, 64)]' in annotated_types
 
-    rows = payload["calls"]
+    rows = [row for function in payload["functions"] for row in function["calls"]]
     assert len(rows) == 9
-    primitive_rows = [row for row in rows if "compute-cost" in row]
-    assert len(primitive_rows) == 7
+    cost_rows = [row for row in rows if "compute-cost" in row]
+    assert len(cost_rows) == 9
     assert all(
-        set(row) - {"performance", "frame"} == {"value", "compute-cost", "memory", "roofline"}
-        for row in primitive_rows
+        set(row) - {"performance"} == {"value", "compute-cost", "memory", "roofline"}
+        for row in cost_rows
     )
-    assert [row["value"] for row in rows if "compute-cost" not in row] == ["v0:9", "v1:10"]
+    assert [row["value"] for row in payload["functions"][0]["calls"][:2]] == ["v0:9", "v1:10"]
     timed = [index for index, row in enumerate(rows) if "performance" in row]
-    assert timed == [1, 5, 8]
-    rendered = {None: annotated.split("# invocation:", 1)[0].rstrip().splitlines()}
-    for block in annotated.split("# invocation: ")[1:]:
-        label, body = block.split("\n", 1)
-        rendered[label] = body.lstrip("\n").rstrip().splitlines()
-    for row in rows:
+    assert timed == [0, 1, 2, 4, 7]
+    rendered = {
+        function["function"]: block.rstrip().splitlines()
+        for function, block in zip(payload["functions"],
+            re.split(r"(?m)(?=^from __future__ import annotations$)", annotated)[1:], strict=True)
+    }
+    for function, row in ((function, row) for function in payload["functions"] for row in function["calls"]):
         value, line_text = row["value"].rsplit(":", 1)
-        body = rendered[row.get("frame")]
+        body = rendered[function["function"]]
         start = int(line_text)
         assert body[start - 1].lstrip().startswith(f"{value} = ")
         later = [
             int(other["value"].rsplit(":", 1)[1]) - 1
-            for other in rows
-            if other.get("frame") == row.get("frame")
-            and int(other["value"].rsplit(":", 1)[1]) > start
+            for other in function["calls"]
+            if int(other["value"].rsplit(":", 1)[1]) > start
         ]
         stop = min(later, default=len(body))
         statement = "\n".join(body[start - 1 : stop])
@@ -860,5 +860,5 @@ def test_analyze_reports_retained_invocations_from_one_rendering(tmp_path) -> No
         placed_meshes = set(re.findall(r"mesh=(\w+),", statement))
         assert placed_meshes <= scoped | {"mesh"}
     assert len([line for line in lines if "; performance=" in line]) == len(timed)
-    assert len({(row.get("frame"), row["value"]) for row in rows}) == len(rows)
+    assert len({(function["function"], row["value"]) for function in payload["functions"] for row in function["calls"]}) == len(rows)
     assert "units=" not in annotated

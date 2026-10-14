@@ -26,6 +26,7 @@ import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 from tests._source import import_dsl
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
+from tilefoundry.analysis.iteration_scope import walk_scopes
 from tilefoundry.analysis.liveness import analyze_liveness, result_copies
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
@@ -546,10 +547,10 @@ def test_scheduled_hir_program_has_analysis_metadata(
     assert metadata_type in result.metadata_types
     if path.stem == "module_instances":
         record_type = PerformanceMetadata if analysis == "performance" else metadata_type
-        for invocation in result.invocations[1:]:
-            schedules = [expr for expr in collect_exprs(invocation.function.body)
+        for occurrence in [scope for scope in walk_scopes(result.scopes) if scope.frame is not None][1:]:
+            schedules = [expr for expr in collect_exprs(occurrence.frame.function.body)
                          if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)]
-            assert any(result.records.get(invocation, expr, record_type) is not None
+            assert any(get_metadata(expr, record_type) is not None
                        for expr in schedules)
 
     if analysis == "memory":
@@ -605,10 +606,10 @@ def test_scheduled_hir_program_has_analysis_metadata(
         if path.stem == "module_instances":
             region_records += tuple(
                 record
-                for invocation in result.invocations[1:]
-                for region in collect_exprs(invocation.function.body)
+                for occurrence in [scope for scope in walk_scopes(result.scopes) if scope.frame is not None][1:]
+                for region in collect_exprs(occurrence.frame.function.body)
                 if isinstance(region, MeshRegion)
-                and (record := result.records.get(invocation, region, RegionMemoryMetadata)) is not None
+                and (record := get_metadata(region, RegionMemoryMetadata)) is not None
             )
         if path.stem == "gemm_8192x17408x5120_tma_store":
             assert len(region_records) == 7
@@ -696,7 +697,7 @@ def test_schedule_memory_report_carries_allocations(
     assert cli_main(["analyze", str(path), str(out), "--memory", "--json"]) == 0
     assert capsys.readouterr() == ("", "")
     report = json.loads(out.read_text())
-    memory = report["function_records"]["memory"]
+    memory = report["functions"][0]['function_records']["memory"]
     peaks = {item["memory_level"]: item["peak_bytes"] for item in memory["peaks"]}
     program = _module_in(path)
     has_smem = any(
@@ -709,7 +710,7 @@ def test_schedule_memory_report_carries_allocations(
         assert "smem" not in peaks
         assert SMEM_GOLDEN[path.stem] == 0
     assert memory["solver_status"] == "feasible"
-    for row in report["calls"]:
+    for row in report["functions"][0]['calls']:
         allocation = row["memory"]
         if "operands" not in allocation:
             continue
@@ -917,21 +918,21 @@ def _check_selected_rows(out: Path, captured: pytest.CaptureResult[str]) -> None
     records = _quiet_json(out, captured)
     gather = next(
         row["memory"]
-        for row in records["calls"]
+        for row in [row for function in records["functions"] for row in function["calls"]]
         if any(
             operand["arg"] == 1 and operand["name"] == "idx"
             for operand in row["memory"]["operands"]
         )
     )
     assert gather["operands"][0]["read"] == 8192, "gather reads 64 selected bf16 rows"
-    footprint = records["function_records"]["memory"]["footprint"]
+    footprint = records["functions"][0]["function_records"]["memory"]["footprint"]
     assert footprint["buffers"]["kv"]["gmem"]["total"] == 8192
     assert footprint["buffers"]["kv"]["gmem"]["total"] <= gather["operands"][0]["read"]
 
 
 def _check_service_work(out: Path, captured: pytest.CaptureResult[str]) -> None:
     records = _quiet_json(out, captured)
-    cost = records["function_records"]["compute-cost"]
+    cost = records["functions"][0]["function_records"]["compute-cost"]
     assert not {"i64", "bool"}.intersection(cost["flops"]), "services are not flops"
     assert cost["other_ops"]["integer"]["total"] > 0, "i64 arithmetic counts as integer work"
     assert cost["other_ops"]["predicate"]["total"] > 0, "predicates count separately"
@@ -1932,7 +1933,7 @@ def _returned_view(storage):
 
 
 def test_a_returned_gmem_view_requires_explicit_scheduled_copy():
-    with pytest.raises(LoweringError, match="callee 'run'.*root/child.*explicit tf.schedule copy"):
+    with pytest.raises(LoweringError, match="callee 'run'.*v0.*explicit tf.schedule copy"):
         finalize(_returned_view(StorageKind.GMEM))
 
 

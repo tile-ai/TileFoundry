@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 _BAD_MODULE = (
@@ -50,7 +51,7 @@ def test_logical_analyses_run(tf, cmine, tmp_path) -> None:
         assert conclusion in report, conclusion
 
 
-def test_mega_kernel_reports_four_families_with_retained_invocations(tf, tmp_path) -> None:
+def test_mega_kernel_reports_four_families_with_retained_occurrences(tf, tmp_path) -> None:
     source = Path(__file__).resolve().parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
     done = tf(
         "analyze",
@@ -66,10 +67,11 @@ def test_mega_kernel_reports_four_families_with_retained_invocations(tf, tmp_pat
     assert done.stdout == ""
     payload = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     rendered = payload["source"]
-    sources = {None: rendered.split("# invocation:", 1)[0].rstrip().splitlines()}
-    for block in rendered.split("# invocation: ")[1:]:
-        label, body = block.split("\n", 1)
-        sources[label] = body.lstrip("\n").rstrip().splitlines()
+    sources = {
+        function["function"]: block.rstrip().splitlines()
+        for function, block in zip(payload["functions"],
+            re.split(r"(?m)(?=^from __future__ import annotations$)", rendered)[1:], strict=True)
+    }
 
     as_text = tf(
         "analyze",
@@ -87,24 +89,27 @@ def test_mega_kernel_reports_four_families_with_retained_invocations(tf, tmp_pat
 
     families = ["compute-cost", "memory", "roofline", "performance"]
     assert payload["requested"] == payload["executed"] == families
-    assert set(payload["function_records"]) == set(families)
-    assert len(payload["calls"]) == 9
-    primitive_rows = [row for row in payload["calls"] if "compute-cost" in row]
-    assert len(primitive_rows) == 7
-    for row in payload["calls"]:
-        source_lines = sources[row.get("frame")]
+    assert set(payload["functions"][0]['function_records']) == set(families)
+    rows = [row for function in payload["functions"] for row in function["calls"]]
+    assert len(rows) == 9
+    cost_rows = [row for row in rows if "compute-cost" in row]
+    assert len(cost_rows) == 9
+    for function, row in ((function, row) for function in payload["functions"] for row in function["calls"]):
+        source_lines = sources[function["function"]]
         name, line_text = row["value"].rsplit(":", 1)
         line = int(line_text)
         assert 1 <= line <= len(source_lines)
         assert f"{name} =" in source_lines[line - 1]
     assert all(
-        set(row) - {"performance", "frame"} == {"value", "compute-cost", "memory", "roofline"}
-        for row in primitive_rows
+        set(row) - {"performance"} == {"value", "compute-cost", "memory", "roofline"}
+        for row in cost_rows
     )
-    assert [index for index, row in enumerate(payload["calls"]) if "performance" in row] == [
+    assert [index for index, row in enumerate(rows) if "performance" in row] == [
+        0,
         1,
-        5,
-        8,
+        2,
+        4,
+        7,
     ]
     assert text.startswith(
         "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts"
@@ -198,7 +203,7 @@ def test_performance_resolves_derived_execution_geometry(tf, derived_prefill, tm
     assert bound.returncode == 0, bound.stderr
     assert bound.stdout == ""
     payload = json.loads((tmp_path / "bound.json").read_text(encoding="utf-8"))
-    record = payload["function_records"]["performance"]
+    record = payload["functions"][0]['function_records']["performance"]
     assert record == {
         "timeline": {
             "start_ns": 0,

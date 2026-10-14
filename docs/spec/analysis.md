@@ -67,19 +67,14 @@ cannot spell one value two ways. What the report is about and what was asked of 
 are records of the report rather than of the IR; every other summary line is a
 record of the selected Function.
 
-The JSON report carries the same identity and selection in `target`, `module`,
-`function`, `topology`, `wave`, `requested`, and `executed`. `wave` holds
-`counted` and `declared`.
-Whole-function
-projections are under `function_records`; `calls` is a value-ordered list whose
-entries have a `value` label and one key per selected family. Calls and loops
-are emitted in operand-first invocation order, stepping into callees at each
-call site. Non-root rows MUST include `frame` with the invocation label (for
-example `twice/mm#1` or `run/layers[i]`); root rows MUST omit it. `loops` is the
-corresponding authored-loop list, labelled by induction variable. Memory does not
-attach an empty record to a loop for a conclusion it has not computed. `totals`
-appears when the selected view includes compute cost or roofline's bounded work
-evidence.
+The JSON report carries `target`, `module`, `topology`, `wave`, `requested`,
+and `executed` once. `wave` holds `counted` and `declared`. Its `functions` list
+contains each reached definition once in root-first DFS order. Each entry has
+`function` (`Module.fn`), `function_records`, operand-first `calls`, authored
+`loops`, and `totals` when compute cost or roofline work evidence is selected.
+Call rows carry `value` and selected-family records; loop rows use the induction
+variable. Rows have no call-path field. Memory MUST NOT attach an empty loop
+record for a conclusion it has not computed.
 
 One result is rendered once, and every surface reads that rendering:
 
@@ -195,7 +190,7 @@ class ComputeCostMetadata(IRMetadata):
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `topologies` | The effective Module topology levels, coarsest first. | No |
-| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written for `logical`; each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level, and `total` is the selected unit's share times its executing mesh positions. Function accumulation multiplies `logical` by varying-loop trips, and `per_unit` and `total` by all enclosing loop trips. Retained Function calls are not charged separately: step into the callee invocation and apply the enclosing loop and mesh factors to its primitives. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written for `logical`; each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level, and `total` is the selected unit's share times its executing mesh positions. Function accumulation multiplies `logical` by varying-loop trips, and `per_unit` and `total` by all enclosing loop trips. Retained calls carry their callee's one-execution summary. Primitive work accumulates into root totals with full repeats and into each enclosing call with repeats relative to that call scope. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `other_ops` | The evaluator's non-floating-point operation counts (`integer`, `predicate`, `select`, `special`), totalled and shared the same way. These keys map directly to target one-unit operation-throughput keys; target-side service naming is unchanged. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `precision` | One-trip Call work is exact; Function work combines the precision of every enclosing loop's trip count. Coordinate-dependent maximum trip counts yield an upper bound. | No |
 
@@ -222,7 +217,7 @@ Each reported Call's JSON projection is under its `compute-cost` key:
 ```
 
 - constraints:
-  - A record MUST be attached to every reachable primitive `Call` and to the root Function.
+  - A record MUST be attached to every reached `Call` and Function.
     The Function record MUST include authored-loop repetition and therefore is
     not the direct sum of the one-occurrence Call records.
   - An op with no registered cost evaluator MUST raise `AnalysisError`.
@@ -1072,7 +1067,7 @@ its full form as defined in that family's section.
     result as one FLOP states a bound the unit cannot meet.
   - Rate-to-duration divisions MUST use exact integer ceiling division. They
     MUST NOT pass through floating-point arithmetic.
-  - Roofline records MUST be attached to reachable primitive `Call`s and the root Function.
+  - Roofline records MUST be attached to reached `Call`s and Functions.
   - Roofline MUST read `ComputeCostMetadata` rather than evaluate the program a
     second time.
   - A recorded compute dtype that is not a `DType` name MUST raise
@@ -1249,7 +1244,7 @@ model.
     An ordering MUST NOT be inferred from an allocation -- which values share
     bytes is a plan's decision and no plan has been made -- and no occurrence is
     held back for a write nobody proved happens in place.
-  - Occurrences MUST be laid out in invocation order. Reordering
+  - Occurrences MUST be laid out in definition-relative order. Reordering
     independent work is a later decision, not an analysis's: what overlaps
     is what the program's own placement made independent, and the reported time
     is the time of the program as written. On a `Function`, the summary's
@@ -1331,30 +1326,28 @@ class AnalysisCheckContext:
     parameters. Authored definitions MUST remain unchanged.
   - Every primitive Call in each derived body MUST have a deterministic unique
     binding. `budget` MUST be a non-negative integer limiting the sum of unique
-    derived body nodes, independent of invocation count. Exceeding it MUST fail
+    derived body nodes, independent of occurrence count. Exceeding it MUST fail
     with the program name, total size, and limit.
   - At each retained call, analysis MUST step into its derived body through an
-    invocation `IterationScope` whose owner is that Call, binding activations to arguments and resolving child weights
+    occurrence `IterationScope` whose owner is that Call, binding activations to arguments and resolving child weights
     along the current call path. Loop call sites MUST be visited once;
     enclosing trip counts multiply work and traffic. Recursion and a callee
     without a body MUST raise `AnalysisError` naming the function and call path.
   - One definition MUST receive one argument-type signature and one current
     mesh. Different shape, dtype, layout, storage, or mesh MUST raise
-    `AnalysisError` naming the callee, both invocation paths, and both signatures.
-  - Invocation identity MUST be the owner-Call `IterationScope`, or the
-    owner-Function scope for the root. It MUST retain callees, variance,
-    structural tables, and result binding; other scopes point to their invocation.
-    Labels derive from the caller chain and the call's sibling-disambiguated label. The invocation's
-    `frame` is a visitor `CallFrame` carrying its Module, function, effective
-    target, and topologies; it is not the record identity.
-  - Root-invocation records MUST remain node metadata. Callee-invocation records MUST be
-    stored in `InvocationRecords`, keyed by invocation and node identity;
-    analyzers writing derived records directly onto shared callee nodes MUST
-    fail. A visitor's memo and structural tables MUST be local to its invocation.
-    Annotated output MUST render the root once and each invocation separately,
-    using `PythonPrintOptions.metadata_of` to read the invocation's records.
-    `InvocationRecords.definition_reader(body)` MUST select the first invocation of that
-    definition for consumers that need one definition-level rendering.
+    `AnalysisError` naming the callee, both call paths, and both signatures.
+  - An occurrence MUST be the owner-Call `IterationScope`, or the owner-Function
+    scope for root. Other scopes point to their occurrence; its `CallFrame`
+    carries the current Module, function, target, and topologies. Diagnostic paths
+    join call binding names with `/`; root has an empty path.
+  - Records MUST live on IR, once per definition, describing its one execution.
+    Each analyzer MUST enter callees during traversal, then write the callee's
+    summary to its Function and call node. Compute-cost and traffic accumulate
+    primitive work into root with full repeats and each enclosing call with
+    repeats relative to that occurrence, preserving root logical totals.
+    Performance MUST schedule each definition once relative to its own origin;
+    call duration is the callee duration, scheduled in the caller's current scope.
+    Callee region peaks MUST take the maximum across occurrences.
   - Parameters and arguments MUST share storage and extend argument liveness
     through the callee's last use. Callee temporaries MUST occupy the caller's
     timeline. A separately materialized callee result of matching memory level
@@ -1368,9 +1361,9 @@ class AnalysisCheckContext:
     multiply along the call path. Traffic MUST use loop trips without this
     additional multiplier.
   - Internal on-chip values shared by a definition MUST have the same offsets,
-    buffer sizes, and aliases in every invocation. Conflicts MUST raise
-    `AnalysisError` naming the callee, binding, both invocation labels, and values.
-    Aliases MUST remain local to an invocation. A result tied to the caller's output
+    buffer sizes, and aliases in every occurrence. Conflicts MUST raise
+    `AnalysisError` naming the callee, binding, both binding paths, and values.
+    Placement comparisons MUST be local before writing one record per SSA value. A result tied to the caller's output
     destination is exempt from this consistency comparison.
   - Authored-analysis readiness is not a program-level rejection. Analyze MUST
     NOT reject an authored `where(...)` constraint: it is an input to a later
@@ -1408,8 +1401,7 @@ class AnalysisResult:
         topology_level: attribute; Topology level whose unit the per-unit quantities describe, or None.
         executed: attribute; Analyses executed in dependency order.
         metadata_types: attribute; Metadata classes actually written.
-        records: attribute; Root metadata and invocation side-table access.
-        invocations: attribute; Invocations in first-visit order, including root.
+        functions: attribute; Reached derived functions in root-first DFS order.
     """
 
     module: "Module"
@@ -1419,8 +1411,7 @@ class AnalysisResult:
     topology_level: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
-    records: "InvocationRecords"
-    invocations: tuple["IterationScope", ...]
+    functions: tuple["Function", ...]
 
 
 def analyze(
@@ -1544,8 +1535,8 @@ grouped by `(Access.buffer, Access.index)`, and a tuple result's label is
 `<name>[index]`. A refused descendant
 makes its owning scope unknown for that view. Non-affine runtime indices retain
 the widest legal access approximation.
-Normalization shares one derived body per reached definition; invocation-local
-records distinguish its call paths ([§2](#2-composed-analysis)).
+Normalization shares one derived body and its records per reached definition
+([§2](#2-composed-analysis)).
 
 `analysis.loop_terms` resolves HIR values to `LoopTerm` without depending on
 isl. `analysis.access` turns those terms into isl constraints and owns access

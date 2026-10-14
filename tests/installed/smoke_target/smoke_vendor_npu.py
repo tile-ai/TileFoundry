@@ -45,7 +45,7 @@ def test_document_free_target_analyzes_with_its_declared_target(
     report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert report["target"] == "vendor.npu"
     assert report["executed"] == ["compute-cost", "memory", "roofline"]
-    assert report["function_records"]["roofline"]["ideal_ns"] > 0
+    assert report["functions"][0]['function_records']["roofline"]["ideal_ns"] > 0
 
     rejected = tf("analyze", f"{model}:CMine.root", str(tmp_path / "rejected.py"), "--performance")
     assert rejected.returncode == 1

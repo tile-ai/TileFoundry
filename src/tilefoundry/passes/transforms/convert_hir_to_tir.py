@@ -15,7 +15,7 @@ import isl
 
 from tilefoundry.analysis import AnalysisResult, MemoryMetadata, analyze
 from tilefoundry.analysis.access import BufferAlias
-from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
+from tilefoundry.analysis.iteration_scope import IterationScope, occurrence_path, walk_scopes
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
 from tilefoundry.ir.core import (
@@ -207,7 +207,7 @@ def _scope_names(root: IterationScope, names: Names) -> dict[int, str]:
     found = {}
     for scope in walk_scopes(root):
         region = scope.owner
-        if scope.invocation is not root.invocation or not isinstance(region, MeshRegion) or region is root.invocation.function.body:
+        if scope.occurrence is not root.occurrence or not isinstance(region, MeshRegion) or region is root.occurrence.frame.function.body:
             continue
         if not (isinstance(region.body, Call) and isinstance(region.body.target, Zeros)):
             found[id(region)] = names.fresh("scope")
@@ -259,15 +259,15 @@ class Lowering(CallFrameVisitor[Expr]):
 
     result: AnalysisResult
     authored: Function
-    invocation: IterationScope | None = None
+    occurrence: IterationScope | None = None
     callees: dict[int, Lowering] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         ExprVisitor.__init__(self)
         self.module = self.result.scopes.frame.module
-        self.invocation = self.result.scopes.invocation if self.invocation is None else self.invocation
-        self.function = self.invocation.function
-        self.read = self.result.records.definition_reader(self.function)
+        self.occurrence = self.result.scopes.occurrence if self.occurrence is None else self.occurrence
+        self.function = self.occurrence.frame.function
+        self.read = get_metadata
         self.names = Names(self.authored)
         self.logical: dict[int, TensorType] = {}
         self.staged: dict[int, tuple[Var, LoopRegion | None]] = {}
@@ -287,18 +287,18 @@ class Lowering(CallFrameVisitor[Expr]):
         self.authored_values: dict[int, Expr] = {}
         if self.function.body is not None and self.authored.body is not None:
             self.authored_values[id(self.function.body)] = self.authored.body
-        self.scopes = self.invocation
+        self.scopes = self.occurrence
         self.scope_for_call = {
             expr_id: scope
             for scope in walk_scopes(self.scopes)
-            if scope.invocation is self.invocation
+            if scope.occurrence is self.occurrence
             for expr_id, (call, _relations) in scope.relations.items()
             if id(call) == expr_id
         }
-        self.type_ctx = TypeInferContext(frame=self.invocation.frame)
+        self.type_ctx = TypeInferContext(frame=self.occurrence.frame)
         for param in self.function.params:
             type_ = param.type
-            if self.invocation.parent is not None and isinstance(type_, TensorType):
+            if self.occurrence.parent is not None and isinstance(type_, TensorType):
                 type_ = _callee_tensor_type(type_)
             physical = Var(param.name, type=type_, is_const=param.is_const)
             self._memo[id(param)] = (param, physical)
@@ -313,9 +313,9 @@ class Lowering(CallFrameVisitor[Expr]):
 
         self.scope_names = _scope_names(self.scopes, self.names)
         result_type = self.function.return_type
-        storage = StorageKind.GMEM if self.invocation.parent is None else result_type.storage
+        storage = StorageKind.GMEM if self.occurrence.parent is None else result_type.storage
         out_type = TensorType(tuple(result_type.shape), result_type.dtype, None, storage)
-        if self.invocation.parent is not None:
+        if self.occurrence.parent is not None:
             out_type = _callee_tensor_type(result_type)
         self.output = Var(self.names.fresh("out"), type=out_type)
         body = self.function.body
@@ -323,7 +323,7 @@ class Lowering(CallFrameVisitor[Expr]):
         while isinstance(returned, MeshRegion):
             returned = returned.body
         self.return_value = returned
-        source = self.invocation.tables["sources"]["narrow"].get(id(body))
+        source = self.occurrence.tables["sources"]["narrow"].get(id(body))
         self.return_source = source if isinstance(source, BufferAlias) else None
         inner = _Cursor()
         self.owner_cursors[id(self.function)] = inner
@@ -364,7 +364,7 @@ class Lowering(CallFrameVisitor[Expr]):
 
     def _staging_loop(self, expr: Call) -> LoopRegion | None:
         scope = self.scope_for_call.get(id(expr))
-        while scope is not None and scope.invocation is self.invocation:
+        while scope is not None and scope.occurrence is self.occurrence:
             if isinstance(scope.owner, LoopRegion):
                 return scope.owner
             scope = scope.parent
@@ -389,10 +389,10 @@ class Lowering(CallFrameVisitor[Expr]):
     ) -> Expr:
         if not isinstance(type_, TensorType):
             raise LoweringError(f"{_label(expr)} has non-tensor material result {type_!r}")
-        if self.invocation.result_tied and (
+        if self.occurrence.result_tied and (
             expr is self.return_value or (
                 self.return_source is not None
-                and self.return_source.invocation is self.invocation
+                and self.return_source.occurrence is self.occurrence
                 and expr is self.return_source.buffer
             )
         ):
@@ -431,7 +431,7 @@ class Lowering(CallFrameVisitor[Expr]):
                 raise LoweringError(f"{_label(expr)} uses staged internal gmem")
             elements = prod(tuple(storage_type.shape))
             scratch_type = TensorType((elements,), storage_type.dtype, None, StorageKind.GMEM)
-            if self.invocation.parent is not None:
+            if self.occurrence.parent is not None:
                 scratch_type = _callee_tensor_type(scratch_type)
             scratch = Var(self.names.fresh("scratch"), type=scratch_type)
             self.scratch.append(scratch)
@@ -631,7 +631,7 @@ class Lowering(CallFrameVisitor[Expr]):
 
     def visit_Call(self, call: Call, cursor: _Cursor) -> Expr:
         target = call.target
-        if id(call) in self.invocation.callees:
+        if self.callee_frame(call, self.occurrence.frame) is not None:
             return self._lower_call(call, cursor)
         if is_dim_op_call(call):
             result = self._dim(call)
@@ -644,7 +644,7 @@ class Lowering(CallFrameVisitor[Expr]):
         return result
 
     def _lower_call(self, call: Call, cursor: _Cursor) -> Expr:
-        frame = self.callee_frame(call, self.invocation.frame)
+        frame = self.callee_frame(call, self.occurrence.frame)
         lowering = self.callees[id(frame.function)]
         args = tuple(self.visit(arg, cursor) for arg in call.args)
         destination = self._declare(call, call.type, 1, cursor)
@@ -1394,18 +1394,19 @@ class ConvertHIRToTIR(ModulePass):
         if not isinstance(authored, Function):
             raise LoweringError(f"{getattr(authored, 'name', self.entry)!r} is not an HIR function")
         result = analyze(module, authored, analysis=("memory",), dims=self.dims)
-        for invocation in result.invocations[1:]:
-            if not invocation.result_tied and invocation.function.return_type.storage is not StorageKind.SMEM:
+        occurrences = tuple(scope for scope in walk_scopes(result.scopes) if scope.frame is not None)
+        for occurrence in occurrences[1:]:
+            if not occurrence.result_tied and occurrence.frame.function.return_type.storage is not StorageKind.SMEM:
                 raise LoweringError(
-                    f"callee {invocation.function.name!r} at {invocation.label!r} has no return bound to its "
+                    f"callee {occurrence.frame.function.name!r} at {occurrence_path(occurrence)!r} has no return bound to its "
                     "caller destination; write an explicit tf.schedule copy in HIR"
                 )
         lowered = {}
 
         for frame in CallFrameVisitor.walk_frames(result.scopes.frame, postorder=True):
             body = frame.function
-            invocation = next(inv for inv in result.invocations if inv.function is body)
-            lowering = Lowering(result, origin_of(body) or body, invocation, lowered)
+            occurrence = next(scope for scope in occurrences if scope.frame.function is body)
+            lowering = Lowering(result, origin_of(body) or body, occurrence, lowered)
             lowering.lowered = lowering.run()
             lowered[id(body)] = lowering
         root = lowered[id(result.function)].lowered

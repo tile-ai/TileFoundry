@@ -57,22 +57,22 @@ def test_external_v100_documents_analyse_a_copied_installed_model(tf, tmp_path) 
 
     assert report["target"] == "vendor.v100_sxm2_32gb"
     assert report["executed"] == ["compute-cost", "memory", "roofline", "performance"]
-    assert report["totals"]["flops"]["f16"] > 0
-    assert report["function_records"]["roofline"]["ideal_ns"] > 0
+    assert report["functions"][0]['totals']["flops"]["f16"] > 0
+    assert report["functions"][0]['function_records']["roofline"]["ideal_ns"] > 0
     gmem = next(
         item
-        for item in report["function_records"]["memory"]["peaks"]
+        for item in report["functions"][0]['function_records']["memory"]["peaks"]
         if item["memory_level"] == "gmem"
     )
     assert gmem["peak_bytes"] < 32_000_000_000
-    record = report["function_records"]["performance"]
+    record = report["functions"][0]['function_records']["performance"]
     assert record["waves"] == 2
-    assert report["function_records"]["memory"]["solver_status"] in (
+    assert report["functions"][0]['function_records']["memory"]["solver_status"] in (
         "optimal",
         "feasible",
     )
     call_records = [
-        call["performance"]["timeline"] for call in report["calls"] if "performance" in call
+        call["performance"]["timeline"] for call in report["functions"][0]['calls'] if "performance" in call
     ]
     assert call_records
     assert all(set(call) == {"start_ns", "end_ns", "trips", "stride_ns"} for call in call_records)
@@ -80,7 +80,7 @@ def test_external_v100_documents_analyse_a_copied_installed_model(tf, tmp_path) 
     per_wave_end = max(
         call["end_ns"] + (call["trips"] - 1) * call["stride_ns"] for call in call_records
     )
-    per_wave_end = max(per_wave_end, report["function_records"]["roofline"]["ideal_ns"])
+    per_wave_end = max(per_wave_end, report["functions"][0]['function_records']["roofline"]["ideal_ns"])
     assert record["timeline"] == {
         "start_ns": 0,
         "end_ns": record["waves"] * per_wave_end,

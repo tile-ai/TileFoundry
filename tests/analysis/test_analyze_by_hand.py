@@ -79,7 +79,7 @@ def _report(module, *, analysis=("memory",)) -> dict:
 
 
 def _memory_record(module) -> dict:
-    return _report(module)["function_records"]["memory"]
+    return _report(module)["functions"][0]['function_records']["memory"]
 
 
 def _footprint_bytes(memory: dict, name: str) -> int:
@@ -206,7 +206,7 @@ def test_invariant_reuse_matches_the_written_arithmetic() -> None:
         executed=result.executed,
         metadata_types=result.metadata_types,
     )
-    memory = data["function_records"]["memory"]
+    memory = data["functions"][0]['function_records']["memory"]
     traffic = memory["traffic"]["storage"]["gmem"]
     assert traffic["logical"] == {"read": 64, "write": 0}
     assert traffic["total"] == {"read": 768, "write": 0}
@@ -214,11 +214,11 @@ def test_invariant_reuse_matches_the_written_arithmetic() -> None:
     assert _footprint_bytes(memory, "x") == 16
     footprint_total = memory["footprint"]["buffers"]["x"]["gmem"]["total"]
     assert footprint_total == 192
-    assert data["function_records"]["roofline"]["memory_ns"] == -(
+    assert data["functions"][0]['function_records']["roofline"]["memory_ns"] == -(
         -(footprint_total * 1_000_000_000) // 4_800_000_000_000
     )
     assert N // BN == 3
-    assert data["function_records"]["compute-cost"]["flops"]["bf16"] == {
+    assert data["functions"][0]['function_records']["compute-cost"]["flops"]["bf16"] == {
         "logical": 32, "total": 384, "per_unit": [96],
     }
     scopes = tuple(walk_scopes(build_scopes(result.module, result.function)))
@@ -275,7 +275,7 @@ def test_packed_dtype_rounds_up_to_whole_bytes() -> None:
 
 def test_wave_truncation_counts_only_the_resident_ctas() -> None:
     resident_data = _report(WaveTruncation, analysis=("memory", "roofline"))
-    resident = resident_data["function_records"]["memory"]
+    resident = resident_data["functions"][0]['function_records']["memory"]
     wide_target = CudaTarget(
         replace(WaveTruncation.target.device, sm_count=256),
         architecture=WaveTruncation.target.architecture,
@@ -283,7 +283,7 @@ def test_wave_truncation_counts_only_the_resident_ctas() -> None:
     all_declared_data = _report(
         replace(WaveTruncation, target=wide_target), analysis=("memory", "roofline")
     )
-    all_declared = all_declared_data["function_records"]["memory"]
+    all_declared = all_declared_data["functions"][0]['function_records']["memory"]
 
     assert resident_data["wave"] == {"counted": 132, "declared": 256}
     assert _footprint_bytes(resident, "x") == 132 * 4 * 2
@@ -293,14 +293,14 @@ def test_wave_truncation_counts_only_the_resident_ctas() -> None:
     assert _footprint_bytes(all_declared, "x") == 256 * 4 * 2
     assert resident["footprint"]["buffers"]["x"]["gmem"]["total"] == 2112
     assert all_declared["footprint"]["buffers"]["x"]["gmem"]["total"] == 2048
-    assert resident_data["function_records"]["roofline"]["memory_ns"] == -(
+    assert resident_data["functions"][0]['function_records']["roofline"]["memory_ns"] == -(
         -(2112 * 1_000_000_000) // 4_800_000_000_000
     )
 
 
 def test_truncated_wave_keeps_reuse_from_participating_boundaries() -> None:
     data = _report(TruncatedWaveReuse, analysis=("memory", "roofline"))
-    memory = data["function_records"]["memory"]
+    memory = data["functions"][0]['function_records']["memory"]
 
     assert data["wave"] == {"counted": 132, "declared": 256}
     assert memory["traffic"]["storage"]["gmem"]["total"] == {"read": 8192, "write": 0}
@@ -308,12 +308,12 @@ def test_truncated_wave_keeps_reuse_from_participating_boundaries() -> None:
     assert sum(
         levels["gmem"]["total"] for levels in memory["footprint"]["buffers"].values()
     ) == 64
-    assert data["function_records"]["roofline"]["memory_ns"] == -(
+    assert data["functions"][0]['function_records']["roofline"]["memory_ns"] == -(
         -(64 * 1_000_000_000) // 4_800_000_000_000
     )
     assert _reuse_conclusions(memory) == [
         {
-            "buffer": "read/view/viewed",
+            "buffer": "v3/viewed",
             "time": "",
             "space": "cta.i",
             "holds_bytes": 32,
@@ -437,7 +437,7 @@ def test_capacity_exceeded_matches_the_written_ratio(
         lambda *args, **kwargs: replace(count(*args, **kwargs), precision=precision),
     )
     data = _report(CapacityExceeded)
-    memory = data["function_records"]["memory"]
+    memory = data["functions"][0]['function_records']["memory"]
     used = _working_set_bytes(memory)
     capacity = 1_048_576
     category = (
@@ -472,14 +472,14 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression(
     if not seeded:
         monkeypatch.setattr(allocation, "_first_fit", lambda *args, **kwargs: None)
     data = _report(PersistentGemmTiled, analysis=("memory", "compute-cost"))
-    memory = data["function_records"]["memory"]
+    memory = data["functions"][0]['function_records']["memory"]
 
     assert _footprint_bytes(memory, "a") == 12 * 64 * 32 * 2
     assert _footprint_bytes(memory, "b") == 11 * 32 * 64 * 2
     assert memory["footprint"]["precision"] == "exact"
     (product,) = (
         call
-        for call in data["calls"]
+        for call in data["functions"][0]['calls']
         if [operand["type"] for operand in call["memory"]["operands"]]
         == [
             f"bf16[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BK}] smem",
@@ -512,10 +512,10 @@ def test_persistent_flat_states_its_precision() -> None:
     column blocks, and 132 distinct output tiles.
     """
     data = _report(PersistentGemmFlat)
-    memory = data["function_records"]["memory"]
+    memory = data["functions"][0]['function_records']["memory"]
     store = next(
         call
-        for call in data["calls"]
+        for call in data["functions"][0]['calls']
         if any(operand["arg"] == "result" for operand in call["memory"]["operands"])
         and any(operand["name"] == "out" for operand in call["memory"]["operands"])
     )

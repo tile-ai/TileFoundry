@@ -389,6 +389,9 @@ separates unless that value brackets itself:
     a measurement of the value, it is the value, and it is DSL text
     ([§2.3](#23-dsl-text-forms)) that pastes back. Every later part is a record.
 
+Analysis rendering prints each reached definition once, with its Function
+summary and node records ([analysis §2](./analysis.md#2-composed-analysis)).
+
 ### 2.9 Pattern declaration reports
 
 `PatternPrinter` renders operation-declaration patterns as reports rather than

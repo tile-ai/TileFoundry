@@ -398,7 +398,8 @@ explicit analysis; there is no ordinary `--target` option.
     Its typed HIR, text report, or JSON report MUST be written to that path, and
     successful execution MUST write none of the report to stdout.
   - `--json` MUST write the report as JSON to the required `PATH` instead of text.
-    Its `source` field MUST carry the annotated HIR rendered alongside that report.
+    Its `source` field MUST carry each reached definition once with its records
+    ([analysis §2](./analysis.md#2-composed-analysis)).
     `--operands` MUST NOT change `source`: it is always the annotated HIR from the
     render without operand annotations.
     It MUST be refused as an argument-combination error when no analysis flag was

@@ -16,8 +16,6 @@ from tilefoundry.ir.core import (
     Expr,
     Tuple,
     Var,
-    attach_metadata,
-    get_metadata,
 )
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -43,10 +41,9 @@ from tilefoundry.visitor_registry.contexts import CostContext
 
 from .access import Access, BufferAlias, buffer_alias
 from .errors import AnalysisError
-from .invocation import invocation_key
 from .iteration_scope import IterationScope, walk_scopes
 from .liveness import Liveness, UseEvent, result_copies
-from .metadata import MemoryMetadata, ValueLifetime
+from .metadata import ValueLifetime
 from .precision import AnalysisPrecision
 
 
@@ -65,7 +62,7 @@ class AllocationValue:
     value: Expr
     index: int
     lifetime: ValueLifetime
-    invocation: object | None = None
+    occurrence: object | None = None
 
     def intersects(self, other: AllocationValue) -> bool:
         """Whether two closed structured-SSA intervals share an event."""
@@ -134,7 +131,7 @@ class AllocationModel:
     quantities: dict[int, tuple[tuple[str, int] | None, ...]]
     persistent: frozenset[int]
     limits: dict[str, int]
-    records: object | None = None
+    aliases: dict[AllocationValue, BufferAlias] = field(default_factory=dict)
     values: list[AllocationValue] = field(default_factory=list)
     material: set[AllocationValue] = field(default_factory=set)
     models: dict[str, cp_model.CpModel] = field(default_factory=dict)
@@ -322,7 +319,7 @@ def operand_to_result_relation(
     operands: dict[tuple[int, int], Expr] = {}
     for access in inputs:
         operand = access.buffer
-        key = (access.invocation, id(operand), access.index)
+        key = (access.occurrence, id(operand), access.index)
         by_buffer[key].append(access)
         operands[key] = operand
 
@@ -356,9 +353,9 @@ def operand_to_result_relation(
     update, update_index = update_access.buffer, update_access.index
     written = output_coverage
     destination_coverage = coverage(
-        tuple(by_buffer.get((destination_access.invocation, id(destination), destination_index), ()))
+        tuple(by_buffer.get((destination_access.occurrence, id(destination), destination_index), ()))
     )
-    update_accesses = tuple(by_buffer.get((update_access.invocation, id(update), update_index), ()))
+    update_accesses = tuple(by_buffer.get((update_access.occurrence, id(update), update_index), ()))
     update_coverage = coverage(update_accesses)
 
     if destination_coverage is not None:
@@ -378,10 +375,10 @@ def operand_to_result_relation(
         if (
             partitioned
             and complete_identity
-            and (destination_access.invocation, id(destination), destination_index) not in seen
+            and (destination_access.occurrence, id(destination), destination_index) not in seen
         ):
-            result.append((destination, destination_index, relation, destination_access.invocation))
-            seen.add((destination_access.invocation, id(destination), destination_index))
+            result.append((destination, destination_index, relation, destination_access.occurrence))
+            seen.add((destination_access.occurrence, id(destination), destination_index))
 
     try:
         update_matches_write = update_coverage is not None and update_coverage.is_equal(written)
@@ -392,8 +389,8 @@ def operand_to_result_relation(
         if update_matches_write
         else None
     )
-    if update_relation is not None and (update_access.invocation, id(update), update_index) not in seen:
-        result.append((update, update_index, update_relation, update_access.invocation))
+    if update_relation is not None and (update_access.occurrence, id(update), update_index) not in seen:
+        result.append((update, update_index, update_relation, update_access.occurrence))
     return tuple(result)
 
 
@@ -419,9 +416,9 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         super().__init__(root_function=root_function)
         self.bound: dict[int, Storage] = {}
         self.resources = {}
-        self.invocation_memos = {}
+        self.occurrence_memos = {}
         self.escaped = {}
-        self.invocation = None
+        self.occurrence = None
         self.pending: dict[int, list[tuple[AllocationValue, int, isl.map]]] = defaultdict(list)
         self.updates: dict[AllocationValue, tuple[AllocationValue, AllocationValue, isl.map, BufferAlias]] = {}
         self.definitions: dict[int, IterationScope] = {}
@@ -434,28 +431,28 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             ):
                 begin, count = leaf_span(node.args[0].type, node.args[1].value)
                 projections[
-                    invocation_key(interval.invocation),
+                    interval.occurrence,
                     id(node.args[0]),
                     interval.defined_at,
                 ] = range(begin, begin + count)
         self.uses: dict[tuple[int, int], list[UseEvent]] = defaultdict(list)
         for use in liveness.uses:
             indexes = (
-                projections.get((invocation_key(use.invocation), id(use.value), use.at))
+                projections.get((use.occurrence, id(use.value), use.at))
                 if not use.synthetic
                 else None
             )
             if indexes is None:
                 indexes = range(len(leaves_of(use.value.type)))
             for index in indexes:
-                self.uses[invocation_key(use.invocation), id(use.value), index].append(use)
+                self.uses[use.occurrence, id(use.value), index].append(use)
         self.last_ordinary_use = {
             key: max((use.at for use in uses if not use.synthetic), default=-1)
             for key, uses in self.uses.items()
         }
 
     def dispatch_visit(self, node: Expr, ctx: AllocationModel) -> Storage:
-        self.invocation = ctx.current.invocation
+        self.occurrence = ctx.current.occurrence
         if id(node) not in self._memo:
             self.definitions[id(node)] = ctx.current
         return super().dispatch_visit(node, ctx)
@@ -464,7 +461,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         self, node: Call, update: AllocationValue, relation: isl.map, ctx: AllocationModel
     ) -> BufferAlias | None:
         """Bind an update's window to values visible at its producer."""
-        if update.invocation is not ctx.current.invocation:
+        if update.occurrence is not ctx.current.occurrence:
             return None
         source_scope = self.definitions[id(update.value)]
         visible: set[IterationScope] = set()
@@ -513,7 +510,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                             return False
                     offset += width
                 return True
-            interval = ctx.liveness.interval_of(value, ctx.current.invocation)
+            interval = ctx.liveness.interval_of(value, ctx.current.occurrence)
             return (
                 self.definitions.get(id(value)) in visible
                 and interval is not None and interval.defined_at < update.lifetime.defined_at
@@ -524,22 +521,9 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             return None
         return BufferAlias(destination, AccessRelation(relation, values))
 
-    def record(self, value, kind, ctx):
-        return (
-            get_metadata(value.value, kind)
-            if ctx.records is None
-            else ctx.records.get(value.invocation, value.value, kind)
-        )
-
-    def attach(self, invocation, node, record, ctx):
-        if ctx.records is None:
-            attach_metadata(node, record)
-        else:
-            ctx.records.attach(invocation, node, record)
-
     def visit_Call(self, node, ctx):
-        invocation = ctx.current.invocation
-        child = None if invocation is None else invocation.callees.get(id(node))
+        occurrence = ctx.current.occurrence
+        child = next((scope for scope in ctx.current.children if scope.owner is node), None)
         if child is None:
             return self.default_visit_leaf(node, self.visit_operands(node, ctx), ctx)
         args = tuple(self.visit(arg, ctx) for arg in node.args)
@@ -547,7 +531,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             self.visit(child.index, ctx)
         names = ("_memo", "bound", "pending", "definitions")
         saved = {name: getattr(self, name) for name in names}
-        self.invocation_memos[invocation.key] = self._memo
+        self.occurrence_memos[occurrence] = self._memo
         self._memo, self.bound, self.pending, self.definitions = {}, {}, defaultdict(list), {}
         inner = replace(ctx, current=child)
         try:
@@ -561,37 +545,37 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 self.resources.setdefault(key, storage)
             for param in child.activations:
                 self.visit(param, inner)
-            returned = self.visit(child.function.body, inner)
+            returned = self.visit(child.frame.function.body, inner)
         finally:
-            self.invocation_memos[child.key] = self._memo
+            self.occurrence_memos[child] = self._memo
             for name, table in saved.items():
                 setattr(self, name, table)
-            self.invocation = invocation
+            self.occurrence = occurrence
         destination = self.allocate(node, ctx)
         result_slots, returned_slots = leaves(destination), leaves(returned)
         tied = bool(result_slots) and len(result_slots) == len(returned_slots)
 
-        def within(invocation):
-            while invocation is not None:
-                if invocation is child:
+        def within(occurrence):
+            while occurrence is not None:
+                if occurrence is child:
                     return True
-                invocation = invocation.caller
+                occurrence = (None if occurrence.parent is None else occurrence.parent.occurrence)
             return False
 
         for result, source in zip(result_slots, returned_slots, strict=False):
             group = ctx.groups.find(source)
             members = tuple(value for value in ctx.values if ctx.groups.find(value) is group)
             independent = any(value in ctx.material for value in members) and all(
-                within(value.invocation) for value in members
+                within(value.occurrence) for value in members
             )
             tied = (independent and self.tie(result, source, ctx)) and tied
         child.result_tied = tied
-        self.escaped[child.key, id(child.function.body)] = destination
+        self.escaped[child, id(child.frame.function.body)] = destination
         return destination
 
     def result_interval(self, node: Expr, index: int, ctx: AllocationModel):
         """Use each tuple leaf's own consumers while keeping tensor intervals intact."""
-        interval = ctx.liveness.interval_of(node, ctx.current.invocation)
+        interval = ctx.liveness.interval_of(node, ctx.current.occurrence)
         if isinstance(node.type, TupleType):
             interval = replace(
                 interval,
@@ -600,7 +584,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                         use.at
                         for use in self.uses.get(
                             (
-                                invocation_key(ctx.current.invocation),
+                                ctx.current.occurrence,
                                 id(node),
                                 index,
                             ),
@@ -646,7 +630,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         self, node: Expr, index: int, lifetime: ValueLifetime, ctx: AllocationModel
     ) -> AllocationValue:
         """Register one result and, at addressable levels, its address variable."""
-        result = AllocationValue(node, index, lifetime, ctx.current.invocation)
+        result = AllocationValue(node, index, lifetime, ctx.current.occurrence)
         ctx.values.append(result)
         ctx.groups.add(result)
         level = lifetime.memory_level
@@ -656,13 +640,13 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             )
         return result
 
-    def storage_of(self, node: Expr, invocation=None) -> Storage:
+    def storage_of(self, node: Expr, occurrence=None) -> Storage:
         """Read completed storage; an unvisited value violates traversal order."""
-        if invocation is None or invocation is self.invocation:
+        if occurrence is None or occurrence is self.occurrence:
             return self._memo[id(node)][1]
-        if (invocation.key, id(node)) in self.escaped:
-            return self.escaped[invocation.key, id(node)]
-        return self.invocation_memos[invocation.key][id(node)][1]
+        if (occurrence, id(node)) in self.escaped:
+            return self.escaped[occurrence, id(node)]
+        return self.occurrence_memos[occurrence][id(node)][1]
 
     def visit_function_body(self, fn: Function, ctx: AllocationModel) -> Storage:
         """Visit function declarations before their body in the one traversal."""
@@ -674,7 +658,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         """Create material results with exactly their SSA live intervals."""
         if isinstance(node.type, TupleType) and result_copies(node) > 1:
             raise AnalysisError("allocation: staged tuple results are not supported")
-        key = (invocation_key(ctx.current.invocation), id(node))
+        key = (ctx.current.occurrence, id(node))
         quantities = ctx.quantities.get(key, ())
         if not quantities:
             return None
@@ -736,17 +720,8 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                     identity = isl.map.identity(
                         domain.get_space().map_from_set()
                     ).intersect_domain(domain)
-                    moved = self.record(result, MemoryMetadata, ctx) or MemoryMetadata()
-                    self.attach(
-                        result.invocation,
-                        result.value,
-                        replace(
-                            moved,
-                            alias=BufferAlias(
-                                node.args[slot], AccessRelation(identity), invocation=ctx.current.invocation
-                            ),
-                        ),
-                        ctx,
+                    ctx.aliases[result] = BufferAlias(
+                        node.args[slot], AccessRelation(identity), occurrence=ctx.current.occurrence
                     )
         body = self.visit(node.body, inner)
         yields = tuple(self.visit(operand, inner) for operand in node.yield_values)
@@ -809,8 +784,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         """Apply the window constraint and publish it together for lowering."""
         if self.alias(result, update, relation, ctx):
             if not isinstance(update.value.type, TupleType):
-                moved = self.record(update, MemoryMetadata, ctx) or MemoryMetadata()
-                self.attach(update.invocation, update.value, replace(moved, alias=alias), ctx)
+                ctx.aliases[update] = alias
 
     def default_visit_leaf(
         self, node: Expr, operands: tuple[Storage, ...], ctx: AllocationModel
@@ -854,15 +828,15 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 destination_access = next(a for a in inputs if a.input_index == 0)
                 update_access = next(a for a in inputs if a.input_index == 1)
                 insert_accesses = destination_access, update_access
-                update = self.storage_of(update_access.buffer, update_access.invocation)
-                destination = self.storage_of(destination_access.buffer, destination_access.invocation)
+                update = self.storage_of(update_access.buffer, update_access.occurrence)
+                destination = self.storage_of(destination_access.buffer, destination_access.occurrence)
                 if isinstance(update, tuple):
                     update = leaves(update)[update_access.index]
                 if isinstance(destination, tuple):
                     destination = leaves(destination)[destination_access.index]
             relations = operand_to_result_relation(node, ctx.current, insert_accesses)
-            for operand, index, relation, invocation in relations:
-                storage = self.storage_of(operand, invocation)
+            for operand, index, relation, occurrence in relations:
+                storage = self.storage_of(operand, occurrence)
                 if isinstance(storage, tuple):
                     storage = leaves(storage)[index]
                 if not isinstance(storage, AllocationValue):
@@ -874,7 +848,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 )
                 if any(
                     self.last_ordinary_use.get(
-                        (invocation_key(value.invocation), id(value.value), value.index), -1
+                        (value.occurrence, id(value.value), value.index), -1
                     )
                     > result.lifetime.defined_at
                     for value in members
@@ -899,7 +873,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                     loop = cursor.owner
                     if isinstance(loop, LoopRegion):
                         for slot, phi in enumerate(loop.params[: len(loop.yield_values)]):
-                            held = self.storage_of(phi, cursor.invocation)
+                            held = self.storage_of(phi, cursor.occurrence)
                             if isinstance(held, AllocationValue) and (
                                 ctx.groups.find(held) is ctx.groups.find(storage)
                             ):

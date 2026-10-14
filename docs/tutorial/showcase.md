@@ -1133,11 +1133,11 @@ report = json.loads(Path("tutorial-reports/stage0-128.json").read_text(encoding=
 summary = {
     "target": report["target"],
     "module": report["module"],
-    "function": report["function"],
+    "function": report["functions"][0]["function"],
     "topology": report["topology"],
     "requested": report["requested"],
     "executed": report["executed"],
-    "totals": report["totals"],
+    "totals": report["functions"][0]["totals"],
 }
 print(json.dumps(summary, indent=2, sort_keys=True))
 ```
@@ -1149,7 +1149,7 @@ print(json.dumps(summary, indent=2, sort_keys=True))
     "memory",
     "roofline"
   ],
-  "function": "gqa_decode",
+  "function": "Stage0_Naive.gqa_decode",
   "module": "Stage0_Naive",
   "requested": [
     "compute-cost",

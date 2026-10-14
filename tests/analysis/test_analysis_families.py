@@ -39,7 +39,7 @@ from tilefoundry.analysis.compute_cost import (
     local_duration_ns,
 )
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.invocation import invocation_values
+from tilefoundry.analysis.iteration_scope import walk_scopes
 from tilefoundry.analysis.memory import MemoryOptions
 from tilefoundry.dsl import *
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
@@ -196,11 +196,26 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
         assert get_metadata(results[name].function, PerformanceSummaryMetadata) is not None
 
     cross_scope = results["cross_scope"]
-    timed = tuple(
-        (call, cross_scope.records.get(invocation, call, PerformanceMetadata))
-        for invocation, call in invocation_values(cross_scope.invocations[0])
-        if isinstance(call, Call)
-    )
+    timed = []
+    for occurrence in walk_scopes(cross_scope.scopes):
+        if occurrence.frame is None:
+            continue
+        offset, cursor = 0, occurrence
+        while cursor.parent is not None:
+            called = get_metadata(cursor.owner, PerformanceMetadata)
+            offset += 0 if called is None else called.timeline.start_ns
+            cursor = cursor.parent.occurrence
+        for call in collect_exprs(occurrence.frame.function.body):
+            if not isinstance(call, Call):
+                continue
+            record = get_metadata(call, PerformanceMetadata)
+            if record is None:
+                continue
+            for iteration in range(record.timeline.trips):
+                start = offset + iteration * record.timeline.stride_ns
+                timed.append((call, replace(record, timeline=replace(record.timeline,
+                    start_ns=record.timeline.start_ns + start,
+                    end_ns=record.timeline.end_ns + start))))
     scalar_indices = tuple(
         (call, record)
         for call, record in timed
@@ -381,7 +396,7 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
     assert '#   error="smem placement peak 206.25KB exceeds capacity 103.12KB"' in render_text(
         render_analysis(tight_memory)
     )
-    assert render_analysis(tight_memory).data["function_records"]["memory"]["errors"] == [
+    assert render_analysis(tight_memory).data["functions"][0]['function_records']["memory"]["errors"] == [
         "smem placement peak 206.25KB exceeds capacity 103.12KB"
     ]
 

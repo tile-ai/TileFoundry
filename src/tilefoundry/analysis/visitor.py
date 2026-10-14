@@ -28,12 +28,11 @@ class AnalyzeContext:
     root: "IterationScope | None" = None
     current: "IterationScope | None" = None
     current_mesh: "Mesh | None" = None
-    records: object | None = None
 
     @property
     def topologies(self):
-        if self.current is not None and self.current.invocation is not None:
-            return self.current.invocation.frame.topologies
+        if self.current is not None and self.current.occurrence is not None:
+            return self.current.occurrence.frame.topologies
         return self.module.effective_topologies()
 
     def type_of(self, expr):

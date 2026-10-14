@@ -116,7 +116,7 @@ def reported(
 
 def _compute_cost_evidence(report: dict) -> str | None:
     """What `compute-cost` must have counted: flops, bucketed by dtype."""
-    flops = report["totals"]["flops"]
+    flops = report["functions"][0]['totals']["flops"]
     if not flops or not any(count > 0 for count in flops.values()):
         return f"reported no flops at all ({flops!r})"
     return None
@@ -129,11 +129,11 @@ def _memory_evidence(report: dict) -> str | None:
     what a program moves and what it must hold at once are two answers, reported
     as two.
     """
-    record = report["function_records"]["memory"]
+    record = report["functions"][0]['function_records']["memory"]
     solver_status = record.get("solver_status")
     if solver_status not in ("optimal", "feasible"):
         return f"solver status is {solver_status!r}"
-    gmem = report["totals"]["traffic"]["gmem"]
+    gmem = report["functions"][0]['totals']["traffic"]["gmem"]
     if not gmem.get("read", 0) > 0:
         return f"reported no gmem read ({gmem!r})"
     if not record["lifetimes"]:
@@ -143,7 +143,7 @@ def _memory_evidence(report: dict) -> str | None:
 
 def _roofline_evidence(report: dict) -> str | None:
     """What `roofline` must have decided: which side bounds, and the time it implies."""
-    record = report["function_records"]["roofline"]
+    record = report["functions"][0]['function_records']["roofline"]
     if record["bound_by"] not in ("compute", "memory", "balanced"):
         return f"bound_by is {record['bound_by']!r}, no rated resource"
     if not record["ideal_ns"] > 0:
@@ -153,7 +153,7 @@ def _roofline_evidence(report: dict) -> str | None:
 
 def _performance_evidence(report: dict) -> str | None:
     """What `performance` must have laid out and scaled by physical capacity."""
-    record = report["function_records"]["performance"]
+    record = report["functions"][0]['function_records']["performance"]
     envelope = record["timeline"]
     if envelope["start_ns"] != 0 or not envelope["end_ns"] > 0:
         return f"predicted interval is {envelope!r}"
@@ -207,14 +207,14 @@ def lifetimes(
     """What the memory analysis says each binding of one function costs."""
     report = reported(tf, source, case, selector, ("memory",), dims)
     return {
-        item["binding"]: item["bytes"] for item in report["function_records"]["memory"]["lifetimes"]
+        item["binding"]: item["bytes"] for item in report["functions"][0]['function_records']["memory"]["lifetimes"]
     }
 
 
 def traffic_read(tf, source: Path, case: ModelCase, selector: str, dims: Mapping[str, int]) -> int:
     """How many bytes the memory analysis says one function reads from gmem."""
     report = reported(tf, source, case, selector, ("memory",), dims)
-    return report["totals"]["traffic"]["gmem"]["read"]
+    return report["functions"][0]['totals']["traffic"]["gmem"]["read"]
 
 
 def one_rounding(want) -> tuple[str, dict[str, float]]:

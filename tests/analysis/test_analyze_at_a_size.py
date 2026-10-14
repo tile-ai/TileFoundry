@@ -37,7 +37,6 @@ from tilefoundry.analysis.access import Access
 from tilefoundry.analysis.allocation import AllocationConstraintVisitor, aligned
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.invocation import invocation_values
 from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
 from tilefoundry.analysis.liveness import analyze_liveness
 from tilefoundry.analysis.report import render_json, report_data
@@ -424,7 +423,7 @@ def assert_reported_contract(report: dict) -> None:
     written once, and its last trip still lands inside the prediction that
     contains it. A loop is not an occurrence and carries no timeline of its own.
     """
-    records = report["function_records"]
+    records = report["functions"][0]['function_records']
     summary = records["performance"]
     timeline = summary["timeline"]
     assert 0 <= timeline["start_ns"] <= timeline["end_ns"]
@@ -434,7 +433,7 @@ def assert_reported_contract(report: dict) -> None:
     assert records["roofline"]["ideal_ns"] <= predicted_ns
 
     timed = 0
-    for call in report["calls"]:
+    for call in report["functions"][0]['calls']:
         record = call.get("performance")
         if record is None:
             continue
@@ -447,7 +446,7 @@ def assert_reported_contract(report: dict) -> None:
         assert (stride == 0) if trips == 1 else (stride >= end - start), call["value"]
         assert end + (trips - 1) * stride <= timeline["end_ns"], call["value"]
     assert bool(timed) is bool(predicted_ns)
-    for loop in report["loops"]:
+    for loop in report["functions"][0]['loops']:
         assert "performance" not in loop, loop["value"]
 
     def nonnegative(value: object) -> None:
@@ -486,19 +485,19 @@ def assert_internal_contract(
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts, result.level)
-    for invocation, expr in invocation_values(result.invocations[0]):
-        if not isinstance(expr, Call) or id(expr) in invocation.callees:
+    for occurrence, expr in ((scope, expr) for scope in walk_scopes(result.scopes) if scope.frame is not None for expr in collect_exprs(scope.frame.function.body)):
+        if not isinstance(expr, Call) or any(scope.owner is expr for scope in occurrence.children):
             continue
-        cost = result.records.get(invocation, expr, ComputeCostMetadata)
+        cost = get_metadata(expr, ComputeCostMetadata)
         assert cost is not None
         duration = local_duration_ns(
             cost,
             throughput,
             services,
-            moved=result.records.get(invocation, expr, MemoryMetadata),
+            moved=get_metadata(expr, MemoryMetadata),
             level=result.level,
         )
-        record = result.records.get(invocation, expr, PerformanceMetadata)
+        record = get_metadata(expr, PerformanceMetadata)
         if not duration:
             assert record is None
             continue
@@ -511,7 +510,7 @@ def assert_internal_contract(
             (
                 scope
                 for scope in scopes
-                if scope.invocation is invocation and id(expr) in scope.accesses.get("narrow", {})
+                if scope.occurrence is occurrence and id(expr) in scope.accesses.get("narrow", {})
             ),
             None,
         )
@@ -581,7 +580,7 @@ def _assert_reported(case: ConcreteCase, report: dict) -> None:
     """
     assert set(report["executed"]) == set(FAMILIES)
     assert_reported_contract(report)
-    reported = report["function_records"]["memory"]
+    reported = report["functions"][0]['function_records']["memory"]
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
         gmem = reported["traffic"]["storage"]["gmem"]
         assert gmem["logical"]["read"] + gmem["logical"]["write"] == 102_172_180
@@ -813,8 +812,8 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     assert result.function is not authored
     assert result.function.name == authored.name
     assert all(
-        residual_dims(invocation.function, invocation.frame) == ()
-        for invocation in result.invocations
+        residual_dims(occurrence.frame.function, occurrence.frame) == ()
+        for occurrence in (scope for scope in walk_scopes(result.scopes) if scope.frame is not None)
     )
 
 

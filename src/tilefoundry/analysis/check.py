@@ -15,6 +15,7 @@ from tilefoundry.ir.core import (
     Call,
     Expr,
     RangeMetadata,
+    binding_name,
 )
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function
@@ -37,7 +38,6 @@ from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts
-from .invocation import call_labels
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -178,7 +178,6 @@ class _CheckCalls(CallFrameVisitor[None]):
     def __init__(self, frame, derive, label):
         super().__init__()
         self.frame, self.derive, self.label = frame, derive, label
-        self.labels = call_labels(frame)
 
     def default_visit_leaf(self, expr, operands, mesh):
         return None
@@ -198,7 +197,7 @@ class _CheckCalls(CallFrameVisitor[None]):
         given = iter(call.args)
         types = tuple(param.type if implicit and param.is_const else next(given).type
                       for param in callee.params)
-        derived = self.derive(inner, types, mesh, f"{self.label}/{self.labels[id(call)]}")
+        derived = self.derive(inner, types, mesh, f"{self.label}/{binding_name(call)}")
         if isinstance(call.target, Function):
             call.target = derived
 

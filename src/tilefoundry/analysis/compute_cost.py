@@ -17,7 +17,6 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
-from .invocation import InvocationWalker
 from .iteration_scope import Repeats
 from .metadata import Breakdown, ComputeCostMetadata, MemoryMetadata, breakdown, shares
 from .precision import AnalysisPrecision
@@ -228,6 +227,7 @@ def _accumulate(ctx: "ComputeCostContext", record: ComputeCostMetadata, repeats:
 
 @dataclass
 class ComputeCostContext(AnalyzeContext):
+    calls: tuple[ComputeCostContext, ...] = ()
     locals_by_unit: dict[str, CostContext] = field(default_factory=dict)
     whole: CostContext | None = None
     flops: dict[str, int] = field(default_factory=dict)
@@ -239,8 +239,27 @@ class ComputeCostContext(AnalyzeContext):
     precision: list[AnalysisPrecision] = field(default_factory=lambda: [AnalysisPrecision.EXACT])
 
 
-class ComputeCostVisitor(InvocationWalker, ExprVisitor[None]):
+class ComputeCostVisitor(ExprVisitor[None]):
     """Attach per-Call work and accumulate multiplicity-aware totals."""
+
+    def visit_Call(self, call, ctx):
+        child = next((scope for scope in ctx.current.children if scope.owner is call), None)
+        if child is None:
+            return self.default_visit_leaf(call, self.visit_operands(call, ctx), ctx)
+        for arg in call.args:
+            self.visit(arg, ctx)
+        if isinstance(child.index, Expr):
+            self.visit(child.index, ctx)
+        local = ComputeCostContext(ctx.module, ctx.target, ctx.topology_level, ctx.options,
+                                   current=child)
+        memo, self._memo = self._memo, {}
+        try:
+            self.visit(child.frame.function.body, replace(ctx, current=child, calls=(*ctx.calls, local)))
+        finally:
+            self._memo = memo
+        record = _summary(local)
+        attach(call, record)
+        attach(child.frame.function, record)
 
     def visit_MeshRegion(self, expr: MeshRegion, ctx: ComputeCostContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
@@ -269,9 +288,13 @@ class ComputeCostVisitor(InvocationWalker, ExprVisitor[None]):
         record = _call_cost_record(
             expr, ctx.locals_by_unit, repeats.mesh_positions, ctx.whole, ctx.topology_level
         )
-        self.attach(expr, record, ctx)
+        attach(expr, record)
         ctx.precision[0] = ctx.precision[0].join(repeats.trips_precision)
         _accumulate(ctx, record, repeats)
+        for call_ctx in ctx.calls:
+            local = ctx.current.repeats_of(expr, ctx.topology_level, stop=call_ctx.current)
+            call_ctx.precision[0] = call_ctx.precision[0].join(local.trips_precision)
+            _accumulate(call_ctx, record, local)
 
 
 def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
@@ -292,32 +315,23 @@ def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
         options=context.options,
         root=context.root,
         current=context.current,
-        records=context.records,
         locals_by_unit=locals_by_unit,
         whole=CostContext(frame=frame),
     )
     ComputeCostVisitor().visit(function.body, cost_context)
     if cost_context.call_count[0] > 0:
-        units = tuple(cost_context.by_unit)
-        attach(
-            function,
-            ComputeCostMetadata(
-                topologies=units,
-                precision=cost_context.precision[0],
-                flops=breakdown(
-                    cost_context.flops,
-                    tuple(cost_context.by_unit[u]["flops"] for u in units),
-                    0,
-                    logical=cost_context.flops_logical,
-                ),
-                other_ops=breakdown(
-                    cost_context.other_ops,
-                    tuple(cost_context.by_unit[u]["other_ops"] for u in units),
-                    0,
-                    logical=cost_context.other_ops_logical,
-                ),
-            ),
-        )
+        attach(function, _summary(cost_context))
+
+
+def _summary(ctx):
+    units = tuple(ctx.by_unit)
+    return ComputeCostMetadata(
+        topologies=units, precision=ctx.precision[0],
+        flops=breakdown(ctx.flops, tuple(ctx.by_unit[u]["flops"] for u in units), 0,
+                        logical=ctx.flops_logical),
+        other_ops=breakdown(ctx.other_ops, tuple(ctx.by_unit[u]["other_ops"] for u in units), 0,
+                            logical=ctx.other_ops_logical),
+    )
 
 
 __all__ = ["SELECTOR", "analyze_compute_cost"]

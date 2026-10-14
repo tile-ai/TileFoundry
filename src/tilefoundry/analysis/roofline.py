@@ -8,6 +8,8 @@ different count of the same flops.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from tilefoundry.ir.core import Call, Expr, describe_expr, get_metadata
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
@@ -16,7 +18,6 @@ from tilefoundry.ir.visitor import ExprVisitor
 
 from .errors import AnalysisError
 from .facts import ThroughputFacts
-from .invocation import InvocationWalker
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -130,31 +131,62 @@ def _cost_bound(
     )
 
 
-class RooflineVisitor(InvocationWalker, ExprVisitor[None]):
+class RooflineVisitor(ExprVisitor[None]):
     """Attach one bound per Call in expression order."""
 
     def __init__(self, facts: ThroughputFacts) -> None:
         super().__init__()
         self.facts = facts
 
+    def visit_Call(self, call, ctx):
+        child = next((scope for scope in ctx.current.children if scope.owner is call), None)
+        if child is None:
+            return self.default_visit_leaf(call, self.visit_operands(call, ctx), ctx)
+        for arg in call.args:
+            self.visit(arg, ctx)
+        if isinstance(child.index, Expr):
+            self.visit(child.index, ctx)
+        memo, self._memo = self._memo, {}
+        try:
+            self.visit(child.frame.function.body, replace(ctx, current=child))
+        finally:
+            self._memo = memo
+        self.default_visit_leaf(call, (), ctx)
+        attach(child.frame.function, get_metadata(call, RooflineMetadata))
+
+    def visit_MeshRegion(self, expr, ctx):
+        for arg in expr.args:
+            self.visit(arg, ctx)
+        child = next(scope for scope in ctx.current.children if scope.owner is expr)
+        self.visit(expr.body, replace(ctx, current=child))
+
+    def visit_LoopRegion(self, expr, ctx):
+        for arg in expr.args:
+            self.visit(arg, ctx)
+        child = next(scope for scope in ctx.current.children if scope.owner is expr)
+        inner = replace(ctx, current=child)
+        self.visit(expr.body, inner)
+        for arg in expr.yield_values:
+            self.visit(arg, inner)
+
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: AnalyzeContext
     ) -> None:
         if not isinstance(expr, Call):
             return
-        cost = self.record(expr, ComputeCostMetadata, ctx)
+        cost = get_metadata(expr, ComputeCostMetadata)
         if cost is None:
             raise AnalysisError(
                 f"{describe_expr(expr)}: roofline needs the compute-cost record "
                 "this call was never given"
             )
-        moved = self.record(expr, MemoryMetadata, ctx)
+        moved = get_metadata(expr, MemoryMetadata)
         if moved is None:
             raise AnalysisError(
                 f"{describe_expr(expr)}: roofline needs the traffic record the "
                 "memory family states for every call it measures"
             )
-        self.attach(expr, _cost_bound(cost, moved, self.facts), ctx)
+        attach(expr, _cost_bound(cost, moved, self.facts))
 
 
 def analyze_roofline(

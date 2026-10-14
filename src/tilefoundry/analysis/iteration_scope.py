@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 
 import isl
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var, binding_name
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -43,7 +43,6 @@ from .access import (
     resolve_access,
 )
 from .errors import AnalysisError
-from .invocation import call_labels
 from .loop_domain import induction_name, iteration_domain
 from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
@@ -97,30 +96,11 @@ class IterationScope:
     )
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
     topologies: tuple[Topology, ...] = ()
-    invocation: IterationScope | None = None
-    call_label: str = ""
+    occurrence: IterationScope | None = None
     frame: CallFrame | None = None
-    callees: dict[int, IterationScope] = field(default_factory=dict)
     variance: dict[int, frozenset[int]] = field(default_factory=dict)
     tables: dict[str, object] = field(default_factory=dict)
-    records: object | None = None
     result_tied: bool = False
-
-    @property
-    def caller(self):
-        return None if self.parent is None else self.parent.invocation
-
-    @property
-    def key(self):
-        return None if isinstance(self.owner, Function) else self
-
-    @property
-    def function(self):
-        return self.owner if isinstance(self.owner, Function) else self.frame.function
-
-    @property
-    def label(self):
-        return self.function.name if self.caller is None else f"{self.caller.label}/{self.call_label}"
 
     @property
     def slot_key(self):
@@ -141,21 +121,21 @@ class IterationScope:
 
     @property
     def activations(self):
-        return tuple(p for p in self.function.params if self.slot_key is None or not p.is_const)
+        return tuple(p for p in self.frame.function.params if self.slot_key is None or not p.is_const)
 
     @property
     def weights(self):
-        return tuple(p for p in self.function.params if self.slot_key is not None and p.is_const)
+        return tuple(p for p in self.frame.function.params if self.slot_key is not None and p.is_const)
 
     def resource_key(self, weight):
         path, cursor = [], self
-        while cursor.caller is not None:
+        while cursor.parent is not None:
             if cursor.slot_key is not None:
                 segment = cursor.slot_key
                 if cursor.index is not None:
                     segment += f".{cursor.index if isinstance(cursor.index, int) else '{i}'}"
                 path.append(segment)
-            cursor = cursor.caller
+            cursor = cursor.parent.occurrence
         return ".".join((*reversed(path), weight.name))
 
     def projected_relations(self, call: Call, ctx: TypeInferContext) -> tuple[AccessRelation, ...]:
@@ -191,12 +171,12 @@ class IterationScope:
             cursor = cursor.parent
         return value
 
-    def is_variant(self, value: Expr, invocation=None) -> bool:
+    def is_variant(self, value: Expr, occurrence=None) -> bool:
         """Whether *value* depends on this loop's induction or carry values."""
         if not isinstance(self.owner, LoopRegion):
             return False
-        invocation = self.invocation if invocation is None else invocation
-        return invocation is not None and id(self) in invocation.variance.get(id(value), frozenset())
+        occurrence = self.occurrence if occurrence is None else occurrence
+        return occurrence is not None and id(self) in occurrence.variance.get(id(value), frozenset())
 
     def enclosing_loops(self) -> tuple[LoopRegion, ...]:
         """Return this scope's loop owners in outer-to-inner order."""
@@ -228,12 +208,12 @@ class IterationScope:
             cursor = cursor.parent
         return make_mesh(*reversed(meshes)) if meshes else None
 
-    def mesh_positions(self, unit: str | None) -> int:
+    def mesh_positions(self, unit: str | None, stop=None) -> int:
         """Count positions in the composed enclosing meshes at a topology unit."""
         meshes = []
         root = self
         cursor: IterationScope | None = self
-        while cursor is not None:
+        while cursor is not None and cursor is not stop:
             if isinstance(cursor.owner, MeshRegion):
                 meshes.append(cursor.owner.mesh)
             root = cursor
@@ -241,24 +221,24 @@ class IterationScope:
         if not meshes or unit is None:
             return 1
         meshes.reverse()
-        return _positions_at(make_mesh(*meshes), unit, root.topologies)
+        return _positions_at(make_mesh(*meshes), unit, stop.frame.topologies if stop is not None else root.topologies)
 
-    def repeats_of(self, call: Call, unit: str | None) -> Repeats:
+    def repeats_of(self, call: Call, unit: str | None, stop=None) -> Repeats:
         """Return this Call's loop and mesh multiplicities in the current scope."""
         varying = loops = 1
         precision = AnalysisPrecision.EXACT
         cursor: IterationScope | None = self
-        while cursor is not None:
+        while cursor is not None and cursor is not stop:
             if isinstance(cursor.owner, LoopRegion):
                 trips = cursor.trips()
                 loops *= trips
-                if self.invocation is not None and id(cursor) in self.invocation.variance.get(
+                if self.occurrence is not None and id(cursor) in self.occurrence.variance.get(
                     id(call), frozenset()
                 ):
                     varying *= trips
                 precision = precision.join(cursor.trips_precision)
             cursor = cursor.parent
-        return Repeats(varying, loops, self.mesh_positions(unit), precision)
+        return Repeats(varying, loops, self.mesh_positions(unit, stop=stop), precision)
 
     def _counted(self) -> tuple[int, AnalysisPrecision]:
         """This scope's iteration count relative to its parent, and how exact it is.
@@ -318,6 +298,16 @@ class IterationScope:
         """
         self.trips()
         return self._trips_cache[1]
+
+
+def occurrence_path(scope):
+    """Binding-name path to an occurrence, with an empty root path."""
+    parts = []
+    while scope.parent is not None:
+        if isinstance(scope.owner, Call):
+            parts.append(binding_name(scope.owner))
+        scope = scope.parent
+    return "/".join(reversed(parts))
 
 
 class ScopeBuilder(CallFrameVisitor[None]):
@@ -396,7 +386,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
             name: value for name, value in scope.domain_params.items()
             if relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
         }
-        return BufferAlias(expr, AccessRelation(relation, values), index, scope.invocation)
+        return BufferAlias(expr, AccessRelation(relation, values), index, scope.occurrence)
 
     def _material_source(self, expr: Expr, held, scope: IterationScope) -> BufferAlias | tuple:
         """Number tensor leaves first, then retain the result's type structure."""
@@ -468,7 +458,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
         }
         return (
             BufferAlias(
-                operand.buffer, AccessRelation(relation, values), operand.index, operand.invocation
+                operand.buffer, AccessRelation(relation, values), operand.index, operand.occurrence
             ),
             precision.join(self.precisions[view][id(alias.buffer)]),
         )
@@ -561,18 +551,14 @@ class ScopeBuilder(CallFrameVisitor[None]):
             tuple(zip((p for p in frame.function.params
                        if isinstance(expr.target, Function) or not p.is_const), expr.args, strict=True)),
             domain_params=scope.domain_params, accesses=self._empty_accesses(),
-            call_label=self.labels[id(expr)], frame=frame, records=self.unit_ctx.records,
+            frame=frame,
         )
         if isinstance(child.index, Expr):
             self._visit(child.index, scope)
-        child.invocation = child
-        scope.invocation.callees[id(expr)] = child
+        child.occurrence = child
         scope.children = (*scope.children, child)
-        if self.unit_ctx.records is not None:
-            self.unit_ctx.records.invocations.append(child)
         names = ("sources", "precisions", "definitions", "aliases", "seen", "seeds", "variance")
         saved = {name: getattr(self, name) for name in names}
-        previous_labels, self.labels = self.labels, call_labels(frame)
         self.sources = {view: {} for view in self.views}
         self.precisions = {view: {} for view in self.views}
         self.definitions, self.aliases, self.seeds, self.seen = {}, {}, {}, set()
@@ -608,7 +594,6 @@ class ScopeBuilder(CallFrameVisitor[None]):
             child.tables = {name: getattr(self, name) for name in names}
         finally:
             self.type_ctx, self.unit_ctx = saved_type, saved_unit
-            self.labels = previous_labels
             for name, table in saved.items():
                 setattr(self, name, table)
         for view, (source, precision) in results.items():
@@ -623,7 +608,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
             return
         self.seen.add(id(expr))
         self.definitions[id(expr)] = scope
-        if isinstance(expr, Call) and (frame := self.callee_frame(expr, scope.invocation.frame)) is not None:
+        if isinstance(expr, Call) and (frame := self.callee_frame(expr, scope.occurrence.frame)) is not None:
             self._visit_call(expr, scope, frame)
             return
         if isinstance(expr, LoopRegion):
@@ -639,7 +624,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
                 captures=expr.captures(),
                 domain_params=domain_params,
                 accesses=self._empty_accesses(),
-                invocation=scope.invocation,
+                occurrence=scope.occurrence,
             )
             scope.children = (*scope.children, child)
             self.seeds[id(expr.induction_var)] = child
@@ -688,7 +673,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
                 captures=expr.captures(),
                 domain_params=scope.domain_params,
                 accesses=self._empty_accesses(),
-                invocation=scope.invocation,
+                occurrence=scope.occurrence,
             )
             scope.children = (*scope.children, child)
             for param, argument in child.captures:
@@ -736,13 +721,9 @@ class ScopeBuilder(CallFrameVisitor[None]):
             accesses=self._empty_accesses(),
             topologies=self.topologies,
         )
-        root.invocation = root
+        root.occurrence = root
         root.frame = CallFrame(self.type_ctx.module, self.graph)
-        self.labels = call_labels(root.frame)
         root.variance = self.variance
-        root.records = self.unit_ctx.records
-        if self.unit_ctx.records is not None:
-            self.unit_ctx.records.invocations.append(root)
         for param in self.graph.params:
             self._visit(param, root)
         if self.graph.body is not None:
