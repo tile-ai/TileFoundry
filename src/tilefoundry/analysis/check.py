@@ -19,11 +19,11 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.module import (
     Module,
+    ModuleList,
     called_function_scopes,
     function_scopes,
     instance_slot,
     reachable_function_scopes,
-    reachable_functions,
     resolve_callee,
 )
 from tilefoundry.ir.hir.function import Function
@@ -33,7 +33,7 @@ from tilefoundry.ir.hir.specialize import (
     _record_complete_bindings,
     dim_vars_reached,
     is_concrete,
-    specialize_concretely,
+    specialize_function,
 )
 from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.types import Topology, callable_type_for
@@ -47,8 +47,7 @@ from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts
@@ -60,6 +59,7 @@ from .metadata import (
     RegionMemoryMetadata,
     RooflineMetadata,
 )
+from .program import Program
 
 _INLINE_NODES = 10_000
 _DERIVED_METADATA = {
@@ -206,12 +206,17 @@ def resolve_program_geometry(
     function_bindings = {name: extent for name, extent in dims.items() if name not in geometry_only}
     try:
         if function_bindings:
-            function = specialize_concretely(function, function_bindings, ctx)
+            function = specialize_function(function, function_bindings, ctx=ctx)
         function = _record_complete_bindings(function, dims)
         execution_module = _substitute_module_tree(module, dims)
     except DimSubstitutionError as error:
         raise SpecializationError(str(error)) from None
-    _require_concrete_geometry(execution_module, function, error_type=SpecializationError)
+    for owner in _reached_owners(execution_module, function):
+        for topology in owner.effective_topologies():
+            if static_dim_value(topology.size) is None:
+                raise SpecializationError(
+                    f"program topology level {topology.name!r} still states symbolic extent {topology.size!r}; bind every dimension before analysis"
+                )
     return execution_module, function
 
 
@@ -287,25 +292,30 @@ def _substitute_module_tree(module: Module, dims: Mapping[str, int]) -> Module:
         substitute_topology_dims(topology, dims) for topology in module.effective_topologies()
     )
 
+    memo = {}
+
     def declared(node: Module) -> Module:
-        children = tuple(declared(child) for child in node.modules)
+        if id(node) in memo:
+            return memo[id(node)]
+        children = {
+            key: ModuleList(
+                tuple(declared(child) for child in slot.elements)
+                if slot.indexed
+                else declared(slot.elements[0])
+            )
+            for key, slot in node.children.items()
+        }
         topologies = (
             None
             if node.topologies is None
             else tuple(substitute_topology_dims(topology, dims) for topology in node.topologies)
         )
-        if children == node.modules and topologies == node.topologies:
-            return node
-        return replace(node, modules=children, topologies=topologies)
+        result = replace(node, children=children, topologies=topologies)
+        memo[id(node)] = result
+        return result
 
-    children = tuple(declared(child) for child in module.modules)
-    if children == module.modules and effective == module.effective_topologies():
-        return module
-    try:
-        target = module.resolve_target()
-    except ValueError:
-        target = module.target
-    return replace(module, modules=children, target=target, topologies=effective)
+    result = declared(module)
+    return replace(result, target=module.target, topologies=effective)
 
 
 def _require_concrete_geometry(
@@ -569,11 +579,11 @@ def check_program(
     topology_level: str | None = None,
     budget: int = _INLINE_NODES,
     analyzers: tuple[object, ...] = (),
-) -> Function:
+) -> "Program":
     """Prove one program holds together, then return the view analysis will read.
 
-    The returned Function has no Function-call wrapper. LoopRegion survives
-    unchanged: a loop stays a loop. The authored Module and Function are untouched.
+    The Program retains calls and has one typed derived body per definition.
+    LoopRegion survives unchanged. The authored Module and Function are untouched.
 
     Each analysis states what it needs of the program through its own checker,
     and every one of them answers before any of them writes. A checker that
@@ -583,11 +593,17 @@ def check_program(
         raise AnalysisError(
             f"inlining {function.name!r} needs a non-negative integer node budget, got {budget!r}"
         )
-    derived = InlineCloner(module, function, budget).clone()
-    TypeInferVisitor(ranges=True).visit(
-        derived, TypeInferContext(scope=FunctionScope(module, derived))
+    from .program import build_program  # noqa: PLC0415 -- builder uses clone helpers
+
+    program = build_program(
+        module, function, None, TypeInferContext(scope=_required_scope(module, function))
     )
-    _require_concrete_geometry(module, derived, error_type=AnalysisError)
+    size = sum(len(collect_exprs(body.body)) for body in program.bodies())
+    if size > budget:
+        raise AnalysisError(
+            f"analysis program {function.name!r} has {size} derived body nodes, exceeding the node budget {budget}"
+        )
+    derived = program.root
     target = module.resolve_target()
     for topology in module.effective_topologies():
         try:
@@ -605,15 +621,16 @@ def check_program(
                 f"program topology level {topology_level!r} is invalid: {error}"
             ) from None
 
-    validate_call_context(module, reachable_functions(function, _required_scope(module, function)))
+    validate_call_context(module, program)
     ctx = analysis_check_context(module, derived, topology_level)
     for analyzer in analyzers:
         checker = analyzer.get_checker()
         if checker is None:
             continue
         checker.check_target_facts(ctx)
-        checker.visit(derived.body, ctx)
-    return derived
+        for body in program.bodies():
+            checker.visit(body.body, replace(ctx, function=body))
+    return program
 
 
 def validate_call_context(module: Module, functions: Iterable[Function]) -> None:
@@ -624,16 +641,28 @@ def validate_call_context(module: Module, functions: Iterable[Function]) -> None
     canonical spelling, so a child declaring the caller's hierarchy explicitly
     passes and any other value is a different context, not a nested launch.
     """
-    for caller in functions:
-        scope = _required_scope(module, caller)
-        caller_owner = _scope_owner(scope)
-        for callee, inner in called_function_scopes(caller, scope):
-            callee_owner = _scope_owner(inner)
-            if callee_owner.effective_topologies() != caller_owner.effective_topologies():
-                raise AnalysisError(
-                    f"{caller_owner.name!r} calls {callee_owner.name!r}, which "
-                    f"resolves a different topology hierarchy "
-                    f"{callee_owner.effective_topologies()} against "
-                    f"{caller_owner.effective_topologies()}; one kernel invocation "
-                    "runs one hierarchy -- declare none on the child and inherit"
-                )
+    if isinstance(functions, Program):
+        edges = []
+        for body in functions.bodies():
+            scope = functions.scopes[id(body)]
+            for expr in collect_exprs(body.body):
+                if functions.sites.get(id(expr)):
+                    _callee, inner = resolve_callee(expr, scope)
+                    edges.append((scope, inner))
+    else:
+        edges = [
+            (scope, inner)
+            for caller in functions
+            for scope in (_required_scope(module, caller),)
+            for _callee, inner in called_function_scopes(caller, scope)
+        ]
+    for scope, inner in edges:
+        caller_owner, callee_owner = _scope_owner(scope), _scope_owner(inner)
+        if callee_owner.effective_topologies() != caller_owner.effective_topologies():
+            raise AnalysisError(
+                f"{caller_owner.name!r} calls {callee_owner.name!r}, which "
+                f"resolves a different topology hierarchy "
+                f"{callee_owner.effective_topologies()} against "
+                f"{caller_owner.effective_topologies()}; one kernel invocation "
+                "runs one hierarchy -- declare none on the child and inherit"
+            )

@@ -28,6 +28,8 @@ class AnalyzeContext:
     root: "IterationScope | None" = None
     current: "IterationScope | None" = None
     current_mesh: "Mesh | None" = None
+    program: object | None = None
+    records: object | None = None
 
     @property
     def topologies(self):

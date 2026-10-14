@@ -197,13 +197,15 @@ def _not_reported(_record: MemoryMetadata, _expr: object) -> None:
 expr_field(MemoryMetadata, "alias", _not_reported)
 
 
-def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str, object]:
+def _records_of(
+    expr: object, selected: frozenset[type[IRMetadata]], metadata_of=get_metadata
+) -> dict[str, object]:
     """Every selected record on *expr*, keyed by the family that owns it."""
     result: dict[str, object] = {}
     for metadata_type in declared_records():
         if metadata_type not in selected:
             continue
-        record = get_metadata(expr, metadata_type)
+        record = metadata_of(expr, metadata_type)
         if record is not None:
             result[family_of(metadata_type)] = render_record(record, expr)
     return result
@@ -235,6 +237,8 @@ def report_data(
     executed: tuple[str, ...],
     metadata_types: tuple[type[IRMetadata], ...],
     call_labels: Mapping[int, str] | None = None,
+    frames=(),
+    records=None,
 ) -> dict[str, object]:
     """Project one completed analysis into stable, serializable report data."""
     selected_types_ = selected_types(module, analyses, metadata_types)
@@ -254,8 +258,8 @@ def report_data(
         "requested": list(analyses),
         "executed": list(executed),
         "function_records": function_records,
-        "calls": _call_records(function, selected, call_labels),
-        "loops": _loop_records(function, selected),
+        "calls": _call_records(function, selected, call_labels, frames, records),
+        "loops": _loop_records(function, selected, frames, records),
     }
     available = set(metadata_types)
     asked = {ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata}
@@ -268,38 +272,78 @@ def _call_records(
     function: Function,
     selected: frozenset[type[IRMetadata]],
     call_labels: Mapping[int, str] | None,
+    frames=(),
+    records=None,
 ) -> list[dict[str, object]]:
     """Every selected record attached to a Call, in program order."""
     rows: list[dict[str, object]] = []
-    for expr in collect_exprs(function.body):
+    from .program import frame_values  # noqa: PLC0415
+
+    values = (
+        frame_values(frames[0])
+        if frames
+        else ((None, expr) for expr in collect_exprs(function.body))
+    )
+    for frame, expr in values:
         if not isinstance(expr, Call):
             continue
-        records = _records_of(expr, selected)
-        if not records:
+        held = _records_of(
+            expr, selected, get_metadata if records is None else records.reader(frame)
+        )
+        if not held:
             continue
         if call_labels is not None:
-            value = call_labels.get(id(expr))
+            value = call_labels.get((frame.key, id(expr))) if frame is not None else None
+            if value is None:
+                value = call_labels.get(id(expr))
             if value is None:
                 continue
         else:
             value = binding_name(expr) or type(expr.target).__name__.lower()
-        rows.append({"value": value, **records})
+        rows.append(
+            {
+                "value": value,
+                **(
+                    {"frame": frame.label} if frame is not None and frame.parent is not None else {}
+                ),
+                **held,
+            }
+        )
     return rows
 
 
 def _loop_records(
     function: Function,
     selected: frozenset[type[IRMetadata]],
+    frames=(),
+    records=None,
 ) -> list[dict[str, object]]:
     """Every selected record attached to an authored loop."""
     rows: list[dict[str, object]] = []
-    for expr in collect_exprs(function.body):
+    from .program import frame_values  # noqa: PLC0415
+
+    values = (
+        frame_values(frames[0])
+        if frames
+        else ((None, expr) for expr in collect_exprs(function.body))
+    )
+    for frame, expr in values:
         if not isinstance(expr, LoopRegion):
             continue
-        records = _records_of(expr, selected)
-        if not records:
+        held = _records_of(
+            expr, selected, get_metadata if records is None else records.reader(frame)
+        )
+        if not held:
             continue
-        rows.append({"value": expr.induction_var.name, **records})
+        rows.append(
+            {
+                "value": expr.induction_var.name,
+                **(
+                    {"frame": frame.label} if frame is not None and frame.parent is not None else {}
+                ),
+                **held,
+            }
+        )
     return rows
 
 

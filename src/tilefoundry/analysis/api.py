@@ -16,12 +16,13 @@ from dataclasses import dataclass
 from tilefoundry.analysis.check import check_program, resolve_program_geometry
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, ScopeBuilder
+from tilefoundry.analysis.program import CallFrame, FrameRecords, Program
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core import IRMetadata
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, module_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry.ir.visitor import function_values
@@ -35,7 +36,7 @@ class AnalysisResult:
 
     ``executed`` records dependency order and ``metadata_types`` lists records
     actually written, excluding analyses that matched nothing. ``function`` is
-    the inlined view that carries those records; ``module`` remains the call's
+    the derived root that carries root-frame records; ``module`` remains the call's
     execution domain.
     """
 
@@ -46,6 +47,9 @@ class AnalysisResult:
     topology_level: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
+    program: Program
+    records: FrameRecords
+    frames: tuple[CallFrame, ...]
 
     @property
     def level(self) -> str | None:
@@ -143,9 +147,12 @@ def build_iteration_scopes(
     if topology_level is None:
         topology_level = topologies[0].name if topologies else None
 
-    function = check_program(module, function, topology_level=topology_level, analyzers=analyzers)
-    context = AnalyzeContext(module, target, topology_level, options)
-    context.root = context.current = ScopeBuilder(module, function, ctx=context).build()
+    program = check_program(module, function, topology_level=topology_level, analyzers=analyzers)
+    function = program.root
+    context = AnalyzeContext(
+        module, target, topology_level, options, program=program, records=FrameRecords()
+    )
+    context.root = context.current = ScopeBuilder(module, function, ctx=context, program=program).build()
 
     return context
 
@@ -165,8 +172,8 @@ def analyze(
     The module supplies target and topology; *topology_level* defaults to its
     coarsest level. *dims* selects a specialization and substitutes concrete
     extents before measurement. The original function must be a prototype or
-    variant owned by the module, and the result identifies the concrete inlined
-    view that received records.
+    variant owned by the module, and the result identifies the concrete derived
+    root that received records.
     """
     if topology_level is not None and level is not None and topology_level != level:
         raise ValueError("analyze: topology_level and level disagree")
@@ -185,29 +192,37 @@ def analyze(
     module = context.module
     topology_level = context.topology_level
     function = context.root.owner
-    functions = (function,)
+    program = context.program
+    functions = program.bodies()
+    frame_records = context.records
 
     order: list[type[IRMetadata]] = []
-    written_records: set[tuple[int, type]] = set()
+    written_records: set[tuple] = set()
+    authored = tuple(
+        fn for owner in module_functions(result_module) if isinstance(owner, Function) for fn in (owner, *owner.variants)
+    )
+    authored_before = _metadata_snapshot(authored)
     for algorithm in closure:
-        before = _metadata_snapshot(functions)
+        before = frame_records.snapshot(program)
+        body_before = _metadata_snapshot(functions[1:])
         try:
             algorithm.run(function, context)
         except UnsupportedCapabilityError as error:
             raise AnalysisError(f"{algorithm.selector}: {error}") from None
-        after = _metadata_snapshot(functions)
+        if _metadata_snapshot(authored) != authored_before:
+            raise AnalysisError(f"{algorithm.selector!r} changed authored IR metadata")
+        after = frame_records.snapshot(program)
+        _require_frame_writes(algorithm, body_before, _metadata_snapshot(functions[1:]))
         records = _require_owned_writes(algorithm, before, after)
         written_records |= records
-        written = {metadata_type for _expr_id, metadata_type in records}
+        written = {key[-1] for key in records}
         for metadata_type in algorithm.produces:
             if metadata_type in written and metadata_type not in order:
                 order.append(metadata_type)
 
-    final = _metadata_snapshot(functions)
+    final = frame_records.snapshot(program)
     surviving = {
-        metadata_type
-        for key in written_records & final.keys()
-        for _expr_id, metadata_type in (key,)
+        metadata_type for key in written_records & final.keys() for metadata_type in (key[-1],)
     }
 
     result = AnalysisResult(
@@ -218,6 +233,9 @@ def analyze(
         topology_level=topology_level,
         executed=tuple(algorithm.selector for algorithm in closure),
         metadata_types=tuple(item for item in order if item in surviving),
+        program=program,
+        records=frame_records,
+        frames=tuple(frame_records.frames),
     )
     dump(
         "analysis.json",
@@ -229,6 +247,8 @@ def analyze(
                 topology_level=result.topology_level,
                 executed=result.executed,
                 metadata_types=result.metadata_types,
+                frames=result.frames,
+                records=result.records,
             )
         ),
         DumpFlags.ANALYSIS,
@@ -294,7 +314,7 @@ def _require_owned_writes(
     """
     owned = set(algorithm.produces)
     changed, written = _metadata_delta(before, after)
-    trespassed = {metadata_type for _expr_id, metadata_type in changed} - owned
+    trespassed = {key[-1] for key in changed} - owned
     if trespassed:
         raise AnalysisError(
             f"{algorithm.selector!r} changed Metadata it does not declare: "
@@ -302,6 +322,14 @@ def _require_owned_writes(
             f"{sorted(item.__name__ for item in owned)}"
         )
     return written
+
+
+def _require_frame_writes(algorithm, before, after):
+    """Shared derived callee nodes cannot own invocation-specific records."""
+    if before != after:
+        raise AnalysisError(
+            f"{algorithm.selector!r} wrote derived callee metadata outside FrameRecords"
+        )
 
 
 __all__ = ["AnalysisResult", "analyze", "build_iteration_scopes"]

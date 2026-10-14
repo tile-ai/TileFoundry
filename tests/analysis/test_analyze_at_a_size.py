@@ -37,14 +37,14 @@ from tilefoundry.analysis.access import Access
 from tilefoundry.analysis.allocation import AllocationConstraintVisitor, aligned
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
+from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
 from tilefoundry.analysis.liveness import analyze_liveness
+from tilefoundry.analysis.program import frame_values
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, describe_expr, get_metadata
-from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
@@ -101,16 +101,6 @@ class _PersistentScheduleExpectation:
 
 
 EXPECTED_MEMORY_PEAKS = {
-    "child_matmul_target.ChildMatmul.run[static]": {
-        "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
-        "rmem": 64 * 32 * 4,
-        "smem": 64 * 16 * 2 + 16 * 32 * 2,
-    },
-    "child_matmul_target.ChildMatmulDirect.direct[static]": {
-        "gmem": 64 * 64 * 2 + 64 * 32 * 2,
-        "rmem": 64 * 32 * 4,
-        "smem": 64 * 16 * 2 + 16 * 32 * 2,
-    },
     "child_matmul_target.ChildMatmulRoot.child.run[static]": {
         "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
         "rmem": 64 * 32 * 4,
@@ -141,11 +131,6 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
-    "child_matmul_target.ChildMatmulStaged.staged[k_len=64]": {
-        "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
-        "rmem": 64 * 32 * 4,
-        "smem": 64 * 16 * 2 + 16 * 32 * 2,
-    },
     "data_started_window.DataStart.probe[static]": {"gmem": 4_384, "rmem": 16, "smem": 256},
     "data_started_window.MeshStart.probe[static]": {"gmem": 4_384, "rmem": 8, "smem": 256},
     "derived_prefill.DerivedPrefill.prefill[prefill_n=64,topology_only=128]": {
@@ -161,7 +146,7 @@ EXPECTED_MEMORY_PEAKS = {
     "fused_boundary.FusedBoundary.root[static]": {
         "gmem": 512,
         "rmem": 8 * 2 + 8 * 4,
-        "smem": 32,
+        "smem": 64,
     },
     "fused_boundary.FusedBoundary.stage[static]": {"smem": 64},
     "gemm_schedules.Gemm_MNK_NT128x128x64_w17x8.gemm[static]": {
@@ -276,7 +261,6 @@ EXPECTED_MEMORY_PEAKS = {
     "moe_mega_kernel.MoEMegaKernel.experts[static]": {"gmem": 64_000},
     "moe_mega_kernel.MoEMegaKernel.routed_expert[static]": {"gmem": 61_696},
     "moe_mega_kernel.MoEMegaKernel.shared_expert[static]": {"gmem": 64_000},
-    "nested_twin.Weighted.scaled[static]": {"gmem": 1_348, "rmem": 4},
     "performance_findings.Compare.kernel[static]": {"gmem": 136_192},
     "performance_findings.GmemSquare.kernel[static]": {"gmem": 68_096},
     "performance_findings.Levels.kernel[static]": {
@@ -323,12 +307,12 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 3 * 128 * 128 * 2,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]": {
-        "gmem": 4_611_690_528,
+        "gmem": 4_611_690_784,
         "rmem": 1_036,
         "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]": {
-        "gmem": 4_611_690_528,
+        "gmem": 4_611_690_784,
         "rmem": 1_036,
         "smem": 65_792,
     },
@@ -357,8 +341,6 @@ EXPECTED_MEMORY_PEAKS = {
     "specialize_through_call.ToCallee.pick[n=128]": {"gmem": 1_024, "smem": 64},
     "specialize_through_call.ToCallee.run[n=128]": {"gmem": 1_024, "smem": 64},
     "square_cuda.Model.main[static]": {"gmem": 676, "rmem": 4},
-    "tiny_tp_decoder.DecoderLayer.decode[static]": {"gmem": 48, "rmem": 16},
-    "tiny_tp_decoder.DecoderLayer.project[static]": {"gmem": 128},
     "tiny_tp_decoder.TinyTPDecoderLM.layer.decode[static]": {"gmem": 48, "rmem": 16},
     "tiny_tp_decoder.TinyTPDecoderLM.layer.project[static]": {"gmem": 128},
     "tp_all_to_all.TransposeShard.transpose_shard[static]": {"gmem": 256},
@@ -504,19 +486,19 @@ def assert_internal_contract(
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts, result.level)
-    for expr in collect_exprs(result.function.body):
-        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+    for frame, expr in frame_values(result.frames[0]):
+        if not isinstance(expr, Call) or id(expr) in result.program.sites:
             continue
-        cost = get_metadata(expr, ComputeCostMetadata)
+        cost = result.records.get(frame, expr, ComputeCostMetadata)
         assert cost is not None
         duration = local_duration_ns(
             cost,
             throughput,
             services,
-            moved=get_metadata(expr, MemoryMetadata),
+            moved=result.records.get(frame, expr, MemoryMetadata),
             level=result.level,
         )
-        record = get_metadata(expr, PerformanceMetadata)
+        record = result.records.get(frame, expr, PerformanceMetadata)
         if not duration:
             assert record is None
             continue
@@ -526,7 +508,11 @@ def assert_internal_contract(
         runs = span // duration
         available = 1
         owner = next(
-            (scope for scope in scopes if id(expr) in scope.accesses.get("narrow", {})),
+            (
+                scope
+                for scope in scopes
+                if scope.frame is frame and id(expr) in scope.accesses.get("narrow", {})
+            ),
             None,
         )
         if owner is not None:
@@ -691,7 +677,7 @@ def test_every_internal_record_agrees(case: ConcreteCase, monkeypatch: pytest.Mo
         metadata_types=result.metadata_types,
     )
     _assert_reported(case, json.loads(render_json(report)))
-    scopes = tuple(walk_scopes(build_scopes(result.module, result.function)))
+    scopes = tuple(walk_scopes(result.scopes))
     assert_internal_contract(result, scopes)
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
         rms_scopes = [
@@ -826,7 +812,10 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
 
     assert result.function is not authored
     assert result.function.name == authored.name
-    assert residual_dims(result.function) == ()
+    assert all(
+        residual_dims(body, result.program.scopes[id(body)]) == ()
+        for body in result.program.bodies()
+    )
 
 
 def test_without_a_size_the_result_names_the_record_bearing_view() -> None:

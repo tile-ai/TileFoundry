@@ -19,6 +19,7 @@ from .facts import PerformanceServiceFacts, ThroughputFacts
 from .iteration_scope import Repeats
 from .metadata import Breakdown, ComputeCostMetadata, MemoryMetadata, breakdown, shares
 from .precision import AnalysisPrecision
+from .program import FrameWalker
 from .visitor import AnalyzeContext
 
 SELECTOR = "compute-cost"
@@ -237,7 +238,7 @@ class ComputeCostContext(AnalyzeContext):
     precision: list[AnalysisPrecision] = field(default_factory=lambda: [AnalysisPrecision.EXACT])
 
 
-class ComputeCostVisitor(ExprVisitor[None]):
+class ComputeCostVisitor(FrameWalker, ExprVisitor[None]):
     """Attach per-Call work and accumulate multiplicity-aware totals."""
 
     def visit_MeshRegion(self, expr: MeshRegion, ctx: ComputeCostContext) -> None:
@@ -267,7 +268,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
         record = _call_cost_record(
             expr, ctx.locals_by_unit, repeats.mesh_positions, ctx.whole, ctx.topology_level
         )
-        attach(expr, record)
+        self.attach(expr, record, ctx)
         ctx.precision[0] = ctx.precision[0].join(repeats.trips_precision)
         _accumulate(ctx, record, repeats)
 
@@ -290,6 +291,8 @@ def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
         options=context.options,
         root=context.root,
         current=context.current,
+        program=context.program,
+        records=context.records,
         locals_by_unit=locals_by_unit,
         whole=CostContext(scope=scope),
     )

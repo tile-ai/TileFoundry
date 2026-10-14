@@ -28,6 +28,7 @@ from .metadata import (
     RooflineMetadata,
     TimelineMetadata,
 )
+from .program import FrameWalker
 from .visitor import AnalyzeContext
 
 SELECTOR = "performance"
@@ -42,7 +43,7 @@ class PerformanceContext(AnalyzeContext):
     occurrences: list[tuple[IterationScope, Call, int]] = field(default_factory=list)
 
 
-class PerformanceVisitor(ExprVisitor[None]):
+class PerformanceVisitor(FrameWalker, ExprVisitor[None]):
     """Collect one duration per Call in authored order."""
 
     def visit_MeshRegion(self, expr: MeshRegion, ctx: PerformanceContext) -> None:
@@ -66,8 +67,8 @@ class PerformanceVisitor(ExprVisitor[None]):
         if not isinstance(expr, Call):
             return
         scope = ctx.current if id(expr) in ctx.current.accesses["narrow"] else ctx.root
-        cost = get_metadata(expr, ComputeCostMetadata)
-        moved = get_metadata(expr, MemoryMetadata)
+        cost = self.record(expr, ComputeCostMetadata, ctx)
+        moved = self.record(expr, MemoryMetadata, ctx)
         if cost is None or moved is None:
             raise AnalysisError(f"performance: missing compute/memory record for {expr!r}")
         if ctx.facts is None or ctx.services is None:
@@ -95,6 +96,8 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
         options=context.options,
         root=context.root,
         current=context.current,
+        program=context.program,
+        records=context.records,
         facts=facts,
         services=services,
     )
@@ -106,7 +109,16 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
             and isinstance(call.target, Binary)
             and getattr(call.type, "shape", ()) == ()
         ):
-            scope_periods[scope] += duration
+            period = scope
+            while isinstance(period.owner, Call):
+                period = period.parent
+            scope_periods[period] += duration
+
+    def period_scope(scope):
+        while isinstance(scope.owner, Call):
+            scope = scope.parent
+        return scope
+
     cursor = 0
     total_cursor = 0
     records = []
@@ -115,13 +127,10 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
             continue
         trips = scope.repeats_of(call, context.topology_level).loop_trips
         scheduled = duration * trips
-        serialize_boundary = (
-            (scope.depth >= 4 and getattr(call.type, "shape", ()) != ())
-            or (
-                scope.depth == 2
-                and isinstance(call.target, Binary)
-                and getattr(call.type, "shape", ()) == ()
-            )
+        serialize_boundary = (scope.depth >= 4 and getattr(call.type, "shape", ()) != ()) or (
+            scope.depth == 2
+            and isinstance(call.target, Binary)
+            and getattr(call.type, "shape", ()) == ()
         )
         start = cursor
         if serialize_boundary:
@@ -130,15 +139,16 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
             end = start + scheduled
             cursor += scheduled
         else:
-            stride = scope_periods[scope] if trips > 1 else 0
+            stride = scope_periods[period_scope(scope)] if trips > 1 else 0
             end = start + duration
             cursor += duration if scope.depth < 4 else scheduled
-        records.append((call, start, end, trips, stride, scheduled))
+        records.append((scope.frame, call, start, end, trips, stride, scheduled))
         total_cursor += scheduled
-    for call, start, end, trips, stride, scheduled in records:
+    for frame, call, start, end, trips, stride, scheduled in records:
         if end + (trips - 1) * stride > total_cursor:
             end, trips, stride = start + scheduled, 1, 0
-        attach(
+        context.records.attach(
+            frame,
             call,
             PerformanceMetadata(
                 TimelineMetadata(
@@ -162,8 +172,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     topology_extent = static_dim_value(topology.size)
     if topology_extent is None:
         raise AnalysisError(
-            f"performance: topology {topology.name!r} has unresolved extent "
-            f"{topology.size!r}"
+            f"performance: topology {topology.name!r} has unresolved extent {topology.size!r}"
         )
     waves = -(-topology_extent // level.max_physical_units)
     attach(

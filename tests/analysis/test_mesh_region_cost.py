@@ -12,12 +12,12 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis.metadata import shares
+from tilefoundry.analysis.program import frame_values
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
@@ -84,7 +84,7 @@ def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
 
 
 def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
-    """Inline preserves helper repetition while counting the escaped value once."""
+    """Stepping into frames preserves helper repetition while counting the escaped value once."""
     helper = analyze(
         RegionBoundaries,
         RegionBoundaries.lookup("helper"),
@@ -111,8 +111,8 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
         level: spread.total.total_bytes for level, spread in moved.traffic.storage.kinds
     } == {"gmem": 384, "smem": 64, "rmem": 720}
     binaries = [
-        get_metadata(expr, ComputeCostMetadata)
-        for expr in collect_exprs(result.function.body)
+        result.records.get(frame, expr, ComputeCostMetadata)
+        for frame, expr in frame_values(result.frames[0])
         if isinstance(expr, Call) and isinstance(expr.target, Binary)
     ]
     binary_flops = sorted(shares(item.flops, item.topologies)["f32"] for item in binaries)

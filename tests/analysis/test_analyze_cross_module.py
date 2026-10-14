@@ -17,6 +17,7 @@ from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.metadata import ComputeCostMetadata, MemoryMetadata
+from tilefoundry.analysis.program import frame_values
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.module import reachable_functions
@@ -33,13 +34,13 @@ _CTA = (Topology("cta", 132),)
 
 
 def _matmul_records(result) -> tuple[tuple[ComputeCostMetadata, MemoryMetadata], ...]:
-    """Both halves of the record on each inlined MatMul occurrence."""
+    """Both halves of each invocation's MatMul record."""
     records = []
-    for expr in collect_exprs(result.function.body):
+    for frame, expr in frame_values(result.frames[0]):
         if not isinstance(expr, Call) or not isinstance(expr.target, MatMul):
             continue
-        record = get_metadata(expr, ComputeCostMetadata)
-        moved = get_metadata(expr, MemoryMetadata)
+        record = result.records.get(frame, expr, ComputeCostMetadata)
+        moved = result.records.get(frame, expr, MemoryMetadata)
         assert record is not None
         records.append((record, moved))
     return tuple(records)

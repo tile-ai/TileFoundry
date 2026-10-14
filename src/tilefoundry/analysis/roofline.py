@@ -23,6 +23,7 @@ from .metadata import (
     RooflineMetadata,
     TrafficBytes,
 )
+from .program import FrameWalker
 from .visitor import AnalyzeContext
 
 SELECTOR = "roofline"
@@ -129,7 +130,7 @@ def _cost_bound(
     )
 
 
-class RooflineVisitor(ExprVisitor[None]):
+class RooflineVisitor(FrameWalker, ExprVisitor[None]):
     """Attach one bound per Call in expression order."""
 
     def __init__(self, facts: ThroughputFacts) -> None:
@@ -137,23 +138,23 @@ class RooflineVisitor(ExprVisitor[None]):
         self.facts = facts
 
     def default_visit_leaf(
-        self, expr: Expr, _operands: tuple[None, ...], _ctx: AnalyzeContext
+        self, expr: Expr, _operands: tuple[None, ...], ctx: AnalyzeContext
     ) -> None:
         if not isinstance(expr, Call):
             return
-        cost = get_metadata(expr, ComputeCostMetadata)
+        cost = self.record(expr, ComputeCostMetadata, ctx)
         if cost is None:
             raise AnalysisError(
                 f"{describe_expr(expr)}: roofline needs the compute-cost record "
                 "this call was never given"
             )
-        moved = get_metadata(expr, MemoryMetadata)
+        moved = self.record(expr, MemoryMetadata, ctx)
         if moved is None:
             raise AnalysisError(
                 f"{describe_expr(expr)}: roofline needs the traffic record the "
                 "memory family states for every call it measures"
             )
-        attach(expr, _cost_bound(cost, moved, self.facts))
+        self.attach(expr, _cost_bound(cost, moved, self.facts), ctx)
 
 
 def analyze_roofline(

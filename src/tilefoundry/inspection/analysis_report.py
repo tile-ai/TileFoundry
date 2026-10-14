@@ -64,6 +64,26 @@ def render_analysis(result: AnalysisResult, *, operands: bool = False) -> Analys
         expr_id: f"{statement.value}:{statement.line}"
         for expr_id, statement in rendered.statements.items()
     }
+    sources = [rendered.source]
+    if len(result.frames) > 1:
+        labels = {(None, identity): label for identity, label in labels.items()}
+        for frame in result.frames[1:]:
+            child = HirPrinter().render(
+                frame.body,
+                options=PythonPrintOptions(
+                    show_types=True,
+                    comment_metadata_types=selected_types_,
+                    comment_opt_in=frozenset({"operands"}) if operands else frozenset(),
+                    metadata_of=result.records.reader(frame),
+                ),
+            )
+            sources.extend((f"# frame: {frame.label}\n", child.source))
+            labels.update(
+                {
+                    (frame.key, identity): f"{statement.value}:{statement.line}"
+                    for identity, statement in child.statements.items()
+                }
+            )
     data = report_data(
         module=result.module,
         function=result.function,
@@ -72,12 +92,14 @@ def render_analysis(result: AnalysisResult, *, operands: bool = False) -> Analys
         executed=result.executed,
         metadata_types=result.metadata_types,
         call_labels=labels,
+        frames=result.frames,
+        records=result.records,
     )
     function_records = data["function_records"]
     selected = frozenset(selected_types_)
     return AnalysisRendering(
         data=data,
-        annotated=rendered.source,
+        annotated="\n".join(sources),
         summary=_summary(result.function, data, function_records, selected),
     )
 

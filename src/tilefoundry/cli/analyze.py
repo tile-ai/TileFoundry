@@ -139,7 +139,10 @@ def run_authored_analysis(
             except SpecializationError as error:
                 raise ValueError(f"analyze: {error}") from None
             expanded = check_program(checked_module, checked)
-            annotated = as_script(expanded, options=PythonPrintOptions(show_types=True))
+            annotated = "\n".join(
+                as_script(body, options=PythonPrintOptions(show_types=True))
+                for body in expanded.bodies()
+            )
             Path(out_path).write_text(annotated, encoding="utf-8")
             return 0
 

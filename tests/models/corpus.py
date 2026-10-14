@@ -24,12 +24,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from copy import deepcopy
 from pathlib import Path
 from typing import Literal
 
 import pytest
 
-from tilefoundry.ir.core.module import Module, function_selectors, select
+from tilefoundry.ir.core.module import Module, function_selectors, select, subtree
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import Topology
 from tilefoundry.target.base import Target
@@ -293,7 +294,14 @@ class ModelCase:
                 f"model case {self.id!r}: prototype is a "
                 f"{type(self.prototype).__name__}, not a Module"
             )
-        return self.prototype.cloned()
+        shared = {}
+        for node in subtree(self.prototype):
+            if node.target is not None:
+                shared[id(node.target)] = node.target
+            if node.topologies is not None:
+                shared[id(node.topologies)] = node.topologies
+                shared.update((id(topology), topology) for topology in node.topologies)
+        return deepcopy(self.prototype, shared)
 
     def _scoped(self, root: Module) -> Module:
         """The domain `scope` names below *root*, which inherits *root*'s machine."""
@@ -353,7 +361,7 @@ class ModelCase:
         *path, name = selector.split(".")
         try:
             owner = select(module, ".".join(path))
-            if any(child.name == name for child in owner.modules):
+            if name in owner.children:
                 raise ValueError(
                     f"{selector!r} names the child Module {name!r}, not a "
                     f"function; name the function of it this case selects"

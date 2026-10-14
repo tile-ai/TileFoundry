@@ -315,10 +315,7 @@ class Qwen3_1_7B:
     """The ordered layer stack plus the norm that closes it."""
 
 
-    layers = tuple(
-        Qwen3_1_7B_DecoderLayer.renamed(f"layer{index}")
-        for index in range(config.num_hidden_layers)
-    )
+    layers = ModuleList(Qwen3_1_7B_DecoderLayer, config.num_hidden_layers)
 
     @func
     def embed(
@@ -367,13 +364,13 @@ class Qwen3_1_7B:
         is the normalised hidden state and each layer's own cache entry, for the
         caller to append -- the same division the single layer makes.
         """
-        if len(caches) != len(self.modules):
+        if len(caches) != len(self.layers):
             raise ValueError(
-                f"decoder has {len(self.modules)} layers but was given "
+                f"decoder has {len(self.layers)} layers but was given "
                 f"{len(caches)} caches"
             )
         entries = []
-        for layer, (k_cache, v_cache) in zip(self.modules, caches):
+        for layer, (k_cache, v_cache) in zip(self.layers, caches):
             hidden, k_new, v_new = layer(
                 hidden, cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale
             )

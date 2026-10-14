@@ -707,8 +707,8 @@ def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys
     assert capsys.readouterr().out == ""
     expanded = report_path.read_text(encoding="utf-8")
     assert "def root(" in expanded
-    assert "leaf_w: ConstTensor" in expanded
-    assert "leaf(" not in expanded
+    assert "w: ConstTensor" in expanded
+    assert "leaf(x)" in expanded
 
 
 def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) -> None:

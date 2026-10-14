@@ -40,6 +40,7 @@ from tilefoundry.analysis.compute_cost import (
 )
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import MemoryOptions
+from tilefoundry.analysis.program import frame_values
 from tilefoundry.dsl import *
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
 from tilefoundry.ir.core import (
@@ -196,7 +197,9 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
 
     cross_scope = results["cross_scope"]
     timed = tuple(
-        (call, get_metadata(call, PerformanceMetadata)) for call in _calls(cross_scope.function)
+        (call, cross_scope.records.get(frame, call, PerformanceMetadata))
+        for frame, call in frame_values(cross_scope.frames[0])
+        if isinstance(call, Call)
     )
     scalar_indices = tuple(
         (call, record)

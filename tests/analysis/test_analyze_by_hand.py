@@ -313,7 +313,7 @@ def test_truncated_wave_keeps_reuse_from_participating_boundaries() -> None:
     )
     assert _reuse_conclusions(memory) == [
         {
-            "buffer": "viewed",
+            "buffer": "read/view/viewed",
             "time": "",
             "space": "cta.i",
             "holds_bytes": 32,

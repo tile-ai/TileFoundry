@@ -238,8 +238,8 @@ class DimensionInstantiator(ExprCloner):
         body = self.visit(expr.body, body_ctx)
         if (
             mesh == expr.mesh
-            and new_args == expr.args
-            and new_params == expr.params
+            and all(new is old for new, old in zip(new_args, expr.args, strict=True))
+            and all(new is old for new, old in zip(new_params, expr.params, strict=True))
             and body is expr.body
         ):
             return expr
@@ -311,6 +311,22 @@ class InstantiateContext:
     type_visitor: TypeInferVisitor
 
 
+class _DimensionTypeInfer(TypeInferVisitor):
+    """Infer instance calls against bound definitions without rewriting their targets."""
+
+    def __init__(self, dims):
+        super().__init__()
+        self.dims = dims
+
+    def _call_function(self, call, callee, arg_types, ctx, *, child_scope=None):
+        if child_scope is not None:
+            callee = _specialize_callee(
+                callee, self.dims, dataclasses.replace(ctx, scope=child_scope)
+            )
+            child_scope = dataclasses.replace(child_scope, function=callee)
+        return super()._call_function(call, callee, arg_types, ctx, child_scope=child_scope)
+
+
 def instantiate_dimensions(
     chosen: Function,
     bound_param_types: tuple[Type, ...],
@@ -332,7 +348,7 @@ def instantiate_dimensions(
         subst={id(old): new for old, new in zip(chosen.params, new_params)},
         dims=dims,
         type_ctx=body_ctx,
-        type_visitor=TypeInferVisitor(),
+        type_visitor=_DimensionTypeInfer(dims),
     )
     new_body = DimensionInstantiator().visit(chosen.body, instantiate_ctx)
     derived = Function.build(
