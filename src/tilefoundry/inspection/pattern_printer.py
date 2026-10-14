@@ -78,7 +78,10 @@ class PatternPrinter:
         merged = {}
         for path in paths:
             for name, value in path:
-                written = getattr(value, "name", str(value))
+                written = (
+                    self._subject_value(value)
+                    if isinstance(value, float) else getattr(value, "name", str(value))
+                )
                 values = merged.setdefault(name, [])
                 if written not in values:
                     values.append(written)
@@ -238,6 +241,8 @@ class PatternPrinter:
         return str(getattr(value, "value", value))
 
     def _written_value(self, value) -> str:
+        if isinstance(value, float):
+            return self._subject_value(value)
         if isinstance(value, Broadcast):
             return "B()"
         if isinstance(value, DType):
@@ -558,6 +563,8 @@ class PatternPrinter:
         )
 
     def _written_expression(self, value) -> str:
+        if isinstance(value, float):
+            return self._subject_value(value)
         name = type(value).__name__
         if name == "Formula":
             if value.op == "not":
@@ -587,7 +594,7 @@ class PatternPrinter:
             )
         if name == "Term":
             if value.op == "constant":
-                return repr(value.args[0])
+                return self._written_expression(value.args[0])
             if value.op in {"variable", "bits"}:
                 return (
                     value.args[0]

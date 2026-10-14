@@ -99,7 +99,7 @@ class HirPrinter(PythonPrinter):
 
     def tuple_reference(self, elements) -> str:
         inner = ", ".join(
-            repr(element.value) if isinstance(element, Constant) else self.reference(element)
+            self.print(element.value) if isinstance(element, Constant) else self.reference(element)
             for element in elements
         )
         return f"({inner}{',' if len(elements) == 1 else ''})"
@@ -819,7 +819,7 @@ def _emit_def(
             return
         if isinstance(expr, Constant):
             lines.append(
-                f"{level}{_names[id(expr)]} = {repr(expr.value)}"
+                f"{level}{_names[id(expr)]} = {printer.print(expr.value, ctx)}"
                 f"{_comments(expr, options, printer, ctx)}"
             )
             printed.add(key)
@@ -942,7 +942,7 @@ def _emit_def(
         if isinstance(expr, Constant):
             name = _names[id(expr)]
             lines.append(
-                f"{indent}{name} = {repr(expr.value)}{_comments(expr, options, printer, ctx)}"
+                f"{indent}{name} = {printer.print(expr.value, ctx)}{_comments(expr, options, printer, ctx)}"
             )
             line = _constraint_line(expr, indent, name)
             if line is not None:

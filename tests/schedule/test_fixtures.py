@@ -48,6 +48,8 @@ from tilefoundry.ir.core import (
     Var,
     detach_metadata,
     get_metadata,
+    op_identifier,
+    supported_op_capabilities,
 )
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.op_registry import iter_schemas
@@ -91,6 +93,7 @@ from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout_algebra import cosize
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
+from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     identity_relations,
@@ -124,6 +127,13 @@ CANDIDATES_REFUSED = {
 }
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
+FACT_INSTRUCTIONS = sorted({
+    op_identifier(declaration)
+    for op_type, capability in supported_op_capabilities(CudaTarget("nvidia.h200_sxm"))
+    for declaration in (
+        (op_type, capability.declaration) if capability.attribute is not None else (op_type,)
+    )
+})
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
 _H200_FACTS_TEXT = """\
 target nvidia.h200_sxm
@@ -970,6 +980,15 @@ def _check_facts(
         assert out.read_text() == expected
 
 
+def _check_facts_declaration(
+    out: Path, captured: pytest.CaptureResult[str], *, instruction: str,
+) -> None:
+    report = _quiet_json(out, captured)
+    assert report["id"] == instruction
+    assert report["target"] == "nvidia.h200_sxm"
+    assert report["execution_mesh"]
+
+
 def _check_facts_refusal(out: Path, captured: pytest.CaptureResult[str], *, message: str) -> None:
     assert captured.out == ""
     assert captured.err.startswith("tilefoundry: error: ")
@@ -1087,6 +1106,18 @@ FIXTURES = (
         "facts write the tiled MMA atom alternatives",
         ("schedule", "facts", "T.tiled_mma", "--target", "nvidia.h200_sxm", "{out}"),
         partial(_check_golden, golden=WGMMA_FACTS.with_name("tiled_mma.facts.txt")),
+    ),
+    *(
+        FixtureCase(
+            f"facts describe {instruction}",
+            (
+                "schedule", "facts", instruction, "--target", "nvidia.h200_sxm",
+                "{out}", "--json",
+            ),
+            partial(_check_facts_declaration, instruction=instruction),
+        )
+        for instruction in FACT_INSTRUCTIONS
+        if instruction not in {"T.cuda.sm90.Wgmma", "T.tiled_mma"}
     ),
     *(
         FixtureCase(

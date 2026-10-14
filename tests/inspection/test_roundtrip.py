@@ -6,8 +6,13 @@ declarations, and composed layouts. Reprinting must reproduce source exactly.
 See [inspection §2.7](docs/spec/inspection.md#27-round-trip-contract).
 """
 
+from pathlib import Path
+
+import pytest
+
 from tests._source import import_dsl
 from tests.fixtures.shapes.tile_window_syntax import nested_scan_copy, scan_copy
+from tests.schedule.test_fixtures import PLAIN_REFUSED
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 
@@ -228,3 +233,17 @@ def test_carry_updates_print_last_without_shadowing_the_old_value() -> None:
     )
     assert repr(fn.body) == repr(rebuilt.body)
     assert as_script(rebuilt) == printed
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted(
+        path for path in (Path(__file__).parents[1] / "fixtures" / "schedule").rglob("*.py")
+        if path.name != "__init__.py"
+        and not (path.parent.name == "plain" and path.stem in PLAIN_REFUSED)
+    ),
+    ids=lambda path: str(path.relative_to(Path(__file__).parents[1] / "fixtures")),
+)
+def test_schedule_fixtures_roundtrip(path: Path) -> None:
+    program = import_dsl(path.read_text())
+    import_dsl(as_script(program))

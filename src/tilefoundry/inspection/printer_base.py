@@ -78,7 +78,9 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
     def default_visit(self, value, ctx=None) -> str:
         if isinstance(value, bool):
             return repr(value)
-        if isinstance(value, (int, float)):
+        if isinstance(value, float):
+            return self.print(value, ctx)
+        if isinstance(value, int):
             return str(value)
         raise NotImplementedError(f"no Python visit routine for {type(value).__name__}")
 
@@ -132,7 +134,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         return value.name
 
     def visit_Constant(self, value: Constant, ctx=None) -> str:
-        return repr(value.value)
+        return self.print(value.value, ctx)
 
     def visit_Tuple(self, value: Tuple, ctx=None) -> str:
         rendered = ", ".join(self.visit(item, ctx) for item in value.elements)
