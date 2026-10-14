@@ -62,9 +62,10 @@ statement span and their carry binding name.
 optional base/key for one parse. Call types inferred while parsing use that target's rules
 ([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)), so in a Module that
 declares its Target a type the parser records is the type the built Module later infers. A
-pending Module is the instance stack's root and supplies its declared Target;
+pending Module supplies its declared Target to the parser's current call frame;
 entering a child follows the target's slot key and index in the current frame.
-The same stack is retained through same-module Function calls. `FunctionRole` is `ROOT`, `VARIANT`, or `CONVERTER`.
+Same-module Function calls retain this effective context.
+`FunctionRole` is `ROOT`, `VARIANT`, or `CONVERTER`.
 `ParseError` is the single authored-source diagnostic type and includes source location and
 recursive parse situation. These are the only public parser symbols.
 

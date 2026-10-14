@@ -316,7 +316,6 @@ class _DimVarCollector(ExprWalker[None]):
         self.seen_functions = set()
         self.active_functions = set()
         self.functions = []
-        self.modules = {}
         self.cycles = []
         self.missing_bodies = []
         self.path = []
@@ -351,7 +350,6 @@ class _DimVarCollector(ExprWalker[None]):
 
     def visit_function(self, fn: Function, frame=None) -> None:
         if frame is not None:
-            self.modules[id(frame.module)] = frame.module
             self.found.update(dim_vars_by_name(frame.topologies))
         if id(fn) in self.active_functions:
             self.cycles.append("/".join((*self.path, fn.name)))

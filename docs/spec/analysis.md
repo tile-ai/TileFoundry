@@ -196,7 +196,7 @@ class ComputeCostMetadata(IRMetadata):
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `topologies` | The effective Module topology levels, coarsest first. | No |
-| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written for `logical`; each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level, and `total` is the selected unit's share times its executing mesh positions. Function accumulation multiplies `logical` by varying-loop trips, and `per_unit` and `total` by all enclosing loop trips. Retained Function calls are not charged separately: step into the callee frame and apply the enclosing loop and mesh factors to its primitives. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written for `logical`; each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level, and `total` is the selected unit's share times its executing mesh positions. Function accumulation multiplies `logical` by varying-loop trips, and `per_unit` and `total` by all enclosing loop trips. Retained Function calls are not charged separately: step into the callee invocation and apply the enclosing loop and mesh factors to its primitives. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `other_ops` | The evaluator's non-floating-point operation counts (`integer`, `predicate`, `select`, `special`), totalled and shared the same way. These keys map directly to target one-unit operation-throughput keys; target-side service naming is unchanged. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `precision` | One-trip Call work is exact; Function work combines the precision of every enclosing loop's trip count. Coordinate-dependent maximum trip counts yield an upper bound. | No |
 
@@ -1351,7 +1351,7 @@ class AnalysisCheckContext:
     with the program name, total size, and limit.
   - At each retained call, analysis MUST step into its derived body through an
     invocation `IterationScope` whose owner is that Call, binding activations to arguments and resolving child weights
-    along the current instance path. Loop call sites MUST be visited once;
+    along the current call path. Loop call sites MUST be visited once;
     enclosing trip counts multiply work and traffic. Recursion and a callee
     without a body MUST raise `AnalysisError` naming the function and call path.
   - One definition MUST receive one argument-type signature and one current
@@ -1363,13 +1363,13 @@ class AnalysisCheckContext:
     Labels derive from the caller chain and `CallSite.label`. The invocation's
     `frame` is a visitor `CallFrame` carrying its Module, function, effective
     target, and topologies; it is not the record identity.
-  - Root-frame records MUST remain node metadata. Callee-frame records MUST be
-    stored in `FrameRecords`, keyed by invocation frame and node identity;
+  - Root-invocation records MUST remain node metadata. Callee-invocation records MUST be
+    stored in `InvocationRecords`, keyed by invocation and node identity;
     analyzers writing derived records directly onto shared callee nodes MUST
-    fail. A visitor's memo and structural tables MUST be local to its frame.
+    fail. A visitor's memo and structural tables MUST be local to its invocation.
     Annotated output MUST render the root once and each invocation separately,
-    using `PythonPrintOptions.metadata_of` to read the frame's records.
-    `FrameRecords.definition_reader(body)` MUST select the first frame of that
+    using `PythonPrintOptions.metadata_of` to read the invocation's records.
+    `InvocationRecords.definition_reader(body)` MUST select the first invocation of that
     definition for consumers that need one definition-level rendering.
   - Parameters and arguments MUST share storage and extend argument liveness
     through the callee's last use. Callee temporaries MUST occupy the caller's
@@ -1381,12 +1381,12 @@ class AnalysisCheckContext:
     A constant index reaches one instance. A variable index MUST multiply
     persistent bytes by the integers in its inferred half-open range intersected
     with `[0, N)`; unknown ranges use N. Nested instance multiplicities MUST
-    multiply along the frame path. Traffic MUST use loop trips without this
+    multiply along the call path. Traffic MUST use loop trips without this
     additional multiplier.
   - Internal on-chip values shared by a definition MUST have the same offsets,
-    buffer sizes, and aliases in every frame. Conflicts MUST raise
-    `AnalysisError` naming the callee, binding, both frame labels, and values.
-    Aliases MUST remain local to a frame. A result tied to the caller's output
+    buffer sizes, and aliases in every invocation. Conflicts MUST raise
+    `AnalysisError` naming the callee, binding, both invocation labels, and values.
+    Aliases MUST remain local to an invocation. A result tied to the caller's output
     destination is exempt from this consistency comparison.
   - Authored-analysis readiness is not a program-level rejection. Analyze MUST
     NOT reject an authored `where(...)` constraint: it is an input to a later
@@ -1430,7 +1430,7 @@ class AnalysisResult:
         metadata_types: attribute; Metadata classes actually written.
         program: attribute; Retained derived definitions and call sites.
         records: attribute; Root metadata and invocation side-table access.
-        frames: attribute; Invocation frames in first-visit order, including root.
+        invocations: attribute; Invocations in first-visit order, including root.
     """
 
     module: "Module"
@@ -1441,8 +1441,8 @@ class AnalysisResult:
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
     program: "Program"
-    records: "FrameRecords"
-    frames: tuple["IterationScope", ...]
+    records: "InvocationRecords"
+    invocations: tuple["IterationScope", ...]
 
 
 def analyze(

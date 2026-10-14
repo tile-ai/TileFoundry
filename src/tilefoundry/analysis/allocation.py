@@ -419,7 +419,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         super().__init__(root_function=root_function)
         self.bound: dict[int, Storage] = {}
         self.resources = {}
-        self.frame_memos = {}
+        self.invocation_memos = {}
         self.escaped = {}
         self.invocation = None
         self.pending: dict[int, list[tuple[AllocationValue, int, isl.map]]] = defaultdict(list)
@@ -531,15 +531,15 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             else ctx.records.get(value.invocation, value.value, kind)
         )
 
-    def attach(self, frame, node, record, ctx):
+    def attach(self, invocation, node, record, ctx):
         if ctx.records is None:
             attach_metadata(node, record)
         else:
-            ctx.records.attach(frame, node, record)
+            ctx.records.attach(invocation, node, record)
 
     def visit_Call(self, node, ctx):
-        frame = ctx.current.invocation
-        child = None if frame is None else frame.callees.get(id(node))
+        invocation = ctx.current.invocation
+        child = None if invocation is None else invocation.callees.get(id(node))
         if child is None:
             return self.default_visit_leaf(node, self.visit_operands(node, ctx), ctx)
         args = tuple(self.visit(arg, ctx) for arg in node.args)
@@ -547,7 +547,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             self.visit(child.site.index, ctx)
         names = ("_memo", "bound", "pending", "definitions")
         saved = {name: getattr(self, name) for name in names}
-        self.frame_memos[frame.key] = self._memo
+        self.invocation_memos[invocation.key] = self._memo
         self._memo, self.bound, self.pending, self.definitions = {}, {}, defaultdict(list), {}
         inner = replace(ctx, current=child)
         try:
@@ -563,19 +563,19 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 self.visit(param, inner)
             returned = self.visit(child.function.body, inner)
         finally:
-            self.frame_memos[child.key] = self._memo
+            self.invocation_memos[child.key] = self._memo
             for name, table in saved.items():
                 setattr(self, name, table)
-            self.invocation = frame
+            self.invocation = invocation
         destination = self.allocate(node, ctx)
         result_slots, returned_slots = leaves(destination), leaves(returned)
         tied = bool(result_slots) and len(result_slots) == len(returned_slots)
 
-        def within(frame):
-            while frame is not None:
-                if frame is child:
+        def within(invocation):
+            while invocation is not None:
+                if invocation is child:
                     return True
-                frame = frame.caller
+                invocation = invocation.caller
             return False
 
         for result, source in zip(result_slots, returned_slots, strict=False):
@@ -662,7 +662,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             return self._memo[id(node)][1]
         if (invocation.key, id(node)) in self.escaped:
             return self.escaped[invocation.key, id(node)]
-        return self.frame_memos[invocation.key][id(node)][1]
+        return self.invocation_memos[invocation.key][id(node)][1]
 
     def visit_function_body(self, fn: Function, ctx: AllocationModel) -> Storage:
         """Visit function declarations before their body in the one traversal."""
@@ -861,8 +861,8 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 if isinstance(destination, tuple):
                     destination = leaves(destination)[destination_access.index]
             relations = operand_to_result_relation(node, ctx.current, insert_accesses)
-            for operand, index, relation, frame in relations:
-                storage = self.storage_of(operand, frame)
+            for operand, index, relation, invocation in relations:
+                storage = self.storage_of(operand, invocation)
                 if isinstance(storage, tuple):
                     storage = leaves(storage)[index]
                 if not isinstance(storage, AllocationValue):

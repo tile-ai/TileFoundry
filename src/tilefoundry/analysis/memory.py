@@ -705,16 +705,16 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     persistent = set()
     resources = {}
 
-    def multiplicity(frame):
+    def multiplicity(invocation):
         count = 1
-        while frame.caller is not None:
-            site = frame.site
-            caller = frame.caller
+        while invocation.caller is not None:
+            site = invocation.site
+            caller = invocation.caller
             if not isinstance(site.index, Expr):
-                frame = caller
+                invocation = caller
                 continue
             slot = caller.frame.module.children[site.key]
-            cursor = frame
+            cursor = invocation
             number = None
             while cursor is not None:
                 loop = cursor.owner
@@ -741,20 +741,20 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                     else max(0, min(len(slot.elements), bounds.hi) - max(0, bounds.lo))
                 )
             count *= number
-            frame = caller
+            invocation = caller
         return count
 
     limits: dict[str, int] = {}
     for interval in liveness.intervals:
-        frame = interval.invocation
-        key = (invocation_key(frame), id(interval.value))
+        invocation = interval.invocation
+        key = (invocation_key(invocation), id(interval.value))
         multiplier = 1
-        if frame is not None and frame.parent is not None and any(interval.value is weight for weight in frame.site.weights):
-            resource = frame.resource_key(interval.value)
-            multiplier = multiplicity(frame)
+        if invocation is not None and invocation.parent is not None and any(interval.value is weight for weight in invocation.site.weights):
+            resource = invocation.resource_key(interval.value)
+            multiplier = multiplicity(invocation)
             resources[key] = resource
             persistent.add(key)
-        elif frame is None or frame.parent is None:
+        elif invocation is None or invocation.parent is None:
             if any(interval.value is param for param in function.params):
                 persistent.add(key)
         held = placement.local_type_of(interval.value)
@@ -950,12 +950,12 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for item in material_values
         if isinstance(item.value, Call) and isinstance(item.value.type, TupleType)
     }
-    for (frame, _identity), producer in tuple_results.items():
-        moved = context.records.get(frame, producer, MemoryMetadata)
+    for (invocation, _identity), producer in tuple_results.items():
+        moved = context.records.get(invocation, producer, MemoryMetadata)
         if moved is None:
             raise AnalysisError("memory: placed Call has no movement record")
         context.records.attach(
-            frame,
+            invocation,
             producer,
             replace(
                 moved,
@@ -963,23 +963,23 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 offsets=tuple(
                     offsets[item]
                     for item in material_values
-                    if item.invocation is frame and item.value is producer and item in offsets
+                    if item.invocation is invocation and item.value is producer and item in offsets
                 ),
             ),
         )
     shared = {}
     for item in allocation_values:
-        frame = item.invocation
+        invocation = item.invocation
         if (
-            frame is None
-            or frame.parent is None
-            or any(item.value is param for param in frame.function.params)
-            or (frame.result_tied and item.value is frame.function.body)
+            invocation is None
+            or invocation.parent is None
+            or any(item.value is param for param in invocation.function.params)
+            or (invocation.result_tied and item.value is invocation.function.body)
         ):
             continue
         if item.lifetime.memory_level == "gmem" or item.lifetime.persistent:
             continue
-        moved = context.records.get(frame, item.value, MemoryMetadata)
+        moved = context.records.get(invocation, item.value, MemoryMetadata)
         alias = None if moved is None else moved.alias
         alias_key = (
             None
@@ -996,9 +996,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         if key in shared and shared[key][1] != state:
             previous, value = shared[key]
             raise AnalysisError(
-                f"callee {frame.function.name!r} node {item.lifetime.binding!r} has incompatible placement at {previous.label!r} and {frame.label!r}: {value!r} versus {state!r}"
+                f"callee {invocation.function.name!r} node {item.lifetime.binding!r} has incompatible placement at {previous.label!r} and {invocation.label!r}: {value!r} versus {state!r}"
             )
-        shared[key] = frame, state
+        shared[key] = invocation, state
     errors = tuple(
         f"{item.memory_level} placement peak {format_bytes(item.peak_bytes)} exceeds "
         f"capacity {format_bytes(item.capacity_bytes)}"

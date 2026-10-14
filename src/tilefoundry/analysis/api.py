@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, ScopeBuilder
-from tilefoundry.analysis.program import FrameRecords, Program
+from tilefoundry.analysis.program import InvocationRecords, Program
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.visitor import AnalyzeContext
@@ -37,7 +37,7 @@ class AnalysisResult:
 
     ``executed`` records dependency order and ``metadata_types`` lists records
     actually written, excluding analyses that matched nothing. ``function`` is
-    the derived root that carries root-frame records; ``module`` remains the call's
+    the derived root that carries root-invocation records; ``module`` remains the call's
     execution domain.
     """
 
@@ -49,8 +49,8 @@ class AnalysisResult:
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
     program: Program
-    records: FrameRecords
-    frames: tuple[IterationScope, ...]
+    records: InvocationRecords
+    invocations: tuple[IterationScope, ...]
 
     @property
     def level(self) -> str | None:
@@ -146,7 +146,7 @@ def build_iteration_scopes(
     module = program.module
     function = program.root
     context = AnalyzeContext(
-        module, target, topology_level, options, program=program, records=FrameRecords()
+        module, target, topology_level, options, program=program, records=InvocationRecords()
     )
     context.root = context.current = ScopeBuilder(module, function, ctx=context, program=program).build()
 
@@ -190,7 +190,7 @@ def analyze(
     function = context.root.owner
     program = context.program
     functions = program.bodies()
-    frame_records = context.records
+    invocation_records = context.records
 
     order: list[type[IRMetadata]] = []
     written_records: set[tuple] = set()
@@ -199,7 +199,7 @@ def analyze(
     )
     authored_before = _metadata_snapshot(authored)
     for algorithm in closure:
-        before = frame_records.snapshot(program)
+        before = invocation_records.snapshot(program)
         body_before = _metadata_snapshot(functions[1:])
         try:
             algorithm.run(function, context)
@@ -207,8 +207,8 @@ def analyze(
             raise AnalysisError(f"{algorithm.selector}: {error}") from None
         if _metadata_snapshot(authored) != authored_before:
             raise AnalysisError(f"{algorithm.selector!r} changed authored IR metadata")
-        after = frame_records.snapshot(program)
-        _require_frame_writes(algorithm, body_before, _metadata_snapshot(functions[1:]))
+        after = invocation_records.snapshot(program)
+        _require_invocation_writes(algorithm, body_before, _metadata_snapshot(functions[1:]))
         records = _require_owned_writes(algorithm, before, after)
         written_records |= records
         written = {key[-1] for key in records}
@@ -216,7 +216,7 @@ def analyze(
             if metadata_type in written and metadata_type not in order:
                 order.append(metadata_type)
 
-    final = frame_records.snapshot(program)
+    final = invocation_records.snapshot(program)
     surviving = {
         metadata_type for key in written_records & final.keys() for metadata_type in (key[-1],)
     }
@@ -230,8 +230,8 @@ def analyze(
         executed=tuple(algorithm.selector for algorithm in closure),
         metadata_types=tuple(item for item in order if item in surviving),
         program=program,
-        records=frame_records,
-        frames=tuple(frame_records.frames),
+        records=invocation_records,
+        invocations=tuple(invocation_records.invocations),
     )
     dump(
         "analysis.json",
@@ -243,7 +243,7 @@ def analyze(
                 topology_level=result.topology_level,
                 executed=result.executed,
                 metadata_types=result.metadata_types,
-                frames=result.frames,
+                invocations=result.invocations,
                 records=result.records,
             )
         ),
@@ -320,11 +320,11 @@ def _require_owned_writes(
     return written
 
 
-def _require_frame_writes(algorithm, before, after):
+def _require_invocation_writes(algorithm, before, after):
     """Shared derived callee nodes cannot own invocation-specific records."""
     if before != after:
         raise AnalysisError(
-            f"{algorithm.selector!r} wrote derived callee metadata outside FrameRecords"
+            f"{algorithm.selector!r} wrote derived callee metadata outside InvocationRecords"
         )
 
 

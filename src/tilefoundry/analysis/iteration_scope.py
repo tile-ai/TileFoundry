@@ -543,7 +543,7 @@ class ScopeBuilder:
         scope.invocation.callees[id(expr)] = child
         scope.children = (*scope.children, child)
         if self.unit_ctx.records is not None:
-            self.unit_ctx.records.frames.append(child)
+            self.unit_ctx.records.invocations.append(child)
         names = ("sources", "precisions", "definitions", "aliases", "seen", "seeds", "variance")
         saved = {name: getattr(self, name) for name in names}
         self.sources = {view: {} for view in self.views}
@@ -713,7 +713,7 @@ class ScopeBuilder:
         root.variance = self.variance
         root.records = self.unit_ctx.records
         if self.unit_ctx.records is not None:
-            self.unit_ctx.records.frames.append(root)
+            self.unit_ctx.records.invocations.append(root)
         for param in self.graph.params:
             self._visit(param, root)
         if self.graph.body is not None:

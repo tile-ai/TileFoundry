@@ -35,11 +35,11 @@ _CTA = (Topology("cta", 132),)
 def _matmul_records(result) -> tuple[tuple[ComputeCostMetadata, MemoryMetadata], ...]:
     """Both halves of each invocation's MatMul record."""
     records = []
-    for frame, expr in invocation_values(result.frames[0]):
+    for invocation, expr in invocation_values(result.invocations[0]):
         if not isinstance(expr, Call) or not isinstance(expr.target, MatMul):
             continue
-        record = result.records.get(frame, expr, ComputeCostMetadata)
-        moved = result.records.get(frame, expr, MemoryMetadata)
+        record = result.records.get(invocation, expr, ComputeCostMetadata)
+        moved = result.records.get(invocation, expr, MemoryMetadata)
         assert record is not None
         records.append((record, moved))
     return tuple(records)

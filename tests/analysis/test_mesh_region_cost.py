@@ -84,7 +84,7 @@ def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
 
 
 def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
-    """Stepping into frames preserves helper repetition while counting the escaped value once."""
+    """Stepping into invocations preserves repetition and counts the escaped value once."""
     helper = analyze(
         RegionBoundaries,
         RegionBoundaries.lookup("helper"),
@@ -111,8 +111,8 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
         level: spread.total.total_bytes for level, spread in moved.traffic.storage.kinds
     } == {"gmem": 384, "smem": 64, "rmem": 720}
     binaries = [
-        result.records.get(frame, expr, ComputeCostMetadata)
-        for frame, expr in invocation_values(result.frames[0])
+        result.records.get(invocation, expr, ComputeCostMetadata)
+        for invocation, expr in invocation_values(result.invocations[0])
         if isinstance(expr, Call) and isinstance(expr.target, Binary)
     ]
     binary_flops = sorted(shares(item.flops, item.topologies)["f32"] for item in binaries)

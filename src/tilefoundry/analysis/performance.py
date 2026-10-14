@@ -144,11 +144,11 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
             cursor += duration if scope.depth < 4 else scheduled
         records.append((scope.invocation, call, start, end, trips, stride, scheduled))
         total_cursor += scheduled
-    for frame, call, start, end, trips, stride, scheduled in records:
+    for invocation, call, start, end, trips, stride, scheduled in records:
         if end + (trips - 1) * stride > total_cursor:
             end, trips, stride = start + scheduled, 1, 0
         context.records.attach(
-            frame,
+            invocation,
             call,
             PerformanceMetadata(
                 TimelineMetadata(

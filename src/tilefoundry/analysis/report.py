@@ -239,7 +239,7 @@ def report_data(
     executed: tuple[str, ...],
     metadata_types: tuple[type[IRMetadata], ...],
     call_labels: Mapping[tuple[object, int], str] | None = None,
-    frames=(),
+    invocations=(),
     records=None,
 ) -> dict[str, object]:
     """Project one completed analysis into stable, serializable report data."""
@@ -260,8 +260,8 @@ def report_data(
         "requested": list(analyses),
         "executed": list(executed),
         "function_records": function_records,
-        "calls": _call_records(function, selected, call_labels, frames, records),
-        "loops": _loop_records(function, selected, frames, records),
+        "calls": _call_records(function, selected, call_labels, invocations, records),
+        "loops": _loop_records(function, selected, invocations, records),
     }
     available = set(metadata_types)
     asked = {ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata}
@@ -274,26 +274,26 @@ def _call_records(
     function: Function,
     selected: frozenset[type[IRMetadata]],
     call_labels: Mapping[tuple[object, int], str] | None,
-    frames=(),
+    invocations=(),
     records=None,
 ) -> list[dict[str, object]]:
     """Every selected record attached to a Call, in program order."""
     rows: list[dict[str, object]] = []
     values = (
-        invocation_values(frames[0])
-        if frames
+        invocation_values(invocations[0])
+        if invocations
         else ((None, expr) for expr in collect_exprs(function.body))
     )
-    for frame, expr in values:
+    for invocation, expr in values:
         if not isinstance(expr, Call):
             continue
         held = _records_of(
-            expr, selected, get_metadata if records is None else records.reader(frame)
+            expr, selected, get_metadata if records is None else records.reader(invocation)
         )
         if not held:
             continue
         if call_labels is not None:
-            value = call_labels.get((invocation_key(frame), id(expr)))
+            value = call_labels.get((invocation_key(invocation), id(expr)))
             if value is None:
                 continue
         else:
@@ -302,7 +302,7 @@ def _call_records(
             {
                 "value": value,
                 **(
-                    {"frame": frame.label} if frame is not None and frame.parent is not None else {}
+                    {"frame": invocation.label} if invocation is not None and invocation.parent is not None else {}
                 ),
                 **held,
             }
@@ -313,21 +313,21 @@ def _call_records(
 def _loop_records(
     function: Function,
     selected: frozenset[type[IRMetadata]],
-    frames=(),
+    invocations=(),
     records=None,
 ) -> list[dict[str, object]]:
     """Every selected record attached to an authored loop."""
     rows: list[dict[str, object]] = []
     values = (
-        invocation_values(frames[0])
-        if frames
+        invocation_values(invocations[0])
+        if invocations
         else ((None, expr) for expr in collect_exprs(function.body))
     )
-    for frame, expr in values:
+    for invocation, expr in values:
         if not isinstance(expr, LoopRegion):
             continue
         held = _records_of(
-            expr, selected, get_metadata if records is None else records.reader(frame)
+            expr, selected, get_metadata if records is None else records.reader(invocation)
         )
         if not held:
             continue
@@ -335,7 +335,7 @@ def _loop_records(
             {
                 "value": expr.induction_var.name,
                 **(
-                    {"frame": frame.label} if frame is not None and frame.parent is not None else {}
+                    {"frame": invocation.label} if invocation is not None and invocation.parent is not None else {}
                 ),
                 **held,
             }

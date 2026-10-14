@@ -432,7 +432,7 @@ def _check_instruction(op, operand_types, mesh, *, repeat, order, frame, binding
 def match_instruction(
     op_type, attributes, operand_types, mesh, *, frame, repeat=None, order=None
 ) -> tuple[InstructionMatch, ...]:
-    """Return every instruction instance implementing these types and execution frame.
+    """Return every instruction instance implementing these types and execution scope.
 
     Read layout forks for each projectable tile, then validate the constructed
     instance with the same closed-instruction checks.

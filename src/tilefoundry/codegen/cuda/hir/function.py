@@ -40,6 +40,40 @@ def _emit(fn: Function, ctx: CudaCodegenContext) -> None:
     )
 
 
+class _Dependencies(ExprWalker):
+    def __init__(self):
+        super().__init__()
+        self.functions = set()
+
+    def function(self, fn, frame):
+        if id(fn) in self.functions:
+            return
+        self.functions.add(id(fn))
+        if fn.body is not None:
+            self.visit(fn.body, frame)
+
+    def visit_Call(self, call, frame):
+        self.visit_operands(call, frame)
+        target = call.target
+        if isinstance(target, Function):
+            self.function(target, frame)
+            return
+        slot = target if isinstance(target, ModuleList) else (
+            target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
+            and isinstance(target.args[0], ModuleList) else None
+        )
+        if slot is not None:
+            slot = frame.module.children[slot.key]
+            index = target.args[1] if isinstance(target, Call) else None
+            index = index.value if isinstance(index, Constant) else 0
+            child = slot.elements[index]
+            callee = child.entry_function()
+            self.function(callee, CallFrame(
+                child, callee, child.target if child.target is not None else frame.target,
+                child.topologies if child.topologies is not None else frame.topologies,
+            ))
+
+
 def device_functions(kernels, ctx) -> tuple[LinkableFunction, ...]:
     """Emit each HIR function and variant, with callees before callers."""
     hir_functions = tuple(fn for fn in kernels if isinstance(fn, Function))
@@ -52,42 +86,9 @@ def device_functions(kernels, ctx) -> tuple[LinkableFunction, ...]:
         for each in (frame.function, *frame.function.variants)
     }
 
-    class Dependencies(ExprWalker):
-        def __init__(self):
-            super().__init__()
-            self.functions = set()
-
-        def function(self, fn, frame):
-            if id(fn) in self.functions:
-                return
-            self.functions.add(id(fn))
-            if fn.body is not None:
-                self.visit(fn.body, frame)
-
-        def visit_Call(self, call, frame):
-            self.visit_operands(call, frame)
-            target = call.target
-            if isinstance(target, Function):
-                self.function(target, frame)
-                return
-            slot = target if isinstance(target, ModuleList) else (
-                target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
-                and isinstance(target.args[0], ModuleList) else None
-            )
-            if slot is not None:
-                slot = frame.module.children[slot.key]
-                index = target.args[1] if isinstance(target, Call) else None
-                index = index.value if isinstance(index, Constant) else 0
-                child = slot.elements[index]
-                callee = child.entry_function()
-                self.function(callee, CallFrame(
-                    child, callee, child.target if child.target is not None else frame.target,
-                    child.topologies if child.topologies is not None else frame.topologies,
-                ))
-
     sizes = {}
     for fn in device_bodies:
-        walk = Dependencies()
+        walk = _Dependencies()
         walk.function(fn, frames[id(fn)])
         sizes[id(fn)] = len(walk.functions)
     device_bodies = tuple(sorted(device_bodies, key=lambda fn: sizes[id(fn)]))

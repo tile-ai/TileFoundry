@@ -486,19 +486,19 @@ def assert_internal_contract(
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts, result.level)
-    for frame, expr in invocation_values(result.frames[0]):
+    for invocation, expr in invocation_values(result.invocations[0]):
         if not isinstance(expr, Call) or id(expr) in result.program.sites:
             continue
-        cost = result.records.get(frame, expr, ComputeCostMetadata)
+        cost = result.records.get(invocation, expr, ComputeCostMetadata)
         assert cost is not None
         duration = local_duration_ns(
             cost,
             throughput,
             services,
-            moved=result.records.get(frame, expr, MemoryMetadata),
+            moved=result.records.get(invocation, expr, MemoryMetadata),
             level=result.level,
         )
-        record = result.records.get(frame, expr, PerformanceMetadata)
+        record = result.records.get(invocation, expr, PerformanceMetadata)
         if not duration:
             assert record is None
             continue
@@ -511,7 +511,7 @@ def assert_internal_contract(
             (
                 scope
                 for scope in scopes
-                if scope.invocation is frame and id(expr) in scope.accesses.get("narrow", {})
+                if scope.invocation is invocation and id(expr) in scope.accesses.get("narrow", {})
             ),
             None,
         )

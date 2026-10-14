@@ -1,4 +1,4 @@
-"""Retained analysis definitions, invocation frames, and frame-local records."""
+"""Retained analysis definitions, invocations, and invocation-local records."""
 
 from __future__ import annotations
 
@@ -33,9 +33,9 @@ from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 from .errors import AnalysisError
 
 
-def invocation_key(frame):
-    """The invocation key, with None representing the root frame."""
-    return None if frame is None else frame.key
+def invocation_key(invocation):
+    """The invocation key, with None representing the root invocation."""
+    return None if invocation is None else invocation.key
 
 
 @dataclass(frozen=True)
@@ -94,6 +94,46 @@ class _BodyCloner(BindingSubstitutionCloner):
         name = f"v{self.number}"
         self.number += 1
         return replace(rebuilt, metadata=(*rebuilt.metadata, BindingMetadata(name)))
+
+
+class _CallSites(ExprWalker):
+    def __init__(self, frame):
+        super().__init__()
+        self.calls = []
+        self.frame = frame
+
+    def visit_MeshRegion(self, region, current_mesh=None):
+        for arg in region.args:
+            self.visit(arg, current_mesh)
+        self.visit(region.body, make_mesh(current_mesh, region.mesh) if current_mesh else region.mesh)
+
+    def visit_Call(self, expr, current_mesh=None):
+        self.visit_operands(expr, current_mesh)
+        target = expr.target
+        callee = target if isinstance(target, Function) else None
+        frame = self.frame
+        child_frame = frame
+        slot = target if isinstance(target, ModuleList) else (
+            target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
+            and isinstance(target.args[0], ModuleList) else None
+        )
+        key, index = None, None
+        if slot is not None:
+            key = slot.key
+            slot = frame.module.children[key]
+            index = target.args[1] if isinstance(target, Call) else None
+            index = index.value if isinstance(index, Constant) else index
+            child = slot.elements[index if isinstance(index, int) else 0]
+            callee = child.entry_function()
+            child_frame = CallFrame(
+                child, callee, child.target if child.target is not None else frame.target,
+                child.topologies if child.topologies is not None else frame.topologies,
+            )
+        if callee is not None:
+            stem = callee.name if key is None else key
+            if index is not None:
+                stem += f"[{index if isinstance(index, int) else getattr(index, 'name', None) or 'i'}]"
+            self.calls.append((expr, callee, child_frame, key, index, current_mesh, stem))
 
 
 def build_program(module, fn, dims=None) -> Program:
@@ -180,44 +220,7 @@ def build_program(module, fn, dims=None) -> Program:
         TypeInferVisitor(ranges=True).visit(
             derived, replace(inner, frame=program.frames[id(derived)])
         )
-        class Sites(ExprWalker):
-            def __init__(self):
-                super().__init__()
-                self.calls = []
-
-            def visit_MeshRegion(self, region, current_mesh=None):
-                for arg in region.args:
-                    self.visit(arg, current_mesh)
-                self.visit(region.body, make_mesh(current_mesh, region.mesh) if current_mesh else region.mesh)
-
-            def visit_Call(self, expr, current_mesh=None):
-                self.visit_operands(expr, current_mesh)
-                target = expr.target
-                callee = target if isinstance(target, Function) else None
-                child_frame = frame
-                slot = target if isinstance(target, ModuleList) else (
-                    target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
-                    and isinstance(target.args[0], ModuleList) else None
-                )
-                key, index = None, None
-                if slot is not None:
-                    key = slot.key
-                    slot = frame.module.children[key]
-                    index = target.args[1] if isinstance(target, Call) else None
-                    index = index.value if isinstance(index, Constant) else index
-                    child = slot.elements[index if isinstance(index, int) else 0]
-                    callee = child.entry_function()
-                    child_frame = CallFrame(
-                        child, callee, child.target if child.target is not None else frame.target,
-                        child.topologies if child.topologies is not None else frame.topologies,
-                    )
-                if callee is not None:
-                    stem = callee.name if key is None else key
-                    if index is not None:
-                        stem += f"[{index if isinstance(index, int) else getattr(index, 'name', None) or 'i'}]"
-                    self.calls.append((expr, callee, child_frame, key, index, current_mesh, stem))
-
-        sites = Sites()
+        sites = _CallSites(frame)
         sites.visit(body, mesh)
         stems = {}
         for expr, _callee, _frame, _key, _index, _mesh, stem in sites.calls:
@@ -246,31 +249,31 @@ def build_program(module, fn, dims=None) -> Program:
     return program
 
 
-class FrameRecords:
+class InvocationRecords:
     """Root metadata lives on IR; callee metadata lives in an invocation side table."""
 
     def __init__(self):
         self.table = {}
-        self.frames: list = []
+        self.invocations: list = []
 
-    def get(self, frame, node, kind):
-        if frame is None or frame.key is None:
+    def get(self, invocation, node, kind):
+        if invocation is None or invocation.key is None:
             return get_metadata(node, kind)
-        return self.table.get((frame, id(node), kind))
+        return self.table.get((invocation, id(node), kind))
 
-    def attach(self, frame, node, record):
-        if frame is None or frame.key is None:
+    def attach(self, invocation, node, record):
+        if invocation is None or invocation.key is None:
             attach_metadata(node, record)
         else:
-            self.table[frame, id(node), type(record)] = record
+            self.table[invocation, id(node), type(record)] = record
 
-    def reader(self, frame) -> Callable:
+    def reader(self, invocation) -> Callable:
         """Return a metadata lookup bound to one invocation."""
-        return lambda node, kind: self.get(frame, node, kind)
+        return lambda node, kind: self.get(invocation, node, kind)
 
     def definition_reader(self, body):
-        frame = next(frame for frame in self.frames if frame.function is body)
-        return self.reader(frame)
+        invocation = next(invocation for invocation in self.invocations if invocation.function is body)
+        return self.reader(invocation)
 
     def snapshot(self, program):
         snapshot = dict((key, id(value)) for key, value in self.table.items())
@@ -282,7 +285,7 @@ class FrameRecords:
 
 
 class InvocationWalker:
-    """Step into retained call frames while swapping the visitor's DAG memo."""
+    """Step into retained calls while swapping the visitor's DAG memo."""
 
     def attach(self, node, record, ctx):
         if ctx.records is None:
@@ -298,8 +301,8 @@ class InvocationWalker:
         )
 
     def visit_Call(self, expr, ctx):
-        frame = getattr(ctx.current, "invocation", None)
-        child = None if frame is None else frame.callees.get(id(expr))
+        invocation = getattr(ctx.current, "invocation", None)
+        child = None if invocation is None else invocation.callees.get(id(expr))
         if child is None:
             return self.default_visit_leaf(expr, self.visit_operands(expr, ctx), ctx)
         for arg in expr.args:
@@ -318,7 +321,7 @@ class InvocationWalker:
         """A retained call contributes no extra operation-level work."""
 
 
-def invocation_values(frame):
+def invocation_values(invocation):
     """Walk values in operand-first order, entering callees at their call sites."""
     seen = set()
 
@@ -326,7 +329,7 @@ def invocation_values(frame):
         if id(expr) in seen:
             return
         seen.add(id(expr))
-        child = frame.callees.get(id(expr))
+        child = invocation.callees.get(id(expr))
         if child is not None:
             for arg in expr.args:
                 yield from visit(arg)
@@ -336,6 +339,6 @@ def invocation_values(frame):
         else:
             for arg in expr_children(expr):
                 yield from visit(arg)
-        yield frame, expr
+        yield invocation, expr
 
-    yield from visit(frame.function.body)
+    yield from visit(invocation.function.body)

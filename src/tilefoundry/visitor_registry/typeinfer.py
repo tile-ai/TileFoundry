@@ -62,8 +62,8 @@ def input_scope_refusal(operand_types, mesh) -> str | None:
 def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
     """Validate one entry call or subscript, returning its normalized index.
 
-    Callers supply the current frame's slot when a tree has been rebuilt.
-    Variable expressions remain expressions in the instance stack.
+    Validate the slot from the current CallFrame's module. A dynamic index
+    remains an expression; runtime bounds are checked when it is evaluated.
     """
     if index is MISSING:
         if slot.indexed:
@@ -92,7 +92,6 @@ def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
     elif any(element is not slot.elements[0] for element in slot.elements[1:]):
         raise ValueError(f"ModuleList slot {slot.key!r}: variable index requires the same definition")
     return index
-
 
 
 class TypeInferVisitor(ExprVisitor[Type]):

@@ -197,8 +197,8 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
 
     cross_scope = results["cross_scope"]
     timed = tuple(
-        (call, cross_scope.records.get(frame, call, PerformanceMetadata))
-        for frame, call in invocation_values(cross_scope.frames[0])
+        (call, cross_scope.records.get(invocation, call, PerformanceMetadata))
+        for invocation, call in invocation_values(cross_scope.invocations[0])
         if isinstance(call, Call)
     )
     scalar_indices = tuple(

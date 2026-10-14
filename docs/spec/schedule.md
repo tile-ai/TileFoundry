@@ -80,9 +80,9 @@ For each projectable extent it separately matches layout major, solves the
 bindings, constructs an instance, and performs the closed instruction checks.
 A rejected extent does not stop other extents from matching. If none match,
 the refusal comes from the largest projectable extent.
-`scope` is required and reaches the verifier unchanged, including its target
+`frame` is required and reaches the verifier unchanged, including its target
 capability checks. Explicit schedule inference uses this same matcher with
-the authored instruction attributes, scope, repeat, and order.
+the authored instruction attributes, frame, repeat, and order.
 
 Operand, tiling, pattern, and verifier rejections raise `ScheduleRefusal`.
 Errors from implementation code, including `TypeError` and ISL errors,
