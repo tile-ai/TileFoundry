@@ -201,16 +201,17 @@ class TypeInferContext:
 
 `CallFrame` carries the current Module, function, effective target, and
 whole topology hierarchy. It is imported internally from
-`visitor_registry/contexts.py`; it is not exported from `tilefoundry` or
+`visitor_registry/call_frame.py`; it is not exported from `tilefoundry` or
 `tilefoundry.ir.core`. A shared definition carries no parent or inherited
 execution context ([core-ir §1](./core-ir.md#1-module)).
 
 - constraints:
   - `frame` MUST be the context state describing where a walk is reading.
-    Each visitor MUST resolve an instance target from its current Module's
-    `children[key]`, then create a callee frame. A callee declaration replaces
-    the corresponding inherited target or topology hierarchy; an explicit
-    empty topology tuple MUST remain empty.
+    `CallFrameVisitor.callee_frame(call, frame)` MUST implement
+    [core-ir §2.1](./core-ir.md#21-call). Direct Function/PrimFunction calls with
+    no caller frame and all Op calls return `None`; instance calls require one.
+    `walk_frames(frame, postorder=False)` enumerates reached HIR definitions
+    once in DFS order; `postorder=True` yields dependencies before callers.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
     subclass retains its analysis-specific state. It also retains `current_mesh`:
     a callee inherits the call site's mesh, and a region in its body composes

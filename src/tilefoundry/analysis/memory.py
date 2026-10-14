@@ -41,7 +41,8 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
     static_bytes,
 )
-from tilefoundry.visitor_registry.contexts import CallFrame, Cost, CostContext
+from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import Cost, CostContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .allocation import (
@@ -63,6 +64,7 @@ from .footprint import (
     reuse_windows,
     wave_of,
 )
+from .invocation import InvocationWalker, invocation_key
 from .iteration_scope import IterationScope, Repeats, walk_scopes
 from .liveness import analyze_liveness, result_copies
 from .metadata import (
@@ -75,7 +77,6 @@ from .metadata import (
     TrafficBytes,
 )
 from .precision import AnalysisPrecision
-from .program import InvocationWalker, invocation_key
 from .visitor import AnalyzeContext
 
 SELECTOR = "memory"
@@ -657,7 +658,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         options=context.options,
         root=context.root,
         current=context.current,
-        program=context.program,
         records=context.records,
         whole=whole,
         locals_by_unit=locals_by_unit,
@@ -708,17 +708,16 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     def multiplicity(invocation):
         count = 1
         while invocation.caller is not None:
-            site = invocation.site
             caller = invocation.caller
-            if not isinstance(site.index, Expr):
+            if not isinstance(invocation.index, Expr):
                 invocation = caller
                 continue
-            slot = caller.frame.module.children[site.key]
+            slot = caller.frame.module.children[invocation.slot_key]
             cursor = invocation
             number = None
             while cursor is not None:
                 loop = cursor.owner
-                if isinstance(loop, LoopRegion) and loop.induction_var is site.index:
+                if isinstance(loop, LoopRegion) and loop.induction_var is invocation.index:
                     start, stop, step = (
                         static_dim_value(value) for value in (loop.start, loop.extent, loop.step)
                     )
@@ -735,7 +734,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                     break
                 cursor = cursor.parent
             if number is None:
-                bounds = get_metadata(site.index, RangeMetadata)
+                bounds = get_metadata(invocation.index, RangeMetadata)
                 number = (
                     len(slot.elements) if bounds is None
                     else max(0, min(len(slot.elements), bounds.hi) - max(0, bounds.lo))
@@ -749,7 +748,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         invocation = interval.invocation
         key = (invocation_key(invocation), id(interval.value))
         multiplier = 1
-        if invocation is not None and invocation.parent is not None and any(interval.value is weight for weight in invocation.site.weights):
+        if invocation is not None and invocation.parent is not None and any(interval.value is weight for weight in invocation.weights):
             resource = invocation.resource_key(interval.value)
             multiplier = multiplicity(invocation)
             resources[key] = resource

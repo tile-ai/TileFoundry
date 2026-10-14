@@ -238,7 +238,7 @@ class ConvertHIRToTIR(ModulePass):
 
 - constraints:
   - The pass runs `analyze(..., analysis=("memory",))` over the authored entry
-    and lowers the returned checked, inlined function. The authored function is
+    and lowers the checked Module and its retained calls. The authored function is
     retained separately so `BindingMetadata`, keyed by `SourceSpanMetadata`,
     remains the source of user-facing names after analysis has assigned its own
     internal bindings.
@@ -261,6 +261,23 @@ class ConvertHIRToTIR(ModulePass):
     emission or require the naming pass to predict coalescing decisions.
   - Any construct without a complete lowering MUST raise `LoweringError`; the
     pass never emits a partial `PrimFunction` or silently preserves HIR.
+
+Scheduled lowering MUST retain loops and produce one `PrimFunction` per reached
+definition, preserving shared child definitions. Callee Tensor parameters and
+output buffers MUST use physical types: a `ShardLayout` contributes its inner
+layout, and layout-free gmem uses a contiguous `Layout`. The root's public
+parameters MUST remain unchanged. Call boundaries MAY create matching views of
+existing buffers, but MUST NOT insert copies, scheduling, or storage transfers.
+The original destination remains the call's result after passing its view.
+
+A callee output MAY be in on-chip memory. An smem return MUST copy into the smem
+output buffer supplied by its caller. Other callee returns not bound to that
+output buffer MUST fail with `LoweringError` naming the callee and call path and
+requiring an explicit HIR `tf.schedule` copy. Lowering MUST NOT repair such an
+input or schedule logical HIR automatically. Existing root output copying is
+unchanged. Codegen does not support these retained TIR calls and MUST refuse them
+with `no codegen handler for Op <type>` when emission reaches one.
+
 
 ### 7.3 `insert_default_host_entry`
 

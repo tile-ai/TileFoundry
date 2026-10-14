@@ -38,12 +38,8 @@ from tilefoundry.visitor_registry.access_relation import (
     local_relations_of,
     reached_elements,
 )
-from tilefoundry.visitor_registry.contexts import (
-    CallFrame,
-    CostContext,
-    TypeInferContext,
-    VerifyContext,
-)
+from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import CostContext, TypeInferContext, VerifyContext
 from tilefoundry.visitor_registry.registries import (
     codegen_registry,
     cost_evaluator_registry,

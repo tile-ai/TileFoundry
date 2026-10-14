@@ -87,6 +87,7 @@ from tilefoundry.visitor_registry.access_relation import (
     projected_axes,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 from tilefoundry.visitor_registry.candidates import candidate_ops, sole_candidate
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.registries import typeinfer_registry
@@ -253,7 +254,7 @@ def _label(call: Expr) -> str:
 
 
 @dataclass
-class Lowering(ExprVisitor[Expr]):
+class Lowering(CallFrameVisitor[Expr]):
     """Mechanical lowering of one analyzed HIR function."""
 
     result: AnalysisResult
@@ -263,7 +264,7 @@ class Lowering(ExprVisitor[Expr]):
 
     def __post_init__(self) -> None:
         ExprVisitor.__init__(self)
-        self.module = self.result.program.module
+        self.module = self.result.scopes.frame.module
         self.invocation = self.result.scopes.invocation if self.invocation is None else self.invocation
         self.function = self.invocation.function
         self.read = self.result.records.definition_reader(self.function)
@@ -643,8 +644,8 @@ class Lowering(ExprVisitor[Expr]):
         return result
 
     def _lower_call(self, call: Call, cursor: _Cursor) -> Expr:
-        child = self.invocation.callees[id(call)]
-        lowering = self.callees[id(child.function)]
+        frame = self.callee_frame(call, self.invocation.frame)
+        lowering = self.callees[id(frame.function)]
         args = tuple(self.visit(arg, cursor) for arg in call.args)
         destination = self._declare(call, call.type, 1, cursor)
         scratch = []
@@ -1400,8 +1401,10 @@ class ConvertHIRToTIR(ModulePass):
                     "caller destination; write an explicit tf.schedule copy in HIR"
                 )
         lowered = {}
-        for body in result.program.callee_first():
-            invocation = next(invocation for invocation in result.invocations if invocation.function is body)
+
+        for frame in CallFrameVisitor.walk_frames(result.scopes.frame, postorder=True):
+            body = frame.function
+            invocation = next(inv for inv in result.invocations if inv.function is body)
             lowering = Lowering(result, origin_of(body) or body, invocation, lowered)
             lowering.lowered = lowering.run()
             lowered[id(body)] = lowering
@@ -1410,10 +1413,6 @@ class ConvertHIRToTIR(ModulePass):
         for record in render_analysis(result).summary:
             if isinstance(record, (ReportIdentity, ReportSelection)):
                 attach_metadata(root, record)
-        replacements = {
-            identity: lowered[id(body)].lowered
-            for identity, body in result.program.definitions.items()
-        }
         modules = {}
 
         def rebuild(node):
@@ -1423,12 +1422,12 @@ class ConvertHIRToTIR(ModulePass):
             for key, slot in node.children.items():
                 elements = tuple(rebuild(child) for child in slot.elements)
                 children[key] = ModuleList(elements if slot.indexed else elements[0])
-            functions = tuple(replacements.get(id(function), function) for function in node.functions)
+            functions = tuple(lowered[id(fn)].lowered if id(fn) in lowered else fn for fn in node.functions)
             rebuilt = replace(node, functions=functions, children=children)
             modules[id(node)] = rebuilt
             return rebuilt
 
-        return rebuild(result.program.module)
+        return rebuild(result.scopes.frame.module)
 
 
 __all__ = ["ConvertHIRToTIR", "LoweringError"]

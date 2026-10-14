@@ -12,7 +12,7 @@ import pytest
 
 from tests.models.deepseek_v4_flash.case import ANALYZED_AT, CASE
 from tests.models.deepseek_v4_flash.model import REAL
-from tilefoundry.analysis.program import build_program
+from tilefoundry.analysis.check import check_program
 from tilefoundry.ir.types.substitute import DimSubstitutionError
 
 
@@ -37,7 +37,7 @@ def test_the_context_lengths_the_case_names_are_ones_the_model_has():
     function = module.lookup("mla_attend")
 
     assert ANALYZED_AT["ctx_len"] < REAL.max_ctx < REAL.window
-    sized = build_program(module, function, dict(ANALYZED_AT)).root
+    sized = check_program(module, function, dims=dict(ANALYZED_AT))[1]
     cache = next(p for p in sized.params if p.name == "kv_cache")
     assert tuple(int(d) for d in cache.type.shape) == (
         1,
@@ -49,4 +49,4 @@ def test_the_context_lengths_the_case_names_are_ones_the_model_has():
     with pytest.raises(
         DimSubstitutionError, match=r"declared over \[0, 127\] and cannot take 1024"
     ):
-        build_program(module, function, {"ctx_len": 1024})
+        check_program(module, function, dims={"ctx_len": 1024})

@@ -117,10 +117,8 @@ def compile(
 def _canonical_module_text(mod: Module) -> str:
     """Produce canonical text for cache-key: entry-function source + topologies.
 
-    Uses the *effective* hierarchy rather than the declared one, so that two
-    modules with the same entry function but different topologies produce
-    different cache keys even when one of them inherits its hierarchy from an
-    owner instead of declaring it.
+    Entry source and declared topologies distinguish independently compiled
+    execution domains without attaching parent context to shared definitions.
     """
     fn_text = _as_script(mod.entry_function())
 

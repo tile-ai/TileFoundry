@@ -1,6 +1,6 @@
 """Enumerate definition call paths and their effective execution contexts."""
 
-from tilefoundry.visitor_registry.contexts import CallFrame
+from tilefoundry.visitor_registry.call_frame import CallFrame
 
 
 def list_call_paths(root) -> dict[str, CallFrame]:

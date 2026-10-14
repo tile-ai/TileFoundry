@@ -28,7 +28,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.types.utils import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
 
-from .program import invocation_key, invocation_values
+from .invocation import invocation_key, invocation_values
 
 _FAMILIES: dict[type[IRMetadata], str] = {}
 _EXPR_FIELDS: dict[type[IRMetadata], dict[str, Callable[..., object]]] = {}

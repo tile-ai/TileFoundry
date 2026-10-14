@@ -11,8 +11,8 @@ from tilefoundry.analysis import (
     RooflineMetadata,
     analyze,
 )
+from tilefoundry.analysis.invocation import invocation_values
 from tilefoundry.analysis.metadata import shares
-from tilefoundry.analysis.program import invocation_values
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion

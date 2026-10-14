@@ -11,18 +11,17 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from tilefoundry.ir.core import Call, Constant, Var
-from tilefoundry.ir.core.module import Module, ModuleList
+from tilefoundry.ir.core import Var
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types import StorageKind, TensorType, TupleType, UnitType
-from tilefoundry.ir.visitor import ExprWalker
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 
 _DEFAULT_ENTRY_NAME = "main"
 
@@ -122,20 +121,16 @@ def reject_omitted_child_weights(module: Module) -> None:
     frames = list_call_paths(module)
     selectors = {id(frame.function): path for path, frame in frames.items()}
 
-    class Check(ExprWalker):
+    class Check(CallFrameVisitor[None]):
+        def default_visit_leaf(self, expr, operands, frame):
+            return None
+
         def visit_Call(self, call, frame):
             self.visit_operands(call, frame)
-            target = call.target
-            slot = target if isinstance(target, ModuleList) else (
-                target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
-                and isinstance(target.args[0], ModuleList) else None
-            )
-            if slot is None:
+            inner = self.callee_frame(call, frame)
+            if inner is None or isinstance(call.target, Function):
                 return
-            slot = frame.module.children[slot.key]
-            index = target.args[1] if isinstance(target, Call) else None
-            index = index.value if isinstance(index, Constant) else 0
-            callee = slot.elements[index].entry_function()
+            callee = inner.function
             weights = [param.name for param in callee.params if param.is_const]
             if weights:
                 raise ValueError(

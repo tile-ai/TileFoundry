@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 import isl
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
@@ -30,7 +30,8 @@ from tilefoundry.visitor_registry.access_relation import (
     renaming_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.contexts import CallFrame, TypeInferContext
+from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .access import (
     Access,
@@ -42,6 +43,7 @@ from .access import (
     resolve_access,
 )
 from .errors import AnalysisError
+from .invocation import call_labels
 from .loop_domain import induction_name, iteration_domain
 from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
@@ -96,7 +98,7 @@ class IterationScope:
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
     topologies: tuple[Topology, ...] = ()
     invocation: IterationScope | None = None
-    site: object | None = None
+    call_label: str = ""
     frame: CallFrame | None = None
     callees: dict[int, IterationScope] = field(default_factory=dict)
     variance: dict[int, frozenset[int]] = field(default_factory=dict)
@@ -114,19 +116,44 @@ class IterationScope:
 
     @property
     def function(self):
-        return self.owner if isinstance(self.owner, Function) else self.site.body
+        return self.owner if isinstance(self.owner, Function) else self.frame.function
 
     @property
     def label(self):
-        return self.function.name if self.caller is None else f"{self.caller.label}/{self.site.label}"
+        return self.function.name if self.caller is None else f"{self.caller.label}/{self.call_label}"
+
+    @property
+    def slot_key(self):
+        if not isinstance(self.owner, Call):
+            return None
+        target = self.owner.target
+        return target.key if isinstance(target, ModuleList) else (
+            target.args[0].key if isinstance(target, Call) else None
+        )
+
+    @property
+    def index(self):
+        target = self.owner.target if isinstance(self.owner, Call) else None
+        if not isinstance(target, Call):
+            return None
+        index = target.args[1]
+        return index.value if isinstance(index, Constant) else index
+
+    @property
+    def activations(self):
+        return tuple(p for p in self.function.params if self.slot_key is None or not p.is_const)
+
+    @property
+    def weights(self):
+        return tuple(p for p in self.function.params if self.slot_key is not None and p.is_const)
 
     def resource_key(self, weight):
         path, cursor = [], self
         while cursor.caller is not None:
-            if cursor.site.key is not None:
-                segment = cursor.site.key
-                if cursor.site.index is not None:
-                    segment += f".{cursor.site.index if isinstance(cursor.site.index, int) else '{i}'}"
+            if cursor.slot_key is not None:
+                segment = cursor.slot_key
+                if cursor.index is not None:
+                    segment += f".{cursor.index if isinstance(cursor.index, int) else '{i}'}"
                 path.append(segment)
             cursor = cursor.caller
         return ".".join((*reversed(path), weight.name))
@@ -293,7 +320,7 @@ class IterationScope:
         return self._trips_cache[1]
 
 
-class ScopeBuilder:
+class ScopeBuilder(CallFrameVisitor[None]):
     """Build one IterationScope tree and its access views for a Function.
 
     Scopes record each call's logical relations, whatever level the caller's
@@ -307,10 +334,8 @@ class ScopeBuilder:
         *,
         views: Sequence[str] = ("narrow", "device", "unit"),
         ctx: AnalyzeContext | None = None,
-        program=None,
     ) -> None:
         self.graph = graph
-        self.program = program if program is not None else getattr(ctx, "program", None)
         self.topologies = module.effective_topologies()
         self.views = tuple(views)
         self.sources: dict[str, dict[int, BufferAlias | tuple]] = {view: {} for view in self.views}
@@ -528,17 +553,18 @@ class ScopeBuilder:
             changing.add(id(loop))
         self.variance[id(expr)] = frozenset(changing)
 
-    def _visit_call(self, expr, scope, site):
+    def _visit_call(self, expr, scope, frame):
         for arg in expr.args:
             self._visit(arg, scope)
-        if isinstance(site.index, Expr):
-            self._visit(site.index, scope)
         child = IterationScope(
             expr, scope, (), scope.depth, scope.domain,
-            tuple(zip(site.activations, expr.args, strict=True)),
+            tuple(zip((p for p in frame.function.params
+                       if isinstance(expr.target, Function) or not p.is_const), expr.args, strict=True)),
             domain_params=scope.domain_params, accesses=self._empty_accesses(),
-            site=site, frame=site.frame, records=self.unit_ctx.records,
+            call_label=self.labels[id(expr)], frame=frame, records=self.unit_ctx.records,
         )
+        if isinstance(child.index, Expr):
+            self._visit(child.index, scope)
         child.invocation = child
         scope.invocation.callees[id(expr)] = child
         scope.children = (*scope.children, child)
@@ -546,13 +572,14 @@ class ScopeBuilder:
             self.unit_ctx.records.invocations.append(child)
         names = ("sources", "precisions", "definitions", "aliases", "seen", "seeds", "variance")
         saved = {name: getattr(self, name) for name in names}
+        previous_labels, self.labels = self.labels, call_labels(frame)
         self.sources = {view: {} for view in self.views}
         self.precisions = {view: {} for view in self.views}
         self.definitions, self.aliases, self.seeds, self.seen = {}, {}, {}, set()
         self.variance = child.variance
         saved_type, saved_unit = self.type_ctx, self.unit_ctx
-        self.type_ctx = replace(self.type_ctx, module=site.frame.module, target=site.frame.target, current=child)
-        self.unit_ctx = replace(self.unit_ctx, module=site.frame.module, target=site.frame.target, current=child)
+        self.type_ctx = replace(self.type_ctx, module=frame.module, target=frame.target, current=child)
+        self.unit_ctx = replace(self.unit_ctx, module=frame.module, target=frame.target, current=child)
         try:
             for param, argument in child.captures:
                 self.seen.add(id(param))
@@ -565,22 +592,23 @@ class ScopeBuilder:
                         child,
                     )
                     self.precisions[view][id(param)] = saved["precisions"][view][id(argument)]
-            for weight in site.weights:
+            for weight in child.weights:
                 self._visit(weight, child)
-                if isinstance(site.index, Expr):
-                    self.variance[id(weight)] = saved["variance"].get(id(site.index), frozenset())
-            self._visit(site.body.body, child)
+                if isinstance(child.index, Expr):
+                    self.variance[id(weight)] = saved["variance"].get(id(child.index), frozenset())
+            self._visit(frame.function.body, child)
             results = {
                 view: (
-                    self.sources[view][id(site.body.body)],
-                    self.precisions[view][id(site.body.body)],
+                    self.sources[view][id(frame.function.body)],
+                    self.precisions[view][id(frame.function.body)],
                 )
                 for view in self.views
             }
-            changing = self.variance.get(id(site.body.body), frozenset())
+            changing = self.variance.get(id(frame.function.body), frozenset())
             child.tables = {name: getattr(self, name) for name in names}
         finally:
             self.type_ctx, self.unit_ctx = saved_type, saved_unit
+            self.labels = previous_labels
             for name, table in saved.items():
                 setattr(self, name, table)
         for view, (source, precision) in results.items():
@@ -595,8 +623,8 @@ class ScopeBuilder:
             return
         self.seen.add(id(expr))
         self.definitions[id(expr)] = scope
-        if self.program is not None and (site := self.program.sites.get(id(expr))) is not None:
-            self._visit_call(expr, scope, site)
+        if isinstance(expr, Call) and (frame := self.callee_frame(expr, scope.invocation.frame)) is not None:
+            self._visit_call(expr, scope, frame)
             return
         if isinstance(expr, LoopRegion):
             for operand in expr.args:
@@ -709,7 +737,8 @@ class ScopeBuilder:
             topologies=self.topologies,
         )
         root.invocation = root
-        root.frame = self.program.frames[id(self.graph)] if self.program is not None else CallFrame(self.type_ctx.module, self.graph)
+        root.frame = CallFrame(self.type_ctx.module, self.graph)
+        self.labels = call_labels(root.frame)
         root.variance = self.variance
         root.records = self.unit_ctx.records
         if self.unit_ctx.records is not None:

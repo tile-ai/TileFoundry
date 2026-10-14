@@ -37,9 +37,9 @@ from tilefoundry.analysis.access import Access
 from tilefoundry.analysis.allocation import AllocationConstraintVisitor, aligned
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.invocation import invocation_values
 from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
 from tilefoundry.analysis.liveness import analyze_liveness
-from tilefoundry.analysis.program import invocation_values
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
@@ -487,7 +487,7 @@ def assert_internal_contract(
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts, result.level)
     for invocation, expr in invocation_values(result.invocations[0]):
-        if not isinstance(expr, Call) or id(expr) in result.program.sites:
+        if not isinstance(expr, Call) or id(expr) in invocation.callees:
             continue
         cost = result.records.get(invocation, expr, ComputeCostMetadata)
         assert cost is not None
@@ -813,8 +813,8 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     assert result.function is not authored
     assert result.function.name == authored.name
     assert all(
-        residual_dims(body, result.program.frames[id(body)]) == ()
-        for body in result.program.bodies()
+        residual_dims(invocation.function, invocation.frame) == ()
+        for invocation in result.invocations
     )
 
 

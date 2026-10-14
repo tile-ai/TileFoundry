@@ -26,9 +26,10 @@ from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
 from tilefoundry.ir.types.utils import participant_layout, types_compatible
-from tilefoundry.ir.visitor import ExprVisitor, expr_children
+from tilefoundry.ir.visitor import expr_children
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 
-from .contexts import CallFrame, TypeInferContext, TypeInferResults
+from .contexts import TypeInferContext, TypeInferResults
 from .registries import typeinfer_registry
 
 
@@ -94,7 +95,7 @@ def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
     return index
 
 
-class TypeInferVisitor(ExprVisitor[Type]):
+class TypeInferVisitor(CallFrameVisitor[Type]):
     """Derive one type for each ``Expr`` kind.
 
     See [hir §1.1](docs/spec/hir.md#11-function) and
@@ -170,30 +171,14 @@ class TypeInferVisitor(ExprVisitor[Type]):
             return arg_types[0].fields[index if isinstance(index, int) else 0]
         if isinstance(target, Call):
             arg_types = arg_types[1:]
-        child_frame = None
-        slot = target if isinstance(target, ModuleList) else (
-            target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
-            and isinstance(target.args[0], ModuleList) else None
-        )
-        if slot is not None:
-            if ctx.frame is None:
-                ctx.error(call, "instance call requires a module scope")
-            try:
-                slot = ctx.frame.module.children[slot.key]
-                if isinstance(target, ModuleList):
-                    _check_module_index(slot)
-                    index = 0
-                else:
-                    index = target.args[1]
-                    index = index.value if isinstance(index, Constant) else 0
-                child = slot.elements[index]
-                target = child.entry_function()
-                child_frame = CallFrame(
-                    child, target, child.target if child.target is not None else ctx.frame.target,
-                    child.topologies if child.topologies is not None else ctx.frame.topologies,
-                )
-            except (KeyError, ValueError) as error:
-                ctx.error(call, str(error))
+        try:
+            if isinstance(target, ModuleList) and ctx.frame is not None:
+                _check_module_index(ctx.frame.module.children[target.key])
+            child_frame = self.callee_frame(call, ctx.frame)
+            if child_frame is not None:
+                target = child_frame.function
+        except (KeyError, ValueError) as error:
+            ctx.error(call, str(error))
         from tilefoundry.ir.hir.schedule import ScheduleOp  # noqa: PLC0415
 
         if not isinstance(target, (HirReshard, ScheduleOp)):
@@ -225,7 +210,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         *,
         child_frame: CallFrame | None = None,
     ) -> Type:
-        child = child_frame is not None
+        child = child_frame is not None and not isinstance(call.target, Function)
         supplied = tuple(
             param for param in callee.params if not (child and param.is_const)
         )

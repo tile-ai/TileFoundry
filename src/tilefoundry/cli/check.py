@@ -33,7 +33,7 @@ from tilefoundry.runtime.resource import (
     SafetensorsResource,
     draw_tensor,
 )
-from tilefoundry.visitor_registry.contexts import CallFrame
+from tilefoundry.visitor_registry.call_frame import CallFrame
 
 SEED = 0
 

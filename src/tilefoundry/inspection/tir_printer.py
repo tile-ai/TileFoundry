@@ -11,7 +11,6 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor
@@ -21,9 +20,10 @@ from tilefoundry.ir.tir.stmts import (
     Evaluate,
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import DType, LayoutBase, PointerType, TensorType
+from tilefoundry.ir.types import DType, LayoutBase, PointerType, TensorType, UnitType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.visitor import StmtVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
 
 _LINE_LENGTH = 100
 
@@ -65,7 +65,7 @@ class _RenderedLines(list):
         self.imports = imports
 
 
-class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
+class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
     """TIR statement printer with explicit statement-visitor entry points.
 
     The legacy helpers below remain as the formatting implementation while the
@@ -271,12 +271,13 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
 
     def _emit_evaluate(self, stmt):
         target = stmt.callable
-        slot = target if isinstance(target, ModuleList) else (
-            target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
-            and isinstance(target.args[0], ModuleList) else None
-        )
-        if isinstance(target, PrimFunction) or slot is not None:
-            head = target.name if slot is None else slot.key
+        if isinstance(target, (PrimFunction, ModuleList, Call)):
+            frame = getattr(self.context, "frame", None)
+            frame = self.callee_frame(Call(target, stmt.args, type=UnitType()), frame) if frame is not None else None
+            callee = target if frame is None else frame.function
+            head = callee.name if isinstance(target, PrimFunction) else (
+                target.key if isinstance(target, ModuleList) else target.args[0].key
+            )
             if isinstance(target, Call):
                 head += f"[{self.visit(target.args[1])}]"
             return [f"{self.indent}{head}({', '.join(self.visit(arg) for arg in stmt.args)})"]
@@ -346,8 +347,9 @@ def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
     ]
 
 
-def _function_block(fn: PrimFunction, *, symbol_bindings=None) -> list[str]:
+def _function_block(fn: PrimFunction, *, symbol_bindings=None, frame=None) -> list[str]:
     ctx = TirPrintContext()
+    ctx.frame = frame
     ctx.symbol_bindings = symbol_bindings or {}
     target_expr = fn.target.to_python()
     ctx.imports.update(target_expr.imports)
@@ -477,7 +479,7 @@ def _single_module_to_python(mod: Module, module_name: str, names, *, options=No
             if isinstance(fn, HirFunction):
                 raise NotImplementedError("mixed HIR/TIR module printing is not yet supported")
             raise TypeError(f"TIR printer cannot serialize {type(fn).__name__}")
-        block = _function_block(fn, symbol_bindings=_module_symbol_bindings(mod))
+        block = _function_block(fn, symbol_bindings=_module_symbol_bindings(mod), frame=CallFrame(mod, fn))
         ctx.imports.update(block.imports)
         blocks.append([*_function_comments(fn, options), *block])
     for index, block in enumerate(blocks):

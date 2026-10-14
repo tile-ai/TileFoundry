@@ -11,15 +11,16 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.visitor_registry.contexts import CallFrame, CostContext, TrafficBytes
+from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
+from .invocation import InvocationWalker
 from .iteration_scope import Repeats
 from .metadata import Breakdown, ComputeCostMetadata, MemoryMetadata, breakdown, shares
 from .precision import AnalysisPrecision
-from .program import InvocationWalker
 from .visitor import AnalyzeContext
 
 SELECTOR = "compute-cost"
@@ -291,7 +292,6 @@ def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
         options=context.options,
         root=context.root,
         current=context.current,
-        program=context.program,
         records=context.records,
         locals_by_unit=locals_by_unit,
         whole=CostContext(frame=frame),

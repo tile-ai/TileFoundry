@@ -15,8 +15,8 @@ from dataclasses import dataclass
 
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.invocation import InvocationRecords
 from tilefoundry.analysis.iteration_scope import IterationScope, ScopeBuilder
-from tilefoundry.analysis.program import InvocationRecords, Program
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.visitor import AnalyzeContext
@@ -29,6 +29,7 @@ from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.types.substitute import DimSubstitutionError
 from tilefoundry.ir.visitor import function_values
 from tilefoundry.target import Target, UnsupportedCapabilityError
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,6 @@ class AnalysisResult:
     topology_level: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
-    program: Program
     records: InvocationRecords
     invocations: tuple[IterationScope, ...]
 
@@ -140,15 +140,13 @@ def build_iteration_scopes(
         topology_level = topologies[0].name if topologies else None
 
     try:
-        program = check_program(module, function, topology_level=topology_level, analyzers=analyzers, dims=dims)
+        module, function = check_program(module, function, topology_level=topology_level, analyzers=analyzers, dims=dims)
     except (SpecializationError, DimSubstitutionError) as error:
         raise AnalysisError(f"analyze: {error}") from None
-    module = program.module
-    function = program.root
     context = AnalyzeContext(
-        module, target, topology_level, options, program=program, records=InvocationRecords()
+        module, target, topology_level, options, records=InvocationRecords()
     )
-    context.root = context.current = ScopeBuilder(module, function, ctx=context, program=program).build()
+    context.root = context.current = ScopeBuilder(module, function, ctx=context).build()
 
     return context
 
@@ -188,8 +186,7 @@ def analyze(
     module = context.module
     topology_level = context.topology_level
     function = context.root.owner
-    program = context.program
-    functions = program.bodies()
+    functions = tuple(frame.function for frame in CallFrameVisitor.walk_frames(context.root.frame))
     invocation_records = context.records
 
     order: list[type[IRMetadata]] = []
@@ -199,7 +196,7 @@ def analyze(
     )
     authored_before = _metadata_snapshot(authored)
     for algorithm in closure:
-        before = invocation_records.snapshot(program)
+        before = invocation_records.snapshot(functions)
         body_before = _metadata_snapshot(functions[1:])
         try:
             algorithm.run(function, context)
@@ -207,7 +204,7 @@ def analyze(
             raise AnalysisError(f"{algorithm.selector}: {error}") from None
         if _metadata_snapshot(authored) != authored_before:
             raise AnalysisError(f"{algorithm.selector!r} changed authored IR metadata")
-        after = invocation_records.snapshot(program)
+        after = invocation_records.snapshot(functions)
         _require_invocation_writes(algorithm, body_before, _metadata_snapshot(functions[1:]))
         records = _require_owned_writes(algorithm, before, after)
         written_records |= records
@@ -216,7 +213,7 @@ def analyze(
             if metadata_type in written and metadata_type not in order:
                 order.append(metadata_type)
 
-    final = invocation_records.snapshot(program)
+    final = invocation_records.snapshot(functions)
     surviving = {
         metadata_type for key in written_records & final.keys() for metadata_type in (key[-1],)
     }
@@ -229,7 +226,6 @@ def analyze(
         topology_level=topology_level,
         executed=tuple(algorithm.selector for algorithm in closure),
         metadata_types=tuple(item for item in order if item in surviving),
-        program=program,
         records=invocation_records,
         invocations=tuple(invocation_records.invocations),
     )

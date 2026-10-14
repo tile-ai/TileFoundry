@@ -39,8 +39,8 @@ from tilefoundry.analysis.compute_cost import (
     local_duration_ns,
 )
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.invocation import invocation_values
 from tilefoundry.analysis.memory import MemoryOptions
-from tilefoundry.analysis.program import invocation_values
 from tilefoundry.dsl import *
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
 from tilefoundry.ir.core import (

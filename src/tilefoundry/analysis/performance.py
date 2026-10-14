@@ -19,6 +19,7 @@ from tilefoundry.target.facts import TopologyFacts
 from .compute_cost import local_duration_ns
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
+from .invocation import InvocationWalker
 from .iteration_scope import IterationScope
 from .metadata import (
     ComputeCostMetadata,
@@ -28,7 +29,6 @@ from .metadata import (
     RooflineMetadata,
     TimelineMetadata,
 )
-from .program import InvocationWalker
 from .visitor import AnalyzeContext
 
 SELECTOR = "performance"
@@ -96,7 +96,6 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
         options=context.options,
         root=context.root,
         current=context.current,
-        program=context.program,
         records=context.records,
         facts=facts,
         services=services,

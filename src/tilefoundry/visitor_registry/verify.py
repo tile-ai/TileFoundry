@@ -18,7 +18,6 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import canonical_specialization_signature
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.pattern import PatternMatcher, RangePattern, between_rules, locate_dim_var
 from tilefoundry.ir.tir.launch import Launch
@@ -59,7 +58,8 @@ from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
-from tilefoundry.visitor_registry.contexts import CallFrame, TypeInferContext, VerifyContext
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.visitor_registry.contexts import TypeInferContext, VerifyContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
 
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
@@ -704,28 +704,17 @@ def _verify_call_arguments(stmt, params, label, ctx):
 
 
 def _retained_callee(target, frame):
-    if isinstance(target, PrimFunction):
-        return target, None if frame is None else dataclasses.replace(frame, function=target)
-    slot = target if isinstance(target, ModuleList) else (
-        target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
-        and isinstance(target.args[0], ModuleList) else None
-    )
-    if slot is None:
+    if not isinstance(target, (PrimFunction, ModuleList, Call)):
         raise VerifyError(f"unsupported TIR call target {type(target).__name__}")
-    if frame is None:
-        raise VerifyError("instance TIR call requires module context")
-    inference_type(target, TypeInferContext(frame=frame))
-    slot = frame.module.children[slot.key]
-    index = target.args[1] if isinstance(target, Call) else None
-    index_value = index.value if isinstance(index, Constant) else 0
-    child = slot.elements[index_value]
-    callee = child.entry_function()
+    if not isinstance(target, PrimFunction):
+        if frame is None:
+            raise VerifyError("instance TIR call requires module context")
+        inference_type(target, TypeInferContext(frame=frame))
+    inner = CallFrameVisitor.callee_frame(Call(target, (), type=UnitType()), frame)
+    callee = inner.function if inner is not None else target
     if not isinstance(callee, PrimFunction):
         raise VerifyError(f"TIR instance entry {callee.name!r} is not a PrimFunction")
-    return callee, CallFrame(
-        child, callee, child.target if child.target is not None else frame.target,
-        child.topologies if child.topologies is not None else frame.topologies,
-    )
+    return callee, inner
 
 
 def _verify_retained_call(stmt, fn, module_fn_map, ctx):

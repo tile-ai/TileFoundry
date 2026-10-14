@@ -116,7 +116,8 @@ table that grows whenever a new Expr subclass appears:
 | `SymbolRef` | `()` |
 | `ShapeOf` | `()` |
 | `Tuple` | `elements` |
-| `Call` | `args` |
+| `ModuleList` | `()` |
+| `Call` | `(target, *args)` when target is a Call, otherwise `args` |
 | `LoopRegion` | `args`, `body`, `yield_values` (binding-site Vars are excluded) |
 | `hir.Function` | `body` (parameter binding-site Vars are excluded) |
 

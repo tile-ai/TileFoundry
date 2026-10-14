@@ -16,7 +16,6 @@ from collections.abc import Mapping
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
 from tilefoundry.ir.core.module import ModuleList
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.pattern import Pattern, RangePattern
 from tilefoundry.ir.types import callable_type_for
 from tilefoundry.ir.types.dim import is_dim_expr
@@ -28,8 +27,8 @@ from tilefoundry.ir.types.substitute import (
     substitute_topology_dims,
 )
 from tilefoundry.ir.types.tensor_type import TensorType
-from tilefoundry.ir.visitor import ExprCloner, ExprWalker
-from tilefoundry.visitor_registry.contexts import CallFrame
+from tilefoundry.ir.visitor import ExprCloner
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 
 from .function import Function
 
@@ -306,7 +305,7 @@ def dim_vars_reached(fn: Function, frame=None) -> dict[str, object]:
     return found
 
 
-class _DimVarCollector(ExprWalker[None]):
+class _DimVarCollector(CallFrameVisitor[None]):
     """Collect dimensions from Expr values plus Function/Op side fields."""
 
     def __init__(self, found, dims=None):
@@ -319,6 +318,9 @@ class _DimVarCollector(ExprWalker[None]):
         self.cycles = []
         self.missing_bodies = []
         self.path = []
+
+    def default_visit_leaf(self, expr, operands, ctx):
+        return None
 
     def _collect_expr(self, expr: Expr, ctx=None) -> None:
         from tilefoundry.ir.types.substitute import _collect  # noqa: PLC0415
@@ -386,25 +388,9 @@ class _DimVarCollector(ExprWalker[None]):
         self._collect_bounds(expr)
         self._visit_children(expr, frame)
         target = expr.target
-        callee = target if isinstance(target, Function) else None
-        inner = frame
-        slot = target if isinstance(target, ModuleList) else (
-            target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
-            and isinstance(target.args[0], ModuleList) else None
-        )
-        if slot is not None:
-            if frame is None:
-                raise ValueError("instance call requires a CallFrame")
-            slot = frame.module.children[slot.key]
-            index = target.args[1] if isinstance(target, Call) else None
-            index = index.value if isinstance(index, Constant) else 0
-            child = slot.elements[index]
-            callee = child.entry_function()
-            inner = CallFrame(
-                child, callee, child.target if child.target is not None else frame.target,
-                child.topologies if child.topologies is not None else frame.topologies,
-            )
-        if callee is not None:
+        inner = self.callee_frame(expr, frame)
+        callee = inner.function if inner is not None else target
+        if isinstance(callee, Function):
             self.visit_function(callee, inner)
         else:
             for attribute in getattr(type(target), "params", lambda: ())():

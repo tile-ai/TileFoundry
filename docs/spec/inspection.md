@@ -144,9 +144,9 @@ used by the rendered program and MUST remain lint-clean.
     written at their scope boundary, and mixed HIR/TIR Modules MUST be
     rejected.
 
-The printer MUST emit a Module's whole tree: each nested Module prints as a
-`@module` class inside its owner's body, so importing the file rebuilds the same
-ownership. It MUST emit only what a Module *declares*, never what the Module
+The printer MUST emit each Module definition once before the slots that use it,
+with class-body bindings preserving shared definitions and instance keys.
+It MUST emit only what a Module *declares*, never what the Module
 resolves to — an inherited Target or topology hierarchy prints nothing, so
 the declaration-versus-inheritance split survives the round trip. A declared
 Target prints as the `@module(target=...)` argument and a declared hierarchy
@@ -161,21 +161,9 @@ as `ceildiv`, so importing restores the same expression tree.
   - The decorator MUST print in its called form, `@module()` included. A bare
     decorator has not run while the class body is evaluated, so a body naming a
     child call could not resolve it ([parser §2.1](./parser.md#21-syntax)).
-  - A nested Module MUST print before the owner's Functions, because a body
-    calling one names the attribute it is bound to and a class body binds in the
-    order it is written.
-  - A call on the entry of a direct child MUST print as that child's attribute
-    applied to the call's arguments, never as an attribute reach into the child
-    and never by the callee's own name. Which child a call reaches MUST be read
-    from the attached entry's identity and the recorded origin
-    ([hir §1.1](./hir.md#11-function)), not from the name they share and not from
-    the parser's consumed authoring record
-    ([parser §3](./parser.md#3-implementation-overview)):
-    anything may be called the same, and two attributes may hold copies of one
-    Module.
-  - Such a call MUST print exactly the arguments `Call.args` carries
-    ([hir §1.1](./hir.md#11-function)) and no others; importing the source
-    restores the callee's complete signature from the child's own class body.
+  - Child definitions MUST precede their slot bindings. Instance calls print
+    the slot key and optional index, with exactly `Call.args`, following
+    [core-ir §2.1](./core-ir.md#21-call).
 
 The printer MUST import the concrete Target class from its provider module and
 embed `repr(target)` as the constructor expression. That representation MUST

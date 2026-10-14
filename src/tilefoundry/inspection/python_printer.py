@@ -1157,11 +1157,6 @@ def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
     return as_script(fn, module=module_name)
 
 
-def _module_hir_functions(mod: Module) -> tuple[HirFunction, ...]:
-    """The Module's HIR functions."""
-    return tuple(fn for fn in _emission_order(mod) if isinstance(fn, HirFunction))
-
-
 def _emission_order(mod: Module) -> tuple:
     """A Module's functions in the order the printed class body binds them.
 

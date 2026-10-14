@@ -6,18 +6,18 @@ from tests._source import import_dsl
 from tests.fixtures.placed.gqa_decode import GqaOnline
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
 from tilefoundry import func
-from tilefoundry.analysis.program import build_program
 from tilefoundry.dsl import Tensor
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, binding_name
 from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.specialize import InstantiateDimensionCloner
 from tilefoundry.ir.visitor import collect_exprs, expr_children
 
 
 def test_gqa_correction_reads_the_old_carry_and_unique_yield() -> None:
-    function = build_program(GqaOnline, GqaOnline.entry_function(), {"ctx_len": 8}).module.entry_function()
+    function = InstantiateDimensionCloner({"ctx_len": 8}).function(GqaOnline.entry_function())
     printed = as_script(function)
 
     assert printed.count("        m_new = tf.max(m, score)") == 1

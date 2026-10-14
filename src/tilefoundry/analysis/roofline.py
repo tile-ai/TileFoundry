@@ -16,6 +16,7 @@ from tilefoundry.ir.visitor import ExprVisitor
 
 from .errors import AnalysisError
 from .facts import ThroughputFacts
+from .invocation import InvocationWalker
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -23,7 +24,6 @@ from .metadata import (
     RooflineMetadata,
     TrafficBytes,
 )
-from .program import InvocationWalker
 from .visitor import AnalyzeContext
 
 SELECTOR = "roofline"

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import torch
 
 from tests.evaluator.eval_utils import EvalCase, run_eval_case
 from tests.ops.ir.cost_utils import CostCase, run_cost_case
-from tilefoundry.analysis.program import build_program
+from tilefoundry.analysis.check import check_program
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.registry import eval_registry
@@ -20,6 +22,7 @@ from tilefoundry.ir.hir.specialize import residual_dims
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.types.mesh import make_mesh
+from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
@@ -69,7 +72,7 @@ def test_arange_symbolic_extent_resolves_from_runtime_shape():
     actual = evaluate(_symbolic_arange, torch.zeros(8))
     torch.testing.assert_close(actual, torch.tensor([1, 3, 5, 7], dtype=torch.int32))
 
-    concrete = build_program(Module("arange", (_symbolic_arange,), _symbolic_arange.name), _symbolic_arange, {"arange_n": 8}).root
+    concrete = check_program(replace(Module("arange", (_symbolic_arange,), _symbolic_arange.name), target=CudaTarget("nvidia.h200_sxm")), _symbolic_arange, dims={"arange_n": 8})[1]
     assert residual_dims(concrete) == ()
     assert isinstance(concrete.body.target, Arange)
     assert concrete.body.target.type.shape == (4,)

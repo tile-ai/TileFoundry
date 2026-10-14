@@ -18,6 +18,7 @@ from tilefoundry.inspection.analysis_report import (
     render_text,
 )
 from tilefoundry.ir.hir.specialize import SpecializationError
+from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
 
 EVIDENCE: dict[str, str] = {
     "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
@@ -128,12 +129,12 @@ def run_authored_analysis(
         require_bound_dims(module, function, dims, command="analyze")
         if not analyses:
             try:
-                expanded = check_program(module, function, dims=dims)
+                checked, root = check_program(module, function, dims=dims)
             except SpecializationError as error:
                 raise ValueError(f"analyze: {error}") from None
             annotated = "\n".join(
-                as_script(body, options=PythonPrintOptions(show_types=True))
-                for body in expanded.bodies()
+                as_script(frame.function, options=PythonPrintOptions(show_types=True))
+                for frame in CallFrameVisitor.walk_frames(CallFrame(checked, root))
             )
             Path(out_path).write_text(annotated, encoding="utf-8")
             return 0

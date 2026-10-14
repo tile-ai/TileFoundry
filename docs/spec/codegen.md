@@ -472,7 +472,7 @@ class CallableSignature(Signature):
     NOT be subclassed. Only the first two are reachable by name; the kernel's
     is derived inside the unit that defines it and is not in the table.
   - `function_path(root, fn)` MUST return the root Module name followed by the
-    selector segments of the first DFS call path for each definition. Child
+    segments of the first DFS call path for each definition. Child
     segments are slot keys and, for indexed slots, decimal indices. Variant paths add
     the display name or `v<index>` when absent. A function outside the tree
     MUST be rejected.
@@ -484,8 +484,8 @@ class CallableSignature(Signature):
     length prefixes, and the underscore delimits an index's length before its
     fixed-length payload, keeping the encoding injective.
   - `export_name(root, fn)` MUST join this same path with dots. For each HIR
-    selector it equals `<root name>.<selector>`.
-  - function paths reuse the IR selector traversal
+    call path it equals `<root name>.<call path>`.
+  - function paths reuse the IR definition traversal
     ([core-ir §1](./core-ir.md#1-module)). This
     traversal emits each definition once using its first DFS call path,
     including index segments. These naming functions live in

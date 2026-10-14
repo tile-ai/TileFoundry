@@ -19,7 +19,8 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import ShardLayout, Split, shard_layout_local_shape
-from tilefoundry.visitor_registry.contexts import CallFrame, TypeInferContext
+from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 

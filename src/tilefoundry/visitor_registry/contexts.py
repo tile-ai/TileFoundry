@@ -27,22 +27,6 @@ class TypeInferResults:
     value_range: tuple[int, int] | None = None
 
 
-@dataclass(frozen=True)
-class CallFrame:
-    """Current definition and its effective execution context on a call path."""
-
-    module: Module
-    function: Function | None
-    target: Target | None = None
-    topologies: tuple[Topology, ...] | None = None
-
-    def __post_init__(self):
-        if self.target is None:
-            object.__setattr__(self, "target", self.module.target)
-        if self.topologies is None:
-            object.__setattr__(self, "topologies", tuple(self.module.topologies or ()))
-
-
 @dataclass
 class TypeInferContext:
     """Track walk location and route type-inference queries.
@@ -220,7 +204,6 @@ class Cost:
 
 
 __all__ = [
-    "CallFrame",
     "TypeInferContext",
     "VerifyContext",
     "CostContext",

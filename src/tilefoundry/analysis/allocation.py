@@ -43,11 +43,11 @@ from tilefoundry.visitor_registry.contexts import CostContext
 
 from .access import Access, BufferAlias, buffer_alias
 from .errors import AnalysisError
+from .invocation import invocation_key
 from .iteration_scope import IterationScope, walk_scopes
 from .liveness import Liveness, UseEvent, result_copies
 from .metadata import MemoryMetadata, ValueLifetime
 from .precision import AnalysisPrecision
-from .program import invocation_key
 
 
 class SolverOptions(Protocol):
@@ -543,23 +543,23 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         if child is None:
             return self.default_visit_leaf(node, self.visit_operands(node, ctx), ctx)
         args = tuple(self.visit(arg, ctx) for arg in node.args)
-        if isinstance(child.site.index, Expr):
-            self.visit(child.site.index, ctx)
+        if isinstance(child.index, Expr):
+            self.visit(child.index, ctx)
         names = ("_memo", "bound", "pending", "definitions")
         saved = {name: getattr(self, name) for name in names}
         self.invocation_memos[invocation.key] = self._memo
         self._memo, self.bound, self.pending, self.definitions = {}, {}, defaultdict(list), {}
         inner = replace(ctx, current=child)
         try:
-            for param, storage in zip(child.site.activations, args, strict=True):
+            for param, storage in zip(child.activations, args, strict=True):
                 self.bound[id(param)] = storage
-            for weight in child.site.weights:
+            for weight in child.weights:
                 key = child.resource_key(weight)
                 if key in self.resources:
                     self.bound[id(weight)] = self.resources[key]
                 storage = self.visit(weight, inner)
                 self.resources.setdefault(key, storage)
-            for param in child.site.activations:
+            for param in child.activations:
                 self.visit(param, inner)
             returned = self.visit(child.function.body, inner)
         finally:

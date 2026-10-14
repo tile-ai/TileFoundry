@@ -222,7 +222,7 @@ bounds the caller stated.
     of one kernel MUST NOT materialise a whole model. A Module is the unit that
     loads, so what a run binds is everything the selected Module declares, not the
     subset the selected function names. A run MUST read the checkpoint relative
-    to the selected Module; selector segments MUST NOT scope into child Modules.
+    to the selected Module ([Commands](#commands)).
   - A dimension the target states as a range MUST be bound by `--dim`; a run
     MUST NOT choose an extent on the caller's behalf. Several extents MAY be
     stated for one dimension, and each MUST be run and reported. Where the extents select an implementation,
@@ -387,7 +387,7 @@ explicit analysis; there is no ordinary `--target` option.
     budget is currently fixed and MUST NOT be exposed as a CLI flag or public
     analysis option.
   - `analyze` MUST invoke the public operation once with every requested root,
-    so their union dependency closure runs on one inlined Function view
+    so their union dependency closure runs over one checked Module
     ([analysis §2](./analysis.md#2-composed-analysis)). Each closure member MUST
     run once, and requesting another root MUST NOT let one analyzer change
     Metadata owned by another.
@@ -473,9 +473,8 @@ tilefoundry schedule facts [INSTRUCTION] --target TARGET PATH [--json]
 tilefoundry schedule candidates SOURCE PATH [--json] [--dim NAME=EXTENT ...]
 ```
 
-`finalize` checks and inlines the selected entry, runs memory analysis, lowers
-every selected instruction, and writes the verified `PrimFunction` as canonical
-Python TIR. With `--json`, `PATH` instead contains an object whose `source`
+`finalize` checks the selected entry, runs memory analysis, and writes canonical
+TIR following [passes §7.1](./passes.md#71-converthirtotir). With `--json`, `PATH` instead contains an object whose `source`
 field is that same canonical TIR. `facts` describes the instructions admitted
 by the exact `TARGET` identity, optionally narrowed to one fully-qualified
 `INSTRUCTION` name. With no `INSTRUCTION`, it lists every registered TIR Op

@@ -186,13 +186,8 @@ parameters; omitting it means one output.
 - **`For` bound coordinates**. A `MeshCoord` read by `For.start` / `.stop` /
   `.step` MUST name a literal in-range axis of a mesh bound by an enclosing
   `MeshScope`.
-- **Retained function calls**. A `PrimFunction` target MUST receive every
-  parameter, including constants, scratch, and its output buffer. A `ModuleList`
-  or `TupleGetItem(ModuleList, i)` target MUST resolve the element entry from the
-  current `CallFrame.module.children[key]`; constant parameters remain implicit
-  instance weights and MUST NOT appear in `args`. Dynamic indices MUST be integer
-  scalars. Arguments and resolved parameters MUST have strictly equal types and
-  counts. A recursive call chain MUST fail with `recursion not allowed`.
+- **Retained function calls** follow [core-ir §2.1](./core-ir.md#21-call).
+  Verification requires strictly equal argument types/counts and rejects recursion.
 - **`Evaluate.callable`**. When `callable` is a `SymbolRef`
   ([§2.1](#21-symbolref)), module-level resolution MUST find exactly one
   `PrimFunction` of that name in the enclosing `Module`, `args` length
@@ -236,21 +231,7 @@ The `callable` is one of:
   remain in one Module tree; they MUST NOT become `SymbolRef` or launches.
   Printers MUST emit `helper(...)`, `child(...)`, and `layers[i](...)` respectively.
 
-Scheduled lowering MUST retain loops and produce one `PrimFunction` per reached
-definition, preserving shared child definitions. Callee Tensor parameters and
-output buffers MUST use physical types: a `ShardLayout` contributes its inner
-layout, and layout-free gmem uses a contiguous `Layout`. The root's public
-parameters MUST remain unchanged. Call boundaries MAY create matching views of
-existing buffers, but MUST NOT insert copies, scheduling, or storage transfers.
-The original destination remains the call's result after passing its view.
-
-A callee output MAY be in on-chip memory. An smem return MUST copy into the smem
-output buffer supplied by its caller. Other callee returns not bound to that
-output buffer MUST fail with `LoweringError` naming the callee and call path and
-requiring an explicit HIR `tf.schedule` copy. Lowering MUST NOT repair such an
-input or schedule logical HIR automatically. Existing root output copying is
-unchanged. Codegen does not support these retained TIR calls and MUST refuse them
-with `no codegen handler for Op <type>` when emission reaches one.
+Scheduled lowering follows [passes §7.1](./passes.md#71-converthirtotir).
 
 Per-Op verify and codegen handlers, when present, are keyed by `Op` type and
 receive the Op together with `args`; an `Op` callable carries no result, so its

@@ -95,7 +95,8 @@ from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
-from tilefoundry.visitor_registry.contexts import CallFrame, TypeInferContext
+from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor, inference_type
 
 T = TypeVar("T")

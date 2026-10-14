@@ -84,8 +84,7 @@ invocation they are already in.
 | Caller | Callee | Meaning |
 |---|---|---|
 | Python | HIR `Function`, directly or through a `Module` entry | Begin one kernel invocation |
-| HIR `Function` | HIR `Function` with the same owner | Same-kernel device call |
-| HIR `Function` | HIR `Function` with a different owner | Same-kernel device call |
+| HIR `Function` | HIR `Function` | Same-kernel device call |
 | Python | Plain Python `Module` method | Ordinary host orchestration |
 | HIR `Function` | Plain Python method | Invalid |
 
@@ -1434,7 +1433,7 @@ Consensus torch.nn.functional ops.
   - Where no Target is in reach (`ctx.resolve_target()` is `None`), a `MatMul`
     with an operand in `smem` or `rmem` has `umat` result storage: which
     instruction computes it, and so where it lands, is decided once a Target
-    is known. A child Module is typed this way until a root holds it.
+    is known. A shared child is typed under the visitor's current CallFrame.
   - `Conv2D` requires rank-4 NCHW input and OIHW weight, a rank-1 bias, and one
     common operand dtype. `stride` and `dilation` are positive length-2 tuples,
     `padding` is a non-negative length-2 tuple, and `groups` is positive. Input
@@ -1777,7 +1776,7 @@ def dim_vars_reached(fn: Function, frame: CallFrame | None = None) -> dict[str, 
     `bound_dims_of`. Provenance and bound-dimension records MUST NOT participate
     in structural equality or hashing. A recorded origin MUST NOT be re-pointed
     after cloning.
-  - Dimension validation and program-construction errors belong to
+  - Dimension validation and check errors belong to
     [analysis §2](./analysis.md#2-composed-analysis).
   - `residual_dims` and `dim_vars_reached` MUST inspect the whole function
     graph, including signatures, bodies, Op attributes, loop bounds, variants,
@@ -1785,6 +1784,4 @@ def dim_vars_reached(fn: Function, frame: CallFrame | None = None) -> dict[str, 
     `DimVar` are rejected later by their consumer.
   - Instance dimension scans MUST receive a `CallFrame` and recurse through
     element entries using the current frame's children ([core-ir §2.1](./core-ir.md#21-call)).
-    Function-only graphs retain the frame-free query API. Dimension instantiation
-    MUST preserve instance targets and shared element definitions; it MAY rebuild
-    the index operand of a computed target.
+    Function-only graphs retain the frame-free query API.

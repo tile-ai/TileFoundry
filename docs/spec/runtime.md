@@ -207,14 +207,12 @@ passes only activations; constants come from its resource at first use.
 - constraints:
   - A reading covers its own Module's declared weights and holds one reading
     per instance in `Module.children` ([core-ir §1](./core-ir.md#1-module)).
-    Function targets retain the current reading and supply every parameter;
-    instance targets select `loaded.children[key]` or `loaded.children[key][i]`
-    and read omitted ConstTensor parameters by name from that instance's resource
-    ([core-ir §2.1](./core-ir.md#21-call)). Each loop trip selects its evaluated
+    Calls follow [core-ir §2.1](./core-ir.md#21-call), selecting the corresponding
+    loaded child for an instance target. Each loop trip selects its evaluated
     index independently. A runtime index outside `[0, N)` MUST be refused with
     the slot key, index, and N.
-  - Loading and preparation MUST pass the root target and the nearest declared
-    topologies down the instance tree, storing them on each LoadedModule.
+  - Loading and preparation MUST carry the effective context under
+    [core-ir §1](./core-ir.md#1-module), storing it on each LoadedModule.
     Selecting a named function from a reading MUST re-enter with that stored
     context. Definitions and bodies remain shared; independent readings of the
     same definition MUST NOT borrow each other's resources.
@@ -242,7 +240,7 @@ passes only activations; constants come from its resource at first use.
     `LoadedModule` tree. It MUST NOT write bindings onto the `Module`, which
     stays pure IR: one `Module` may be read any number of times — two
     checkpoints, two devices — and each reading is independent of the others.
-    A child reached from two owners therefore yields one `LoadedModule` per
+    A definition reached from two slots therefore yields one `LoadedModule` per
     instance rather than one binding the last instance wins. This is the semantic-side
     counterpart of the `RuntimeModule` twin's own `load` ([§1.1](#11-runtimemodulepy)).
   - The caller supplies `evaluate(..., device=...)`. Every activation and every
@@ -269,7 +267,7 @@ passes only activations; constants come from its resource at first use.
     registered plain Python orchestration method stays on the host; every
     function it calls is a separate Python-to-HIR entry. An HIR-to-HIR `Call`
     remains inside the invocation and MUST NOT be surfaced as another runtime
-    launch merely because its callee has a different Module owner.
+    launch merely because its callee belongs to another Module.
   - a causal-LM root MAY define `init_caches`,
     `prepare_inputs_for_generation`, and `append_cache` orchestration methods.
     `prepare_inputs_for_generation(input_ids, step, caches, *, device)` receives
@@ -312,9 +310,8 @@ class Attention:
     key set; missing *or* extra either MUST be rejected. Each slot MUST
     match both its single/indexed form and its number of elements, and a mismatch
     diagnostic MUST identify the key and the semantic and runtime counts.
-  - A single child attribute is a RuntimeModule subclass, not an instance.
-    An indexed child is `ModuleList(ChildTwin, N)` or
-    `ModuleList((Twin0, Twin1, ...))`, in the same order as the semantic slot.
+  - Twin child declarations follow the semantic slots
+    ([core-ir §1.3](./core-ir.md#13-modulelist)).
     The generated constructor MUST build one runtime instance per semantic
     element, passing `ir=<element definition>` and inherited `topologies=`.
     Child classes MUST accept both constructor keywords. A child's explicit
@@ -450,10 +447,9 @@ single-function `Module` that declares no execution context.
 
 **Cache**: in-process dict cache keyed by
 `sha256(canonical_module_text + target_text + canonical_options_text)`.
-`canonical_module_text` includes functions, the Module's *effective* topology
-hierarchy, and `with Mesh` scopes. It uses the effective hierarchy rather than
-the declared one so that a Module inheriting its hierarchy from an owner does
-not collide with an identically-authored Module under a different owner. No
+`canonical_module_text` includes functions, declared topology hierarchies, and
+`with Mesh` scopes. Independently compiled Modules declare their execution
+context ([core-ir §1](./core-ir.md#1-module)). No
 Python object identity and no
 dedicated `cta_mesh` / `thread_mesh` key fields participate in the key.
 `jit.cache_clear()` evicts; `jit.cache_info()` returns `{"size": N}`.

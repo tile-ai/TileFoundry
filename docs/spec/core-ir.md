@@ -91,7 +91,7 @@ class Module:
     only its first edge — a rebuild may itself be rebuilt; equal copies and
     same-name functions from another Module MUST remain unowned.
 
-A `Module` is a static ownership and execution-context container, not a dynamic
+A `Module` is a static definition and execution-context container, not a dynamic
 invocation. Owning a `Function`, attaching a child `Module`, or declaring a
 `Target` or `Topology` hierarchy never itself begins or counts an invocation;
 Python-to-HIR entry and HIR-to-HIR device calls are governed by
@@ -116,7 +116,7 @@ without copying them onto shared definitions or Functions.
   `topologies = ()` declares an explicitly topology-free domain; an explicit
   tuple replaces the inherited hierarchy whole rather than extending it. A
   declared tuple MUST NOT repeat a level name.
-  - `resolve_topology(name)` returns the single effective level with that exact
+  - `resolve_topology(name)` returns the single declared level with that exact
   name and MUST fail, naming the levels that are available, when there is
   none.
   - `metadata` carries target / compiler-option configuration, never
@@ -157,28 +157,18 @@ by the visitor from the callee declaration or the inherited caller context.
 - constraints:
   - `resolve_target()` MUST return this Module's declared target. Inherited
     context belongs to the visitor's `CallFrame`, not the shared Module.
-  - A child Module MAY declare a target. A visitor entering a callee MUST use
-    the callee's declaration when present, otherwise inherit the caller's target,
-    using the same rule as topologies. Analyze MUST reject calls whose resolved
-    target or topology hierarchy differs between caller and callee.
+  - Callee context inheritance and call compatibility follow
+    [hir §1.1](./hir.md#11-function).
   - A root Module with no target declaration MUST be refused
     when its target is resolved. Its root Module MUST declare one, for example
     with `target=CudaTarget("nvidia.h200_sxm")`.
   - A Target declaration MUST be a constructed Target instance.
     A string MUST be refused rather than resolved or constructed.
-  - `resolve_target()` MUST return the exact instance the root declared; it MUST
+  - `resolve_target()` MUST return the exact instance this Module declared; it MUST
     NOT reconstruct or replace an equal value.
-  - A Module used independently MUST declare its own target; an undeclared
-    child inherits only while a visitor runs under its caller's context.
-  - A Module published as an independently analysable root MUST declare both
-    its target and the topology levels it is aimed at, so that Analyze answers
-    it as it is published rather than after an edit. Naming the device is
-    enough; the architecture is derived from that device's document
-    ([target §4](./target.md#4-cudatarget)).
-  - Declaring a Module MUST NOT require a target. Whether a Module becomes an
-    owned child is decided by the owner, after the child has been constructed,
-    so a construction-time requirement would refuse trees whose children
-    correctly declare nothing.
+  - Declaring a Module MUST NOT require a target; a shared definition can
+    inherit execution context when a visitor enters it through a caller.
+
 
 #### Default step
 
@@ -198,15 +188,6 @@ step.
     method is invoked by name rather than selected as an evaluator target.
   - A bare `@func` / `@prim_func` MUST become an implicit single-function
     Module whose `entry` names that function.
-
-`tilefoundry.ir.module_utils.list_call_paths(root)` enumerates each declared
-function once by identity, in DFS first-instance order. It returns a
-`dict[call_path, CallFrame]`, including HIR Functions and PrimFunctions. A
-call path is a dot-separated string. The frame records the current Module,
-function, effective target, and effective topologies; shared definitions use the first
-path for generated names, including indexed segments such as `layers.0.run`.
-Call paths are diagnostic and naming output, not an API for selecting a child.
-A child used independently is supplied directly as its own Module definition.
 
 ### 1.1 Function access
 
@@ -241,6 +222,15 @@ shape-specialization variants live inside that entry's `Function.variants`
   (`m.forward(...)`). Names beginning with `_` are never functions, modules, or
   methods and resolve by normal attribute rules. This lets a module read like
   the model it mirrors — `decoder.layer0.attention`.
+
+### 1.2 Definition call paths
+
+`tilefoundry.ir.module_utils.list_call_paths(root)` enumerates each declared
+function once by identity, in DFS first-instance order. It returns a
+`dict[call_path, CallFrame]`, including HIR Functions and PrimFunctions. A
+call path is a dot-separated string. The frame records the current Module,
+function, effective target, and effective topologies; shared definitions use the first
+path for generated names, including indexed segments such as `layers.0.run`.
 
 ### 1.3 `ModuleList`
 

@@ -30,6 +30,7 @@ from tilefoundry.visitor_registry.contexts import CostContext
 
 from .access import Access
 from .facts import MemoryHierarchyFacts
+from .invocation import invocation_key
 from .iteration_scope import IterationScope, walk_scopes
 from .loop_domain import induction_name
 from .metadata import (
@@ -41,7 +42,6 @@ from .metadata import (
     TrafficBytes,
 )
 from .precision import AnalysisPrecision
-from .program import invocation_key
 
 
 @dataclass(frozen=True)

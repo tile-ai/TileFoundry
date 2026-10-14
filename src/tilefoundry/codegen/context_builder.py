@@ -22,17 +22,17 @@ from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.target import CpuTarget, Target
-from tilefoundry.visitor_registry.contexts import CallFrame
+from tilefoundry.visitor_registry.call_frame import CallFrame
 
 
 def _function_paths(module: Module, prefix: tuple[str, ...] = ()):
-    """Root-relative paths for every declared function, using child mount names."""
+    """Root-relative paths for every declared function, using instance slot keys."""
     for call_path, frame in list_call_paths(module).items():
         yield (*prefix, *call_path.split(".")), frame.function
 
 
 def function_path(root: Module, fn) -> tuple[str, ...]:
-    """Use the selector traversal for prototypes and their specialization labels."""
+    """Use definition call paths for prototypes and their specialization labels."""
     from tilefoundry.ir.hir.specialize import display_name  # noqa: PLC0415
 
     matches = []
@@ -60,7 +60,7 @@ def mangle(root: Module, fn) -> str:
 
 
 def export_name(root: Module, fn) -> str:
-    """The dotted TVM FFI registration name corresponding to a selector."""
+    """The dotted TVM FFI registration name corresponding to a call path."""
     return ".".join(function_path(root, fn))
 
 

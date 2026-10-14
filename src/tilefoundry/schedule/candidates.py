@@ -17,6 +17,7 @@ from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import access_relation_registry
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 from tilefoundry.visitor_registry.candidates import (
     candidate_operands,
     candidate_ops,
@@ -45,7 +46,8 @@ def candidates(
     pattern_printer = PatternPrinter()
     rows = []
     calls = []
-    for call in (call for body in ctx.program.bodies() for call in collect_exprs(body.body)):
+    frames = CallFrameVisitor.walk_frames(ctx.root.frame)
+    for call in (call for frame in frames for call in collect_exprs(frame.function.body)):
         if (
             not isinstance(call, Call)
             or is_dim_op_call(call)

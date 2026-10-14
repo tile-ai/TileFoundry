@@ -11,7 +11,7 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 
-from .program import invocation_key
+from .invocation import invocation_key
 
 
 @dataclass(frozen=True)
@@ -163,8 +163,8 @@ class LivenessVisitor(ExprVisitor[None]):
             return self.default_visit_leaf(call, self.visit_operands(call, ctx), ctx)
         for arg in call.args:
             self.visit(arg, ctx)
-        if isinstance(child.site.index, Expr):
-            self.visit(child.site.index, ctx)
+        if isinstance(child.index, Expr):
+            self.visit(child.index, ctx)
         argument_use = self.next_event()
         for arg in call.args:
             self.use(arg, argument_use)
@@ -174,7 +174,7 @@ class LivenessVisitor(ExprVisitor[None]):
             definition = self.next_event()
             for param in child.function.params:
                 self.define(param, definition)
-            for param, arg in zip(child.site.activations, call.args, strict=True):
+            for param, arg in zip(child.activations, call.args, strict=True):
                 self.bindings[child.key, id(param)] = parent, arg
             self.visit(child.function.body, ctx)
             self.use(child.function.body, self.next_event())

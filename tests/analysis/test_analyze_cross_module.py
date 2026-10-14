@@ -23,8 +23,8 @@ from tests.models.qwen3_1_7b.model import Qwen3_1_7B
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.invocation import invocation_values
 from tilefoundry.analysis.metadata import ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata
-from tilefoundry.analysis.program import build_program, invocation_values
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Constant, Tuple, Var, attach_metadata, get_metadata
@@ -39,6 +39,7 @@ from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.types import DType, Layout, Mesh, TensorType, TupleType
 from tilefoundry.ir.types.layout import ComposedLayout, flatten
@@ -226,7 +227,8 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
     expected = {"routed_expert": ((120,), 0), "shared_expert": ((12,), 120)}
     reached = {
         fn.name: _placed_primitives(fn)
-        for fn in build_program(MoEMegaKernel, MoEMegaKernel.entry_function()).bodies()
+        for frame in list_call_paths(check_program(MoEMegaKernel, MoEMegaKernel.entry_function())[0]).values()
+        for fn in (frame.function,)
     }
 
     for branch, (shape, offset) in expected.items():
@@ -309,7 +311,7 @@ def test_retained_calls_match_the_memory_and_work_acceptance_values(
     assert cost.flops.of("f32").total == flops
     assert moved.traffic.storage.of("gmem").total.total_bytes == traffic
     assert (region.peak_bytes, region.persistent_bytes) == (peak, persistent)
-    assert len(result.program.bodies()) == 2
+    assert len({id(inv.function) for inv in result.invocations}) == 2
     assert len(result.invocations) - 1 == invocations
     if kind == "stacked":
         assert result.invocations[1].label == "run/layers[i]"
@@ -323,10 +325,11 @@ def test_derived_nodes_and_bodies_do_not_grow_with_indexed_instance_count():
     sizes = []
     for count in (3, 28):
         root = _stacked_program(count)
-        program = check_program(root, root.entry_function())
-        sizes.append((sum(len(collect_exprs(body.body)) for body in program.bodies()),
-                      len(program.bodies())))
-        assert sum(isinstance(node, LoopRegion) for node in collect_exprs(program.root.body)) == 1
+        checked, function = check_program(root, root.entry_function())
+        functions = tuple(frame.function for frame in list_call_paths(checked).values())
+        sizes.append((sum(len(collect_exprs(body.body)) for body in functions),
+                      len(functions)))
+        assert sum(isinstance(node, LoopRegion) for node in collect_exprs(function.body)) == 1
         with pytest.raises(AnalysisError, match="derived body nodes.*node budget"):
             check_program(root, root.entry_function(), budget=sizes[-1][0] - 1)
     assert sizes[0] == sizes[1]
@@ -338,8 +341,8 @@ def test_the_published_qwen_stack_shares_its_layer_definition_and_fits_the_budge
     assert len(elements) == 28
     assert all(element is elements[0] for element in elements)
     root = QWEN_CASE.build()
-    program = check_program(root, root.lookup("decoder_layer"), dims={"ctx_len": 128})
-    assert sum(len(collect_exprs(body.body)) for body in program.bodies()) <= 10_000
+    checked, _function = check_program(root, root.lookup("decoder_layer"), dims={"ctx_len": 128})
+    assert sum(len(collect_exprs(frame.function.body)) for frame in list_call_paths(checked).values()) <= 10_000
 
 
 def _direct_program(callee, params, calls):
@@ -367,7 +370,7 @@ def test_one_definition_rejects_different_call_signatures(difference):
         second = MeshRegion(Mesh(_CTA, Layout((1,), (1,)), ("second",)), second, type=changed)
     root = _direct_program(callee, (left, right), (first, second))
     with pytest.raises(AnalysisError, match="callee 'helper'.*root/helper#0.*root/helper#1.*versus"):
-        build_program(root, root.entry_function())
+        check_program(root, root.entry_function())
 
 
 def test_recursive_call_paths_and_missing_callee_bodies_are_diagnosed():
@@ -376,10 +379,10 @@ def test_recursive_call_paths_and_missing_callee_bodies_are_diagnosed():
     callee = Function.build(name="helper", params=(param,), body=None, return_type=type_)
     root = _direct_program(callee, (param,), (Call(callee, (param,), type=type_),))
     with pytest.raises(AnalysisError, match="cannot analyze Function 'helper' without a body"):
-        build_program(root, root.entry_function())
+        check_program(root, root.entry_function())
     callee.body = Call(callee, (param,), type=type_)
     with pytest.raises(AnalysisError, match="recursive call path through 'root/helper/helper'"):
-        build_program(root, root.entry_function())
+        check_program(root, root.entry_function())
 
 
 @dataclass(frozen=True)
@@ -393,7 +396,7 @@ class _WriteGuardTarget(Target):
 
 def test_an_analyzer_cannot_write_records_on_a_shared_derived_callee():
     def write_on_definition(_function, context):
-        attach_metadata(context.program.bodies()[1].body, ComputeCostMetadata())
+        attach_metadata(context.records.invocations[1].function.body, ComputeCostMetadata())
 
     target = _WriteGuardTarget(Analyzer("bad", write_on_definition, produces=(ComputeCostMetadata,)))
     root = replace(CrossModule, target=target, topologies=None)

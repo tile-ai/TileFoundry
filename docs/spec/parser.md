@@ -11,9 +11,8 @@ Authored DSL source imports its authoring surface with `from tilefoundry.dsl imp
 child Modules, and ordinary methods. Module authoring is two-phase: class execution records
 Function, specialization, and converter declarations; finalization attaches all child Modules
 and puts them in parser scope before parsing Functions in source order. `@func` produces an HIR
-Function; `@prim_func` produces a TIR PrimFunction. Both class-body declarations,
-including a `@prim_func` with an explicit target, are parsed after slots enter
-module scope; an explicit PrimFunction target is preserved.
+Function; `@prim_func` produces TIR ([tir §1.3](./tir.md#13-primfunction)).
+Explicit PrimFunction targets survive deferred parsing.
 `specialize` and `converter` register variants and weight converters on an existing HIR Function.
 
 ```python
@@ -64,27 +63,17 @@ statement span and their carry binding name.
 optional base/key for one parse. Call types inferred while parsing use that target's rules
 ([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)), so in a Module that
 declares its Target a type the parser records is the type the built Module later infers. A
-pending Module supplies its declared Target to the parser's current call frame;
-entering a child follows the target's slot key and index in the current frame.
-Same-module Function calls retain this effective context.
+pending Module supplies its declared Target to the parser's current call frame.
 `FunctionRole` is `ROOT`, `VARIANT`, or `CONVERTER`.
 `ParseError` is the single authored-source diagnostic type and includes source location and
 recursive parse situation. These are the only public parser symbols.
 
-Class-body `Module` members become single ModuleList slots under their attribute
-keys; authored `ModuleList(definition, N)` or `ModuleList((d0, d1, ...))` members
-remain indexed slots. Lists and tuples of Modules are refused. Definitions are
-shared, and duplicate slot objects under different keys are refused.
-`child(x)` targets the single slot; `layers[i](x)` targets
-`TupleGetItem(ModuleList, i)`. A constant index must be in range; a variable index
-must be an integer scalar and the list must contain one shared definition.
-Calling a global Module outside a class-body slot, indexing a single slot,
-calling an indexed slot without an index, and calling non-entry instance methods
-are refused. Containers without entries can occupy slots; calling them reports
-the existing no-entry diagnostic. Numeric subscripts become Constant expressions;
-static index validation runs only in type inference. Constructing a Call does not
-project an indexed slot's return type before that validation. Retained TIR calls
-produce unit-valued statements and are checked in the enclosing Module context.
+Instance authoring and call contracts follow
+[core-ir §1.3](./core-ir.md#13-modulelist) and [§2.1](./core-ir.md#21-call).
+Numeric subscripts become Constant expressions; static index checks run only
+in type inference. Call construction MUST NOT project an indexed slot's return
+type before validation. Retained TIR calls produce unit-valued statements
+checked in the enclosing Module context.
 
 ### 1.5 Mesh declarations and region captures
 

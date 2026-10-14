@@ -128,8 +128,8 @@ class Module:
 
     A Module is also the execution domain of the functions it owns: it carries
     the hardware ``target`` and the ordered ``topologies`` budget those
-    functions run against. ``topologies=None`` inherits from the instance
-    stack; ``topologies=()`` declares a topology-free Module.
+    functions run against. ``topologies=None`` inherits from the caller's
+    CallFrame; ``topologies=()`` declares a topology-free Module.
     """
 
     name: str = field(hash=False)
