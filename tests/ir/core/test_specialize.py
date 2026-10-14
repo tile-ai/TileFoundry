@@ -19,7 +19,6 @@ from tilefoundry.ir.hir.specialize import (
     SpecializationError,
     bound_dims_of,
     display_name,
-    is_concrete,
     origin_of,
     residual_dims,
     variant_for,
@@ -179,7 +178,6 @@ def test_a_specialised_function_states_extents_everywhere() -> None:
     concrete = build_program(GqaOnline, ENTRY, STEADY).root
 
     assert residual_dims(concrete) == ()
-    assert is_concrete(concrete)
 
 
 def test_specialising_only_substitutes_dimensions() -> None:
@@ -350,7 +348,6 @@ def test_a_dimension_only_the_body_uses_is_still_substituted() -> None:
 
     assert concrete is not authored
     assert residual_dims(concrete) == ()
-    assert is_concrete(concrete)
 
 
 def test_two_sizes_of_a_body_only_dimension_are_told_apart() -> None:

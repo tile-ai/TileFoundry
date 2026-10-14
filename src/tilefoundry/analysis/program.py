@@ -7,13 +7,14 @@ from dataclasses import dataclass, field, replace
 
 from tilefoundry.ir.core import Call, Expr, Var, attach_metadata, get_metadata
 from tilefoundry.ir.core.metadata import BindingMetadata
-from tilefoundry.ir.core.module import Module, ModuleList, instance_slot, resolve_callee
+from tilefoundry.ir.core.module import Module, instance_slot, resolve_callee
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.specialize import (
     InstantiateDimensionCloner,
     SpecializationError,
     bound_dims_of,
+    dim_vars_reached,
     variant_for,
 )
 from tilefoundry.ir.types.callable_type import callable_type_for
@@ -155,27 +156,9 @@ def build_program(module, fn, dims=None) -> Program:
     bound_module = cloner.module(module)
     instances = tuple(replace(frame, module=cloner.module(frame.module)) for frame in original_scope.instances)
     initial = FunctionScope(cloner.module(original_scope.module), bound_root, instances)
-    residual = set()
+    residual = set(dim_vars_reached(bound_root, initial))
     for owner in cloner.modules.values():
         residual.update(dim_vars_by_name(owner.topologies))
-    for body in {id(body): body for body in cloner.functions.values()}.values():
-        residual.update(dim_vars_by_name(tuple(p.type for p in body.params)))
-        residual.update(dim_vars_by_name(body.return_type))
-        for value in collect_exprs(body.body):
-            if isinstance(value, ModuleList):
-                continue
-            fields = [
-                value.type,
-                *(getattr(value, name, None) for name in ("extent", "step", "start", "mesh")),
-            ]
-            if isinstance(value, Call):
-                fields.extend(
-                    getattr(value.target, attr.name, None)
-                    for attr in getattr(type(value.target), "params", lambda: ())()
-                    if attr.kind == "attribute"
-                )
-            for value_field in fields:
-                residual.update(dim_vars_by_name(value_field))
     if residual:
         raise SpecializationError(
             f"{fn.name!r} still states {sorted(residual)} as ranges after binding {sorted(supplied)}; every dimension has to be given an extent"

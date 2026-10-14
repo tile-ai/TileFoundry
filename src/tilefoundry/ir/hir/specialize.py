@@ -14,22 +14,20 @@ import dataclasses
 from collections.abc import Mapping
 
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
-from tilefoundry.ir.core.module import ModuleList
+from tilefoundry.ir.core.module import ModuleList, resolve_callee
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.pattern import Pattern, RangePattern
 from tilefoundry.ir.types import callable_type_for
 from tilefoundry.ir.types.dim import is_dim_expr
 from tilefoundry.ir.types.substitute import (
     dim_vars_by_name,
-    has_symbolic_dims,
     substitute_dims,
     substitute_mesh_dims,
     substitute_shape_dim,
     substitute_topology_dims,
 )
 from tilefoundry.ir.types.tensor_type import TensorType
-from tilefoundry.ir.visitor import ExprCloner, ExprVisitor, ExprWalker
+from tilefoundry.ir.visitor import ExprCloner, ExprWalker
 
 from .function import Function
 
@@ -153,10 +151,8 @@ class InstantiateDimensionCloner(ExprCloner):
     def __init__(self, dims):
         super().__init__()
         self.dims = {} if dims is None else dict(dims)
-        self.bindings = dims
         self.functions = {}
         self.modules = {}
-        self.active = set()
 
     def function(self, fn: Function) -> Function:
         """Clone the chosen implementation and its same-module callees once."""
@@ -166,9 +162,6 @@ class InstantiateDimensionCloner(ExprCloner):
         if id(chosen) in self.functions:
             self.functions[id(fn)] = self.functions[id(chosen)]
             return self.functions[id(chosen)]
-        if id(chosen) in self.active:
-            raise SpecializationError(f"recursive call path through {fn.name!r}")
-        self.active.add(id(chosen))
         params = tuple(self.visit(param) for param in chosen.params)
         body = None if chosen.body is None else self.visit(chosen.body)
         result_type = substitute_dims(chosen.return_type, self.dims)
@@ -176,9 +169,8 @@ class InstantiateDimensionCloner(ExprCloner):
             chosen, name=fn.name, params=params, body=body, return_type=result_type,
             type=callable_type_for(params, result_type), variants=(), converters=(),
         )
-        _record_provenance(derived, chosen, self.bindings)
+        _record_provenance(derived, chosen, self.dims or None)
         self.functions[id(fn)] = self.functions[id(chosen)] = derived
-        self.active.remove(id(chosen))
         return derived
 
     def module(self, node):
@@ -276,7 +268,7 @@ def _substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:
             rebuilt = tuple(substitute_shape_dim(item, dims) for item in value)
         else:
             continue
-        if rebuilt is not value:
+        if rebuilt != value:
             changed[param.name] = rebuilt
     if not changed:
         return target
@@ -322,7 +314,6 @@ class _DimVarCollector(ExprWalker[None]):
         self.active_functions: set[int] = set()
 
     def _collect_expr(self, expr: Expr, ctx=None) -> None:
-        from tilefoundry.ir.core.module import ModuleList  # noqa: PLC0415
         from tilefoundry.ir.types.substitute import _collect  # noqa: PLC0415
 
         current = (
@@ -333,8 +324,6 @@ class _DimVarCollector(ExprWalker[None]):
         _collect(current.type, self.found)
 
     def _collect_target(self, expr: Call, ctx=None) -> None:
-        from tilefoundry.ir.core.module import resolve_callee  # noqa: PLC0415
-
         target = expr.target
         callee, inner = resolve_callee(expr, ctx)
         if isinstance(callee, Function):
@@ -425,119 +414,6 @@ def _collect_entries(value: object, found: dict[str, object]) -> None:
     _collect(value, found)
 
 
-def is_concrete(fn: Function, scope=None) -> bool:
-    """Whether *fn* states extents everywhere a size is required."""
-    return not _SymbolicDimVisitor().visit_function(fn, scope)
-
-
-class _SymbolicDimVisitor(ExprVisitor[bool]):
-    """Detect symbolic dimensions across Expr values and Function side fields."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.seen_functions: set[tuple[int, int]] = set()
-        self.active_functions: set[int] = set()
-
-    def _expr_has_symbolic(self, expr: Expr, ctx=None) -> bool:
-        from tilefoundry.ir.core.module import ModuleList  # noqa: PLC0415
-
-        current = (
-            ctx.module.children[expr.key]
-            if isinstance(expr, ModuleList) and ctx is not None
-            else expr
-        )
-        if has_symbolic_dims(current.type):
-            return True
-        for bound in ("extent", "step", "start"):
-            if has_symbolic_dims(getattr(expr, bound, None)):
-                return True
-        return False
-
-    def _target_has_symbolic(self, expr, ctx=None) -> bool:
-        from tilefoundry.ir.core.module import resolve_callee  # noqa: PLC0415
-
-        target = expr.target
-        callee, inner = resolve_callee(expr, ctx)
-        if isinstance(callee, Function):
-            return self.visit_function(callee, inner)
-        return any(
-            attribute.kind == "attribute"
-            and has_symbolic_dims(getattr(target, attribute.name, None))
-            for attribute in getattr(type(target), "params", lambda: ())()
-        )
-
-    def _children_have_symbolic(self, expr: Expr, ctx=None) -> bool:
-        if (
-            isinstance(expr, Call)
-            and isinstance(expr.target, Call)
-            and self.visit(expr.target, ctx)
-        ):
-            return True
-        children = (
-            getattr(expr, "args", ())
-            + (expr.elements if isinstance(expr, Tuple) else ())
-            + getattr(expr, "yield_values", ())
-            + getattr(expr, "params", ())
-        )
-        body = getattr(expr, "body", None)
-        return any(self.visit(child, ctx) for child in children) or (
-            body is not None and self.visit(body, ctx)
-        )
-
-    def visit_function(self, fn: Function, ctx=None) -> bool:
-        key = (id(fn), id(ctx.module) if ctx is not None else 0)
-        if key in self.seen_functions or id(fn) in self.active_functions:
-            return False
-        self.seen_functions.add(key)
-        self.active_functions.add(id(fn))
-        previous_memo, self._memo = self._memo, {}
-        try:
-            if any(has_symbolic_dims(param.type) for param in fn.params):
-                return True
-            if has_symbolic_dims(fn.return_type):
-                return True
-            if any(self.visit_function(variant, ctx) for variant in fn.variants):
-                return True
-            return fn.body is not None and self.visit(fn.body, ctx)
-        finally:
-            self._memo = previous_memo
-            self.active_functions.remove(id(fn))
-
-    def visit_Call(self, expr: Call, ctx=None) -> bool:
-        return (
-            self._expr_has_symbolic(expr, ctx)
-            or self._target_has_symbolic(expr, ctx)
-            or self._children_have_symbolic(expr, ctx)
-        )
-
-    def visit_Tuple(self, expr: Tuple, ctx=None) -> bool:
-        return self._expr_has_symbolic(expr, ctx) or self._children_have_symbolic(expr, ctx)
-
-    def visit_LoopRegion(self, expr: LoopRegion, ctx=None) -> bool:
-        return self._expr_has_symbolic(expr, ctx) or self._children_have_symbolic(expr, ctx)
-
-    def visit_MeshRegion(self, expr: MeshRegion, ctx=None) -> bool:
-        return self._expr_has_symbolic(expr, ctx) or self._children_have_symbolic(expr, ctx)
-
-    def visit_Function(self, expr: Function, ctx=None) -> bool:
-        return self.visit_function(expr, ctx)
-
-    def visit_Var(self, expr: Var, ctx=None) -> bool:
-        return self._expr_has_symbolic(expr, ctx)
-
-    def visit_Constant(self, expr: Constant, ctx=None) -> bool:
-        return self._expr_has_symbolic(expr, ctx)
-
-    def visit_SymbolRef(self, expr: Expr, ctx=None) -> bool:
-        return self._expr_has_symbolic(expr, ctx)
-
-    def visit_ModuleList(self, expr, ctx=None) -> bool:
-        return self._expr_has_symbolic(expr, ctx)
-
-    def visit_ShapeOf(self, expr: Expr, ctx=None) -> bool:
-        return self._expr_has_symbolic(expr, ctx)
-
-
 __all__ = [
     "InstantiateDimensionCloner",
     "BOUND_DIMS",
@@ -546,7 +422,6 @@ __all__ = [
     "bound_dims_of",
     "canonical_specialization_signature",
     "dim_vars_reached",
-    "is_concrete",
     "origin_of",
     "residual_dims",
     "variant_for",
