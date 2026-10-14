@@ -366,12 +366,12 @@ def _function_block(fn: PrimFunction, *, symbol_bindings=None) -> list[str]:
     lines.append(f"@prim_func({', '.join(attrs)})")
     parameters = []
     for param in fn.params:
-        annotation = (
-            TirPrinter(context=ctx).visit(param.type, ctx)
-            if isinstance(param.type, (TensorType, PointerType)) else repr(param.type)
-        )
-        if param.is_const and isinstance(param.type, TensorType):
-            annotation = annotation.replace("Tensor[", "ConstTensor[", 1)
+        printer = TirPrinter(context=ctx)
+        with printer.type_surface(const=param.is_const):
+            annotation = (
+                printer.visit(param.type, ctx)
+                if isinstance(param.type, (TensorType, PointerType)) else repr(param.type)
+            )
         parameters.append(f"{param.name}: {annotation}")
     params = ", ".join(parameters)
     definition = f"def {_binding_name(fn.name)}({params}):"

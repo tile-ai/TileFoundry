@@ -1375,11 +1375,6 @@ class Lowering(ExprVisitor[Expr]):
     def _finish(self, result: Expr, cursor: _Cursor) -> None:
         assert self.output is not None
         if result is not self.output:
-            if self.invocation.parent is not None and self.function.return_type.storage is not StorageKind.SMEM:
-                raise LoweringError(
-                    f"callee {self.function.name!r} at {self.invocation.label!r} does not write its "
-                    "output; write an explicit tf.schedule copy in HIR"
-                )
             self._emit_copy(result, self.output, cursor)
 
 

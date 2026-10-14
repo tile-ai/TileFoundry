@@ -703,42 +703,45 @@ def _verify_call_arguments(stmt, params, label, ctx):
             )
 
 
-
-def _verify_retained_call(stmt, fn, module_fn_map, ctx):
-    target = stmt.callable
-    frame = ctx.frame
+def _retained_callee(target, frame):
+    if isinstance(target, PrimFunction):
+        return target, None if frame is None else dataclasses.replace(frame, function=target)
     slot = target if isinstance(target, ModuleList) else (
         target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
         and isinstance(target.args[0], ModuleList) else None
     )
     if slot is None:
-        if not isinstance(target, PrimFunction):
-            raise VerifyError(f"unsupported TIR call target {type(target).__name__}")
-        callee, label = target, target.name
-        if frame is not None:
-            frame = dataclasses.replace(frame, function=callee)
-    else:
-        if frame is None:
-            raise VerifyError("instance TIR call requires module context")
-        inference_type(target, TypeInferContext(frame=frame))
-        slot = frame.module.children[slot.key]
-        index = target.args[1] if isinstance(target, Call) else None
-        index_value = index.value if isinstance(index, Constant) else 0
-        child = slot.elements[index_value]
-        callee = child.entry_function()
-        label = slot.key + (f"[{TirPrinter().visit(index)}]" if index is not None else "")
-        frame = CallFrame(
-            child, callee, child.target if child.target is not None else frame.target,
-            child.topologies if child.topologies is not None else frame.topologies,
-        )
+        raise VerifyError(f"unsupported TIR call target {type(target).__name__}")
+    if frame is None:
+        raise VerifyError("instance TIR call requires module context")
+    inference_type(target, TypeInferContext(frame=frame))
+    slot = frame.module.children[slot.key]
+    index = target.args[1] if isinstance(target, Call) else None
+    index_value = index.value if isinstance(index, Constant) else 0
+    child = slot.elements[index_value]
+    callee = child.entry_function()
     if not isinstance(callee, PrimFunction):
         raise VerifyError(f"TIR instance entry {callee.name!r} is not a PrimFunction")
+    return callee, CallFrame(
+        child, callee, child.target if child.target is not None else frame.target,
+        child.topologies if child.topologies is not None else frame.topologies,
+    )
+
+
+def _verify_retained_call(stmt, fn, module_fn_map, ctx):
+    target = stmt.callable
+    callee, frame = _retained_callee(target, ctx.frame)
+    direct = isinstance(target, PrimFunction)
+    label = target.name if direct else (
+        target.key if isinstance(target, ModuleList)
+        else f"{target.args[0].key}[{TirPrinter().visit(target.args[1])}]"
+    )
     prefix = f"Evaluate({label})"
     _assert_no_path_back(
         callee, fn, module_fn_map, visited=set(), frame=frame,
         recursion=f"{prefix}: recursion not allowed",
     )
-    params = tuple(param for param in callee.params if slot is None or not param.is_const)
+    params = tuple(param for param in callee.params if direct or not param.is_const)
     _verify_call_arguments(stmt, params, prefix, ctx)
 
 
@@ -879,28 +882,8 @@ def _assert_no_path_back(callee, root, module_fn_map, visited, frame=None, recur
             matches = module_fn_map.get(target.name, ())
             if len(matches) == 1:
                 reached = matches[0]
-        elif isinstance(target, PrimFunction):
-            reached = target
-            if frame is not None:
-                inner = dataclasses.replace(frame, function=target)
-        else:
-            slot = target if isinstance(target, ModuleList) else (
-                target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
-                and isinstance(target.args[0], ModuleList) else None
-            )
-            if slot is not None:
-                if frame is None:
-                    raise VerifyError("instance TIR call requires module context")
-                inference_type(target, TypeInferContext(frame=frame))
-                slot = frame.module.children[slot.key]
-                index = target.args[1] if isinstance(target, Call) else None
-                index = index.value if isinstance(index, Constant) else 0
-                child = slot.elements[index]
-                reached = child.entry_function()
-                inner = CallFrame(
-                    child, reached, child.target if child.target is not None else frame.target,
-                    child.topologies if child.topologies is not None else frame.topologies,
-                )
+        elif isinstance(target, (PrimFunction, ModuleList, Call)):
+            reached, inner = _retained_callee(target, frame)
         if reached is not None:
             _assert_no_path_back(reached, root, module_fn_map, visited, inner, recursion)
 
