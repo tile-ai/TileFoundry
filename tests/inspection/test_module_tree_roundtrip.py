@@ -10,6 +10,8 @@ absent.
 
 from __future__ import annotations
 
+import pytest
+
 from tests._source import import_dsl
 from tests.fixtures.logical import module_context as context_fixture
 from tests.fixtures.logical.gqa_static import static_online_attend
@@ -17,6 +19,7 @@ from tests.fixtures.logical.hir_composition import Expert
 from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
+from tests.fixtures.shapes import scaled_modules
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.inspection.dot import hir_function_to_dot
@@ -24,6 +27,7 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.visitor import collect_exprs
@@ -303,3 +307,28 @@ def test_hir_function_dot_keeps_loop_regions_as_opaque_leaves() -> None:
     assert len(dot.splitlines()) == 33
     assert 'label="LoopRegion", fillcolor="#ffffff"' in dot
     assert "TupleType(" not in dot
+
+
+@pytest.mark.parametrize("name", ["PairedScaledParent", "StackedScaledParent"])
+def test_shared_slots_and_instance_calls_round_trip(name) -> None:
+    root = getattr(scaled_modules, name)
+    source = as_script(root)
+    imported = import_dsl(source, root.name)
+    assert as_script(imported) == source
+    assert tuple(imported.children) == tuple(root.children)
+    slots = tuple(imported.children.values())
+    for key, slot in imported.children.items():
+        assert slot.key == key
+        assert slot.indexed == root.children[key].indexed
+        assert len(slot.elements) == len(root.children[key].elements)
+        assert all(element is slots[0].elements[0] for element in slot.elements)
+    original_calls = [expr for expr in collect_exprs(root.entry_function().body) if isinstance(expr, Call)]
+    restored_calls = [expr for expr in collect_exprs(imported.entry_function().body) if isinstance(expr, Call)]
+    assert len(restored_calls) == len(original_calls)
+    targets = [expr.target for expr in restored_calls if isinstance(expr.target, ModuleList)]
+    if name == "PairedScaledParent":
+        assert targets == list(imported.children.values())
+    else:
+        (index,) = (expr for expr in restored_calls if isinstance(expr.target, TupleGetItem))
+        assert index.args[0] is imported.children["layers"]
+        assert any(expr.target is index for expr in restored_calls)

@@ -9,12 +9,24 @@ No GPU: a second device is spelled ``meta``, which needs no card.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import torch
 
-from tests.fixtures.shapes.scaled_modules import FusedScaledParent, ScaledChild
+from tests.fixtures.shapes.scaled_modules import (
+    FusedScaledParent,
+    NestedScaledRoot,
+    PairedScaledParent,
+    ScaledChild,
+    StackedScaledParent,
+)
 from tilefoundry.dsl import *
-from tilefoundry.evaluator import evaluate
+from tilefoundry.evaluator import EvalError, evaluate
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.visitor import ExprCloner
+from tilefoundry.runtime import runtime_func, runtime_module
+from tilefoundry.runtime.resource import DictResource
 from tilefoundry.target import CudaTarget
 
 
@@ -35,6 +47,11 @@ class _Weights:
         return _Weights(
             {k[len(prefix):]: v for k, v in self.values.items() if k.startswith(prefix)}
         )
+
+
+class _LongerLoop(ExprCloner):
+    def visit_LoopRegion(self, loop: LoopRegion, ctx):
+        return replace(self.default_visit(loop, ctx), extent=4)
 
 
 def test_reading_a_resource_without_a_child_weight_is_refused() -> None:
@@ -95,3 +112,62 @@ def test_preparation_stages_on_the_device_it_was_given() -> None:
 
     assert str(staged["w"].device) == "meta"
     assert str(reading.resource.load("w").device) == "meta"
+
+
+def test_nested_same_name_entries_load_weights_from_the_current_instance() -> None:
+    root = NestedScaledRoot
+    middle = root.children["middle"].elements[0]
+    leaf = middle.children["scaled"].elements[0]
+    for owner in (root, middle, leaf):
+        assert owner.entry_function() is owner.lookup("run")
+    assert len({id(owner.entry_function()) for owner in (root, middle, leaf)}) == 3
+    loaded = root.load(DictResource({"middle.scaled.w": torch.full((4,), 2.0)}))
+    assert torch.equal(loaded.run(torch.ones(4)), torch.full((4,), 2.0))
+
+
+def test_indexed_instances_share_definitions_and_read_their_own_weights() -> None:
+    root = StackedScaledParent
+    loaded = root.load(DictResource({
+        f"layers.{index}.w": torch.full((4,), float(index + 1)) for index in range(3)
+    }))
+    assert isinstance(loaded.layers, tuple)
+    assert [child.path for child in loaded.layers] == ["layers.0", "layers.1", "layers.2"]
+    assert all(child.module.entry_function() is ScaledChild.entry_function() for child in loaded.layers)
+    assert torch.equal(loaded.run(torch.ones(4)), torch.full((4,), 6.0))
+
+
+def test_two_slots_of_one_definition_keep_their_own_weights() -> None:
+    loaded = PairedScaledParent.load(DictResource({
+        "left.w": torch.full((4,), 2.0), "right.w": torch.full((4,), 3.0),
+    }))
+    assert loaded.left.module is loaded.right.module is ScaledChild
+    assert torch.equal(loaded.both(torch.ones(4)), torch.full((4,), 5.0))
+
+
+def test_missing_indexed_weight_reports_the_instance_path() -> None:
+    loaded = StackedScaledParent.load(DictResource({"layers.0.w": torch.ones(4)}))
+    with pytest.raises(KeyError, match="missing declared weight 'w'.*layers.1.w"):
+        loaded.run(torch.ones(4))
+
+
+def test_runtime_index_checks_include_the_slot_index_and_count() -> None:
+    function = StackedScaledParent.entry_function()
+    function = replace(function, body=_LongerLoop().visit(function.body))
+    root = replace(StackedScaledParent, functions=(function,))
+    loaded = root.load(DictResource({f"layers.{i}.w": torch.ones(4) for i in range(3)}))
+    with pytest.raises(EvalError, match="slot 'layers': index 3 out of range for N=3"):
+        loaded.run(torch.ones(4))
+
+
+@pytest.mark.parametrize("key,count,indexed", [("wrong", 3, True), ("layers", 2, True), ("layers", 1, False)])
+def test_runtime_twins_match_slot_keys_indexing_and_element_count(key, count, indexed) -> None:
+    @runtime_module(ScaledChild)
+    class ChildTwin:
+        @runtime_func
+        def run(self, x, w):
+            return x * w
+
+    children = ModuleList(ChildTwin, count) if indexed else ChildTwin
+    namespace = {key: children, "run": runtime_func(lambda self, x: x)}
+    with pytest.raises(TypeError, match="children|layers|indexed|count"):
+        runtime_module(StackedScaledParent)(type("WrongTwin", (), namespace))

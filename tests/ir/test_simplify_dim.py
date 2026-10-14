@@ -299,9 +299,8 @@ def test_unary_propagates_dim_var_in_shape() -> None:
 def test_a_copied_dim_var_is_the_canonical_one() -> None:
     """A deep copy of a shape keeps its ``DimVar`` identity.
 
-    ``Module.cloned`` copies the IR graph when a child is attached, and a
-    signature that came back holding a fresh ``DimVar`` would no longer bind
-    against the one its caller wrote.
+    Test-side deep copies must preserve the canonical ``DimVar`` so a copied
+    signature still binds against the dimension its caller wrote.
     """
     s = DimVar(name="S_copy", lo=1, hi=7)
     in_ty = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")

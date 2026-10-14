@@ -36,6 +36,9 @@ from tilefoundry.analysis.metadata import (
     RooflineMetadata,
 )
 from tilefoundry.cli import main as cli_main
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
+from tilefoundry.codegen.emitter import CppEmitter
+from tilefoundry.dsl import Topology
 from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.inspection import PatternPrinter, as_script
@@ -52,6 +55,7 @@ from tilefoundry.ir.core import (
     supported_op_capabilities,
 )
 from tilefoundry.ir.core.errors import VerifyError
+from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef, collect_param_defs
 from tilefoundry.ir.core.register import register_op
@@ -64,6 +68,8 @@ from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.transpose import Transpose
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.pattern import (
     PatternMatcher,
     TensorPattern,
@@ -93,6 +99,8 @@ from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout_algebra import cosize
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
+from tilefoundry.passes.transforms.convert_hir_to_tir import LoweringError
+from tilefoundry.schedule import finalize
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
@@ -102,7 +110,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
-from tilefoundry.visitor_registry.verify import verify_prim_function
+from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
 
 PLAIN = (
     "chunk_rmsnorm",
@@ -121,6 +129,7 @@ PLAIN_REFUSED = {
     ),
 }
 CANDIDATES_REFUSED = {
+    "module_instances": "source has no unscheduled candidate site",
     "captured_insert_update": "source has no unscheduled candidate site",
     "loop_carry_from_param": "source has no unscheduled candidate site",
     "wgmma_b_nk": "source has no unscheduled candidate site",
@@ -211,6 +220,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "module_instances": 0,
     "captured_insert_update": 16,
     "loop_carry_from_param": 0,
     "sparse_decode": 16_384,
@@ -243,6 +253,7 @@ RMEM_EXPECTED = {
             4096, "64x16 f32 C fragment, shared by zeros and MMA result"
         ),
     },
+    "module_instances": {},
     "captured_insert_update": {},
     "loop_carry_from_param": {},
     "sparse_decode": {
@@ -425,12 +436,17 @@ def _region_key(region: MeshRegion, occurrences: dict[str, int]) -> str:
     return f"{selection}#{occurrence}"
 
 
-def _prim_in(path: Path) -> PrimFunction:
+def _tir_in(path: Path) -> Module | PrimFunction:
     spec = importlib.util.spec_from_file_location(path.stem, path)
     assert spec is not None and spec.loader is not None
     loaded = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(loaded)
-    return next(value for value in vars(loaded).values() if isinstance(value, PrimFunction))
+    return next(value for value in vars(loaded).values() if isinstance(value, (Module, PrimFunction)))
+
+
+def _prim_in(path: Path) -> PrimFunction:
+    program = _tir_in(path)
+    return program.entry_function() if isinstance(program, Module) else program
 
 
 def _module_in(path: Path):
@@ -529,6 +545,13 @@ def test_scheduled_hir_program_has_analysis_metadata(
     entry = next(function for function in program.functions if function.name == "gemm")
     result = analyze(program, entry, analysis=analysis)
     assert metadata_type in result.metadata_types
+    if path.stem == "module_instances":
+        record_type = PerformanceMetadata if analysis == "performance" else metadata_type
+        for invocation in result.invocations[1:]:
+            schedules = [expr for expr in collect_exprs(invocation.function.body)
+                         if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)]
+            assert any(result.records.get(invocation, expr, record_type) is not None
+                       for expr in schedules)
 
     if analysis == "memory":
         for expr in collect_exprs(result.function.body):
@@ -580,6 +603,14 @@ def test_scheduled_hir_program_has_analysis_metadata(
             for region in regions
             if (record := get_metadata(region, RegionMemoryMetadata)) is not None
         )
+        if path.stem == "module_instances":
+            region_records += tuple(
+                record
+                for invocation in result.invocations[1:]
+                for region in collect_exprs(invocation.function.body)
+                if isinstance(region, MeshRegion)
+                and (record := result.records.get(invocation, region, RegionMemoryMetadata)) is not None
+            )
         if path.stem == "gemm_8192x17408x5120_tma_store":
             assert len(region_records) == 7
         for record in region_records:
@@ -1326,10 +1357,19 @@ def test_schedule_evaluation_rejects_an_unregistered_instruction() -> None:
 
 @pytest.mark.parametrize("path", TIR, ids=lambda path: path.stem)
 def test_tir_program_is_verified_and_canonical(path: Path) -> None:
-    function = _prim_in(path)
-    verify_prim_function(function)
+    program = _tir_in(path)
+    if isinstance(program, Module):
+        verify_module(program)
+    else:
+        verify_prim_function(program)
     source = path.read_text()
-    assert as_script(function) == source[source.index("from __future__ import annotations") :]
+    expected = source[source.index("from __future__ import annotations") :]
+    if isinstance(program, Module):
+        expected = "\n".join(
+            line for line in expected.splitlines()
+            if not line.lstrip().startswith(("# analysis ", "# selection ", "# memory "))
+        ) + "\n"
+    assert as_script(program) == expected
 
 
 def test_parameter_structure_does_not_repeat_its_name() -> None:
@@ -1617,9 +1657,15 @@ def test_schedule_finalize_writes_verified_tir(
     assert captured.out == ""
     assert captured.err == ""
     assert out.read_bytes() == expected.read_bytes()
-    lowered = _prim_in(out)
-    _assert_live_smem_views_do_not_overlap(lowered, source)
-    found = _direct_operand_matches(lowered)
+    lowered = _tir_in(out)
+    functions = (
+        tuple(frame.function for frame in list_call_paths(lowered).values())
+        if isinstance(lowered, Module) else (lowered,)
+    )
+    found = []
+    for function in functions:
+        _assert_live_smem_views_do_not_overlap(function, source)
+        found.extend(_direct_operand_matches(function))
     assert found
     wgmma_lhs = [
         captures
@@ -1826,3 +1872,103 @@ def test_lowering_rejects_invalid_atom_geometry(
     monkeypatch.setattr(lowering_module.Lowering, "_emit_instruction", malformed)
 
     _assert_cli_lowering_error(source, message, tmp_path, capsys)
+
+
+class _RetainedStatements(StmtVisitor[None]):
+    def __init__(self):
+        self.calls = []
+        self.loops = []
+        self.operations = []
+
+    def visit_For(self, stmt, ctx=None):
+        self.loops.append(stmt)
+        self.visit(stmt.body)
+
+    def visit_Evaluate(self, stmt, ctx=None):
+        self.operations.append(stmt.callable)
+        if isinstance(stmt.callable, (PrimFunction, ModuleList, Call)):
+            self.calls.append(stmt)
+
+
+def test_lowering_retains_all_four_instance_and_local_call_shapes():
+    source = Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py"
+    lowered = finalize(_module_in(source))
+    verify_module(lowered)
+    frames = list_call_paths(lowered)
+    assert len(frames) == 3
+    assert all(isinstance(frame.function, PrimFunction) for frame in frames.values())
+    layers, mm = lowered.children["layers"], lowered.children["mm"]
+    assert len(layers.elements) == 3
+    assert all(element is mm.elements[0] for element in layers.elements)
+    visitor = _RetainedStatements()
+    visitor.visit(lowered.entry_function().body)
+    assert len(visitor.loops) == 1
+    assert len(visitor.calls) == 5
+    assert sum(isinstance(call.callable, ModuleList) and call.callable.key == mm.key
+               for call in visitor.calls) == 2
+    indexed = [call for call in visitor.calls if isinstance(call.callable, Call)]
+    assert len(indexed) == 2
+    assert all(call.callable.args[0].key == layers.key for call in indexed)
+    assert any(isinstance(call.callable.args[1], Var) for call in indexed)
+    assert any(isinstance(call.callable.args[1], Constant) and call.callable.args[1].value == 0
+               for call in indexed)
+    for call in visitor.calls:
+        assert len(call.args) == (3 if isinstance(call.callable, PrimFunction) else 2)
+        with pytest.raises(RuntimeError, match="no codegen handler for Op"):
+            CppEmitter(context=CudaCodegenContext(target=lowered.target)).visit_Evaluate(call)
+
+
+def _returned_view(storage):
+    type_ = TensorType((32,), DType.f32, Layout((32,), (1,)), storage)
+    param = Var("x", type=type_)
+    function = Function.build(name="run", params=(param,), body=param, return_type=type_)
+    leaf = Module("View", (function,), "run")
+    slot = ModuleList(leaf)
+    activation = replace(param)
+    call = Call(slot, (activation,), type=type_)
+    root = Function.build(name="root", params=(activation,), body=call, return_type=type_)
+    return Module("ViewCaller", (root,), "root", children={"child": slot},
+                  target=CudaTarget("nvidia.h200_sxm"),
+                  topologies=(Topology("cta", 1), Topology("thread", 32)))
+
+
+def test_a_returned_gmem_view_requires_explicit_scheduled_copy():
+    with pytest.raises(LoweringError, match="callee 'run'.*root/child.*explicit tf.schedule copy"):
+        finalize(_returned_view(StorageKind.GMEM))
+
+
+def test_a_returned_smem_view_is_copied_into_the_callers_out():
+    lowered = finalize(_returned_view(StorageKind.SMEM))
+    verify_module(lowered)
+    callee = lowered.children["child"].elements[0].entry_function()
+    assert callee.params[-1].type.storage is StorageKind.SMEM
+    visitor = _RetainedStatements()
+    visitor.visit(callee.body)
+    assert sum(isinstance(operation, Copy) for operation in visitor.operations) == 1
+
+
+@pytest.mark.parametrize("wrong,refused", [
+    ("count", "arg count"), ("type", r"arg\[0\] type"), ("recursion", "recursion not allowed"),
+])
+def test_verifier_rejects_malformed_retained_tir_calls(wrong, refused):
+    param = Var("x", type=TensorType.scalar(DType.f32))
+    callee = PrimFunction("callee", (param,), Sequential(()), target=CudaTarget("nvidia.h200_sxm"))
+    args = () if wrong == "count" else (Constant(0, type=TensorType.scalar(DType.i32)),)
+    caller = PrimFunction("caller", (), Sequential((Evaluate(callee, args),)), target=callee.target)
+    if wrong == "recursion":
+        caller.body = Sequential((Evaluate(caller, ()),))
+    with pytest.raises(VerifyError, match=refused):
+        verify_prim_function(caller, module_fns=(caller, callee))
+
+
+def test_verifier_rejects_non_integer_indexed_tir_target():
+    lowered = finalize(_module_in(Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py"))
+    slot = lowered.children["layers"]
+    target = Call(TupleGetItem(), (slot, Constant(0.5, type=TensorType.scalar(DType.f32))),
+                  type=slot.type.fields[0])
+    root = replace(lowered.entry_function(), body=Sequential((Evaluate(target, ()),)))
+    functions = tuple(root if function is lowered.entry_function() else function
+                      for function in lowered.functions)
+    malformed = replace(lowered, functions=functions)
+    with pytest.raises(VerifyError, match="index must be an integer scalar"):
+        verify_module(malformed)

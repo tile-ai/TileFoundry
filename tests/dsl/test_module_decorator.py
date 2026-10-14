@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 import torch
 
+from tests._source import import_dsl
+from tests.fixtures.shapes import scaled_modules
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
@@ -441,3 +443,50 @@ def test_prim_func_host_resolves_sibling_device_in_class_body():
     assert isinstance(_Launch, Module)
     assert [fn.name for fn in _Launch.functions] == ["dev", "host"]
     assert _Launch.entry == "host"
+
+
+@pytest.mark.parametrize(
+    "declarations,body,refused",
+    [
+        ("layers = [ScaledChild]", "return x", "use ModuleList"),
+        ("layers = (ScaledChild,)", "return x", "use ModuleList"),
+        ("layers = ModuleList(ScaledChild, 0)", "return x", "positive integer"),
+        ("layers = ModuleList(ScaledChild, 1.5)", "return x", "positive integer"),
+        ("layers = ModuleList(())", "return x", "non-empty tuple"),
+        ("layers = ModuleList((ScaledChild, 1))", "return x", "requires Modules"),
+        ("layers = ModuleList(ScaledChild, 3)\n    other = layers", "return x", "layers.*other"),
+        ("layers = ModuleList(ScaledChild, 3)", "return layers[3](x)", "layers.*N=3"),
+        ("layers = ModuleList(ScaledChild, 3)", "return layers[-1](x)", "layers.*N=3"),
+        ("layers = ModuleList(ScaledChild, 3)", "return layers[0.5](x)", "integer scalar"),
+        ("layers = ScaledChild", "return layers[0](x)", "single slot.*cannot be indexed"),
+        ("layers = ModuleList(ScaledChild, 3)", "return layers(x)", "must be indexed"),
+        ("layers = ModuleList((ScaledChild, NestedScaledMiddle))", "return layers[i](x)", "same definition"),
+        ("layers = ModuleList(ScaledChild, 3)", "return layers[0].run(x)", "only calling an instance entry"),
+        ("layers = ScaledChild", "return layers(x, x)", "arity mismatch.*1 activation.*passed 2"),
+        ("helper = ScaledChild.run", "return helper(x)", "arity mismatch.*2 parameter.*passed 1"),
+        ("layers = replace(ScaledChild, entry=None)", "return layers(x)", "declares no entry"),
+        ("", "return ScaledChild(x)", "instance calls must use a slot name"),
+    ],
+)
+def test_module_rejects_invalid_instance_declarations_and_calls(declarations, body, refused):
+    source = f'''from dataclasses import replace
+from tilefoundry.dsl import *
+from tests.fixtures.shapes.scaled_modules import ScaledChild, NestedScaledMiddle
+
+@module(entry="main")
+class Invalid:
+    {declarations}
+
+    @func
+    def main(x: Tensor[(4,), "f32"], i: Tensor[(), "i32"]):
+        {body}
+'''
+    with pytest.raises((TypeError, ValueError, VerifyError), match=refused):
+        import_dsl(source, "Invalid")
+
+
+def test_an_unused_module_without_entry_can_occupy_a_slot_and_be_replaced():
+    slot = ModuleList(dataclasses.replace(scaled_modules.ScaledChild, entry=None))
+    root = Module("Container", (), None, children={"unused": slot})
+    assert dataclasses.replace(root).children["unused"] is slot
+    assert slot.elements[0].entry is None

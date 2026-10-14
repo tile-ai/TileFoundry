@@ -11,7 +11,9 @@ Authored DSL source imports its authoring surface with `from tilefoundry.dsl imp
 child Modules, and ordinary methods. Module authoring is two-phase: class execution records
 Function, specialization, and converter declarations; finalization attaches all child Modules
 and puts them in parser scope before parsing Functions in source order. `@func` produces an HIR
-Function; `@prim_func` produces a TIR PrimFunction.
+Function; `@prim_func` produces a TIR PrimFunction. Both class-body declarations,
+including a `@prim_func` with an explicit target, are parsed after slots enter
+module scope; an explicit PrimFunction target is preserved.
 `specialize` and `converter` register variants and weight converters on an existing HIR Function.
 
 ```python
@@ -79,7 +81,10 @@ must be an integer scalar and the list must contain one shared definition.
 Calling a global Module outside a class-body slot, indexing a single slot,
 calling an indexed slot without an index, and calling non-entry instance methods
 are refused. Containers without entries can occupy slots; calling them reports
-the existing no-entry diagnostic.
+the existing no-entry diagnostic. Numeric subscripts become Constant expressions;
+static index validation runs only in type inference. Constructing a Call does not
+project an indexed slot's return type before that validation. Retained TIR calls
+produce unit-valued statements and are checked in the enclosing Module context.
 
 ### 1.5 Mesh declarations and region captures
 

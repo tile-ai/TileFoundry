@@ -7,7 +7,7 @@ returns the parsed and verified IR node, not the original Python function.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import FunctionType
 from typing import Any, Callable, ClassVar, Literal, Mapping
@@ -244,7 +244,7 @@ def _parse_authored(
             except ValueError:
                 pass
     use_owner_context = module_context is not None and (
-        role is not FunctionRole.ROOT or (target is None and topologies is None)
+        role is not FunctionRole.ROOT or (target is None and topologies is None) or dialect == "tir"
     )
     if use_owner_context:
         context = module_context.function_context(
@@ -257,6 +257,8 @@ def _parse_authored(
             mesh=mesh,
             output_count=output_count,
         )
+        if dialect == "tir" and target is not None:
+            context = replace(context, target=target, hardware_context=_hardware_context(target))
     else:
         topology_scope = {
             getattr(topology, "name", str(index)): topology
@@ -306,6 +308,7 @@ class _DeferredFunction:
     binding_name: str
     closure: Mapping[str, Any]
     mesh: Mesh | None = None
+    target: object | None = None
     base: object | None = None
     key: object | None = None
     output_count: int = 1
@@ -325,6 +328,7 @@ class _DeferredFunction:
             key=self.key,
             mesh=self.mesh,
             output_count=self.output_count,
+            target=self.target,
             module_context=self.module_context,
             closure=self.closure,
         )
@@ -351,6 +355,7 @@ class _DeferredFunction:
                 base=self,
                 key=pat,
                 mesh=mesh,
+                target=self.target,
             )
             self.module_context.declarations.append(declaration)
             return declaration
@@ -526,7 +531,7 @@ def prim_func(fn=None, *, target=None, output_count=1):
 
     def _wrap(fn_inner):
         module_context = _enclosing_declaration()
-        if module_context is not None and resolved_target is None:
+        if module_context is not None:
             declaration = _DeferredFunction(
                 module_context,
                 fn_inner,
@@ -535,6 +540,7 @@ def prim_func(fn=None, *, target=None, output_count=1):
                 fn_inner.__name__,
                 _capture_function_closure(fn_inner),
                 output_count=output_count,
+                target=resolved_target,
             )
             module_context.declarations.append(declaration)
             return declaration

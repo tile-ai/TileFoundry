@@ -1921,6 +1921,8 @@ class StaticReferencePattern(ElementPattern):
         elif match.branch_id == "static_attribute":
             owner = children["owner"]
             attribute = match.captures["attribute"]
+            if isinstance(owner, runtime.ModuleList):
+                return _resolve_reference(match.node, context)
             try:
                 return getattr(owner, attribute)
             except AttributeError as error:
@@ -2458,6 +2460,8 @@ class CallTypeInferenceRule:
         infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
         if not isinstance(infer_context, runtime.TypeInferContext):
             infer_context = runtime.TypeInferContext()
+        if context.function.dialect == "tir" and match.branch_id == "function_call":
+            return value
         computed = runtime.TypeInferVisitor().visit(value, infer_context)
         value.type = computed
         return value
@@ -3009,7 +3013,7 @@ class CallPattern(ElementPattern):
                     "op_call", node.func,
                     "instance calls must use a slot name in the @module class body",
                 )
-        if instance_target is not None or isinstance(callee, runtime.Function):
+        if instance_target is not None or isinstance(callee, (runtime.Function, runtime.PrimFunction)):
             if node.keywords:
                 return PatternFailure("op_call", node, "a function call takes positional arguments only")
             return dataclasses.replace(
@@ -3089,17 +3093,9 @@ class CallPattern(ElementPattern):
         elif match.branch_id == "function_call":
             callee = match.captures["callee"]
             target = children.get("target", callee)
-            if match.captures.get("instance_target") is not None:
-                if context.function.module is None:
-                    raise ParseError.from_node(
-                        match.node, context, "a Module call is only valid inside a @module class body"
-                    )
-                try:
-                    return_type = target.type.return_type
-                except ValueError as error:
-                    raise ParseError.from_node(match.node, context, str(error)) from error
-            else:
-                return_type = callee.return_type
+            return_type = runtime.UnitType() if (
+                context.function.dialect == "tir" or match.captures.get("instance_target") is not None
+            ) else callee.return_type
             return runtime.Call(
                 type=return_type, target=target,
                 args=tuple(value for name, value in children.items() if name.startswith("arg_")),
@@ -3582,7 +3578,7 @@ class SubscriptExpressionPattern(ElementPattern):
         value = children["value"]
         index = children["index"]
         if isinstance(value, runtime.ModuleList):
-            if isinstance(index, int):
+            if isinstance(index, (int, float)):
                 index = _constant(index)
             return _infer_call(runtime.TupleGetItem(), (value, index), context)
         if isinstance(value.type, runtime.TupleType):
