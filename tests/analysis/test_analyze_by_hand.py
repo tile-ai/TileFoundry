@@ -139,7 +139,7 @@ def test_uncounted_boundary_marks_the_footprint_incomplete(
     footprint = footprint_of(
         merged((uncounted, counted)),
         memory_level="gmem",
-        labels={(id(buffer), 0): "x"},
+        labels={(None, id(buffer), 0): "x"},
     )
 
     assert dict(footprint.buffers)["x"].of("gmem").total == 8
@@ -150,7 +150,7 @@ def test_uncounted_boundary_marks_the_footprint_incomplete(
     )
     assert footprint.precision is expected
     assert (
-        footprint_of((uncounted,), memory_level="gmem", labels={(id(buffer), 0): "x"}).precision
+        footprint_of((uncounted,), memory_level="gmem", labels={(None, id(buffer), 0): "x"}).precision
         is missing_precision
     )
 
@@ -177,7 +177,7 @@ def test_tuple_output_boundaries_add_instead_of_union(
     footprint = footprint_of(
         distinct,
         memory_level="gmem",
-        labels={(id(buffer), 0): "x"},
+        labels={(None, id(buffer), 0): "x"},
     )
     by_name = dict(footprint.buffers)
     gmem = by_name["x"].of("gmem")

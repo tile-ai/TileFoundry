@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from tilefoundry.ir.core import (
     Call,
     Expr,
+    RangeMetadata,
     Var,
     VerifyError,
     describe_expr,
@@ -22,7 +23,12 @@ from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.utils import bytes_by_storage, is_unsharded_layout, participant_layout
+from tilefoundry.ir.types.utils import (
+    bytes_by_storage,
+    is_unsharded_layout,
+    participant_layout,
+    static_dim_value,
+)
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.units import format_bytes
@@ -69,7 +75,7 @@ from .metadata import (
     TrafficBytes,
 )
 from .precision import AnalysisPrecision
-from .program import FrameWalker
+from .program import FrameWalker, frame_key
 from .visitor import AnalyzeContext
 
 SELECTOR = "memory"
@@ -671,7 +677,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     for item in merged_reached:
         if item.reached is not None:
             distinct.setdefault(
-                ((item.frame.key if item.frame else None), id(item.buffer), item.index), item.buffer
+                (frame_key(item.frame), id(item.buffer), item.index), item.buffer
             )
     captured_names = {}
     for scope in walk_scopes(context.root):
@@ -698,7 +704,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     quantities = {}
     persistent = set()
     resources = {}
-    from tilefoundry.ir.core import RangeMetadata  # noqa: PLC0415
 
     def multiplicity(frame):
         count = 1
@@ -706,19 +711,39 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             if not isinstance(instance.index, Expr):
                 continue
             slot = frame.instances[position - 1].module.children[instance.key]
-            bounds = get_metadata(instance.index, RangeMetadata)
-            number = (
-                len(slot.elements)
-                if bounds is None
-                else max(0, min(len(slot.elements), bounds.hi) - max(0, bounds.lo))
-            )
+            cursor = frame.scope
+            number = None
+            while cursor is not None:
+                loop = cursor.owner
+                if isinstance(loop, LoopRegion) and loop.induction_var is instance.index:
+                    start, stop, step = (
+                        static_dim_value(value) for value in (loop.start, loop.extent, loop.step)
+                    )
+                    if start is not None and stop is not None and step is not None and step != 0:
+                        trips = len(range(start, stop, step))
+                        if step > 0:
+                            first = max(0, -(start // step))
+                            last = min(trips, -(-(len(slot.elements) - start) // step))
+                        else:
+                            stride = -step
+                            first = max(0, (start - len(slot.elements)) // stride + 1)
+                            last = min(trips, start // stride + 1)
+                        number = max(0, last - first)
+                    break
+                cursor = cursor.parent
+            if number is None:
+                bounds = get_metadata(instance.index, RangeMetadata)
+                number = (
+                    len(slot.elements) if bounds is None
+                    else max(0, min(len(slot.elements), bounds.hi) - max(0, bounds.lo))
+                )
             count *= number
         return count
 
     limits: dict[str, int] = {}
     for interval in liveness.intervals:
         frame = interval.frame
-        key = (frame.key if frame else None, id(interval.value))
+        key = (frame_key(frame), id(interval.value))
         multiplier = 1
         if frame is not None and frame.parent is not None and any(interval.value is weight for weight in frame.site.weights):
             resource = frame.resource_key(interval.value)
@@ -757,24 +782,24 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
 
     allocation.visit_function_body(function, model)
     definitions = {
-        ((interval.frame.key if interval.frame else None), id(interval.value)): index
+        (frame_key(interval.frame), id(interval.value)): index
         for index, interval in enumerate(liveness.intervals)
     }
     model.values.sort(
         key=lambda item: (
-            definitions[(item.frame.key if item.frame else None), id(item.value)],
+            definitions[frame_key(item.frame), id(item.value)],
             item.index,
         )
     )
     allocation_values = tuple(model.values)
     material_values = tuple(item for item in allocation_values if item in model.material)
     producers = {
-        (item.frame.key if item.frame else None, id(item.value)): item.value
+        (frame_key(item.frame), id(item.value)): item.value
         for item in (*material_values, *allocation_values)
     }
     labels = dict(zip(producers, value_labels(producers.values()), strict=True))
     for item in allocation_values:
-        key = (item.frame.key if item.frame else None, id(item.value))
+        key = (frame_key(item.frame), id(item.value))
         label = resources.get(
             key, (f"{item.frame.label}/" if item.frame and item.frame.parent else "") + labels[key]
         )

@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Mapping
 
 from tilefoundry.analysis import analyze, check_program
-from tilefoundry.analysis.check import resolve_program_geometry
 from tilefoundry.cli.source import load_authored_ir, require_bound_dims
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import (
@@ -19,7 +18,6 @@ from tilefoundry.inspection.analysis_report import (
     render_text,
 )
 from tilefoundry.ir.hir.specialize import SpecializationError
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 EVIDENCE: dict[str, str] = {
     "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
@@ -130,15 +128,9 @@ def run_authored_analysis(
         require_bound_dims(module, function, dims, command="analyze")
         if not analyses:
             try:
-                checked_module, checked = resolve_program_geometry(
-                    module,
-                    function,
-                    dims,
-                    TypeInferContext(scope=FunctionScope(module, function)),
-                )
+                expanded = check_program(module, function, dims=dims)
             except SpecializationError as error:
                 raise ValueError(f"analyze: {error}") from None
-            expanded = check_program(checked_module, checked)
             annotated = "\n".join(
                 as_script(body, options=PythonPrintOptions(show_types=True))
                 for body in expanded.bodies()

@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from tilefoundry.analysis.check import check_program, resolve_program_geometry
+from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, ScopeBuilder
 from tilefoundry.analysis.program import CallFrame, FrameRecords, Program
@@ -25,9 +25,9 @@ from tilefoundry.ir.core import IRMetadata
 from tilefoundry.ir.core.module import Module, module_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError
+from tilefoundry.ir.types.substitute import DimSubstitutionError
 from tilefoundry.ir.visitor import function_values
 from tilefoundry.target import Target, UnsupportedCapabilityError
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 
 @dataclass(frozen=True)
@@ -132,22 +132,17 @@ def build_iteration_scopes(
         raise AnalysisError(
             f"analyze: {function.name!r} is not a function of module {module.name!r}"
         )
-    try:
-        module, function = resolve_program_geometry(
-            module,
-            function,
-            dims,
-            TypeInferContext(scope=FunctionScope(module, function)),
-        )
-    except SpecializationError as error:
-        raise AnalysisError(f"analyze: {error}") from None
 
     target = module.resolve_target()
     topologies = module.effective_topologies()
     if topology_level is None:
         topology_level = topologies[0].name if topologies else None
 
-    program = check_program(module, function, topology_level=topology_level, analyzers=analyzers)
+    try:
+        program = check_program(module, function, topology_level=topology_level, analyzers=analyzers, dims=dims)
+    except (SpecializationError, DimSubstitutionError) as error:
+        raise AnalysisError(f"analyze: {error}") from None
+    module = program.module
     function = program.root
     context = AnalyzeContext(
         module, target, topology_level, options, program=program, records=FrameRecords()

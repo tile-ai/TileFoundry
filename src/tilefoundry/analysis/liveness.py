@@ -11,6 +11,8 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 
+from .program import frame_key
+
 
 @dataclass(frozen=True)
 class LiveInterval:
@@ -58,8 +60,7 @@ class Liveness:
                 item
                 for item in self.intervals
                 if item.value is value
-                and (item.frame.key if item.frame is not None else None)
-                is (frame.key if frame is not None else None)
+                and frame_key(item.frame) is frame_key(frame)
             ),
             None,
         )
@@ -106,7 +107,7 @@ class LivenessVisitor(ExprVisitor[None]):
 
     def define(self, value: Expr, point: int) -> None:
         """Record the one definition of *value*."""
-        key = (None if self.frame is None else self.frame.key, id(value))
+        key = (frame_key(self.frame), id(value))
         if key in self.states:
             raise ValueError(f"liveness: {type(value).__name__} is defined more than once")
         self.states[key] = LiveInterval(value, point, point, self.frame)
@@ -114,7 +115,7 @@ class LivenessVisitor(ExprVisitor[None]):
 
     def use(self, value: Expr, point: int, *, synthetic: bool = False) -> None:
         """Extend the SSA value through one use."""
-        key = (None if self.frame is None else self.frame.key, id(value))
+        key = (frame_key(self.frame), id(value))
         state = self.states.get(key)
         if state is None:
             raise ValueError(f"liveness: {type(value).__name__} is used before its definition")
@@ -153,7 +154,7 @@ class LivenessVisitor(ExprVisitor[None]):
         self.define(value, point)
         if result_copies(value) > 1 and self.loop_entries:
             self.loop_entries[-1][2].add(
-                (None if self.frame is None else self.frame.key, id(value))
+                (frame_key(self.frame), id(value))
             )
 
     def visit_Call(self, call, ctx=None):

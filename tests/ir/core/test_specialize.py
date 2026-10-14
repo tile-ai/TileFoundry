@@ -12,6 +12,7 @@ from tests.fixtures.placed.gqa_decode import (
     GqaOnline,
 )
 from tests.fixtures.placed.specialize_through_call import ToCallee
+from tilefoundry.analysis.program import build_program
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import (
@@ -21,7 +22,6 @@ from tilefoundry.ir.hir.specialize import (
     is_concrete,
     origin_of,
     residual_dims,
-    specialize_function,
     variant_for,
 )
 from tilefoundry.target import CudaTarget
@@ -131,12 +131,12 @@ def test_choosing_an_implementation_needs_the_dimension_it_turns_on() -> None:
 
 def test_a_dimension_the_function_does_not_have_is_refused() -> None:
     with pytest.raises(SpecializationError, match="no dimension named"):
-        specialize_function(ENTRY, {**STEADY, "batch": 4})
+        build_program(GqaOnline, ENTRY, {**STEADY, "batch": 4}).root
 
 
 def test_specialising_nothing_is_refused() -> None:
-    with pytest.raises(SpecializationError, match="at least one dimension"):
-        specialize_function(ENTRY, {})
+    with pytest.raises(SpecializationError, match="non-empty mapping"):
+        build_program(GqaOnline, ENTRY, {}).root
 
 
 def test_a_call_through_a_prototype_selects_by_the_callers_dimensions() -> None:
@@ -144,7 +144,7 @@ def test_a_call_through_a_prototype_selects_by_the_callers_dimensions() -> None:
     run = ToCallee.entry_function()
 
     for extent, expected in ((64, "pick_small"), (512, "pick_big")):
-        rebuilt = specialize_function(run, {"n": extent}).body.target
+        rebuilt = build_program(ToCallee, run, {"n": extent}).root.body.target
         assert display_name(origin_of(rebuilt)) == expected
 
 
@@ -153,7 +153,7 @@ def test_specialising_through_a_call_says_which_dimension_is_missing() -> None:
     caller = _MissingCalleeDimension.entry_function()
 
     with pytest.raises(SpecializationError, match="'call_n'.*was not given a size"):
-        specialize_function(caller, {"call_m": 4})
+        build_program(_MissingCalleeDimension, caller, {"call_m": 4}).root
 
 
 def test_specialising_follows_dispatch_variants_into_nested_dispatches() -> None:
@@ -161,7 +161,7 @@ def test_specialising_follows_dispatch_variants_into_nested_dispatches() -> None
     run = _NestedDispatch.entry_function()
 
     for extent, suffix in ((64, "small"), (512, "big")):
-        concrete = specialize_function(run, {"nested_n": extent})
+        concrete = build_program(_NestedDispatch, run, {"nested_n": extent}).root
         middle = concrete.body.target
         inner = middle.body.target
 
@@ -176,7 +176,7 @@ def test_a_specialised_function_states_extents_everywhere() -> None:
     Nothing may still be a range -- including inside the callees, and in the
     shape-valued attributes their operations carry, which no signature shows.
     """
-    concrete = specialize_function(ENTRY, STEADY)
+    concrete = build_program(GqaOnline, ENTRY, STEADY).root
 
     assert residual_dims(concrete) == ()
     assert is_concrete(concrete)
@@ -185,7 +185,7 @@ def test_a_specialised_function_states_extents_everywhere() -> None:
 def test_specialising_only_substitutes_dimensions() -> None:
     """The signature keeps its rank, dtype and storage; only extents move."""
     chosen = variant_for(ENTRY, STEADY)
-    concrete = specialize_function(ENTRY, STEADY)
+    concrete = build_program(GqaOnline, ENTRY, STEADY).root
 
     assert len(concrete.params) == len(chosen.params)
     for new, old in zip(concrete.params, chosen.params):
@@ -202,7 +202,7 @@ def test_a_derived_extent_follows_the_dimension_it_derives_from() -> None:
     The per-split block length is the context length over the splits. It has
     to arrive at that number without being told it.
     """
-    concrete = specialize_function(ENTRY, STEADY)
+    concrete = build_program(GqaOnline, ENTRY, STEADY).root
     shapes = {tuple(param.type.shape) for param in concrete.params}
 
     steady_context = STEADY["ctx_len"]
@@ -220,8 +220,8 @@ def test_the_same_request_gives_the_same_answer_every_time() -> None:
     reads a type belonging to something else -- which showed up as the same
     call returning a different shape, or failing, from one run to the next.
     """
-    first = specialize_function(ENTRY, STEADY)
-    others = [specialize_function(ENTRY, STEADY) for _ in range(4)]
+    first = build_program(GqaOnline, ENTRY, STEADY).root
+    others = [build_program(GqaOnline, ENTRY, STEADY).root for _ in range(4)]
 
     for other in others:
         assert other.return_type == first.return_type
@@ -235,18 +235,12 @@ def test_specialising_one_function_does_not_disturb_the_next() -> None:
     The callees are shared, so a rebuild that left state on them would show
     up here rather than where it was caused.
     """
-    partials = specialize_function(GqaOnline.lookup("_ctx_partials"), STEADY)
+    partials = build_program(GqaOnline, GqaOnline.lookup("_ctx_partials"), STEADY).root
     assert residual_dims(partials) == ()
 
-    entry = specialize_function(ENTRY, STEADY)
+    entry = build_program(GqaOnline, ENTRY, STEADY).root
     assert entry.return_type.shape == (1, 1, 32, 128)
     assert residual_dims(entry) == ()
-
-
-def test_a_function_with_nothing_to_bind_is_returned_unchanged() -> None:
-    concrete = specialize_function(ENTRY, STEADY)
-
-    assert specialize_function(concrete, {"ctx_len": SMALL_CONTEXT_T}) is concrete
 
 
 def _reshape_targets(fn) -> list[tuple]:
@@ -277,7 +271,7 @@ def test_a_derived_extent_reaches_the_operation_that_states_it() -> None:
 
     Nothing supplies it, and it has to arrive inside the callee's own reshape.
     """
-    concrete = specialize_function(ENTRY, STEADY)
+    concrete = build_program(GqaOnline, ENTRY, STEADY).root
     block = STEADY["ctx_len"] // NUM_SPLITS
 
     targets = _reshape_targets(concrete)
@@ -316,7 +310,7 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     assert variant_for(ENTRY, dims) is admitted[0]
 
     expected = evaluate(ENTRY, q, k, v, k_new, v_new)
-    got = evaluate(specialize_function(ENTRY, dims), q, k, v, k_new, v_new)
+    got = evaluate(build_program(GqaOnline, ENTRY, dims).root, q, k, v, k_new, v_new)
 
     assert got.shape == expected.shape
     assert got.dtype == expected.dtype
@@ -352,7 +346,7 @@ def test_a_dimension_only_the_body_uses_is_still_substituted() -> None:
         isinstance(extent, int) for param in authored.params for extent in param.type.shape
     ), "the signature is already concrete, which is the point"
 
-    concrete = specialize_function(authored, {"loop_ctx": 512})
+    concrete = build_program(_LoopOnly, authored, {"loop_ctx": 512}).root
 
     assert concrete is not authored
     assert residual_dims(concrete) == ()
@@ -372,8 +366,8 @@ def test_two_sizes_of_a_body_only_dimension_are_told_apart() -> None:
     """
     authored = _LoopOnly.entry_function()
 
-    small = specialize_function(authored, {"loop_ctx": 8})
-    large = specialize_function(authored, {"loop_ctx": 512})
+    small = build_program(_LoopOnly, authored, {"loop_ctx": 8}).root
+    large = build_program(_LoopOnly, authored, {"loop_ctx": 512}).root
 
     assert origin_of(small) is authored
     assert origin_of(large) is authored

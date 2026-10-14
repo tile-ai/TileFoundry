@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 
 from tilefoundry.ir.core import Call, Expr, Var, attach_metadata, get_metadata
@@ -10,20 +10,30 @@ from tilefoundry.ir.core.metadata import BindingMetadata
 from tilefoundry.ir.core.module import Module, ModuleList, instance_slot, resolve_callee
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.specialize import _specialize_callee, bound_dims_of, origin_of, variant_for
+from tilefoundry.ir.hir.specialize import (
+    InstantiateDimensionCloner,
+    SpecializationError,
+    bound_dims_of,
+    variant_for,
+)
 from tilefoundry.ir.types.callable_type import callable_type_for
 from tilefoundry.ir.types.mesh import make_mesh
-from tilefoundry.ir.types.substitute import has_symbolic_dims
+from tilefoundry.ir.types.substitute import dim_vars_by_name, substitute_shape_dim
 from tilefoundry.ir.visitor import (
     BindingSubstitutionCloner,
     collect_exprs,
     expr_children,
     function_values,
 )
-from tilefoundry.visitor_registry.contexts import FunctionScope, ModuleInstance
+from tilefoundry.visitor_registry.contexts import FunctionScope, ModuleInstance, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 from .errors import AnalysisError
+
+
+def frame_key(frame):
+    """The invocation key, with None representing the root frame."""
+    return None if frame is None else frame.key
 
 
 def _call_stem(definition, instance):
@@ -47,6 +57,7 @@ class CallSite:
     activations: tuple[Var, ...]
     weights: tuple[Var, ...]
     index: Expr | None
+    label: str
 
 
 @dataclass
@@ -92,62 +103,89 @@ class _BodyCloner(BindingSubstitutionCloner):
         return replace(rebuilt, metadata=(*rebuilt.metadata, BindingMetadata(name)))
 
 
-def build_program(module, fn, dims, ctx) -> Program:
-    """Clone each reached definition once and reject inconsistent instantiations."""
-    from .check import _required_scope, _view_metadata  # noqa: PLC0415 -- check calls builder
+def build_program(module, fn, dims=None) -> Program:
+    """Bind one reachable program, then infer one body per definition and signature."""
+    from .check import _required_scope, _view_metadata, program_dim_vars  # noqa: PLC0415 -- cycle
 
-    program = Program(module, fn)
-    signatures, active = {}, []
-    dims = dict(bound_dims_of(fn) or ()) if dims is None else dims
-
-    inference_modules = {}
-
-    def inference_scope(scope):
-        """Infer through dimension-bound children while retaining the IR targets."""
-
-        def bound(module, frames):
-            if id(module) in inference_modules:
-                return inference_modules[id(module)]
-            children = {}
-            for key, slot in module.children.items():
-                elements = tuple(
-                    bound(
-                        child,
-                        (*frames, ModuleInstance(child, key, index if slot.indexed else None)),
-                    )
-                    for index, child in enumerate(slot.elements)
+    if dims is not None:
+        if not isinstance(dims, Mapping) or not dims:
+            raise SpecializationError(
+                f"specialising {fn.name!r} needs a non-empty mapping of dimension names to extents, got {dims!r}"
+            )
+        for name, extent in dims.items():
+            if not isinstance(name, str) or not name:
+                raise SpecializationError(f"specialising {fn.name!r}: {name!r} is not a dimension name")
+            if isinstance(extent, bool) or not isinstance(extent, int):
+                raise SpecializationError(
+                    f"specialising {fn.name!r}: dimension {name!r} takes an integer extent, got {extent!r}"
                 )
-                children[key] = ModuleList(elements if slot.indexed else elements[0])
-            functions = module.functions
-            if module.entry is not None:
-                entry = module.entry_function()
-                needed = {
-                    pattern.dim_var
-                    for variant in entry.variants
-                    for pattern in variant.specializations
-                    if hasattr(pattern, "dim_var")
-                }
-                if needed <= dims.keys():
-                    entered = replace(ctx, scope=FunctionScope(module, entry, frames))
-                    selected = _specialize_callee(entry, dims, entered)
-                    functions = tuple(selected if fn is entry else fn for fn in functions)
-            rebuilt = replace(module, children=children, functions=functions)
-            inference_modules[id(module)] = rebuilt
-            return rebuilt
+    declared = program_dim_vars(module, fn)
+    supplied = {} if dims is None else dict(dims)
+    reached, checked = [], set()
 
-        if not dims:
-            return scope
-        owner = bound(scope.module, scope.instances)
-        frames = (*scope.instances[:-1], replace(scope.instances[-1], module=owner))
-        return replace(scope, module=owner, instances=frames)
+    def preflight(function, scope, path, active):
+        if id(function) in active:
+            raise AnalysisError(f"recursive call path through {function.name!r}: {path}")
+        key = (id(function), id(scope.module))
+        if key in checked:
+            return
+        chosen = variant_for(function, supplied)
+        if chosen.body is None:
+            raise AnalysisError(f"cannot analyze Function {function.name!r} without a body")
+        reached.append(function)
+        for expr in collect_exprs(chosen.body):
+            if not isinstance(expr, Call):
+                continue
+            callee, inner = resolve_callee(expr, scope)
+            if callee is not None:
+                preflight(callee, inner, f"{path}/{callee.name}", active | {id(function)})
+        checked.add(key)
+
+    original_scope = _required_scope(module, fn)
+    preflight(fn, original_scope, fn.name, set())
+    unknown = sorted(set(supplied) - declared.keys())
+    if unknown:
+        raise SpecializationError(f"{fn.name!r} has no dimension named {unknown!r}; it states {sorted(declared)}")
+    for name, extent in supplied.items():
+        substitute_shape_dim(declared[name], {name: extent})
+    cloner = InstantiateDimensionCloner(dims)
+    for function in reached:
+        cloner.function(function)
+    bound_root = cloner.function(fn)
+    bound_module = cloner.module(module)
+    instances = tuple(replace(frame, module=cloner.module(frame.module)) for frame in original_scope.instances)
+    initial = FunctionScope(cloner.module(original_scope.module), bound_root, instances)
+    residual = set()
+    for owner in cloner.modules.values():
+        residual.update(dim_vars_by_name(owner.topologies))
+    for body in {id(body): body for body in cloner.functions.values()}.values():
+        residual.update(dim_vars_by_name(tuple(p.type for p in body.params)))
+        residual.update(dim_vars_by_name(body.return_type))
+        for value in collect_exprs(body.body):
+            if isinstance(value, ModuleList):
+                continue
+            fields = [
+                value.type,
+                *(getattr(value, name, None) for name in ("extent", "step", "start", "mesh")),
+            ]
+            if isinstance(value, Call):
+                fields.extend(
+                    getattr(value.target, attr.name, None)
+                    for attr in getattr(type(value.target), "params", lambda: ())()
+                    if attr.kind == "attribute"
+                )
+            for value_field in fields:
+                residual.update(dim_vars_by_name(value_field))
+    if residual:
+        raise SpecializationError(
+            f"{fn.name!r} still states {sorted(residual)} as ranges after binding {sorted(supplied)}; every dimension has to be given an extent"
+        )
+    program = Program(bound_module, bound_root)
+    signatures = {}
+    ctx = TypeInferContext()
 
     def derive(definition, scope, types, mesh, label):
-        canonical = definition
-        while origin_of(canonical) is not None:
-            canonical = origin_of(canonical)
-        identity = id(canonical)
-        if identity in (item[0] for item in active):
-            raise AnalysisError(f"recursive call path through {definition.name!r}: {label}")
+        identity = id(definition)
         signature = (types, mesh)
         if identity in signatures:
             previous, path = signatures[identity]
@@ -158,11 +196,8 @@ def build_program(module, fn, dims, ctx) -> Program:
                 )
             return program.definitions[identity]
         signatures[identity] = signature, label
-        active.append((identity, label))
         inner = replace(ctx, scope=scope, current_mesh=mesh, memo={})
-        chosen = _specialize_callee(definition, dims, inner)
-        if chosen.body is None:
-            raise AnalysisError(f"cannot analyze Function {definition.name!r} without a body")
+        chosen = definition
         params = tuple(
             replace(p, type=t, metadata=_view_metadata(p))
             for p, t in zip(chosen.params, types, strict=True)
@@ -178,29 +213,13 @@ def build_program(module, fn, dims, ctx) -> Program:
             converters=(),
             metadata=_view_metadata(chosen),
         )
-        derived._specialized_from = definition
+        derived._specialized_from = definition._specialized_from
+        derived._specialized_dims = bound_dims_of(definition)
         program.definitions[identity] = derived
         program.scopes[id(derived)] = replace(scope, function=derived)
         TypeInferVisitor(ranges=True).visit(
-            derived, replace(inner, scope=inference_scope(program.scopes[id(derived)]))
+            derived, replace(inner, scope=program.scopes[id(derived)])
         )
-        for value in collect_exprs(derived.body):
-            if isinstance(value, ModuleList):
-                continue
-            required = [
-                value.type,
-                *(getattr(value, name, None) for name in ("extent", "start", "step", "mesh")),
-            ]
-            if isinstance(value, Call):
-                required.extend(
-                    getattr(value.target, attr.name, None)
-                    for attr in getattr(type(value.target), "params", lambda: ())()
-                    if attr.kind == "attribute"
-                )
-            if any(has_symbolic_dims(item) for item in required):
-                raise AnalysisError(
-                    f"{definition.name!r} still states symbolic dimensions; bind every dimension before analysis"
-                )
         stems = {}
         for value in collect_exprs(body):
             if not isinstance(value, Call):
@@ -231,10 +250,8 @@ def build_program(module, fn, dims, ctx) -> Program:
             activations = tuple(p for p in callee.params if not (located and p.is_const))
             weights = tuple(p for p in callee.params if located and p.is_const)
             supplied = iter(expr.args)
-            from tilefoundry.ir.types.substitute import substitute_dims  # noqa: PLC0415
-
             arg_types = tuple(
-                substitute_dims(p.type, dims) if located and p.is_const else next(supplied).type
+                p.type if located and p.is_const else next(supplied).type
                 for p in callee.params
             )
             stem = _call_stem(callee, instance)
@@ -250,37 +267,15 @@ def build_program(module, fn, dims, ctx) -> Program:
                 p for p, old in zip(child.params, callee.params, strict=True) if any(old is weight for weight in weights)
             )
             program.sites[id(expr)] = CallSite(
-                expr, callee, child, instance, child_activations, child_weights, index
+                expr, callee, child, instance, child_activations, child_weights, index, stem
             )
 
         discover(body, mesh)
         derived.return_type = derived.body.type
         derived.type = callable_type_for(derived.params, derived.return_type)
-        active.pop()
         return derived
 
-    checked = set()
-
-    def preflight(function, scope, path, active):
-        if id(function) in active:
-            raise AnalysisError(f"recursive call path through {function.name!r}: {path}")
-        key = (id(function), id(scope.module))
-        if key in checked:
-            return
-        chosen = variant_for(function, dims)
-        if chosen.body is None:
-            raise AnalysisError(f"cannot analyze Function {function.name!r} without a body")
-        for expr in collect_exprs(chosen.body):
-            if not isinstance(expr, Call):
-                continue
-            callee, inner = resolve_callee(expr, scope)
-            if callee is not None:
-                preflight(callee, inner, f"{path}/{callee.name}", active | {id(function)})
-        checked.add(key)
-
-    scope = _required_scope(module, fn)
-    preflight(fn, scope, fn.name, set())
-    program.root = derive(fn, scope, tuple(p.type for p in fn.params), ctx.current_mesh, fn.name)
+    program.root = derive(bound_root, initial, tuple(p.type for p in bound_root.params), None, fn.name)
     return program
 
 

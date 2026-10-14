@@ -19,7 +19,7 @@ from tilefoundry.ir.types.dim import DimSub, simplify_dim
 from tilefoundry.ir.types.layout import ComposedLayout, get, size
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.ir.visitor import collect_exprs, expr_children
+from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
     access_relation_registry,
@@ -30,7 +30,7 @@ from tilefoundry.visitor_registry.access_relation import (
     renaming_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import ModuleInstance, TypeInferContext
 
 from .access import (
     Access,
@@ -44,7 +44,7 @@ from .access import (
 from .errors import AnalysisError
 from .loop_domain import induction_name, iteration_domain
 from .precision import AnalysisPrecision
-from .program import CallFrame, _call_stem
+from .program import CallFrame
 from .visitor import AnalyzeContext
 
 
@@ -60,7 +60,8 @@ def _positions_at(mesh: Mesh, unit: str, topologies: tuple[Topology, ...]) -> in
         count = size(get(stated, index))
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise AnalysisError(
-                f"mesh level {topology.name!r} needs positive static extents, got {count!r}"
+                f"mesh level {topology.name!r} needs positive static "
+                f"extents, got {count!r}"
             )
         positions *= count
     return positions
@@ -427,10 +428,8 @@ class ScopeBuilder:
             )
             precisions[id(expr)] = tuple(precisions[id(item)] for item in expr.elements)
             return
-        if (
-            isinstance(expr, Call)
-            and isinstance(expr.target, TupleGetItem)
-            and (isinstance(expr.args[1], Constant) and type(expr.args[1].value) is int)
+        if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem) and (
+            isinstance(expr.args[1], Constant) and type(expr.args[1].value) is int
         ):
             index = expr.args[1].value
             table[id(expr)] = self._source_relation(
@@ -504,25 +503,13 @@ class ScopeBuilder:
         instances = scope.frame.instances
         if site.instance is not None:
             instances = (*instances, site.instance)
-        stem = _call_stem(site.definition, site.instance)
-        siblings = [
-            self.program.sites[id(value)]
-            for value in collect_exprs(scope.frame.body.body)
-            if id(value) in self.program.sites
-            and _call_stem(
-                self.program.sites[id(value)].definition, self.program.sites[id(value)].instance
-            )
-            == stem
-        ]
-        if len(siblings) > 1:
-            stem += f"#{next(i for i, sibling in enumerate(siblings) if sibling is site)}"
         frame = CallFrame(
             scope.frame,
             expr,
             site,
             site.body,
             instances,
-            label=f"{scope.frame.label}/{stem}",
+            label=f"{scope.frame.label}/{site.label}",
             records=self.unit_ctx.records,
         )
         child = IterationScope(
@@ -701,8 +688,6 @@ class ScopeBuilder:
             accesses=self._empty_accesses(),
             topologies=self.topologies,
         )
-        from tilefoundry.visitor_registry.contexts import ModuleInstance  # noqa: PLC0415
-
         instances = (
             self.program.scopes[id(self.graph)].instances
             if self.program is not None

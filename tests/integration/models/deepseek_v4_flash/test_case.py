@@ -12,7 +12,7 @@ import pytest
 
 from tests.models.deepseek_v4_flash.case import ANALYZED_AT, CASE
 from tests.models.deepseek_v4_flash.model import REAL
-from tilefoundry.ir.hir.specialize import specialize_concretely
+from tilefoundry.analysis.program import build_program
 from tilefoundry.ir.types.substitute import DimSubstitutionError
 
 
@@ -33,10 +33,11 @@ def test_the_context_lengths_the_case_names_are_ones_the_model_has():
     context this layer type has rather than a long one -- and the length the case
     analyses at sits below the ceiling, which is asked about separately.
     """
-    function = CASE.build().lookup("mla_attend")
+    module = CASE.build()
+    function = module.lookup("mla_attend")
 
     assert ANALYZED_AT["ctx_len"] < REAL.max_ctx < REAL.window
-    sized = specialize_concretely(function, dict(ANALYZED_AT))
+    sized = build_program(module, function, dict(ANALYZED_AT)).root
     cache = next(p for p in sized.params if p.name == "kv_cache")
     assert tuple(int(d) for d in cache.type.shape) == (
         1,
@@ -48,4 +49,4 @@ def test_the_context_lengths_the_case_names_are_ones_the_model_has():
     with pytest.raises(
         DimSubstitutionError, match=r"declared over \[0, 127\] and cannot take 1024"
     ):
-        specialize_concretely(function, {"ctx_len": 1024})
+        build_program(module, function, {"ctx_len": 1024})

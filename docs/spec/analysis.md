@@ -5,7 +5,7 @@ This spec owns TileFoundry's fact layer: everything a later stage decides
 
 | Surface | Entry | What it states |
 |---|---|---|
-| Program check | `check_program(module, function, topology_level=..., budget=..., analyzers=...)` | a retained-call Program after validating one authored program, its declared topology, and what each requested analysis needs of it |
+| Program check | `check_program(module, function, dims=..., topology_level=..., budget=..., analyzers=...)` | a retained-call Program after validating one authored program, its declared topology, and what each requested analysis needs of it |
 | Iteration context | `build_iteration_scopes(module, function, topology_level=..., dims=..., analyzers=(), options=None)` | an `AnalyzeContext` with resolved execution module and bound root/current scopes, without running an analysis family |
 | Composed measurement | `analyze(module, function, analysis=...)` | one or more root analyses and their union dependency closure, leaving typed Metadata on the IR |
 
@@ -1279,6 +1279,7 @@ def check_program(
     module: "Module",
     function: "Function",
     *,
+    dims: "Mapping[str, int] | None" = None,
     topology_level: str | None = None,
     budget: int = _INLINE_NODES,
     analyzers: tuple["Analyzer", ...] = (),
@@ -1308,11 +1309,23 @@ class AnalysisCheckContext:
     is its own copy: its types are inferred and stored on it under the
     program's Target and arguments, so analyses read that view's `Expr.type`
     rather than a stamp of a shared child body.
-  - The reachable Function and Mesh geometry and every effective Module
-    topology extent MUST be concrete before this operation runs. A public
-    Analyze call with `dims` MUST resolve all three through one binding pass
-    before calling this gate; a residual dimension expression MUST fail before
-    any consuming algorithm runs.
+  - `check_program` MUST pass `dims` to `build_program(module, function, dims)`,
+    the single binding entry. It MUST validate dimension names and integer
+    extents, choose variants, and clone the reachable program once through
+    `InstantiateDimensionCloner` before ordinary type inference with ranges.
+    The cloner MUST NOT infer types. Function targets MUST refer to cloned
+    functions; instance targets MUST retain their slot and may rebuild only
+    their computed index. Shared definitions MUST be cloned once by identity.
+    The reachable Function and Mesh geometry and every effective Module
+    topology extent MUST then be concrete; a residual dimension expression
+    MUST fail with its dimension names before any consuming algorithm runs.
+  - A supplied `dims` MUST be a non-empty mapping from declared dimension names
+    to integer extents. Empty mappings, invalid names, non-integer extents,
+    unknown dimensions, and out-of-range extents MUST be rejected. Missing or
+    ambiguous variant coverage MUST follow `variant_for`'s errors. An unbound
+    dispatch dimension MUST be named. A reachable selected function without a
+    body MUST fail before inference. Remaining symbolic dimensions MUST be
+    named together with the supplied bindings.
   - Every effective Module topology MUST name a level the resolved Target
     supports. A resolved static extent MUST be positive and within that level's
     finite hardware limit. A rejection MUST name the level, its extent, and the

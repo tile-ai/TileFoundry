@@ -25,7 +25,7 @@ import torch
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 from tests._source import import_dsl
 from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import check_program, resolve_program_geometry
+from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.liveness import analyze_liveness, result_copies
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
@@ -100,7 +100,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
@@ -490,10 +490,7 @@ def test_plain_program_is_analyzable(name: str) -> None:
     program = next(value for value in vars(module).values() if type(value).__name__ == "Module")
     entry = program.entry_function()
     dims = PLAIN_DIMS.get(name)
-    concrete, concrete_entry = resolve_program_geometry(
-        program, entry, dims, TypeInferContext(scope=FunctionScope(program, entry))
-    )
-    check_program(concrete, concrete_entry)
+    check_program(program, entry, dims=dims)
     result = analyze(program, entry, analysis=("memory", "performance"), dims=dims)
     assert result.metadata_types
 

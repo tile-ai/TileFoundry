@@ -64,9 +64,9 @@ def render_analysis(result: AnalysisResult, *, operands: bool = False) -> Analys
         expr_id: f"{statement.value}:{statement.line}"
         for expr_id, statement in rendered.statements.items()
     }
+    labels = {(None, identity): label for identity, label in labels.items()}
     sources = [rendered.source]
     if len(result.frames) > 1:
-        labels = {(None, identity): label for identity, label in labels.items()}
         for frame in result.frames[1:]:
             child = HirPrinter().render(
                 frame.body,

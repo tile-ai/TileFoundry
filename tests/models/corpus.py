@@ -23,8 +23,8 @@ copy has to come first.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
 from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 

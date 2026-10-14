@@ -7,7 +7,7 @@ per family, so no family can be the one that forgot.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from tilefoundry.ir.core import (
@@ -19,8 +19,6 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.module import (
     Module,
-    ModuleList,
-    called_function_scopes,
     function_scopes,
     instance_slot,
     reachable_function_scopes,
@@ -28,26 +26,12 @@ from tilefoundry.ir.core.module import (
 )
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.specialize import (
-    SpecializationError,
-    _record_complete_bindings,
-    dim_vars_reached,
-    is_concrete,
-    specialize_function,
-)
-from tilefoundry.ir.pattern import RangePattern
+from tilefoundry.ir.hir.specialize import dim_vars_reached
 from tilefoundry.ir.types import Topology, callable_type_for
-from tilefoundry.ir.types.substitute import (
-    DimSubstitutionError,
-    dim_vars_by_name,
-    substitute_shape_dim,
-    substitute_topology_dims,
-)
-from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
-from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts
@@ -59,7 +43,7 @@ from .metadata import (
     RegionMemoryMetadata,
     RooflineMetadata,
 )
-from .program import Program
+from .program import Program, build_program
 
 _INLINE_NODES = 10_000
 _DERIVED_METADATA = {
@@ -164,86 +148,6 @@ def program_dim_vars(module: Module, function: Function) -> dict[str, object]:
     return found
 
 
-def resolve_program_geometry(
-    module: Module,
-    function: Function,
-    dims: Mapping[str, int] | None,
-    ctx: TypeInferContext | None = None,
-) -> tuple[Module, Function]:
-    """Resolve one call's Function, Mesh, and Module topology dimensions."""
-    if dims is None:
-        _require_concrete_function_geometry(
-            function, error_type=SpecializationError, scope=_required_scope(module, function)
-        )
-        return module, function
-    if not isinstance(dims, Mapping) or not dims:
-        raise SpecializationError(
-            f"specialising {function.name!r} needs a non-empty mapping of dimension "
-            f"names to extents, got {dims!r}"
-        )
-    for name, extent in dims.items():
-        if not isinstance(name, str) or not name:
-            raise SpecializationError(
-                f"specialising {function.name!r}: {name!r} is not a dimension name"
-            )
-        if isinstance(extent, bool) or not isinstance(extent, int):
-            raise SpecializationError(
-                f"specialising {function.name!r}: dimension {name!r} takes an "
-                f"integer extent, got {extent!r}"
-            )
-
-    declared = program_dim_vars(module, function)
-    function_names = _function_dimension_names(function, _required_scope(module, function))
-    geometry_only = set(declared) - function_names
-    try:
-        for name in geometry_only & dims.keys():
-            variable = declared[name]
-            if name in dims:
-                substitute_shape_dim(variable, dims)
-    except DimSubstitutionError as error:
-        raise SpecializationError(str(error)) from None
-
-    function_bindings = {name: extent for name, extent in dims.items() if name not in geometry_only}
-    try:
-        if function_bindings:
-            function = specialize_function(function, function_bindings, ctx=ctx)
-        function = _record_complete_bindings(function, dims)
-        execution_module = _substitute_module_tree(module, dims)
-    except DimSubstitutionError as error:
-        raise SpecializationError(str(error)) from None
-    for owner in _reached_owners(execution_module, function):
-        for topology in owner.effective_topologies():
-            if static_dim_value(topology.size) is None:
-                raise SpecializationError(
-                    f"program topology level {topology.name!r} still states symbolic extent {topology.size!r}; bind every dimension before analysis"
-                )
-    return execution_module, function
-
-
-def _function_dimension_names(function: Function, scope=None) -> set[str]:
-    return set(dim_vars_reached(function, scope)) | _pattern_dimension_names(function, scope)
-
-
-def _pattern_dimension_names(function: Function, scope=None) -> set[str]:
-    found: set[str] = set()
-    seen: set[int] = set()
-
-    def visit(fn: Function, current) -> None:
-        if id(fn) in seen:
-            return
-        seen.add(id(fn))
-        for pattern in fn.specializations:
-            if isinstance(pattern, RangePattern):
-                found.add(pattern.dim_var)
-        for variant in fn.variants:
-            visit(variant, current)
-        for callee, inner in called_function_scopes(fn, current):
-            visit(callee, inner)
-
-    visit(function, scope)
-    return found
-
-
 def _required_scope(module: Module, function: Function):
     """Recover a supplied definition's first instance context, including origins."""
     scopes = {
@@ -281,73 +185,6 @@ def _reached_owners(module: Module, function: Function) -> tuple[Module, ...]:
             seen.add(key)
             owners.append(_scope_owner(scope))
     return tuple(owners)
-
-
-def _required_owner(module: Module, function: Function) -> Module:
-    return _scope_owner(_required_scope(module, function))
-
-
-def _substitute_module_tree(module: Module, dims: Mapping[str, int]) -> Module:
-    effective = tuple(
-        substitute_topology_dims(topology, dims) for topology in module.effective_topologies()
-    )
-
-    memo = {}
-
-    def declared(node: Module) -> Module:
-        if id(node) in memo:
-            return memo[id(node)]
-        children = {
-            key: ModuleList(
-                tuple(declared(child) for child in slot.elements)
-                if slot.indexed
-                else declared(slot.elements[0])
-            )
-            for key, slot in node.children.items()
-        }
-        topologies = (
-            None
-            if node.topologies is None
-            else tuple(substitute_topology_dims(topology, dims) for topology in node.topologies)
-        )
-        result = replace(node, children=children, topologies=topologies)
-        memo[id(node)] = result
-        return result
-
-    result = declared(module)
-    return replace(result, target=module.target, topologies=effective)
-
-
-def _require_concrete_geometry(
-    module: Module,
-    function: Function,
-    *,
-    error_type: type[ValueError],
-) -> None:
-    for owner in _reached_owners(module, function):
-        for topology in owner.effective_topologies():
-            if static_dim_value(topology.size) is None:
-                raise error_type(
-                    f"program topology level {topology.name!r} still states "
-                    f"symbolic extent {topology.size!r}; bind every dimension "
-                    "before analysis"
-                )
-    _require_concrete_function_geometry(
-        function, error_type=error_type, scope=_required_scope(module, function)
-    )
-
-
-def _require_concrete_function_geometry(
-    function: Function,
-    *,
-    error_type: type[ValueError],
-    scope=None,
-) -> None:
-    if not is_concrete(function, scope):
-        raise error_type(
-            f"{function.name!r} still states symbolic dimensions in its reachable "
-            "Function or Mesh geometry; bind every dimension before analysis"
-        )
 
 
 def _reading_path(scope) -> str:
@@ -579,6 +416,7 @@ def check_program(
     topology_level: str | None = None,
     budget: int = _INLINE_NODES,
     analyzers: tuple[object, ...] = (),
+    dims: Mapping[str, int] | None = None,
 ) -> "Program":
     """Prove one program holds together, then return the view analysis will read.
 
@@ -593,11 +431,8 @@ def check_program(
         raise AnalysisError(
             f"inlining {function.name!r} needs a non-negative integer node budget, got {budget!r}"
         )
-    from .program import build_program  # noqa: PLC0415 -- builder uses clone helpers
-
-    program = build_program(
-        module, function, None, TypeInferContext(scope=_required_scope(module, function))
-    )
+    program = build_program(module, function, dims)
+    module = program.module
     size = sum(len(collect_exprs(body.body)) for body in program.bodies())
     if size > budget:
         raise AnalysisError(
@@ -633,7 +468,7 @@ def check_program(
     return program
 
 
-def validate_call_context(module: Module, functions: Iterable[Function]) -> None:
+def validate_call_context(module: Module, program: Program) -> None:
     """Reject a reached call whose two ends do not share one execution context.
 
     Checked over what the selected query reaches, not at construction: an
@@ -641,21 +476,13 @@ def validate_call_context(module: Module, functions: Iterable[Function]) -> None
     canonical spelling, so a child declaring the caller's hierarchy explicitly
     passes and any other value is a different context, not a nested launch.
     """
-    if isinstance(functions, Program):
-        edges = []
-        for body in functions.bodies():
-            scope = functions.scopes[id(body)]
-            for expr in collect_exprs(body.body):
-                if functions.sites.get(id(expr)):
-                    _callee, inner = resolve_callee(expr, scope)
-                    edges.append((scope, inner))
-    else:
-        edges = [
-            (scope, inner)
-            for caller in functions
-            for scope in (_required_scope(module, caller),)
-            for _callee, inner in called_function_scopes(caller, scope)
-        ]
+    edges = []
+    for body in program.bodies():
+        scope = program.scopes[id(body)]
+        for expr in collect_exprs(body.body):
+            if program.sites.get(id(expr)):
+                _callee, inner = resolve_callee(expr, scope)
+                edges.append((scope, inner))
     for scope, inner in edges:
         caller_owner, callee_owner = _scope_owner(scope), _scope_owner(inner)
         if callee_owner.effective_topologies() != caller_owner.effective_topologies():

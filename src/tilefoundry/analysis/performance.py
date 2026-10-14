@@ -102,6 +102,11 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
         services=services,
     )
     PerformanceVisitor().visit(function.body, performance_context)
+    def period_scope(scope):
+        while isinstance(scope.owner, Call):
+            scope = scope.parent
+        return scope
+
     scope_periods: dict[object, int] = defaultdict(int)
     for scope, call, duration in performance_context.occurrences:
         if not (
@@ -109,15 +114,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
             and isinstance(call.target, Binary)
             and getattr(call.type, "shape", ()) == ()
         ):
-            period = scope
-            while isinstance(period.owner, Call):
-                period = period.parent
-            scope_periods[period] += duration
-
-    def period_scope(scope):
-        while isinstance(scope.owner, Call):
-            scope = scope.parent
-        return scope
+            scope_periods[period_scope(scope)] += duration
 
     cursor = 0
     total_cursor = 0
@@ -127,10 +124,13 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
             continue
         trips = scope.repeats_of(call, context.topology_level).loop_trips
         scheduled = duration * trips
-        serialize_boundary = (scope.depth >= 4 and getattr(call.type, "shape", ()) != ()) or (
-            scope.depth == 2
-            and isinstance(call.target, Binary)
-            and getattr(call.type, "shape", ()) == ()
+        serialize_boundary = (
+            (scope.depth >= 4 and getattr(call.type, "shape", ()) != ())
+            or (
+                scope.depth == 2
+                and isinstance(call.target, Binary)
+                and getattr(call.type, "shape", ()) == ()
+            )
         )
         start = cursor
         if serialize_boundary:
@@ -172,7 +172,8 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     topology_extent = static_dim_value(topology.size)
     if topology_extent is None:
         raise AnalysisError(
-            f"performance: topology {topology.name!r} has unresolved extent {topology.size!r}"
+            f"performance: topology {topology.name!r} has unresolved extent "
+            f"{topology.size!r}"
         )
     waves = -(-topology_extent // level.max_physical_units)
     attach(

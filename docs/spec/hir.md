@@ -1726,39 +1726,12 @@ def variant_for(fn: Function, dims: Mapping[str, int]) -> Function:
     ...
 
 
-def specialize_function(
-    fn: Function,
-    dims: Mapping[str, int],
-    *,
-    ctx: TypeInferContext | None = None,
-) -> Function:
-    """Bind stated dimensions and rebuild the selected implementation.
+class InstantiateDimensionCloner(ExprCloner):
+    """Clone a reachable program with dimension bindings, without type inference."""
 
-    Args:
-        fn: Function or dispatch prototype.
-        dims: Dimensions to bind.
-        ctx: Optional shared type-inference context.
-
-    Returns:
-        The selected and partially or fully specialized function.
-    """
-    ...
-
-
-def specialize_concretely(
-    fn: Function, dims: Mapping[str, int], ctx: TypeInferContext | None = None
-) -> Function:
-    """Specialize a function with no residual symbolic dimensions.
-
-    Args:
-        fn: Function or dispatch prototype.
-        dims: Complete concrete dimension bindings.
-        ctx: Optional shared type-inference context.
-
-    Returns:
-        A concrete function.
-    """
-    ...
+    def __init__(self, dims: Mapping[str, int] | None): ...
+    def module(self, module: Module) -> Module: ...
+    def function(self, function: Function) -> Function: ...
 
 
 def residual_dims(fn: Function, scope: FunctionScope | None = None) -> tuple[str, ...]:
@@ -1804,23 +1777,19 @@ def is_concrete(fn: Function, scope: FunctionScope | None = None) -> bool:
   - `variant_for` MUST return an ordinary function unchanged and otherwise
     MUST select exactly one matching variant. Missing or ambiguous coverage and
     an unstated dimension used by a pattern MUST raise `SpecializationError`.
-  - `specialize_function` MUST reject an empty binding, an unknown dimension,
-    or a selected implementation with no body. It MUST record the chosen
-    implementation and sorted bindings on a rebuilt function so `origin_of`
-    and `bound_dims_of` can recover them. Specialization MUST rebuild called
-    functions affected by the caller's bindings and record their provenance.
-    When a called function is a dispatch prototype, specialization MUST select
-    its implementation from the same bindings by the `variant_for` rule; an
-    unstated dispatch dimension MUST raise `SpecializationError` and name it.
-  - `specialize_concretely` MUST require a non-empty string-to-integer mapping
-    and MUST reject any residual dimension after specialization.
-  - Provenance and bound-dimension records MUST NOT participate in structural
-    equality or hashing; ownership checks use the recorded origin rather than
-    a function name.
-  - The recorded origin MUST be the function actually rebuilt, and nothing may
-    re-point it afterwards. Two call sites reaching two copies of one source
-    function hold two rebuilds recording two origins; one shared instance
-    re-pointed instead would answer both with whichever was written last.
+  - `InstantiateDimensionCloner` MUST select variants by `variant_for` and
+    substitute dimensions in types, Op attributes, loop bounds, and meshes.
+    It MUST replace Function targets with clones deduplicated by identity;
+    one shared definition MUST be cloned once. It MUST preserve ModuleList
+    and TupleGetItem instance targets, except for rebuilding their computed
+    index operand. It MUST NOT perform type inference while cloning.
+  - Each cloned function MUST retain its original name and record the chosen
+    implementation and sorted bindings, recoverable through `origin_of` and
+    `bound_dims_of`. Provenance and bound-dimension records MUST NOT participate
+    in structural equality or hashing. A recorded origin MUST NOT be re-pointed
+    after cloning.
+  - Dimension validation and program-construction errors belong to
+    [analysis §2](./analysis.md#2-composed-analysis).
   - `residual_dims` and `dim_vars_reached` MUST inspect the whole function
     graph, including signatures, bodies, Op attributes, loop bounds, variants,
     and called functions. `is_concrete` additionally checks the return type and

@@ -14,22 +14,22 @@ import dataclasses
 from collections.abc import Mapping
 
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
+from tilefoundry.ir.core.module import ModuleList
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.pattern import Pattern, RangePattern
+from tilefoundry.ir.types import callable_type_for
 from tilefoundry.ir.types.dim import is_dim_expr
-from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.substitute import (
     dim_vars_by_name,
     has_symbolic_dims,
     substitute_dims,
     substitute_mesh_dims,
     substitute_shape_dim,
+    substitute_topology_dims,
 )
-from tilefoundry.ir.types.tensor_type import TensorType, Type
+from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.ir.visitor import ExprCloner, ExprVisitor, ExprWalker
-from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 from .function import Function
 
@@ -77,16 +77,6 @@ def _record_provenance(derived: Function, origin: Function, dims: Mapping[str, i
     derived._specialized_from = origin
     if dims is not None:
         derived._specialized_dims = tuple(sorted(dims.items()))
-
-
-def _record_complete_bindings(function: Function, dims: Mapping[str, int]) -> Function:
-    """Record a public call's complete program bindings on a derived Function."""
-    if bound_dims_of(function) is None:
-        derived = dataclasses.replace(function)
-        _record_provenance(derived, function, dims)
-        return derived
-    function._specialized_dims = tuple(sorted(dims.items()))
-    return function
 
 
 def origin_of(function: object) -> Function | None:
@@ -157,234 +147,105 @@ def _coverage(fn: Function) -> str:
     )
 
 
-def specialize_function(
-    fn: Function,
-    dims: Mapping[str, int],
-    *,
-    ctx: TypeInferContext | None = None,
-) -> Function:
-    """*fn* at the stated extents: one implementation, its ranges resolved.
-
-    The dimensions are checked against what the function actually has before
-    anything is rebuilt. A name nothing uses is a caller who believes they
-    specialised something, and quietly substituting nothing would let them
-    carry on believing it.
-    """
-    if not dims:
-        raise SpecializationError(f"specialising {fn.name!r} needs at least one dimension to bind")
-    chosen = variant_for(fn, dims)
-    if chosen.body is None:
-        raise SpecializationError(
-            f"{fn.name!r} resolved to a variant with no body; a dispatch "
-            "prototype states which implementation to use, not what it does"
-        )
-
-    present = set(residual_dims(chosen, None if ctx is None else ctx.scope))
-    for pattern in chosen.specializations:
-        if isinstance(pattern, RangePattern):
-            present.add(pattern.dim_var)
-    unknown = sorted(set(dims) - present)
-    if unknown:
-        raise SpecializationError(
-            f"{fn.name!r} has no dimension named {unknown!r}; it states {sorted(present)}"
-        )
-
-    if not set(dims) & set(residual_dims(chosen, None if ctx is None else ctx.scope)):
-        return chosen
-    bound = tuple(substitute_dims(param.type, dims) for param in chosen.params)
-    return instantiate_dimensions(
-        chosen,
-        bound,
-        ctx if ctx is not None else TypeInferContext(),
-        dims,
-    )
-
-
-class DimensionInstantiator(ExprCloner):
-    """Clone a Function body with symbolic dimensions replaced by values.
-
-    DAG memoization and identity pinning come from ``ExprCloner``. The visit
-    context carries the substitutions and shared type-inference visitor for
-    this one instantiation.
-    """
-
-    def visit_Var(self, var: Var, ctx: InstantiateContext) -> Expr:
-        return ctx.subst.get(id(var), var)
-
-    def visit_Constant(self, const: Constant, ctx: InstantiateContext) -> Expr:
-        return const
-
-    def visit_MeshRegion(self, expr: MeshRegion, ctx: InstantiateContext) -> Expr:
-        """Instantiate a region's boundary values and body independently."""
-        mesh = substitute_mesh_dims(expr.mesh, ctx.dims)
-        new_args = tuple(self.visit(arg, ctx) for arg in expr.args)
-        new_params = tuple(
-            param if new_arg.type == param.type else Var(type=new_arg.type, name=param.name)
-            for param, new_arg in zip(expr.params, new_args, strict=True)
-        )
-        for old, new in zip(expr.params, new_params, strict=True):
-            if old is not new:
-                ctx.subst[id(old)] = new
-        current_mesh = (
-            make_mesh(ctx.type_ctx.current_mesh, mesh) if ctx.type_ctx.current_mesh else mesh
-        )
-        body_ctx = dataclasses.replace(
-            ctx,
-            type_ctx=dataclasses.replace(
-                ctx.type_ctx,
-                current_mesh=current_mesh,
-            ),
-        )
-        body = self.visit(expr.body, body_ctx)
-        if (
-            mesh == expr.mesh
-            and all(new is old for new, old in zip(new_args, expr.args, strict=True))
-            and all(new is old for new, old in zip(new_params, expr.params, strict=True))
-            and body is expr.body
-        ):
-            return expr
-        return self._retyped(
-            dataclasses.replace(expr, mesh=mesh, params=new_params, args=new_args, body=body),
-            ctx,
-        )
-
-    def visit_Call(self, call: Call, ctx: InstantiateContext) -> Expr:
-        new_args = tuple(self.visit(arg, ctx) for arg in call.args)
-        new_target = self.visit(call.target, ctx) if isinstance(call.target, Call) else call.target
-        if isinstance(new_target, Function):
-            new_target = _specialize_callee(new_target, ctx.dims, ctx.type_ctx)
-        new_target = _substitute_op_dims(new_target, ctx.dims)
-        if all(new is old for new, old in zip(new_args, call.args)) and new_target is call.target:
-            return call
-        rebuilt = dataclasses.replace(call, args=new_args, target=new_target)
-        return self._retyped(rebuilt, ctx)
-
-    def visit_LoopRegion(self, region: LoopRegion, ctx: InstantiateContext) -> Expr:
-        """Rebuild loop bindings and shape fields excluded by generic cloning."""
-        new_inits = tuple(self.visit(arg, ctx) for arg in region.args)
-        new_phis = tuple(
-            old_phi if new_init.type == old_phi.type else Var(type=new_init.type, name=old_phi.name)
-            for old_phi, new_init in zip(region.params, new_inits)
-        )
-        for old_phi, new_phi in zip(region.params, new_phis):
-            if new_phi is not old_phi:
-                ctx.subst[id(old_phi)] = new_phi
-        new_body = self.visit(region.body, ctx)
-        new_yields = tuple(self.visit(value, ctx) for value in region.yield_values)
-        bounds = (region.extent, region.step, region.start)
-        new_bounds = tuple(substitute_shape_dim(bound, ctx.dims) for bound in bounds)
-        if (
-            all(new is old for new, old in zip(new_inits, region.args))
-            and all(new is old for new, old in zip(new_phis, region.params))
-            and new_body is region.body
-            and all(new is old for new, old in zip(new_yields, region.yield_values))
-            and new_bounds == bounds
-        ):
-            return region
-        rebuilt = dataclasses.replace(
-            region,
-            params=new_phis,
-            args=new_inits,
-            body=new_body,
-            yield_values=new_yields,
-            extent=new_bounds[0],
-            step=new_bounds[1],
-            start=new_bounds[2],
-        )
-        return self._retyped(rebuilt, ctx)
-
-    def default_visit(self, expr: Expr, ctx: InstantiateContext) -> Expr:
-        rebuilt = super().default_visit(expr, ctx)
-        return rebuilt if rebuilt is expr else self._retyped(rebuilt, ctx)
-
-    def _retyped(self, rebuilt: Expr, ctx: InstantiateContext) -> Expr:
-        return dataclasses.replace(rebuilt, type=ctx.type_visitor.visit(rebuilt, ctx.type_ctx))
-
-
-@dataclasses.dataclass
-class InstantiateContext:
-    """Mutable state shared by one dimension-instantiation traversal."""
-
-    subst: dict[int, Var]
-    dims: Mapping[str, int]
-    type_ctx: TypeInferContext
-    type_visitor: TypeInferVisitor
-
-
-class _DimensionTypeInfer(TypeInferVisitor):
-    """Infer instance calls against bound definitions without rewriting their targets."""
+class InstantiateDimensionCloner(ExprCloner):
+    """Bind dimensions without inference, preserving definition and SSA sharing."""
 
     def __init__(self, dims):
         super().__init__()
-        self.dims = dims
+        self.dims = {} if dims is None else dict(dims)
+        self.bindings = dims
+        self.functions = {}
+        self.modules = {}
+        self.active = set()
 
-    def _call_function(self, call, callee, arg_types, ctx, *, child_scope=None):
-        if child_scope is not None:
-            callee = _specialize_callee(
-                callee, self.dims, dataclasses.replace(ctx, scope=child_scope)
-            )
-            child_scope = dataclasses.replace(child_scope, function=callee)
-        return super()._call_function(call, callee, arg_types, ctx, child_scope=child_scope)
+    def function(self, fn: Function) -> Function:
+        """Clone the chosen implementation and its same-module callees once."""
+        if id(fn) in self.functions:
+            return self.functions[id(fn)]
+        chosen = variant_for(fn, self.dims)
+        if id(chosen) in self.functions:
+            self.functions[id(fn)] = self.functions[id(chosen)]
+            return self.functions[id(chosen)]
+        if id(chosen) in self.active:
+            raise SpecializationError(f"recursive call path through {fn.name!r}")
+        self.active.add(id(chosen))
+        params = tuple(self.visit(param) for param in chosen.params)
+        body = None if chosen.body is None else self.visit(chosen.body)
+        result_type = substitute_dims(chosen.return_type, self.dims)
+        derived = dataclasses.replace(
+            chosen, name=fn.name, params=params, body=body, return_type=result_type,
+            type=callable_type_for(params, result_type), variants=(), converters=(),
+        )
+        _record_provenance(derived, chosen, self.bindings)
+        self.functions[id(fn)] = self.functions[id(chosen)] = derived
+        self.active.remove(id(chosen))
+        return derived
 
+    def module(self, node):
+        """Rebuild children first and replace the functions reached by this clone."""
+        if id(node) in self.modules:
+            return self.modules[id(node)]
+        children = {}
+        for key, slot in node.children.items():
+            elements = tuple(self.module(child) for child in slot.elements)
+            children[key] = ModuleList(elements if slot.indexed else elements[0])
+        topologies = (
+            None if node.topologies is None
+            else tuple(substitute_topology_dims(topology, self.dims) for topology in node.topologies)
+        )
+        functions = tuple(self.functions.get(id(fn), fn) for fn in node.functions)
+        cloned = dataclasses.replace(node, children=children, functions=functions, topologies=topologies)
+        self.modules[id(node)] = cloned
+        return cloned
 
-def instantiate_dimensions(
-    chosen: Function,
-    bound_param_types: tuple[Type, ...],
-    ctx: TypeInferContext,
-    dims: Mapping[str, int],
-) -> Function:
-    """Rebuild *chosen* at concrete dimension bindings.
+    def visit_Var(self, value, ctx=None):
+        return dataclasses.replace(value, type=substitute_dims(value.type, self.dims))
 
-    The cloner memo preserves SSA DAG identity while one shared type visitor
-    retypes every rebuilt node.
-    """
-    new_params = tuple(
-        Var(type=type_, name=param.name, is_const=param.is_const)
-        for type_, param in zip(bound_param_types, chosen.params)
-    )
-    scope = None if ctx.scope is None else dataclasses.replace(ctx.scope, function=chosen)
-    body_ctx = dataclasses.replace(ctx, scope=scope)
-    instantiate_ctx = InstantiateContext(
-        subst={id(old): new for old, new in zip(chosen.params, new_params)},
-        dims=dims,
-        type_ctx=body_ctx,
-        type_visitor=_DimensionTypeInfer(dims),
-    )
-    new_body = DimensionInstantiator().visit(chosen.body, instantiate_ctx)
-    derived = Function.build(
-        name=chosen.name,
-        params=new_params,
-        body=new_body,
-        return_type=new_body.type,
-        specializations=chosen.specializations,
-    )
-    _record_provenance(derived, chosen, dims)
-    return derived
+    def visit_Constant(self, value, ctx=None):
+        return dataclasses.replace(value, type=substitute_dims(value.type, self.dims))
 
+    def visit_ModuleList(self, slot, ctx=None):
+        return slot
 
-def _specialize_callee(
-    callee: Function,
-    dims: Mapping[str, int],
-    ctx: TypeInferContext,
-) -> Function:
-    """Rebuild a nested callee at the dimensions its caller was given.
+    def visit_Call(self, call, ctx=None):
+        target = call.target
+        if isinstance(target, Function):
+            target = self.function(target)
+        elif isinstance(target, Call):
+            target = self.visit(target)
+        else:
+            target = _substitute_op_dims(target, self.dims)
+        args = tuple(self.visit(arg) for arg in call.args)
+        return dataclasses.replace(
+            call, target=target, args=args, type=substitute_dims(call.type, self.dims)
+        )
 
-    A dispatching callee picks from the same dims through variant_for. A
-    dimension the caller never bound is still refused and named.
+    def visit_MeshRegion(self, region, ctx=None):
+        return dataclasses.replace(
+            region, args=tuple(self.visit(arg) for arg in region.args),
+            params=tuple(self.visit(param) for param in region.params),
+            body=self.visit(region.body), mesh=substitute_mesh_dims(region.mesh, self.dims),
+            type=substitute_dims(region.type, self.dims),
+        )
 
-    The dispatch guard on the identity shortcut is defensive: verified variants
-    anchor dispatch dimensions in their parameter types. The guard states that
-    cross-file invariant where the shortcut relies on it.
-    """
-    dispatched = bool(callee.variants)
-    if dispatched:
-        callee = variant_for(callee, dims)
-    if callee.body is None:
-        return callee
-    bound = tuple(substitute_dims(param.type, dims) for param in callee.params)
-    if not dispatched and all(new is param.type for new, param in zip(bound, callee.params)):
-        return callee
-    return instantiate_dimensions(callee, bound, ctx, dims)
+    def visit_LoopRegion(self, region, ctx=None):
+        def bound(value):
+            if is_dim_expr(value):
+                return substitute_shape_dim(value, self.dims)
+            return self.visit(value) if isinstance(value, Expr) else value
+
+        return dataclasses.replace(
+            region, args=tuple(self.visit(arg) for arg in region.args),
+            params=tuple(self.visit(param) for param in region.params),
+            induction_var=self.visit(region.induction_var), body=self.visit(region.body),
+            yield_values=tuple(self.visit(value) for value in region.yield_values),
+            start=bound(region.start), extent=bound(region.extent), step=bound(region.step),
+            type=substitute_dims(region.type, self.dims),
+        )
+
+    def default_visit(self, value, ctx=None):
+        rebuilt = super().default_visit(value, ctx)
+        return dataclasses.replace(rebuilt, type=substitute_dims(value.type, self.dims))
 
 
 def _substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:
@@ -415,7 +276,7 @@ def _substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:
             rebuilt = tuple(substitute_shape_dim(item, dims) for item in value)
         else:
             continue
-        if rebuilt != value:
+        if rebuilt is not value:
             changed[param.name] = rebuilt
     if not changed:
         return target
@@ -426,40 +287,6 @@ def _substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:
     }
     attributes.update(changed)
     return type(target)(**attributes)
-
-
-def specialize_concretely(
-    fn: Function, dims: Mapping[str, int], ctx: TypeInferContext | None = None
-) -> Function:
-    """*fn* at the stated extents, with nothing left as a range.
-
-    The stricter half of `specialize_function`, for callers that go on to run
-    something over the result. Partial binding is useful when the choices are
-    still being made one at a time; it is useless to anything that has to count
-    elements, so a dimension left unbound is refused here rather than surfacing
-    later as an extent that is not a number.
-    """
-    if not isinstance(dims, Mapping) or not dims:
-        raise SpecializationError(
-            f"specialising {fn.name!r} needs a non-empty mapping of dimension "
-            f"names to extents, got {dims!r}"
-        )
-    for name, extent in dims.items():
-        if not isinstance(name, str) or not name:
-            raise SpecializationError(f"specialising {fn.name!r}: {name!r} is not a dimension name")
-        if isinstance(extent, bool) or not isinstance(extent, int):
-            raise SpecializationError(
-                f"specialising {fn.name!r}: dimension {name!r} takes an integer "
-                f"extent, got {extent!r}"
-            )
-    concrete = specialize_function(fn, dims, ctx=ctx)
-    residual = residual_dims(concrete, None if ctx is None else ctx.scope)
-    if residual:
-        raise SpecializationError(
-            f"{fn.name!r} still states {list(residual)} as ranges after binding "
-            f"{sorted(dims)}; every dimension has to be given an extent"
-        )
-    return concrete
 
 
 def residual_dims(fn: Function, scope=None) -> tuple[str, ...]:
@@ -712,19 +539,15 @@ class _SymbolicDimVisitor(ExprVisitor[bool]):
 
 
 __all__ = [
+    "InstantiateDimensionCloner",
     "BOUND_DIMS",
-    "DimensionInstantiator",
-    "InstantiateContext",
     "PROVENANCE",
     "SpecializationError",
     "bound_dims_of",
     "canonical_specialization_signature",
     "dim_vars_reached",
     "is_concrete",
-    "instantiate_dimensions",
     "origin_of",
     "residual_dims",
-    "specialize_concretely",
-    "specialize_function",
     "variant_for",
 ]

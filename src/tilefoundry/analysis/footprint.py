@@ -41,6 +41,7 @@ from .metadata import (
     TrafficBytes,
 )
 from .precision import AnalysisPrecision
+from .program import frame_key
 
 
 @dataclass(frozen=True)
@@ -94,7 +95,7 @@ def _static_axes(mesh: Mesh) -> "tuple[int, tuple[int, ...], tuple[int, ...]] | 
     """A mesh's device-numbered positions, when every one of them is a number."""
     try:
         axes = flatten(mesh.layout)
-        offset = mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
+        offset = (mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0)
     except ValueError:
         return None
     shape = tuple(static_dim_value(extent) for extent in flatten(axes.shape))
@@ -565,12 +566,11 @@ def moving_boundaries(
     """
     whole = replace(ctx, topology_level=None, topologies=())
     wave_units, declared_units = wave
-    topology_level = (
-        ctx.topology_level
-        or ctx.scope.module.resolve_target().get_facts(TopologyFacts).parallel_level
-    )
+    topology_level = ctx.topology_level or ctx.scope.module.resolve_target().get_facts(
+        TopologyFacts
+    ).parallel_level
     definitions = {
-        ((scope.frame.key if scope.frame else None), value_id): scope
+        (frame_key(scope.frame), value_id): scope
         for scope in walk_scopes(root)
         for value_id in scope.relations
     }
@@ -627,7 +627,7 @@ def moving_boundaries(
                 if len(leaves) != 1 or not isinstance(leaves[0], TensorType):
                     continue
                 label = labels.get(
-                    ((access.frame.key if access.frame else None), id(access.buffer), access.index)
+                    (frame_key(access.frame), id(access.buffer), access.index)
                 )
                 if label is None:
                     continue
@@ -653,7 +653,7 @@ def moving_boundaries(
                         axis_parameters=axis_parameters
                         if _shared_origin(
                             definitions.get(
-                                ((access.frame.key if access.frame else None), id(access.buffer))
+                                (frame_key(access.frame), id(access.buffer))
                             ),
                             topology_level,
                             wave,
@@ -828,7 +828,7 @@ def _by_buffer(
         loops = _loop_scopes(boundary.scope)
         candidate = loops[axes.time] if axes.time is not None else None
         key = (
-            (boundary.access.frame.key if boundary.access.frame else None),
+            frame_key(boundary.access.frame),
             id(boundary.access.buffer),
             boundary.access.index,
         )
@@ -872,7 +872,7 @@ def _window_footprints(
     """Count every moving buffer once in each distinct selected window."""
     labels = {
         (
-            (boundary.access.frame.key if boundary.access.frame else None),
+            frame_key(boundary.access.frame),
             id(boundary.access.buffer),
             boundary.access.index,
         ): boundary.label
@@ -985,7 +985,7 @@ def merged(items: Iterable[ReachedAddresses]) -> tuple[ReachedAddresses, ...]:
     grouped: dict[tuple[int, int, int | None], ReachedAddresses] = {}
     for item in items:
         key = (
-            (item.frame.key if item.frame else None),
+            frame_key(item.frame),
             id(item.buffer),
             item.index,
             item.output_index,
@@ -1042,10 +1042,7 @@ def footprint_of(
                 amount = min(amount, must + item.may_coordinates)
         packed = -(-(amount * item.dtype.bit_width) // 8)
         key = (
-            labels.get(
-                ((item.frame.key if item.frame else None), id(item.buffer), item.index),
-                labels.get((id(item.buffer), item.index)),
-            ),
+            labels[(frame_key(item.frame), id(item.buffer), item.index)],
             memory_level,
         )
         totals[key] = totals.get(key, 0) + packed

@@ -47,6 +47,7 @@ from .iteration_scope import IterationScope, walk_scopes
 from .liveness import Liveness, UseEvent, result_copies
 from .metadata import MemoryMetadata, ValueLifetime
 from .precision import AnalysisPrecision
+from .program import frame_key
 
 
 class SolverOptions(Protocol):
@@ -433,21 +434,21 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             ):
                 begin, count = leaf_span(node.args[0].type, node.args[1].value)
                 projections[
-                    (interval.frame.key if interval.frame else None),
+                    frame_key(interval.frame),
                     id(node.args[0]),
                     interval.defined_at,
                 ] = range(begin, begin + count)
         self.uses: dict[tuple[int, int], list[UseEvent]] = defaultdict(list)
         for use in liveness.uses:
             indexes = (
-                projections.get(((use.frame.key if use.frame else None), id(use.value), use.at))
+                projections.get((frame_key(use.frame), id(use.value), use.at))
                 if not use.synthetic
                 else None
             )
             if indexes is None:
                 indexes = range(len(leaves_of(use.value.type)))
             for index in indexes:
-                self.uses[(use.frame.key if use.frame else None), id(use.value), index].append(use)
+                self.uses[frame_key(use.frame), id(use.value), index].append(use)
         self.last_ordinary_use = {
             key: max((use.at for use in uses if not use.synthetic), default=-1)
             for key, uses in self.uses.items()
@@ -599,7 +600,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                         use.at
                         for use in self.uses.get(
                             (
-                                (ctx.current.frame.key if ctx.current.frame else None),
+                                frame_key(ctx.current.frame),
                                 id(node),
                                 index,
                             ),
@@ -673,8 +674,8 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         """Create material results with exactly their SSA live intervals."""
         if isinstance(node.type, TupleType) and result_copies(node) > 1:
             raise AnalysisError("allocation: staged tuple results are not supported")
-        key = (ctx.current.frame.key if ctx.current.frame else None, id(node))
-        quantities = ctx.quantities.get(key, ctx.quantities.get(id(node), ()))
+        key = (frame_key(ctx.current.frame), id(node))
+        quantities = ctx.quantities.get(key, ())
         if not quantities:
             return None
         slots: list[Storage] = []
@@ -688,7 +689,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 binding="",
                 memory_level=level,
                 bytes=amount,
-                persistent=key in ctx.persistent or id(node) in ctx.persistent,
+                persistent=key in ctx.persistent,
                 defined_at=interval.defined_at,
                 last_used_at=interval.last_used_at,
             )
@@ -732,9 +733,9 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 if self.tie(result, operand, inner):
                     shape = tuple(result.value.type.shape)
                     domain = shape_to_isl_set(shape, {})
-                    identity = isl.map.identity(domain.get_space().map_from_set()).intersect_domain(
-                        domain
-                    )
+                    identity = isl.map.identity(
+                        domain.get_space().map_from_set()
+                    ).intersect_domain(domain)
                     moved = self.record(result, MemoryMetadata, ctx) or MemoryMetadata()
                     self.attach(
                         result.frame,
@@ -772,11 +773,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         return True
 
     def alias(
-        self,
-        result: AllocationValue,
-        operand: AllocationValue,
-        relation: isl.map,
-        ctx: AllocationModel,
+        self, result: AllocationValue, operand: AllocationValue, relation: isl.map, ctx: AllocationModel
     ) -> bool:
         """Require one proven logical alias in the physical placement."""
         if (
@@ -806,12 +803,8 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         return True
 
     def adopt_update(
-        self,
-        result: AllocationValue,
-        update: AllocationValue,
-        relation: isl.map,
-        alias: BufferAlias,
-        ctx: AllocationModel,
+        self, result: AllocationValue, update: AllocationValue, relation: isl.map,
+        alias: BufferAlias, ctx: AllocationModel
     ) -> None:
         """Apply the window constraint and publish it together for lowering."""
         if self.alias(result, update, relation, ctx):
@@ -881,16 +874,13 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 )
                 if any(
                     self.last_ordinary_use.get(
-                        (value.frame.key if value.frame else None, id(value.value), value.index), -1
+                        (frame_key(value.frame), id(value.value), value.index), -1
                     )
                     > result.lifetime.defined_at
                     for value in members
                 ):
                     continue
-                if (
-                    max(value.lifetime.last_used_at for value in members)
-                    <= result.lifetime.defined_at
-                ):
+                if max(value.lifetime.last_used_at for value in members) <= result.lifetime.defined_at:
                     if is_update:
                         if isinstance(destination, AllocationValue):
                             alias = self.update_alias(node, storage, relation, ctx)

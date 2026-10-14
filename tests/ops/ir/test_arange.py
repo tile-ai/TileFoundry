@@ -7,14 +7,16 @@ import torch
 
 from tests.evaluator.eval_utils import EvalCase, run_eval_case
 from tests.ops.ir.cost_utils import CostCase, run_cost_case
+from tilefoundry.analysis.program import build_program
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.registry import eval_registry
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.core.errors import VerifyError
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
-from tilefoundry.ir.hir.specialize import residual_dims, specialize_concretely
+from tilefoundry.ir.hir.specialize import residual_dims
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.types.mesh import make_mesh
@@ -67,7 +69,7 @@ def test_arange_symbolic_extent_resolves_from_runtime_shape():
     actual = evaluate(_symbolic_arange, torch.zeros(8))
     torch.testing.assert_close(actual, torch.tensor([1, 3, 5, 7], dtype=torch.int32))
 
-    concrete = specialize_concretely(_symbolic_arange, {"arange_n": 8})
+    concrete = build_program(Module("arange", (_symbolic_arange,), _symbolic_arange.name), _symbolic_arange, {"arange_n": 8}).root
     assert residual_dims(concrete) == ()
     assert isinstance(concrete.body.target, Arange)
     assert concrete.body.target.type.shape == (4,)

@@ -28,6 +28,8 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.types.utils import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
 
+from .program import frame_key, frame_values
+
 _FAMILIES: dict[type[IRMetadata], str] = {}
 _EXPR_FIELDS: dict[type[IRMetadata], dict[str, Callable[..., object]]] = {}
 
@@ -236,7 +238,7 @@ def report_data(
     topology_level: str | None,
     executed: tuple[str, ...],
     metadata_types: tuple[type[IRMetadata], ...],
-    call_labels: Mapping[int, str] | None = None,
+    call_labels: Mapping[tuple[object, int], str] | None = None,
     frames=(),
     records=None,
 ) -> dict[str, object]:
@@ -271,14 +273,12 @@ def report_data(
 def _call_records(
     function: Function,
     selected: frozenset[type[IRMetadata]],
-    call_labels: Mapping[int, str] | None,
+    call_labels: Mapping[tuple[object, int], str] | None,
     frames=(),
     records=None,
 ) -> list[dict[str, object]]:
     """Every selected record attached to a Call, in program order."""
     rows: list[dict[str, object]] = []
-    from .program import frame_values  # noqa: PLC0415
-
     values = (
         frame_values(frames[0])
         if frames
@@ -293,9 +293,7 @@ def _call_records(
         if not held:
             continue
         if call_labels is not None:
-            value = call_labels.get((frame.key, id(expr))) if frame is not None else None
-            if value is None:
-                value = call_labels.get(id(expr))
+            value = call_labels.get((frame_key(frame), id(expr)))
             if value is None:
                 continue
         else:
@@ -320,8 +318,6 @@ def _loop_records(
 ) -> list[dict[str, object]]:
     """Every selected record attached to an authored loop."""
     rows: list[dict[str, object]] = []
-    from .program import frame_values  # noqa: PLC0415
-
     values = (
         frame_values(frames[0])
         if frames
