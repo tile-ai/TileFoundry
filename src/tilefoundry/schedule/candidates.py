@@ -22,7 +22,6 @@ from tilefoundry.visitor_registry.candidates import (
     candidate_ops,
     sole_candidate,
 )
-from tilefoundry.visitor_registry.contexts import CallFrame
 
 
 def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
@@ -44,10 +43,9 @@ def candidates(
     declared = _instructions(ctx.target)
     type_printer = PythonPrinter()
     pattern_printer = PatternPrinter()
-    function_frame = ctx.root.frame
     rows = []
     calls = []
-    for call in collect_exprs(ctx.root.owner.body):
+    for call in (call for body in ctx.program.bodies() for call in collect_exprs(body.body)):
         if (
             not isinstance(call, Call)
             or is_dim_op_call(call)
@@ -73,7 +71,7 @@ def candidates(
                 if capability.attribute is not None:
                     attributes[capability.attribute] = capability.declaration
                 instances = match_instruction(
-                    op_type, attributes, types, mesh, frame=function_frame
+                    op_type, attributes, types, mesh, frame=scope.frame
                 )
             except ScheduleRefusal as error:
                 refused.append(

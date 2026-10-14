@@ -15,9 +15,12 @@ def _program():
         def run(x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"]) -> Tensor[(32,), "f32"]:
             with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
                 with Mesh(("thread",), layout=(32,), names=("lane",)) as _thread:
-                    value = tf.schedule((x,), op=T.copy(rmem_layout=(32,)))
-                    weight = tf.schedule((w,), op=T.copy(rmem_layout=(32,)))
-                    scaled = tf.schedule((value, weight), op=T.binary(kind=BinaryKind.MUL))
+                    value_dst = tf.empty(Tensor[(32,), "f32", (32,), "rmem"])
+                    value = tf.schedule((x, value_dst), op=T.copy())
+                    weight_dst = tf.empty(Tensor[(32,), "f32", (32,), "rmem"])
+                    weight = tf.schedule((w, weight_dst), op=T.copy())
+                    scaled_dst = tf.empty(Tensor[(32,), "f32", (32,), "rmem"])
+                    scaled = tf.schedule((value, weight, scaled_dst), op=T.binary(kind=BinaryKind.MUL))
                     out = tf.zeros(Tensor[(32,), "f32", None, "gmem"])
                     return tf.insert_slice(out, scaled, (0,))
 
@@ -35,7 +38,8 @@ def _program():
             """A local call passes even an unused constant parameter explicitly."""
             with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
                 with Mesh(("thread",), layout=(32,), names=("lane",)) as _thread:
-                    value = tf.schedule((x,), op=T.copy(rmem_layout=(32,)))
+                    value_dst = tf.empty(Tensor[(32,), "f32", (32,), "rmem"])
+                    value = tf.schedule((x, value_dst), op=T.copy())
                     out = tf.zeros(Tensor[(32,), "f32", None, "gmem"])
                     return tf.insert_slice(out, value, (0,))
 

@@ -38,7 +38,6 @@ from tilefoundry.analysis.metadata import (
 from tilefoundry.cli import main as cli_main
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.emitter import CppEmitter
-from tilefoundry.dsl import Topology
 from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.inspection import PatternPrinter, as_script

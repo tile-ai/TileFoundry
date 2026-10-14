@@ -16,16 +16,16 @@ class ScheduledScale:
     ):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             T.fill(out, 0.0)
-            scaled = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-            value = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-            weight = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+            scaled_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+            value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+            weight_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
                 with scope[:] as threads:
-                    T.copy(x, value)
-                    T.copy(w, weight)
-                    T.binary(value, weight, scaled, kind=BinaryKind.MUL)
+                    T.copy(x, value_dst)
+                    T.copy(w, weight_dst)
+                    T.binary(value_dst, weight_dst, scaled_dst, kind=BinaryKind.MUL)
                 window = T.tensor_view(T.ptr_of(out[0:0 + 32]), layout=(32,), shape=(32,))
-                T.copy(scaled, window)
+                T.copy(scaled_dst, window)
 
 @module(
     entry="gemm",
@@ -42,16 +42,16 @@ class ModuleInstances:
     ):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             T.fill(out, 0.0)
-            value = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+            value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
                 with scope[:] as threads:
-                    T.copy(x, value)
+                    T.copy(x, value_dst)
                 window = T.tensor_view(T.ptr_of(out[0:0 + 32]), layout=(32,), shape=(32,))
-                T.copy(value, window)
+                T.copy(value_dst, window)
 
     # analysis target=nvidia.h200_sxm module=ModuleInstances function=gemm topology=cta wave=1/1
     # selection requested=memory executed=memory
-    # memory traffic=gmem:r1.62KB/w1.50KB@logical,r1.62KB/w1.75KB@total,r1.62KB/w1.75KB@cta,r1.62KB/w1.75KB@thread;rmem:r2.43KB/w2.38KB@logical,r2.43KB/w2.38KB@total,r2.43KB/w2.38KB@cta,r2.43KB/w2.38KB@thread footprint=gemm/helper/v2:40:128B;gemm/layers[0]/v4:22_4:256B;gemm/layers[0]/w_4:128B;gemm/layers[i]/v0:21:128B;gemm/layers[i]/v4:22:128B;gemm/layers[i]/w:128B;gemm/mm#0/v4:22_2:256B;gemm/mm#0/w_2:128B;gemm/mm#1/v4:22_3:256B;gemm/mm#1/w_3:128B;x:128B footprint-precision=exact peak=gmem:1.12KB;rmem:128B persistent=gmem:896B
+    # memory traffic=gmem:r1.62KB/w1.50KB@logical,r1.62KB/w1.75KB@total,r1.62KB/w1.75KB@cta,r1.62KB/w1.75KB@thread;rmem:r2.43KB/w2.38KB@logical,r2.43KB/w2.38KB@total,r2.43KB/w2.38KB@cta,r2.43KB/w2.38KB@thread footprint=gemm/helper/v3:44:128B;gemm/layers[0]/v7:25_4:256B;gemm/layers[0]/w_4:128B;gemm/layers[i]/v0:24:128B;gemm/layers[i]/v7:25:128B;gemm/layers[i]/w:128B;gemm/mm#0/v7:25_2:256B;gemm/mm#0/w_2:128B;gemm/mm#1/v7:25_3:256B;gemm/mm#1/w_3:128B;x:128B footprint-precision=exact peak=gmem:1.12KB;rmem:128B persistent=gmem:896B
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def gemm(
         x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"], scratch: Tensor[(32,), "f32"], scratch_1: Tensor[(32,), "f32"], scratch_2: Tensor[(32,), "f32"], scratch_3: Tensor[(32,), "f32"], scratch_4: Tensor[(32,), "f32"], scratch_5: Tensor[(32,), "f32"], out: Tensor[(32,), "f32"]

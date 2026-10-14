@@ -202,9 +202,7 @@ class HirPrinter(PythonPrinter):
         suppressed = frozenset({"kind"}) if alias_name is not None else frozenset()
         attrs = self.op_attributes(target, ctx, self._indent + "    ", suppressed=suppressed)
         schema = getattr(type(target), "_op_schema", None)
-        inputs = (
-            tuple(param for param in schema.signature if param.kind == "input") if schema else ()
-        )
+        inputs = tuple(param for param in schema.signature if param.kind == "input") if schema else ()
         arguments = (
             [self.tuple_reference(expr.args)]
             if len(inputs) == 1 and variadic_item_annotation(inputs[0]) is not None

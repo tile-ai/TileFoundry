@@ -35,6 +35,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.schedule import ScheduleOp
+from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
@@ -405,10 +406,12 @@ def test_repeated_callee_temporaries_require_one_shared_memory_placement():
     scalar = TensorType.scalar(DType.i32)
     zero = Constant(0, type=scalar)
     starts = Tuple((zero,), type=TupleType((scalar,)))
-    shared_copy = ScheduleOp(op=Copy(smem_layout=Layout((32,), (1,))))
+    shared_copy = ScheduleOp(op=Copy())
+    shared_type = replace(type_, layout=Layout((32,), (1,)), storage=StorageKind.SMEM)
 
     def copy(value):
-        return Call(shared_copy, (value,), type=type_)
+        destination = Call(Empty(type=shared_type), (), type=shared_type)
+        return Call(shared_copy, (value, destination), type=shared_type)
 
     def write_back(value):
         out = Call(Zeros(type=type_), (), type=type_)
@@ -451,8 +454,14 @@ def test_repeated_callee_placement_compares_alias_even_at_the_same_offset():
     scalar = TensorType.scalar(DType.i32)
     x, y = Var("x", type=type_), Var("y", type=short)
     offset = Var("offset", type=scalar)
-    held = Call(ScheduleOp(op=Copy(smem_layout=Layout((32,), (1,)))), (x,), type=type_)
-    update = Call(ScheduleOp(op=Copy(smem_layout=Layout((16,), (1,)))), (y,), type=short)
+    shared_type = replace(type_, layout=Layout((32,), (1,)), storage=StorageKind.SMEM)
+    shared_short = replace(short, layout=Layout((16,), (1,)), storage=StorageKind.SMEM)
+    held = Call(ScheduleOp(op=Copy()), (
+        x, Call(Empty(type=shared_type), (), type=shared_type),
+    ), type=shared_type)
+    update = Call(ScheduleOp(op=Copy()), (
+        y, Call(Empty(type=shared_short), (), type=shared_short),
+    ), type=shared_short)
     starts = Tuple((offset,), type=TupleType((scalar,)))
     updated = Call(InsertSlice(), (held, update, starts), type=type_)
     value = Call(Binary(kind=BinaryKind.ADD), (updated, updated), type=type_)
