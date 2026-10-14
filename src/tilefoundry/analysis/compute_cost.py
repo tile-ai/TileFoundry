@@ -11,7 +11,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TrafficBytes
+from tilefoundry.visitor_registry.contexts import CallFrame, CostContext, TrafficBytes
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
@@ -19,7 +19,7 @@ from .facts import PerformanceServiceFacts, ThroughputFacts
 from .iteration_scope import Repeats
 from .metadata import Breakdown, ComputeCostMetadata, MemoryMetadata, breakdown, shares
 from .precision import AnalysisPrecision
-from .program import FrameWalker
+from .program import InvocationWalker
 from .visitor import AnalyzeContext
 
 SELECTOR = "compute-cost"
@@ -238,7 +238,7 @@ class ComputeCostContext(AnalyzeContext):
     precision: list[AnalysisPrecision] = field(default_factory=lambda: [AnalysisPrecision.EXACT])
 
 
-class ComputeCostVisitor(FrameWalker, ExprVisitor[None]):
+class ComputeCostVisitor(InvocationWalker, ExprVisitor[None]):
     """Attach per-Call work and accumulate multiplicity-aware totals."""
 
     def visit_MeshRegion(self, expr: MeshRegion, ctx: ComputeCostContext) -> None:
@@ -277,10 +277,10 @@ def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
     """Attach one-trip work per Call and multiplicity-aware totals per Function."""
     module, topology_level = context.module, context.topology_level
     topologies = module.effective_topologies()
-    scope = FunctionScope(module, function)
+    frame = CallFrame(module, function)
     units = tuple(topology.name for topology in topologies) or (topology_level,)
     locals_by_unit = {
-        unit: CostContext(scope=scope, topology_level=unit, topologies=topologies)
+        unit: CostContext(frame=frame, topology_level=unit, topologies=topologies)
         for unit in units
         if unit is not None
     }
@@ -294,7 +294,7 @@ def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
         program=context.program,
         records=context.records,
         locals_by_unit=locals_by_unit,
-        whole=CostContext(scope=scope),
+        whole=CostContext(frame=frame),
     )
     ComputeCostVisitor().visit(function.body, cost_context)
     if cost_context.call_count[0] > 0:

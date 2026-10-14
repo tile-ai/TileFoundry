@@ -16,15 +16,16 @@ from dataclasses import dataclass
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, ScopeBuilder
-from tilefoundry.analysis.program import CallFrame, FrameRecords, Program
+from tilefoundry.analysis.program import FrameRecords, Program
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core import IRMetadata
-from tilefoundry.ir.core.module import Module, module_functions
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.types.substitute import DimSubstitutionError
 from tilefoundry.ir.visitor import function_values
 from tilefoundry.target import Target, UnsupportedCapabilityError
@@ -49,7 +50,7 @@ class AnalysisResult:
     metadata_types: tuple[type[IRMetadata], ...]
     program: Program
     records: FrameRecords
-    frames: tuple[CallFrame, ...]
+    frames: tuple[IterationScope, ...]
 
     @property
     def level(self) -> str | None:
@@ -194,7 +195,7 @@ def analyze(
     order: list[type[IRMetadata]] = []
     written_records: set[tuple] = set()
     authored = tuple(
-        fn for owner in module_functions(result_module) if isinstance(owner, Function) for fn in (owner, *owner.variants)
+        fn for frame in list_call_paths(result_module).values() for owner in (frame.function,) if isinstance(owner, Function) for fn in (owner, *owner.variants)
     )
     authored_before = _metadata_snapshot(authored)
     for algorithm in closure:

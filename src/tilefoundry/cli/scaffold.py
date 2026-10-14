@@ -5,7 +5,7 @@ from pathlib import Path
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.codegen.link_module import link_program
 from tilefoundry.codegen.options import CodegenOptions
-from tilefoundry.ir.core.module import module_functions
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.passes.pass_manager import PassManager
 from tilefoundry.passes.transforms import InsertHostEntryPass
@@ -21,7 +21,7 @@ def run_scaffold(source: str, out_dir: str) -> int:
     prepared = PassManager().add(InsertHostEntryPass()).run(module)
     entries = tuple(
         fn
-        for fn in module_functions(prepared)
+        for frame in list_call_paths(prepared).values() for fn in (frame.function,)
         if isinstance(fn, PrimFunction) and isinstance(fn.target, CpuTarget)
     )
     link_program(

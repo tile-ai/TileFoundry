@@ -12,7 +12,7 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis.metadata import shares
-from tilefoundry.analysis.program import frame_values
+from tilefoundry.analysis.program import invocation_values
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -112,7 +112,7 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
     } == {"gmem": 384, "smem": 64, "rmem": 720}
     binaries = [
         result.records.get(frame, expr, ComputeCostMetadata)
-        for frame, expr in frame_values(result.frames[0])
+        for frame, expr in invocation_values(result.frames[0])
         if isinstance(expr, Call) and isinstance(expr.target, Binary)
     ]
     binary_flops = sorted(shares(item.flops, item.topologies)["f32"] for item in binaries)

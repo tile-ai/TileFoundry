@@ -11,8 +11,9 @@ from tilefoundry.cli.source import load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, SourceSpanMetadata, get_metadata
-from tilefoundry.ir.core.module import Module, subtree
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CudaTarget
@@ -39,7 +40,7 @@ def _functions_defined_by(namespace: dict[str, object]) -> tuple[Function, ...]:
         if isinstance(value, Function):
             add(value)
         elif isinstance(value, Module):
-            for module_value in subtree(value):
+            for module_value in (value, *(frame.module for frame in list_call_paths(value).values())):
                 for function in module_value.functions:
                     if isinstance(function, Function):
                         add(function)

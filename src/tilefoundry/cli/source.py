@@ -7,11 +7,12 @@ import contextlib
 import importlib.util
 import io
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from tilefoundry.analysis.check import program_dim_vars
-from tilefoundry.ir.core.module import Module, select
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 
 
@@ -66,7 +67,10 @@ def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
             )
 
 
-        return select(selected, ".".join(path))
+        if len(path) != 1:
+            raise ValueError(f"selector {selector!r}: use Module.function; child module paths are unsupported")
+        selected.lookup(path[0])
+        return replace(selected, entry=path[0])
 
     modules = _unique_values(namespace, Module)
     if len(modules) == 1:

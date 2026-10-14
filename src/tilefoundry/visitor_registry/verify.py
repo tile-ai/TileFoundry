@@ -11,11 +11,13 @@ from typing import Iterable
 
 from tilefoundry.ir.core import Expr, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import canonical_specialization_signature
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.pattern import PatternMatcher, RangePattern, between_rules, locate_dim_var
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor as AllocTensorOp
@@ -375,18 +377,12 @@ def verify_prim_function(
     ctx = VerifyContext()
     scope: list[Mesh] = []
 
-    from tilefoundry.ir.core.module import (  # noqa: PLC0415
-        Module,
-        function_selectors,
-        module_functions,
-    )
-
     module_fn_map: dict[str, tuple[PrimFunction | Function, ...]] = {}
     if isinstance(module_fns, Module):
-        module_fn_map.update({selector: (f,) for selector, f in function_selectors(module_fns)})
+        module_fn_map.update({path: (frame.function,) for path, frame in list_call_paths(module_fns).items() if isinstance(frame.function, Function)})
         module_fns = (
             function
-            for function in module_functions(module_fns)
+            for frame in list_call_paths(module_fns).values() for function in (frame.function,)
             if isinstance(function, PrimFunction)
         )
     for f in module_fns:
@@ -856,12 +852,12 @@ def verify_module(fns) -> None:
     is never a variant, and every entry is callable (``body is None`` only when
     it carries variants).
     """
-    from tilefoundry.ir.core.module import Module, module_functions, subtree  # noqa: PLC0415
-
     root = fns if isinstance(fns, Module) else None
     if root is not None:
-        groups = tuple(node.functions for node in subtree(root))
-        fns = module_functions(root)
+        frames = list_call_paths(root)
+        owners = {id(root): root, **{id(frame.module): frame.module for frame in frames.values()}}
+        groups = tuple(node.functions for node in owners.values())
+        fns = tuple(frame.function for frame in frames.values())
     else:
         groups = (tuple(fns),)
         fns = groups[0]

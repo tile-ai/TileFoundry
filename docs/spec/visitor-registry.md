@@ -172,31 +172,26 @@ Context:
 
 ```python
 @dataclass(frozen=True)
-class FunctionScope:
-    """Where a walk is reading: one Module tree, and whose body it is in.
-
-    Attributes:
-        module: attribute; the Module tree the walk answers questions within.
-        function: attribute; the Function whose body the walk is reading.
-    """
+class CallFrame:
+    """Current function definition and effective execution context."""
 
     module: Module
-    function: Function
+    function: Function | None
+    target: Target | None = None
+    topologies: tuple[Topology, ...] | None = None
 
 
 @dataclass
 class TypeInferContext:
     """Walk location and type-inference memo state."""
 
-    scope: FunctionScope | None = None
+    frame: CallFrame | None = None
     current_mesh: Mesh | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
-    instantiated_memo: dict[tuple[int, tuple[Type, ...], Mesh | None], Type] = field(
+    instantiated_memo: dict[tuple, Type] = field(
         default_factory=dict, repr=False, compare=False
     )
 
-    def child_for(self, callee: Function) -> Module | None: ...
-    def scope_for(self, callee: Function) -> FunctionScope | None: ...
     def resolve_target(self) -> Target | None: ...
     def for_callee(self, callee: Function) -> TypeInferContext: ...
     def type_of(self, expr: Expr) -> Type: ...
@@ -204,35 +199,32 @@ class TypeInferContext:
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
 ```
 
-`FunctionScope` is the whole of what a walk states about where it is. A
-`Function` carries no execution context and one object is reachable from more
-than one program, so anything answered about the body being read — which Module
-owns it, what a call in it may reach — is answered within the tree the walk was
-given ([core-ir §1](./core-ir.md#1-module)). A walk given no scope answers
-nothing of that kind rather than guessing.
+`CallFrame` carries the current Module, function, effective target, and
+whole topology hierarchy. It is imported internally from
+`visitor_registry/contexts.py`; it is not exported from `tilefoundry` or
+`tilefoundry.ir.core`. A shared definition carries no parent or inherited
+execution context ([core-ir §1](./core-ir.md#1-module)).
 
 - constraints:
-  - `scope` MUST be the only context state describing where a walk is reading,
-    and the pair MUST be reachable from the package root together, since one is
-    how the other is constructed.
+  - `frame` MUST be the context state describing where a walk is reading.
+    Each visitor MUST resolve an instance target from its current Module's
+    `children[key]`, then create a callee frame. A callee declaration replaces
+    the corresponding inherited target or topology hierarchy; an explicit
+    empty topology tuple MUST remain empty.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
     subclass retains its analysis-specific state. It also retains `current_mesh`:
-    a callee inherits the call site's scope, and a region in its body composes
-    with that scope using the usual nested-region rules.
-  - `resolve_target` answers which Target's rules apply: the scope Module's
-    resolved Target, or `None` without a scope or when no Module on the owner
-    chain declares one. The parser's context, which reads a function before its
-    Module exists, MUST answer with the Target that function is parsed under
-    when it has no scope. With a scope, the scope Module's owner chain answers
-    first; only a child the `@module` being built will hold, whose chain has no
-    Target yet, answers with the Target that build declares, and any other
-    scope without a Target answers `None`
+    a callee inherits the call site's mesh, and a region in its body composes
+    with it using the usual nested-region rules.
+  - `resolve_target` MUST return the current frame's effective Target, or
+    `None` without a frame. The parser MAY fall back to the target under which
+    a not-yet-finalized Module is being built
     ([parser §1.4](./parser.md#14-context-and-diagnostics)).
   - `memo` is the current scope's identity-pinned type table. Crossing a
     Function boundary creates a fresh context table; a region keeps its scope
     and seeds a nested visitor table from the enclosing one.
   - `instantiated_memo` is the traversal-wide Function-call result table,
-    keyed by `(id(callee), argument_types, current_mesh)`. Crossing a Function
+    keyed by callee identity, argument types, current mesh, and effective
+    Module execution context. Crossing a Function
     boundary MUST preserve the same table object. It stores Types only and never introduces
     a derived Function into the IR.
   - The two tables have opposite lifetimes: `memo` is replaced at a Function
@@ -455,7 +447,7 @@ Context (extends `TypeInferContext` with the TIR traversal scope cache):
 
 ```python
 @dataclass
-class VerifyContext(TypeInferContext):   # inherits scope / current_mesh / child_for
+class VerifyContext(TypeInferContext):   # inherits frame / current_mesh
     """TIR verification context with its statement-walk scope cache.
 
     Attributes:

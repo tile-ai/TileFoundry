@@ -102,8 +102,8 @@ def verify_mma(call: "Call", ctx: "VerifyContext") -> None:
     """Check each operand against its atom and the active physical frame."""
     op = call.target
     atom = op.atom
-    if ctx.scope is not None and ctx.scope.module is not None:
-        capabilities = ctx.scope.module.target.architecture.capabilities
+    if ctx.frame is not None and ctx.frame.module is not None:
+        capabilities = ctx.frame.target.architecture.capabilities
         if atom.capability not in capabilities:
             ctx.error(call, f"target does not support {atom.capability}")
     if not ctx.mesh_scope:

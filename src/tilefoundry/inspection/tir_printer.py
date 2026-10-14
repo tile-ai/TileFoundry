@@ -11,6 +11,7 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -417,12 +418,10 @@ def _function_comments(fn: PrimFunction, options) -> list[str]:
 
 def _module_symbol_bindings(mod: Module) -> dict[str, str]:
     """Render unique subtree PrimFunction bare names through their slot bindings."""
-    from tilefoundry.ir.core.module import function_scopes  # noqa: PLC0415
-
     candidates = {}
-    for selector, scope in function_scopes(mod):
-        if isinstance(scope.function, PrimFunction):
-            candidates.setdefault(scope.function.name, []).append(selector)
+    for selector, frame in list_call_paths(mod).items():
+        if isinstance(frame.function, PrimFunction):
+            candidates.setdefault(frame.function.name, []).append(selector)
     return {name: paths[0] for name, paths in candidates.items() if len(paths) == 1}
 
 

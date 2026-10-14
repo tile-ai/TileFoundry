@@ -95,7 +95,7 @@ from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import CallFrame, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor, inference_type
 
 T = TypeVar("T")
@@ -294,7 +294,7 @@ runtime = SimpleNamespace(
     TensorType=TensorType,
     TupleType=TupleType,
     TypeInferContext=TypeInferContext,
-    FunctionScope=FunctionScope,
+    CallFrame=CallFrame,
     TypeInferVisitor=TypeInferVisitor,
     TupleGetItem=TupleGetItem,
     Unary=Unary,
@@ -1222,7 +1222,7 @@ class ModuleBuildContext:
                 verify_function(function, module=result)
                 inference_type(
                     function,
-                    runtime.TypeInferContext(scope=runtime.FunctionScope(result, function)),
+                    runtime.TypeInferContext(frame=runtime.CallFrame(result, function)),
                     ranges=True,
                 )
             elif isinstance(function, runtime.PrimFunction):
@@ -1322,7 +1322,7 @@ class MatchContext:
         scope.define(
             _TYPE_INFER_CONTEXT,
             ParserTypeInferContext(
-                scope=FunctionScope(function.module, None) if function.module is not None else None,
+                frame=CallFrame(function.module, None) if function.module is not None else None,
                 current_mesh=resolved_mesh,
                 parser_target=function.target,
             ),
@@ -1351,7 +1351,7 @@ class MatchContext:
             scope.define(
                 _TYPE_INFER_CONTEXT,
                 ParserTypeInferContext(
-                    scope=FunctionScope(function.module, None) if function.module is not None else None,
+                    frame=CallFrame(function.module, None) if function.module is not None else None,
                     parser_target=function.target,
                 ),
             )

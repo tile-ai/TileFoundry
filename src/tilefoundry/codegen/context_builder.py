@@ -15,24 +15,20 @@ from tilefoundry.codegen.signature import (
     called_as,
     program_id_params,
 )
-from tilefoundry.ir.core.module import (
-    Module,
-    function_scopes,
-    function_selectors,
-    module_functions,
-    select,
-)
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.target import CpuTarget, Target
+from tilefoundry.visitor_registry.contexts import CallFrame
 
 
 def _function_paths(module: Module, prefix: tuple[str, ...] = ()):
     """Root-relative paths for every declared function, using child mount names."""
-    for selector, scope in function_scopes(module):
-        yield (*prefix, *selector.split(".")), scope.function
+    for call_path, frame in list_call_paths(module).items():
+        yield (*prefix, *call_path.split(".")), frame.function
 
 
 def function_path(root: Module, fn) -> tuple[str, ...]:
@@ -137,7 +133,7 @@ class CodegenContext:
     targets: Mapping[int, Target]
     symbols: FunctionSymbolTable
     launch_edges: tuple[LaunchEdge, ...]
-    topology_domains: Mapping[int, Module]
+    topology_domains: Mapping[int, CallFrame]
     launch_callables: Mapping[int, CallableSignature]
     groups: tuple[EmissionGroup, ...]
 
@@ -173,44 +169,25 @@ class CodegenContext:
 
 
 def _domains(root: Module):
-    """Group each definition under its first path's nearest topology declaration."""
+    """Group definitions by their first call path's effective topology declaration."""
     rows = {}
-    for selector, scope in function_scopes(root):
-        declared = next(
-            (
-                frame.module
-                for frame in reversed(scope.instances)
-                if frame.module.topologies is not None
-            ),
-            root,
-        )
-        row = rows.get(id(declared))
-        if row is None:
-            segments = []
-            for frame in scope.instances[1:]:
-                segments.append(frame.key)
-                if frame.index is not None:
-                    segments.append(str(frame.index))
-                if frame.module is declared:
-                    break
-            owner = root if declared is root else select(root, ".".join(segments))
-            row = (owner, [])
-            rows[id(declared)] = row
-        row[1].append(scope.function)
-    return tuple((owner, tuple(functions)) for owner, functions in rows.values())
+    for frame in list_call_paths(root).values():
+        key = (id(frame.topologies), frame.target)
+        row = rows.setdefault(key, (frame, []))
+        row[1].append(frame.function)
+    return tuple((frame, tuple(functions)) for frame, functions in rows.values())
 
 
 def hir_domains(root: Module):
-    """Coalesce first-instance definition contexts by equal effective hierarchy."""
+    """Coalesce first-call-path contexts with equal effective hierarchy."""
     rows = []
-    for owner, functions in _domains(root):
-        hierarchy = owner.effective_topologies()
-        row = next((row for row in rows if row[0].effective_topologies() == hierarchy), None)
+    for frame, functions in _domains(root):
+        row = next((row for row in rows if row[0].topologies == frame.topologies and row[0].target == frame.target), None)
         if row is None:
-            rows.append((owner, list(functions)))
+            rows.append((frame, list(functions)))
         else:
             row[1].extend(functions)
-    return tuple((owner, tuple(functions)) for owner, functions in rows)
+    return tuple((frame, tuple(functions)) for frame, functions in rows)
 
 
 def _product(values: tuple[object, ...]) -> object:
@@ -225,13 +202,13 @@ def _product(values: tuple[object, ...]) -> object:
     return result
 
 
-def _launch_extents(owner: Module) -> tuple[object, object]:
+def _launch_extents(frame: CallFrame) -> tuple[object, object]:
     """Derive one-dimensional grid/block extents from declared topologies."""
     ctas = tuple(
-        topology.size for topology in owner.effective_topologies() if topology.name == "cta"
+        topology.size for topology in frame.topologies if topology.name == "cta"
     )
     threads = tuple(
-        topology.size for topology in owner.effective_topologies() if topology.name == "thread"
+        topology.size for topology in frame.topologies if topology.name == "thread"
     )
     return _product(ctas), _product(threads)
 
@@ -247,19 +224,22 @@ def _launch_statements(function: PrimFunction | Function) -> tuple[Evaluate, ...
     )
 
 
-def _resolve_launch_definition(root, scope, name):
-    for node in (scope.module, root):
-        try:
-            return select(node, name).entry_function()
-        except ValueError:
-            pass
+def _resolve_launch_definition(root, frame, name):
+    for node in (frame.module, root):
+        local = tuple(fn for fn in node.functions if fn.name == name)
+        if len(local) == 1:
+            return local[0]
+    paths = list_call_paths(root)
+    if name in paths:
+        return paths[name].function
     matches = tuple(
-        function for function in module_functions(scope.module) if function.name == name
+        inner.function for inner in list_call_paths(frame.module).values()
+        if inner.function.name == name
     )
     if len(matches) == 1:
         return matches[0]
     raise ValueError(
-        f"codegen: launch from {scope.function.name!r} names {name!r}: "
+        f"codegen: launch from {frame.function.name!r} names {name!r}: "
         f"expected one match, found {len(matches)}"
     )
 
@@ -272,18 +252,18 @@ def build_codegen_context(
     An HIR function enters codegen only as the callee a Launch names, and takes
     the arguments that Launch binds; Python wraps any other one.
     """
-    functions = tuple(module_functions(module))
+    functions = tuple(frame.function for frame in list_call_paths(module).values())
     for function in functions:
         if isinstance(function, Function) and options.emit != "skeleton":
             raise ValueError(
                 f"codegen: HIR function {export_name(module, function)!r} requires "
                 'emit="skeleton" or lowering to TIR first'
             )
-    selected = function_selectors(module)
+    selected = tuple((path, frame.function) for path, frame in list_call_paths(module).items() if isinstance(frame.function, Function))
     contexts = {
-        id(each): (selector, scope)
-        for selector, scope in function_scopes(module)
-        for each in (scope.function, *scope.function.variants)
+        id(each): (path, frame)
+        for path, frame in list_call_paths(module).items()
+        for each in (frame.function, *frame.function.variants)
     }
     launched = {
         id(
@@ -315,9 +295,9 @@ def build_codegen_context(
     ownership: dict[int, Module] = {}
     targets: dict[int, Target] = {}
     for function in identities.values():
-        selector, scope = contexts[id(function)]
-        owner = select(module, selector.rpartition(".")[0])
-        target = function.target if isinstance(function, PrimFunction) else module.resolve_target()
+        _path, frame = contexts[id(function)]
+        owner = frame.module
+        target = function.target if isinstance(function, PrimFunction) else frame.target
         if target is None:
             raise ValueError(f"codegen: function {function.name!r} has no resolved Target")
         ownership[id(function)] = owner
@@ -381,7 +361,7 @@ def build_codegen_context(
             reference = stmt.args[0]
             callee = _resolve_launch_definition(module, contexts[id(caller)][1], reference.name)
             symbol = by_function[id(callee)]
-            grid_x, block_x = _launch_extents(symbol.owner)
+            grid_x, block_x = _launch_extents(contexts[id(callee)][1])
             callable_signature = replace(symbol.callable, trailing=LAUNCH_ABI)
             launch_callables[id(stmt)] = callable_signature
             edges.append(
@@ -397,16 +377,16 @@ def build_codegen_context(
             )
 
     domain_rows = tuple(
-        (owner, tuple(function for function in owned if id(function) in identities))
-        for owner, owned in (
+        (frame, tuple(function for function in owned if id(function) in identities))
+        for frame, owned in (
             hir_domains(module)
             if any(isinstance(fn, Function) for fn in functions)
             else _domains(module)
         )
     )
-    topology_domains = {id(function): owner for owner, owned in domain_rows for function in owned}
+    topology_domains = {id(function): frame for frame, owned in domain_rows for function in owned}
     groups: list[EmissionGroup] = []
-    for owner, owned in domain_rows:
+    for frame, owned in domain_rows:
         by_target: dict[Target, list[PrimFunction]] = {}
         for function in owned:
             by_target.setdefault(targets[id(function)], []).append(function)
@@ -416,7 +396,7 @@ def build_codegen_context(
             ):
                 missing = ", ".join(function.name for function in grouped)
                 raise ValueError(f"codegen: no Launch states geometry for {missing}")
-            groups.append(EmissionGroup(owner, target, tuple(grouped)))
+            groups.append(EmissionGroup(frame.module, target, tuple(grouped)))
 
     return CodegenContext(
         module=module,

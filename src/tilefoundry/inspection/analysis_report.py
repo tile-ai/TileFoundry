@@ -69,7 +69,7 @@ def render_analysis(result: AnalysisResult, *, operands: bool = False) -> Analys
     if len(result.frames) > 1:
         for frame in result.frames[1:]:
             child = HirPrinter().render(
-                frame.body,
+                frame.function,
                 options=PythonPrintOptions(
                     show_types=True,
                     comment_metadata_types=selected_types_,

@@ -14,8 +14,9 @@ import dataclasses
 from collections.abc import Mapping
 
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
-from tilefoundry.ir.core.module import ModuleList, resolve_callee
+from tilefoundry.ir.core.module import ModuleList
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.pattern import Pattern, RangePattern
 from tilefoundry.ir.types import callable_type_for
 from tilefoundry.ir.types.dim import is_dim_expr
@@ -28,6 +29,7 @@ from tilefoundry.ir.types.substitute import (
 )
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.ir.visitor import ExprCloner, ExprWalker
+from tilefoundry.visitor_registry.contexts import CallFrame
 
 from .function import Function
 
@@ -281,7 +283,7 @@ def _substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:
     return type(target)(**attributes)
 
 
-def residual_dims(fn: Function, scope=None) -> tuple[str, ...]:
+def residual_dims(fn: Function, frame=None) -> tuple[str, ...]:
     """Every dimension still stated as a range anywhere *fn* reaches.
 
     Signature, body, the shape-valued attributes its operations carry, the
@@ -290,28 +292,34 @@ def residual_dims(fn: Function, scope=None) -> tuple[str, ...]:
     block length the caller never mentions -- and a scan that stopped at the
     signature would call such a function concrete while it still holds a range.
     """
-    return tuple(dim_vars_reached(fn, scope))
+    return tuple(dim_vars_reached(fn, frame))
 
 
-def dim_vars_reached(fn: Function, scope=None) -> dict[str, object]:
+def dim_vars_reached(fn: Function, frame=None) -> dict[str, object]:
     """The declarations behind `residual_dims`, by name.
 
     Same traversal, keeping the `DimVar` rather than only its name, for a caller
     that has to restate the bounds a dimension was declared with.
     """
     found: dict[str, object] = {}
-    _DimVarCollector(found).visit_function(fn, scope)
+    _DimVarCollector(found).visit_function(fn, frame)
     return found
 
 
 class _DimVarCollector(ExprWalker[None]):
     """Collect dimensions from Expr values plus Function/Op side fields."""
 
-    def __init__(self, found: dict[str, object]) -> None:
+    def __init__(self, found, dims=None):
         super().__init__()
         self.found = found
-        self.seen_functions: set[tuple[int, int]] = set()
-        self.active_functions: set[int] = set()
+        self.dims = dims
+        self.seen_functions = set()
+        self.active_functions = set()
+        self.functions = []
+        self.modules = {}
+        self.cycles = []
+        self.missing_bodies = []
+        self.path = []
 
     def _collect_expr(self, expr: Expr, ctx=None) -> None:
         from tilefoundry.ir.types.substitute import _collect  # noqa: PLC0415
@@ -322,16 +330,6 @@ class _DimVarCollector(ExprWalker[None]):
             else expr
         )
         _collect(current.type, self.found)
-
-    def _collect_target(self, expr: Call, ctx=None) -> None:
-        target = expr.target
-        callee, inner = resolve_callee(expr, ctx)
-        if isinstance(callee, Function):
-            self.visit_function(callee, inner)
-            return
-        for attribute in getattr(type(target), "params", lambda: ())():
-            if attribute.kind == "attribute":
-                _collect_entries(getattr(target, attribute.name, None), self.found)
 
     def _collect_bounds(self, expr: Expr) -> None:
         for bound in ("extent", "step", "start"):
@@ -351,30 +349,69 @@ class _DimVarCollector(ExprWalker[None]):
         if body is not None:
             self.visit(body, ctx)
 
-    def visit_function(self, fn: Function, ctx=None) -> None:
-        key = (id(fn), id(ctx.module) if ctx is not None else 0)
-        if key in self.seen_functions or id(fn) in self.active_functions:
+    def visit_function(self, fn: Function, frame=None) -> None:
+        if frame is not None:
+            self.modules[id(frame.module)] = frame.module
+            self.found.update(dim_vars_by_name(frame.topologies))
+        if id(fn) in self.active_functions:
+            self.cycles.append("/".join((*self.path, fn.name)))
+            return
+        key = (id(fn), id(frame.module) if frame is not None else 0)
+        if key in self.seen_functions:
             return
         self.seen_functions.add(key)
         self.active_functions.add(id(fn))
+        self.functions.append((fn, frame))
+        self.path.append(fn.name)
         previous_memo, self._memo = self._memo, {}
         try:
             for param in fn.params:
                 self.found.update(dim_vars_by_name(param.type))
             self.found.update(dim_vars_by_name(fn.return_type))
-            for variant in fn.variants:
-                self.visit_function(variant, ctx)
-            if fn.body is not None:
-                self.visit(fn.body, ctx)
+            if self.dims is None:
+                for variant in fn.variants:
+                    self.visit_function(variant, frame)
+                chosen = fn
+            else:
+                chosen = variant_for(fn, self.dims)
+            if chosen.body is not None:
+                self.visit(chosen.body, frame)
+            elif not chosen.variants:
+                self.missing_bodies.append((fn.name, "/".join(self.path)))
         finally:
             self._memo = previous_memo
+            self.path.pop()
             self.active_functions.remove(id(fn))
 
-    def visit_Call(self, expr: Call, ctx=None) -> None:
-        self._collect_expr(expr, ctx)
-        self._collect_target(expr, ctx)
+    def visit_Call(self, expr: Call, frame=None) -> None:
+        self._collect_expr(expr, frame)
         self._collect_bounds(expr)
-        self._visit_children(expr, ctx)
+        self._visit_children(expr, frame)
+        target = expr.target
+        callee = target if isinstance(target, Function) else None
+        inner = frame
+        slot = target if isinstance(target, ModuleList) else (
+            target.args[0] if isinstance(target, Call) and isinstance(target.target, TupleGetItem)
+            and isinstance(target.args[0], ModuleList) else None
+        )
+        if slot is not None:
+            if frame is None:
+                raise ValueError("instance call requires a CallFrame")
+            slot = frame.module.children[slot.key]
+            index = target.args[1] if isinstance(target, Call) else None
+            index = index.value if isinstance(index, Constant) else 0
+            child = slot.elements[index]
+            callee = child.entry_function()
+            inner = CallFrame(
+                child, callee, child.target if child.target is not None else frame.target,
+                child.topologies if child.topologies is not None else frame.topologies,
+            )
+        if callee is not None:
+            self.visit_function(callee, inner)
+        else:
+            for attribute in getattr(type(target), "params", lambda: ())():
+                if attribute.kind == "attribute":
+                    _collect_entries(getattr(target, attribute.name, None), self.found)
 
     def visit_Tuple(self, expr: Tuple, ctx=None) -> None:
         self._collect_expr(expr, ctx)

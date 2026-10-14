@@ -379,24 +379,24 @@ def _pattern_refusal(matcher: PatternMatcher, op, parameter=None) -> ScheduleRef
     return ScheduleRefusal(PatternPrinter().refusal_reason(refusal, parameter), path=path, op=op)
 
 
-def _instruction_call(op, operand_types, mesh, *, repeat, order, scope):
+def _instruction_call(op, operand_types, mesh, *, repeat, order, frame):
     args = tuple(
         Var(name=f"operand{index}", type=type_) for index, type_ in enumerate(operand_types)
     )
     call = Call(ScheduleOp(op=op, repeat=repeat, order=order), args, type=UnitType())
     ctx = TypeInferContext(
-        scope=scope,
+        frame=frame,
         current_mesh=mesh,
         memo={id(arg): (arg, type_) for arg, type_ in zip(args, operand_types, strict=True)},
     )
     return call, ctx
 
 
-def _check_instruction(op, operand_types, mesh, *, repeat, order, scope, bindings):
+def _check_instruction(op, operand_types, mesh, *, repeat, order, frame, bindings):
     matcher = PatternMatcher(
         {**bindings, **dict(getattr(getattr(op, "atom", None), "bindings", {}))}
     )
-    call, ctx = _instruction_call(op, operand_types, mesh, repeat=repeat, order=order, scope=scope)
+    call, ctx = _instruction_call(op, operand_types, mesh, repeat=repeat, order=order, frame=frame)
     op, params, _writes, patterns, inner, _repeat, _order, _shape = _instruction_view(
         call, ctx, bindings=matcher.bindings
     )
@@ -416,7 +416,7 @@ def _check_instruction(op, operand_types, mesh, *, repeat, order, scope, binding
     target_call = Call(target=op, args=args, type=UnitType())
     frames = tuple(layout.mesh for type_ in inner if hasattr((layout := type_.layout), "mesh"))
     verify_ctx = VerifyContext(
-        scope=scope,
+        frame=frame,
         current_mesh=mesh,
         memo={id(arg): (arg, type_) for arg, type_ in zip(args, inner, strict=True)},
         mesh_scope=frames[:1] or (() if mesh is None else (mesh,)),
@@ -430,9 +430,9 @@ def _check_instruction(op, operand_types, mesh, *, repeat, order, scope, binding
 
 
 def match_instruction(
-    op_type, attributes, operand_types, mesh, *, scope, repeat=None, order=None
+    op_type, attributes, operand_types, mesh, *, frame, repeat=None, order=None
 ) -> tuple[InstructionMatch, ...]:
-    """Return every instruction instance implementing these types and execution scope.
+    """Return every instruction instance implementing these types and execution frame.
 
     Read layout forks for each projectable tile, then validate the constructed
     instance with the same closed-instruction checks.
@@ -480,7 +480,7 @@ def match_instruction(
                 mesh,
                 repeat=repeat,
                 order=order,
-                scope=scope,
+                frame=frame,
                 bindings=matcher.bindings,
             ),
         )
@@ -503,7 +503,7 @@ def match_instruction(
         integers, vary_defaulted=True, values=lambda param: tuple(range(1, largest + 1))
     )
     choices = tuple(sorted(choices, key=lambda state: tuple(state.values()), reverse=True))
-    call, ctx = _instruction_call(op, operand_types, mesh, repeat=repeat, order=order, scope=scope)
+    call, ctx = _instruction_call(op, operand_types, mesh, repeat=repeat, order=order, frame=frame)
     first_refusal = None
     tile_refusal = None
     divisible_seen = False
@@ -560,7 +560,7 @@ def match_instruction(
                 mesh,
                 repeat=repeat,
                 order=order,
-                scope=scope,
+                frame=frame,
                 bindings=matcher.bindings,
             )
         except ScheduleRefusal as error:
@@ -586,7 +586,7 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
             attributes,
             tuple(ctx.type_of(arg) for arg in call.args),
             ctx.current_mesh,
-            scope=ctx.scope,
+            frame=ctx.frame,
             repeat=call.target.repeat,
             order=call.target.order,
         )

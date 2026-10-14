@@ -26,7 +26,7 @@ PROJECT_SHARDS = {
 }
 
 
-@module(entry="project", topologies=(GPU, CTA))
+@module(entry="project", target=CudaTarget("nvidia.h200_sxm"), topologies=(GPU, CTA))
 class DecoderLayer:
     """One projection sharded by column and one replicated decode weight."""
 

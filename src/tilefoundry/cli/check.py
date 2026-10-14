@@ -16,7 +16,6 @@ from tilefoundry.cli.source import load_namespace, parse_dims
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import from_torch_dtype
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.module import select as select_module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import (
     canonical_specialization_signature,
@@ -34,7 +33,7 @@ from tilefoundry.runtime.resource import (
     SafetensorsResource,
     draw_tensor,
 )
-from tilefoundry.visitor_registry.contexts import FunctionScope
+from tilefoundry.visitor_registry.contexts import CallFrame
 
 SEED = 0
 
@@ -224,31 +223,15 @@ def _refuse_orchestration(module: Module, method: str) -> None:
 
 
 def _module_selection(root: Module, path: Sequence[str]) -> tuple[Module, tuple[str, ...]]:
-    node = root
-    children: list[str] = []
-    index = 0
-    while index < len(path):
-        segment = path[index]
-        slot = node.children.get(segment)
-        if slot is not None:
-            children.append(segment)
-            index += 1
-            if slot.indexed:
-                if index == len(path):
-                    raise ValueError(f"selector {'.'.join(path)!r}: indexed slot needs an index")
-                children.append(path[index])
-                node = select_module(root, ".".join(children))
-                index += 1
-            else:
-                node = slot.elements[0]
-            continue
-        if index != len(path) - 1:
-            raise ValueError(f"selector {'.'.join(path)!r}: {segment!r} is not a child module")
-        if segment in node.methods:
-            _refuse_orchestration(node, segment)
-        node.lookup(segment)
-        return select_module(root, ".".join(path)), tuple(children)
-    return select_module(root, ".".join(path)), tuple(children)
+    if len(path) > 1:
+        raise ValueError("use Module.function; child module paths are unsupported")
+    if not path:
+        return root, ()
+    name = path[0]
+    if name in root.methods:
+        _refuse_orchestration(root, name)
+    root.lookup(name)
+    return replace(root, entry=name), ()
 
 
 def select(source: str) -> Selection:
@@ -284,7 +267,7 @@ def read_inputs(paths: Sequence[str], device: str) -> tuple[Any, ...]:
 
 def draw_inputs(module: Module, dims: dict[str, int], seed: int, device: str):
     function = module.entry_function()
-    residual_dims(function, FunctionScope(module, function))
+    residual_dims(function, CallFrame(module, function))
     concrete = replace(
         function,
         params=tuple(

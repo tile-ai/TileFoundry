@@ -8,9 +8,10 @@ from tilefoundry.target import CudaTarget
 
 @module(
     entry="run",
+    target=CudaTarget("nvidia.h200_sxm"),
     topologies=(Topology("cta", 8), Topology("thread", 32)),
 )
-class _Inner:
+class Inner:
     @func(mesh=Mesh(("cta",), (8,), names=("b",)))
     def scale(
         x: Tensor[(8, 8), "bf16", None, "rmem"],
@@ -29,7 +30,7 @@ class _Inner:
     topologies=(Topology("cta", 8), Topology("thread", 32)),
 )
 class FusedBoundary:
-    inner = _Inner
+    inner = Inner
 
     @func(mesh=Mesh(("cta",), (8,), names=("b",)))
     def stage(x: Tensor[(8 @ mesh.b, 8), "f32", "smem"]):  # noqa: F821

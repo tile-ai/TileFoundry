@@ -14,7 +14,7 @@ from typing import Mapping, Union
 from tilefoundry import evaluator
 from tilefoundry.evaluator.interpreter import _run_bound
 from tilefoundry.evaluator.value import tensor_type_of
-from tilefoundry.ir.core.expr import Call, Constant, Expr
+from tilefoundry.ir.core.expr import Expr
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.callable_type import callable_type_for
@@ -29,118 +29,6 @@ ModuleFunction = Union[HirFunction, PrimFunction]
 _MISSING_PREPARED_WEIGHT = (
     "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
 )
-
-
-def subtree(root: "Module"):
-    """Definitions in DFS order, yielding each shared definition once."""
-    seen: set[int] = set()
-
-    def visit(node):
-        if id(node) in seen:
-            return
-        seen.add(id(node))
-        yield node
-        for slot in node.children.values():
-            for child in slot.elements:
-                yield from visit(child)
-
-    yield from visit(root)
-
-
-def module_functions(root: "Module") -> tuple[ModuleFunction, ...]:
-    """Every function definition once, in DFS definition order."""
-    seen: set[int] = set()
-    found = []
-    for node in subtree(root):
-        for function in node.functions:
-            if id(function) not in seen:
-                seen.add(id(function))
-                found.append(function)
-    return tuple(found)
-
-
-def resolve_callee(call: Call, scope=None):
-    """Resolve a function and its scope through an explicit call target."""
-    if isinstance(call.target, HirFunction):
-        inner = None if scope is None else _replace(scope.enter(call.target), function=call.target)
-        return call.target, inner
-    if instance_slot(call.target) is None:
-        return None, scope
-    if scope is None:
-        raise ValueError("instance call requires a FunctionScope")
-    inner = scope.enter(call.target)
-    callee = inner.module.entry_function()
-    return callee, _replace(inner, function=callee)
-
-
-def called_function_scopes(function: HirFunction, scope=None):
-    """Direct call edges with the instance context each edge enters."""
-    from tilefoundry.ir.visitor import collect_exprs  # noqa: PLC0415 -- cycle
-
-    for expr in collect_exprs(function.body):
-        if isinstance(expr, Call):
-            callee, inner = resolve_callee(expr, scope)
-            if isinstance(callee, HirFunction):
-                yield callee, inner
-
-
-def called_functions(function: HirFunction, scope=None) -> tuple[HirFunction, ...]:
-    """Directly called definitions once, in operand-before-consumer order."""
-    found = {}
-    for callee, _inner in called_function_scopes(function, scope):
-        found.setdefault(id(callee), callee)
-    return tuple(found.values())
-
-
-def reachable_function_scopes(root: HirFunction, scope=None):
-    """Reached bodies and their instance paths, without expanding recursive edges."""
-    seen = set()
-
-    def visit(function, current, active):
-        frames = (
-            ()
-            if current is None
-            else tuple(
-                (
-                    id(frame.module),
-                    frame.key,
-                    id(frame.index) if isinstance(frame.index, Expr) else frame.index,
-                )
-                for frame in current.instances
-            )
-        )
-        key = (id(function), frames)
-        if key in seen or id(function) in active:
-            return
-        seen.add(key)
-        yield function, current
-        for callee, inner in called_function_scopes(function, current):
-            yield from visit(callee, inner, active | {id(function)})
-
-    yield from visit(root, scope, frozenset())
-
-
-def reachable_functions(root: HirFunction, scope=None) -> tuple[HirFunction, ...]:
-    """Reached definitions once by identity, callers before callees."""
-    found = {}
-    for function, _inner in reachable_function_scopes(root, scope):
-        found.setdefault(id(function), function)
-    return tuple(found.values())
-
-
-def _refuse_bare_call(module: "Module", kind: str) -> None:
-    """Refuse bare call.
-
-    Refuse a bare call on a *kind* whose *module* has no default entry, naming
-    what to call instead.
-    """
-    if module.entry is not None:
-        return
-    named = sorted({fn.name for fn in module.functions} | set(module.methods))
-    raise TypeError(
-        f"{kind} {module.name!r} has no entry, so it has no default step; "
-        f"call one by name" + (f" -- {', '.join(named)}" if named else "")
-    )
 
 
 @dataclass(eq=False, init=False)
@@ -233,61 +121,6 @@ class ModuleList(Expr):
         return self.elements[index]
 
 
-def validate_instance_slot(slot: ModuleList, index=MISSING, *, index_type=None):
-    """Validate one entry call or subscript, returning its normalized index.
-
-    Callers supply the current frame's slot when a tree has been rebuilt.
-    Variable expressions remain expressions in the instance stack.
-    """
-    if index is MISSING:
-        if slot.indexed:
-            raise ValueError(f"ModuleList slot {slot.key!r} must be indexed before calling")
-        return None
-    if not slot.indexed:
-        raise ValueError(f"single slot {slot.key!r} cannot be indexed")
-    if isinstance(index, Expr) or index_type is not None:
-        index_type = index.type if index_type is None else index_type
-        from tilefoundry.ir.types.dtype import IntegerDType  # noqa: PLC0415
-
-        if (
-            not isinstance(index_type, TensorType)
-            or index_type.shape != ()
-            or not isinstance(index_type.dtype, IntegerDType)
-        ):
-            raise ValueError(f"ModuleList slot {slot.key!r}: index must be an integer scalar")
-    if isinstance(index, Constant):
-        index = index.value
-    if isinstance(index, bool) or not isinstance(index, (int, Expr)):
-        raise ValueError(f"ModuleList slot {slot.key!r}: index must be an integer scalar")
-    if isinstance(index, int):
-        if not 0 <= index < len(slot):
-            raise ValueError(
-                f"ModuleList slot {slot.key!r}: index {index!r} out of range for N={len(slot)}"
-            )
-    elif any(element is not slot.elements[0] for element in slot.elements[1:]):
-        raise ValueError(f"ModuleList slot {slot.key!r}: variable index requires the same definition")
-    return index
-
-
-def instance_slot(target):
-    """Decode the slot and raw index carried by an instance-call target.
-
-    Decoding does not validate stale target definitions. Validation uses the
-    current frame's slot through ``validate_instance_slot``.
-    """
-    from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem  # noqa: PLC0415
-
-    if isinstance(target, ModuleList):
-        return target, MISSING
-    if (
-        isinstance(target, Call)
-        and isinstance(target.target, TupleGetItem)
-        and isinstance(target.args[0], ModuleList)
-    ):
-        return target.args
-    return None
-
-
 @dataclass(unsafe_hash=True)
 class Module:
     """Container of functions + the name of the public entry function.
@@ -352,17 +185,10 @@ class Module:
             for child in slot.elements:
                 if not isinstance(child, Module):
                     raise TypeError(f"Module {self.name!r}: slot {key!r} requires Module definitions")
-                if child.target is not None:
-                    raise ValueError(
-                        f"Module {self.name!r}: child module {key!r} declares "
-                        f"its own target {child.target!r}; only the root module "
-                        "declares a target and children inherit it. The rule: "
-                        "tilefoundry spec core-ir target-inheritance"
-                    )
 
-    def resolve_target(self, instances: tuple[Module, ...] = ()) -> Target:
-        """Resolve the root target in an explicit instance stack."""
-        root = instances[0] if instances else self
+    def resolve_target(self) -> Target:
+        """Resolve this definition's own target."""
+        root = self
         if root.target is not None:
             return root.target
         raise ValueError(
@@ -371,12 +197,9 @@ class Module:
             "tilefoundry spec core-ir target-inheritance"
         )
 
-    def effective_topologies(self, instances: tuple[Module, ...] = ()) -> tuple[Topology, ...]:
-        """The nearest declaration in the explicit instance stack."""
-        for node in reversed(instances or (self,)):
-            if node.topologies is not None:
-                return node.topologies
-        return ()
+    def effective_topologies(self) -> tuple[Topology, ...]:
+        """This definition's declared topology hierarchy, or an empty one."""
+        return self.topologies if self.topologies is not None else ()
 
     def resolve_topology(self, name: str) -> Topology:
         """The effective Topology named *name*.
@@ -518,6 +341,7 @@ class Module:
         return self._load_under(resource, self.target, (), "")
 
     def _load_under(self, resource, target, topologies, path: str) -> "LoadedModule":
+        target = self.target if self.target is not None else target
         topologies = self.topologies if self.topologies is not None else topologies
         children = {}
         for key, slot in self.children.items():
@@ -569,7 +393,7 @@ class Module:
             DictResource,
         )
 
-        target = self.target if target is None else target
+        target = self.target if self.target is not None else target
         topologies = self.topologies if self.topologies is not None else topologies
         children = {}
         for key, slot in self.children.items():
@@ -669,7 +493,7 @@ class LoadedModule:
         matches = tuple(fn for fn in module.functions if fn.name == name)
         if len(matches) == 1:
             return _replace(
-                self, module=_reentered(module, name, target=self.target, topologies=self.topologies)
+                self, module=_replace(module, entry=name, target=self.target, topologies=self.topologies)
             )
         if len(matches) > 1:
             raise AttributeError(
@@ -695,121 +519,4 @@ class LoadedModule:
         return self.module.entry_function(), self
 
 
-def _reentered(module: Module, entry: str | None, *, target, topologies) -> Module:
-    """Re-root a selected definition with its instance's effective context."""
-    return _replace(module, entry=entry, target=target, topologies=topologies)
-
-
-def select(module: Module, path: str) -> Module:
-    """The node dotted *path* names below *module*, as a Module.
-
-    Slots are addressed by key and indexed slots also consume an index segment.
-    The last segment may select a function of the reached definition. Non-empty
-    paths return a re-rooted copy with inherited target and topologies; the
-    empty path returns the input root itself.
-
-    See [core-ir §1.2](docs/spec/core-ir.md#12-selecting-a-node-by-path).
-    """
-    if not path:
-        return module
-    selected = module
-    topologies = module.effective_topologies()
-    segments = path.split(".")
-    if any(not segment for segment in segments):
-        raise ValueError(
-            f"selector {path!r}: an empty segment names nothing. Dropping it would "
-            f"make two different paths mean the same node"
-        )
-    position = 0
-    entry = selected.entry
-    while position < len(segments):
-        name = segments[position]
-        position += 1
-        slot = selected.children.get(name)
-        if slot is None:
-            if position != len(segments):
-                raise ValueError(
-                    f"selector {path!r}: Module {selected.name!r} has no child module {name!r}"
-                )
-            selected.lookup(name)
-            entry = name
-            break
-        if slot.indexed:
-            if position == len(segments):
-                raise ValueError(f"selector {path!r}: ModuleList slot {name!r} requires an index")
-            try:
-                index = int(segments[position])
-            except ValueError:
-                raise ValueError(
-                    f"selector {path!r}: ModuleList slot {name!r} requires an integer index"
-                ) from None
-            position += 1
-            validate_instance_slot(slot, index)
-            selected = slot.elements[index]
-        else:
-            selected = slot.elements[0]
-        entry = selected.entry
-        if selected.topologies is not None:
-            topologies = selected.topologies
-    return _reentered(selected, entry, target=module.target, topologies=topologies)
-
-
-def function_scopes(module: Module, prefix: str = ""):
-    """Declared functions with their first DFS selector and explicit instance scope."""
-    from tilefoundry.visitor_registry.contexts import FunctionScope, ModuleInstance  # noqa: PLC0415
-
-    seen: set[int] = set()
-    functions: set[int] = set()
-
-    def visit(node, path, frames):
-        if id(node) in seen:
-            return
-        seen.add(id(node))
-        for function in node.functions:
-            if id(function) not in functions:
-                functions.add(id(function))
-                yield f"{path}{function.name}", FunctionScope(node, function, frames)
-        for key, slot in node.children.items():
-            for index, child in enumerate(slot.elements):
-                taken = index if slot.indexed else None
-                suffix = f"{key}.{index}." if slot.indexed else f"{key}."
-                yield from visit(
-                    child, f"{path}{suffix}", (*frames, ModuleInstance(child, key, taken))
-                )
-
-    yield from visit(module, prefix, (ModuleInstance(module),))
-
-
-def function_selectors(module: Module, prefix: str = "") -> tuple[tuple[str, HirFunction], ...]:
-    """One selector per definition, using its first DFS instance path.
-
-    Paths are root-relative and dotted: a leaf is qualified by the slot keys
-    and indices through which its definition was first reached. PrimFunction
-    implementations are excluded from this HIR inventory.
-
-    See [core-ir §1.2](docs/spec/core-ir.md#12-selecting-a-node-by-path).
-    """
-    return tuple(
-        (selector, scope.function)
-        for selector, scope in function_scopes(module, prefix)
-        if isinstance(scope.function, HirFunction)
-    )
-
-
-__all__ = [
-    "LoadedModule",
-    "Module",
-    "ModuleList",
-    "instance_slot",
-    "validate_instance_slot",
-    "ModuleFunction",
-    "called_functions",
-    "called_function_scopes",
-    "reachable_function_scopes",
-    "resolve_callee",
-    "function_scopes",
-    "function_selectors",
-    "module_functions",
-    "reachable_functions",
-    "select",
-]
+__all__ = ["Module", "ModuleList", "LoadedModule"]

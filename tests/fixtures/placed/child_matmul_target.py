@@ -1,8 +1,7 @@
-"""Child Modules with no Target of their own, reached from a CUDA root.
+"""Child Modules sharing the CUDA target of their root.
 
-Each child carries an on-chip matmul result around its K loop. Only a root may
-declare a Target, so a child's is the root's, and the carried value is where a
-CUDA MMA writes its result: an f32 register tile. ``ChildMatmulDirect`` hands
+Each child carries an on-chip matmul result around its K loop. The carried
+value is where a CUDA MMA writes its result: an f32 register tile. ``ChildMatmulDirect`` hands
 that tile straight back, so the root's own call is typed by the same rule;
 ``ChildMatmulStaged`` keeps the loop in a specialization variant.
 """
@@ -17,7 +16,7 @@ BK = 16
 K_LEN = DimVar("k_len", BK, K)
 
 
-@module(entry="run", topologies=(Topology("cta", 1),))
+@module(entry="run", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class ChildMatmul:
     @func
     def run(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]) -> Tensor[(M, N), "f32"]:
@@ -32,7 +31,7 @@ class ChildMatmul:
             return tf.reshard(acc, (M, N), "gmem")
 
 
-@module(entry="direct", topologies=(Topology("cta", 1),))
+@module(entry="direct", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class ChildMatmulDirect:
     @func
     def direct(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]):
@@ -47,7 +46,7 @@ class ChildMatmulDirect:
             return acc
 
 
-@module(entry="staged", topologies=(Topology("cta", 1),))
+@module(entry="staged", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class ChildMatmulStaged:
     @func
     def staged(

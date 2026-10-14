@@ -60,8 +60,8 @@ class Module:
     methods: Mapping[str, object] = field(default_factory=dict)
 
     def weights(self) -> Mapping[str, TensorType]: ...
-    def resolve_target(self, instances: tuple[Module, ...] = ()) -> Target: ...
-    def effective_topologies(self, instances: tuple[Module, ...] = ()) -> tuple[Topology, ...]: ...
+    def resolve_target(self) -> Target: ...
+    def effective_topologies(self) -> tuple[Topology, ...]: ...
     def resolve_topology(self, name: str) -> Topology: ...
     def owns(self, function: object, *, derived: bool = False) -> bool: ...
     def load(self, resource) -> "LoadedModule": ...
@@ -79,9 +79,9 @@ class Module:
     function bodies remain shared; placing a definition creates no copy and no
     parent backlink. A class-body `Module` becomes a single-element,
     non-indexed slot; a class-body `ModuleList` is held as authored.
-  - a child declares no Target, so its bodies are typed without one, and
-    holding it does not type them again. A call of a child function is typed
-    from the callee body under the caller's effective Target with the call's
+  - a child MAY declare its own Target; holding it does not type its bodies
+    again. A call of a child function is typed
+    from the callee body under the callee's effective Target with the call's
     own argument types ([hir §1.1](./hir.md#11-function)); that writes the
     caller's `Call.type` and nothing in the child.
   - `owns(function)` MUST use identity and accept the Module's direct functions
@@ -108,8 +108,8 @@ Python-to-HIR entry and HIR-to-HIR device calls are governed by
   effective levels and creates a lexical mesh binding.
 
 **Effective context.** `target` and `topologies` record what a Module
-*declares*, not what it resolves to; resolution uses the explicit root-to-current instance stack and is not
-copied onto shared definitions or Functions.
+*declares*, not what it resolves to; a visitor carries the effective declarations in its current `CallFrame`,
+without copying them onto shared definitions or Functions.
 
 - constraints:
   - `topologies = None` declares nothing and inherits the nearest instance declaration;
@@ -152,14 +152,15 @@ copied onto shared definitions or Functions.
 #### Target inheritance
 
 A Module's target declaration belongs to its execution domain and is resolved
-from the root of its explicit instance stack.
+by the visitor from the callee declaration or the inherited caller context.
 
 - constraints:
-  - `resolve_target(instances)` MUST return the target on the stack's root.
-    Without a supplied stack this Module is treated as the root.
-  - Only the outermost Module of a tree MAY declare a target. A child Module
-    that declares a target of its own MUST be refused when it is attached, and
-    MUST inherit its owner's target instead.
+  - `resolve_target()` MUST return this Module's declared target. Inherited
+    context belongs to the visitor's `CallFrame`, not the shared Module.
+  - A child Module MAY declare a target. A visitor entering a callee MUST use
+    the callee's declaration when present, otherwise inherit the caller's target,
+    using the same rule as topologies. Analyze MUST reject calls whose resolved
+    target or topology hierarchy differs between caller and callee.
   - A root Module with no target declaration MUST be refused
     when its target is resolved. Its root Module MUST declare one, for example
     with `target=CudaTarget("nvidia.h200_sxm")`.
@@ -167,8 +168,8 @@ from the root of its explicit instance stack.
     A string MUST be refused rather than resolved or constructed.
   - `resolve_target()` MUST return the exact instance the root declared; it MUST
     NOT reconstruct or replace an equal value.
-  - A Module reused as an owned child and as an independently analysed root
-    declares a target only in the latter role.
+  - A Module used independently MUST declare its own target; an undeclared
+    child inherits only while a visitor runs under its caller's context.
   - A Module published as an independently analysable root MUST declare both
     its target and the topology levels it is aimed at, so that Analyze answers
     it as it is published rather than after an edit. Naming the device is
@@ -198,24 +199,14 @@ step.
   - A bare `@func` / `@prim_func` MUST become an implicit single-function
     Module whose `entry` names that function.
 
-The shared HIR call-graph queries are:
-
-```python
-def called_functions(function: HirFunction, scope: FunctionScope | None = None) -> tuple[HirFunction, ...]: ...
-def reachable_functions(root: HirFunction, scope: FunctionScope | None = None) -> tuple[HirFunction, ...]: ...
-```
-
-- constraints:
-  - `called_functions` MUST return each direct Function-call target in the
-    body's operand-before-consumer definition order, deduplicated by Function
-    identity. Instance targets resolve to the selected element's entry.
-  - `reachable_functions` MUST return the root followed by its transitively
-    called Functions, callers before callees and deduplicated by Function
-    identity.
-
-  - Function targets MAY be queried without a scope. Instance targets MUST
-    receive a `FunctionScope`; missing scope raises explicitly. Each recursive
-    instance call pushes the selected child frame using [§2.1](#21-call).
+`tilefoundry.ir.module_utils.list_call_paths(root)` enumerates each declared
+function once by identity, in DFS first-instance order. It returns a
+`dict[call_path, CallFrame]`, including HIR Functions and PrimFunctions. A
+call path is a dot-separated string. The frame records the current Module,
+function, effective target, and effective topologies; shared definitions use the first
+path for generated names, including indexed segments such as `layers.0.run`.
+Call paths are diagnostic and naming output, not an API for selecting a child.
+A child used independently is supplied directly as its own Module definition.
 
 ### 1.1 Function access
 
@@ -250,27 +241,6 @@ shape-specialization variants live inside that entry's `Function.variants`
   (`m.forward(...)`). Names beginning with `_` are never functions, modules, or
   methods and resolve by normal attribute rules. This lets a module read like
   the model it mirrors — `decoder.layer0.attention`.
-
-### 1.2 Selecting a node by path
-
-A caller that names one kernel of a tree needs the kernel *and* the execution
-domain it belongs to: a `Function` carries neither the Target its numbers are
-measured against nor the topology hierarchy they divide over, so a bare function
-is not a thing a cost can be stated about.
-
-- constraints:
-  - `select(module, path)` MUST resolve a dotted `path` relative to `module`
-    and return a `Module`. A child segment MUST name a `children` key; an
-    indexed slot MUST be followed by an integer element index in range. The
-    last segment MAY name one of the reached module's own functions. Every
-    non-empty path MUST return a re-rooted copy with the root's exact target
-    and the nearest declared topologies, optionally re-entried at the selected
-    function. An empty path is the input module; an empty segment MUST be refused.
-  - `subtree` and `module_functions` MUST enumerate each definition once by
-    identity, in DFS order. `function_selectors(module)` MUST return one entry
-    per HIR Function definition with its first DFS instance path, including
-    indexed segments such as `layers.0.run`. It MUST NOT return `PrimFunction`
-    entries. Shared definitions produce one kernel using that first path.
 
 ### 1.3 `ModuleList`
 

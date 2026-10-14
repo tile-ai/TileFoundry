@@ -62,7 +62,7 @@ logical Split axes when that projection is possible; if factored splits have
 no local logical box, it compares whole types instead.
 
 Each single-issue operand MUST match the corresponding instruction parameter
-pattern. `match_instruction(op_type, attributes, operand_types, mesh, *, scope,
+pattern. `match_instruction(op_type, attributes, operand_types, mesh, *, frame,
 repeat=None, order=None)` returns a tuple of frozen `InstructionMatch(op, path)`
 records. Each op uses the existing constructor; its path contains every binding
 from the closed matcher in binding order. A `ScheduleRefusal` carries the

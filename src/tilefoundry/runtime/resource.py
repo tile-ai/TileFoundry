@@ -14,7 +14,7 @@ from typing import Any, Callable, Mapping, Protocol, Union
 import torch
 
 from tilefoundry.evaluator.value import to_torch_dtype
-from tilefoundry.ir.core.module import Module, ModuleList, validate_instance_slot
+from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.types.tensor_type import TensorType
 
 
@@ -343,7 +343,6 @@ class DrawnResource:
                 index = int(seg)
             except ValueError:
                 raise KeyError(seg) from None
-            validate_instance_slot(self._module, index)
             child = self._module.elements[index]
         else:
             slot = self._module.children[seg]

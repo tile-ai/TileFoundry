@@ -1,11 +1,12 @@
 """Module-owned execution context: Target and the ordered Topology hierarchy.
 
 A Module is the execution domain of the functions it owns. The outermost
-Module declares the Target and every Module below it inherits that one
-declaration. Topologies are declared per Module: omitting them inherits the
-owner's hierarchy, while an explicit empty tuple declares a topology-free
-domain. Resolution is lexical over the Module tree, so a selected Module
-answers for its own effective context without any Function carrying it.
+Module declares its Target; a child declaration defines its own domain, while
+an undeclared child inherits during a visitor walk. Topologies are declared per
+Module: omitting them inherits the owner's hierarchy, while an explicit empty
+tuple declares a topology-free
+domain. A visitor frame supplies inherited context without any
+Function carrying it.
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ from tests._source import import_dsl
 from tests.fixtures.logical import module_context as context_fixture
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import VerifyError
-from tilefoundry.ir.core.module import Module, select
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CTA = context_fixture.CONTEXT_CTA
@@ -28,22 +30,16 @@ _THREAD = context_fixture.CONTEXT_THREAD
 _Root = context_fixture.ContextTree
 
 
-def test_the_root_declaration_is_the_only_target_anywhere_below() -> None:
-    """Test the root declaration is the only target anywhere below.
-
-    One Target is declared at the outermost Module and every Module below it
-    resolves to that one; a child that declares its own is rejected rather than
-    shadowing its instance root, and an undeclared root names the missing target.
-    """
-    assert _Root.resolve_target() == CudaTarget("nvidia.h200_sxm")
-    assert select(_Root, "inherits").resolve_target() == CudaTarget("nvidia.h200_sxm")
-    assert select(_Root, "topology_free").resolve_target() == CudaTarget("nvidia.h200_sxm")
-    assert select(_Root, "replaces").resolve_target() == CudaTarget("nvidia.h200_sxm")
-
+def test_a_target_declaration_defines_its_own_execution_domain() -> None:
+    """A child's target can differ; an undeclared standalone root has no target."""
+    target = _Root.resolve_target()
+    assert target == CudaTarget("nvidia.h200_sxm")
+    assert all(frame.target is target for frame in list_call_paths(_Root).values())
     forward = _Root.lookup("forward")
     child = Module("child", (forward,), "forward", target=CpuTarget())
-    with pytest.raises(ValueError, match="child module 'child' declares its own target"):
-        Module("root", (), "forward", children={"child": ModuleList(child)}, target=CudaTarget("nvidia.h200_sxm"))
+    root = Module("root", (forward,), "forward", children={"child": ModuleList(child)}, target=target)
+    assert root.resolve_target() is target
+    assert child.resolve_target() is child.target
 
     with pytest.raises(ValueError, match="Module 'bare'.*no target is declared"):
         Module("bare", (forward,), "forward").resolve_target()
@@ -74,17 +70,18 @@ def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
     tuple replaces the inherited hierarchy whole rather than extending it.
     """
     assert _Root.inherits.topologies is None
-    inherits = select(_Root, "inherits")
-    assert inherits.effective_topologies() == (_CTA, _WARP)
-    assert inherits.resolve_topology("warp") is _WARP
+    inherits = _Root.inherits
+    frame = next(frame for frame in list_call_paths(_Root).values() if frame.module is inherits)
+    assert frame.topologies == (_CTA, _WARP)
+    assert frame.topologies[1] is _WARP
 
     assert _Root.topology_free.topologies == ()
-    topology_free = select(_Root, "topology_free")
+    topology_free = _Root.topology_free
     assert topology_free.effective_topologies() == ()
     with pytest.raises(ValueError, match="no topology named 'cta'"):
         topology_free.resolve_topology("cta")
 
-    replaces = select(_Root, "replaces")
+    replaces = _Root.replaces
     assert replaces.effective_topologies() == (_THREAD,)
     assert replaces.resolve_topology("thread") is _THREAD
     with pytest.raises(ValueError, match="no topology named 'cta'"):

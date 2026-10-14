@@ -30,7 +30,8 @@ from typing import Literal
 
 import pytest
 
-from tilefoundry.ir.core.module import Module, function_selectors, select, subtree
+from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import Topology
 from tilefoundry.target.base import Target
@@ -295,20 +296,13 @@ class ModelCase:
                 f"{type(self.prototype).__name__}, not a Module"
             )
         shared = {}
-        for node in subtree(self.prototype):
+        for node in (self.prototype, *(frame.module for frame in list_call_paths(self.prototype).values())):
             if node.target is not None:
                 shared[id(node.target)] = node.target
             if node.topologies is not None:
                 shared[id(node.topologies)] = node.topologies
                 shared.update((id(topology), topology) for topology in node.topologies)
         return deepcopy(self.prototype, shared)
-
-    def _scoped(self, root: Module) -> Module:
-        """The domain `scope` names below *root*, which inherits *root*'s machine."""
-        try:
-            return select(root, self.scope)
-        except (TypeError, ValueError) as error:
-            raise CorpusError(f"model case {self.id!r}: {error}") from None
 
     def build(self) -> Module:
         """A Module nothing else holds a reference to.
@@ -317,11 +311,15 @@ class ModelCase:
         Function and no Call, so an analysis that annotates one is invisible to
         the other and to the prototype they both came from.
         """
-        return self._scoped(self._root())
+        if self.scope:
+            raise CorpusError("use the child module directly as the case prototype")
+        return self._root()
 
     def build_for(self, fixture: TargetFixture) -> Module:
         """A fresh Module aimed at one machine, in the one order that isolates."""
-        return self._scoped(fixture.bind(self._root()))
+        if self.scope:
+            raise CorpusError("use the child module directly as the case prototype")
+        return fixture.bind(self._root())
 
     def inventory(self, module: Module | None = None) -> tuple[str, ...]:
         """Every HIR function this model really defines, as root-relative
@@ -333,7 +331,7 @@ class ModelCase:
         instead of dropping out of the report along with it.
         """
         built = self.build() if module is None else module
-        return tuple(selector for selector, _ in function_selectors(built))
+        return tuple(path for path, frame in list_call_paths(built).items() if frame.module is built and isinstance(frame.function, Function))
 
     def selected(self, kind: Literal["analyze"]) -> tuple[str, ...]:
         cases = self.analyze
@@ -358,16 +356,10 @@ class ModelCase:
         would resolve to whatever that Module happens to nominate as its default
         step, which is an answer to a question no case asked.
         """
-        *path, name = selector.split(".")
         try:
-            owner = select(module, ".".join(path))
-            if name in owner.children:
-                raise ValueError(
-                    f"{selector!r} names the child Module {name!r}, not a "
-                    f"function; name the function of it this case selects"
-                )
-            found = owner.lookup(name)
-            selected = select(module, selector)
+            if "." in selector:
+                raise ValueError("supply the child module directly and name its function")
+            found = module.lookup(selector)
         except (TypeError, ValueError) as error:
             raise CorpusError(f"model case {self.id!r}: {error}") from None
         if not isinstance(found, Function):
@@ -375,7 +367,7 @@ class ModelCase:
                 f"model case {self.id!r}: {selector!r} is a "
                 f"{type(found).__name__}, not an HIR function"
             )
-        return selected, found
+        return module, found
 
 
 
@@ -435,17 +427,16 @@ def placed_fixture_roots() -> tuple[tuple[str, str, Module], ...]:
     """Every reusable placed program, by the file and the name it is published under.
 
     Walked rather than listed, so a fixture added to the package joins the
-    inventory instead of quietly escaping it. A Module reached as somebody's
-    child is not a root: it is asked about through the parent whose machine it
-    inherits. One of these files names its neighbour the way a script does,
+    inventory instead of quietly escaping it. An unmounted definition remains
+    a root; a definition declaring its own target is also a root even when held
+    as a child.
+    One of these files names its neighbour the way a script does,
     because the CLI loads them by path, so the package directory is on the path
     while they import.
     """
     import importlib
     import pkgutil
     import sys
-
-    from tilefoundry.ir.core.module import subtree
 
     import tests.fixtures.placed as placed
 
@@ -463,13 +454,13 @@ def placed_fixture_roots() -> tuple[tuple[str, str, Module], ...]:
             children = {
                 id(child)
                 for _name, owner in named
-                for child in subtree(owner)
-                if child is not owner
+                for frame in list_call_paths(owner).values()
+                for child in (frame.module,) if child is not owner
             }
             found.extend(
                 (info.name, name, value)
                 for name, value in named
-                if id(value) not in children
+                if id(value) not in children or value.target is not None
             )
     finally:
         sys.path.pop(0)
@@ -495,8 +486,10 @@ def placed_cases(level: str = "cta") -> tuple[ConcreteCase, ...]:
         facts = root.resolve_target().get_facts(TopologyFacts)
         if level not in tuple(t.name for t in facts.topologies):
             continue
-        for selector, function in function_selectors(root):
-            owner = select(root, selector)
+        for selector, frame in list_call_paths(root).items():
+            if frame.module is not root or not isinstance(frame.function, Function):
+                continue
+            owner, function = frame.module, frame.function
             for dims in STATED_DIMS.get((file, selector)) or (
                 _probe_dims(owner, function),
             ):

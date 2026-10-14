@@ -39,7 +39,7 @@ from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
 from tilefoundry.analysis.liveness import analyze_liveness
-from tilefoundry.analysis.program import frame_values
+from tilefoundry.analysis.program import invocation_values
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
@@ -101,12 +101,12 @@ class _PersistentScheduleExpectation:
 
 
 EXPECTED_MEMORY_PEAKS = {
-    "child_matmul_target.ChildMatmulRoot.child.run[static]": {
+    "child_matmul_target.ChildMatmul.run[static]": {
         "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
         "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
-    "child_matmul_target.ChildMatmulRoot.direct.direct[static]": {
+    "child_matmul_target.ChildMatmulDirect.direct[static]": {
         "gmem": 64 * 64 * 2 + 64 * 32 * 2,
         "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
@@ -126,7 +126,7 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
-    "child_matmul_target.ChildMatmulRoot.staged.staged[k_len=64]": {
+    "child_matmul_target.ChildMatmulStaged.staged[k_len=64]": {
         "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
         "rmem": 64 * 32 * 4,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
@@ -141,8 +141,8 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 128 * 4 + 8,
         "smem": 2 * 128 * 64 * 2 + 1_044,
     },
-    "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 8 * 2 + 8 * 2},
-    "fused_boundary.FusedBoundary.inner.scale[static]": {"rmem": 256},
+    "fused_boundary.Inner.run[static]": {"rmem": 8 * 2 + 8 * 2},
+    "fused_boundary.Inner.scale[static]": {"rmem": 256},
     "fused_boundary.FusedBoundary.root[static]": {
         "gmem": 512,
         "rmem": 8 * 2 + 8 * 4,
@@ -341,8 +341,8 @@ EXPECTED_MEMORY_PEAKS = {
     "specialize_through_call.ToCallee.pick[n=128]": {"gmem": 1_024, "smem": 64},
     "specialize_through_call.ToCallee.run[n=128]": {"gmem": 1_024, "smem": 64},
     "square_cuda.Model.main[static]": {"gmem": 676, "rmem": 4},
-    "tiny_tp_decoder.TinyTPDecoderLM.layer.decode[static]": {"gmem": 48, "rmem": 16},
-    "tiny_tp_decoder.TinyTPDecoderLM.layer.project[static]": {"gmem": 128},
+    "tiny_tp_decoder.DecoderLayer.decode[static]": {"gmem": 48, "rmem": 16},
+    "tiny_tp_decoder.DecoderLayer.project[static]": {"gmem": 128},
     "tp_all_to_all.TransposeShard.transpose_shard[static]": {"gmem": 256},
     "weighted_twin.Weighted.scaled[static]": {"gmem": 1_348, "rmem": 4},
 }
@@ -486,7 +486,7 @@ def assert_internal_contract(
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts, result.level)
-    for frame, expr in frame_values(result.frames[0]):
+    for frame, expr in invocation_values(result.frames[0]):
         if not isinstance(expr, Call) or id(expr) in result.program.sites:
             continue
         cost = result.records.get(frame, expr, ComputeCostMetadata)
@@ -511,7 +511,7 @@ def assert_internal_contract(
             (
                 scope
                 for scope in scopes
-                if scope.frame is frame and id(expr) in scope.accesses.get("narrow", {})
+                if scope.invocation is frame and id(expr) in scope.accesses.get("narrow", {})
             ),
             None,
         )
@@ -813,7 +813,7 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     assert result.function is not authored
     assert result.function.name == authored.name
     assert all(
-        residual_dims(body, result.program.scopes[id(body)]) == ()
+        residual_dims(body, result.program.frames[id(body)]) == ()
         for body in result.program.bodies()
     )
 

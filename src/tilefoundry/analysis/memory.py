@@ -41,7 +41,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
     static_bytes,
 )
-from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope
+from tilefoundry.visitor_registry.contexts import CallFrame, Cost, CostContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .allocation import (
@@ -75,7 +75,7 @@ from .metadata import (
     TrafficBytes,
 )
 from .precision import AnalysisPrecision
-from .program import FrameWalker, frame_key
+from .program import InvocationWalker, invocation_key
 from .visitor import AnalyzeContext
 
 SELECTOR = "memory"
@@ -544,7 +544,7 @@ def _footprint_inputs(
     return refused, available
 
 
-class MemoryVisitor(FrameWalker, ExprVisitor[None]):
+class MemoryVisitor(InvocationWalker, ExprVisitor[None]):
     """Attach per-Call traffic and aggregate it over each enclosing loop."""
 
     def call_result(self, expr, ctx):
@@ -623,7 +623,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 f"target topology in {owner_topologies}"
             )
     topologies = module.effective_topologies()
-    whole = CostContext(scope=FunctionScope(module, function))
+    whole = CostContext(frame=CallFrame(module, function))
     cache = cached_level(facts)
     wave = wave_of(module, context.target, topology_level) if cache is not None else None
     memory_level = cache[1] if cache is not None and wave is not None else None
@@ -644,7 +644,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     )
     locals_by_unit = {
         unit: CostContext(
-            scope=FunctionScope(module, function),
+            frame=CallFrame(module, function),
             topology_level=unit,
             topologies=topologies,
         )
@@ -677,12 +677,12 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     for item in merged_reached:
         if item.reached is not None:
             distinct.setdefault(
-                (frame_key(item.frame), id(item.buffer), item.index), item.buffer
+                (invocation_key(item.invocation), id(item.buffer), item.index), item.buffer
             )
     captured_names = {}
     for scope in walk_scopes(context.root):
         for param, _argument in scope.captures:
-            captured_names.setdefault((scope.frame.key, id(scope.capture_root(param))), param)
+            captured_names.setdefault((scope.invocation.key, id(scope.capture_root(param))), param)
     label_sources = {(key[0], key[1]): value for key, value in distinct.items()}
     label_values = (
         value if getattr(value, "name", None) else captured_names.get(key, value)
@@ -695,9 +695,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         + (f"[{key[2]}]" if isinstance(value.type, TupleType) else "")
         for key, value in distinct.items()
     }
-    liveness = analyze_liveness(function, context.root.frame)
+    liveness = analyze_liveness(function, context.root.invocation)
     placement = CostContext(
-        scope=FunctionScope(module, function),
+        frame=CallFrame(module, function),
         topology_level=topology_level,
         topologies=topologies,
     )
@@ -707,15 +707,18 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
 
     def multiplicity(frame):
         count = 1
-        for position, instance in enumerate(frame.instances[1:], 1):
-            if not isinstance(instance.index, Expr):
+        while frame.caller is not None:
+            site = frame.site
+            caller = frame.caller
+            if not isinstance(site.index, Expr):
+                frame = caller
                 continue
-            slot = frame.instances[position - 1].module.children[instance.key]
-            cursor = frame.scope
+            slot = caller.frame.module.children[site.key]
+            cursor = frame
             number = None
             while cursor is not None:
                 loop = cursor.owner
-                if isinstance(loop, LoopRegion) and loop.induction_var is instance.index:
+                if isinstance(loop, LoopRegion) and loop.induction_var is site.index:
                     start, stop, step = (
                         static_dim_value(value) for value in (loop.start, loop.extent, loop.step)
                     )
@@ -732,18 +735,19 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                     break
                 cursor = cursor.parent
             if number is None:
-                bounds = get_metadata(instance.index, RangeMetadata)
+                bounds = get_metadata(site.index, RangeMetadata)
                 number = (
                     len(slot.elements) if bounds is None
                     else max(0, min(len(slot.elements), bounds.hi) - max(0, bounds.lo))
                 )
             count *= number
+            frame = caller
         return count
 
     limits: dict[str, int] = {}
     for interval in liveness.intervals:
-        frame = interval.frame
-        key = (frame_key(frame), id(interval.value))
+        frame = interval.invocation
+        key = (invocation_key(frame), id(interval.value))
         multiplier = 1
         if frame is not None and frame.parent is not None and any(interval.value is weight for weight in frame.site.weights):
             resource = frame.resource_key(interval.value)
@@ -782,26 +786,26 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
 
     allocation.visit_function_body(function, model)
     definitions = {
-        (frame_key(interval.frame), id(interval.value)): index
+        (invocation_key(interval.invocation), id(interval.value)): index
         for index, interval in enumerate(liveness.intervals)
     }
     model.values.sort(
         key=lambda item: (
-            definitions[frame_key(item.frame), id(item.value)],
+            definitions[invocation_key(item.invocation), id(item.value)],
             item.index,
         )
     )
     allocation_values = tuple(model.values)
     material_values = tuple(item for item in allocation_values if item in model.material)
     producers = {
-        (frame_key(item.frame), id(item.value)): item.value
+        (invocation_key(item.invocation), id(item.value)): item.value
         for item in (*material_values, *allocation_values)
     }
     labels = dict(zip(producers, value_labels(producers.values()), strict=True))
     for item in allocation_values:
-        key = (frame_key(item.frame), id(item.value))
+        key = (invocation_key(item.invocation), id(item.value))
         label = resources.get(
-            key, (f"{item.frame.label}/" if item.frame and item.frame.parent else "") + labels[key]
+            key, (f"{item.invocation.label}/" if item.invocation and item.invocation.parent else "") + labels[key]
         )
         item.lifetime = replace(
             item.lifetime,
@@ -823,11 +827,11 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     if memory_level is not None and wave is not None:
         for scope, call, reached in memory_context.call_reached:
             repeats = scope.repeats_of(call, topology_level)
-            moved = context.records.get(scope.frame, call, MemoryMetadata)
+            moved = context.records.get(scope.invocation, call, MemoryMetadata)
             if moved is None:
                 raise AnalysisError("memory: Call footprint has no movement record")
             context.records.attach(
-                scope.frame,
+                scope.invocation,
                 call,
                 replace(
                     moved,
@@ -877,7 +881,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 claimed_rmem.update(resident)
         if region_levels:
             context.records.attach(
-                window.frame,
+                window.invocation,
                 window.region,
                 RegionMemoryMetadata(
                     solver_status="feasible",
@@ -905,13 +909,13 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                     continue
                 copies = result_copies(item.value)
                 buffer_bytes = item.lifetime.bytes // copies
-                moved = context.records.get(item.frame, item.value, MemoryMetadata)
+                moved = context.records.get(item.invocation, item.value, MemoryMetadata)
                 if isinstance(item.value, Var) and moved is None:
                     moved = MemoryMetadata()
                 if moved is None:
                     raise AnalysisError("memory: placed Call has no movement record")
                 context.records.attach(
-                    item.frame,
+                    item.invocation,
                     item.value,
                     replace(
                         moved,
@@ -942,7 +946,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         )
     levels = tuple(levels_list)
     tuple_results = {
-        (item.frame, id(item.value)): item.value
+        (item.invocation, id(item.value)): item.value
         for item in material_values
         if isinstance(item.value, Call) and isinstance(item.value.type, TupleType)
     }
@@ -959,18 +963,18 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 offsets=tuple(
                     offsets[item]
                     for item in material_values
-                    if item.frame is frame and item.value is producer and item in offsets
+                    if item.invocation is frame and item.value is producer and item in offsets
                 ),
             ),
         )
     shared = {}
     for item in allocation_values:
-        frame = item.frame
+        frame = item.invocation
         if (
             frame is None
             or frame.parent is None
-            or any(item.value is param for param in frame.body.params)
-            or (frame.result_tied and item.value is frame.body.body)
+            or any(item.value is param for param in frame.function.params)
+            or (frame.result_tied and item.value is frame.function.body)
         ):
             continue
         if item.lifetime.memory_level == "gmem" or item.lifetime.persistent:
@@ -992,7 +996,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         if key in shared and shared[key][1] != state:
             previous, value = shared[key]
             raise AnalysisError(
-                f"callee {frame.body.name!r} node {item.lifetime.binding!r} has incompatible placement at {previous.label!r} and {frame.label!r}: {value!r} versus {state!r}"
+                f"callee {frame.function.name!r} node {item.lifetime.binding!r} has incompatible placement at {previous.label!r} and {frame.label!r}: {value!r} versus {state!r}"
             )
         shared[key] = frame, state
     errors = tuple(

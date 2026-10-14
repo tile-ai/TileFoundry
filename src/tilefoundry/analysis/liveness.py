@@ -11,7 +11,7 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 
-from .program import frame_key
+from .program import invocation_key
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class LiveInterval:
     value: Expr
     defined_at: int
     last_used_at: int
-    frame: object | None = None
+    invocation: object | None = None
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class UseEvent:
     value: Expr
     at: int
     synthetic: bool = False
-    frame: object | None = None
+    invocation: object | None = None
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ class RegionInterval:
     region: MeshRegion
     entered_at: int
     exited_at: int
-    frame: object | None = None
+    invocation: object | None = None
 
 
 @dataclass(frozen=True)
@@ -53,14 +53,14 @@ class Liveness:
     regions: tuple[RegionInterval, ...]
     timeline_end: int
 
-    def interval_of(self, value: Expr, frame=None) -> LiveInterval | None:
+    def interval_of(self, value: Expr, invocation=None) -> LiveInterval | None:
         """Return *value*'s interval when it belongs to this timeline."""
         return next(
             (
                 item
                 for item in self.intervals
                 if item.value is value
-                and frame_key(item.frame) is frame_key(frame)
+                and invocation_key(item.invocation) is invocation_key(invocation)
             ),
             None,
         )
@@ -74,9 +74,9 @@ def result_copies(expr: Expr) -> int:
 class LivenessVisitor(ExprVisitor[None]):
     """Build definition/use intervals while preserving structured SSA edges."""
 
-    def __init__(self, function: Function, frame=None) -> None:
+    def __init__(self, function: Function, invocation=None) -> None:
         super().__init__(root_function=function)
-        self.frame = frame
+        self.invocation = invocation
         self.bindings = {}
         self.point = -1
         self.states: dict[int, LiveInterval] = {}
@@ -107,15 +107,15 @@ class LivenessVisitor(ExprVisitor[None]):
 
     def define(self, value: Expr, point: int) -> None:
         """Record the one definition of *value*."""
-        key = (frame_key(self.frame), id(value))
+        key = (invocation_key(self.invocation), id(value))
         if key in self.states:
             raise ValueError(f"liveness: {type(value).__name__} is defined more than once")
-        self.states[key] = LiveInterval(value, point, point, self.frame)
+        self.states[key] = LiveInterval(value, point, point, self.invocation)
         self.definition_order.append(key)
 
     def use(self, value: Expr, point: int, *, synthetic: bool = False) -> None:
         """Extend the SSA value through one use."""
-        key = (frame_key(self.frame), id(value))
+        key = (invocation_key(self.invocation), id(value))
         state = self.states.get(key)
         if state is None:
             raise ValueError(f"liveness: {type(value).__name__} is used before its definition")
@@ -123,14 +123,14 @@ class LivenessVisitor(ExprVisitor[None]):
             if state.defined_at < entry:
                 outside.add(key)
         self.states[key] = replace(state, last_used_at=max(state.last_used_at, point))
-        self.uses.append(UseEvent(value, point, synthetic, self.frame))
+        self.uses.append(UseEvent(value, point, synthetic, self.invocation))
         if key in self.bindings:
             parent, arg = self.bindings[key]
-            saved, self.frame = self.frame, parent
+            saved, self.invocation = self.invocation, parent
             try:
                 self.use(arg, point, synthetic=synthetic)
             finally:
-                self.frame = saved
+                self.invocation = saved
 
     def finish(self) -> Liveness:
         """Freeze the definition-ordered result."""
@@ -154,32 +154,32 @@ class LivenessVisitor(ExprVisitor[None]):
         self.define(value, point)
         if result_copies(value) > 1 and self.loop_entries:
             self.loop_entries[-1][2].add(
-                (frame_key(self.frame), id(value))
+                (invocation_key(self.invocation), id(value))
             )
 
     def visit_Call(self, call, ctx=None):
-        child = None if self.frame is None else self.frame.callees.get(id(call))
+        child = None if self.invocation is None else self.invocation.callees.get(id(call))
         if child is None:
             return self.default_visit_leaf(call, self.visit_operands(call, ctx), ctx)
         for arg in call.args:
             self.visit(arg, ctx)
-        if child.site.index is not None:
+        if isinstance(child.site.index, Expr):
             self.visit(child.site.index, ctx)
         argument_use = self.next_event()
         for arg in call.args:
             self.use(arg, argument_use)
-        parent, self.frame = self.frame, child
+        parent, self.invocation = self.invocation, child
         memo, self._memo = self._memo, {}
         try:
             definition = self.next_event()
-            for param in child.body.params:
+            for param in child.function.params:
                 self.define(param, definition)
             for param, arg in zip(child.site.activations, call.args, strict=True):
                 self.bindings[child.key, id(param)] = parent, arg
-            self.visit(child.body.body, ctx)
-            self.use(child.body.body, self.next_event())
+            self.visit(child.function.body, ctx)
+            self.use(child.function.body, self.next_event())
         finally:
-            self.frame = parent
+            self.invocation = parent
             self._memo = memo
         self.define(call, self.next_event())
 
@@ -197,7 +197,7 @@ class LivenessVisitor(ExprVisitor[None]):
         self.visit(region.body, ctx)
         body_use = self.next_event()
         self.use(region.body, body_use)
-        self.regions.append(RegionInterval(region, argument_use, body_use, self.frame))
+        self.regions.append(RegionInterval(region, argument_use, body_use, self.invocation))
         self.define(region, self.next_event())
 
     def visit_LoopRegion(self, region: LoopRegion, ctx=None) -> None:
@@ -224,9 +224,9 @@ class LivenessVisitor(ExprVisitor[None]):
             self.use(yielded, backedge)
         outside, staged = self.loop_entries.pop()[1:]
         for key in outside:
-            saved, self.frame = self.frame, self.states[key].frame
+            saved, self.invocation = self.invocation, self.states[key].invocation
             self.use(self.states[key].value, backedge, synthetic=True)
-            self.frame = saved
+            self.invocation = saved
         for key in staged:
             self.states[key] = replace(
                 self.states[key], defined_at=phi_definition, last_used_at=backedge
@@ -241,11 +241,11 @@ class LivenessVisitor(ExprVisitor[None]):
         self.define(region, self.next_event())
 
 
-def analyze_liveness(function: Function, frame=None) -> Liveness:
+def analyze_liveness(function: Function, invocation=None) -> Liveness:
     """Build target-independent intervals for a checked HIR function."""
     if function.body is None:
         raise ValueError(f"liveness: function {function.name!r} has no body")
-    visitor = LivenessVisitor(function, frame)
+    visitor = LivenessVisitor(function, invocation)
     visitor.visit_function_body(function)
     return visitor.finish()
 

@@ -173,7 +173,8 @@ def emit_cuda_module(
     preamble = render(
         "cuda_preamble.cu.j2",
         program_topology=topology_scope_str(
-            module.effective_topologies()[0].name if module.effective_topologies() else "cta"
+            ctx.codegen_context.topology_domains[id(kernels[0])].topologies[0].name
+            if ctx.codegen_context.topology_domains[id(kernels[0])].topologies else "cta"
         ),
         program_dims=_program_dims(geometry),
         dynamic_cta=static_dim_value(geometry[0][0]) is None,

@@ -10,7 +10,7 @@ import types
 from dataclasses import replace
 from typing import Callable
 
-from tilefoundry.ir.core.module import Module, ModuleList, _refuse_bare_call
+from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.types import Placement, Topology
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.tensor_type import TensorType
@@ -190,7 +190,12 @@ class _Twin(RuntimeModule):
             return method(self, *acts)
 
 
-        _refuse_bare_call(self._ir, "RuntimeModule")
+        if self._ir.entry is None:
+            named = sorted({fn.name for fn in self._ir.functions} | set(self._ir.methods))
+            raise TypeError(
+                f"RuntimeModule {self._ir.name!r} has no entry, so it has no default step; "
+                f"call one by name" + (f" -- {', '.join(named)}" if named else "")
+            )
         return getattr(self, self._ir.entry)(*acts)
 
     def __getattr__(self, name: str):

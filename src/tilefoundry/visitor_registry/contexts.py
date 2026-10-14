@@ -28,88 +28,45 @@ class TypeInferResults:
 
 
 @dataclass(frozen=True)
-class ModuleInstance:
-    """A definition reached through one slot in the current instance path."""
-
-    module: Module
-    key: str | None = None
-    index: int | Expr | None = None
-
-
-@dataclass(frozen=True)
-class FunctionScope:
-    """The current body and its explicit root-to-current instance stack.
-
-    A Function carries no execution context and a shared definition can be
-    reached through several instance paths. The supplied stack answers where
-    the current body runs and what it may reach within this invocation.
-    """
+class CallFrame:
+    """Current definition and its effective execution context on a call path."""
 
     module: Module
     function: Function | None
-    instances: tuple[ModuleInstance, ...] = ()
+    target: Target | None = None
+    topologies: tuple[Topology, ...] | None = None
 
     def __post_init__(self):
-        if not self.instances:
-            object.__setattr__(self, "instances", (ModuleInstance(self.module),))
-
-    def enter(self, target: object) -> FunctionScope:
-        """Enter a target's instance using the current frame's child definitions.
-
-        Targets may retain slots from before replace(); only their key and index
-        locate the definition. A Function target keeps the current instance.
-        """
-        from tilefoundry.ir.core.module import (  # noqa: PLC0415
-            instance_slot,
-            validate_instance_slot,
-        )
-
-        located = instance_slot(target)
-        if located is None:
-            return FunctionScope(self.module, None, self.instances)
-        slot, raw_index = located
-        current_slot = self.module.children[slot.key]
-        index = validate_instance_slot(current_slot, raw_index)
-        module = current_slot.elements[index if isinstance(index, int) else 0]
-        frame = ModuleInstance(module, slot.key, index)
-        return FunctionScope(module, None, (*self.instances, frame))
+        if self.target is None:
+            object.__setattr__(self, "target", self.module.target)
+        if self.topologies is None:
+            object.__setattr__(self, "topologies", tuple(self.module.topologies or ()))
 
 
 @dataclass
 class TypeInferContext:
     """Track walk location and route type-inference queries.
 
-    Derivation lives in ``TypeInferVisitor``. ``scope`` says where the walk is
+    Derivation lives in ``TypeInferVisitor``. ``frame`` says where the walk is
     reading. ``current_mesh`` is the composed HIR execution domain.
     See [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
     """
 
-    scope: FunctionScope | None = None
+    frame: CallFrame | None = None
     current_mesh: Mesh | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
     instantiated_memo: dict[tuple, Type] = field(
         default_factory=dict, repr=False, compare=False
     )
 
-    def scope_for(self, callee: object, target=None) -> FunctionScope | None:
-        """Enter a callee using the target's slot key, never owner searches.
-
-        Targets can hold slots from the original tree after replace(), so the
-        current frame's children supply the definition.
-        """
-        if self.scope is None:
-            return None
-        return replace(self.scope.enter(target), function=callee)
-
     def resolve_target(self):
-        """The root instance's target, or None without a declared target."""
-        if self.scope is None:
-            return None
-        return self.scope.instances[0].module.target
+        """The target carried by this visitor's current call frame."""
+        return None if self.frame is None else self.frame.target
 
-    def for_callee(self, callee: object, target=None) -> TypeInferContext:
-        """Enter a body with fresh bindings and the shared instantiation cache."""
-        return replace(self, scope=self.scope_for(callee, target), memo={})
+    def for_callee(self, callee: object) -> TypeInferContext:
+        """Enter a same-module function with fresh type bindings."""
+        frame = None if self.frame is None else replace(self.frame, function=callee)
+        return replace(self, frame=frame, memo={})
 
     def type_of(self, expr: Expr) -> Type:
         """The type this inference derived or bound for *expr*.
@@ -263,8 +220,7 @@ class Cost:
 
 
 __all__ = [
-    "FunctionScope",
-    "ModuleInstance",
+    "CallFrame",
     "TypeInferContext",
     "VerifyContext",
     "CostContext",

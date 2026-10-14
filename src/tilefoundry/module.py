@@ -78,8 +78,8 @@ def module(
 
     ``entry`` optionally names which collected function is the default step.
 
-    ``target`` declares the hardware this execution domain runs on; only the
-    outermost Module declares it and nested Modules inherit it. ``topologies``
+    ``target`` declares the hardware this execution domain runs on. A child
+    with no declaration inherits its caller's target. ``topologies``
     declares the ordered parallel-resource hierarchy; omitting it inherits the
     owning Module's hierarchy and ``()`` declares a topology-free Module.
     """

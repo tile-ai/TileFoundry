@@ -30,7 +30,6 @@ from tests.models.qwen3_5_35b_a3b.model import (
     Qwen3_5MoE,
     Qwen3_5Router,
 )
-from tilefoundry.ir.core.module import select
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -47,19 +46,13 @@ def test_the_stack_is_the_published_order_and_its_layers_are_independent():
     assert [child.name for child in stack.modules[:3]] == ["layer0", "layer1", "layer2"]
 
     for index, kind in enumerate(shape.layer_types):
-        mixer = select(stack, f"layer{index}.mixer")
+        mixer = stack.children[f"layer{index}"].elements[0].mixer
         entry = LAYER_TYPE[kind].modules[0].entry
         assert mixer.entry == entry, f"layer{index} is not a {kind} layer"
 
     first, second = stack.modules[0], stack.modules[1]
     assert first.lookup("residual_add") is not second.lookup("residual_add")
     assert first.modules[0].lookup("conv_step") is not second.modules[0].lookup("conv_step")
-
-    selected = select(stack, "layer0.moe.experts")
-    assert selected.name == "moe"
-    assert selected.entry_function().name == "experts"
-
-    assert select(stack, "layer0.moe.router.routing").entry_function().name == "routing"
 
     assert "forward" in stack.methods
     with pytest.raises(ValueError, match=f"{shape.num_hidden_layers} layers but was given 0"):

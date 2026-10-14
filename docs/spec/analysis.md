@@ -1349,14 +1349,20 @@ class AnalysisCheckContext:
     binding. `budget` MUST be a non-negative integer limiting the sum of unique
     derived body nodes, independent of invocation count. Exceeding it MUST fail
     with the program name, total size, and limit.
-  - At each retained call, analysis MUST step into its derived body through a
-    `CallFrame`, binding activations to arguments and resolving child weights
+  - At each retained call, analysis MUST step into its derived body through an
+    invocation `IterationScope` whose owner is that Call, binding activations to arguments and resolving child weights
     along the current instance path. Loop call sites MUST be visited once;
     enclosing trip counts multiply work and traffic. Recursion and a callee
     without a body MUST raise `AnalysisError` naming the function and call path.
   - One definition MUST receive one argument-type signature and one current
     mesh. Different shape, dtype, layout, storage, or mesh MUST raise
     `AnalysisError` naming the callee, both invocation paths, and both signatures.
+  - Invocation identity MUST be the owner-Call `IterationScope`, or the
+    owner-Function scope for the root. It MUST retain callees, variance,
+    structural tables, and result binding; other scopes point to their invocation.
+    Labels derive from the caller chain and `CallSite.label`. The invocation's
+    `frame` is a visitor `CallFrame` carrying its Module, function, effective
+    target, and topologies; it is not the record identity.
   - Root-frame records MUST remain node metadata. Callee-frame records MUST be
     stored in `FrameRecords`, keyed by invocation frame and node identity;
     analyzers writing derived records directly onto shared callee nodes MUST
@@ -1436,7 +1442,7 @@ class AnalysisResult:
     metadata_types: tuple[type[IRMetadata], ...]
     program: "Program"
     records: "FrameRecords"
-    frames: tuple["CallFrame", ...]
+    frames: tuple["IterationScope", ...]
 
 
 def analyze(

@@ -17,10 +17,9 @@ from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.metadata import ComputeCostMetadata, MemoryMetadata
-from tilefoundry.analysis.program import frame_values
+from tilefoundry.analysis.program import build_program, invocation_values
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, get_metadata
-from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types.layout import ComposedLayout, flatten
@@ -36,7 +35,7 @@ _CTA = (Topology("cta", 132),)
 def _matmul_records(result) -> tuple[tuple[ComputeCostMetadata, MemoryMetadata], ...]:
     """Both halves of each invocation's MatMul record."""
     records = []
-    for frame, expr in frame_values(result.frames[0]):
+    for frame, expr in invocation_values(result.frames[0]):
         if not isinstance(expr, Call) or not isinstance(expr.target, MatMul):
             continue
         record = result.records.get(frame, expr, ComputeCostMetadata)
@@ -208,7 +207,7 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
     expected = {"routed_expert": ((120,), 0), "shared_expert": ((12,), 120)}
     reached = {
         fn.name: _placed_primitives(fn)
-        for fn in reachable_functions(MoEMegaKernel.entry_function())
+        for fn in build_program(MoEMegaKernel, MoEMegaKernel.entry_function()).bodies()
     }
 
     for branch, (shape, offset) in expected.items():

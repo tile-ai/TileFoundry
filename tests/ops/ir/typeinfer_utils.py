@@ -19,7 +19,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import ShardLayout, Split, shard_layout_local_shape
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import CallFrame, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 
@@ -72,7 +72,7 @@ def infer_call(op, *input_types, target=None):
         return TypeInferVisitor().visit(call, TypeInferContext())
     function = Function.build(name="case", params=call.args, body=call, return_type=input_types[0])
     module = Module(name="Case", functions=(function,), entry="case", target=target)
-    return TypeInferVisitor().visit(call, TypeInferContext(scope=FunctionScope(module, function)))
+    return TypeInferVisitor().visit(call, TypeInferContext(frame=CallFrame(module, function)))
 
 
 @dataclass(frozen=True)

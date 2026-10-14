@@ -136,7 +136,7 @@ parameters, then walking the callee body in a child context that retains the
 call site's mesh. A callee without a mesh declaration runs in that scope;
 a `MeshRegion` in its body composes with it using the usual nested-region rules.
 This is type inference only: it does not rebuild a `Function`, mutate the target,
-or create a per-call instance. The callee body is read under the caller's effective
+or create a per-call instance. The callee body is read under the callee's effective
 Target and none of its nodes is written; only a walk that owns the caller's
 body stores the result on the caller's `Call`.
 Caller-supplied layout (sharding) flowing into a layout-unconstrained
@@ -146,7 +146,7 @@ parameter propagates through the body, including through a `Tuple` or
 Within one inference traversal, repeated calls to the same `Function` object
 with equal argument types and equal call-site mesh scopes MUST reuse the
 previously inferred result type. The cache key uses callee identity, the
-argument-type tuple, call-site mesh, and instance definition stack; the cached value is
+argument-type tuple, call-site mesh, and current Module with its effective target and topologies; the cached value is
 only a `Type`, never a derived `Function` or a replacement `Call.target`.
 
 Argument types bind to supplied parameters in order, following the target and
@@ -1734,12 +1734,12 @@ class InstantiateDimensionCloner(ExprCloner):
     def function(self, function: Function) -> Function: ...
 
 
-def residual_dims(fn: Function, scope: FunctionScope | None = None) -> tuple[str, ...]:
+def residual_dims(fn: Function, frame: CallFrame | None = None) -> tuple[str, ...]:
     """Return every dimension still stated as a range.
 
     Args:
         fn: Function to inspect recursively.
-        scope: Current instance stack, required for instance targets.
+        frame: Current module and effective execution context, required for instance targets.
 
     Returns:
         Residual dimension names.
@@ -1747,12 +1747,12 @@ def residual_dims(fn: Function, scope: FunctionScope | None = None) -> tuple[str
     ...
 
 
-def dim_vars_reached(fn: Function, scope: FunctionScope | None = None) -> dict[str, object]:
+def dim_vars_reached(fn: Function, frame: CallFrame | None = None) -> dict[str, object]:
     """Return residual dimension declarations by name.
 
     Args:
         fn: Function to inspect recursively.
-        scope: Current instance stack, required for instance targets.
+        frame: Current module and effective execution context, required for instance targets.
 
     Returns:
         Residual dimension declarations.
@@ -1783,8 +1783,8 @@ def dim_vars_reached(fn: Function, scope: FunctionScope | None = None) -> dict[s
     graph, including signatures, bodies, Op attributes, loop bounds, variants,
     and called functions, including return types. Runtime values without a
     `DimVar` are rejected later by their consumer.
-  - Instance dimension scans MUST receive a `FunctionScope` and recurse through
+  - Instance dimension scans MUST receive a `CallFrame` and recurse through
     element entries using the current frame's children ([core-ir §2.1](./core-ir.md#21-call)).
-    Function-only graphs retain the scope-free query API. Dimension instantiation
+    Function-only graphs retain the frame-free query API. Dimension instantiation
     MUST preserve instance targets and shared element definitions; it MAY rebuild
     the index operand of a computed target.

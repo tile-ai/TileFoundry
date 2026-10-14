@@ -87,7 +87,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import candidate_ops, sole_candidate
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import CallFrame, TypeInferContext
 from tilefoundry.visitor_registry.registries import typeinfer_registry
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
@@ -279,7 +279,7 @@ class Lowering(ExprVisitor[Expr]):
             for expr_id, (call, _relations) in scope.relations.items()
             if id(call) == expr_id
         }
-        self.type_ctx = TypeInferContext(scope=FunctionScope(self.module, self.function))
+        self.type_ctx = TypeInferContext(frame=CallFrame(self.module, self.function))
         for param in self.function.params:
             physical = Var(param.name, type=param.type, is_const=param.is_const)
             self._memo[id(param)] = (param, physical)

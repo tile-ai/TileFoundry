@@ -23,7 +23,7 @@ from .metadata import (
     RooflineMetadata,
     TrafficBytes,
 )
-from .program import FrameWalker
+from .program import InvocationWalker
 from .visitor import AnalyzeContext
 
 SELECTOR = "roofline"
@@ -130,7 +130,7 @@ def _cost_bound(
     )
 
 
-class RooflineVisitor(FrameWalker, ExprVisitor[None]):
+class RooflineVisitor(InvocationWalker, ExprVisitor[None]):
     """Attach one bound per Call in expression order."""
 
     def __init__(self, facts: ThroughputFacts) -> None:

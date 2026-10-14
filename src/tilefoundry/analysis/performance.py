@@ -28,7 +28,7 @@ from .metadata import (
     RooflineMetadata,
     TimelineMetadata,
 )
-from .program import FrameWalker
+from .program import InvocationWalker
 from .visitor import AnalyzeContext
 
 SELECTOR = "performance"
@@ -43,7 +43,7 @@ class PerformanceContext(AnalyzeContext):
     occurrences: list[tuple[IterationScope, Call, int]] = field(default_factory=list)
 
 
-class PerformanceVisitor(FrameWalker, ExprVisitor[None]):
+class PerformanceVisitor(InvocationWalker, ExprVisitor[None]):
     """Collect one duration per Call in authored order."""
 
     def visit_MeshRegion(self, expr: MeshRegion, ctx: PerformanceContext) -> None:
@@ -142,7 +142,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
             stride = scope_periods[period_scope(scope)] if trips > 1 else 0
             end = start + duration
             cursor += duration if scope.depth < 4 else scheduled
-        records.append((scope.frame, call, start, end, trips, stride, scheduled))
+        records.append((scope.invocation, call, start, end, trips, stride, scheduled))
         total_cursor += scheduled
     for frame, call, start, end, trips, stride, scheduled in records:
         if end + (trips - 1) * stride > total_cursor:

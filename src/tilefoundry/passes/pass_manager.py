@@ -11,8 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.dump import DumpFlags, DumpScope, dump
-from tilefoundry.ir.core.module import Module, function_scopes, module_functions
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
@@ -52,16 +53,16 @@ class PassManager:
         object identity changed between ``prev`` and ``curr``. Whole-
         function fallback per [passes §7](docs/spec/passes.md#7-implemented-passes).
         """
-        previous = {id(f) for f in module_functions(prev)}
-        for _selector, scope in function_scopes(curr):
-            fn = scope.function
+        previous = {id(frame.function) for frame in list_call_paths(prev).values()}
+        for frame in list_call_paths(curr).values():
+            fn = frame.function
             if id(fn) in previous:
                 continue
             if isinstance(fn, HirFunction):
                 verify_hir_function(fn)
                 inference_type(
                     fn,
-                    TypeInferContext(scope=scope),
+                    TypeInferContext(frame=frame),
                     ranges=True,
                 )
             elif isinstance(fn, PrimFunction):

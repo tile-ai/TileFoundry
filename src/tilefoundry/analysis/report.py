@@ -28,7 +28,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.types.utils import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
 
-from .program import frame_key, frame_values
+from .program import invocation_key, invocation_values
 
 _FAMILIES: dict[type[IRMetadata], str] = {}
 _EXPR_FIELDS: dict[type[IRMetadata], dict[str, Callable[..., object]]] = {}
@@ -280,7 +280,7 @@ def _call_records(
     """Every selected record attached to a Call, in program order."""
     rows: list[dict[str, object]] = []
     values = (
-        frame_values(frames[0])
+        invocation_values(frames[0])
         if frames
         else ((None, expr) for expr in collect_exprs(function.body))
     )
@@ -293,7 +293,7 @@ def _call_records(
         if not held:
             continue
         if call_labels is not None:
-            value = call_labels.get((frame_key(frame), id(expr)))
+            value = call_labels.get((invocation_key(frame), id(expr)))
             if value is None:
                 continue
         else:
@@ -319,7 +319,7 @@ def _loop_records(
     """Every selected record attached to an authored loop."""
     rows: list[dict[str, object]] = []
     values = (
-        frame_values(frames[0])
+        invocation_values(frames[0])
         if frames
         else ((None, expr) for expr in collect_exprs(function.body))
     )

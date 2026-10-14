@@ -30,7 +30,7 @@ from tilefoundry.ir.core import (
     get_metadata,
 )
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
-from tilefoundry.ir.core.module import Module, ModuleList, module_functions, subtree
+from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.core.param_def import variadic_item_annotation
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -1178,12 +1178,7 @@ def _emission_order(mod: Module) -> tuple:
     return ordered + (entry,) if entry is not None else ordered
 
 
-def _module_tree_functions(mod: Module) -> tuple[HirFunction, ...]:
-    """Every HIR function owned by *mod* or any Module beneath it."""
-    return tuple(fn for node in subtree(mod) for fn in _module_hir_functions(node))
-
-
-def _module_definition_order(root):
+def _module_definition_order(root, *, before_children=False):
     """Definitions once, children before the slots that reference them."""
     seen = set()
     ordered = []
@@ -1192,10 +1187,13 @@ def _module_definition_order(root):
         if id(node) in seen:
             return
         seen.add(id(node))
+        if before_children:
+            ordered.append(node)
         for slot in node.children.values():
             for child in slot.elements:
                 visit(child)
-        ordered.append(node)
+        if not before_children:
+            ordered.append(node)
 
     visit(root)
     return ordered
@@ -1204,7 +1202,7 @@ def _module_definition_order(root):
 def _definition_names(root, root_name):
     names = {id(root): root_name}
     taken = {root_name}
-    for node in subtree(root):
+    for node in _module_definition_order(root, before_children=True):
         if node is root:
             continue
         name = node.name
@@ -1303,7 +1301,7 @@ def _module_to_python(
             entry=fn_or_module.name,
         )
         module_name = root.name
-    functions = module_functions(root)
+    functions = tuple(fn for node in _module_definition_order(root) for fn in node.functions)
     if not functions:
         raise TypeError("Module printer requires at least one function")
     entry = root.entry_function() if root.entry is not None else None
@@ -1333,7 +1331,3 @@ def _module_to_python(
         )
     header = ctx.header()
     return "\n".join(header + lines) + "\n"
-
-
-def _module_tree(root: Module) -> Iterator[Module]:
-    yield from subtree(root)

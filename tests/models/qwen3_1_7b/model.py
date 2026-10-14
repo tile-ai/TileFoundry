@@ -117,7 +117,7 @@ def _generation_rope(device):
     return phases.cos().to(config.dtype), phases.sin().to(config.dtype)
 
 
-@module(entry="decoder_layer", topologies=_TOPOLOGIES)
+@module(entry="decoder_layer", target=CudaTarget("nvidia.h200_sxm"), topologies=_TOPOLOGIES)
 class Qwen3_1_7B_DecoderLayer:
     @func
     def input_rms_norm(

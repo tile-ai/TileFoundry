@@ -68,19 +68,6 @@ def _access_relations(call: "Call", ctx: "AccessContext") -> tuple[AccessRelatio
 
 @register_typeinfer(TupleGetItem)
 def _(call: "Call", ctx: "TypeInferContext"):
-    from tilefoundry.ir.core.module import ModuleList, validate_instance_slot  # noqa: PLC0415
-
-    slot = call.args[0]
-    if isinstance(slot, ModuleList):
-        if ctx.scope is not None:
-            slot = ctx.scope.module.children[slot.key]
-        try:
-            index = validate_instance_slot(
-                slot, call.args[1], index_type=ctx.type_of(call.args[1])
-            )
-        except ValueError as error:
-            ctx.error(call, str(error))
-        return ctx.type_of(call.args[0]).fields[index if isinstance(index, int) else 0]
     tup_ty = ctx.type_of(call.args[0])
     if not isinstance(tup_ty, TupleType):
         ctx.error(call, "TupleGetItem on non-TupleType")

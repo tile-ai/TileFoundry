@@ -120,21 +120,18 @@ class EvaluatorVisitor(ExprVisitor):
         return ctx.loaded_module.children[slot.key]
 
     def visit_leaf_Call(self, call: Call, args, ctx: EvaluateContext) -> Value:
-        from tilefoundry.ir.core.module import ModuleList, validate_instance_slot  # noqa: PLC0415
+        from tilefoundry.ir.core.module import ModuleList  # noqa: PLC0415 -- cycle
         from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem  # noqa: PLC0415
 
         target = call.target
         if isinstance(target, TupleGetItem) and isinstance(call.args[0], ModuleList):
             slot = ctx.loaded_module.module.children[call.args[0].key]
             index = args[1]
-            if not isinstance(index, TensorValue) or index.data.numel() != 1:
-                raise EvalError(f"evaluator: ModuleList slot {slot.key!r}: index must be an integer scalar")
-            try:
-                taken = validate_instance_slot(
-                    slot, index.data.item(), index_type=index.type
+            taken = int(index.data.item())
+            if not 0 <= taken < len(args[0]):
+                raise EvalError(
+                    f"evaluator: ModuleList slot {slot.key!r}: index {taken!r} out of range for N={len(args[0])}"
                 )
-            except ValueError as error:
-                raise EvalError(f"evaluator: {error}") from error
             return args[0][taken]
         if isinstance(target, (ModuleList, Call)):
             if isinstance(target, Call):
@@ -142,10 +139,6 @@ class EvaluatorVisitor(ExprVisitor):
             else:
                 if ctx.loaded_module is None:
                     raise EvalError("evaluator: instance call requires a loaded module")
-                try:
-                    validate_instance_slot(ctx.loaded_module.module.children[target.key])
-                except ValueError as error:
-                    raise EvalError(f"evaluator: {error}") from error
                 child = ctx.loaded_module.children[target.key]
             return self._call_function(child.module.entry_function(), args, ctx, child=child)
         if isinstance(target, Function):

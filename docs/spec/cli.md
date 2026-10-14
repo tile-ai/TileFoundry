@@ -24,12 +24,10 @@ or summary restated in this project's source.
 ## Commands
 
 `SOURCE` is a Python file followed optionally by
-`:Module[.child_module...][.function]`. Without a selector, the source must
-define exactly one top-level HIR Module or Function. A selector chooses the
-named Module, or a Function reached through the chain of child Modules that own
-it: each segment names a child Module of the one before it, and only the last
-MAY name a Function. A leaf selected this way MUST keep resolving the Target and
-hierarchy it inherits from the owners it was reached through.
+`:Module[.function]`. Without a selector, the source must define exactly one
+top-level HIR Module or Function. A selector chooses the named Module and its
+default entry, or one of that Module's own Functions. Child Module path segments
+MUST be refused; a child used independently is named by its own top-level binding.
 
 A selector MAY name a top-level binding that is a bare `Function` — a source
 whose `@func` declares no execution context binds one. Every verb here reads
@@ -223,9 +221,8 @@ bounds the caller stated.
   - Reaching one leaf MUST read only that leaf Module's own weights. A comparison
     of one kernel MUST NOT materialise a whole model. A Module is the unit that
     loads, so what a run binds is everything the selected Module declares, not the
-    subset the selected function names; the selector's child segments MUST scope
-    the checkpoint by the same names they resolve the Module by, so the two cannot
-    be addressed differently.
+    subset the selected function names. A run MUST read the checkpoint relative
+    to the selected Module; selector segments MUST NOT scope into child Modules.
   - A dimension the target states as a range MUST be bound by `--dim`; a run
     MUST NOT choose an extent on the caller's behalf. Several extents MAY be
     stated for one dimension, and each MUST be run and reported. Where the extents select an implementation,

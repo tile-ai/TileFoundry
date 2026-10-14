@@ -16,7 +16,6 @@ from dataclasses import fields
 import isl
 import pytest
 
-import tilefoundry
 from tilefoundry.evaluator import eval_registry
 from tilefoundry.ir.core import Call, Constant, Op, Var
 from tilefoundry.ir.core.errors import VerifyError
@@ -40,8 +39,8 @@ from tilefoundry.visitor_registry.access_relation import (
     reached_elements,
 )
 from tilefoundry.visitor_registry.contexts import (
+    CallFrame,
     CostContext,
-    FunctionScope,
     TypeInferContext,
     VerifyContext,
 )
@@ -171,24 +170,18 @@ def test_visitors_fail_closed_when_unregistered() -> None:
         CostEvaluator().visit_Call(call, CostContext())
 
 
-def test_where_a_walk_reads_is_one_pair_and_nothing_else() -> None:
-    """The location API is `FunctionScope` and `TypeInferContext.scope`.
+def test_where_a_walk_reads_is_an_internal_call_frame() -> None:
+    """The location API is `CallFrame` and `TypeInferContext.frame`.
 
-    Both are reachable from the package root, because one is how the other is
-    constructed. Nothing else on a context describes where a walk reads, and no
-    context answers a question about one kind of construct.
+    The frame is internal to visitor contexts and carries the effective
+    execution domain. A context does not answer construct-specific questions.
     """
-    assert (tilefoundry.FunctionScope, tilefoundry.TypeInferContext) == (
-        FunctionScope,
-        TypeInferContext,
-    )
-    assert FunctionScope.__dataclass_params__.frozen
-    assert [field.name for field in fields(FunctionScope)] == ["module", "function"]
-    assert [field.type for field in fields(FunctionScope)] == ["Module", "Function"]
+    assert CallFrame.__dataclass_params__.frozen
+    assert [field.name for field in fields(CallFrame)] == ["module", "function", "target", "topologies"]
 
     for context in (TypeInferContext, VerifyContext, CostContext):
         declared = [field.name for field in fields(context)]
-        assert declared[:3] == ["scope", "current_mesh", "memo"]
+        assert declared[:3] == ["frame", "current_mesh", "memo"]
         assert not any(
             hasattr(context, name)
             for name in ("module", "caller", "child_call", "child_call_owner")

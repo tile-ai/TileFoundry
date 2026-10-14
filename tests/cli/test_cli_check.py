@@ -21,7 +21,6 @@ from tilefoundry import cli
 from tilefoundry.cli.source import load_namespace, select_ir
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import to_torch_dtype
-from tilefoundry.ir.core.module import select
 from tilefoundry.runtime import DictResource
 from tilefoundry.runtime.resource import DrawnResource
 
@@ -63,7 +62,7 @@ def test_load_asks_the_resource_for_nothing():
 
 def test_a_run_asks_for_exactly_the_functions_own_consts():
     rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
-    evaluate(select(leaf_weights.Small, "leaf").load(rec), torch.zeros(1, leaf_weights.D))
+    evaluate(leaf_weights.Small.load(rec).leaf, torch.zeros(1, leaf_weights.D))
     assert rec.asked == []
     evaluate(leaf_weights.Small.load(rec), torch.zeros(1, leaf_weights.D))
     assert rec.asked == ["w"]

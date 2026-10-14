@@ -17,21 +17,15 @@ from tilefoundry.ir.core import (
     RangeMetadata,
     Var,
 )
-from tilefoundry.ir.core.module import (
-    Module,
-    function_scopes,
-    instance_slot,
-    reachable_function_scopes,
-    resolve_callee,
-)
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.specialize import dim_vars_reached
 from tilefoundry.ir.types import Topology, callable_type_for
-from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
+from tilefoundry.visitor_registry.contexts import CallFrame
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts
@@ -141,87 +135,45 @@ class PerformanceChecker:
 
 
 def program_dim_vars(module: Module, function: Function) -> dict[str, object]:
-    """Dimension declarations reached through program values and execution geometry."""
-    found: dict[str, object] = dict(dim_vars_reached(function, _required_scope(module, function)))
-    for owner in _reached_owners(module, function):
-        found.update(dim_vars_by_name(owner.effective_topologies()))
-    return found
+    """Dimension declarations in reachable values and effective execution geometry."""
+    return dim_vars_reached(function, _required_frame(module, function))
 
 
-def _required_scope(module: Module, function: Function):
-    """Recover a supplied definition's first instance context, including origins."""
-    scopes = {
-        id(each): scope
-        for _selector, scope in function_scopes(module)
-        for each in (scope.function, *scope.function.variants)
-    }
-    origin = function
-    while origin is not None:
-        scope = scopes.get(id(origin))
-        if scope is not None:
-            return replace(scope, function=function)
-        origin = getattr(origin, "_specialized_from", None)
+def _required_frame(module: Module, function: Function):
+    """Read a function directly from its supplied owning definition."""
+    if module.owns(function, derived=True):
+        return CallFrame(module, function)
     raise AnalysisError(
         f"function {function.name!r} is owned by no single node of module "
-        f"{module.name!r}; analysis answers within the supplied instance tree"
+        f"{module.name!r}; supply its owning module directly"
     )
 
 
-def _scope_owner(scope):
-    instances = tuple(frame.module for frame in scope.instances)
-    return replace(
-        scope.module,
-        target=instances[0].target,
-        topologies=scope.module.effective_topologies(instances),
-    )
-
-
-def _reached_owners(module: Module, function: Function) -> tuple[Module, ...]:
-    owners = []
-    seen = set()
-    for _function, scope in reachable_function_scopes(function, _required_scope(module, function)):
-        key = tuple(id(frame.module) for frame in scope.instances)
-        if key not in seen:
-            seen.add(key)
-            owners.append(_scope_owner(scope))
-    return tuple(owners)
-
-
-def _reading_path(scope) -> str:
-    segments = []
-    for frame in scope.instances[1:]:
-        segments.append(frame.key)
-        if frame.index is not None:
-            if not isinstance(frame.index, int):
-                raise AnalysisError(
-                    f"cannot inline variable ModuleList index for slot {frame.key!r}"
-                )
-            segments.append(str(frame.index))
-    return ".".join(segments)
-
-
-def _resource_parameters(
-    module: Module, function: Function
-) -> tuple[tuple[_ResourceKey, Var], ...]:
-    """ConstTensor declarations reached through statically selected instances."""
+def _resource_parameters(program):
+    """ConstTensor declarations at the retained program's constant call paths."""
     needed = {}
-    initial = _required_scope(module, function)
-    for caller, scope in reachable_function_scopes(function, initial):
-        _reading_path(scope)
-        for expr in collect_exprs(caller.body):
-            if not isinstance(expr, Call) or instance_slot(expr.target) is None:
+
+    def visit(body, path):
+        for expr in collect_exprs(body.body):
+            site = program.sites.get(id(expr))
+            if site is None:
                 continue
-            callee, inner = resolve_callee(expr, scope)
-            path = _reading_path(inner)
-            for param in callee.params:
-                if param.is_const:
-                    key = (path, param.name)
+            inner = path
+            if site.key is not None:
+                inner = (*path, site.key)
+                if site.index is not None:
+                    if not isinstance(site.index, int):
+                        raise AnalysisError(f"cannot inline variable ModuleList index for slot {site.key!r}")
+                    inner = (*inner, str(site.index))
+                for param in site.weights:
+                    key = (".".join(inner), param.name)
                     previous = needed.get(key)
                     if previous is not None and previous.type != param.type:
-                        raise AnalysisError(
-                            f"reachable ConstTensor {path}.{param.name} has conflicting types"
-                        )
+                        raise AnalysisError(f"reachable ConstTensor {key!r} has conflicting types")
                     needed.setdefault(key, param)
+            visit(site.body, inner)
+
+    visit(program.root, ())
     return tuple(needed.items())
 
 
@@ -243,32 +195,29 @@ class _AnalysisViewCloner(BindingSubstitutionCloner):
     independent cloned bodies and derived metadata.
     """
 
-    def __init__(self, owner, function, path, active, scope) -> None:
+    def __init__(self, owner, function, path, active) -> None:
         super().__init__(metadata=_view_metadata)
         self.owner = owner
         self.function = function
         self.path = path
         self.active = active
-        self.scope = scope
 
     def visit_Call(self, expr: Call, ctx: Mapping[int, Expr]) -> Expr:
-        target, inner = resolve_callee(expr, self.scope)
+        site = self.owner.program.sites.get(id(expr))
         new_args = tuple(self.visit(arg, ctx) for arg in expr.args)
-        if isinstance(target, Function):
-            call_index = self.owner.function_call_counters[-1]
-            self.owner.function_call_counters[-1] += 1
-            implicit = instance_slot(expr.target) is not None
-            prefix = _reading_path(inner)
+        if site is not None:
+            prefix = self.path
+            if site.key is not None:
+                prefix = (*prefix, site.key)
+                if site.index is not None:
+                    prefix = (*prefix, str(site.index))
             supplied = iter(new_args)
             callee_env = {
-                id(param): self.owner.resources[(prefix, param.name)]
-                if implicit and param.is_const
-                else next(supplied)
-                for param in target.params
+                id(param): self.owner.resources[(".".join(prefix), param.name)]
+                if site.key is not None and param.is_const else next(supplied)
+                for param in site.body.params
             }
-            return self.owner.function_body(
-                target, callee_env, (*self.path, target.name, str(call_index)), self.active, inner
-            )
+            return self.owner.function_body(site.body, callee_env, prefix, self.active)
         metadata = (*_view_metadata(expr), BindingMetadata(self.owner._binding()))
         new_target = self.visit(expr.target, ctx) if isinstance(expr.target, Call) else expr.target
         return replace(expr, target=new_target, args=new_args, metadata=metadata)
@@ -296,11 +245,11 @@ class _AnalysisViewCloner(BindingSubstitutionCloner):
 class _Inliner:
     def __init__(
         self,
-        module: Module,
+        program: Program,
         resources: Mapping[_ResourceKey, Var],
         used_names: set[str],
     ) -> None:
-        self.module = module
+        self.program = program
         self.resources = resources
         self.used_names = used_names
         self.next_binding = 0
@@ -320,7 +269,6 @@ class _Inliner:
         env: Mapping[int, Expr],
         path: tuple[str, ...],
         active: frozenset[int],
-        scope,
     ) -> Expr:
         identity = id(function)
         if identity in active:
@@ -337,8 +285,7 @@ class _Inliner:
                 function,
                 path,
                 active | {identity},
-                scope,
-            )
+                    )
         finally:
             self.function_call_counters.pop()
 
@@ -349,13 +296,14 @@ class _Inliner:
         function: Function,
         path: tuple[str, ...],
         active: frozenset[int],
-        scope,
     ) -> Expr:
-        return _AnalysisViewCloner(self, function, path, active, scope).visit(expr, env)
+        return _AnalysisViewCloner(self, function, path, active).visit(expr, env)
 
 
 def _inline_view(module: Module, function: Function, budget: int) -> Function:
-    declared_resources = _resource_parameters(module, function)
+    program = build_program(module, function)
+    function = program.root
+    declared_resources = _resource_parameters(program)
     params = tuple(replace(param, metadata=_view_metadata(param)) for param in function.params)
     resources: dict[_ResourceKey, Var] = {}
     appended: list[Var] = []
@@ -372,9 +320,9 @@ def _inline_view(module: Module, function: Function, budget: int) -> Function:
 
     view_params = (*params, *appended)
     env = {id(old): new for old, new in zip(function.params, params)}
-    inliner = _Inliner(module, resources, {param.name for param in view_params})
+    inliner = _Inliner(program, resources, {param.name for param in view_params})
     body = inliner.function_body(
-        function, env, (function.name,), frozenset(), _required_scope(module, function)
+        function, env, (), frozenset()
     )
     size = len(collect_exprs(body))
     if size > budget:
@@ -476,20 +424,23 @@ def validate_call_context(module: Module, program: Program) -> None:
     canonical spelling, so a child declaring the caller's hierarchy explicitly
     passes and any other value is a different context, not a nested launch.
     """
-    edges = []
     for body in program.bodies():
-        scope = program.scopes[id(body)]
+        frame = program.frames[id(body)]
         for expr in collect_exprs(body.body):
-            if program.sites.get(id(expr)):
-                _callee, inner = resolve_callee(expr, scope)
-                edges.append((scope, inner))
-    for scope, inner in edges:
-        caller_owner, callee_owner = _scope_owner(scope), _scope_owner(inner)
-        if callee_owner.effective_topologies() != caller_owner.effective_topologies():
-            raise AnalysisError(
-                f"{caller_owner.name!r} calls {callee_owner.name!r}, which "
-                f"resolves a different topology hierarchy "
-                f"{callee_owner.effective_topologies()} against "
-                f"{caller_owner.effective_topologies()}; one kernel invocation "
-                "runs one hierarchy -- declare none on the child and inherit"
-            )
+            site = program.sites.get(id(expr))
+            if site is None:
+                continue
+            inner = site.frame
+            if frame.target != inner.target:
+                raise AnalysisError(
+                    f"{frame.module.name!r} calls {inner.module.name!r}, which resolves "
+                    f"a different target {inner.target!r} against {frame.target!r}; "
+                    "one kernel invocation runs one target"
+                )
+            if frame.topologies != inner.topologies:
+                raise AnalysisError(
+                    f"{frame.module.name!r} calls {inner.module.name!r}, which "
+                    f"resolves a different topology hierarchy {inner.topologies} against "
+                    f"{frame.topologies}; one kernel invocation runs one hierarchy "
+                    "-- declare none on the child and inherit"
+                )

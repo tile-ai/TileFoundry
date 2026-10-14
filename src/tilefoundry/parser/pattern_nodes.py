@@ -2996,12 +2996,6 @@ class CallPattern(ElementPattern):
                     "instance calls must use a slot name in the @module class body",
                 )
             if isinstance(callee, runtime.ModuleList):
-                from tilefoundry.ir.core.module import validate_instance_slot  # noqa: PLC0415
-
-                try:
-                    validate_instance_slot(callee)
-                except ValueError as error:
-                    return PatternFailure("op_call", node.func, str(error))
                 instance_target = callee
         if instance_target is not None:
             binding = node.func.value if isinstance(node.func, ast.Subscript) else node.func
@@ -3588,12 +3582,6 @@ class SubscriptExpressionPattern(ElementPattern):
         value = children["value"]
         index = children["index"]
         if isinstance(value, runtime.ModuleList):
-            from tilefoundry.ir.core.module import validate_instance_slot  # noqa: PLC0415
-
-            try:
-                validate_instance_slot(value, index)
-            except ValueError as error:
-                raise ParseError.from_node(match.node, context, str(error)) from error
             if isinstance(index, int):
                 index = _constant(index)
             return _infer_call(runtime.TupleGetItem(), (value, index), context)
