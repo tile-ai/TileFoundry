@@ -2,8 +2,8 @@
   "models": [
     {
       "counts": {
-        "functions": 519,
-        "leaf_modules": 86
+        "functions": 15,
+        "leaf_modules": 2
       },
       "modules": [
         {
@@ -51,49 +51,49 @@
                 }
               ],
               "names": [
-                "layer0",
-                "layer1",
-                "layer2",
-                "layer3",
-                "layer4",
-                "layer5",
-                "layer6",
-                "layer7",
-                "layer8",
-                "layer9",
-                "layer10",
-                "layer11",
-                "layer12",
-                "layer13",
-                "layer14",
-                "layer15",
-                "layer16",
-                "layer17",
-                "layer18",
-                "layer19",
-                "layer20",
-                "layer21",
-                "layer22",
-                "layer23",
-                "layer24",
-                "layer25",
-                "layer26",
-                "layer27",
-                "layer28",
-                "layer29",
-                "layer30",
-                "layer31",
-                "layer32",
-                "layer33",
-                "layer34",
-                "layer35",
-                "layer36",
-                "layer37",
-                "layer38",
-                "layer39",
-                "layer40",
-                "layer41",
-                "layer42"
+                "layers.0",
+                "layers.1",
+                "layers.2",
+                "layers.3",
+                "layers.4",
+                "layers.5",
+                "layers.6",
+                "layers.7",
+                "layers.8",
+                "layers.9",
+                "layers.10",
+                "layers.11",
+                "layers.12",
+                "layers.13",
+                "layers.14",
+                "layers.15",
+                "layers.16",
+                "layers.17",
+                "layers.18",
+                "layers.19",
+                "layers.20",
+                "layers.21",
+                "layers.22",
+                "layers.23",
+                "layers.24",
+                "layers.25",
+                "layers.26",
+                "layers.27",
+                "layers.28",
+                "layers.29",
+                "layers.30",
+                "layers.31",
+                "layers.32",
+                "layers.33",
+                "layers.34",
+                "layers.35",
+                "layers.36",
+                "layers.37",
+                "layers.38",
+                "layers.39",
+                "layers.40",
+                "layers.41",
+                "layers.42"
               ]
             }
           ],
@@ -106,8 +106,8 @@
     },
     {
       "counts": {
-        "functions": 107,
-        "leaf_modules": 26
+        "functions": 7,
+        "leaf_modules": 1
       },
       "modules": [
         {
@@ -128,32 +128,32 @@
               "leaf": true,
               "modules": [],
               "names": [
-                "layer0",
-                "layer1",
-                "layer2",
-                "layer3",
-                "layer4",
-                "layer5",
-                "layer6",
-                "layer7",
-                "layer8",
-                "layer9",
-                "layer10",
-                "layer11",
-                "layer12",
-                "layer13",
-                "layer14",
-                "layer15",
-                "layer16",
-                "layer17",
-                "layer18",
-                "layer19",
-                "layer20",
-                "layer21",
-                "layer22",
-                "layer23",
-                "layer24",
-                "layer25"
+                "layers.0",
+                "layers.1",
+                "layers.2",
+                "layers.3",
+                "layers.4",
+                "layers.5",
+                "layers.6",
+                "layers.7",
+                "layers.8",
+                "layers.9",
+                "layers.10",
+                "layers.11",
+                "layers.12",
+                "layers.13",
+                "layers.14",
+                "layers.15",
+                "layers.16",
+                "layers.17",
+                "layers.18",
+                "layers.19",
+                "layers.20",
+                "layers.21",
+                "layers.22",
+                "layers.23",
+                "layers.24",
+                "layers.25"
               ]
             }
           ],
@@ -219,8 +219,8 @@
     },
     {
       "counts": {
-        "functions": 251,
-        "leaf_modules": 62
+        "functions": 7,
+        "leaf_modules": 1
       },
       "modules": [
         {
@@ -241,68 +241,68 @@
               "leaf": true,
               "modules": [],
               "names": [
-                "layer0",
-                "layer1",
-                "layer2",
-                "layer3",
-                "layer4",
-                "layer5",
-                "layer6",
-                "layer7",
-                "layer8",
-                "layer9",
-                "layer10",
-                "layer11",
-                "layer12",
-                "layer13",
-                "layer14",
-                "layer15",
-                "layer16",
-                "layer17",
-                "layer18",
-                "layer19",
-                "layer20",
-                "layer21",
-                "layer22",
-                "layer23",
-                "layer24",
-                "layer25",
-                "layer26",
-                "layer27",
-                "layer28",
-                "layer29",
-                "layer30",
-                "layer31",
-                "layer32",
-                "layer33",
-                "layer34",
-                "layer35",
-                "layer36",
-                "layer37",
-                "layer38",
-                "layer39",
-                "layer40",
-                "layer41",
-                "layer42",
-                "layer43",
-                "layer44",
-                "layer45",
-                "layer46",
-                "layer47",
-                "layer48",
-                "layer49",
-                "layer50",
-                "layer51",
-                "layer52",
-                "layer53",
-                "layer54",
-                "layer55",
-                "layer56",
-                "layer57",
-                "layer58",
-                "layer59",
-                "layer60",
-                "layer61"
+                "layers.0",
+                "layers.1",
+                "layers.2",
+                "layers.3",
+                "layers.4",
+                "layers.5",
+                "layers.6",
+                "layers.7",
+                "layers.8",
+                "layers.9",
+                "layers.10",
+                "layers.11",
+                "layers.12",
+                "layers.13",
+                "layers.14",
+                "layers.15",
+                "layers.16",
+                "layers.17",
+                "layers.18",
+                "layers.19",
+                "layers.20",
+                "layers.21",
+                "layers.22",
+                "layers.23",
+                "layers.24",
+                "layers.25",
+                "layers.26",
+                "layers.27",
+                "layers.28",
+                "layers.29",
+                "layers.30",
+                "layers.31",
+                "layers.32",
+                "layers.33",
+                "layers.34",
+                "layers.35",
+                "layers.36",
+                "layers.37",
+                "layers.38",
+                "layers.39",
+                "layers.40",
+                "layers.41",
+                "layers.42",
+                "layers.43",
+                "layers.44",
+                "layers.45",
+                "layers.46",
+                "layers.47",
+                "layers.48",
+                "layers.49",
+                "layers.50",
+                "layers.51",
+                "layers.52",
+                "layers.53",
+                "layers.54",
+                "layers.55",
+                "layers.56",
+                "layers.57",
+                "layers.58",
+                "layers.59",
+                "layers.60",
+                "layers.61"
               ]
             }
           ],
@@ -315,8 +315,8 @@
     },
     {
       "counts": {
-        "functions": 115,
-        "leaf_modules": 28
+        "functions": 7,
+        "leaf_modules": 1
       },
       "modules": [
         {
@@ -337,34 +337,34 @@
               "leaf": true,
               "modules": [],
               "names": [
-                "layer0",
-                "layer1",
-                "layer2",
-                "layer3",
-                "layer4",
-                "layer5",
-                "layer6",
-                "layer7",
-                "layer8",
-                "layer9",
-                "layer10",
-                "layer11",
-                "layer12",
-                "layer13",
-                "layer14",
-                "layer15",
-                "layer16",
-                "layer17",
-                "layer18",
-                "layer19",
-                "layer20",
-                "layer21",
-                "layer22",
-                "layer23",
-                "layer24",
-                "layer25",
-                "layer26",
-                "layer27"
+                "layers.0",
+                "layers.1",
+                "layers.2",
+                "layers.3",
+                "layers.4",
+                "layers.5",
+                "layers.6",
+                "layers.7",
+                "layers.8",
+                "layers.9",
+                "layers.10",
+                "layers.11",
+                "layers.12",
+                "layers.13",
+                "layers.14",
+                "layers.15",
+                "layers.16",
+                "layers.17",
+                "layers.18",
+                "layers.19",
+                "layers.20",
+                "layers.21",
+                "layers.22",
+                "layers.23",
+                "layers.24",
+                "layers.25",
+                "layers.26",
+                "layers.27"
               ]
             }
           ],
@@ -377,8 +377,8 @@
     },
     {
       "counts": {
-        "functions": 115,
-        "leaf_modules": 28
+        "functions": 8,
+        "leaf_modules": 1
       },
       "modules": [
         {
@@ -394,39 +394,40 @@
                 "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"])",
                 "self_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_q: ConstTensor[(1, 2048, 2048), \"bf16\"], w_k: ConstTensor[(1, 2048, 1024), \"bf16\"], w_v: ConstTensor[(1, 2048, 1024), \"bf16\"], gamma_q: ConstTensor[(128,), \"bf16\"], gamma_k: ConstTensor[(128,), \"bf16\"], cos_cache: Tensor[(40960, 128), \"bf16\"], sin_cache: Tensor[(40960, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2048), \"bf16\"])",
                 "mlp(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"], w_gate: ConstTensor[(1, 2048, 6144), \"bf16\"], w_up: ConstTensor[(1, 2048, 6144), \"bf16\"], w_down: ConstTensor[(1, 6144, 2048), \"bf16\"])",
+                "placed_mlp(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"], w_gate: ConstTensor[(1, 2048, 6144), \"bf16\"], w_up: ConstTensor[(1, 2048, 6144), \"bf16\"], w_down: ConstTensor[(1, 6144, 2048), \"bf16\"])",
                 "decoder_layer(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_q: ConstTensor[(1, 2048, 2048), \"bf16\"], w_k: ConstTensor[(1, 2048, 1024), \"bf16\"], w_v: ConstTensor[(1, 2048, 1024), \"bf16\"], gamma_q: ConstTensor[(128,), \"bf16\"], gamma_k: ConstTensor[(128,), \"bf16\"], cos_cache: Tensor[(40960, 128), \"bf16\"], sin_cache: Tensor[(40960, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"], w_gate: ConstTensor[(1, 2048, 6144), \"bf16\"], w_up: ConstTensor[(1, 2048, 6144), \"bf16\"], w_down: ConstTensor[(1, 6144, 2048), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
               "names": [
-                "layer0",
-                "layer1",
-                "layer2",
-                "layer3",
-                "layer4",
-                "layer5",
-                "layer6",
-                "layer7",
-                "layer8",
-                "layer9",
-                "layer10",
-                "layer11",
-                "layer12",
-                "layer13",
-                "layer14",
-                "layer15",
-                "layer16",
-                "layer17",
-                "layer18",
-                "layer19",
-                "layer20",
-                "layer21",
-                "layer22",
-                "layer23",
-                "layer24",
-                "layer25",
-                "layer26",
-                "layer27"
+                "layers.0",
+                "layers.1",
+                "layers.2",
+                "layers.3",
+                "layers.4",
+                "layers.5",
+                "layers.6",
+                "layers.7",
+                "layers.8",
+                "layers.9",
+                "layers.10",
+                "layers.11",
+                "layers.12",
+                "layers.13",
+                "layers.14",
+                "layers.15",
+                "layers.16",
+                "layers.17",
+                "layers.18",
+                "layers.19",
+                "layers.20",
+                "layers.21",
+                "layers.22",
+                "layers.23",
+                "layers.24",
+                "layers.25",
+                "layers.26",
+                "layers.27"
               ]
             }
           ],
@@ -439,8 +440,8 @@
     },
     {
       "counts": {
-        "functions": 393,
-        "leaf_modules": 80
+        "functions": 17,
+        "leaf_modules": 3
       },
       "modules": [
         {
@@ -496,9 +497,9 @@
                 }
               ],
               "names": [
-                "layer0",
-                "layer1",
-                "layer2"
+                "layers.0",
+                "layers.1",
+                "layers.2"
               ]
             },
             {
@@ -545,7 +546,7 @@
                 }
               ],
               "names": [
-                "layer3"
+                "layers.3"
               ]
             },
             {
@@ -593,9 +594,9 @@
                 }
               ],
               "names": [
-                "layer4",
-                "layer5",
-                "layer6"
+                "layers.4",
+                "layers.5",
+                "layers.6"
               ]
             },
             {
@@ -642,7 +643,7 @@
                 }
               ],
               "names": [
-                "layer7"
+                "layers.7"
               ]
             },
             {
@@ -690,9 +691,9 @@
                 }
               ],
               "names": [
-                "layer8",
-                "layer9",
-                "layer10"
+                "layers.8",
+                "layers.9",
+                "layers.10"
               ]
             },
             {
@@ -739,7 +740,7 @@
                 }
               ],
               "names": [
-                "layer11"
+                "layers.11"
               ]
             },
             {
@@ -787,9 +788,9 @@
                 }
               ],
               "names": [
-                "layer12",
-                "layer13",
-                "layer14"
+                "layers.12",
+                "layers.13",
+                "layers.14"
               ]
             },
             {
@@ -836,7 +837,7 @@
                 }
               ],
               "names": [
-                "layer15"
+                "layers.15"
               ]
             },
             {
@@ -884,9 +885,9 @@
                 }
               ],
               "names": [
-                "layer16",
-                "layer17",
-                "layer18"
+                "layers.16",
+                "layers.17",
+                "layers.18"
               ]
             },
             {
@@ -933,7 +934,7 @@
                 }
               ],
               "names": [
-                "layer19"
+                "layers.19"
               ]
             },
             {
@@ -981,9 +982,9 @@
                 }
               ],
               "names": [
-                "layer20",
-                "layer21",
-                "layer22"
+                "layers.20",
+                "layers.21",
+                "layers.22"
               ]
             },
             {
@@ -1030,7 +1031,7 @@
                 }
               ],
               "names": [
-                "layer23"
+                "layers.23"
               ]
             },
             {
@@ -1078,9 +1079,9 @@
                 }
               ],
               "names": [
-                "layer24",
-                "layer25",
-                "layer26"
+                "layers.24",
+                "layers.25",
+                "layers.26"
               ]
             },
             {
@@ -1127,7 +1128,7 @@
                 }
               ],
               "names": [
-                "layer27"
+                "layers.27"
               ]
             },
             {
@@ -1175,9 +1176,9 @@
                 }
               ],
               "names": [
-                "layer28",
-                "layer29",
-                "layer30"
+                "layers.28",
+                "layers.29",
+                "layers.30"
               ]
             },
             {
@@ -1224,7 +1225,7 @@
                 }
               ],
               "names": [
-                "layer31"
+                "layers.31"
               ]
             },
             {
@@ -1272,9 +1273,9 @@
                 }
               ],
               "names": [
-                "layer32",
-                "layer33",
-                "layer34"
+                "layers.32",
+                "layers.33",
+                "layers.34"
               ]
             },
             {
@@ -1321,7 +1322,7 @@
                 }
               ],
               "names": [
-                "layer35"
+                "layers.35"
               ]
             },
             {
@@ -1369,9 +1370,9 @@
                 }
               ],
               "names": [
-                "layer36",
-                "layer37",
-                "layer38"
+                "layers.36",
+                "layers.37",
+                "layers.38"
               ]
             },
             {
@@ -1418,7 +1419,7 @@
                 }
               ],
               "names": [
-                "layer39"
+                "layers.39"
               ]
             }
           ],

@@ -43,7 +43,7 @@ def test_external_v100_documents_analyse_a_copied_installed_model(tf, tmp_path) 
     model = _v100_qwen(tf, tmp_path)
     done = tf(
         "analyze",
-        f"{model}:Qwen3_1_7B.layer0.placed_mlp",
+        f"{model}:Qwen3_1_7B_DecoderLayer.placed_mlp",
         str(tmp_path / "report.json"),
         "--compute-cost",
         "--memory",

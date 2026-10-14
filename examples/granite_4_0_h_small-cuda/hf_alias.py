@@ -66,10 +66,10 @@ def hf_alias(config: GraniteMoeHybridConfig) -> dict[str, object]:
         "w_down": "output_linear.weight",
         "w_router": "layer.weight",
     }
+    alias["layers"] = layers
     for index, kind in enumerate(config.layer_types):
         layer = f"model.layers.{index}"
         mixer = "mamba" if kind == "linear_attention" else "self_attn"
-        alias[f"layer{index}"] = layer
         alias[f"{layer}.mixer"] = mixer
         # Both pre-norms live on the layer, one level above the block that
         # fuses them, so each is reached absolutely rather than by prefix.

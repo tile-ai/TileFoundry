@@ -34,25 +34,23 @@ from tests.models.qwen3_5_35b_a3b.model import (
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def test_the_stack_is_the_published_order_and_its_layers_are_independent():
-    """The stack is `layer_types` in order, and each layer is an independent copy.
-
-    A stack built from a restated pattern, or from layers sharing Functions, would
-    pass every component test in this package and fail here.
-    """
+def test_the_stack_is_the_published_order_and_shares_each_layer_definition():
+    """The stack follows `layer_types` and shares Functions for each layer type."""
     shape = reference.CONFIG
     stack = Qwen3_5_35B_A3B
-    assert len(stack.modules) == shape.num_hidden_layers
-    assert [child.name for child in stack.modules[:3]] == ["layer0", "layer1", "layer2"]
+    assert len(stack.layers) == shape.num_hidden_layers
+    assert [child.name for child in stack.layers.elements[:3]] == [
+        LAYER_TYPE[kind].name for kind in shape.layer_types[:3]
+    ]
 
     for index, kind in enumerate(shape.layer_types):
-        mixer = stack.children[f"layer{index}"].elements[0].mixer
-        entry = LAYER_TYPE[kind].modules[0].entry
+        mixer = stack.layers.elements[index].mixer
+        entry = LAYER_TYPE[kind].mixer.entry
         assert mixer.entry == entry, f"layer{index} is not a {kind} layer"
 
-    first, second = stack.modules[0], stack.modules[1]
-    assert first.lookup("residual_add") is not second.lookup("residual_add")
-    assert first.modules[0].lookup("conv_step") is not second.modules[0].lookup("conv_step")
+    first, second = stack.layers.elements[:2]
+    assert first.lookup("residual_add") is second.lookup("residual_add")
+    assert first.mixer.lookup("conv_step") is second.mixer.lookup("conv_step")
 
     assert "forward" in stack.methods
     with pytest.raises(ValueError, match=f"{shape.num_hidden_layers} layers but was given 0"):
@@ -237,5 +235,5 @@ def test_both_published_token_mixers_are_covered(block_type):
     published stack does not contain.
     """
     assert block_type in reference.CONFIG.layer_types
-    layer = LAYER_TYPE[block_type].cloned()
-    assert {child.name for child in layer.modules} == {"mixer", "moe"}
+    layer = LAYER_TYPE[block_type]
+    assert set(layer.children) == {"mixer", "moe"}

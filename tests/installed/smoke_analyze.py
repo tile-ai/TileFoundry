@@ -50,7 +50,7 @@ def test_logical_analyses_run(tf, cmine, tmp_path) -> None:
         assert conclusion in report, conclusion
 
 
-def test_mega_kernel_reports_four_families_on_one_expanded_program(tf, tmp_path) -> None:
+def test_mega_kernel_reports_four_families_with_retained_invocations(tf, tmp_path) -> None:
     source = Path(__file__).resolve().parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
     done = tf(
         "analyze",
@@ -65,7 +65,11 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf, tmp_path)
     assert done.returncode == 0, done.stderr
     assert done.stdout == ""
     payload = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
-    source_lines = payload["source"].splitlines()
+    rendered = payload["source"]
+    sources = {None: rendered.split("# invocation:", 1)[0].rstrip().splitlines()}
+    for block in rendered.split("# invocation: ")[1:]:
+        label, body = block.split("\n", 1)
+        sources[label] = body.lstrip("\n").rstrip().splitlines()
 
     as_text = tf(
         "analyze",
@@ -84,20 +88,23 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf, tmp_path)
     families = ["compute-cost", "memory", "roofline", "performance"]
     assert payload["requested"] == payload["executed"] == families
     assert set(payload["function_records"]) == set(families)
-    assert len(payload["calls"]) == 7
+    assert len(payload["calls"]) == 9
+    primitive_rows = [row for row in payload["calls"] if "compute-cost" in row]
+    assert len(primitive_rows) == 7
     for row in payload["calls"]:
+        source_lines = sources[row.get("frame")]
         name, line_text = row["value"].rsplit(":", 1)
         line = int(line_text)
         assert 1 <= line <= len(source_lines)
         assert f"{name} =" in source_lines[line - 1]
     assert all(
-        set(row) - {"performance"} == {"value", "compute-cost", "memory", "roofline"}
-        for row in payload["calls"]
+        set(row) - {"performance", "frame"} == {"value", "compute-cost", "memory", "roofline"}
+        for row in primitive_rows
     )
     assert [index for index, row in enumerate(payload["calls"]) if "performance" in row] == [
         1,
-        4,
-        6,
+        5,
+        8,
     ]
     assert text.startswith(
         "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts"
@@ -305,7 +312,7 @@ def test_a_dim_that_is_not_understood_is_refused(tf, cmine, tmp_path) -> None:
 
 
 def test_analyze_names_an_open_dimension_and_suggests_extents(tf, shipped, tmp_path) -> None:
-    model = f"{Path(shipped['models']) / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5_35B_A3B.layer3.mixer.full_attention"
+    model = f"{Path(shipped['models']) / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5FullAttention.full_attention"
     done = tf("analyze", model, str(tmp_path / "open.py"), "--memory")
     assert done.returncode == 1
     assert done.stdout == ""
@@ -315,7 +322,7 @@ def test_analyze_names_an_open_dimension_and_suggests_extents(tf, shipped, tmp_p
 
 
 def test_analyze_rejects_several_extents_for_one_dimension(tf, shipped, tmp_path) -> None:
-    model = f"{Path(shipped['models']) / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5_35B_A3B.layer3.mixer.full_attention"
+    model = f"{Path(shipped['models']) / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5FullAttention.full_attention"
     done = tf("analyze", model, str(tmp_path / "several.py"), "--dim", "ctx_len=0,1")
     assert done.returncode == 1
     assert done.stdout == ""

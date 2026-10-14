@@ -80,10 +80,10 @@ def hf_alias(config: Qwen3_5MoeTextConfig) -> dict[str, object]:
         "w_shared_scale": Preprocessed("shared_expert_gate.weight", _transposed),
         "w_router": Preprocessed("weight", _transposed),
     }
+    alias["layers"] = layers
     for index, kind in enumerate(config.layer_types):
         layer = f"{layers}.{index}"
         mixer = "linear_attn" if kind == "linear_attention" else "self_attn"
-        alias[f"layer{index}"] = layer
         alias[f"{layer}.mixer"] = mixer
         alias[f"{layer}.{mixer}.gamma_in"] = Absolute(
             f"{layer}.input_layernorm.weight"

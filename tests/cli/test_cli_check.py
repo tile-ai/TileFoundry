@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy
 import pytest
 import torch
-from safetensors.torch import save_file
+from safetensors.torch import load_file, save_file
 
 from tests.fixtures.placed import gqa_decode, leaf_weights
 from tests.fixtures.shapes.composed_leaf_source import composed_leaf_source
@@ -24,7 +24,7 @@ from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.runtime import DictResource
 from tilefoundry.runtime.resource import DrawnResource
 
-ROUTING = f"{MODELS_ROOT / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5MoE.router.routing"
+ROUTING = f"{MODELS_ROOT / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5Router.routing"
 
 DISPATCHING = f"{gqa_decode.__file__}:GqaOnline.gqa_online_attend"
 
@@ -128,8 +128,7 @@ def routing(tmp_path_factory) -> dict[str, Path]:
     where = tmp_path_factory.mktemp("routing")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     namespace, _ = load_namespace(ROUTING)
-    parent = select_ir(namespace, "Qwen3_5MoE")
-    leaf = next(child for child in parent.modules if child.name == "router")
+    leaf = select_ir(namespace, "Qwen3_5Router")
     declared = leaf.lookup("routing")
 
     generator = torch.Generator(device=device).manual_seed(11)
@@ -153,7 +152,7 @@ def routing(tmp_path_factory) -> dict[str, Path]:
     changed[0, 0] = (changed[0, 0] + 1) % w_router.shape[-1]
     numpy.save(where / "one_off.npy", changed.cpu().numpy())
 
-    save_file({"router.w_router": w_router.cpu()}, str(where / "model.safetensors"))
+    save_file({"w_router": w_router.cpu()}, str(where / "model.safetensors"))
     return {
         "dir": where,
         "tokens": where / "tokens.pt",
@@ -657,29 +656,50 @@ def test_a_random_input_fail_against_a_reference_states_its_limits(
     ]
 
 
-def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing) -> None:
+def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, tmp_path) -> None:
     """Reaching `router.routing` reads `router.w_router`.
 
     Reaching `router.routing` reads `router.w_router`: the checkpoint holds
     that one tensor and none of the eight the block around it declares.
     """
-    assert (
-        cli.main(
-            _routing_argv(
-                routing,
-                "indices",
-                "--out",
-                "output[0]",
-                "--fn",
-                "nan_inf",
-                "--out",
-                "output[1]",
-                "--fn",
-                "equal",
-            )
-        )
-        == 0
+    source = tmp_path / "nested.py"
+    source.write_text(
+        """from dataclasses import replace
+from tilefoundry.dsl import *
+from tests.models.qwen3_5_35b_a3b.model import Qwen3_5MoE, Qwen3_5Router, S, _H, _DT
+
+@module(entry="routing")
+class Wrapper:
+    router = Qwen3_5Router
+
+    @func
+    def routing(tokens: Tensor[(S, _H), _DT]):
+        return router(tokens)
+
+Root = replace(Qwen3_5MoE, functions=(*Qwen3_5MoE.functions, Wrapper.routing))
+""",
+        encoding="utf-8",
     )
+    save_file(
+        {"router.w_router": load_file(str(routing["dir"] / "model.safetensors"))["w_router"]},
+        str(tmp_path / "model.safetensors"),
+    )
+    argv = _routing_argv(
+        routing,
+        "indices",
+        "--out",
+        "output[0]",
+        "--fn",
+        "nan_inf",
+        "--out",
+        "output[1]",
+        "--fn",
+        "equal",
+    )
+    argv[1] = f"{source}:Root.routing"
+    argv[argv.index("--weights") + 1] = f"ckpt:{tmp_path}"
+    assert cli.main(argv) == 0
+
 
 
 def test_a_pinned_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> None:

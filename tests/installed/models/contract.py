@@ -43,10 +43,9 @@ def model_cases(model: str) -> tuple[ModelCase, ...]:
 def static(source: Path, case: ModelCase, selector: str) -> str:
     """The ``path:selector`` the command is given, from the non-empty segments.
 
-    The root the source declares, the domain the case scopes to, and the function
-    the case names. A case whose domain is the root itself contributes no segment.
+    The case names a definition directly and selects one of its functions.
     """
-    reached = ".".join(part for part in (case.prototype.name, case.scope, selector) if part)
+    reached = ".".join((case.prototype.name, selector))
     return f"{source / 'model.py'}:{reached}"
 
 
@@ -237,17 +236,6 @@ def exactly() -> tuple[str, dict[str, float]]:
     return "equal", {}
 
 
-def _reached_through(case: ModelCase, selector: str) -> str:
-    """The Modules between the root and the function, as the checkpoint keys them.
-
-    ``check`` scopes the weights it reads to the child Modules the selector passes
-    through, so a checkpoint written for one of them has to key its tensors the same
-    way -- a bare weight name is not found at all.
-    """
-    inner = [part for part in (*case.scope.split("."), *selector.split(".")[:-1]) if part]
-    return f"{'.'.join(inner)}." if inner else ""
-
-
 def split_by_declaration(case: ModelCase, selector: str, args: Sequence):
     """One positional argument list, split the way the command takes it.
 
@@ -273,8 +261,12 @@ def nested_constants(loaded, prefix: str = "") -> dict:
     by the path they are reached through, or the child is loaded with nothing.
     """
     found = {f"{prefix}{name}": loaded.resource.load(name) for name in loaded.module.weights}
-    for child in loaded.modules:
-        found.update(nested_constants(child, f"{prefix}{child.module.name}."))
+    for key, child in loaded.children.items():
+        if isinstance(child, tuple):
+            for index, instance in enumerate(child):
+                found.update(nested_constants(instance, f"{prefix}{key}.{index}."))
+        else:
+            found.update(nested_constants(child, f"{prefix}{key}."))
     return found
 
 
@@ -392,7 +384,7 @@ def compared(
 
     if weights:
         checkpoint = {
-            f"{_reached_through(case, selector)}{name}": value
+            name: value
             for name, value in weights.items()
         }
         argv += ["--weights", f"ckpt:{_materialize_weights(checkpoint, cache)}"]

@@ -177,8 +177,8 @@ def test_a_variant_body_reaches_its_child_the_same_way() -> None:
         def dynamic_variant(x: Tensor[(_N_EVAL,), "f32"]) -> Tensor[(_N_EVAL,), "f32"]:
             return scaled(x)  # noqa: F821
 
-    (child,) = _Dispatch.modules
+    child = _Dispatch.children["scaled"]
     (variant,) = _Dispatch.entry_function().variants
-    assert variant.body.target is child.entry_function()
+    assert variant.body.target is child
     assert len(variant.body.args) == 1
-    assert [p.is_const for p in variant.body.target.params] == [False, True]
+    assert [p.is_const for p in variant.body.target.elements[0].entry_function().params] == [False, True]

@@ -79,7 +79,7 @@ def main():
                       "k_cache", "v_cache", "scale")}
 
     loaded = ref.Qwen3_1_7B.load(SafetensorsResource(str(args.ckpt), device=dev))
-    lay = getattr(loaded, f"layer{args.layer}")
+    lay = loaded.layers[args.layer]
     w = lay.constants
 
     # both sides take activations alone; each fills its own weights from its own
@@ -94,7 +94,7 @@ def main():
 
     ref_out = lay.self_attention(*call)[0]
     tw = twin.LayerTwin(ir=ref.Qwen3_1_7B_DecoderLayer)
-    tw.load(SafetensorsResource(str(args.ckpt), device=dev).subtree(f"layer{args.layer}"))
+    tw.load(SafetensorsResource(str(args.ckpt), device=dev).subtree("layers").subtree(str(args.layer)))
     mine = tw.self_attention(*call)[0]
 
     e_ref, e_mine = err(ref_out, truth), err(mine, truth)

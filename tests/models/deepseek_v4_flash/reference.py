@@ -135,7 +135,7 @@ def run_attention_step(inputs: DecodeStepInputs):
     step: the description under test is the one the checkpoint pipeline binds
     into, not a second copy that takes its weights positionally.
     """
-    loaded = DeepseekV4Attention.cloned().load(DictResource(inputs.weights))
+    loaded = DeepseekV4Attention.load(DictResource(inputs.weights))
     return loaded.forward(*inputs.args)
 
 

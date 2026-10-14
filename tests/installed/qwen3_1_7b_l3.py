@@ -125,7 +125,7 @@ def _oracle(mount: Path):
 def _loaded(source: Path, mount: Path):
     """The emitted decoder with its published weights bound directly."""
     namespace = runpy.run_path(str(source))
-    root = namespace["Qwen3_1_7B"].cloned()
+    root = namespace["Qwen3_1_7B"]
     alias = runpy.run_path(str(source.with_name("hf_alias.py")))["hf_alias"](namespace["config"])
     return root.load(SafetensorsResource(str(mount), device=DEV, alias=alias))
 

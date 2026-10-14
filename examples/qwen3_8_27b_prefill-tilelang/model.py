@@ -75,7 +75,11 @@ NEG_INF = float("-inf")
 N = DimVar("seq_len", CHUNK, 8192)
 
 
-@module(entry="down")
+@module(
+    entry="down",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 132), Topology("thread", 384)),
+)
 class MLP:
     """`Qwen3_5MLP` and the residual add that follows it."""
 
@@ -100,7 +104,11 @@ class MLP:
         return hidden + tf.matmul(act, w_down, b_layout="NK")
 
 
-@module(entry="delta_rule")
+@module(
+    entry="delta_rule",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 132), Topology("thread", 384)),
+)
 class GatedDeltaNet:
     """`Qwen3_5GatedDeltaNet` over a whole prompt, from an empty state."""
 
@@ -252,7 +260,11 @@ class GatedDeltaNet:
         return hidden + tf.matmul(gated, w_out, b_layout="NK")
 
 
-@module(entry="o_proj")
+@module(
+    entry="o_proj",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 132), Topology("thread", 384)),
+)
 class Attention:
     """`Qwen3_5Attention` over a whole prompt: causal, gated output."""
 
@@ -359,18 +371,26 @@ def _full_layer_forward(self, hidden, cos, sin):
     return self.mlp.down(self.mlp.gate_up(self.post_norm(hidden)), hidden)
 
 
-@module(entry="input_norm")
+@module(
+    entry="input_norm",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 132), Topology("thread", 384)),
+)
 class LinearAttentionLayer:
-    mixer = GatedDeltaNet.renamed("mixer")
-    mlp = MLP.renamed("mlp")
+    mixer = GatedDeltaNet
+    mlp = MLP
     input_norm, post_norm = _norms()
     forward = _linear_layer_forward
 
 
-@module(entry="input_norm")
+@module(
+    entry="input_norm",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 132), Topology("thread", 384)),
+)
 class FullAttentionLayer:
-    mixer = Attention.renamed("mixer")
-    mlp = MLP.renamed("mlp")
+    mixer = Attention
+    mlp = MLP
     input_norm, post_norm = _norms()
     forward = _full_layer_forward
 
@@ -405,10 +425,7 @@ def rope_tables(n: int, device):
 class Qwen3_8_27B:
     """The text decoder in `config.layer_types` order, one prefill step."""
 
-    layers = tuple(
-        LAYER_TYPE[kind].renamed(f"layer{index}")
-        for index, kind in enumerate(config["layer_types"])
-    )
+    layers = ModuleList(tuple(LAYER_TYPE[kind] for kind in config["layer_types"]))
 
     @func
     def embed(
@@ -434,7 +451,7 @@ class Qwen3_8_27B:
         """One prefill: token ids in, the logits of row `last` out."""
         hidden = self.embed(token_ids)
         cos, sin = rope_tables(token_ids.shape[0], token_ids.device)
-        for layer, kind in zip(self.modules, config["layer_types"]):
+        for layer, kind in zip(self.layers, config["layer_types"]):
             if kind == "full_attention":
                 hidden = layer.forward(hidden, cos, sin)
             else:
@@ -474,8 +491,8 @@ def hf_alias() -> dict[str, object]:
         "w_up": "up_proj.weight",
         "w_down": "down_proj.weight",
     }
+    alias["layers"] = "model.language_model.layers"
     for index, kind in enumerate(config["layer_types"]):
-        alias[f"layer{index}"] = f"model.language_model.layers.{index}"
         alias[f"model.language_model.layers.{index}.mixer"] = (
             "linear_attn" if kind == "linear_attention" else "self_attn"
         )

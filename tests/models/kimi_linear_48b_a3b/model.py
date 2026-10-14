@@ -273,7 +273,11 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
     ]
 
 
-    @module(entry="mla_attention")
+    @module(
+        entry="mla_attention",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 132), Topology("thread", 512)),
+    )
     class KimiMla:
         """Layer 3's attention: multi-head latent attention, decode step.
 
@@ -373,7 +377,11 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             return out, k_new, v_new
 
 
-    @module(entry="kda_attention")
+    @module(
+        entry="kda_attention",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 132), Topology("thread", 512)),
+    )
     class KimiKda:
         """Layer 0's attention: Kimi Delta Attention, decode step.
 
@@ -525,7 +533,11 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             return out, state_next, conv_q_next, conv_k_next, conv_v_next
 
 
-    @module(entry="moe")
+    @module(
+        entry="moe",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 132), Topology("thread", 512)),
+    )
     class KimiMoe:
         """The MoE both non-dense layers share: sigmoid router, 256 experts, top-8,
         one shared expert.
@@ -643,10 +655,8 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
     class KimiLinear48BA3B:
         """The three kernels this model is, as one tree.
 
-        A root rather than three published submodules: each is its own execution
-        domain -- an HIR Function may only call a Function its own Module owns --
-        and one root is what lets a caller name any of them by the path it was
-        reached through.
+        The root holds the three definitions; each can also be used directly
+        with its own declared execution context.
         """
 
 
@@ -661,4 +671,8 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
 #: to name -- `reference.py` builds one with fewer experts for the MoE oracle.
 KimiLinear48BA3B = build_kimi_linear_48b_a3b(published())
 
-__all__ = ["KimiLinear48BA3B", "build_kimi_linear_48b_a3b"]
+KimiKda = KimiLinear48BA3B.kda
+KimiMla = KimiLinear48BA3B.mla
+KimiMoe = KimiLinear48BA3B.moe
+
+__all__ = ["KimiKda", "KimiMla", "KimiMoe", "KimiLinear48BA3B", "build_kimi_linear_48b_a3b"]

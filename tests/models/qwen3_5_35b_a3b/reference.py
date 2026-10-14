@@ -303,14 +303,14 @@ def load_mixer(kind: str, layer):
     them on, and the activations a caller then passes have to be on that one too.
     """
     module, constants = _MIXER[kind]
-    return module.cloned().load(
+    return module.load(
         DictResource(constants(layer), alias=hf_layout_only(CONFIG))
     )
 
 
 def load_moe(layer):
     """The MoE Module with *layer*'s block weights bound, the router's included."""
-    return Qwen3_5MoE.cloned().load(
+    return Qwen3_5MoE.load(
         DictResource(moe_weights(layer), alias=hf_layout_only(CONFIG))
     )
 
@@ -326,7 +326,7 @@ def load_layer(kind: str, layer):
     _module, constants = _MIXER[kind]
     flat = {f"mixer.{name}": w for name, w in constants(layer).items()}
     flat.update({f"moe.{name}": w for name, w in moe_weights(layer).items()})
-    return LAYER_TYPE[kind].cloned().load(DictResource(flat, alias=hf_layout_only(CONFIG)))
+    return LAYER_TYPE[kind].load(DictResource(flat, alias=hf_layout_only(CONFIG)))
 
 
 def moe_oracle(layer, hidden) -> torch.Tensor:

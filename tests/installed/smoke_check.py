@@ -112,7 +112,7 @@ def test_a_reached_weight_with_no_source_is_named_where_it_is_first_asked_for(
     """The first use names a missing child weight and the Module declaring it."""
     done = tf("check", f"{hir_composition}:CrossModule", *_JUDGE)
     assert done.returncode != 0
-    assert "'expert'" in done.stderr and "'w'" in done.stderr
+    assert all(name in done.stderr for name in ("'Expert'", "'w'", "'expert.w'"))
 
 
 def test_check_reports_grid_loop_parser_errors_from_the_installed_wheel(
@@ -366,14 +366,6 @@ def test_real_weights_come_from_the_checkpoint_and_activations_are_drawn(
 
     assert "random (seed " in done.stdout
     assert "activations actual f32 (declared f32)" in done.stdout
-    assert "max_violation 0" in done.stdout
-
-
-def test_a_nested_twin_is_reached_through_the_child_it_is_declared_under(tf, nested_twin) -> None:
-    done = tf("check", f"{nested_twin}:NestedTwin.child.scaled", *_ARGS)
-    assert done.returncode == 0, done.stderr
-
-    assert "reference: evaluator on child.scaled" in done.stdout
     assert "max_violation 0" in done.stdout
 
 

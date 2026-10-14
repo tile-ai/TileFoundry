@@ -1,9 +1,8 @@
 """This model's corpus entry: what is selected from it, and how it is judged.
 
-One case, one model, one root. The three kernels are separate execution domains --
-an HIR Function may only call a Function its own Module owns -- so each is its own
-child Module, and a case names them by the path it reached them through rather
-than by naming three models.
+Three cases name the KDA, MLA, and MoE definitions directly. Each carries the
+execution context declared by its module, while the report groups all three
+under one model.
 
 The `reference` is spent on KDA, which is BLOCKED. That is deliberate: of the three
 kernels it is the one that distinguishes this model, and a capability matrix that
@@ -27,7 +26,7 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B, published
+from tests.models.kimi_linear_48b_a3b.model import KimiKda, KimiMla, KimiMoe, published
 from tests.models.kimi_linear_48b_a3b.reference import (
     CTX_LEN,
     KDA_BLOCK_REASON,
@@ -45,7 +44,7 @@ ANALYZED_AT = {"ctx_len": 1024}
 
 CASE = ModelCase(
     id="kimi_linear_48b_a3b",
-    prototype=KimiLinear48BA3B,
+    prototype=KimiKda,
     reference=ReferenceCase(
         id="kimi_linear_48b_a3b/reference/kda_decode",
         boundary=(
@@ -65,43 +64,56 @@ CASE = ModelCase(
     analyze=(
         FunctionCase(
             id="kimi_linear_48b_a3b/analyze/kda_attention",
-            selector="kda.kda_attention",
+            selector="kda_attention",
         ),
         FunctionCase(
-            id="kimi_linear_48b_a3b/analyze/short_conv", selector="kda.short_conv"
+            id="kimi_linear_48b_a3b/analyze/short_conv", selector="short_conv"
         ),
         FunctionCase(
-            id="kimi_linear_48b_a3b/analyze/l2_normalize", selector="kda.l2_normalize"
+            id="kimi_linear_48b_a3b/analyze/l2_normalize", selector="l2_normalize"
         ),
         FunctionCase(
-            id="kimi_linear_48b_a3b/analyze/kda_gate", selector="kda.kda_gate"
-        ),
-        FunctionCase(
-            id="kimi_linear_48b_a3b/analyze/mla_attention",
-            selector="mla.mla_attention",
-            dims=ANALYZED_AT,
-        ),
-        FunctionCase(id="kimi_linear_48b_a3b/analyze/moe", selector="moe.moe"),
-        FunctionCase(id="kimi_linear_48b_a3b/analyze/router", selector="moe.router"),
-        FunctionCase(
-            id="kimi_linear_48b_a3b/analyze/shared_expert",
-            selector="moe.shared_expert",
+            id="kimi_linear_48b_a3b/analyze/kda_gate", selector="kda_gate"
         ),
     ),
-    #: Only MLA leaves a dimension open. KDA's state is fixed-size and the MoE's
-    #: expert count is a constant of the published model, so neither has a size to
-    #: be asked at -- which is what those shapes mean, not a capability they lack.
+)
+
+MLA_CASE = ModelCase(
+    id="kimi_linear_48b_a3b_mla",
+    model="kimi_linear_48b_a3b",
+    prototype=KimiMla,
+    analyze=(
+        FunctionCase(
+            id="kimi_linear_48b_a3b/analyze/mla_attention",
+            selector="mla_attention",
+            dims=ANALYZED_AT,
+        ),
+    ),
     sized=(
         SizedCase(
             id="kimi_linear_48b_a3b/sized/mla_attention",
-            selector="mla.mla_attention",
+            selector="mla_attention",
             dims=ANALYZED_AT,
             ceiling={"ctx_len": published().model_max_length - 1},
         ),
     ),
 )
 
-#: What the registry collects from this package: one Module, one case.
-CASES = (CASE,)
+MOE_CASE = ModelCase(
+    id="kimi_linear_48b_a3b_moe",
+    model="kimi_linear_48b_a3b",
+    prototype=KimiMoe,
+    analyze=(
+        FunctionCase(id="kimi_linear_48b_a3b/analyze/moe", selector="moe"),
+        FunctionCase(id="kimi_linear_48b_a3b/analyze/router", selector="router"),
+        FunctionCase(
+            id="kimi_linear_48b_a3b/analyze/shared_expert",
+            selector="shared_expert",
+        ),
+    ),
+)
 
-__all__ = ["ANALYZED_AT", "CASE", "CASES"]
+#: One case per selected definition, grouped under the same model.
+CASES = (CASE, MLA_CASE, MOE_CASE)
+
+__all__ = ["ANALYZED_AT", "CASE", "CASES", "MLA_CASE", "MOE_CASE"]

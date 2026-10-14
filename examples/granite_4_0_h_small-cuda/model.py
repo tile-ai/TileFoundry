@@ -41,9 +41,9 @@ from transformers.models.granitemoehybrid.configuration_granitemoehybrid import 
 )
 
 from tilefoundry import DType, func, module
-from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 -- tf used by @func bodies
+from tilefoundry.dsl import ConstTensor, ModuleList, Tensor, tf  # noqa: F401 -- tf used by @func bodies
 from tilefoundry.evaluator import to_torch_dtype
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types.mesh import Topology
 from tilefoundry.target import CudaTarget
 
 
@@ -494,8 +494,8 @@ def _layer_forward(self, hidden, mixer_args):
 
 @module(entry="residual_add")
 class GraniteMambaDecoderLayer:
-    mixer = GraniteMamba.renamed("mixer")
-    moe = GraniteMoE.renamed("moe")
+    mixer = GraniteMamba
+    moe = GraniteMoE
 
     @func
     def residual_add(
@@ -511,8 +511,8 @@ class GraniteMambaDecoderLayer:
 
 @module(entry="residual_add")
 class GraniteAttentionDecoderLayer:
-    mixer = GraniteAttention.renamed("mixer")
-    moe = GraniteMoE.renamed("moe")
+    mixer = GraniteAttention
+    moe = GraniteMoE
 
     @func
     def residual_add(
@@ -604,10 +604,7 @@ class Granite4_0_H_Small:
 
 
     # The published layer-type cycle determines each layer Module.
-    layers = tuple(
-        LAYER_TYPE[kind].renamed(f"layer{index}")
-        for index, kind in enumerate(config.layer_types)
-    )
+    layers = ModuleList(tuple(LAYER_TYPE[kind] for kind in config.layer_types))
 
     @func
     def embed(
@@ -650,13 +647,13 @@ class Granite4_0_H_Small:
         call. What comes back is the normed hidden state and each layer's
         fresh state.
         """
-        if len(layer_args) != len(self.modules) or len(caches) != len(self.modules):
+        if len(layer_args) != len(self.layers) or len(caches) != len(self.layers):
             raise ValueError(
-                f"decoder has {len(self.modules)} layers but was given "
+                f"decoder has {len(self.layers)} layers but was given "
                 f"{len(layer_args)} argument tuples and {len(caches)} caches"
             )
         states = []
-        for layer, mixer_args, cache in zip(self.modules, layer_args, caches):
+        for layer, mixer_args, cache in zip(self.layers, layer_args, caches):
             hidden, state = layer(hidden, _with_cache(layer.mixer, mixer_args, cache))
             states.append(state)
         return self.final_rms_norm(hidden), tuple(states)

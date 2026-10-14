@@ -37,10 +37,10 @@ def test_models_renders_the_whole_forest_with_leaf_modules_marked(tf) -> None:
     assert done.returncode == 0, done.stderr
     forest = done.stdout
 
-    assert "28 leaf modules, 115 functions" in forest
+    assert "1 leaf modules, 8 functions" in forest
     assert "  Qwen3_1_7B\n" in forest
     assert "* Qwen3_1_7B_DecoderLayer\n" not in forest
-    assert "*   layer0..layer27  (28 identical, each as shown)" in forest
+    assert "*   layers.0..layers.27  (28 identical, each as shown)" in forest
     assert "layer1\n" not in forest
     assert 'input_rms_norm(hidden: Tensor[(1, 1, 2048), "bf16"]' in forest
 
@@ -72,7 +72,7 @@ def test_models_source_names_the_shipped_directory_and_its_files(
 
     copied = tmp_path / "mine"
     shutil.copytree(source, copied)
-    static = f"{copied / 'model.py'}:Qwen3_1_7B.layer0.mlp"
+    static = f"{copied / 'model.py'}:Qwen3_1_7B_DecoderLayer.mlp"
     analysed = tf(
         "analyze", static, str(tmp_path / "analysed.py"), "--compute-cost", "--memory"
     )
@@ -83,17 +83,16 @@ def test_models_source_names_the_shipped_directory_and_its_files(
     assert "# compute-cost flops=bf16:" in report
     assert "traffic=gmem:r" in report
 
-    targetless = f"{copied / 'model.py'}:Qwen3_1_7B_DecoderLayer"
-    rejected = tf(
+    standalone = f"{copied / 'model.py'}:Qwen3_1_7B_DecoderLayer"
+    analysed_layer = tf(
         "analyze",
-        targetless,
-        str(tmp_path / "targetless.py"),
+        standalone,
+        str(tmp_path / "standalone.py"),
         "--compute-cost",
         "--dim",
         "ctx_len=128",
     )
-    assert rejected.returncode == 1
-    assert "no target is declared" in rejected.stderr
+    assert analysed_layer.returncode == 0, analysed_layer.stderr
 
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)

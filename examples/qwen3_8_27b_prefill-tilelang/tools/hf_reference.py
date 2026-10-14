@@ -18,7 +18,7 @@ own code run on them, and is checked against the hooked downstream value
 where one exists, so the reference cannot drift from the model it names.
 
 `--ckpt-out` also writes a weights directory keyed by this model's module
-paths (`layer0.mixer.w_qkv`, ...), the form `check --weights ckpt:DIR` reads.
+paths (`layers.0.mixer.w_qkv`, ...), the form `check --weights ckpt:DIR` reads.
 """
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ def main():
         for name in ("table", "gamma_final", "w_head"):
             tensors[name] = sd[alias[name]].detach().contiguous().cpu()
         for li in layers:
-            lmod = root.modules[li]
+            lmod = root.layers[li]
             prefix = f"model.language_model.layers.{li}"
             for sub, hfsub in (("", ""), ("mixer.", alias[f"{prefix}.mixer"] + "."), ("mlp.", "mlp.")):
                 node = lmod if not sub else getattr(lmod, sub[:-1])
@@ -94,7 +94,7 @@ def main():
                         key = f"{prefix}.{raw}"
                     else:
                         key = f"{prefix}.{hfsub}{raw}"
-                    tensors[f"layer{li}.{sub}{wname}"] = sd[key].detach().contiguous().cpu()
+                    tensors[f"layers.{li}.{sub}{wname}"] = sd[key].detach().contiguous().cpu()
         Path(args.ckpt_out).mkdir(parents=True, exist_ok=True)
         save_file(tensors, str(Path(args.ckpt_out) / "model.safetensors"))
         print(f"wrote {len(tensors)} weights to {args.ckpt_out}", flush=True)
@@ -155,7 +155,7 @@ def main():
         with torch.no_grad():
             for li in layers:
                 L = text.layers[li]
-                ld = d / "v1" / f"layer{li}"
+                ld = d / "v1" / f"layers.{li}"
                 hidden, hn = caught[f"l{li}.in"], caught[f"l{li}.hn"]
                 attended, hn2 = caught[f"l{li}.attended"], caught[f"l{li}.hn2"]
                 save(ld / "input_norm", [hidden], hn)

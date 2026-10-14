@@ -12,7 +12,7 @@ from tests.models.deepseek_v4_flash.model import (
     KV_QUANT_BLOCK,
     DSV4Config,
 )
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.runtime import RuntimeModule, runtime_func, runtime_module
 
 _BF16 = torch.bfloat16
@@ -362,9 +362,9 @@ def _build_root_funcs(config: DSV4Config) -> dict[str, object]:
 def build_runtime_causal_lm(config: DSV4Config, ir: Module) -> RuntimeModule:
     """The runtime twin of the causal-LM tree at *config*; `ir` is that semantic
     root (its children/entry/functions drive the twin)."""
-    if not ir.modules:
+    if "layers" not in ir.children:
         raise ValueError("build_runtime_causal_lm: ir has no decoder layers")
-    layer0_ir = ir.modules[0]
+    layer0_ir = ir.children["layers"].elements[0]
     attention_ir = layer0_ir.attention
     moe_ir = layer0_ir.moe
 
@@ -373,8 +373,7 @@ def build_runtime_causal_lm(config: DSV4Config, ir: Module) -> RuntimeModule:
     decoder_layer_cls = _build_decoder_layer_rt(layer0_ir, attention_cls, moe_cls)
 
     namespace: dict[str, object] = dict(_build_root_funcs(config))
-    for layer_ir in ir.modules:
-        namespace[layer_ir.name] = decoder_layer_cls
+    namespace["layers"] = ModuleList(decoder_layer_cls, len(ir.children["layers"]))
 
     root_cls = runtime_module(ir)(type("DeepseekV4FlashRT", (), namespace))
     return root_cls(ir=ir)

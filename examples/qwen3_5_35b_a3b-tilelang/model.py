@@ -17,7 +17,7 @@ added, and nothing is removed:
    this for "a model asked about more than one structural configuration"; it is
    what lets a 4-layer stack and the published 40-layer one be the same source.
    The module-level names below are `build(REAL)`, so a selector still reads
-   `model.py:Qwen3_5Decoder.layer0.mixer`.
+   `model.py:Qwen3_5LinearAttention`.
 3. **Per-weight converters.** The shipped source registers exactly one
    (`lm_head.w_head`), which is enough at L1 -- "per-op against Hugging Face
    with random weights" never binds a real checkpoint. Step one is finished
@@ -54,7 +54,7 @@ if _HERE not in sys.path:
 from config import REAL  # noqa: E402 -- must follow the sys.path bootstrap
 from tilefoundry import DType, func, module
 from tilefoundry.target import CudaTarget
-from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 -- tf used by @func bodies
+from tilefoundry.dsl import ConstTensor, ModuleList, Tensor, tf  # noqa: F401 -- tf used by @func bodies
 from tilefoundry.evaluator import to_torch_dtype
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.runtime import Absolute
@@ -676,8 +676,8 @@ def build(config):
 
     @module(entry="residual_add")
     class Qwen3_5FullAttnLayer:
-        mixer = Qwen3_5FullAttention.renamed("mixer")
-        moe = Qwen3_5MoE.renamed("moe")
+        mixer = Qwen3_5FullAttention
+        moe = Qwen3_5MoE
 
         @func
         def residual_add(
@@ -690,8 +690,8 @@ def build(config):
 
     @module(entry="residual_add")
     class Qwen3_5LinearAttnLayer:
-        mixer = Qwen3_5LinearAttention.renamed("mixer")
-        moe = Qwen3_5MoE.renamed("moe")
+        mixer = Qwen3_5LinearAttention
+        moe = Qwen3_5MoE
 
         @func
         def residual_add(
@@ -764,10 +764,7 @@ def build(config):
         independent copy, so an analysis of one annotates only it."""
 
         # The published layer-type cycle determines each layer Module.
-        layers = tuple(
-            LAYER_TYPE[kind].renamed(f"layer{index}")
-            for index, kind in enumerate(config.layer_types)
-        )
+        layers = ModuleList(tuple(LAYER_TYPE[kind] for kind in config.layer_types))
 
         @func
         def embed(
@@ -828,13 +825,13 @@ def build(config):
             call. What comes back is the normed hidden state and each layer's
             fresh state.
             """
-            if len(layer_args) != len(self.modules) or len(caches) != len(self.modules):
+            if len(layer_args) != len(self.layers) or len(caches) != len(self.layers):
                 raise ValueError(
-                    f"decoder has {len(self.modules)} layers but was given "
+                    f"decoder has {len(self.layers)} layers but was given "
                     f"{len(layer_args)} argument tuples and {len(caches)} caches"
                 )
             states = []
-            for layer, mixer_args, cache in zip(self.modules, layer_args, caches):
+            for layer, mixer_args, cache in zip(self.layers, layer_args, caches):
                 hidden, state = layer(
                     hidden, _with_cache(layer.mixer, mixer_args, cache)
                 )
@@ -984,11 +981,11 @@ def hf_alias(cfg=REAL, *, text_prefix="model.language_model", head="lm_head.weig
     for index, kind in enumerate(cfg.layer_types):
         layer = f"{text_prefix}.layers.{index}"
         for canonical, raw in _MIXER_RAW[kind].items():
-            alias[f"layer{index}.mixer.{canonical}"] = Absolute(f"{layer}.{raw}")
+            alias[f"layers.{index}.mixer.{canonical}"] = Absolute(f"{layer}.{raw}")
         for canonical, raw in _MOE_RAW.items():
-            alias[f"layer{index}.moe.{canonical}"] = Absolute(f"{layer}.{raw}")
+            alias[f"layers.{index}.moe.{canonical}"] = Absolute(f"{layer}.{raw}")
         for canonical, raw in _ROUTER_RAW.items():
-            alias[f"layer{index}.moe.router.{canonical}"] = Absolute(f"{layer}.{raw}")
+            alias[f"layers.{index}.moe.router.{canonical}"] = Absolute(f"{layer}.{raw}")
     return alias
 
 

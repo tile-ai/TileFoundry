@@ -120,15 +120,16 @@ class HFResource:
         return None
 
     def subtree(self, seg: str) -> "HFResource":
-        for child in self._node.modules:
-            if child.name == seg:
-                return HFResource(
-                    child,
-                    self._raw.subtree(seg),
-                    dtype=self._dtype,
-                    report=self._report,
-                )
-        raise KeyError(f"{self._node.name!r} has no child module {seg!r}")
+        if isinstance(self._node, ModuleList):
+            child = self._node.elements[int(seg)]
+        else:
+            child = self._node.children[seg]
+            if not child.indexed:
+                child = child.elements[0]
+        return HFResource(
+            child, self._raw.subtree(seg), dtype=self._dtype, report=self._report,
+            _converters={} if isinstance(child, ModuleList) else None,
+        )
 
 
 def _converter_map(node) -> dict:

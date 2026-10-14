@@ -56,30 +56,30 @@ EXPECTED_PREPARED_KEYS = {
     "table",
     "final_norm_weight",
     "lm_head_weight",
-    "layer0.pre_attn_norm_weight",
-    "layer0.pre_moe_norm_weight",
-    "layer0.attention.gamma_kv",
-    "layer0.attention.gamma_q_lora",
-    "layer0.attention.w_kv",
-    "layer0.attention.w_q_a",
-    "layer0.attention.w_q_b",
-    "layer0.attention.attn_sink",
-    "layer0.attention.w_o_a",
-    "layer0.attention.w_o_b",
-    "layer0.moe.gate_weight",
-    "layer0.moe.tid2eid",
-    "layer0.moe.w1_weight",
-    "layer0.moe.w1_scale",
-    "layer0.moe.w3_weight",
-    "layer0.moe.w3_scale",
-    "layer0.moe.w2_weight",
-    "layer0.moe.w2_scale",
-    "layer0.moe.shared_w1_weight",
-    "layer0.moe.shared_w1_scale",
-    "layer0.moe.shared_w3_weight",
-    "layer0.moe.shared_w3_scale",
-    "layer0.moe.shared_w2_weight",
-    "layer0.moe.shared_w2_scale",
+    "layers.0.pre_attn_norm_weight",
+    "layers.0.pre_moe_norm_weight",
+    "layers.0.attention.gamma_kv",
+    "layers.0.attention.gamma_q_lora",
+    "layers.0.attention.w_kv",
+    "layers.0.attention.w_q_a",
+    "layers.0.attention.w_q_b",
+    "layers.0.attention.attn_sink",
+    "layers.0.attention.w_o_a",
+    "layers.0.attention.w_o_b",
+    "layers.0.moe.gate_weight",
+    "layers.0.moe.tid2eid",
+    "layers.0.moe.w1_weight",
+    "layers.0.moe.w1_scale",
+    "layers.0.moe.w3_weight",
+    "layers.0.moe.w3_scale",
+    "layers.0.moe.w2_weight",
+    "layers.0.moe.w2_scale",
+    "layers.0.moe.shared_w1_weight",
+    "layers.0.moe.shared_w1_scale",
+    "layers.0.moe.shared_w3_weight",
+    "layers.0.moe.shared_w3_scale",
+    "layers.0.moe.shared_w2_weight",
+    "layers.0.moe.shared_w2_scale",
 }
 
 
@@ -123,8 +123,10 @@ def _fabricate_checkpoint(mod, alias, generator, path=(), out=None):
                     out[one] = _fabricate_one(shape[1:], ty.dtype, name, generator)
             else:
                 out[key] = _fabricate_one(shape, ty.dtype, name, generator)
-    for child in mod.modules:
-        _fabricate_checkpoint(child, alias, generator, (*path, child.name), out)
+    for key, slot in mod.children.items():
+        for index, child in enumerate(slot.elements):
+            child_path = (*path, key, str(index)) if slot.indexed else (*path, key)
+            _fabricate_checkpoint(child, alias, generator, child_path, out)
     return out
 
 
@@ -221,12 +223,13 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
         k
         for k in store._index()
         if any(
-            tag in k for tag in ("layers.", "attn.", "ffn", "experts.", "wkv", "wq_", "wo_", "raw")
+            tag in (k.split(".", 2)[2] if k.startswith("layers.") else k)
+            for tag in ("layers.", "attn.", "ffn", "experts.", "wkv", "wq_", "wo_", "raw")
         )
     ]
     assert debris == []
 
-    w_kv = store.load("layer0.attention.w_kv")
+    w_kv = store.load("layers.0.attention.w_kv")
     expected_w_kv = (
         _dequant_blocks(
             raw_tensors["layers.0.attn.wkv.weight"], raw_tensors["layers.0.attn.wkv.scale"]
@@ -240,7 +243,7 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
     assert w_kv.dtype == torch.bfloat16
     assert (raw_tensors["layers.0.attn.wkv.scale"].float() != 1.0).any(), "scales must be non-unit"
 
-    w1 = store.load("layer0.moe.w1_weight")
+    w1 = store.load("layers.0.moe.w1_weight")
     expected_w1 = torch.stack(
         [raw_tensors[f"layers.0.ffn.experts.{i}.w1.weight"] for i in range(config.n_routed)]
     )
@@ -248,7 +251,7 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
     assert torch.equal(w1.float().cpu(), expected_w1.float())
 
     assert torch.equal(
-        store.load("layer0.moe.gate_weight").float().cpu(),
+        store.load("layers.0.moe.gate_weight").float().cpu(),
         raw_tensors["layers.0.gate.weight"].float(),
     )
     assert "layers.0.ffn.gate.weight" not in raw_tensors
@@ -257,19 +260,19 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
         SafetensorsResource(
             str(prepared),
             device="cuda",
-            alias={"pre_moe_norm_weight": Absolute("layer0.pre_moe_norm_weight")},
+            alias={"pre_moe_norm_weight": Absolute("layers.0.pre_moe_norm_weight")},
         )
-        .subtree("layer0")
+        .subtree("layers").subtree("0")
         .subtree("moe")
     )
     assert torch.equal(
-        escaped.load("pre_moe_norm_weight"), store.load("layer0.pre_moe_norm_weight")
+        escaped.load("pre_moe_norm_weight"), store.load("layers.0.pre_moe_norm_weight")
     )
     assert escaped.load_group("pre_moe_norm_weight") is None
     with pytest.raises(TypeError, match="absolute alias"):
         escaped.subtree("pre_moe_norm_weight")
 
-    w1_scale = store.load("layer0.moe.w1_scale")
+    w1_scale = store.load("layers.0.moe.w1_scale")
     expected_scale = torch.stack(
         [raw_tensors[f"layers.0.ffn.experts.{i}.w1.scale"] for i in range(config.n_routed)]
     )
@@ -277,31 +280,31 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
     assert w1_scale.dtype == torch.float8_e8m0fnu
     assert torch.equal(w1_scale.float().cpu(), expected_scale)
 
-    layer0 = next(child for child in semantic.modules if child.module.name == "layer0")
-    leaf = next(child for child in layer0.modules if child.module.name == "moe")
+    layer0 = semantic.children["layers"][0]
+    leaf = layer0.children["moe"]
     with pytest.MonkeyPatch.context() as patched:
 
         def refuse(*_args, **_kwargs):
             raise AssertionError("loading one leaf reached Module.prepare")
 
         patched.setattr(Module, "prepare", refuse)
-        loaded_leaf = leaf.module.load(store.subtree("layer0").subtree("moe"))
+        loaded_leaf = leaf.module.load(store.subtree("layers").subtree("0").subtree("moe"))
 
     assert loaded_leaf.module is leaf.module
     assert set(loaded_leaf.module.weights) == set(leaf.module.weights)
-    assert {f"layer0.moe.{name}" for name in loaded_leaf.module.weights} == {
-        key for key in EXPECTED_PREPARED_KEYS if key.startswith("layer0.moe.")
+    assert {f"layers.0.moe.{name}" for name in loaded_leaf.module.weights} == {
+        key for key in EXPECTED_PREPARED_KEYS if key.startswith("layers.0.moe.")
     }
     assert torch.equal(
-        loaded_leaf.resource.load("w1_weight").float(), store.load("layer0.moe.w1_weight").float()
+        loaded_leaf.resource.load("w1_weight").float(), store.load("layers.0.moe.w1_weight").float()
     )
 
     inputs = _node_inputs(semantic, config)
     step_and_latent = {"output[0]": _AGREES, "output[1]": _AGREES}
     nodes = {
-        "attention": (runtime.layer0.attention, semantic.modules[0].modules[0], step_and_latent),
-        "moe": (runtime.layer0.moe, semantic.modules[0].modules[1], {"output": _AGREES}),
-        "layer0": (runtime.layer0, semantic.modules[0], step_and_latent),
+        "attention": (runtime.layers[0].attention, semantic.children["layers"][0].children["attention"], step_and_latent),
+        "moe": (runtime.layers[0].moe, semantic.children["layers"][0].children["moe"], {"output": _AGREES}),
+        "layer0": (runtime.layers[0], semantic.children["layers"][0], step_and_latent),
         "root": (
             runtime,
             semantic,
@@ -438,8 +441,8 @@ def test_structure_mismatch_rejected(config, twins):
     """
     semantic, runtime = twins
 
-    layer0 = semantic.modules[0]
-    attention = layer0.modules[0].module
+    layer0 = semantic.children["layers"][0]
+    attention = layer0.children["attention"].module
     layer = layer0.module
 
     with pytest.raises(TypeError, match=r"missing \['mla_kv_update'\]"):
@@ -496,7 +499,7 @@ def test_structure_mismatch_rejected(config, twins):
 
         @runtime_module(layer)
         class MissingChild:
-            attention = type(runtime.layer0.attention)
+            attention = type(runtime.layers[0].attention)
 
             @runtime_func
             def pre_attn_rms_norm(self, *args):

@@ -39,6 +39,7 @@ import torch  # noqa: E402
 import model as sem  # noqa: E402
 import weights as wt  # noqa: E402
 from config import CKPT, REAL  # noqa: E402
+from tilefoundry.dsl import ModuleList  # noqa: E402
 from tilefoundry.runtime import runtime_func, runtime_module  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -287,21 +288,15 @@ def _lm_head(self, hidden, w_head):
 def _decoder_twin(cfg=REAL, sem_decoder=None):
     """The decoder twin of *sem_decoder*, at *cfg*'s layer-type cycle.
 
-    Built with `type()` because `@runtime_module` reads the child classes out of
-    `vars(cls)` and requires one class attribute per authored child -- 40 of
-    them, named `layer0` .. `layer39` by the authored side, and *exactly* those
-    (missing or extra is rejected at decoration time). A class body cannot write
-    that from a tuple.
+    The layers slot follows the authored layer-type cycle, with one runtime
+    instance for each element of its ModuleList.
 
     *sem_decoder* has to be the Module at the same layer count, which is why a
     truncated run builds its own semantic tree through `model.build(cfg)` rather
     than reusing the published one.
     """
     sem_decoder = sem.Qwen3_5Decoder if sem_decoder is None else sem_decoder
-    namespace = {
-        f"layer{index}": _LAYER_TWIN[kind]
-        for index, kind in enumerate(cfg.layer_types)
-    }
+    namespace = {"layers": ModuleList(tuple(_LAYER_TWIN[kind] for kind in cfg.layer_types))}
     namespace.update(
         embed=runtime_func(_embed),
         final_rms_norm=runtime_func(_final_rms_norm),

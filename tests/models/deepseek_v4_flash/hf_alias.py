@@ -17,7 +17,7 @@ def hf_alias(config: DSV4Config) -> "dict[str, AliasValue]":
         "table": "embed.weight",
         "final_norm_weight": "norm.weight",
         "head_weight_raw": "head.weight",  # lm_head_weight's converter input
-        **{f"layer{i}": f"layers.{i}" for i in range(config.n_layers)},
+        "layers": "layers",
         "pre_attn_norm_weight": "attn_norm.weight",
         "pre_moe_norm_weight": "ffn_norm.weight",
         "attention": "attn",

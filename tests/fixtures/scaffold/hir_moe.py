@@ -54,7 +54,7 @@ class Runtime(RuntimeModule):
     def __init__(self, library_path):
         self.library = tvm_ffi.load_module(str(library_path))
         self.router = RouterRuntime(self.library)
-        super().__init__("Root", entry="forward", modules=(self.router,))
+        super().__init__("Root", entry="forward", children={"router": self.router})
         self.weight = torch.randn(8, device="cuda")
         self.run_fn = tvm_ffi.get_global_func("Root.model")
 

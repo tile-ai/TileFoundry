@@ -40,6 +40,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from tilefoundry.dsl import ModuleList  # noqa: E402
 from tilefoundry.runtime.decorator import runtime_func, runtime_module  # noqa: E402
 
 import kernels as K  # noqa: E402
@@ -225,12 +226,11 @@ def lm_head(self, hidden, w_head):
     return logits.to(hidden.dtype).reshape(1, V)
 
 
-#: The root's children are named `layer0`..`layer27` and the twin's child-attribute
-#: name set must equal that exactly, so the class body is built rather than typed.
+#: The layers slot mirrors the authored ModuleList, one twin per instance.
 RootTwin = runtime_module(ref.Qwen3_1_7B)(type("RootTwin", (), {
     "__doc__": "The layer stack and the step around it, as a runtime twin.",
     "embed": embed,
     "final_rms_norm": final_rms_norm,
     "lm_head": lm_head,
-    **{f"layer{i}": LayerTwin for i in range(cfg.num_hidden_layers)},
+    "layers": ModuleList(LayerTwin, cfg.num_hidden_layers),
 }))

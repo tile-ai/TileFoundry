@@ -1,10 +1,8 @@
 """DeepSeek-V4-Flash as one corpus case: what runs, what is analysed, and at
 what context length.
 
-The boundary this model states is the sliding-window MLA attention submodule of
-its first sliding layer, named as that -- ``DeepseekV4Flash.layer0.attention``,
-the layer's own copy rather than the component it was built from, so what the
-corpus reports is a Module the published model really holds. The tree above it --
+The boundary this model states is the sliding-window MLA attention definition,
+``DeepseekV4Attention``, shared by the layers of the published model. The tree above it --
 embedding, 43 decoder layers, MoE, final norm, head -- is a real end-to-end path
 with a real checkpoint pipeline behind it (`test_causal_lm_e2e.py`), and it is a
 tree of Modules walked by orchestration methods rather than a Module of Functions:
@@ -27,7 +25,7 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.deepseek_v4_flash.model import REAL, DeepseekV4Flash
+from tests.models.deepseek_v4_flash.model import REAL, DeepseekV4Attention
 from tests.models.deepseek_v4_flash.reference import (
     CTX_LEN,
     attention_step_inputs,
@@ -45,8 +43,7 @@ ANALYZED_AT = {"ctx_len": 96}
 
 CASE = ModelCase(
     id="deepseek_v4_flash",
-    prototype=DeepseekV4Flash,
-    scope="layer0.attention",
+    prototype=DeepseekV4Attention,
     reference=ReferenceCase(
         id="deepseek_v4_flash/reference/attention_decode",
         boundary=(

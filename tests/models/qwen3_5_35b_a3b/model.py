@@ -118,7 +118,7 @@ _I = config.moe_intermediate_size
 _IS = config.shared_expert_intermediate_size
 
 
-@module(entry="linear_attention")
+@module(entry="linear_attention", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen3_5LinearAttention:
     @func
     def conv_step(
@@ -229,7 +229,7 @@ class Qwen3_5LinearAttention:
         out = tf.matmul(tf.reshape(gated, new_shape=(1, S, _VAL)), w_out)
         return out, entry, updated
 
-@module(entry="full_attention")
+@module(entry="full_attention", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen3_5FullAttention:
     @func
     def partial_rope(
@@ -345,7 +345,7 @@ class Qwen3_5FullAttention:
         )
         return tf.matmul(gated, w_o), k_rope, v
 
-@module(entry="routing")
+@module(entry="routing", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen3_5Router:
     """The block's expert selection, as a Module of its own so it loads and runs
     by itself. Its output is an index, so a router that picked a different eight
@@ -366,7 +366,7 @@ class Qwen3_5Router:
         return tf.cast(top_vals / denom, dtype=_DT), indices
 
 
-@module(entry="experts")
+@module(entry="experts", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen3_5MoE:
     router = Qwen3_5Router
 
@@ -487,8 +487,8 @@ def _layer_forward(self, hidden, mixer_args):
 
 @module(entry="residual_add")
 class Qwen3_5FullAttentionDecoderLayer:
-    mixer = Qwen3_5FullAttention.renamed("mixer")
-    moe = Qwen3_5MoE.renamed("moe")
+    mixer = Qwen3_5FullAttention
+    moe = Qwen3_5MoE
 
     @func
     def residual_add(
@@ -502,8 +502,8 @@ class Qwen3_5FullAttentionDecoderLayer:
 
 @module(entry="residual_add")
 class Qwen3_5LinearAttentionDecoderLayer:
-    mixer = Qwen3_5LinearAttention.renamed("mixer")
-    moe = Qwen3_5MoE.renamed("moe")
+    mixer = Qwen3_5LinearAttention
+    moe = Qwen3_5MoE
 
     @func
     def residual_add(
@@ -594,10 +594,7 @@ class Qwen3_5_35B_A3B:
 
 
     # The published layer-type cycle determines each layer Module.
-    layers = tuple(
-        LAYER_TYPE[kind].renamed(f"layer{index}")
-        for index, kind in enumerate(config.layer_types)
-    )
+    layers = ModuleList(tuple(LAYER_TYPE[kind] for kind in config.layer_types))
 
     @func
     def embed(
@@ -640,13 +637,13 @@ class Qwen3_5_35B_A3B:
         *caches* is each layer's own state, spliced into its mixer call. What
         comes back is the normed hidden state and each layer's fresh state.
         """
-        if len(layer_args) != len(self.modules) or len(caches) != len(self.modules):
+        if len(layer_args) != len(self.layers) or len(caches) != len(self.layers):
             raise ValueError(
-                f"decoder has {len(self.modules)} layers but was given "
+                f"decoder has {len(self.layers)} layers but was given "
                 f"{len(layer_args)} argument tuples and {len(caches)} caches"
             )
         states = []
-        for layer, mixer_args, cache in zip(self.modules, layer_args, caches):
+        for layer, mixer_args, cache in zip(self.layers, layer_args, caches):
             hidden, state = layer(hidden, _with_cache(layer.mixer, mixer_args, cache))
             states.append(state)
         return self.final_rms_norm(hidden), tuple(states)

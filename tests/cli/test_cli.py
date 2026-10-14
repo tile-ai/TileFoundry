@@ -711,7 +711,7 @@ def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys
     assert "leaf(x)" in expanded
 
 
-def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) -> None:
+def test_analyze_reports_retained_invocations_from_one_rendering(tmp_path) -> None:
     source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
     selector = f"{source}:MoEMegaKernel"
     flags = ["--compute-cost", "--memory", "--roofline", "--performance"]
@@ -757,13 +757,15 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         "roofline",
         "performance",
     }
-    assert "routed_expert(" not in annotated
-    assert "shared_expert(" not in annotated
+    assert "v0 = routed_expert(tokens)" in annotated
+    assert "v1 = shared_expert(tokens)" in annotated
+    assert "# invocation: experts/routed_expert" in annotated
+    assert "# invocation: experts/shared_expert" in annotated
     assert annotated.count("reshard(tokens") == 2
     assert "v0 = tf.reshard(tokens" in annotated
-    assert "v3 = tf.reshard(tokens" in annotated
-    assert "with cta[:120] as cta_2:" in annotated
-    assert "with cta_3[120:] as cta_4:" in annotated
+    assert annotated.count("v0 = tf.reshard(tokens") == 2
+    assert "with mesh[:120] as cta:" in annotated
+    assert "with mesh[120:] as cta:" in annotated
 
     summary = payload["function_records"]["performance"]
     cost = payload["function_records"]["compute-cost"]
@@ -788,8 +790,10 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']} precision=exact",
         "# memory traffic=gmem:r120.00KB/w90.00KB@logical,"
         "r7.79MB/w3.93MB@total,r62.75KB/w32.75KB@cta "
-        "footprint=v0:27:256B;v1:28:256B;v2:29:30.00KB;"
-        "v3:35:2.50KB;v4:36:2.50KB;v5:37:30.00KB;v6:42:30.00KB "
+        "footprint=experts/routed_expert/v0:27:256B;"
+        "experts/routed_expert/v1:28:256B;experts/routed_expert/v2:29:30.00KB;"
+        "experts/shared_expert/v0:35:2.50KB;experts/shared_expert/v1:36:2.50KB;"
+        "experts/shared_expert/v2:37:30.00KB;v2:42:30.00KB "
         "footprint-precision=exact peak=gmem:62.50KB persistent=gmem:30.00KB",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
@@ -810,41 +814,51 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         if line.lstrip().startswith("with ")
     }
     assert hoisted == set()
-    assert scoped == {"cta", "cta_2", "cta_3", "cta_4"}
+    assert scoped == {"cta"}
     annotated_types = [
         line.split("  # ", 1)[1].split("; ", 1)[0] for line in lines if "  # Tensor[" in line
     ]
-    assert 'Tensor[(120, 64), "f32", ((120 @ cta_2.tile, 64), (64, 1))]' in annotated_types
-    assert 'Tensor[(120, 64), "f32", ((12 @ cta_3.tile, 10, 64), (640, 64, 1))]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", ((120 @ cta.tile, 64), (64, 1))]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", ((12 @ mesh.tile, 10, 64), (640, 64, 1))]' in annotated_types
     assert 'Tensor[(120, 64), "f32", (120, 64)]' in annotated_types
 
     rows = payload["calls"]
-    assert len(rows) == 7
+    assert len(rows) == 9
+    primitive_rows = [row for row in rows if "compute-cost" in row]
+    assert len(primitive_rows) == 7
     assert all(
-        set(row) - {"performance"} == {"value", "compute-cost", "memory", "roofline"}
-        for row in rows
+        set(row) - {"performance", "frame"} == {"value", "compute-cost", "memory", "roofline"}
+        for row in primitive_rows
     )
+    assert [row["value"] for row in rows if "compute-cost" not in row] == ["v0:9", "v1:10"]
     timed = [index for index, row in enumerate(rows) if "performance" in row]
-    assert timed == [1, 4, 6]
-    starts = []
+    assert timed == [1, 5, 8]
+    rendered = {None: annotated.split("# invocation:", 1)[0].rstrip().splitlines()}
+    for block in annotated.split("# invocation: ")[1:]:
+        label, body = block.split("\n", 1)
+        rendered[label] = body.lstrip("\n").rstrip().splitlines()
     for row in rows:
         value, line_text = row["value"].rsplit(":", 1)
-        line = int(line_text)
-        starts.append(line)
-        assert lines[line - 1].lstrip().startswith(f"{value} = ")
-
-    for index, (row, start) in enumerate(zip(rows, starts)):
-        stop = starts[index + 1] - 1 if index + 1 < len(starts) else len(lines)
-        statement = "\n".join(lines[start - 1 : stop])
+        body = rendered[row.get("frame")]
+        start = int(line_text)
+        assert body[start - 1].lstrip().startswith(f"{value} = ")
+        later = [
+            int(other["value"].rsplit(":", 1)[1]) - 1
+            for other in rows
+            if other.get("frame") == row.get("frame")
+            and int(other["value"].rsplit(":", 1)[1]) > start
+        ]
+        stop = min(later, default=len(body))
+        statement = "\n".join(body[start - 1 : stop])
         if "performance" in row:
             timeline = row["performance"]["timeline"]
             assert f"performance=[{timeline['start_ns']},{timeline['end_ns']})" in statement
         else:
             assert "; performance=" not in statement
         annotated_meshes = set(re.findall(r"@ (\w+)\.", statement.split("  # ", 1)[1]))
-        assert annotated_meshes <= scoped
+        assert annotated_meshes <= scoped | {"mesh"}
         placed_meshes = set(re.findall(r"mesh=(\w+),", statement))
-        assert placed_meshes <= scoped
+        assert placed_meshes <= scoped | {"mesh"}
     assert len([line for line in lines if "; performance=" in line]) == len(timed)
-    assert len({row["value"] for row in rows}) == len(rows)
+    assert len({(row.get("frame"), row["value"]) for row in rows}) == len(rows)
     assert "units=" not in annotated

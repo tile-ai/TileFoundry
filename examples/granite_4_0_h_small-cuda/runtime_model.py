@@ -33,6 +33,7 @@ import torch
 
 import model as sem
 from kernels import ops
+from tilefoundry.dsl import ModuleList
 from tilefoundry.runtime import runtime_func, runtime_module
 
 _K = ops()
@@ -437,10 +438,7 @@ def _root_namespace():
     namespace = {
         name: value for name, value in vars(_Root).items() if not name.startswith("__")
     }
-    namespace.update({
-        f"layer{index}": _LAYER_TWIN[kind]
-        for index, kind in enumerate(sem.config.layer_types)
-    })
+    namespace["layers"] = ModuleList(tuple(_LAYER_TWIN[kind] for kind in sem.config.layer_types))
     return namespace
 
 

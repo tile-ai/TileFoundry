@@ -39,7 +39,7 @@ def hf_alias(config: Qwen3Config) -> dict[str, object]:
         "w_gate": Preprocessed("mlp.gate_proj.weight", _projection),
         "w_up": Preprocessed("mlp.up_proj.weight", _projection),
         "w_down": Preprocessed("mlp.down_proj.weight", _projection),
-        **{f"layers.{i}": f"model.layers.{i}" for i in range(config.num_hidden_layers)},
+        "layers": "model.layers",
     }
 
 

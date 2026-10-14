@@ -38,6 +38,7 @@ from kernels import elementwise as E
 from kernels import gdn as GD
 from kernels import gemm as G
 from kernels import pack as PK
+from tilefoundry.dsl import ModuleList
 from tilefoundry.runtime import runtime_func, runtime_module
 
 H, I, V = M.H, M.I, M.V
@@ -283,7 +284,7 @@ class FullAttentionLayerTwin:
 
 def _root_class():
     twins = {"linear_attention": LinearAttentionLayerTwin, "full_attention": FullAttentionLayerTwin}
-    body = {f"layer{i}": twins[kind] for i, kind in enumerate(M.config["layer_types"])}
+    body = {"layers": ModuleList(tuple(twins[kind] for kind in M.config["layer_types"]))}
 
     def embed(self, table, token_ids):
         n = token_ids.shape[0]

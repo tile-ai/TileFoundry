@@ -222,7 +222,7 @@ def _layer_constants(layer) -> dict:
 
 def load_layer(layer):
     """The layer Module with *layer*'s weights bound."""
-    return MiniCPM3_4B_DecoderLayer.cloned().load(
+    return MiniCPM3_4B_DecoderLayer.load(
         DictResource(_layer_constants(layer), alias=hf_layout_only(CONFIG))
     )
 
@@ -242,9 +242,9 @@ def load_decoder(model):
     }
     for index, layer in enumerate(model.model.layers):
         constants.update(
-            {f"layer{index}.{name}": w for name, w in _layer_constants(layer).items()}
+            {f"layers.{index}.{name}": w for name, w in _layer_constants(layer).items()}
         )
-    return MiniCPM3_4B.cloned().load(DictResource(constants, alias=hf_layout_only(CONFIG)))
+    return MiniCPM3_4B.load(DictResource(constants, alias=hf_layout_only(CONFIG)))
 
 
 def _residual_scale(layer, device: str) -> tuple:

@@ -75,15 +75,22 @@ def _grouped(children: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _node(module: Any, counts: dict[str, int]) -> dict[str, Any]:
-    """One Module and everything under it, counted by this traversal.
-
-    Counted before any run collapses, so the totals are the real tree's.
-    """
-    children = [_node(child, counts) for child in module.modules]
-    if not children:
-        counts["leaf_modules"] += 1
-    counts["functions"] += len(module.functions)
+def _node(module: Any, counts: dict[str, int], seen: set[int]) -> dict[str, Any]:
+    """Render every instance while counting each Module and Function definition once."""
+    children = []
+    for key, slot in module.children.items():
+        for index, child in enumerate(slot.elements):
+            node = _node(child, counts, seen)
+            node["names"] = [f"{key}.{index}" if slot.indexed else key]
+            children.append(node)
+    if id(module) not in seen:
+        seen.add(id(module))
+        if not children:
+            counts["leaf_modules"] += 1
+    for function in module.functions:
+        if id(function) not in seen:
+            seen.add(id(function))
+            counts["functions"] += 1
     return {
         "names": [module.name],
         "leaf": not children,
@@ -93,7 +100,7 @@ def _node(module: Any, counts: dict[str, int]) -> dict[str, Any]:
 
 
 def _roots(model: Any) -> list[Any]:
-    """The Modules a package publishes: the ones that declare a Target."""
+    """Publish target-declaring definitions that no other published definition holds."""
     from tilefoundry.ir.core.module import Module  # noqa: PLC0415
 
     published: list[Any] = []
@@ -102,7 +109,18 @@ def _roots(model: Any) -> list[Any]:
         if isinstance(value, Module) and value.target is not None and id(value) not in seen:
             seen.add(id(value))
             published.append(value)
-    return published
+    held: set[int] = set()
+
+    def visit(module):
+        for slot in module.children.values():
+            for child in slot.elements:
+                if id(child) not in held:
+                    held.add(id(child))
+                    visit(child)
+
+    for module in published:
+        visit(module)
+    return [module for module in published if id(module) not in held]
 
 
 def catalog() -> dict[str, Any]:
@@ -114,9 +132,10 @@ def catalog() -> dict[str, Any]:
     models = []
     for name in sorted(MODELS):
         counts = {"leaf_modules": 0, "functions": 0}
+        seen: set[int] = set()
         roots = _grouped(
             [
-                _node(root, counts)
+                _node(root, counts, seen)
                 for root in _roots(importlib.import_module(f"tests.models.{name}.model"))
             ]
         )

@@ -172,7 +172,7 @@ def _layer_constants(layer) -> dict:
 
 def load_layer(layer):
     """The layer Module with *layer*'s weights bound."""
-    return Qwen2_5_1_5B_DecoderLayer.cloned().load(
+    return Qwen2_5_1_5B_DecoderLayer.load(
         DictResource(_layer_constants(layer), alias=hf_layout_only(CONFIG))
     )
 
@@ -192,9 +192,9 @@ def load_decoder(model):
     }
     for index, layer in enumerate(model.model.layers):
         constants.update(
-            {f"layer{index}.{name}": w for name, w in _layer_constants(layer).items()}
+            {f"layers.{index}.{name}": w for name, w in _layer_constants(layer).items()}
         )
-    return Qwen2_5_1_5B.cloned().load(DictResource(constants, alias=hf_layout_only(CONFIG)))
+    return Qwen2_5_1_5B.load(DictResource(constants, alias=hf_layout_only(CONFIG)))
 
 
 SPEC = dense_decode.DenseDecode(

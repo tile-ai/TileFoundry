@@ -195,7 +195,7 @@ class GraphedStep:
         hidden = twin.embed(self.token)
 
         for index, kind in enumerate(self.cfg.layer_types):
-            layer = getattr(twin, f"layer{index}")
+            layer = twin.layers[index]
             if kind == "linear_attention":
                 mixed, entry, updated = layer.mixer.linear_attention(
                     hidden, self.conv[index], self.recur[index]

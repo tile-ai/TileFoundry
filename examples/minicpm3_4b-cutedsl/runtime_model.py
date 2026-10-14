@@ -47,6 +47,7 @@ from model import (
     EMBED_SCALE, LOGITS_SCALING, MiniCPM3_4B, MiniCPM3_4B_DecoderLayer,
     _KV_A_PROJ, _LORA_EPS, _NOPE, _QK, _V, config,
 )
+from tilefoundry.dsl import ModuleList
 from tilefoundry.runtime import runtime_func, runtime_module
 
 _H = config.num_attention_heads
@@ -313,7 +314,7 @@ def _root_load(self, resource) -> None:
     # Every layer's fresh entry in one pool, so appending is two copies.
     self._k_fresh = torch.empty(_L, _H, _QK, device=device, dtype=_DT)
     self._v_fresh = torch.empty(_L, _H, _V, device=device, dtype=_DT)
-    for i, layer in enumerate(self.modules):
+    for i, layer in enumerate(self.layers):
         layer.scratch.k_new = self._k_fresh[i].reshape(-1)
         layer.scratch.v_new = self._v_fresh[i].reshape(-1)
         layer._ctx = self._ctx
@@ -329,7 +330,7 @@ def _init_caches(self, device=None):
     if self._k_all is None or self._k_all.device != torch.device(device):
         self._k_all = torch.zeros(_L, MAX_CONTEXT, _H, _QK, device=device, dtype=_DT)
         self._v_all = torch.zeros(_L, MAX_CONTEXT, _H, _V, device=device, dtype=_DT)
-        for i, layer in enumerate(self.modules):
+        for i, layer in enumerate(self.layers):
             layer._kbuf = self._k_all[i]
             layer._vbuf = self._v_all[i]
     self._graph = None
@@ -377,7 +378,7 @@ def _traverse(self, token_ids, cos_cache, sin_cache, pos_ids, scale,
               residual_scale, caches):
     hidden = self.embed(token_ids)
     fresh = []
-    for layer, (k_cache, v_cache) in zip(self.modules, caches):
+    for layer, (k_cache, v_cache) in zip(self.layers, caches):
         hidden, k_new, v_new = layer(
             hidden, cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale,
             residual_scale,
@@ -457,7 +458,7 @@ MiniCPM3_4B_Runtime = runtime_module(MiniCPM3_4B)(
         "_capturable": _capturable,
         "_k_all": None, "_v_all": None, "_cos": None, "_sin": None,
         "_graph": None, "_graph_fresh": None, "_steps": 0,
-        **{f"layer{i}": MiniCPM3_4B_DecoderLayer_Runtime for i in range(_L)},
+        "layers": ModuleList(MiniCPM3_4B_DecoderLayer_Runtime, _L),
     })
 )
 

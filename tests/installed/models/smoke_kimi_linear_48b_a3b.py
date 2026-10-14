@@ -1,8 +1,7 @@
 """Kimi-Linear-48B-A3B, as the installation ships it, asked through the commands.
 
 Three Modules of kernels are reached from one root, so this model states three
-cases where most state one, and its selectors are dotted paths through the
-tree. It ships no ``hf_alias.py``: it is not loaded from a raw published
+cases, each naming a definition directly. It ships no ``hf_alias.py`` for a raw published
 checkpoint.
 """
 
@@ -39,7 +38,8 @@ def test_every_analysis_answers_at_the_largest_context(tf, shipped_source, case,
 
 CTX_LENGTHS = (24, 40)
 
-MLA = "mla.mla_attention"
+MLA = "mla_attention"
+MLA_CASE = next(case for case in CASES if case.id.endswith("_mla"))
 
 
 def _mla(tf, work, source, step, *, args=None, refuse=False):
@@ -53,7 +53,7 @@ def _mla(tf, work, source, step, *, args=None, refuse=False):
     test passed under an identity permutation.
     """
     activations, weights = contract.split_by_declaration(
-        CASES[0], MLA, args if args is not None else step.args
+        MLA_CASE, MLA, args if args is not None else step.args
     )
     want = reference.mla_step_oracle(step)
     want_k, want_v = reference.mla_appended_cache_oracle(step)
@@ -65,7 +65,7 @@ def _mla(tf, work, source, step, *, args=None, refuse=False):
         tf,
         work,
         source,
-        CASES[0],
+        MLA_CASE,
         MLA,
         activations=activations,
         weights=weights,
@@ -130,7 +130,8 @@ def test_mla_cache_pairing_is_load_bearing(tf, shipped_source, comparison_cache)
     _mla(tf, comparison_cache, source, step, args=values, refuse=True)
 
 
-MOE = "moe.moe"
+MOE = "moe"
+MOE_CASE = next(case for case in CASES if case.id.endswith("_moe"))
 
 
 def _moe(tf, work, source, step, want, *, args=None, refuse=False):
@@ -141,14 +142,14 @@ def _moe(tf, work, source, step, want, *, args=None, refuse=False):
     largest entry is 1.70, so a tighter fixed bound would refuse an unperturbed run too.
     """
     activations, weights = contract.split_by_declaration(
-        CASES[0], MOE, args if args is not None else step.args
+        MOE_CASE, MOE, args if args is not None else step.args
     )
     ask = contract.disagreed if refuse else contract.compared
     return ask(
         tf,
         work,
         source,
-        CASES[0],
+        MOE_CASE,
         MOE,
         activations=activations,
         weights=weights,

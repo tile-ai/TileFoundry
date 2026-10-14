@@ -18,6 +18,18 @@ def _root(namespace: dict[str, object]) -> Module:
         for value in namespace.values()
         if isinstance(value, Module) and value.target is not None
     ]
+    held: set[int] = set()
+
+    def visit(module):
+        for slot in module.children.values():
+            for child in slot.elements:
+                if id(child) not in held:
+                    held.add(id(child))
+                    visit(child)
+
+    for root in roots:
+        visit(root)
+    roots = list({id(root): root for root in roots if id(root) not in held}.values())
     if len(roots) != 1:
         raise SystemExit("model.py must declare exactly one root Module with a target")
     return roots[0]

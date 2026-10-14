@@ -11,8 +11,6 @@ Function carrying it.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pytest
 
 from tests._source import import_dsl
@@ -43,22 +41,6 @@ def test_a_target_declaration_defines_its_own_execution_domain() -> None:
 
     with pytest.raises(ValueError, match="Module 'bare'.*no target is declared"):
         Module("bare", (forward,), "forward").resolve_target()
-
-
-def test_a_module_owns_its_children_so_a_copy_cannot_retarget_the_original() -> None:
-    """Placing the same child value under a second owner.
-
-    Placing the same child value under a second owner -- as a re-export
-    that declares its own Target does -- must not change what the first
-    owner's child resolves against.
-    """
-    child = Module("child", (_Root.lookup("forward"),), "forward")
-    on_cuda = Module("root", (), "forward", modules=(child,), target=CudaTarget("nvidia.h200_sxm"))
-    on_cpu = replace(on_cuda, name="copy", target=CpuTarget())
-
-    assert on_cuda.modules[0].resolve_target() == CudaTarget("nvidia.h200_sxm")
-    assert on_cpu.modules[0].resolve_target() == CpuTarget()
-    assert on_cuda.modules == on_cpu.modules
 
 
 def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
@@ -213,6 +195,6 @@ def test_member_context_builds_its_own_runtime_domain() -> None:
     imported = import_dsl(_MEMBER_CONTEXT_SOURCE, "Layer")
 
     assert [function.name for function in imported.functions] == ["attention"]
-    assert [child.name for child in imported.modules] == ["softmax"]
-    assert imported.modules[0].topologies == (Topology("thread", 4),)
-    assert imported.modules[0].resolve_target() == CudaTarget("nvidia.h200_sxm")
+    assert list(imported.children) == ["softmax"]
+    assert imported.children["softmax"].elements[0].topologies == (Topology("thread", 4),)
+    assert list_call_paths(imported)["softmax.softmax"].target == CudaTarget("nvidia.h200_sxm")

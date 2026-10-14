@@ -1,8 +1,9 @@
 """Canonical round trip of a Module tree through the printer and product import.
 
 ``as_script`` renders the selected Module as ``@module`` source: its declared
-execution context, its entry, every function it owns, and each nested Module as
-a class in its body. Importing that file runs the authoring decorators to build
+execution context, its entry, every function it owns, and each shared Module
+definition with its instance slot bindings. Importing that file runs the
+authoring decorators to build
 an equal tree, so a declared context stays declared and an inherited one stays
 absent.
 """
@@ -24,6 +25,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.where import Where
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 
@@ -89,7 +91,7 @@ def test_flash_split_k_decode_survives_the_round_trip() -> None:
 
 
 def _child(mod: Module, name: str) -> Module:
-    return next(child for child in mod.modules if child.name == name)
+    return mod.children[name].elements[0]
 
 
 def test_the_root_declaration_and_its_functions_survive_the_round_trip() -> None:
@@ -114,7 +116,7 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     """
     imported = import_dsl(as_script(ContextTree))
 
-    assert sorted(child.name for child in imported.modules) == [
+    assert sorted(imported.children) == [
         "inherits",
         "nominates_nothing",
         "replaces",
@@ -126,8 +128,8 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     inherits = _child(imported, "inherits")
     assert inherits.target is None
     assert inherits.topologies is None
-    assert inherits.resolve_target() == CudaTarget("nvidia.h200_sxm")
-    assert inherits.effective_topologies() == (_CTA, _WARP)
+    assert list_call_paths(imported)["inherits.step"].target == CudaTarget("nvidia.h200_sxm")
+    assert list_call_paths(imported)["inherits.step"].topologies == (_CTA, _WARP)
 
     replaces = _child(imported, "replaces")
     assert replaces.topologies == (_THREAD,)
@@ -147,7 +149,7 @@ def test_a_child_nominating_no_step_prints_an_empty_argument_list() -> None:
     """
     source = as_script(ContextTree)
 
-    assert "@module()\n    class nominates_nothing:" in source
+    assert "@module()\nclass nominates_nothing:" in source
     assert 'entry="None"' not in source
     assert _child(import_dsl(source), "nominates_nothing").entry is None
 
@@ -218,22 +220,24 @@ def test_a_child_call_prints_by_its_binding_and_carries_activations_only() -> No
     source = as_script(_Composed)
 
     assert "v0 = first(x)" in source and "v1 = second(x)" in source
-    assert "Expert" not in source and ".run(" not in source
+    assert "class Expert:" in source and ".run(" not in source
+    assert "first = Expert" in source and "second = Expert" in source
 
     imported = import_dsl(source)
     left, right = imported.entry_function().body.args
     assert len(left.args) == 1
-    assert [param.is_const for param in left.target.params] == [False, True]
+    assert [param.is_const for param in left.target.elements[0].entry_function().params] == [False, True]
 
 
-def test_two_attached_copies_of_one_child_stay_distinct_through_the_trip() -> None:
+def test_two_slots_share_one_child_definition_through_the_trip() -> None:
     imported = import_dsl(as_script(_Composed))
 
-    first, second = imported.modules
-    assert (first.name, second.name) == ("first", "second")
+    first, second = imported.children.values()
+    assert tuple(imported.children) == ("first", "second")
+    assert first.elements[0] is second.elements[0]
     left, right = imported.entry_function().body.args
-    assert left.target is first.entry_function()
-    assert right.target is second.entry_function()
+    assert left.target is first
+    assert right.target is second
 
 
 def test_a_composed_tree_prints_to_a_fixed_point() -> None:
@@ -248,8 +252,8 @@ def test_a_child_before_the_functions_naming_it() -> None:
     """A class body binds in source order, so the attribute has to exist first."""
     source = as_script(_Composed)
 
-    assert source.index("class first:") < source.index("def fused(")
-    assert source.index("class second:") < source.index("def fused(")
+    assert source.index("first = Expert") < source.index("def fused(")
+    assert source.index("second = Expert") < source.index("def fused(")
 
 
 @module(entry="run")
@@ -283,13 +287,13 @@ def test_a_child_call_in_a_specialization_body_survives_the_round_trip() -> None
     assert "leaf(x)" in block
 
     imported = import_dsl(source)
-    (imported_child,) = imported.modules
+    (imported_child,) = imported.children.values()
     (variant,) = imported.entry_function().variants
     assert imported.entry_function().body is None
     assert variant.specializations == (RangePattern("n_print", 1, 8),)
-    assert variant.body.target is imported_child.entry_function()
+    assert variant.body.target is imported_child
     assert len(variant.body.args) == 1
-    assert [param.is_const for param in variant.body.target.params] == [False, True]
+    assert [param.is_const for param in variant.body.target.elements[0].entry_function().params] == [False, True]
 
 
 def test_hir_function_dot_keeps_loop_regions_as_opaque_leaves() -> None:

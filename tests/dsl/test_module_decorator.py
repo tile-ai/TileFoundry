@@ -11,8 +11,10 @@ targeting the sibling); forward references stay unresolved and fail loudly.
 
 from __future__ import annotations
 
+import ast
 import copy
 import dataclasses
+from pathlib import Path
 
 import pytest
 import torch
@@ -27,6 +29,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.runtime.resource import DictResource
 from tilefoundry.target import CpuTarget, CudaTarget
@@ -242,13 +245,13 @@ def test_one_shared_child_binds_once_per_owner():
         return node
 
     left, right = aliasing("left"), aliasing("right")
-    assert left.modules[0] is right.modules[0]
+    assert left.children["leaf"].elements[0] is right.children["leaf"].elements[0]
 
     ones = torch.ones(2, dtype=torch.float32)
     loaded_left = left.load(DictResource({"leaf.w": torch.full((2,), 3.0)}))
     loaded_right = right.load(DictResource({"leaf.w": torch.full((2,), 10.0)}))
 
-    assert loaded_left.modules[0].module is loaded_right.modules[0].module
+    assert loaded_left.children["leaf"].module is loaded_right.children["leaf"].module
     assert evaluate(loaded_left.leaf, ones).float().cpu().tolist() == [3.0, 3.0]
     assert evaluate(loaded_right.leaf, ones).float().cpu().tolist() == [10.0, 10.0]
 
@@ -257,19 +260,15 @@ def test_a_held_child_takes_its_own_owners_target_types():
     """A root types its own calls of a child under its Target; the child keeps its body.
 
     The children declare no Target, so their matmuls and loop accumulators,
-    variants included, stay umat wherever they are held. A CUDA root's call of
-    the direct child is an f32 register tile and a CPU root's, on its own copy,
-    shared memory; neither writes into a child. A roundtrip keeps the inherited
+    variants included, keep their stored types wherever they are held. A CUDA
+    root's call of the direct child is an f32 register tile and a CPU root's
+    call uses shared memory; neither changes the child. A roundtrip keeps the inherited
     Target and the call's storage, and a call the Target refuses fails where the
     root makes it, leaving the child's types as they were.
     """
     from tests._source import import_dsl  # noqa: PLC0415
     from tests.fixtures.placed.child_matmul_target import (  # noqa: PLC0415
         K_LEN,
-        ChildMatmul,
-        ChildMatmulDirect,
-        ChildMatmulRoot,
-        ChildMatmulStaged,
         K,
         M,
         N,
@@ -305,13 +304,23 @@ def test_a_held_child_takes_its_own_owners_target_types():
         (function,) = (function for function in owner.functions if function.name == name)
         return function.body.type.storage
 
-    for standalone in (ChildMatmul, ChildMatmulDirect, ChildMatmulStaged):
-        assert storages(standalone) == [StorageKind.UMAT] * 3
-    held = ChildMatmulRoot.modules
+    authored = ast.parse(Path(__file__).parents[1].joinpath(
+        "fixtures/placed/child_matmul_target.py"
+    ).read_text())
+    for definition in authored.body:
+        if isinstance(definition, ast.ClassDef) and definition.name in {
+            "ChildMatmul", "ChildMatmulDirect", "ChildMatmulStaged"
+        }:
+            for decorator in definition.decorator_list:
+                if isinstance(decorator, ast.Call):
+                    decorator.keywords = [kw for kw in decorator.keywords if kw.arg != "target"]
+    cuda_root = import_dsl(ast.unparse(authored), "ChildMatmulRoot")
+    held = tuple(slot.elements[0] for slot in cuda_root.children.values())
     for child in held:
-        assert child.target is None and child.resolve_target() is ChildMatmulRoot.target
+        assert child.target is None
         assert storages(child) == [StorageKind.UMAT] * 3
-    assert call_storage(ChildMatmulRoot, "gemm_on_chip") is StorageKind.RMEM
+    assert list_call_paths(cuda_root)["direct.direct"].target is cuda_root.target
+    assert call_storage(cuda_root, "gemm_on_chip") is StorageKind.RMEM
     before = [stored_types(child) for child in held]
 
     @module(entry="gemm", target=CpuTarget(), topologies=(Topology("cta", 1),))
@@ -330,26 +339,27 @@ def test_a_held_child_takes_its_own_owners_target_types():
         def gemm_staged(a: Tensor[(M, K_LEN), "bf16"], b: Tensor[(K_LEN, N), "bf16"]):
             return staged(a, b)  # noqa: F821 -- class-body binding
 
-    copies = _CpuRoot.modules
-    for copy_, original, types in zip(copies, held, before, strict=True):
-        assert copy_ is not original and copy_._parent is _CpuRoot and copy_.target is None
-        assert storages(copy_) == [StorageKind.UMAT] * 3
+    children = tuple(slot.elements[0] for slot in _CpuRoot.children.values())
+    for child, original, types in zip(children, held, before, strict=True):
+        assert child is original and child.target is None
+        assert storages(child) == [StorageKind.UMAT] * 3
         assert all(expr.type is stored for expr, stored in types)
     assert call_storage(_CpuRoot, "gemm_on_chip") is StorageKind.SMEM
-    assert call_storage(ChildMatmulRoot, "gemm_on_chip") is StorageKind.RMEM
+    assert call_storage(cuda_root, "gemm_on_chip") is StorageKind.RMEM
     callees = [
         expr.target
         for function in _CpuRoot.functions
         for expr in collect_exprs(function.body)
         if isinstance(expr, Call)
     ]
-    assert all(copy_.functions[0] in callees for copy_ in copies)
-    assert not any(original.functions[0] in callees for original in held)
+    assert all(any(target is slot for target in callees) for slot in _CpuRoot.children.values())
 
-    imported = import_dsl(as_script(ChildMatmulRoot), "ChildMatmulRoot")
-    for child in imported.modules:
-        assert child.target is None and child.resolve_target() == ChildMatmulRoot.target
+    imported = import_dsl(as_script(cuda_root), "ChildMatmulRoot")
+    for slot in imported.children.values():
+        child = slot.elements[0]
+        assert child.target is None
         assert storages(child) == [StorageKind.UMAT] * 3
+    assert list_call_paths(imported)["direct.direct"].target == cuda_root.target
     assert call_storage(imported, "gemm_on_chip") is StorageKind.RMEM
 
     @module(entry="run", topologies=(Topology("cta", 1),))

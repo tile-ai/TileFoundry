@@ -231,7 +231,7 @@ def _submodules(config: DSV4Config):
     C = DimVar("ctx_len", 0, config.window - 1)
 
 
-    @module(entry="mla_attend")
+    @module(entry="mla_attend", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
     class DeepseekV4Attention:
         @func
         def mla_kv_update(
@@ -1251,7 +1251,11 @@ def build_deepseek_v4_flash(config: DSV4Config):
     that shares no IR node with any other call's.
     """
     attention_module, moe_module, _ = _submodules(config)
+    return _build_deepseek_v4_flash(config, attention_module, moe_module)
 
+
+def _build_deepseek_v4_flash(config: DSV4Config, attention_module, moe_module):
+    """Assemble the stack around the supplied shared component definitions."""
     @module(entry="residual_add")
     class DeepseekV4DecoderLayer:
         @func
@@ -1326,10 +1330,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
             # head.weight is (vocab, dim); transpose to match lm_head's (dim, vocab) matmul.
             return tf.transpose(head_weight_raw, perm=(1, 0))
 
-        layers = tuple(
-            DeepseekV4DecoderLayer.renamed(f"layer{index}")
-            for index in range(config.n_layers)
-        )
+        layers = ModuleList(DeepseekV4DecoderLayer, config.n_layers)
 
         def forward(self, token_ids, cos_pos, sin_pos, past_key_values, scale, ones_head_dim):
             """One decode step of the whole model: the per-layer context it reads
@@ -1339,7 +1340,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
             hidden = self.embed(token_ids)
             fresh = []
             for i in range(config.n_layers):
-                layer = getattr(self, f"layer{i}")
+                layer = self.layers[i]
                 hidden, kv_new = layer.forward(
                     hidden, cos_pos, sin_pos, past_key_values[i], scale, ones_head_dim, token_ids,
                 )
@@ -1403,13 +1404,13 @@ def build_deepseek_v4_flash(config: DSV4Config):
 
 
 #: The attention submodule and the ``noaux_tc`` MoE block at the real checkpoint's
-#: dimensions, built on their own for the tests that ask about a block rather than
-#: about the model. Neither declares a Target.
-DeepseekV4Attention, _, deepseek_v4_flash_module = _submodules(REAL)
+#: dimensions. The published root holds these same component definitions.
+_published_submodules = _submodules(REAL)
+DeepseekV4Attention, _, deepseek_v4_flash_module = _published_submodules
 
 #: The published model, at the real checkpoint's shape. Any other shape is the
 #: caller's to name: ``build_deepseek_v4_flash(TINY)``.
-DeepseekV4Flash = build_deepseek_v4_flash(REAL)
+DeepseekV4Flash = _build_deepseek_v4_flash(REAL, *_published_submodules[:2])
 
 __all__ = [
     "SEED_CTX_LEN",

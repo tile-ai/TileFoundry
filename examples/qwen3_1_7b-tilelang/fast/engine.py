@@ -114,7 +114,7 @@ class Engine:
         self.gamma_final = loaded.constants["gamma_final"]
         self.layers = []
         for i in range(self.L):
-            c = getattr(loaded, f"layer{i}").constants
+            c = loaded.layers[i].constants
             self.layers.append({
                 "gamma_in": c["gamma_in"],
                 "gamma_post": c["gamma_post"],

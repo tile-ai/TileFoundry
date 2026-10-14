@@ -1,9 +1,9 @@
 """Qwen3.5-35B-A3B as corpus cases: what runs, what is analysed, and at what
 context length.
 
-Three Modules, three cases. The published stack is a hybrid -- three linear
+Four Modules, four cases. The published stack is a hybrid -- three linear
 attention layers to every full attention one, each ending in the same 256-expert
-MoE block -- and the three are different kernels, not one kernel configured three
+MoE block -- and the mixer and MoE blocks are different kernels, not one kernel configured three
 ways. A `ModelCase` names one Module, so a single case would have to pick one of
 them and the other two would be reported as nothing at all.
 
@@ -42,7 +42,10 @@ from tests.models.corpus import (
     SizedCase,
 )
 from tests.models.qwen3_5_35b_a3b.model import (
-    Qwen3_5_35B_A3B,
+    Qwen3_5FullAttention,
+    Qwen3_5LinearAttention,
+    Qwen3_5MoE,
+    Qwen3_5Router,
     config,
 )
 from tests.models.qwen3_5_35b_a3b.reference import (
@@ -62,16 +65,13 @@ from tests.models.qwen3_5_35b_a3b.reference import (
 #: answer neither.
 ANALYZED_AT = {"ctx_len": 1024}
 
-_LINEAR_LAYER = config.layer_types.index("linear_attention")
-_FULL_LAYER = config.layer_types.index("full_attention")
 
 #: The linear-attention layer is the model's own: three layers in four are one, and
 #: the Gated DeltaNet is the semantics no other model in the corpus has. So it is
 #: the case that carries the package's name.
 CASE = ModelCase(
     id="qwen3_5_35b_a3b",
-    prototype=Qwen3_5_35B_A3B,
-    scope=f"layer{_LINEAR_LAYER}.mixer",
+    prototype=Qwen3_5LinearAttention,
     reference=ReferenceCase(
         id="qwen3_5_35b_a3b/reference/linear_attention_decode",
         boundary=(
@@ -108,8 +108,7 @@ CASE = ModelCase(
 FULL_ATTENTION_CASE = ModelCase(
     id="qwen3_5_35b_a3b_full_attention",
     model="qwen3_5_35b_a3b",
-    prototype=Qwen3_5_35B_A3B,
-    scope=f"layer{_FULL_LAYER}.mixer",
+    prototype=Qwen3_5FullAttention,
     reference=ReferenceCase(
         id="qwen3_5_35b_a3b/reference/full_attention_decode",
         boundary=(
@@ -155,8 +154,7 @@ FULL_ATTENTION_CASE = ModelCase(
 MOE_CASE = ModelCase(
     id="qwen3_5_35b_a3b_moe",
     model="qwen3_5_35b_a3b",
-    prototype=Qwen3_5_35B_A3B,
-    scope=f"layer{_LINEAR_LAYER}.moe",
+    prototype=Qwen3_5MoE,
     #: No harness reference. Drawing one means building a whole decoder layer for
     #: its block -- 805 million parameters, 3.3 GB in f32, essentially all of it the
     #: 256 experts -- which is by a wide margin the most expensive draw in this
@@ -173,9 +171,6 @@ MOE_CASE = ModelCase(
         FunctionCase(id="qwen3_5_35b_a3b/analyze/experts", selector="experts"),
         FunctionCase(id="qwen3_5_35b_a3b/analyze/post_norm", selector="post_norm"),
         FunctionCase(
-            id="qwen3_5_35b_a3b/analyze/routing", selector="router.routing"
-        ),
-        FunctionCase(
             id="qwen3_5_35b_a3b/analyze/routed_experts", selector="routed_experts"
         ),
         FunctionCase(
@@ -186,7 +181,14 @@ MOE_CASE = ModelCase(
     sized=(),
 )
 
-#: What the registry collects from this package.
-CASES = (CASE, FULL_ATTENTION_CASE, MOE_CASE)
+ROUTER_CASE = ModelCase(
+    id="qwen3_5_35b_a3b_router",
+    model="qwen3_5_35b_a3b",
+    prototype=Qwen3_5Router,
+    analyze=(FunctionCase(id="qwen3_5_35b_a3b/analyze/routing", selector="routing"),),
+)
 
-__all__ = ["ANALYZED_AT", "CASE", "CASES", "FULL_ATTENTION_CASE", "MOE_CASE"]
+#: What the registry collects from this package.
+CASES = (CASE, FULL_ATTENTION_CASE, MOE_CASE, ROUTER_CASE)
+
+__all__ = ["ANALYZED_AT", "CASE", "CASES", "FULL_ATTENTION_CASE", "MOE_CASE", "ROUTER_CASE"]

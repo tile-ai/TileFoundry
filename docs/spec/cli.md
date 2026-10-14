@@ -291,11 +291,10 @@ that runs before it can be read is a reference that decides what it describes.
     a function — a runtime twin is written per Module and MUST cover all of that
     Module's functions at once, so marking functions would state the work at a
     granularity nobody implements at.
-  - A root MUST be a Module that declares the target its tree runs on, and a
-    Module that declares none MUST NOT be listed as one. Declaring the machine is
-    what makes a Module answerable on its own; a component or layer template
-    reached through the root that owns it would otherwise be offered as a selector
-    that Analyze cannot answer.
+  - A catalog root MUST declare a target and MUST NOT be held, directly or
+    transitively, by another target-declaring Module in the same model package.
+    A layer that declares its own target remains usable on its own, but MUST NOT
+    be listed as another root when a published top-level model holds it.
   - A run of sibling Modules MAY be written once as the range it covers, and only
     when the run is adjacent, identically shaped down its whole subtree, named from
     one stem, and numbered consecutively. Such an entry MUST name every Module it
@@ -303,9 +302,10 @@ that runs before it can be read is a reference that decides what it describes.
     ranges, not a tree with repetition left out. Distinct siblings MUST stay
     separate. Without this a stack states its one layer forty times and the reader
     is back to reading a dump.
-  - The leaf-Module count and the function count MUST come from one traversal, so
-    the numbers cannot disagree with the forest printed beside them, and they MUST
-    count every Module a range stands for rather than the range as one.
+  - The leaf-Module count and function count MUST count definitions by object
+    identity, once per model. Repeated instances of one definition MUST NOT
+    increase either count. The forest MUST still show every instance, including
+    the element count of an indexed slot when its instances are grouped.
   - `--source` MUST print the absolute path of the shipped model directory first,
     followed by one line for every file named in the package data manifest, in
     a stable filename order. Each file line MUST give its filename and the first line of

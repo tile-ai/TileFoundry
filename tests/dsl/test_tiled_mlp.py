@@ -157,7 +157,7 @@ def _drawn(device="cpu", seed=0):
         return (torch.randn(*shape, device=device) * 0.05).to(_TORCH_DT)
 
     x = draw(1, S, HIDDEN)
-    loaded = TiledMLP.cloned().load(
+    loaded = TiledMLP.load(
         DictResource(
             {
                 "w_gate": draw(1, HIDDEN, INTERMEDIATE),

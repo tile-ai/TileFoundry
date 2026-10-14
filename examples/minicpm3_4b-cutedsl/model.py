@@ -99,9 +99,9 @@ from transformers import MiniCPM3Config
 from transformers.models.minicpm3.modeling_minicpm3 import MiniCPM3RMSNorm
 
 from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by @func bodies
+from tilefoundry.dsl import ConstTensor, ModuleList, Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types.mesh import Topology
 from tilefoundry.target import CudaTarget
 
 
@@ -350,10 +350,7 @@ class MiniCPM3_4B:
     that bracket it."""
 
 
-    layers = tuple(
-        MiniCPM3_4B_DecoderLayer.renamed(f"layer{index}")
-        for index in range(config.num_hidden_layers)
-    )
+    layers = ModuleList(MiniCPM3_4B_DecoderLayer, config.num_hidden_layers)
 
     @func
     def embed(
@@ -421,13 +418,13 @@ class MiniCPM3_4B:
         is the normalised hidden state and each layer's own cache entry, for the
         caller to append -- the same division the single layer makes.
         """
-        if len(caches) != len(self.modules):
+        if len(caches) != len(self.layers):
             raise ValueError(
-                f"decoder has {len(self.modules)} layers but was given "
+                f"decoder has {len(self.layers)} layers but was given "
                 f"{len(caches)} caches"
             )
         entries = []
-        for layer, (k_cache, v_cache) in zip(self.modules, caches):
+        for layer, (k_cache, v_cache) in zip(self.layers, caches):
             hidden, k_new, v_new = layer(
                 hidden, cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale,
                 residual_scale,
