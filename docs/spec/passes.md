@@ -300,8 +300,8 @@ def insert_default_host_entry(module: Module) -> Module:
     invocation only by entering one ([hir §1.1](./hir.md#11-function),
     [core-ir §1](./core-ir.md#1-module)). Any other function gets no entry.
     The tree's resolved Target MUST be CUDA. Each entry launches the Module
-    entry by its root-relative selector
-    ([core-ir §1.2](./core-ir.md#12-selecting-a-node-by-path)) at the owner's
+    entry by its root-relative call path
+    ([core-ir §1](./core-ir.md#1-module)) at the owner's
     effective topology and forwards its own parameters: the declared inputs,
     then one destination per tensor result leaf in tuple leaf order. A
     destination keeps the leaf's shape and dtype, with GMEM storage and no
