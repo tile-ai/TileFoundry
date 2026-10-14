@@ -99,44 +99,8 @@ class IterationScope:
     occurrence: IterationScope | None = None
     frame: CallFrame | None = None
     variance: dict[int, frozenset[int]] = field(default_factory=dict)
-    tables: dict[str, object] = field(default_factory=dict)
-    result_tied: bool = False
-
-    @property
-    def slot_key(self):
-        if not isinstance(self.owner, Call):
-            return None
-        target = self.owner.target
-        return target.key if isinstance(target, ModuleList) else (
-            target.args[0].key if isinstance(target, Call) else None
-        )
-
-    @property
-    def index(self):
-        target = self.owner.target if isinstance(self.owner, Call) else None
-        if not isinstance(target, Call):
-            return None
-        index = target.args[1]
-        return index.value if isinstance(index, Constant) else index
-
-    @property
-    def activations(self):
-        return tuple(p for p in self.frame.function.params if self.slot_key is None or not p.is_const)
-
-    @property
-    def weights(self):
-        return tuple(p for p in self.frame.function.params if self.slot_key is not None and p.is_const)
-
-    def resource_key(self, weight):
-        path, cursor = [], self
-        while cursor.parent is not None:
-            if cursor.slot_key is not None:
-                segment = cursor.slot_key
-                if cursor.index is not None:
-                    segment += f".{cursor.index if isinstance(cursor.index, int) else '{i}'}"
-                path.append(segment)
-            cursor = cursor.parent.occurrence
-        return ".".join((*reversed(path), weight.name))
+    slot: ModuleList | None = None
+    index: Expr | int | None = None
 
     def projected_relations(self, call: Call, ctx: TypeInferContext) -> tuple[AccessRelation, ...]:
         """Return *call*'s relations in *ctx*'s topology window, projecting it once.
@@ -546,12 +510,21 @@ class ScopeBuilder(CallFrameVisitor[None]):
     def _visit_call(self, expr, scope, frame):
         for arg in expr.args:
             self._visit(arg, scope)
+        target = expr.target
+        slot = target if isinstance(target, ModuleList) else (
+            target.args[0] if isinstance(target, Call) else None
+        )
+        if slot is not None:
+            slot = scope.occurrence.frame.module.children[slot.key]
+        index = target.args[1] if isinstance(target, Call) else None
+        if isinstance(index, Constant):
+            index = index.value
         child = IterationScope(
             expr, scope, (), scope.depth, scope.domain,
             tuple(zip((p for p in frame.function.params
                        if isinstance(expr.target, Function) or not p.is_const), expr.args, strict=True)),
             domain_params=scope.domain_params, accesses=self._empty_accesses(),
-            frame=frame,
+            frame=frame, slot=slot, index=index,
         )
         if isinstance(child.index, Expr):
             self._visit(child.index, scope)
@@ -578,7 +551,9 @@ class ScopeBuilder(CallFrameVisitor[None]):
                         child,
                     )
                     self.precisions[view][id(param)] = saved["precisions"][view][id(argument)]
-            for weight in child.weights:
+            for weight in frame.function.params:
+                if any(weight is param for param, _ in child.captures):
+                    continue
                 self._visit(weight, child)
                 if isinstance(child.index, Expr):
                     self.variance[id(weight)] = saved["variance"].get(id(child.index), frozenset())
@@ -591,7 +566,6 @@ class ScopeBuilder(CallFrameVisitor[None]):
                 for view in self.views
             }
             changing = self.variance.get(id(frame.function.body), frozenset())
-            child.tables = {name: getattr(self, name) for name in names}
         finally:
             self.type_ctx, self.unit_ctx = saved_type, saved_unit
             for name, table in saved.items():
@@ -728,18 +702,6 @@ class ScopeBuilder(CallFrameVisitor[None]):
             self._visit(param, root)
         if self.graph.body is not None:
             self._visit(self.graph.body, root)
-        root.tables = {
-            name: getattr(self, name)
-            for name in (
-                "sources",
-                "precisions",
-                "definitions",
-                "aliases",
-                "seen",
-                "seeds",
-                "variance",
-            )
-        }
         return root
 
 

@@ -1349,22 +1349,21 @@ class AnalysisCheckContext:
     call duration is the callee duration, scheduled in the caller's current scope.
     Callee region peaks MUST take the maximum across occurrences.
   - Parameters and arguments MUST share storage and extend argument liveness
-    through the callee's last use. Callee temporaries MUST occupy the caller's
-    timeline. A separately materialized callee result of matching memory level
-    and byte size MUST share the caller's destination buffer. A return that
-    aliases an input or has no independent material buffer MUST instead require
-    a caller destination; this extra buffer MAY increase peak memory.
-  - Implicit weights MUST be persistent and counted once per instance resource.
-    A constant index reaches one instance. A variable index MUST multiply
-    persistent bytes by the integers in its inferred half-open range intersected
-    with `[0, N)`; unknown ranges use N. Nested instance multiplicities MUST
-    multiply along the call path. Traffic MUST use loop trips without this
-    additional multiplier.
-  - Internal on-chip values shared by a definition MUST have the same offsets,
-    buffer sizes, and aliases in every occurrence. Conflicts MUST raise
-    `AnalysisError` naming the callee, binding, both binding paths, and values.
-    Placement comparisons MUST be local before writing one record per SSA value. A result tied to the caller's output
-    destination is exempt from this consistency comparison.
+    through the callee's last use; callee temporaries occupy the caller timeline.
+    A separately materialized callee result of matching memory level and byte
+    size MUST share the caller destination. A return without an independent
+    material buffer requires a caller destination, which MAY increase peak memory.
+  - Implicit weights MUST be persistent. Their instance index tuples are the
+    union of reached index images clipped to slot bounds; their cardinality
+    scales weight bytes. Unknown indices reach the whole slot. Traffic uses
+    loop trips without this multiplier.
+  - Each internal SSA leaf MUST share one address across its occurrence windows.
+    Callee parameters and results tied to caller destinations use caller pointers
+    and carry no offsets. Internal values MUST NOT reuse parameter storage;
+    a return group's proven reuse of a parameter is applied only at the call,
+    subject to the caller's persistent and last-use checks. Different alias
+    relationships MUST raise `AnalysisError` naming the callee, binding,
+    both binding paths, and relationships.
   - Authored-analysis readiness is not a program-level rejection. Analyze MUST
     NOT reject an authored `where(...)` constraint: it is an input to a later
     decision, and a program carrying one is measured as written. A value whose

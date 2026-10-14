@@ -145,7 +145,7 @@ EXPECTED_MEMORY_PEAKS = {
     "fused_boundary.FusedBoundary.root[static]": {
         "gmem": 512,
         "rmem": 8 * 2 + 8 * 4,
-        "smem": 64,
+        "smem": 32,
     },
     "fused_boundary.FusedBoundary.stage[static]": {"smem": 64},
     "gemm_schedules.Gemm_MNK_NT128x128x64_w17x8.gemm[static]": {

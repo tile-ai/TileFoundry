@@ -19,17 +19,18 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.specialize import (
     InstantiateDimensionCloner,
     SpecializationError,
     _DimVarCollector,
-    bound_dims_of,
     dim_vars_reached,
 )
 from tilefoundry.ir.types import Topology, callable_type_for
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.substitute import dim_vars_by_name, substitute_shape_dim
-from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
+from tilefoundry.ir.visitor import collect_exprs, expr_children
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
@@ -162,16 +163,33 @@ def _view_metadata(expr: Expr) -> tuple:
                  if type(item) not in _DERIVED_METADATA and type(item) is not BindingMetadata)
 
 
-class _BodyCloner(BindingSubstitutionCloner):
-    def __init__(self, metadata):
-        super().__init__(metadata=metadata)
-        self.number = 0
+def _prepare_function(function):
+    """Clear derived facts and number calls, including authored loop bounds."""
+    seen, number = set(), 0
 
-    def visit_Call(self, expr, ctx):
-        rebuilt = super().visit_Call(expr, ctx)
-        name = f"v{self.number}"
-        self.number += 1
-        return replace(rebuilt, metadata=(*rebuilt.metadata, BindingMetadata(name)))
+    def prepare(node):
+        nonlocal number
+        if isinstance(node, ModuleList) or id(node) in seen:
+            return
+        seen.add(id(node))
+        node.metadata = _view_metadata(node)
+        if isinstance(node, Function):
+            children = (*node.params, node.body)
+        elif isinstance(node, LoopRegion):
+            children = (*node.args, node.induction_var, *node.params,
+                        *(bound for bound in (node.start, node.extent, node.step) if isinstance(bound, Expr)),
+                        node.body, *node.yield_values)
+        elif isinstance(node, MeshRegion):
+            children = (*node.args, *node.params, node.body)
+        else:
+            children = expr_children(node)
+        for child in children:
+            prepare(child)
+        if isinstance(node, Call):
+            node.metadata = (*node.metadata, BindingMetadata(f"v{number}"))
+            number += 1
+
+    prepare(function)
 
 
 class _CheckCalls(CallFrameVisitor[None]):
@@ -197,9 +215,7 @@ class _CheckCalls(CallFrameVisitor[None]):
         given = iter(call.args)
         types = tuple(param.type if implicit and param.is_const else next(given).type
                       for param in callee.params)
-        derived = self.derive(inner, types, mesh, f"{self.label}/{binding_name(call)}")
-        if isinstance(call.target, Function):
-            call.target = derived
+        self.derive(inner, types, mesh, f"{self.label}/{binding_name(call)}")
 
 
 def check_program(
@@ -264,7 +280,7 @@ def check_program(
         raise SpecializationError(
             f"{function.name!r} still states {sorted(residual)} as ranges after binding {sorted(supplied)}; every dimension has to be given an extent"
         )
-    derived_functions, signatures = {}, {}
+    signatures = {}
 
     def derive(frame, types, mesh, label):
         definition = frame.function
@@ -277,40 +293,19 @@ def check_program(
                     f"callee {definition.name!r} has incompatible signatures at {path!r} and "
                     f"{label!r}: {previous!r} versus {signature!r}"
                 )
-            return derived_functions[identity]
+            return
         signatures[identity] = signature, label
-        params = tuple(replace(p, type=t, metadata=_view_metadata(p))
-                       for p, t in zip(definition.params, types, strict=True))
-        body = _BodyCloner(_view_metadata).visit(
-            definition.body, {id(p): q for p, q in zip(definition.params, params, strict=True)}
-        )
-        derived = replace(definition, params=params, body=body, variants=(), converters=(),
-                          metadata=_view_metadata(definition))
-        derived._specialized_from = definition._specialized_from
-        derived._specialized_dims = bound_dims_of(definition)
-        derived_functions[identity] = derived
-        frame = replace(frame, function=derived)
-        TypeInferVisitor(ranges=True).visit(derived, TypeInferContext(frame=frame, current_mesh=mesh))
-        _CheckCalls(frame, derive, label).visit(body, mesh)
-        derived.return_type = derived.body.type
-        derived.type = callable_type_for(derived.params, derived.return_type)
-        return derived
+        for param, type_ in zip(definition.params, types, strict=True):
+            param.type = type_
+        _prepare_function(definition)
+        TypeInferVisitor(ranges=True).visit(definition, TypeInferContext(frame=frame, current_mesh=mesh))
+        definition.return_type = definition.body.type
+        definition.type = callable_type_for(definition.params, definition.return_type)
+        _CheckCalls(frame, derive, label).visit(definition.body, mesh)
 
-    root = derive(initial, tuple(p.type for p in bound_root.params), None, function.name)
-    modules = {}
+    root, module = bound_root, bound_module
+    derive(initial, tuple(p.type for p in root.params), None, function.name)
 
-    def rebuild(node):
-        if id(node) not in modules:
-            children = {}
-            for key, slot in node.children.items():
-                elements = tuple(rebuild(child) for child in slot.elements)
-                children[key] = ModuleList(elements if slot.indexed else elements[0])
-            modules[id(node)] = replace(node, children=children, functions=tuple(
-                derived_functions.get(id(fn), fn) for fn in node.functions
-            ))
-        return modules[id(node)]
-
-    module = rebuild(bound_module)
     frames = tuple(CallFrameVisitor.walk_frames(CallFrame(module, root)))
     functions = tuple(frame.function for frame in frames)
     size = sum(len(collect_exprs(body.body)) for body in functions)

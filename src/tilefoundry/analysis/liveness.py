@@ -74,18 +74,20 @@ def result_copies(expr: Expr) -> int:
 class LivenessVisitor(ExprVisitor[None]):
     """Build definition/use intervals while preserving structured SSA edges."""
 
-    def __init__(self, function: Function, occurrence=None) -> None:
+    def __init__(self, function: Function, occurrence=None, *, templates=None, callee=False) -> None:
         super().__init__(root_function=function)
         self.occurrence = occurrence
-        self.bindings = {}
+        self.templates = {} if templates is None else templates
         self.point = -1
         self.states: dict[int, LiveInterval] = {}
         self.definition_order: list[int] = []
         self.uses: list[UseEvent] = []
         self.regions: list[RegionInterval] = []
         self.loop_entries: list[tuple[int, set[int], set[int]]] = []
+        if callee:
+            definition = self.next_event()
         for parameter in function.params:
-            self.define(parameter, self.next_event())
+            self.define(parameter, definition if callee else self.next_event())
         values = collect_exprs(function.body) if function.body is not None else ()
         bound_ids = {id(parameter) for parameter in function.params}
         for value in values:
@@ -124,13 +126,6 @@ class LivenessVisitor(ExprVisitor[None]):
                 outside.add(key)
         self.states[key] = replace(state, last_used_at=max(state.last_used_at, point))
         self.uses.append(UseEvent(value, point, synthetic, self.occurrence))
-        if key in self.bindings:
-            parent, arg = self.bindings[key]
-            saved, self.occurrence = self.occurrence, parent
-            try:
-                self.use(arg, point, synthetic=synthetic)
-            finally:
-                self.occurrence = saved
 
     def finish(self) -> Liveness:
         """Freeze the definition-ordered result."""
@@ -168,19 +163,35 @@ class LivenessVisitor(ExprVisitor[None]):
         argument_use = self.next_event()
         for arg in call.args:
             self.use(arg, argument_use)
-        parent, self.occurrence = self.occurrence, child
-        memo, self._memo = self._memo, {}
-        try:
-            definition = self.next_event()
-            for param in child.frame.function.params:
-                self.define(param, definition)
-            for param, arg in zip(child.activations, call.args, strict=True):
-                self.bindings[child, id(param)] = parent, arg
-            self.visit(child.frame.function.body, ctx)
-            self.use(child.frame.function.body, self.next_event())
-        finally:
-            self.occurrence = parent
-            self._memo = memo
+        function = child.frame.function
+        if id(function) not in self.templates:
+            visitor = LivenessVisitor(function, child, templates=self.templates, callee=True)
+            visitor.visit_function_body(function)
+            visitor.use(function.body, visitor.next_event())
+            self.templates[id(function)] = child, visitor.finish()
+        origin, relative = self.templates[id(function)]
+        occurrences = dict(zip(
+            (scope for scope in walk_scopes(origin) if scope.frame is not None),
+            (scope for scope in walk_scopes(child) if scope.frame is not None), strict=True,
+        ))
+
+        start = self.next_event()
+        for interval in relative.intervals:
+            occurrence = occurrences[interval.occurrence]
+            key = occurrence, id(interval.value)
+            self.states[key] = replace(interval, occurrence=occurrence,
+                defined_at=start + interval.defined_at, last_used_at=start + interval.last_used_at)
+            self.definition_order.append(key)
+        self.uses.extend(replace(use, at=start + use.at, occurrence=occurrences[use.occurrence])
+                         for use in relative.uses)
+        self.regions.extend(replace(region, entered_at=start + region.entered_at,
+            exited_at=start + region.exited_at, occurrence=occurrences[region.occurrence])
+            for region in relative.regions)
+        for param, argument in child.captures:
+            for use in relative.uses:
+                if use.occurrence is origin and use.value is param:
+                    self.use(argument, start + use.at, synthetic=use.synthetic)
+        self.point = start + relative.timeline_end
         self.define(call, self.next_event())
 
     def visit_MeshRegion(self, region: MeshRegion, ctx=None) -> None:

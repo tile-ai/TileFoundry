@@ -436,11 +436,20 @@ def test_repeated_callee_temporaries_require_one_shared_memory_placement():
     function = Function.build(name="root", params=(root_x, root_w), body=body, return_type=type_)
     root = Module("SharedPressure", (helper, function), "root",
                   target=CudaTarget(_H200), topologies=topologies)
-    with pytest.raises(AnalysisError, match="callee 'helper' node.*incompatible placement") as error:
-        analyze(root, function, analysis="memory")
-    message = str(error.value)
-    assert "v1" in message and "v4" in message
-    assert "((0,), 128, None) versus ((128,), 128, None)" in message
+    analyzed = analyze(root, function, analysis="memory")
+    derived = next(fn for fn in analyzed.functions if fn.name == "helper")
+    temporaries = [node for node in collect_exprs(derived.body)
+                   if isinstance(node, Call) and isinstance(node.target, Empty)
+                   and node.type.storage is StorageKind.SMEM]
+    assert len(temporaries) == 2
+    calls = [scope for scope in walk_scopes(analyzed.scopes)
+             if scope.frame is not None and scope.frame.function is derived]
+    assert len(calls) == 2
+    offsets = [tuple(get_metadata(node, MemoryMetadata).offsets
+                     for node in collect_exprs(call.frame.function.body)
+                     if any(node is temporary for temporary in temporaries)) for call in calls]
+    assert offsets[0] == offsets[1]
+    assert all(len(held) == 1 for held in offsets[0])
 
 
 
@@ -486,9 +495,8 @@ def test_repeated_callee_placement_compares_alias_even_at_the_same_offset():
     function = Function.build(name="root", params=(root_x, root_y), body=body, return_type=body.type)
     root = Module("SharedAliases", (helper, function), "root",
                   target=CudaTarget(_H200), topologies=topologies)
-    with pytest.raises(AnalysisError, match="callee 'helper' node.*incompatible placement") as error:
+    with pytest.raises(AnalysisError, match="callee 'helper' node.*different alias relationships") as error:
         analyze(root, function, analysis="memory")
     message = str(error.value)
     assert "v0" in message and "v1" in message
-    assert message.count("((0,), 64,") == 2
     assert "[1 + i0]" in message and "[2 + i0]" in message

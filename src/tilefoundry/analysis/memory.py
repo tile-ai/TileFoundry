@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
+import isl
+
 from tilefoundry.ir.core import (
     Call,
     Expr,
-    RangeMetadata,
     Var,
     VerifyError,
     describe_expr,
@@ -27,7 +28,6 @@ from tilefoundry.ir.types.utils import (
     bytes_by_storage,
     is_unsharded_layout,
     participant_layout,
-    static_dim_value,
 )
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target.facts import TopologyFacts
@@ -725,53 +725,48 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     persistent = set()
     resources = {}
 
-    def multiplicity(occurrence):
-        count = 1
-        while occurrence.parent is not None:
-            caller = occurrence.parent.occurrence
-            if not isinstance(occurrence.index, Expr):
-                occurrence = caller
+    resource_ids, images = {}, {}
+    for scope in walk_scopes(context.root):
+        if scope.frame is None or scope.parent is None:
+            continue
+        chain, cursor = [], scope
+        while cursor.parent is not None:
+            if cursor.slot is not None:
+                chain.append(cursor)
+            cursor = cursor.parent.occurrence
+        chain.reverse()
+        image = isl.map.from_domain(scope.domain).add_dims(isl.dim_type.OUT, len(chain))
+        for axis, call in enumerate(chain):
+            index = call.index
+            if isinstance(index, int) or index is None:
+                image = image.fix_val(isl.dim_type.OUT, axis, isl.val(index or 0))
+            else:
+                index = scope.capture_root(index)
+                loop = next((held for held in scope.enclosing_loops()
+                             if held.induction_var is index), None)
+                if loop is not None:
+                    image = image.equate(isl.dim_type.IN, scope.enclosing_loops().index(loop),
+                                        isl.dim_type.OUT, axis)
+            image = image.lower_bound_val(isl.dim_type.OUT, axis, isl.val(0))
+            image = image.upper_bound_val(isl.dim_type.OUT, axis, isl.val(len(call.slot.elements) - 1))
+        reached = image.range()
+        reached = reached.project_out(isl.dim_type.PARAM, 0, reached.dim(isl.dim_type.PARAM))
+        for weight in scope.frame.function.params:
+            if any(weight is param for param, _ in scope.captures):
                 continue
-            slot = caller.frame.module.children[occurrence.slot_key]
-            cursor = occurrence
-            number = None
-            while cursor is not None:
-                loop = cursor.owner
-                if isinstance(loop, LoopRegion) and loop.induction_var is occurrence.index:
-                    start, stop, step = (
-                        static_dim_value(value) for value in (loop.start, loop.extent, loop.step)
-                    )
-                    if start is not None and stop is not None and step is not None and step != 0:
-                        trips = len(range(start, stop, step))
-                        if step > 0:
-                            first = max(0, -(start // step))
-                            last = min(trips, -(-(len(slot.elements) - start) // step))
-                        else:
-                            stride = -step
-                            first = max(0, (start - len(slot.elements)) // stride + 1)
-                            last = min(trips, start // stride + 1)
-                        number = max(0, last - first)
-                    break
-                cursor = cursor.parent
-            if number is None:
-                bounds = get_metadata(occurrence.index, RangeMetadata)
-                number = (
-                    len(slot.elements) if bounds is None
-                    else max(0, min(len(slot.elements), bounds.hi) - max(0, bounds.lo))
-                )
-            count *= number
-            occurrence = caller
-        return count
+            key = (tuple(call.slot.key for call in chain), id(weight))
+            resource_ids[scope, id(weight)] = key
+            images[key] = reached if key not in images else images[key].union(reached)
 
     limits: dict[str, int] = {}
     for interval in liveness.intervals:
         occurrence = interval.occurrence
         key = (occurrence, id(interval.value))
         multiplier = 1
-        if occurrence is not None and occurrence.parent is not None and any(interval.value is weight for weight in occurrence.weights):
-            resource = occurrence.resource_key(interval.value)
-            multiplier = multiplicity(occurrence)
-            resources[key] = resource
+        if key in resource_ids:
+            resource = resource_ids[key]
+            multiplier = images[resource].count_val().get_num_si()
+            resources[key] = ".".join((*resource[0], interval.value.name))
             persistent.add(key)
         elif occurrence is None or occurrence.parent is None:
             if any(interval.value is param for param in function.params):
@@ -799,10 +794,12 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         quantities=quantities,
         persistent=frozenset(persistent),
         limits=limits,
+        resources=resource_ids,
     )
     allocation = AllocationConstraintVisitor(root_function=function, liveness=liveness)
 
     allocation.visit_function_body(function, model)
+    external = model.addresses()
     definitions = {
         (interval.occurrence, id(interval.value)): index
         for index, interval in enumerate(liveness.intervals)
@@ -927,6 +924,12 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             offsets.update(solved.offsets)
             peak = solved.peak_bytes
             for item in values:
+                if item in external:
+                    if item in model.outputs and not item.lifetime.persistent:
+                        moved = get_metadata(item.value, MemoryMetadata) or MemoryMetadata()
+                        placements[item.occurrence, id(item.value)] = replace(
+                            moved, buffer_bytes=item.lifetime.bytes, offsets=())
+                    continue
                 if item not in model.material or item.lifetime.persistent:
                     continue
                 if not isinstance(item.value, (Call, Var)) or isinstance(item.value.type, TupleType):
@@ -985,38 +988,22 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                     if item.occurrence is occurrence and item.value is producer and item in offsets
                 ),
             )
-    shared = {}
+    aliases = {}
     for item in allocation_values:
         occurrence = item.occurrence
-        if (
-            occurrence is None
-            or occurrence.parent is None
-            or any(item.value is param for param in occurrence.frame.function.params)
-            or (occurrence.result_tied and item.value is occurrence.frame.function.body)
-        ):
+        if (occurrence is None or occurrence.parent is None or item in model.parameters
+                or item.lifetime.memory_level == "gmem" or item.lifetime.persistent):
             continue
-        if item.lifetime.memory_level == "gmem" or item.lifetime.persistent:
-            continue
-        moved = placements.get((occurrence, id(item.value)), get_metadata(item.value, MemoryMetadata))
-        alias = None if moved is None else moved.alias
-        alias_key = (
-            None
-            if alias is None
-            else (
-                id(alias.buffer),
-                alias.index,
-                str(alias.relation.relation),
-                tuple((name, id(value)) for name, value in alias.relation.values.items()),
-            )
+        alias = model.aliases.get(item)
+        state = None if alias is None else (
+            id(alias.buffer), alias.index,
+            tuple((name, id(value)) for name, value in alias.relation.values.items()),
         )
-        state = None if moved is None else (moved.offsets, moved.buffer_bytes, alias_key)
-        key = (id(item.value), item.index)
-        if key in shared and shared[key][1] != state:
-            previous, value = shared[key]
+        previous, held, signature = aliases.setdefault((id(item.value), item.index), (occurrence, alias, state))
+        if signature != state or (alias is not None and not held.relation.relation.is_equal(alias.relation.relation)):
             raise AnalysisError(
-                f"callee {occurrence.frame.function.name!r} node {item.lifetime.binding!r} has incompatible placement at {occurrence_path(previous)!r} and {occurrence_path(occurrence)!r}: {value!r} versus {state!r}"
+                f"callee {occurrence.frame.function.name!r} node {item.lifetime.binding!r} has different alias relationships at {occurrence_path(previous)!r} and {occurrence_path(occurrence)!r}: {(signature, None if held is None else held.relation.relation)!r} versus {(state, None if alias is None else alias.relation.relation)!r}"
             )
-        shared[key] = occurrence, state
     by_definition = {identity: moved for (_occurrence, identity), moved in placements.items()}
     values_by_identity = {id(item.value): item.value for item in allocation_values}
     for identity, moved in by_definition.items():

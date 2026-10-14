@@ -137,6 +137,47 @@ class AllocationModel:
     models: dict[str, cp_model.CpModel] = field(default_factory=dict)
     address: dict[AllocationValue, cp_model.IntVar] = field(default_factory=dict)
     groups: AllocationGroups = field(default_factory=AllocationGroups)
+    resources: dict = field(default_factory=dict)
+    parameters: set[AllocationValue] = field(default_factory=set)
+    outputs: set[AllocationValue] = field(default_factory=set)
+    equal: AllocationGroups = field(default_factory=AllocationGroups)
+    windows: list[tuple[AllocationValue, AllocationValue]] = field(default_factory=list)
+
+    def parameter_storage(self, operand: AllocationValue) -> AllocationValue | None:
+        """Find the formal pointer bounding this definition's storage group."""
+        group = self.groups.find(operand)
+        return next((param for param in self.parameters
+                     if param.occurrence is self.current.occurrence
+                     and self.groups.find(param) is group), None)
+
+    def addresses(self) -> set[AllocationValue]:
+        """Share internal SSA addresses across their occurrence windows."""
+        boundaries = {self.groups.find(value) for value in self.parameters | self.outputs}
+        external = {value for value in self.values if self.groups.find(value) in boundaries
+                         and value.occurrence is not None and value.occurrence.parent is not None}
+        definitions = {}
+        for value in self.values:
+            if value not in external:
+                key = (id(value.value), value.index)
+                other = definitions.setdefault(key, value)
+                self.equal.union(value, other)
+                self.groups.union(value, other)
+        variables = {}
+        for value in self.values:
+            level = value.lifetime.memory_level
+            if level not in self.models:
+                continue
+            group = self.equal.find(value)
+            if group not in variables:
+                variables[group] = self.models[level].new_int_var(
+                    0, self.limits[level], f"address_{len(variables)}")
+            self.address[value] = variables[group]
+        for result, operand in self.windows:
+            level = result.lifetime.memory_level
+            self.models[level].add(self.address[operand] >= self.address[result])
+            self.models[level].add(self.address[operand] + operand.lifetime.bytes
+                                   <= self.address[result] + result.lifetime.bytes)
+        return external
 
     def __post_init__(self) -> None:
         for level in self.limits:
@@ -418,6 +459,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         self.resources = {}
         self.occurrence_memos = {}
         self.escaped = {}
+        self.return_reuse = {}
         self.occurrence = None
         self.pending: dict[int, list[tuple[AllocationValue, int, isl.map]]] = defaultdict(list)
         self.updates: dict[AllocationValue, tuple[AllocationValue, AllocationValue, isl.map, BufferAlias]] = {}
@@ -535,16 +577,16 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         self._memo, self.bound, self.pending, self.definitions = {}, {}, defaultdict(list), {}
         inner = replace(ctx, current=child)
         try:
-            for param, storage in zip(child.activations, args, strict=True):
+            for (param, _), storage in zip(child.captures, args, strict=True):
                 self.bound[id(param)] = storage
-            for weight in child.weights:
-                key = child.resource_key(weight)
+            for param in child.frame.function.params:
+                key = ctx.resources.get((child, id(param)))
                 if key in self.resources:
-                    self.bound[id(weight)] = self.resources[key]
-                storage = self.visit(weight, inner)
-                self.resources.setdefault(key, storage)
-            for param in child.activations:
-                self.visit(param, inner)
+                    self.bound[id(param)] = self.resources[key]
+                storage = self.visit(param, inner)
+                if key is not None:
+                    self.resources.setdefault(key, storage)
+                ctx.parameters.update(leaves(storage))
             returned = self.visit(child.frame.function.body, inner)
         finally:
             self.occurrence_memos[child] = self._memo
@@ -553,23 +595,32 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
             self.occurrence = occurrence
         destination = self.allocate(node, ctx)
         result_slots, returned_slots = leaves(destination), leaves(returned)
-        tied = bool(result_slots) and len(result_slots) == len(returned_slots)
 
-        def within(occurrence):
-            while occurrence is not None:
-                if occurrence is child:
-                    return True
-                occurrence = (None if occurrence.parent is None else occurrence.parent.occurrence)
-            return False
-
+        within = {scope.occurrence for scope in walk_scopes(child)}
         for result, source in zip(result_slots, returned_slots, strict=False):
             group = ctx.groups.find(source)
             members = tuple(value for value in ctx.values if ctx.groups.find(value) is group)
             independent = any(value in ctx.material for value in members) and all(
-                within(value.occurrence) for value in members
+                value.occurrence in within for value in members
             )
-            tied = (independent and self.tie(result, source, ctx)) and tied
-        child.result_tied = tied
+            if independent and self.tie(result, source, ctx):
+                ctx.outputs.update(members)
+                candidate = next((self.return_reuse[value] for value in members
+                                  if value in self.return_reuse
+                                  and self.return_reuse[value][0].occurrence is child), None)
+                if candidate is not None:
+                    param, relation = candidate
+                    argument = next(storage for (formal, _), storage in zip(child.captures, args)
+                                    if formal is param.value)
+                    operand = leaves(argument)[param.index]
+                    group = ctx.groups.find(operand)
+                    held = [value for value in ctx.values if ctx.groups.find(value) is group]
+                    if all(self.last_ordinary_use.get((value.occurrence, id(value.value), value.index), -1)
+                           <= result.lifetime.defined_at for value in held):
+                        if relation is None:
+                            self.tie(result, operand, ctx)
+                        else:
+                            self.alias(result, operand, relation, ctx)
         self.escaped[child, id(child.frame.function.body)] = destination
         return destination
 
@@ -621,9 +672,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         )
         result = self.add_value(node, index, lifetime, ctx)
         ctx.groups.union(result, operand)
-        level = lifetime.memory_level
-        if level in ctx.models:
-            ctx.models[level].add(ctx.address[result] == ctx.address[operand])
+        ctx.equal.union(result, operand)
         return result
 
     def add_value(
@@ -633,11 +682,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         result = AllocationValue(node, index, lifetime, ctx.current.occurrence)
         ctx.values.append(result)
         ctx.groups.add(result)
-        level = lifetime.memory_level
-        if level in ctx.models:
-            ctx.address[result] = ctx.models[level].new_int_var(
-                0, ctx.limits[level] - lifetime.bytes, f"address_{len(ctx.address)}"
-            )
+        ctx.equal.add(result)
         return result
 
     def storage_of(self, node: Expr, occurrence=None) -> Storage:
@@ -740,36 +785,42 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         """Require the single backing buffer stated by one loop-carried slot."""
         if result is operand or result.lifetime.memory_level != operand.lifetime.memory_level:
             return False
+        parameter = ctx.parameter_storage(operand)
+        if parameter is not None:
+            if (result.lifetime.bytes == operand.lifetime.bytes
+                    and any(parameter.value is formal for formal, _ in ctx.current.occurrence.captures)):
+                self.return_reuse.setdefault(result, (parameter, None))
+            return False
         if operand.lifetime.persistent or result.lifetime.bytes != operand.lifetime.bytes:
             return False
         ctx.groups.union(result, operand)
-        if result.lifetime.memory_level in ctx.models:
-            ctx.models[result.lifetime.memory_level].add(ctx.address[result] == ctx.address[operand])
+        ctx.equal.union(result, operand)
         return True
 
     def alias(
         self, result: AllocationValue, operand: AllocationValue, relation: isl.map, ctx: AllocationModel
     ) -> bool:
         """Require one proven logical alias in the physical placement."""
-        if (
-            result is operand or result.lifetime.memory_level != operand.lifetime.memory_level
-            or operand.lifetime.persistent
-        ):
+        if result is operand or result.lifetime.memory_level != operand.lifetime.memory_level:
+            return False
+        parameter = ctx.parameter_storage(operand)
+        if parameter is not None:
+            if (any(parameter.value is formal for formal, _ in ctx.current.occurrence.captures)
+                    and (result.lifetime.bytes <= operand.lifetime.bytes if is_zero_offset(relation)
+                         else operand.lifetime.bytes <= result.lifetime.bytes)):
+                self.return_reuse.setdefault(result, (parameter, relation))
+            return False
+        if operand.lifetime.persistent:
             return False
         if is_zero_offset(relation):
             if result.lifetime.bytes > operand.lifetime.bytes:
                 return False
-            if result.lifetime.memory_level in ctx.models:
-                ctx.models[result.lifetime.memory_level].add(ctx.address[result] == ctx.address[operand])
+            ctx.equal.union(result, operand)
         else:
             if operand.lifetime.bytes > result.lifetime.bytes:
                 return False
             if result.lifetime.memory_level in ctx.models:
-                model = ctx.models[result.lifetime.memory_level]
-                model.add(ctx.address[operand] >= ctx.address[result])
-                model.add(
-                    ctx.address[operand] + operand.lifetime.bytes <= ctx.address[result] + result.lifetime.bytes
-                )
+                ctx.windows.append((result, operand))
         ctx.groups.union(result, operand)
         joint = self.updates.get(result)
         if joint is not None and joint[0] is operand:
@@ -845,6 +896,8 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 members = tuple(
                     value for value in ctx.values
                     if ctx.groups.find(value) is ctx.groups.find(storage)
+                    and (ctx.parameter_storage(storage) is None
+                         or value.occurrence is ctx.current.occurrence)
                 )
                 if any(
                     self.last_ordinary_use.get(
@@ -1124,8 +1177,11 @@ def solve_allocation(
     if seed is not None:
         address_hints, peak_hint = seed
         model.add(peak <= peak_hint)
+        hinted = set()
         for address, suggested in zip(addresses, address_hints, strict=True):
-            model.add_hint(address, suggested)
+            if address.index not in hinted:
+                model.add_hint(address, suggested)
+                hinted.add(address.index)
         for (left, right), (left_before, right_before) in order_choices.items():
             left_end = address_hints[left] + values[left].lifetime.bytes
             right_end = address_hints[right] + values[right].lifetime.bytes

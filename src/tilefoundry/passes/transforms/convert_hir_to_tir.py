@@ -31,7 +31,7 @@ from tilefoundry.ir.core import (
     op_identifier,
 )
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.core.module import Module, ModuleList
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -267,7 +267,6 @@ class Lowering(CallFrameVisitor[Expr]):
         self.module = self.result.scopes.frame.module
         self.occurrence = self.result.scopes.occurrence if self.occurrence is None else self.occurrence
         self.function = self.occurrence.frame.function
-        self.read = get_metadata
         self.names = Names(self.authored)
         self.logical: dict[int, TensorType] = {}
         self.staged: dict[int, tuple[Var, LoopRegion | None]] = {}
@@ -279,7 +278,7 @@ class Lowering(CallFrameVisitor[Expr]):
             id(call): memory.alias
             for call in collect_exprs(self.function.body)
             if isinstance(call, Call)
-            and (memory := self.read(call, MemoryMetadata)) is not None
+            and (memory := get_metadata(call, MemoryMetadata)) is not None
             and memory.alias is not None
         }
         self.placed: set[int] = set()
@@ -319,12 +318,6 @@ class Lowering(CallFrameVisitor[Expr]):
             out_type = _callee_tensor_type(result_type)
         self.output = Var(self.names.fresh("out"), type=out_type)
         body = self.function.body
-        returned = body
-        while isinstance(returned, MeshRegion):
-            returned = returned.body
-        self.return_value = returned
-        source = self.occurrence.tables["sources"]["narrow"].get(id(body))
-        self.return_source = source if isinstance(source, BufferAlias) else None
         inner = _Cursor()
         self.owner_cursors[id(self.function)] = inner
         if isinstance(body, MeshRegion):
@@ -389,13 +382,9 @@ class Lowering(CallFrameVisitor[Expr]):
     ) -> Expr:
         if not isinstance(type_, TensorType):
             raise LoweringError(f"{_label(expr)} has non-tensor material result {type_!r}")
-        if self.occurrence.result_tied and (
-            expr is self.return_value or (
-                self.return_source is not None
-                and self.return_source.occurrence is self.occurrence
-                and expr is self.return_source.buffer
-            )
-        ):
+        memory = get_metadata(expr, MemoryMetadata)
+        if (self.occurrence.parent is not None and memory is not None
+                and memory.buffer_bytes is not None and not memory.offsets):
             self.logical[id(self.output)] = type_
             return self.output
         storage_type = _storage_type(type_)
@@ -415,7 +404,7 @@ class Lowering(CallFrameVisitor[Expr]):
                 f"{_label(expr)} has addressable result in unsupported storage "
                 f"{storage_type.storage}"
             )
-        memory = self.read(expr, MemoryMetadata)
+        memory = get_metadata(expr, MemoryMetadata)
         offsets = () if memory is None else memory.offsets
         if not offsets:
             raise LoweringError(
@@ -565,7 +554,7 @@ class Lowering(CallFrameVisitor[Expr]):
         carried_values = []
         for param in loop.params[: len(loop.yield_values)]:
             initial = self._known(param)
-            memory = self.read(param, MemoryMetadata)
+            memory = get_metadata(param, MemoryMetadata)
             if memory is not None and memory.alias is not None:
                 carried = self._alias_value(param, memory.alias.buffer)
             else:
@@ -1395,17 +1384,17 @@ class ConvertHIRToTIR(ModulePass):
             raise LoweringError(f"{getattr(authored, 'name', self.entry)!r} is not an HIR function")
         result = analyze(module, authored, analysis=("memory",), dims=self.dims)
         occurrences = tuple(scope for scope in walk_scopes(result.scopes) if scope.frame is not None)
-        for occurrence in occurrences[1:]:
-            if not occurrence.result_tied and occurrence.frame.function.return_type.storage is not StorageKind.SMEM:
-                raise LoweringError(
-                    f"callee {occurrence.frame.function.name!r} at {occurrence_path(occurrence)!r} has no return bound to its "
-                    "caller destination; write an explicit tf.schedule copy in HIR"
-                )
         lowered = {}
-
         for frame in CallFrameVisitor.walk_frames(result.scopes.frame, postorder=True):
             body = frame.function
             occurrence = next(scope for scope in occurrences if scope.frame.function is body)
+            memory = get_metadata(body.body, MemoryMetadata)
+            tied = memory is not None and memory.buffer_bytes is not None and not memory.offsets
+            if occurrence.parent is not None and not tied and body.return_type.storage is not StorageKind.SMEM:
+                raise LoweringError(
+                    f"callee {body.name!r} at {occurrence_path(occurrence)!r} has no return bound to its "
+                    "caller destination; write an explicit tf.schedule copy in HIR"
+                )
             lowering = Lowering(result, origin_of(body) or body, occurrence, lowered)
             lowering.lowered = lowering.run()
             lowered[id(body)] = lowering
@@ -1416,19 +1405,18 @@ class ConvertHIRToTIR(ModulePass):
                 attach_metadata(root, record)
         modules = {}
 
-        def rebuild(node):
+        def lower_module(node):
             if id(node) in modules:
-                return modules[id(node)]
-            children = {}
-            for key, slot in node.children.items():
-                elements = tuple(rebuild(child) for child in slot.elements)
-                children[key] = ModuleList(elements if slot.indexed else elements[0])
-            functions = tuple(lowered[id(fn)].lowered if id(fn) in lowered else fn for fn in node.functions)
-            rebuilt = replace(node, functions=functions, children=children)
-            modules[id(node)] = rebuilt
-            return rebuilt
+                return
+            modules[id(node)] = node
+            for slot in node.children.values():
+                for child in slot.elements:
+                    lower_module(child)
+            node.functions = tuple(lowered[id(fn)].lowered if id(fn) in lowered else fn
+                                   for fn in node.functions)
 
-        return rebuild(result.scopes.frame.module)
+        lower_module(result.scopes.frame.module)
+        return result.scopes.frame.module
 
 
 __all__ = ["ConvertHIRToTIR", "LoweringError"]

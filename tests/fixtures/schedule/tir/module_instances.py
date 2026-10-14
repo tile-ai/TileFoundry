@@ -51,7 +51,7 @@ class ModuleInstances:
 
     # analysis target=nvidia.h200_sxm module=ModuleInstances function=gemm topology=cta wave=1/1
     # selection requested=memory executed=memory
-    # memory traffic=gmem:r1.62KB/w1.50KB@logical,r1.62KB/w1.75KB@total,r1.62KB/w1.75KB@cta,r1.62KB/w1.75KB@thread;rmem:r2.43KB/w2.38KB@logical,r2.43KB/w2.38KB@total,r2.43KB/w2.38KB@cta,r2.43KB/w2.38KB@thread footprint=v2/v0:24:128B;v2/v7:25:128B;v2/w:128B;v3/v7:25_2:256B;v3/w_2:128B;v4/v7:25_3:256B;v4/w_3:128B;v5/v7:25_4:256B;v5/w_4:128B;v6/v3:44:128B;x:128B footprint-precision=exact peak=gmem:1.12KB;rmem:128B persistent=gmem:896B
+    # memory traffic=gmem:r1.62KB/w1.50KB@logical,r1.62KB/w1.75KB@total,r1.62KB/w1.75KB@cta,r1.62KB/w1.75KB@thread;rmem:r2.43KB/w2.38KB@logical,r2.43KB/w2.38KB@total,r2.43KB/w2.38KB@cta,r2.43KB/w2.38KB@thread footprint=v2/v0:24:128B;v2/v7:25:128B;v2/w:128B;v3/v7:25_2:256B;v3/w_2:128B;v4/v7:25_3:256B;v4/w_3:128B;v5/v7:25_4:256B;v5/w_4:128B;v6/v3:44:128B;x:128B footprint-precision=exact peak=gmem:1.00KB;rmem:128B persistent=gmem:768B
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def gemm(
         x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"], scratch: Tensor[(32,), "f32"], scratch_1: Tensor[(32,), "f32"], scratch_2: Tensor[(32,), "f32"], scratch_3: Tensor[(32,), "f32"], scratch_4: Tensor[(32,), "f32"], scratch_5: Tensor[(32,), "f32"], out: Tensor[(32,), "f32"]
