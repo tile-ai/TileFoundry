@@ -338,6 +338,16 @@ def name_loop_parameters(relation: isl.map, inductions) -> tuple[isl.map, dict]:
     return relation, values
 
 
+def restore_loop_dimensions(relation: isl.map, inductions) -> isl.map:
+    """Return named loop parameters to their local input coordinates."""
+    for axis, induction in enumerate(inductions):
+        parameter = relation.find_dim_by_name(isl.dim_type.PARAM, loop_parameter(induction))
+        if parameter >= 0:
+            relation = relation.equate(isl.dim_type.IN, axis, isl.dim_type.PARAM, parameter)
+            relation = relation.project_out(isl.dim_type.PARAM, parameter, 1)
+    return relation
+
+
 def bind_parameters(
     relation: isl.map,
     values: Mapping[str, object],

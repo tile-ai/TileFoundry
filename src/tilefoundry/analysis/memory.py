@@ -11,7 +11,6 @@ from tilefoundry.ir.core import (
     VerifyError,
     describe_expr,
     get_metadata,
-    value_labels,
 )
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
@@ -40,7 +39,6 @@ from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationV
 from tilefoundry.visitor_registry.contexts import Cost, CostContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
-from .access import SSAValue
 from .allocation import (
     AllocationValue,
 )
@@ -50,6 +48,7 @@ from .facts import TARGET_MEMORY_OWNER, MemoryHierarchyFacts
 from .footprint import (
     ReachedAddresses,
     cached_level,
+    footprint_labels,
     footprint_of,
     qualify_instances,
     reached_by,
@@ -478,9 +477,6 @@ class MemoryContext(AnalyzeContext):
     reached_by_scope: dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]] = field(
         default_factory=dict
     )
-    call_reached: list[tuple[IterationScope, Call, tuple[ReachedAddresses, ...]]] = field(
-        default_factory=list
-    )
     footprint_available: bool = False
 
     @property
@@ -577,7 +573,6 @@ class MemoryVisitor(ValuationVisitor[None]):
             if footprint is not None:
                 reached = tuple(item for _windows, items in footprint.groups for item in items)
                 ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, reached))
-                ctx.call_reached.append((ctx.current, expr, reached))
         if callee is None and recorded and ctx.wave is not None and ctx.memory_level is not None:
             reached = reached_by(
                 ctx.current,
@@ -591,7 +586,6 @@ class MemoryVisitor(ValuationVisitor[None]):
             )
             if reached is not None:
                 ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, reached))
-                ctx.call_reached.append((ctx.current, expr, reached))
             else:
                 ctx.footprint_available = False
         attach(expr, moved)
@@ -669,50 +663,31 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for _call, reached in calls
         for item in reached
     )
-    distinct: dict[SSAValue, Expr] = {}
-    for item in merged_reached:
-        if item.reached is not None:
-            distinct.setdefault(item.target, item.target.expr)
-    captured_names = {}
-    for scope in walk_scopes(context.root):
-        for param, _argument in scope.captures:
-            captured_names.setdefault(id(scope.capture_root(param)), param)
-    label_sources = {id(key.expr): value for key, value in distinct.items()}
-    label_values = (
-        value if getattr(value, "name", None) else captured_names.get(key, value)
-        for key, value in label_sources.items()
-    )
-    source_labels = dict(zip(label_sources, value_labels(label_values), strict=True))
-    footprint_labels = {
-        key: source_labels[id(key.expr)]
-        + (f"[{key.index}]" if isinstance(value.type, TupleType) else "")
-        for key, value in distinct.items()
-    }
+    labels = footprint_labels(merged_reached)
     attach(function, analyze_liveness(function, context, callee=function is not context.entry))
     if memory_level is not None and wave is not None:
         seen_footprints = set()
-        for scope, call, reached in memory_context.call_reached:
-            if CallFrameVisitor.callee_frame(call, context.frame) is not None:
-                continue
-            if id(call) in seen_footprints:
-                continue
-            seen_footprints.add(id(call))
-            repeats = scope.repeats_of(call, topology_level)
-            moved = get_metadata(call, MemoryMetadata)
-            if moved is None:
-                raise AnalysisError("memory: Call footprint has no movement record")
-            attach(
-                call,
-                replace(
-                    moved,
-                    footprint=footprint_of(
-                        reached,
-                        memory_level=memory_level,
-                        labels=footprint_labels,
-                        windows=-(-repeats.mesh_positions // wave[0]),
+        for scope, calls in memory_context.reached_by_scope.items():
+            for call, reached in calls:
+                if CallFrameVisitor.callee_frame(call, context.frame) is not None:
+                    continue
+                if id(call) not in scope.accesses.get("narrow", {}) or id(call) in seen_footprints:
+                    continue
+                seen_footprints.add(id(call))
+                repeats = scope.repeats_of(call, topology_level)
+                moved = get_metadata(call, MemoryMetadata)
+                if moved is None:
+                    raise AnalysisError("memory: Call footprint has no movement record")
+                attach(
+                    call,
+                    replace(
+                        moved,
+                        footprint=footprint_of(
+                            reached,
+                            windows=-(-repeats.mesh_positions // wave[0]),
+                        ),
                     ),
-                ),
-            )
+                )
     footprint = None
     if (
         cache is not None
@@ -750,10 +725,11 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             wave=wave,
             ctx=replace(context, topology_level=topology_level),
             capacity=cache[2],
-            labels=footprint_labels,
+            labels=labels,
             resolved=tuple(
                 (scope, call, reached)
-                for scope, call, reached in memory_context.call_reached
+                for scope, calls in memory_context.reached_by_scope.items()
+                for call, reached in calls
                 if CallFrameVisitor.callee_frame(call, context.frame) is not None
             ),
         )

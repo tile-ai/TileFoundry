@@ -35,8 +35,8 @@ from .access import (
     AliasKind,
     BufferAlias,
     SSAValue,
-    loop_parameter,
     name_loop_parameters,
+    restore_loop_dimensions,
     widest_allowed,
 )
 from .facts import MemoryHierarchyFacts
@@ -178,10 +178,17 @@ def _restrict_to_wave(
     return relation.intersect_params(context.add_constraint(lower).add_constraint(upper))
 
 
+def _loop_parameters(relation):
+    return tuple(
+        (axis, name)
+        for axis in range(relation.dim(isl.dim_type.PARAM))
+        if (name := relation.get_dim_name(isl.dim_type.PARAM, axis) or "").startswith("__tf_loop_")
+    )
+
+
 def _union_loops(relation):
-    for axis in reversed(range(relation.dim(isl.dim_type.PARAM))):
-        if (relation.get_dim_name(isl.dim_type.PARAM, axis) or "").startswith("__tf_loop_"):
-            relation = relation.project_out(isl.dim_type.PARAM, axis, 1)
+    for axis, _name in reversed(_loop_parameters(relation)):
+        relation = relation.project_out(isl.dim_type.PARAM, axis, 1)
     return relation
 
 
@@ -705,13 +712,9 @@ def moving_boundaries(
                 continue
             relation = isl.map.from_range(item.reached).insert_dims(isl.dim_type.IN, 0, scope.depth)
             relation = relation.intersect_domain(scope.domain)
-            for axis, loop in enumerate(_loop_scopes(scope)):
-                parameter = relation.find_dim_by_name(
-                    isl.dim_type.PARAM, loop_parameter(loop.owner.induction_var)
-                )
-                if parameter >= 0:
-                    relation = relation.equate(isl.dim_type.IN, axis, isl.dim_type.PARAM, parameter)
-                    relation = relation.project_out(isl.dim_type.PARAM, parameter, 1)
+            relation = restore_loop_dimensions(
+                relation, (loop.owner.induction_var for loop in _loop_scopes(scope))
+            )
             access = Access(None, relation, item.target, precision=item.precision)
             mesh = _wave_mesh(scope, topology_level)
             parameters = tuple(
@@ -1036,17 +1039,13 @@ def merged(items: Iterable[ReachedAddresses]) -> tuple[ReachedAddresses, ...]:
     return tuple(grouped.values())
 
 
-def footprint_of(items, *, memory_level=None, labels=None, windows=1) -> Footprint:
+def footprint_of(items, *, windows=1) -> Footprint:
     """Retain one copy of the reached evidence; numeric views are derived."""
     return Footprint(((windows, tuple(items)),))
 
 
 def _first_loops(image):
-    names = [
-        image.get_dim_name(isl.dim_type.PARAM, axis)
-        for axis in range(image.dim(isl.dim_type.PARAM))
-        if (image.get_dim_name(isl.dim_type.PARAM, axis) or "").startswith("__tf_loop_")
-    ]
+    names = tuple(name for _axis, name in _loop_parameters(image))
     first = image.params()
     for name in names:
         first = first.move_dims(
@@ -1065,26 +1064,14 @@ def _first_loops(image):
             first.find_dim_by_name(isl.dim_type.SET, name),
             1,
         )
-    image = image.intersect_params(first)
-    for name in names:
-        image = image.project_out(
-            isl.dim_type.PARAM, image.find_dim_by_name(isl.dim_type.PARAM, name), 1
-        )
-    return image
+    return _union_loops(image.intersect_params(first))
 
 
 def _window_item(item):
     if item.reached is None:
         return item
 
-    def window(image):
-        if not item.ownership:
-            return _first_loops(image)
-        for axis in reversed(range(image.dim(isl.dim_type.PARAM))):
-            if (image.get_dim_name(isl.dim_type.PARAM, axis) or "").startswith("__tf_loop_"):
-                image = image.project_out(isl.dim_type.PARAM, axis, 1)
-        return image
-
+    window = _union_loops if item.ownership else _first_loops
     image = window(item.reached)
     return replace(
         item, reached=image, must=image if item.must.is_equal(item.reached) else window(item.must)
@@ -1134,41 +1121,55 @@ def counted_precision(items):
     return precision
 
 
+def footprint_labels(items):
+    """Name reached SSA leaves consistently for footprint and reuse rows."""
+    targets = dict.fromkeys(item.target for item in items if item.reached is not None)
+    expressions = dict.fromkeys(target.expr for target in targets)
+    labels = dict(zip(expressions, value_labels(expressions), strict=True))
+    return {
+        target: labels[target.expr]
+        + (f"[{target.index}]" if isinstance(target.expr.type, TupleType) else "")
+        for target in targets
+    }
+
+
 def counted_buffers(footprint):
     """Union by SSA identity and instance ownership before packing bytes."""
-    items = merged(_window_item(item) for _windows, group in footprint.groups for item in group)
-    expressions = dict.fromkeys(item.target.expr for item in items)
-    labels = dict(zip(expressions, value_labels(expressions), strict=True))
+    groups = tuple(
+        (windows, merged(_window_item(item) for item in group))
+        for windows, group in footprint.groups
+    )
+    items = merged(item for _windows, group in groups for item in group)
+    labels = footprint_labels(items)
+    counts = {}
+
+    def count(item):
+        if id(item) not in counts:
+            counts[id(item)] = _count(item)[0]
+        return counts[id(item)]
+
     totals = {}
-    for windows, group in footprint.groups:
-        for item in merged(_window_item(item) for item in group):
+    for windows, group in groups:
+        for item in group:
             key = item.target, item.ownership
-            totals[key] = totals.get(key, 0) + _count(item)[0] * windows
+            totals[key] = totals.get(key, 0) + count(item) * windows
     logical, counted = {}, {}
     for item in items:
         if item.reached is not None:
             key = item.target, item.ownership
-            logical[key] = logical.get(key, 0) + _count(item)[0]
+            logical[key] = logical.get(key, 0) + count(item)
             counted[key] = item
     entries = []
     for key, item in counted.items():
         held = leaves_of(item.target.expr.type)[item.target.index]
-        label = labels[item.target.expr]
-        if isinstance(item.target.expr.type, TupleType):
-            label += f"[{item.target.index}]"
-        if item.ownership:
-            label = "/".join((*item.ownership, label))
         entries.append(
             (
-                label,
+                "/".join((*item.ownership, labels[item.target])),
                 Breakdown(
                     (
                         (
                             str(held.storage),
-                            Spread(
-                                total=totals[key],
-                                logical_groups=(((), logical[key]),),
-                            ),
+                            Spread(total=totals[key], logical_groups=(((), logical[key]),)),
                         ),
                     )
                 ),
@@ -1285,13 +1286,9 @@ def qualify_instances(footprint, ctx):
                 continue
             relation = isl.map.from_range(item.reached).insert_dims(isl.dim_type.IN, 0, scope.depth)
             relation = relation.intersect_domain(scope.domain)
-            for axis, loop in enumerate(_loop_scopes(scope)):
-                parameter = relation.find_dim_by_name(
-                    isl.dim_type.PARAM, loop_parameter(loop.owner.induction_var)
-                )
-                if parameter >= 0:
-                    relation = relation.equate(isl.dim_type.IN, axis, isl.dim_type.PARAM, parameter)
-                    relation = relation.project_out(isl.dim_type.PARAM, parameter, 1)
+            relation = restore_loop_dimensions(
+                relation, (loop.owner.induction_var for loop in _loop_scopes(scope))
+            )
             relation = index_map.flat_range_product(relation)
             relation, _loop_values = name_loop_parameters(
                 relation, (loop.owner.induction_var for loop in _loop_scopes(scope))
