@@ -13,14 +13,12 @@ from __future__ import annotations
 
 from dataclasses import fields
 
-import isl
 import pytest
 
 from tilefoundry.evaluator import eval_registry
 from tilefoundry.ir.core import Call, Constant, Op, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.op_registry import iter_schemas
-from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
 from tilefoundry.ir.types import (
@@ -30,14 +28,9 @@ from tilefoundry.ir.types import (
     ShardLayout,
     TensorType,
     Topology,
-    UnitType,
 )
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CudaTarget
-from tilefoundry.visitor_registry.access_relation import (
-    local_relations_of,
-    reached_elements,
-)
 from tilefoundry.visitor_registry.call_frame import CallFrame
 from tilefoundry.visitor_registry.contexts import CostContext, TypeInferContext, VerifyContext
 from tilefoundry.visitor_registry.registries import (
@@ -88,52 +81,31 @@ def _copied(shape: tuple, layout=None) -> TensorType:
 
 
 @pytest.mark.parametrize(
-    ("src", "dst", "reached"),
+    ("src", "dst"),
     [
-        pytest.param(_copied((4,)), _copied((8,)), None, id="plain_shapes_differ"),
+        pytest.param(_copied((4,)), _copied((8,)), id="plain_shapes_differ"),
         pytest.param(
-            _copied((2, 4), _BUFFER),
-            _copied((8,), _BUFFER),
-            "{ [d0, d1] -> [4d0 + d1] : 0 <= d0 < 2 and 0 <= d1 < 4 }",
+            _copied((2, 4), _BUFFER), _copied((8,), _BUFFER),
             id="one_buffer_rows_onto_a_line",
         ),
         pytest.param(
-            _copied((8,), _BUFFER),
-            _copied((2, 4), _BUFFER),
-            "{ [d0] -> [floor(d0/4), d0 mod 4] : 0 <= d0 < 8 }",
+            _copied((8,), _BUFFER), _copied((2, 4), _BUFFER),
             id="one_buffer_a_line_onto_rows",
         ),
     ],
 )
-def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough(
-    src, dst, reached
-) -> None:
-    """``Evaluate(Copy, ...)`` dispatches verify on Op class.
+def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough(src, dst) -> None:
+    """Copy's declared SameShape rejects reshapes, including one per-thread buffer.
 
-    A Copy between shapes that differ is refused unless both describe one
-    per-thread buffer; then ``dst`` is reached where the same buffer position
-    holds it, the row-major reshape of ``src``'s coordinates, and each thread
-    reads and writes that whole buffer once. Unregistered structural Stmts
-    (Return / LetStmt) pass through silently.
+    The execution scope is valid, so rejection must come from the declaration,
+    rather than an absent leaf verifier or an access-relation projection error.
+    Structural Return and LetStmt still traverse without a custom verifier.
     """
     src_var, dst_var = Var(type=src, name="src"), Var(type=dst, name="dst")
     stmt = Evaluate(callable=Copy(), args=(src_var, dst_var))
-
-    if reached is None:
-        with pytest.raises(VerifyError, match=r"^Copy: "):
-            VerifyVisitor(VerifyContext()).visit(stmt)
-    else:
-        VerifyVisitor(VerifyContext()).visit(stmt)
-        call = Call(type=UnitType(), target=Copy(), args=(src_var, dst_var))
-        written = operand_relations(Copy(), (src, dst))[1]
-        assert written.relation.is_equal(isl.map(reached))
-        held = local_relations_of(call, CostContext(topology_level="thread", topologies=(_THREAD,)))
-        operands = held[: len(call.args)]
-        read_at, written_at = (boundary.relation for boundary in operands)
-        assert read_at.is_equal(written_at), "each iteration reads and writes one position"
-        assert written_at.range().is_equal(isl.set("{ [p] : 0 <= p < 8 }"))
-        assert [reached_elements(boundary) * 4 for boundary in operands] == [32, 32]
-        assert all(not boundary.values for boundary in held)
+    ctx = VerifyContext(current_mesh=_BUFFER.mesh, mesh_scope=(_BUFFER.mesh,))
+    with pytest.raises(VerifyError, match=r"reads src.shape = dst.shape"):
+        VerifyVisitor(ctx).visit(stmt)
 
     VerifyVisitor(VerifyContext()).visit(Return())
     VerifyVisitor(VerifyContext()).visit(

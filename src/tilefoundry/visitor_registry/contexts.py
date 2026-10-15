@@ -38,12 +38,12 @@ class TypeInferContext:
 
     frame: CallFrame | None = None
     current_mesh: Mesh | None = None
-    loops: tuple[tuple[Expr, object, object, object], ...] = ()
-    loop_aliases: dict[int, int] = field(default_factory=dict, repr=False, compare=False)
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
     instantiated_memo: dict[tuple, Type] = field(
         default_factory=dict, repr=False, compare=False
     )
+    loops: tuple[tuple[Expr, object, object, object], ...] = ()
+    loop_aliases: dict[int, int] = field(default_factory=dict, repr=False, compare=False)
 
     def with_captures(self, captures):
         """Keep captured induction parameters in their original loop coordinate."""

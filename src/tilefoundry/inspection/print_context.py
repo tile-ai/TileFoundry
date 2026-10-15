@@ -21,7 +21,6 @@ class PrintContext:
         self._dim_declarations: dict[str, tuple[object, str]] = {}
         self._mesh_bindings: list[tuple[Mesh, str]] = []
         self._used_scope_names: set[str] = set()
-        self._type_annotation_surface = False
         self.topologies = ()
 
     def use(self, rendered: PythonExpr | str) -> str:
@@ -68,16 +67,6 @@ class PrintContext:
     def pop_mesh(self) -> None:
         self._mesh_bindings.pop()
 
-    @contextmanager
-    def type_annotation_surface(self):
-        """Prefer a parent binding when a type refers to a sliced mesh."""
-        previous = self._type_annotation_surface
-        self._type_annotation_surface = True
-        try:
-            yield
-        finally:
-            self._type_annotation_surface = previous
-
     @property
     def current_mesh(self) -> Mesh | None:
         return make_mesh(*(mesh for mesh, _name in self._mesh_bindings)) if self._mesh_bindings else None
@@ -99,12 +88,6 @@ class PrintContext:
         )
         for binding_index in range(len(self._mesh_bindings) - 1, -1, -1):
             bound, alias = self._mesh_bindings[binding_index]
-            if (
-                self._type_annotation_surface
-                and bound is mesh
-                and (mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0) != 0
-            ):
-                continue
             if not bound.names or target_name not in bound.names:
                 continue
             for bound_level, bound_name in axis_keys(bound):

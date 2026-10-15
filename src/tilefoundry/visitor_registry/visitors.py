@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
+from tilefoundry.ir.core import Op, VerifyError
 from tilefoundry.ir.core.expr import Call, Expr
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
-from tilefoundry.ir.types.tensor_type import UnitType
+from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.visitor import ExprWalker, StmtVisitor
 
 from .contexts import Cost, CostContext, VerifyContext
+from .instruction import ScheduleRefusal, check_call
 from .registries import (
     DispatchRegistry,
     Role,
@@ -41,10 +44,11 @@ class VerifyVisitor(StmtVisitor[None]):
     def generic_visit(self, stmt: Stmt) -> None:
         if isinstance(stmt, Evaluate):
             op = stmt.callable
-            fn = self.registry.lookup(type(op))
-            if fn is not None:
-                call = Call(type=UnitType(), target=op, args=stmt.args)
-                fn(call, self.ctx)
+            if isinstance(op, Op):
+                try:
+                    check_call(op, stmt.args, self.ctx.current_mesh, frame=self.ctx)
+                except ScheduleRefusal as error:
+                    raise VerifyError(str(error)) from error
             super().generic_visit(stmt)
             return
         fn = self.registry.lookup(type(stmt))
@@ -56,8 +60,17 @@ class VerifyVisitor(StmtVisitor[None]):
         fn = self.registry.lookup(MeshScope)
         if fn is not None:
             fn(stmt, self.ctx)
-        for child in stmt.body:
-            self.visit(child)
+        outer = self.ctx
+        self.ctx = replace(
+            outer,
+            current_mesh=make_mesh(outer.current_mesh, stmt.mesh) if outer.current_mesh else stmt.mesh,
+            mesh_scope=(*outer.mesh_scope, stmt.mesh),
+        )
+        try:
+            self.visit(stmt.body)
+        finally:
+            self.ctx = outer
+
 
 
 class CodegenVisitor:
