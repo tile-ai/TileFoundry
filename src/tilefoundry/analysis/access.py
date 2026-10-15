@@ -18,6 +18,7 @@ from tilefoundry.ir.visitor import ExprCloner, collect_exprs
 from tilefoundry.utils.isl_utils import cardinality, has_unbounded_param
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
+    leaf_span,
     leaves_of,
     renaming_relation,
 )
@@ -390,7 +391,11 @@ def resolve_access(
     if not types:
         return ()
     whole_tuple = isinstance(held, TupleType) and output_index is None
-    indexes = range(len(types)) if whole_tuple else (output_index or 0,)
+    if whole_tuple:
+        indexes = range(len(types))
+    else:
+        begin = leaf_span(held, output_index)[0] if isinstance(held, TupleType) else 0
+        indexes = (begin,)
     built = []
     for index in indexes:
         leaf = types[index]

@@ -594,14 +594,14 @@ def moving_boundaries(
             device_recorded = scope.accesses.get("device", {}).get(id(call))
             device_by_boundary = (
                 {
-                    (item.input_index, item.output_index, item.target): item
+                    (item.input_index, item.output_index, item.target.index): item
                     for item in device_recorded[1]
                 }
                 if device_recorded is not None and device_recorded[0] is call
                 else {}
             )
             unit_by_boundary = {
-                (item.input_index, item.output_index, item.target): item
+                (item.input_index, item.output_index, item.target.index): item
                 for item in _call_accesses(scope, call, "unit")
             }
             for access in _call_accesses(scope, call):
@@ -623,7 +623,7 @@ def moving_boundaries(
                 label = labels.get(access.target)
                 if label is None:
                     continue
-                boundary_key = (access.input_index, access.output_index, access.target)
+                boundary_key = (access.input_index, access.output_index, access.target.index)
                 space_wave_access = device_by_boundary.get(boundary_key, access)
                 unit_access = unit_by_boundary.get(boundary_key)
                 if unit_access is None:

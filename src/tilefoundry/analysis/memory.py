@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
@@ -790,10 +791,10 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 ),
             )
     model.definitions = dict(allocation.definitions)
-    model.uses = {
-        value: tuple(use for use in liveness.uses if use.value == value.value)
-        for value in model.values
-    }
+    uses = defaultdict(list)
+    for use in liveness.uses:
+        uses[use.value].append(use)
+    model.uses = {value: tuple(uses[value.value]) for value in model.values}
     tie_analysis(model)
     for node in {id(value.value.expr): value.value.expr for value in model.values}.values():
         moved = get_metadata(node, MemoryMetadata)

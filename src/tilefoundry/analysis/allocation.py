@@ -36,7 +36,7 @@ from tilefoundry.ir.types.utils import (
     tensor_types,
 )
 from tilefoundry.utils.isl_utils import equates
-from tilefoundry.visitor_registry.access_relation import AccessRelation, leaves_of
+from tilefoundry.visitor_registry.access_relation import AccessRelation, leaf_span, leaves_of
 from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
 
 from .access import Access, AliasKind, BufferAlias, SSAValue, apply_source, eliminate_parameters
@@ -663,9 +663,11 @@ def operand_scope(node: Call, ctx: AllocationModel) -> IterationScope:
         value = node.args[index] if is_input else node
         output_index = None if is_input else index - len(node.args)
         held = local_type_of(value.type)
+        leaf_index = 0
         if isinstance(held, TupleType):
             if is_input:
                 continue
+            leaf_index, _count = leaf_span(held, output_index)
             held = held.fields[output_index]
         if not isinstance(held, TensorType):
             continue
@@ -682,7 +684,7 @@ def operand_scope(node: Call, ctx: AllocationModel) -> IterationScope:
         access = Access(
             index if is_input else None,
             relation,
-            SSAValue(value, output_index or 0),
+            SSAValue(value, leaf_index),
             precision,
             output_index,
         )
@@ -727,44 +729,29 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
             SSAValue(destination), AccessRelation(held.relation, values), AliasKind.WINDOW
         )
 
-    def same_storage(
-        self,
-        node: Expr,
-        storage: Storage,
-        ctx: AllocationModel,
-        *,
-        held=None,
-        index: int = 0,
-    ) -> Storage:
-        """Give forwarded values their own intervals and a structural Alias."""
-        if storage is None:
-            return None
-        if held is None:
-            held = node.type
-        if isinstance(held, TupleType):
-            fields = []
-            for field_type, field in zip(held.fields, storage, strict=True):
-                fields.append(self.same_storage(node, field, ctx, held=field_type, index=index))
-                index += len(leaves_of(field_type))
-            return tuple(fields)
-        if not isinstance(held, TensorType):
-            return None
-        operand = storage
-        interval = ctx.liveness.interval_of(SSAValue(node, index))
-        lifetime = replace(
-            interval,
-            memory_level=operand.lifetime.memory_level,
-            bytes=operand.lifetime.bytes,
-        )
-        result = self.add_value(node, index, lifetime, ctx)
-        result.aliases = (ctx.current.sources["narrow"][result.value],)
-        return result
+    def forward(self, node: Expr, ctx: AllocationModel) -> Storage:
+        """Give each forwarded leaf its own lifetime and cached source link."""
+        values = []
+        for index, _leaf in enumerate(leaves_of(node.type)):
+            value = SSAValue(node, index)
+            alias = ctx.current.sources["narrow"][value]
+            root = ctx.by_value.get(alias.target)
+            if root is None:
+                values.append(None)
+                continue
+            lifetime = replace(
+                ctx.liveness.interval_of(value),
+                memory_level=root.lifetime.memory_level,
+                bytes=root.lifetime.bytes,
+            )
+            values.append(self.add_value(lifetime, ctx, (alias,)))
+        return storage_like(node.type, iter(values)) if any(values) else None
 
     def add_value(
-        self, node: Expr, index: int, lifetime: ValueLifetime, ctx: AllocationModel
+        self, lifetime: ValueLifetime, ctx: AllocationModel, aliases: tuple[BufferAlias, ...] = ()
     ) -> AllocationValue:
         """Register one result and, at addressable levels, its address variable."""
-        result = AllocationValue(lifetime)
+        result = AllocationValue(lifetime, aliases)
         ctx.by_value[result.value] = result
         ctx.values.append(result)
         return result
@@ -797,7 +784,7 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
                 bytes=amount,
                 persistent=value in ctx.persistent,
             )
-            result = self.add_value(node, index, lifetime, ctx)
+            result = self.add_value(lifetime, ctx)
             ctx.material.add(result)
             slots.append(result)
         if not slots:
@@ -807,21 +794,21 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
     def visit_Var(self, node: Var, ctx: AllocationModel) -> Storage:
         source = ctx.capture_root(node)
         if source is not node:
-            return self.same_storage(node, self.visit(source, ctx), ctx)
+            return self.forward(node, ctx)
         return self.allocate(node, ctx)
 
     def visit_leaf_Tuple(
         self, node: Tuple, operands: tuple[Storage, ...], ctx: AllocationModel
     ) -> Storage:
-        return self.same_storage(node, operands, ctx)
+        return self.forward(node, ctx)
 
     def visit_MeshRegion(self, node: MeshRegion, ctx: AllocationModel) -> Storage:
         self.visit_operands_outside(node, ctx)
         inner = self.region_context(node, ctx)
         for parameter in node.params:
             self.visit(parameter, inner)
-        storage = self.visit(node.body, inner)
-        return self.same_storage(node, storage, ctx)
+        self.visit(node.body, inner)
+        return self.forward(node, ctx)
 
     def visit_LoopRegion(self, node: LoopRegion, ctx: AllocationModel) -> Storage:
         initials = tuple(self.visit(argument, ctx) for argument in node.args)
@@ -835,13 +822,12 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
         for result, initial in zip(carried, initials, strict=False):
             for value, operand in zip(leaves(result), leaves(initial), strict=True):
                 add_alias(value, operand, AliasKind.CARRY_INIT)
-        body = self.visit(node.body, inner)
+        self.visit(node.body, inner)
         for yielded, phi in zip(node.yield_values, carried, strict=True):
             for value, operand in zip(leaves(self.visit(yielded, inner)), leaves(phi), strict=True):
                 add_alias(value, operand, AliasKind.CARRY_YIELD)
                 ctx.carry_loops[value, operand] = node
-        storage = carried[0] if len(carried) == 1 else carried if carried else body
-        return self.same_storage(node, storage, ctx)
+        return self.forward(node, ctx)
 
     def visit_Call(self, node: Call, ctx: AllocationModel) -> Storage:
         context = ctx
@@ -919,23 +905,7 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
             return None
         source = ctx.current.sources["narrow"].get(SSAValue(node))
         if source is not None and source.target != SSAValue(node):
-            values = []
-            for index, _leaf in enumerate(leaves_of(node.type)):
-                value = SSAValue(node, index)
-                alias = ctx.current.sources["narrow"][value]
-                target = ctx.by_value.get(alias.target)
-                if target is None:
-                    values.append(None)
-                    continue
-                lifetime = replace(
-                    ctx.liveness.interval_of(value),
-                    memory_level=target.lifetime.memory_level,
-                    bytes=target.lifetime.bytes,
-                )
-                result = self.add_value(node, index, lifetime, ctx)
-                result.aliases = (alias,)
-                values.append(result)
-            return storage_like(node.type, iter(values)) if any(values) else None
+            return self.forward(node, ctx)
         result = self.allocate(node, ctx)
         if not isinstance(node, Call) or not isinstance(result, AllocationValue):
             return result
