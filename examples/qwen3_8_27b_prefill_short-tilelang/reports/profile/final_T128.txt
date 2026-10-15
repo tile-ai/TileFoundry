@@ -1,0 +1,20 @@
+T=128 total kernel time 19.543 ms over 838 kernels
+     7.926 ms  40.6%  x  64  gemm_swiglu2_128x17408x5120_128x96x64_s4_t256_sw0_kernel
+     3.512 ms  18.0%  x  64  gemm_splitk_128x5120x17408_128x128x64_s6_t256_sw0_sk2_kernel
+     2.279 ms  11.7%  x  48  gemm_store_128x16640x5120_128x128x64_s6_t256_sw0_kernel
+     1.654 ms   8.5%  x  64  gemm_splitk_128x5120x6144_128x128x64_s6_t256_sw0_sk2_kernel
+     0.674 ms   3.4%  x  16  gemm_store_128x14336x5120_128x128x64_s6_t256_sw0_kernel
+     0.566 ms   2.9%  x   1  gemv_248320x5120_kernel
+     0.555 ms   2.8%  x 128  rmsnorm_128x5120_kernel
+     0.537 ms   2.7%  x  48  gdn_chunk_kernel
+     0.458 ms   2.3%  x  48  gdn_scan_plain_kernel
+     0.396 ms   2.0%  x 128  splitk_reduce_128x5120_s2_res_kernel
+     0.324 ms   1.7%  x  48  ba_splitk_128x96x5120_s8_kernel
+     0.247 ms   1.3%  x  48  gdn_prep_kernel
+     0.178 ms   0.9%  x  48  gdn_gated_norm_kernel
+     0.106 ms   0.5%  x  16  attn_core_kernel
+     0.067 ms   0.3%  x  48  ba_reduce_128_s8_kernel
+     0.052 ms   0.3%  x  16  attn_prep_kernel
+     0.005 ms   0.0%  x   1  rmsnorm_1x5120_kernel
+     0.004 ms   0.0%  x   3  Memcpy DtoD 
+     0.003 ms   0.0%  x   1  embed_128_kernel

@@ -1,0 +1,101 @@
+[
+ {
+  "T": 128,
+  "name": "o_proj",
+  "cfg": "ws128x80x64_s6_sk2_csk_pk_io",
+  "epilogue": "residual",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ },
+ {
+  "T": 128,
+  "name": "down",
+  "cfg": "ws128x80x64_s6_sk2_csk_pk_io",
+  "epilogue": "residual",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ },
+ {
+  "T": 256,
+  "name": "gate_up",
+  "cfg": "ws128x144x64_s4_am_pk",
+  "epilogue": "swiglu2",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ },
+ {
+  "T": 512,
+  "name": "gdn_in",
+  "cfg": "ws128x256x64_s3_p132",
+  "epilogue": "store",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ },
+ {
+  "T": 512,
+  "name": "gate_up",
+  "cfg": "ws128x176x64_s3_p132_pk",
+  "epilogue": "swiglu2",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ },
+ {
+  "T": 512,
+  "name": "o_proj",
+  "cfg": "ws128x160x64_s4_pk_io",
+  "epilogue": "residual",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ },
+ {
+  "T": 1024,
+  "name": "gdn_in",
+  "cfg": "ws128x256x64_s3_p132",
+  "epilogue": "store",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ },
+ {
+  "T": 1024,
+  "name": "att_in",
+  "cfg": "ws128x224x64_s3_p132",
+  "epilogue": "store",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ },
+ {
+  "T": 1024,
+  "name": "gate_up",
+  "cfg": "ws128x176x64_s3_p132_pk",
+  "epilogue": "swiglu2",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ },
+ {
+  "T": 1024,
+  "name": "o_proj",
+  "cfg": "ws128x160x64_s4_p132_pk",
+  "epilogue": "residual",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ },
+ {
+  "T": 1024,
+  "name": "down",
+  "cfg": "ws128x160x64_s4_p132_pk",
+  "epilogue": "residual",
+  "bitwise_all": true,
+  "cases": 9,
+  "maxabs_if_diff": 0.0
+ }
+]

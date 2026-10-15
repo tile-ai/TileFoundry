@@ -1,0 +1,7037 @@
+{
+ "stamp": "20261015-065039",
+ "gpu_physical_index": 1,
+ "args": {
+  "gpu": 1,
+  "lengths": [
+   128,
+   256,
+   512,
+   1024
+  ],
+  "rounds": 6,
+  "warmup": 3,
+  "iters": 10,
+  "mem_fraction": 0.45
+ },
+ "rows": {
+  "128": {
+   "sglang": {
+    "median_ms": 36.84495,
+    "min_ms": 36.4748,
+    "max_ms": 41.5804,
+    "n": 60,
+    "sm_clock_min": 1500,
+    "sm_clock_max": 1500,
+    "first_tokens": [
+     552
+    ]
+   },
+   "mine": {
+    "median_ms": 19.56782341003418,
+    "min_ms": 19.428831100463867,
+    "max_ms": 19.645503997802734,
+    "n": 60,
+    "sm_clock_min": 1500,
+    "sm_clock_max": 1500,
+    "first_tokens": [
+     552
+    ]
+   },
+   "reference_first_token": 552
+  },
+  "256": {
+   "sglang": {
+    "median_ms": 37.160650000000004,
+    "min_ms": 36.7303,
+    "max_ms": 39.2701,
+    "n": 60,
+    "sm_clock_min": 1500,
+    "sm_clock_max": 1500,
+    "first_tokens": [
+     65
+    ]
+   },
+   "mine": {
+    "median_ms": 26.36569595336914,
+    "min_ms": 26.119903564453125,
+    "max_ms": 26.496639251708984,
+    "n": 60,
+    "sm_clock_min": 1500,
+    "sm_clock_max": 1500,
+    "first_tokens": [
+     65
+    ]
+   },
+   "reference_first_token": 65
+  },
+  "512": {
+   "sglang": {
+    "median_ms": 48.53874999999999,
+    "min_ms": 48.4601,
+    "max_ms": 48.8168,
+    "n": 60,
+    "sm_clock_min": 1500,
+    "sm_clock_max": 1500,
+    "first_tokens": [
+     6816
+    ]
+   },
+   "mine": {
+    "median_ms": 44.023807525634766,
+    "min_ms": 43.71897506713867,
+    "max_ms": 44.25337600708008,
+    "n": 60,
+    "sm_clock_min": 1500,
+    "sm_clock_max": 1500,
+    "first_tokens": [
+     6816
+    ]
+   },
+   "reference_first_token": 6816
+  },
+  "1024": {
+   "sglang": {
+    "median_ms": 85.41125,
+    "min_ms": 84.9139,
+    "max_ms": 93.977,
+    "n": 60,
+    "sm_clock_min": 1290,
+    "sm_clock_max": 1500,
+    "first_tokens": [
+     735
+    ]
+   },
+   "mine": {
+    "median_ms": 82.65544128417969,
+    "min_ms": 82.09542083740234,
+    "max_ms": 83.076416015625,
+    "n": 60,
+    "sm_clock_min": 1485,
+    "sm_clock_max": 1500,
+    "first_tokens": [
+     735
+    ]
+   },
+   "reference_first_token": 735
+  }
+ },
+ "calls": [
+  {
+   "T": 128,
+   "round": 0,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 67544 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 518 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 36.7611,
+   "min_ms": 36.5284,
+   "max_ms": 37.849,
+   "times_ms": [
+    36.5292,
+    36.833,
+    36.6271,
+    37.849,
+    36.5284,
+    36.8041,
+    36.8496,
+    36.7181,
+    37.0106,
+    36.6951
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     128
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 128,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 552,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 128,
+   "round": 0,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 518 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 19.549824714660645,
+   "min_ms": 19.465120315551758,
+   "max_ms": 19.625471115112305,
+   "times_ms": [
+    19.465120315551758,
+    19.49123191833496,
+    19.495616912841797,
+    19.49907112121582,
+    19.595775604248047,
+    19.548032760620117,
+    19.551616668701172,
+    19.580543518066406,
+    19.60041618347168,
+    19.625471115112305
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": false,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 128,
+   "round": 1,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 19.583231925964355,
+   "min_ms": 19.479103088378906,
+   "max_ms": 19.63609504699707,
+   "times_ms": [
+    19.511775970458984,
+    19.479103088378906,
+    19.507680892944336,
+    19.590208053588867,
+    19.59993553161621,
+    19.55411148071289,
+    19.63609504699707,
+    19.576255798339844,
+    19.626623153686523,
+    19.608800888061523
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 128,
+   "round": 1,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 36.6733,
+   "min_ms": 36.4877,
+   "max_ms": 38.0427,
+   "times_ms": [
+    38.0427,
+    36.6133,
+    36.8214,
+    36.6364,
+    36.7102,
+    36.6065,
+    36.8951,
+    36.7145,
+    36.5252,
+    36.4877
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     128
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 128,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 552,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 128,
+   "round": 2,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 36.713,
+   "min_ms": 36.4748,
+   "max_ms": 38.0071,
+   "times_ms": [
+    36.5589,
+    36.6109,
+    38.0071,
+    36.5053,
+    36.8636,
+    36.7694,
+    36.7168,
+    36.7092,
+    36.4748,
+    36.7428
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     128
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 128,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      1,
+      2,
+      3,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 552,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 128,
+   "round": 2,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 19.57383918762207,
+   "min_ms": 19.487680435180664,
+   "max_ms": 19.645503997802734,
+   "times_ms": [
+    19.487680435180664,
+    19.51299285888672,
+    19.578655242919922,
+    19.620576858520508,
+    19.552064895629883,
+    19.551584243774414,
+    19.592512130737305,
+    19.645503997802734,
+    19.631168365478516,
+    19.56902313232422
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 128,
+   "round": 3,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 19.575056076049805,
+   "min_ms": 19.46553611755371,
+   "max_ms": 19.626752853393555,
+   "times_ms": [
+    19.46553611755371,
+    19.504352569580078,
+    19.5467529296875,
+    19.565216064453125,
+    19.584896087646484,
+    19.597759246826172,
+    19.617055892944336,
+    19.626752853393555,
+    19.58684730529785,
+    19.547487258911133
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 128,
+   "round": 3,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 37.113,
+   "min_ms": 36.9395,
+   "max_ms": 41.5804,
+   "times_ms": [
+    36.9876,
+    38.4758,
+    37.5605,
+    37.1138,
+    38.4534,
+    37.0092,
+    37.1123,
+    36.9395,
+    41.5804,
+    36.9957
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     128
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 128,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 552,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 128,
+   "round": 4,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 36.9398,
+   "min_ms": 36.6393,
+   "max_ms": 41.1961,
+   "times_ms": [
+    36.9802,
+    36.6393,
+    36.8073,
+    36.8862,
+    36.7369,
+    38.786,
+    37.7348,
+    36.8995,
+    37.1165,
+    41.1961
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     128
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 128,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 552,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 128,
+   "round": 4,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 19.56886386871338,
+   "min_ms": 19.470943450927734,
+   "max_ms": 19.638399124145508,
+   "times_ms": [
+    19.470943450927734,
+    19.50934410095215,
+    19.561216354370117,
+    19.638399124145508,
+    19.61734390258789,
+    19.56595230102539,
+    19.573631286621094,
+    19.61609649658203,
+    19.571775436401367,
+    19.549440383911133
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 128,
+   "round": 5,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 19.55940818786621,
+   "min_ms": 19.428831100463867,
+   "max_ms": 19.62403106689453,
+   "times_ms": [
+    19.428831100463867,
+    19.52956771850586,
+    19.466720581054688,
+    19.4467830657959,
+    19.56662368774414,
+    19.582624435424805,
+    19.55219268798828,
+    19.62403106689453,
+    19.58336067199707,
+    19.610815048217773
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 128,
+   "round": 5,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 36.8991,
+   "min_ms": 36.7436,
+   "max_ms": 37.2491,
+   "times_ms": [
+    36.7801,
+    37.2491,
+    36.8403,
+    36.7436,
+    36.8996,
+    36.8986,
+    36.9046,
+    37.0234,
+    36.9033,
+    36.8385
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552,
+    552
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     128
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 128,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 552,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 256,
+   "round": 0,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68272 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 37.1587,
+   "min_ms": 37.0798,
+   "max_ms": 38.3967,
+   "times_ms": [
+    37.4519,
+    37.1609,
+    37.0798,
+    38.3967,
+    37.1564,
+    37.1487,
+    37.9068,
+    37.1449,
+    37.1172,
+    38.0244
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     256
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 256,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 65,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 256,
+   "round": 0,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 62766 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 26.326383590698242,
+   "min_ms": 26.119903564453125,
+   "max_ms": 26.479583740234375,
+   "times_ms": [
+    26.119903564453125,
+    26.252639770507812,
+    26.27881622314453,
+    26.297439575195312,
+    26.41708755493164,
+    26.373760223388672,
+    26.296159744262695,
+    26.3907527923584,
+    26.479583740234375,
+    26.355327606201172
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": false,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 256,
+   "round": 1,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 26.365488052368164,
+   "min_ms": 26.211488723754883,
+   "max_ms": 26.45929527282715,
+   "times_ms": [
+    26.211488723754883,
+    26.45929527282715,
+    26.224544525146484,
+    26.33612823486328,
+    26.28246307373047,
+    26.409887313842773,
+    26.433183670043945,
+    26.306528091430664,
+    26.397600173950195,
+    26.394847869873047
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 256,
+   "round": 1,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 37.5426,
+   "min_ms": 36.9761,
+   "max_ms": 39.2701,
+   "times_ms": [
+    37.3814,
+    39.2701,
+    37.2506,
+    37.3196,
+    38.5692,
+    37.9052,
+    37.7038,
+    36.9761,
+    37.2588,
+    38.2158
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     256
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 256,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 65,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 256,
+   "round": 2,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 37.1987,
+   "min_ms": 36.8584,
+   "max_ms": 38.369,
+   "times_ms": [
+    37.1104,
+    37.5647,
+    37.2343,
+    36.9853,
+    38.369,
+    37.5409,
+    37.0394,
+    37.4642,
+    37.1631,
+    36.8584
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     256
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 256,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      33,
+      34,
+      35,
+      36
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 65,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 256,
+   "round": 2,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 26.385967254638672,
+   "min_ms": 26.2238712310791,
+   "max_ms": 26.496639251708984,
+   "times_ms": [
+    26.2238712310791,
+    26.26691246032715,
+    26.23593521118164,
+    26.496639251708984,
+    26.46326446533203,
+    26.3832950592041,
+    26.42937660217285,
+    26.394432067871094,
+    26.302688598632812,
+    26.388639450073242
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 256,
+   "round": 3,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 26.375840187072754,
+   "min_ms": 26.2010555267334,
+   "max_ms": 26.484159469604492,
+   "times_ms": [
+    26.226335525512695,
+    26.2010555267334,
+    26.292415618896484,
+    26.396799087524414,
+    26.334688186645508,
+    26.448415756225586,
+    26.364896774291992,
+    26.469696044921875,
+    26.386783599853516,
+    26.484159469604492
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 256,
+   "round": 3,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 37.2193,
+   "min_ms": 36.9999,
+   "max_ms": 38.3635,
+   "times_ms": [
+    37.198,
+    37.2407,
+    37.4519,
+    37.1604,
+    36.9999,
+    37.2631,
+    37.3459,
+    37.1229,
+    38.3635,
+    37.1429
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     256
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 256,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 65,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 256,
+   "round": 4,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 36.9143,
+   "min_ms": 36.7303,
+   "max_ms": 38.3684,
+   "times_ms": [
+    37.0797,
+    36.793,
+    36.9313,
+    36.7303,
+    36.9515,
+    36.8267,
+    36.8436,
+    37.0321,
+    36.8972,
+    38.3684
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     256
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 256,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 65,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 256,
+   "round": 4,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 26.35217571258545,
+   "min_ms": 26.284320831298828,
+   "max_ms": 26.459999084472656,
+   "times_ms": [
+    26.334495544433594,
+    26.284320831298828,
+    26.369855880737305,
+    26.305952072143555,
+    26.306751251220703,
+    26.387584686279297,
+    26.45756721496582,
+    26.459999084472656,
+    26.310720443725586,
+    26.379871368408203
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 256,
+   "round": 5,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 26.34177589416504,
+   "min_ms": 26.236480712890625,
+   "max_ms": 26.443296432495117,
+   "times_ms": [
+    26.236480712890625,
+    26.36649513244629,
+    26.310239791870117,
+    26.386432647705078,
+    26.400672912597656,
+    26.31705665588379,
+    26.443296432495117,
+    26.302560806274414,
+    26.411327362060547,
+    26.316640853881836
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 256,
+   "round": 5,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 37.0645,
+   "min_ms": 36.7476,
+   "max_ms": 38.4699,
+   "times_ms": [
+    37.2051,
+    37.0603,
+    37.2105,
+    37.0688,
+    37.0495,
+    37.1444,
+    38.4699,
+    36.9806,
+    36.903,
+    36.7476
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65,
+    65
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     256
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 256,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      36
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 65,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 512,
+   "round": 0,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68276 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "18, 1500"
+   },
+   "median_ms": 48.5537,
+   "min_ms": 48.5066,
+   "max_ms": 48.8168,
+   "times_ms": [
+    48.5604,
+    48.5066,
+    48.5337,
+    48.5286,
+    48.5621,
+    48.5754,
+    48.5859,
+    48.538,
+    48.8168,
+    48.547
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     512
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 512,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 6816,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 512,
+   "round": 0,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63024 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 44.034576416015625,
+   "min_ms": 43.736671447753906,
+   "max_ms": 44.1995849609375,
+   "times_ms": [
+    43.736671447753906,
+    44.1778564453125,
+    44.1995849609375,
+    44.1407356262207,
+    43.97724914550781,
+    44.02284622192383,
+    44.023040771484375,
+    43.943233489990234,
+    44.046112060546875,
+    44.0524787902832
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": false,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 512,
+   "round": 1,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 44.01568031311035,
+   "min_ms": 43.84944152832031,
+   "max_ms": 44.18793487548828,
+   "times_ms": [
+    43.936702728271484,
+    43.99177551269531,
+    44.18793487548828,
+    44.12227249145508,
+    43.921695709228516,
+    44.05152130126953,
+    43.84944152832031,
+    44.04220962524414,
+    44.03958511352539,
+    43.91686248779297
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 512,
+   "round": 1,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 48.5264,
+   "min_ms": 48.4766,
+   "max_ms": 48.5644,
+   "times_ms": [
+    48.5183,
+    48.4766,
+    48.5475,
+    48.5036,
+    48.5112,
+    48.5351,
+    48.5421,
+    48.5346,
+    48.5644,
+    48.4905
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     512
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 512,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      1,
+      2,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 6816,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 512,
+   "round": 2,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 48.5378,
+   "min_ms": 48.5225,
+   "max_ms": 48.5589,
+   "times_ms": [
+    48.5225,
+    48.5468,
+    48.5582,
+    48.5589,
+    48.5484,
+    48.527,
+    48.5395,
+    48.5334,
+    48.5361,
+    48.5243
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     512
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 512,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 6816,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 512,
+   "round": 2,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 43.994014739990234,
+   "min_ms": 43.76982498168945,
+   "max_ms": 44.07177734375,
+   "times_ms": [
+    44.01155090332031,
+    44.07177734375,
+    43.88399887084961,
+    43.99516677856445,
+    43.76982498168945,
+    43.992862701416016,
+    44.03587341308594,
+    43.919166564941406,
+    44.01491165161133,
+    43.86396789550781
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 512,
+   "round": 3,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 44.03664016723633,
+   "min_ms": 43.87980651855469,
+   "max_ms": 44.21692657470703,
+   "times_ms": [
+    43.87980651855469,
+    44.00467300415039,
+    43.95552062988281,
+    44.17504119873047,
+    44.04787063598633,
+    43.96364974975586,
+    44.03785705566406,
+    44.035423278808594,
+    44.21692657470703,
+    44.040897369384766
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 512,
+   "round": 3,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 48.5372,
+   "min_ms": 48.4958,
+   "max_ms": 48.5753,
+   "times_ms": [
+    48.5236,
+    48.5753,
+    48.5462,
+    48.5551,
+    48.5154,
+    48.5499,
+    48.524,
+    48.5324,
+    48.5419,
+    48.4958
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     512
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 512,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 6816,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 512,
+   "round": 4,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 48.5708,
+   "min_ms": 48.4957,
+   "max_ms": 48.7743,
+   "times_ms": [
+    48.4957,
+    48.7743,
+    48.6948,
+    48.7487,
+    48.5532,
+    48.5753,
+    48.5937,
+    48.5434,
+    48.5662,
+    48.5178
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     512
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 512,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 6816,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 512,
+   "round": 4,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 44.03331184387207,
+   "min_ms": 43.71897506713867,
+   "max_ms": 44.25337600708008,
+   "times_ms": [
+    43.71897506713867,
+    43.88764953613281,
+    44.024574279785156,
+    44.13385772705078,
+    43.75030517578125,
+    44.042049407958984,
+    44.25337600708008,
+    43.931583404541016,
+    44.05775833129883,
+    44.07215881347656
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 512,
+   "round": 5,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 44.06096076965332,
+   "min_ms": 43.76492691040039,
+   "max_ms": 44.22499084472656,
+   "times_ms": [
+    43.76492691040039,
+    44.19152069091797,
+    44.13545608520508,
+    43.8900146484375,
+    44.1962890625,
+    44.08000183105469,
+    43.88959884643555,
+    44.04191970825195,
+    43.92854309082031,
+    44.22499084472656
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 512,
+   "round": 5,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 48.5221,
+   "min_ms": 48.4601,
+   "max_ms": 48.565,
+   "times_ms": [
+    48.5234,
+    48.565,
+    48.5633,
+    48.4601,
+    48.5546,
+    48.5279,
+    48.4934,
+    48.5208,
+    48.482,
+    48.5179
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1500,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816,
+    6816
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     512
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 512,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 6816,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 1024,
+   "round": 0,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68284 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 85.074,
+   "min_ms": 84.9139,
+   "max_ms": 90.8882,
+   "times_ms": [
+    84.9139,
+    85.0657,
+    85.0163,
+    85.0822,
+    85.0464,
+    85.05,
+    89.1307,
+    90.8882,
+    87.6706,
+    85.151
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1485,
+     1425,
+     1470,
+     1500
+    ],
+    "per_iter_min": 1425,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     1024
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 1024,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 735,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 1024,
+   "round": 0,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63350 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 82.67196655273438,
+   "min_ms": 82.29344177246094,
+   "max_ms": 83.03580474853516,
+   "times_ms": [
+    82.29344177246094,
+    82.6520004272461,
+    82.6728286743164,
+    82.7109146118164,
+    82.69878387451172,
+    82.65190124511719,
+    82.68793487548828,
+    83.03580474853516,
+    82.67110443115234,
+    82.57164764404297
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": false,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 1024,
+   "round": 1,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63904 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 82.65873718261719,
+   "min_ms": 82.4863052368164,
+   "max_ms": 83.076416015625,
+   "times_ms": [
+    82.59149169921875,
+    82.65129852294922,
+    82.9228515625,
+    82.66617584228516,
+    82.60086059570312,
+    83.0040283203125,
+    82.4863052368164,
+    82.61555480957031,
+    83.076416015625,
+    82.69692993164062
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 1024,
+   "round": 1,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63904 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 85.2997,
+   "min_ms": 84.9569,
+   "max_ms": 93.977,
+   "times_ms": [
+    85.0153,
+    84.9569,
+    85.2551,
+    84.9573,
+    85.3443,
+    85.1981,
+    87.2094,
+    93.977,
+    86.4915,
+    85.8597
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1485,
+     1500,
+     1500,
+     1500,
+     1500,
+     1290,
+     1440,
+     1500
+    ],
+    "per_iter_min": 1290,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     1024
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 1024,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      32,
+      33,
+      34,
+      35,
+      36
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 735,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 1024,
+   "round": 2,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63904 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 85.5182,
+   "min_ms": 85.115,
+   "max_ms": 87.9562,
+   "times_ms": [
+    85.4183,
+    85.32,
+    85.6182,
+    85.1382,
+    85.1648,
+    85.115,
+    87.081,
+    87.2972,
+    87.9562,
+    86.4036
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1485,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1485,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1455,
+     1440,
+     1485
+    ],
+    "per_iter_min": 1440,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     1024
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 1024,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 735,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 1024,
+   "round": 2,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63904 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 82.76082992553711,
+   "min_ms": 82.50201416015625,
+   "max_ms": 82.9665298461914,
+   "times_ms": [
+    82.50201416015625,
+    82.63091278076172,
+    82.89820861816406,
+    82.87913513183594,
+    82.61654663085938,
+    82.96015930175781,
+    82.64252471923828,
+    82.95951843261719,
+    82.62620544433594,
+    82.9665298461914
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 1024,
+   "round": 3,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63904 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 82.64662551879883,
+   "min_ms": 82.10745239257812,
+   "max_ms": 82.91212463378906,
+   "times_ms": [
+    82.10745239257812,
+    82.88079833984375,
+    82.60313415527344,
+    82.91212463378906,
+    82.68962860107422,
+    82.62486267089844,
+    82.84400177001953,
+    82.65229034423828,
+    82.64096069335938,
+    82.54249572753906
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 1024,
+   "round": 3,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63904 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 85.7922,
+   "min_ms": 84.9795,
+   "max_ms": 91.0192,
+   "times_ms": [
+    84.9795,
+    85.2436,
+    85.9593,
+    85.2354,
+    85.6252,
+    85.3151,
+    90.1872,
+    91.0192,
+    86.5393,
+    85.9956
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1470,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1320,
+     1410,
+     1410,
+     1470
+    ],
+    "per_iter_min": 1320,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     1024
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 1024,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 735,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 1024,
+   "round": 4,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63904 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 85.4716,
+   "min_ms": 85.0762,
+   "max_ms": 88.0246,
+   "times_ms": [
+    85.164,
+    85.2639,
+    85.0762,
+    85.3829,
+    85.1913,
+    85.5603,
+    86.2825,
+    88.0246,
+    87.192,
+    86.4952
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1485,
+     1485,
+     1500,
+     1500,
+     1485,
+     1500,
+     1500,
+     1500,
+     1500
+    ],
+    "per_iter_min": 1485,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     1024
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 1024,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      35,
+      36
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 735,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  },
+  {
+   "T": 1024,
+   "round": 4,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63904 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 82.6661605834961,
+   "min_ms": 82.09542083740234,
+   "max_ms": 82.97042846679688,
+   "times_ms": [
+    82.09542083740234,
+    82.59855651855469,
+    82.9664306640625,
+    82.6737289428711,
+    82.97042846679688,
+    82.6585922241211,
+    82.86396789550781,
+    82.63446044921875,
+    82.92189025878906,
+    82.61033630371094
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1485,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 1024,
+   "round": 5,
+   "worker": "mine",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63904 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 82.6322250366211,
+   "min_ms": 82.5265884399414,
+   "max_ms": 83.00745391845703,
+   "times_ms": [
+    82.80156707763672,
+    82.59331512451172,
+    82.5830078125,
+    82.98019409179688,
+    82.6209945678711,
+    83.00745391845703,
+    82.6434555053711,
+    82.5265884399414,
+    82.86463928222656,
+    82.53878021240234
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1500,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500
+    ]
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "per_iter": [
+     {
+      "iter": 0,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 1,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 2,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 3,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 4,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 5,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 6,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 7,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 8,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 9,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 10,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 11,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     },
+     {
+      "iter": 12,
+      "poisoned_before": true,
+      "finite_after": true,
+      "bitwise_equal_to_first": true,
+      "argmax_equal": true
+     }
+    ],
+    "all_passed": true,
+    "method": "NaN-poison all engine buffers before; finite + bitwise-equal outputs after"
+   }
+  },
+  {
+   "T": 1024,
+   "round": 5,
+   "worker": "sglang",
+   "env_before": {
+    "apps": [
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206302, 68428 MiB",
+     "GPU-3a3112ff-837c-3b87-38d1-cb203d656589, 3206303, 63904 MiB"
+    ],
+    "util_clock": "0, 1500"
+   },
+   "median_ms": 85.4306,
+   "min_ms": 85.1901,
+   "max_ms": 92.6851,
+   "times_ms": [
+    85.4498,
+    85.1901,
+    85.2582,
+    85.3166,
+    85.4115,
+    85.411,
+    87.4791,
+    92.6851,
+    88.0799,
+    86.0385
+   ],
+   "sm_clock_mhz": {
+    "before": 1500,
+    "after": 1455,
+    "max": 1980,
+    "per_iter_after_forward": [
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1500,
+     1425,
+     1380,
+     1470,
+     1455
+    ],
+    "per_iter_min": 1380,
+    "per_iter_max": 1500
+   },
+   "argmax": [
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735,
+    735
+   ],
+   "recompute_asserts": {
+    "all_passed": true,
+    "iterations_checked": 13,
+    "fresh_request_and_batch_each_iteration": true,
+    "radix_cache_disabled": true,
+    "tree_cache": "sglang.benchmark.one_batch.TreeCacheNamespace (no prefix matching)",
+    "mrope_positions_checked": true,
+    "forward_mode": "EXTEND",
+    "extend_prefix_lens": [
+     0
+    ],
+    "extend_seq_lens": [
+     1024
+    ],
+    "positions_eq_arange_T": true,
+    "input_ids_eq_given_token_ids": true,
+    "kv_poison": {
+     "full_attention_layers": 16,
+     "slots_per_layer": 1024,
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true
+    },
+    "gdn_state_poison": {
+     "linear_layers": 48,
+     "ssm_state_shape_per_layer": [
+      48,
+      128,
+      128
+     ],
+     "conv_state_shape_per_layer": [
+      [
+       10240,
+       3
+      ]
+     ],
+     "nan_before_forward": true,
+     "nan_left_after_forward": 0,
+     "all_layers_nonzero_after_forward": true,
+     "ssm_max_abs_diff_vs_first_warmup": 0.0,
+     "conv_max_abs_diff_vs_first_warmup": 0.0,
+     "bitwise_equal_all_iters": true,
+     "mamba_slots_used": [
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24
+     ]
+    },
+    "kv_first_slot_values_seen": 13,
+    "logits_finite_all": true,
+    "argmax_equal_first_warmup_all": true,
+    "first_warmup_argmax": 735,
+    "state_rel_tol": 0.01,
+    "pool_free_counts_restored_each_iter": true,
+    "pool_free_counts": {
+     "kv_tokens": 99610,
+     "req_slots": 36,
+     "mamba_slots": 36
+    }
+   }
+  }
+ ],
+ "load": {
+  "sglang": {
+   "ok": true,
+   "cmd": "load",
+   "gpu_name": "NVIDIA H200",
+   "gpu": {
+    "physical_index": 1,
+    "uuid": "GPU-3a3112ff-837c-3b87-38d1-cb203d656589",
+    "pci_bus_id": "00000000:3B:00.0",
+    "cuda_visible_devices": "1",
+    "torch_device": "cuda:0"
+   },
+   "backends": {
+    "versions": {
+     "sglang": "0.5.21",
+     "torch": "2.13.0+cu130",
+     "flashinfer": "0.6.18"
+    },
+    "model_class": "Qwen3_5ForConditionalGeneration",
+    "attention_backend_arg": "fa3",
+    "attention_backend_class": "HybridLinearAttnBackend",
+    "full_attention_backend_class": "sglang.srt.layers.attention.flashattention_backend.FlashAttentionBackend",
+    "full_attention_fa_impl_ver": 3,
+    "prefill_attention_backend_str": "fa3",
+    "decode_attention_backend_str": "fa3",
+    "linear_attention_backend_class": "GDNAttnBackend",
+    "linear_attn_backend_arg": "triton",
+    "gdn_extend_kernel": "FlashInferGDNKernel",
+    "gdn_decode_kernel": "TritonGDNKernel",
+    "gdn_causal_conv1d_fn": "sglang.srt.layers.attention.mamba.causal_conv1d.causal_conv1d_fn",
+    "mamba_backend_arg": "triton",
+    "mamba_ssm_state_dtype": "torch.float32",
+    "kv_cache_dtype": "torch.bfloat16",
+    "linear_layer_method": "layers.0.mlp.gate_up_proj: UnquantizedLinearMethod",
+    "prefill_cuda_graph": {
+     "backend": "breakable",
+     "runner_class": "PrefillCudaGraphRunner",
+     "graph_backend_class": "BreakableCudaGraphBackend",
+     "capture_num_tokens": [
+      4,
+      8,
+      12,
+      16,
+      20,
+      24,
+      28,
+      32,
+      48,
+      64,
+      80,
+      96,
+      112,
+      128,
+      144,
+      160,
+      176,
+      192,
+      208,
+      224,
+      240,
+      256,
+      288,
+      320,
+      352,
+      384,
+      416,
+      448,
+      480,
+      512,
+      576,
+      640,
+      704,
+      768,
+      832,
+      896,
+      960,
+      1024,
+      1280,
+      1536,
+      1792,
+      2048,
+      2304,
+      2560,
+      2816,
+      3072,
+      3328,
+      3584,
+      3840,
+      4096,
+      4608,
+      5120,
+      5632,
+      6144,
+      6656,
+      7168,
+      7680,
+      8192
+     ],
+     "tc_compiler": "eager",
+     "note": "tc_compiler is only used by tc_piecewise; breakable does not use torch.compile"
+    },
+    "decode_cuda_graph": {
+     "backend": "full",
+     "bs": [
+      1
+     ],
+     "runner_class": "DecodeCudaGraphRunner",
+     "note": "decode is never run by this worker"
+    },
+    "enable_torch_compile": false,
+    "disable_radix_cache": true,
+    "page_size": 1,
+    "chunked_prefill_size": 8192,
+    "mem_fraction_static": 0.45
+   },
+   "load_s": 53.759,
+   "load_model_s": 45.75,
+   "server_args_argv": [
+    "--model-path",
+    "$QWEN38_CKPT",
+    "--tp-size",
+    "1",
+    "--disable-radix-cache",
+    "--mem-fraction-static",
+    "0.45"
+   ],
+   "memory": {
+    "torch_allocated_gib": 62.83,
+    "torch_reserved_gib": 64.6,
+    "max_total_num_tokens": 99610,
+    "req_pool_size": 36,
+    "mamba_pool_size": 36
+   },
+   "clock_after_load": {
+    "sm": 1500,
+    "sm_max": 1980,
+    "other_compute_procs": 0,
+    "util_gpu_pct": 0,
+    "temp_c": 32
+   }
+  },
+  "mine": {
+   "ok": true,
+   "gpu_name": "NVIDIA H200",
+   "gpu_physical_index": 1,
+   "load_s": 0.2652751668356359
+  }
+ }
+}

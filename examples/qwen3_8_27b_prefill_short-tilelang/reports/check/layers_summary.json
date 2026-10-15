@@ -1,0 +1,19 @@
+{
+ "note": "`tilefoundry check` run per (length, layer), teacher-forced with transformers' own layer input; bounds from check --help's rule (rel_l2 <= 0.009, cosine >= 0.99996, nan_inf). The per-layer transcripts are in the round archive.",
+ "groups": {
+  "hir_vs_hf_layers": {
+   "entries": 512,
+   "passed": 512,
+   "failed": 0,
+   "worst_rel_l2": 0.0016244734006528347,
+   "worst_cosine": 0.9999986290931702
+  },
+  "twin_vs_hir_layers": {
+   "entries": 512,
+   "passed": 512,
+   "failed": 0,
+   "worst_rel_l2": 0.002557392806936504,
+   "worst_cosine": 0.9999968409538269
+  }
+ }
+}

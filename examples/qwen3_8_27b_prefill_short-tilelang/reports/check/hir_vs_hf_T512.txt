@@ -1,0 +1,28 @@
+model.py:Qwen3_8_27B
+
+  seq_len=512
+  reference: reference/T512/expected.pt
+  inputs:    files:reference/T512/token_ids.pt,reference/T512/cos.pt,reference/T512/sin.pt; activations actual i64, bf16, bf16 (declared none); files token_ids.pt: 1 tensor(s) i64[512]; cos.pt: 1 tensor(s) bf16[512, 64]; sin.pt: 1 tensor(s) bf16[512, 64]
+
+  output[0]   bf16[1,248320]   ref_norm 1429.55
+    rel_l2(max=0.0717)                 rel_l2 0.00931246          PASS
+    cosine(min=0.9974)                 cosine 0.999958            PASS
+    nan_inf                            nan 0 inf 0                PASS
+  output[1]   bf16[16,512,4,256]   ref_norm 4349.24
+    rel_l2(max=0.0717)                 rel_l2 0.0194943           PASS
+    cosine(min=0.9974)                 cosine 0.99981             PASS
+    nan_inf                            nan 0 inf 0                PASS
+  output[2]   bf16[16,512,4,256]   ref_norm 5460.67
+    rel_l2(max=0.0717)                 rel_l2 0.0359572           PASS
+    cosine(min=0.9974)                 cosine 0.999354            PASS
+    nan_inf                            nan 0 inf 0                PASS
+  output[3]   bf16[48,10240,3]   ref_norm 1773.05
+    rel_l2(max=0.0717)                 rel_l2 0.0066118           PASS
+    cosine(min=0.9974)                 cosine 0.999978            PASS
+    nan_inf                            nan 0 inf 0                PASS
+  output[4]   f32[48,48,128,128]   ref_norm 391.403
+    rel_l2(max=0.0717)                 rel_l2 0.0050945           PASS
+    cosine(min=0.9974)                 cosine 0.999987            PASS
+    nan_inf                            nan 0 inf 0                PASS
+
+PASS

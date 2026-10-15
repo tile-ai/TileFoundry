@@ -1,0 +1,632 @@
+{
+ "method": "GPU1, SM clock locked 1500 MHz (reads 1.42-1.46 GHz under tensor load in ncu), CUDA-graph replay of 20 calls (runtime/benchutil.py), 5 interleaved rounds [today, new] with rotated order, median per kernel and median of per-round ratios (runtime/experiments/gemm_ws_sweep.py, reports/gemm_ws_final.jsonl). Today's kernels measured 2-6 % slower in this session than the brief's numbers (card state); compare ratios.",
+ "rule": "replace where final paired ratio <= 0.990",
+ "table": [
+  {
+   "linear": "gate_up",
+   "T": 128,
+   "today_us_brief": 93.2,
+   "today_us_same_run": 94.68,
+   "measured_new_us": 94.08,
+   "measured_ratio": 0.9957,
+   "measured_cfg": "WsConfig(BN=144, BK=128, stages=2, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=True, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    93.28,
+    93.55,
+    94.7,
+    94.59,
+    94.08
+   ],
+   "today_rounds": [
+    93.41,
+    93.95,
+    94.68,
+    96.42,
+    95.98
+   ],
+   "alternates": [],
+   "decision": "keep gemm_kernel (plan v3)",
+   "new_us": 94.68
+  },
+  {
+   "linear": "gate_up",
+   "T": 256,
+   "today_us_brief": 145.5,
+   "today_us_same_run": 152.95,
+   "measured_new_us": 146.45,
+   "measured_ratio": 0.9575,
+   "measured_cfg": "WsConfig(BN=144, BK=64, stages=4, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=True, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    143.22,
+    146.06,
+    147.23,
+    147.47,
+    146.45
+   ],
+   "today_rounds": [
+    144.74,
+    152.82,
+    153.35,
+    154.12,
+    152.95
+   ],
+   "alternates": [],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=144, BK=64, stages=4, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=True, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "swiglu2",
+   "new_us": 146.45,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  },
+  {
+   "linear": "gate_up",
+   "T": 512,
+   "today_us_brief": 257.4,
+   "today_us_same_run": 268.66,
+   "measured_new_us": 255.19,
+   "measured_ratio": 0.9498,
+   "measured_cfg": "WsConfig(BN=176, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    249.86,
+    257.38,
+    255.22,
+    254.85,
+    255.19
+   ],
+   "today_rounds": [
+    256.23,
+    271.54,
+    266.46,
+    269.0,
+    268.66
+   ],
+   "alternates": [],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=176, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "swiglu2",
+   "new_us": 255.19,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  },
+  {
+   "linear": "gate_up",
+   "T": 1024,
+   "today_us_brief": 511.6,
+   "today_us_same_run": 520.56,
+   "measured_new_us": 497.97,
+   "measured_ratio": 0.9559,
+   "measured_cfg": "WsConfig(BN=176, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    497.25,
+    497.58,
+    497.97,
+    542.07,
+    511.71
+   ],
+   "today_rounds": [
+    506.7,
+    520.56,
+    516.63,
+    642.08,
+    540.43
+   ],
+   "alternates": [],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=176, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "swiglu2",
+   "new_us": 497.97,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  },
+  {
+   "linear": "down",
+   "T": 128,
+   "today_us_brief": 55.1,
+   "today_us_same_run": 54.95,
+   "measured_new_us": 53.88,
+   "measured_ratio": 0.9805,
+   "measured_cfg": "WsConfig(BN=80, BK=64, stages=6, CL=1, mc='A', grid=0, wait1=False, split_k=2, direct=False, amerge=False, pdl=False, csk=True, pk=True, io=True, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    53.41,
+    53.32,
+    53.88,
+    54.66,
+    54.61
+   ],
+   "today_rounds": [
+    54.35,
+    54.92,
+    54.95,
+    55.22,
+    56.14
+   ],
+   "alternates": [],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=80, BK=64, stages=6, CL=1, mc='A', grid=0, wait1=False, split_k=2, direct=False, amerge=False, pdl=False, csk=True, pk=True, io=True, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "residual",
+   "new_us": 53.88,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  },
+  {
+   "linear": "down",
+   "T": 256,
+   "today_us_brief": 78.1,
+   "today_us_same_run": 78.25,
+   "measured_new_us": 78.34,
+   "measured_ratio": 0.9936,
+   "measured_cfg": "WsConfig(BN=160, BK=64, stages=4, CL=1, mc='A', grid=0, wait1=False, split_k=2, direct=True, amerge=False, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    77.59,
+    78.34,
+    77.73,
+    80.29,
+    81.02
+   ],
+   "today_rounds": [
+    77.56,
+    78.25,
+    78.23,
+    81.62,
+    81.63
+   ],
+   "alternates": [],
+   "decision": "keep gemm_kernel (plan v3)",
+   "new_us": 78.25
+  },
+  {
+   "linear": "down",
+   "T": 512,
+   "today_us_brief": 127,
+   "today_us_same_run": 134.58,
+   "measured_new_us": 134.15,
+   "measured_ratio": 0.9924,
+   "measured_cfg": "WsConfig(BN=160, BK=64, stages=4, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=True, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    125.22,
+    131.01,
+    134.98,
+    135.17,
+    134.15
+   ],
+   "today_rounds": [
+    126.79,
+    132.25,
+    134.58,
+    136.2,
+    134.71
+   ],
+   "alternates": [],
+   "decision": "keep gemm_kernel (plan v3)",
+   "new_us": 134.58
+  },
+  {
+   "linear": "down",
+   "T": 1024,
+   "today_us_brief": 249,
+   "today_us_same_run": 265.49,
+   "measured_new_us": 262.59,
+   "measured_ratio": 0.99,
+   "measured_cfg": "WsConfig(BN=160, BK=64, stages=4, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    257.24,
+    262.59,
+    262.84,
+    262.09,
+    265.56
+   ],
+   "today_rounds": [
+    250.5,
+    265.29,
+    265.49,
+    267.95,
+    268.21
+   ],
+   "alternates": [],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=160, BK=64, stages=4, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "residual",
+   "new_us": 262.59,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  },
+  {
+   "linear": "o_proj",
+   "T": 128,
+   "today_us_brief": 25.9,
+   "today_us_same_run": 25.74,
+   "measured_new_us": 24.14,
+   "measured_ratio": 0.9424,
+   "measured_cfg": "WsConfig(BN=80, BK=64, stages=6, CL=1, mc='A', grid=0, wait1=False, split_k=2, direct=False, amerge=False, pdl=False, csk=True, pk=True, io=True, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    24.1,
+    24.13,
+    24.38,
+    24.24,
+    24.14
+   ],
+   "today_rounds": [
+    25.24,
+    25.91,
+    25.87,
+    25.68,
+    25.74
+   ],
+   "alternates": [],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=80, BK=64, stages=6, CL=1, mc='A', grid=0, wait1=False, split_k=2, direct=False, amerge=False, pdl=False, csk=True, pk=True, io=True, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "residual",
+   "new_us": 24.14,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  },
+  {
+   "linear": "o_proj",
+   "T": 256,
+   "today_us_brief": 35.6,
+   "today_us_same_run": 35.48,
+   "measured_new_us": 35.71,
+   "measured_ratio": 1.0108,
+   "measured_cfg": "WsConfig(BN=80, BK=64, stages=6, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=True, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    35.71,
+    35.92,
+    35.71,
+    35.53,
+    35.49
+   ],
+   "today_rounds": [
+    35.52,
+    35.48,
+    35.5,
+    35.15,
+    35.03
+   ],
+   "alternates": [],
+   "decision": "keep gemm_kernel (plan v3)",
+   "new_us": 35.48
+  },
+  {
+   "linear": "o_proj",
+   "T": 512,
+   "today_us_brief": 51.0,
+   "today_us_same_run": 50.42,
+   "measured_new_us": 49.09,
+   "measured_ratio": 0.9728,
+   "measured_cfg": "WsConfig(BN=160, BK=64, stages=4, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=True, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    49.12,
+    49.24,
+    48.62,
+    49.09,
+    48.94
+   ],
+   "today_rounds": [
+    50.6,
+    50.13,
+    49.97,
+    50.42,
+    50.48
+   ],
+   "alternates": [],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=160, BK=64, stages=4, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=True, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "residual",
+   "new_us": 49.09,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  },
+  {
+   "linear": "o_proj",
+   "T": 1024,
+   "today_us_brief": 98.1,
+   "today_us_same_run": 99.27,
+   "measured_new_us": 96.66,
+   "measured_ratio": 0.9737,
+   "measured_cfg": "WsConfig(BN=160, BK=64, stages=4, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    95.1,
+    95.3,
+    97.16,
+    96.99,
+    96.66
+   ],
+   "today_rounds": [
+    97.49,
+    98.79,
+    99.5,
+    99.76,
+    99.27
+   ],
+   "alternates": [],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=160, BK=64, stages=4, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=True, io=False, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "residual",
+   "new_us": 96.66,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  },
+  {
+   "linear": "gdn_in",
+   "T": 128,
+   "today_us_brief": 46.6,
+   "today_us_same_run": 46.69,
+   "measured_new_us": 47.33,
+   "measured_ratio": 1.006,
+   "measured_cfg": "WsConfig(BN=128, BK=64, stages=6, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=True, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    46.8,
+    47.08,
+    47.33,
+    47.36,
+    47.66
+   ],
+   "today_rounds": [
+    46.6,
+    46.69,
+    46.63,
+    47.38,
+    47.37
+   ],
+   "alternates": [],
+   "decision": "keep gemm_kernel (plan v3)",
+   "new_us": 46.69
+  },
+  {
+   "linear": "gdn_in",
+   "T": 256,
+   "today_us_brief": 63.5,
+   "today_us_same_run": 67.08,
+   "measured_new_us": 66.69,
+   "measured_ratio": 0.9927,
+   "measured_cfg": "WsConfig(BN=256, BK=64, stages=4, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=True, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    63.13,
+    64.91,
+    66.7,
+    66.69,
+    67.29
+   ],
+   "today_rounds": [
+    63.59,
+    66.42,
+    67.19,
+    67.08,
+    68.08
+   ],
+   "alternates": [],
+   "decision": "keep gemm_kernel (plan v3)",
+   "new_us": 67.08
+  },
+  {
+   "linear": "gdn_in",
+   "T": 512,
+   "today_us_brief": 120.8,
+   "today_us_same_run": 125.77,
+   "measured_new_us": 122.35,
+   "measured_ratio": 0.9813,
+   "measured_cfg": "WsConfig(BN=256, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    119.4,
+    122.35,
+    124.6,
+    122.29,
+    123.78
+   ],
+   "today_rounds": [
+    121.69,
+    126.45,
+    126.39,
+    125.34,
+    125.77
+   ],
+   "alternates": [
+    {
+     "cfg": "WsConfig(BN=256, BK=64, stages=4, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=True, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+     "us": 125.35,
+     "ratio": 0.9967
+    }
+   ],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=256, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "store",
+   "new_us": 122.35,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  },
+  {
+   "linear": "gdn_in",
+   "T": 1024,
+   "today_us_brief": 240.8,
+   "today_us_same_run": 246.08,
+   "measured_new_us": 239.57,
+   "measured_ratio": 0.9739,
+   "measured_cfg": "WsConfig(BN=256, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    237.0,
+    239.57,
+    240.49,
+    239.45,
+    240.02
+   ],
+   "today_rounds": [
+    239.27,
+    246.08,
+    245.11,
+    246.31,
+    246.46
+   ],
+   "alternates": [],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=256, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "store",
+   "new_us": 239.57,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  },
+  {
+   "linear": "att_in",
+   "T": 128,
+   "today_us_brief": 41.9,
+   "today_us_same_run": 41.15,
+   "measured_new_us": 41.34,
+   "measured_ratio": 1.0062,
+   "measured_cfg": "WsConfig(BN=128, BK=64, stages=6, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=True, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    41.3,
+    41.59,
+    41.32,
+    41.34,
+    41.54
+   ],
+   "today_rounds": [
+    41.25,
+    41.23,
+    41.15,
+    41.08,
+    41.11
+   ],
+   "alternates": [],
+   "decision": "keep gemm_kernel (plan v3)",
+   "new_us": 41.15
+  },
+  {
+   "linear": "att_in",
+   "T": 256,
+   "today_us_brief": 56.6,
+   "today_us_same_run": 57.6,
+   "measured_new_us": 58.03,
+   "measured_ratio": 0.9924,
+   "measured_cfg": "WsConfig(BN=224, BK=64, stages=4, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=True, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    56.17,
+    56.75,
+    58.19,
+    58.03,
+    59.29
+   ],
+   "today_rounds": [
+    56.75,
+    57.6,
+    57.4,
+    58.47,
+    59.14
+   ],
+   "alternates": [],
+   "decision": "keep gemm_kernel (plan v3)",
+   "new_us": 57.6
+  },
+  {
+   "linear": "att_in",
+   "T": 512,
+   "today_us_brief": 107.4,
+   "today_us_same_run": 110.83,
+   "measured_new_us": 110.89,
+   "measured_ratio": 0.9923,
+   "measured_cfg": "WsConfig(BN=224, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    106.4,
+    109.82,
+    111.96,
+    111.49,
+    110.89
+   ],
+   "today_rounds": [
+    107.23,
+    110.83,
+    112.8,
+    112.4,
+    110.56
+   ],
+   "alternates": [
+    {
+     "cfg": "WsConfig(BN=224, BK=64, stages=4, CL=1, mc='A', grid=0, wait1=False, split_k=1, direct=False, amerge=True, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+     "us": 110.37,
+     "ratio": 0.994
+    }
+   ],
+   "decision": "keep gemm_kernel (plan v3)",
+   "new_us": 110.83
+  },
+  {
+   "linear": "att_in",
+   "T": 1024,
+   "today_us_brief": 211.7,
+   "today_us_same_run": 217.13,
+   "measured_new_us": 211.6,
+   "measured_ratio": 0.9747,
+   "measured_cfg": "WsConfig(BN=224, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "measured_bitwise": true,
+   "us_rounds": [
+    208.54,
+    210.88,
+    212.2,
+    211.6,
+    212.77
+   ],
+   "today_rounds": [
+    211.17,
+    217.13,
+    218.32,
+    217.09,
+    218.1
+   ],
+   "alternates": [],
+   "decision": "gemm_ws",
+   "ws_config": "WsConfig(BN=224, BK=64, stages=3, CL=1, mc='A', grid=132, wait1=False, split_k=1, direct=False, amerge=False, pdl=False, csk=False, pk=False, io=False, wbox=0, debug='', BM=128)",
+   "ws_epilogue": "store",
+   "new_us": 211.6,
+   "bitwise_9_cases": true,
+   "repeat_200_mismatches": 0
+  }
+ ],
+ "directions": {
+  "persistent_cooperative": "T=1024 ratios gdn_in 0.974, att_in 0.975, o_proj 0.974, down 0.990, gate_up 0.956 (with pk); T=512 gate_up 0.950, gdn_in 0.981, att_in 0.992; single-round grids (T<=256 store) no gain",
+  "packed_epilogue_pk": "gate_up T=1024 508.1 -> 496.4 us (F2F removed, 2 MUFU/element remain); ncu tensor pipe 95.0 % active, 98.4 % without epilogue (475.7 us)",
+  "pingpong": "not built: per-WG 64-row tiles raise L2->SM bytes/FLOP x1.67-1.74 while gate_up load-only time (503 us) already equals the full kernel time; 128-row tiles per WG need 2x accumulator registers",
+  "tma_multicast_A_cluster_N": "T=128 gdn_in CL2 47.2 vs 46.5 us, CL4 75.3; down T=128 CL2 57.0 vs 55.1, CL4 93.2; A traffic is not the limit (no-A-load variant 45.4 vs 46.5 us)",
+  "tma_multicast_W_cluster_M": "gate_up T=1024 505.3 vs 496.1 us; load-only 526.9 vs 503.1 us",
+  "cluster_splitk_dsmem_csk": "T=128 o_proj 0.942, down 0.981 (bitwise vs split-K + reduce); T=256 down 1.19 (s3) / 1.48 (s2): the 80 KB f32 receive tile leaves too few ring stages",
+  "smem_alias_amerge": "T=256 gdn_in s3 (separate staging) 1.045 -> s4 aliased 0.993",
+  "io_warp": "persistent: worse (gdn_in 1024 1.007-1.011 vs 0.974); non-persistent residual: better (o_proj 512 0.973 vs 0.993)",
+  "w_box_split_wbox": "no gain (gate_up 1024 0.983 vs 0.949, att_in 1024 0.980 vs 0.973)",
+  "wait1_async_wgmma": "gdn_in 1024 non-persistent 249.4 vs 239.2 us (worse)",
+  "pdl_w_prefetch": "16-layer [gate_up -> down] chain, us/layer median today/new/new+PDL: T=128 155.0/153.3/152.2, T=256 235.1/229.8/232.9 (min 149.1/150.4/151.8 and 227.4/227.8/227.7): within noise; bitwise",
+  "hb136": "N=136 (N%16==8) lowers to 17 x m64n8k16: gate_up T=128 281 us, T=256 533 us (3-3.7x slower)",
+  "bk128_T128": "gdn_in T=128 BK128 s3 46.95-48.1 vs 46.1 us (no gain)"
+ },
+ "t128_stream_limit": {
+  "gemv_same_bytes_us": {
+   "gdn_in": 42.12,
+   "gate_up": 91.75,
+   "down": 52.15,
+   "o_proj": 20.98
+  },
+  "gdn_in_decomposition_us": {
+   "full": 46.48,
+   "no_mma": 44.8,
+   "no_A_loads": 45.41,
+   "no_W_loads": 34.35,
+   "W_loads_only": 43.11
+  }
+ }
+}

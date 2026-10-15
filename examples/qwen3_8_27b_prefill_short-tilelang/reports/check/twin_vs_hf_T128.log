@@ -1,0 +1,28 @@
+runtime/twin.py:Qwen3_8_27BTwin
+
+  seq_len=128
+  reference: reference/T128/expected.pt
+  inputs:    files:reference/T128/token_ids.pt,reference/T128/cos.pt,reference/T128/sin.pt; activations actual i64, bf16, bf16 (declared none); files token_ids.pt: 1 tensor(s) i64[128]; cos.pt: 1 tensor(s) bf16[128, 64]; sin.pt: 1 tensor(s) bf16[128, 64]
+
+  output[0]   bf16[1,248320]   ref_norm 1122.05
+    rel_l2(max=0.0717)                 rel_l2 0.0265347           PASS
+    cosine(min=0.9974)                 cosine 0.999701            PASS
+    nan_inf                            nan 0 inf 0                PASS
+  output[1]   bf16[16,128,4,256]   ref_norm 2161.82
+    rel_l2(max=0.0717)                 rel_l2 0.0109714           PASS
+    cosine(min=0.9974)                 cosine 0.99994             PASS
+    nan_inf                            nan 0 inf 0                PASS
+  output[2]   bf16[16,128,4,256]   ref_norm 2811.15
+    rel_l2(max=0.0717)                 rel_l2 0.00971607          PASS
+    cosine(min=0.9974)                 cosine 0.999953            PASS
+    nan_inf                            nan 0 inf 0                PASS
+  output[3]   bf16[48,10240,3]   ref_norm 1703.31
+    rel_l2(max=0.0717)                 rel_l2 0.0108019           PASS
+    cosine(min=0.9974)                 cosine 0.999942            PASS
+    nan_inf                            nan 0 inf 0                PASS
+  output[4]   f32[48,48,128,128]   ref_norm 357.967
+    rel_l2(max=0.0717)                 rel_l2 0.00273407          PASS
+    cosine(min=0.9974)                 cosine 0.999996            PASS
+    nan_inf                            nan 0 inf 0                PASS
+
+PASS

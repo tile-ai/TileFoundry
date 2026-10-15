@@ -1,0 +1,89 @@
+# TileFoundry Spec — hir (`@func` pure SSA dataflow IR)
+
+Defines HIR, the pure SSA-as-DAG dataflow IR: its `Expr` constructs — the
+`Function` container, the structured-SSA exceptions `LoopRegion` and
+`MeshRegion`, and the
+HIR Op subdirectories (math / tensor / nn / shape / sharding) — together with
+their HIR-specific typing rules. Mesh scope is authored in the parser
+([parser](./parser.md)) and its `Mesh` / `Topology` are defined by shard
+([shard §5](./shard.md#5-mesh)); HIR links to those owners where a construct carries
+the result.
+
+```mermaid
+flowchart TB
+    Expr["<b>Expr</b><br/>(core-ir)"]
+    Op["<b>Op</b><br/>(core-ir)"]
+    Function["<b>Function</b> (Expr)"]
+    LoopRegion["<b>LoopRegion</b> (Expr)"]
+    MeshRegion["<b>MeshRegion</b> (Expr)"]
+    HirOpBase["<b>hir.Op</b> subclasses<br/>math / tensor / nn / shape / sharding"]
+
+    Expr --> Function
+    Expr --> LoopRegion
+    Expr --> MeshRegion
+    Op --> HirOpBase
+```
+
+## 1. HIR Expr constructs
+
+HIR values are `Expr` nodes ([core-ir §2](./core-ir.md#2-expr)): a `Function`
+container, the loop-phi-shaped `LoopRegion`, the execution-region
+`MeshRegion`, and value `Op` calls. HIR is
+pure **SSA-as-DAG** — there are no `Region` / `Block` abstractions and no Stmt
+sequence; `LoopRegion` carries loop-phi-shaped SSA and `MeshRegion` carries
+the structured execution region.
+
+### 1.1 `Function`
+
+```python
+class Function(Expr):
+    """HIR's function container; its value type is the function signature.
+
+    Attributes:
+        name: attribute; the function name; call sites resolve through Module's symbol table.
+        params: attribute; each Var carries a type annotation.
+        body: attribute; a single Expr — typically a Call DAG; None for a dispatch prototype.
+        return_type: attribute; TensorType for single output, TupleType for multi.
+        specializations: attribute; Dispatch patterns carried by a variant.
+        variants: attribute; Shape-specialized implementations carried by a prototype.
+        converters: attribute; Weight names paired with offline converter functions.
+    """
+
+    name: str
+    params: tuple[Var, ...]
+    body: Expr | None
+    return_type: Type
+    specializations: tuple[Pattern, ...] = field(default_factory=tuple)
+    variants: tuple["Function", ...] = field(default_factory=tuple)
+    converters: tuple[tuple[str, "Function"], ...] = field(default_factory=tuple)
+```
+- constraints:
+  - an `Expr` subclass whose value type is the function signature; always returns
+    by value (explicit output params are TIR-only). Typing and shape-dispatch
+    rules are stated below.
+  - mutable during the compiler's authorised typing, metadata, and specialization updates;
+    fields that are not updated retain structural equality and hashing semantics.
+  - value-range metadata is refreshed by a non-type-writing whole-function
+    inference walk. Parser construction MAY attach an already-proved range to a leaf
+    whose value is fixed by lexical geometry; `MeshCoord` uses its concrete mesh
+    axis extent for this purpose.
+  - a `Function` MUST NOT declare or override execution context. The `Module`
+    that owns it declares the `Target` and the ordered `Topology` hierarchy its
+    body runs against ([core-ir §1](./core-ir.md#1-module)).
+
+**Kernel invocation.** Entering an HIR `Function` from Python begins one kernel
+invocation. A `Call` from one HIR `Function` to another is a device call inside
+the current kernel invocation and never begins another one, regardless of which
+`Module` owns the callee. A `Module` is a static container and an invocation is
+a dynamic event: Python entering one root twice is two invocations, and a Python
+loop entering it N times is N. Module ownership, topology equality, call-graph
+depth, source nesting, and how often a call site repeats take no part in this
+rule: a repeated site and a site a loop varies repeat device work inside the
+invocation they are already in.
+
+| Caller | Callee | Meaning |
+|---|---|---|
+| Python | HIR `Function`, directly or through a `Module` entry | Begin one kernel invocation |
+| HIR `Function` | HIR `Function` with the same owner | Same-kernel device call |
+| HIR `Function` | HIR `Function` with a different owner | Same-kernel device call |
+| Python | Plain Python `M

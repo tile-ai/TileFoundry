@@ -1,0 +1,213 @@
+{
+ "method": {
+  "graph": "one CUDA graph per piece, GPU sleep before, events around one replay, median of 50 replays (as test_gdn.py; includes ~3-4 us graph launch per graph)",
+  "b2b": "runtime.benchutil.graph_time_us: 20 back-to-back calls per graph, per-call time",
+  "chain": "all kernels of the split alternative in one graph",
+  "inputs": "layer 0 realistic inputs, proj row stride 16640; split prep kernels get contiguous copies of mixed and q/k (small.* kernels need contiguous tensors)",
+  "C_chunk_scan_one_kernel": "not measured: no fused chunk+scan variant exists"
+ },
+ "T128": {
+  "graph_us": {
+   "prep_fused": 8.61,
+   "conv_silu": 10.59,
+   "l2norm_q": 6.34,
+   "l2norm_k": 6.5,
+   "g_beta_window": 5.44,
+   "prep_split_chain": 17.89,
+   "chunk": 14.91,
+   "scan_fused_norm": 15.07,
+   "scan_plain": 13.38,
+   "gated_norm": 8.06,
+   "scan_plain_plus_norm_chain": 17.66,
+   "core_fused": 26.5,
+   "core_split_chain": 29.06,
+   "prep_split_sum": 28.87,
+   "scan_plain_plus_norm_sum": 21.44
+  },
+  "b2b_us": {
+   "prep_fused": 5.06,
+   "conv_silu": 6.99,
+   "l2norm_q": 2.71,
+   "l2norm_k": 2.72,
+   "g_beta_window": 2.0,
+   "prep_split_chain": 13.73,
+   "chunk": 11.22,
+   "scan_fused_norm": 11.11,
+   "scan_plain": 9.28,
+   "gated_norm": 4.41,
+   "scan_plain_plus_norm_chain": 13.94,
+   "core_fused": 22.45,
+   "core_split_chain": 25.2,
+   "prep_split_sum": 14.42,
+   "scan_plain_plus_norm_sum": 13.69
+  },
+  "check_prep_split_vs_fused_differing": {
+   "q": 0,
+   "k": 0,
+   "v": 0,
+   "g": 0,
+   "beta": 0,
+   "window": 0
+  },
+  "check_norm": {
+   "split_vs_hir_formula_differing": 0,
+   "fused_vs_hir_formula_differing": 4,
+   "fused_vs_split_maxabs": 7.62939453125e-06,
+   "elements": 786432
+  },
+  "sm_clock": "0, 1500 MHz, 1980 MHz; 1, 1500 MHz, 1980 MHz; 2, 1500 MHz, 1980 MHz; 3, 345 MHz, 1980 MHz; 4, 345 MHz, 1980 MHz; 5, 345 MHz, 1980 MHz; 6, 345 MHz, 1980 MHz; 7, 345 MHz, 1980 MHz"
+ },
+ "T256": {
+  "graph_us": {
+   "prep_fused": 11.55,
+   "conv_silu": 16.16,
+   "l2norm_q": 7.78,
+   "l2norm_k": 7.78,
+   "g_beta_window": 5.57,
+   "prep_split_chain": 25.92,
+   "chunk": 20.26,
+   "scan_fused_norm": 20.48,
+   "scan_plain": 17.44,
+   "gated_norm": 9.47,
+   "scan_plain_plus_norm_chain": 23.33,
+   "core_fused": 36.38,
+   "core_split_chain": 39.68,
+   "prep_split_sum": 37.29,
+   "scan_plain_plus_norm_sum": 26.91
+  },
+  "b2b_us": {
+   "prep_fused": 7.59,
+   "conv_silu": 12.15,
+   "l2norm_q": 4.02,
+   "l2norm_k": 3.99,
+   "g_beta_window": 2.01,
+   "prep_split_chain": 21.68,
+   "chunk": 16.47,
+   "scan_fused_norm": 15.99,
+   "scan_plain": 13.6,
+   "gated_norm": 5.93,
+   "scan_plain_plus_norm_chain": 19.7,
+   "core_fused": 32.6,
+   "core_split_chain": 36.08,
+   "prep_split_sum": 22.17,
+   "scan_plain_plus_norm_sum": 19.53
+  },
+  "check_prep_split_vs_fused_differing": {
+   "q": 0,
+   "k": 0,
+   "v": 0,
+   "g": 0,
+   "beta": 0,
+   "window": 0
+  },
+  "check_norm": {
+   "split_vs_hir_formula_differing": 0,
+   "fused_vs_hir_formula_differing": 4,
+   "fused_vs_split_maxabs": 7.62939453125e-06,
+   "elements": 1572864
+  },
+  "sm_clock": "0, 1500 MHz, 1980 MHz; 1, 1500 MHz, 1980 MHz; 2, 1500 MHz, 1980 MHz; 3, 345 MHz, 1980 MHz; 4, 345 MHz, 1980 MHz; 5, 345 MHz, 1980 MHz; 6, 345 MHz, 1980 MHz; 7, 345 MHz, 1980 MHz"
+ },
+ "T512": {
+  "graph_us": {
+   "prep_fused": 15.78,
+   "conv_silu": 26.88,
+   "l2norm_q": 10.34,
+   "l2norm_k": 10.46,
+   "g_beta_window": 5.66,
+   "prep_split_chain": 42.43,
+   "chunk": 30.56,
+   "scan_fused_norm": 31.9,
+   "scan_plain": 26.27,
+   "gated_norm": 13.12,
+   "scan_plain_plus_norm_chain": 36.48,
+   "core_fused": 58.98,
+   "core_split_chain": 64.83,
+   "prep_split_sum": 53.34,
+   "scan_plain_plus_norm_sum": 39.39
+  },
+  "b2b_us": {
+   "prep_fused": 12.02,
+   "conv_silu": 22.98,
+   "l2norm_q": 6.51,
+   "l2norm_k": 6.53,
+   "g_beta_window": 2.03,
+   "prep_split_chain": 38.61,
+   "chunk": 26.79,
+   "scan_fused_norm": 27.43,
+   "scan_plain": 22.03,
+   "gated_norm": 9.17,
+   "scan_plain_plus_norm_chain": 32.68,
+   "core_fused": 55.09,
+   "core_split_chain": 60.47,
+   "prep_split_sum": 38.05,
+   "scan_plain_plus_norm_sum": 31.2
+  },
+  "check_prep_split_vs_fused_differing": {
+   "q": 0,
+   "k": 0,
+   "v": 0,
+   "g": 0,
+   "beta": 0,
+   "window": 0
+  },
+  "check_norm": {
+   "split_vs_hir_formula_differing": 0,
+   "fused_vs_hir_formula_differing": 15,
+   "fused_vs_split_maxabs": 0.0001220703125,
+   "elements": 3145728
+  },
+  "sm_clock": "0, 1500 MHz, 1980 MHz; 1, 1500 MHz, 1980 MHz; 2, 1500 MHz, 1980 MHz; 3, 345 MHz, 1980 MHz; 4, 345 MHz, 1980 MHz; 5, 345 MHz, 1980 MHz; 6, 345 MHz, 1980 MHz; 7, 345 MHz, 1980 MHz"
+ },
+ "T1024": {
+  "graph_us": {
+   "prep_fused": 25.41,
+   "conv_silu": 50.02,
+   "l2norm_q": 15.42,
+   "l2norm_k": 15.42,
+   "g_beta_window": 5.86,
+   "prep_split_chain": 76.86,
+   "chunk": 52.38,
+   "scan_fused_norm": 53.38,
+   "scan_plain": 43.46,
+   "gated_norm": 19.74,
+   "scan_plain_plus_norm_chain": 60.51,
+   "core_fused": 100.7,
+   "core_split_chain": 107.87,
+   "prep_split_sum": 86.72,
+   "scan_plain_plus_norm_sum": 63.2
+  },
+  "b2b_us": {
+   "prep_fused": 21.44,
+   "conv_silu": 45.86,
+   "l2norm_q": 11.51,
+   "l2norm_k": 11.53,
+   "g_beta_window": 2.12,
+   "prep_split_chain": 72.68,
+   "chunk": 48.27,
+   "scan_fused_norm": 48.93,
+   "scan_plain": 39.16,
+   "gated_norm": 16.36,
+   "scan_plain_plus_norm_chain": 56.22,
+   "core_fused": 96.21,
+   "core_split_chain": 103.9,
+   "prep_split_sum": 71.02,
+   "scan_plain_plus_norm_sum": 55.52
+  },
+  "check_prep_split_vs_fused_differing": {
+   "q": 0,
+   "k": 0,
+   "v": 0,
+   "g": 0,
+   "beta": 0,
+   "window": 0
+  },
+  "check_norm": {
+   "split_vs_hir_formula_differing": 0,
+   "fused_vs_hir_formula_differing": 30,
+   "fused_vs_split_maxabs": 0.000244140625,
+   "elements": 6291456
+  },
+  "sm_clock": "0, 1500 MHz, 1980 MHz; 1, 1500 MHz, 1980 MHz; 2, 1500 MHz, 1980 MHz; 3, 345 MHz, 1980 MHz; 4, 345 MHz, 1980 MHz; 5, 345 MHz, 1980 MHz; 6, 345 MHz, 1980 MHz; 7, 345 MHz, 1980 MHz"
+ }
+}

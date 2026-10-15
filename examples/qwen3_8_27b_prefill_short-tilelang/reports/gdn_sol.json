@@ -1,0 +1,81 @@
+{
+ "method": "per-call GPU time (us): runtime.benchutil.graph_time_us, 20 back-to-back calls per graph, median of 10 replays; median of 3 alternating rounds",
+ "device": "NVIDIA H200",
+ "sm_clock_note": "SM clock 1500 MHz (GPU0)",
+ "T128": {
+  "before": {
+   "prep": 5.06,
+   "chunk": 11.21,
+   "scan": 9.4,
+   "norm": 3.92,
+   "sum": 29.59
+  },
+  "after": {
+   "prep": 5.05,
+   "chunk": 10.65,
+   "scan": 8.94,
+   "norm": 3.49,
+   "sum": 28.13
+  }
+ },
+ "T256": {
+  "before": {
+   "prep": 7.74,
+   "chunk": 16.51,
+   "scan": 13.62,
+   "norm": 5.51,
+   "sum": 43.38
+  },
+  "after": {
+   "prep": 7.6,
+   "chunk": 15.78,
+   "scan": 12.93,
+   "norm": 4.47,
+   "sum": 40.78
+  }
+ },
+ "T512": {
+  "before": {
+   "prep": 12.02,
+   "chunk": 26.72,
+   "scan": 21.95,
+   "norm": 8.69,
+   "sum": 69.38
+  },
+  "after": {
+   "prep": 11.59,
+   "chunk": 25.05,
+   "scan": 21.33,
+   "norm": 6.84,
+   "sum": 64.81
+  }
+ },
+ "T1024": {
+  "before": {
+   "prep": 21.32,
+   "chunk": 48.34,
+   "scan": 39.18,
+   "norm": 15.43,
+   "sum": 124.27
+  },
+  "after": {
+   "prep": 20.45,
+   "chunk": 47.1,
+   "scan": 38.76,
+   "norm": 11.88,
+   "sum": 118.19
+  }
+ },
+ "changes": {
+  "gdn_gated_norm": "guarded fast gate (ex2/rcp approx, exact fix-up near bf16 midpoints, exhaustively checked), packed bf16 casts; output bits unchanged",
+  "gdn_prep": "one silu-guard branch per thread, bf16 vector stores of q/k/v; output bits unchanged",
+  "gdn_scan_plain": "no cluster launch; bits unchanged",
+  "gdn_chunk": "inverse in 5 phases (two doubling levels, 2x2 register tiles); state rel_l2 4.55e-6..6.42e-6, worst abs/tol <= 0.032"
+ },
+ "structure_changes_for_hir": [
+  "gdn_scan_plain: cluster_dims removed, no cluster barrier at exit",
+  "gdn_chunk: inverse phases / thread mappings (grid, threads, staging unchanged)",
+  "gdn_prep: silu guard control flow, q/k/v params bf16 instead of uint32",
+  "gdn_gated_norm: gate code (grid unchanged)"
+ ]
+}

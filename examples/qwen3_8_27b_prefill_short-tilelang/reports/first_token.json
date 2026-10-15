@@ -1,0 +1,42 @@
+[
+ {
+  "T": 128,
+  "first_token_mine": 552,
+  "first_token_transformers": 552,
+  "equal": true,
+  "transformers_top2_margin": 4.125,
+  "mine_top2_margin": 4.25,
+  "logits_max_abs_err": 0.3125,
+  "logits_rel_l2": 0.02653474546968937
+ },
+ {
+  "T": 256,
+  "first_token_mine": 65,
+  "first_token_transformers": 65,
+  "equal": true,
+  "transformers_top2_margin": 12.375,
+  "mine_top2_margin": 12.1875,
+  "logits_max_abs_err": 0.3515625,
+  "logits_rel_l2": 0.021408485248684883
+ },
+ {
+  "T": 512,
+  "first_token_mine": 6816,
+  "first_token_transformers": 6816,
+  "equal": true,
+  "transformers_top2_margin": 2.75,
+  "mine_top2_margin": 2.75,
+  "logits_max_abs_err": 0.125,
+  "logits_rel_l2": 0.008390870876610279
+ },
+ {
+  "T": 1024,
+  "first_token_mine": 735,
+  "first_token_transformers": 735,
+  "equal": true,
+  "transformers_top2_margin": 3.0,
+  "mine_top2_margin": 3.0,
+  "logits_max_abs_err": 0.25,
+  "logits_rel_l2": 0.01277337409555912
+ }
+]

@@ -1,0 +1,133 @@
+{
+ "gemm_params_by_leaf": {
+  "linear_attn.in_proj_a.weight": 11796480,
+  "linear_attn.in_proj_b.weight": 11796480,
+  "linear_attn.in_proj_qkv.weight": 2516582400,
+  "linear_attn.in_proj_z.weight": 1509949440,
+  "linear_attn.out_proj.weight": 1509949440,
+  "mlp.down_proj.weight": 5704253440,
+  "mlp.gate_proj.weight": 5704253440,
+  "mlp.up_proj.weight": 5704253440,
+  "self_attn.k_proj.weight": 83886080,
+  "self_attn.o_proj.weight": 503316480,
+  "self_attn.q_proj.weight": 1006632960,
+  "self_attn.v_proj.weight": 83886080
+ },
+ "gemm_params": 24350556160,
+ "lm_head_params": 1271398400,
+ "other_bytes": {
+  "input_layernorm.weight": 655360,
+  "linear_attn.A_log": 4608,
+  "linear_attn.conv1d.weight": 3932160,
+  "linear_attn.dt_bias": 4608,
+  "linear_attn.norm.weight": 12288,
+  "post_attention_layernorm.weight": 655360,
+  "self_attn.k_norm.weight": 8192,
+  "self_attn.q_norm.weight": 8192
+ },
+ "weight_bytes": 51249189888,
+ "skipped_tensors": 348,
+ "crossover_tokens": 206.14583333333334,
+ "rows": [
+  {
+   "T": 128,
+   "flops": {
+    "gemm (all decoder nn.Linear)": 6233742376960,
+    "lm_head (last token only)": 2542796800,
+    "attention core (causal QK^T + PV)": 3246391296,
+    "gdn core (chunked WY, C=64)": 53955523584,
+    "gdn conv1d (depthwise, k=4)": 503316480
+   },
+   "bytes": {
+    "decoder weights (bf16, once)": 48706393088,
+    "lm_head weight (bf16, once)": 2542796800,
+    "embedding rows gathered": 1310720,
+    "final norm weight": 10240,
+    "kv cache written (16 layers, bf16)": 8388608,
+    "gdn state written (48 layers, f32 + conv bf16)": 153944064
+   },
+   "total_flops": 6293990405120,
+   "total_bytes": 51412843520,
+   "compute_ms": 6.360778580212228,
+   "memory_ms": 10.711009066666668,
+   "roofline_ms": 10.711009066666668,
+   "serial_gemm_roofline_ms": 10.733623308418395,
+   "bound": "memory"
+  },
+  {
+   "T": 256,
+   "flops": {
+    "gemm (all decoder nn.Linear)": 12467484753920,
+    "lm_head (last token only)": 2542796800,
+    "attention core (causal QK^T + PV)": 12935233536,
+    "gdn core (chunked WY, C=64)": 107911047168,
+    "gdn conv1d (depthwise, k=4)": 1006632960
+   },
+   "bytes": {
+    "decoder weights (bf16, once)": 48706393088,
+    "lm_head weight (bf16, once)": 2542796800,
+    "embedding rows gathered": 2621440,
+    "final norm weight": 10240,
+    "kv cache written (16 layers, bf16)": 16777216,
+    "gdn state written (48 layers, f32 + conv bf16)": 153944064
+   },
+   "total_flops": 12591880464384,
+   "total_bytes": 51422542848,
+   "compute_ms": 12.725498195436078,
+   "memory_ms": 10.71302976,
+   "roofline_ms": 12.725498195436078,
+   "serial_gemm_roofline_ms": 13.25166043451979,
+   "bound": "compute"
+  },
+  {
+   "T": 512,
+   "flops": {
+    "gemm (all decoder nn.Linear)": 24934969507840,
+    "lm_head (last token only)": 2542796800,
+    "attention core (causal QK^T + PV)": 51640270848,
+    "gdn core (chunked WY, C=64)": 215822094336,
+    "gdn conv1d (depthwise, k=4)": 2013265920
+   },
+   "bytes": {
+    "decoder weights (bf16, once)": 48706393088,
+    "lm_head weight (bf16, once)": 2542796800,
+    "embedding rows gathered": 5242880,
+    "final norm weight": 10240,
+    "kv cache written (16 layers, bf16)": 33554432,
+    "gdn state written (48 layers, f32 + conv bf16)": 153944064
+   },
+   "total_flops": 25206987935744,
+   "total_bytes": 51441941504,
+   "compute_ms": 25.47446986937241,
+   "memory_ms": 10.717071146666667,
+   "roofline_ms": 25.47446986937241,
+   "serial_gemm_roofline_ms": 25.999614793691087,
+   "bound": "compute"
+  },
+  {
+   "T": 1024,
+   "flops": {
+    "gemm (all decoder nn.Linear)": 49869939015680,
+    "lm_head (last token only)": 2542796800,
+    "attention core (causal QK^T + PV)": 206359756800,
+    "gdn core (chunked WY, C=64)": 431644188672,
+    "gdn conv1d (depthwise, k=4)": 4026531840
+   },
+   "bytes": {
+    "decoder weights (bf16, once)": 48706393088,
+    "lm_head weight (bf16, once)": 2542796800,
+    "embedding rows gathered": 10485760,
+    "final norm weight": 10240,
+    "kv cache written (16 layers, bf16)": 67108864,
+    "gdn state written (48 layers, f32 + conv bf16)": 153944064
+   },
+   "total_flops": 50514512289792,
+   "total_bytes": 51480738816,
+   "compute_ms": 51.0505429911996,
+   "memory_ms": 10.725153919999999,
+   "roofline_ms": 51.0505429911996,
+   "serial_gemm_roofline_ms": 51.57365328598821,
+   "bound": "compute"
+  }
+ ]
+}
