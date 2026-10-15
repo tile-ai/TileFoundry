@@ -990,34 +990,6 @@ def _reuse_rows(
     return tuple(sorted(rows, key=lambda row: row.reuse_bytes, reverse=True))
 
 
-def reuse_windows(
-    root: IterationScope,
-    *,
-    memory_level: str,
-    wave_units: int,
-    declared_units: int,
-    ctx: CostContext,
-    labels: Mapping[tuple[int, int], str],
-) -> tuple[ReuseWindow, ...]:
-    """Describe one cache-residency window per buffer that is read again."""
-    wave = (wave_units, declared_units)
-    boundaries = moving_boundaries(
-        root, memory_level=memory_level, wave=wave, ctx=ctx, labels=labels
-    )
-    buffers = _by_buffer(boundaries, wave)
-    if not buffers or ctx.frame is None:
-        return ()
-    cache = cached_level(ctx.frame.target.get_facts(MemoryHierarchyFacts))
-    if cache is None or cache[1] != memory_level:
-        return ()
-    uncounted = tuple(
-        (tuple((id(loop),) for loop in _loop_scopes(scope)), item)
-        for scope, item in _uncounted_movements(root, memory_level=memory_level, ctx=ctx)
-    )
-    footprints = _window_footprints(boundaries, uncounted, buffers, memory_level=memory_level)
-    return _reuse_rows(buffers, footprints, cache[2])
-
-
 def merged(items: Iterable[ReachedAddresses]) -> tuple[ReachedAddresses, ...]:
     """Union addresses by source allocation and output field."""
     grouped: dict[tuple[int, int, int | None], ReachedAddresses] = {}
@@ -1560,7 +1532,6 @@ __all__ = [
     "moving_boundaries",
     "reached_by",
     "reuse_axes",
-    "reuse_windows",
     "shared_units",
     "space_axes",
     "time_axis",

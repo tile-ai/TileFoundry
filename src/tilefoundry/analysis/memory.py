@@ -10,7 +10,6 @@ import isl
 from tilefoundry.ir.core import (
     Call,
     Expr,
-    Var,
     VerifyError,
     binding_name,
     describe_expr,
@@ -50,9 +49,11 @@ from .allocation import (
     AllocationConstraintVisitor,
     AllocationModel,
     AllocationValue,
-    aligned,
-    alignment_of,
+    Buffer,
+    leaves,
+    published_aliases,
     solve_allocation,
+    tie_analysis,
 )
 from .compute_cost import accumulate_logical, grouped_breakdown
 from .errors import AnalysisError
@@ -73,6 +74,7 @@ from .metadata import (
     MemoryMetadata,
     RegionMemoryMetadata,
     Spread,
+    TimingValuation,
     Traffic,
     TrafficBytes,
 )
@@ -725,7 +727,6 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
     quantities = {}
     persistent = set()
 
-    limits: dict[str, int] = {}
     for interval in liveness.intervals:
         key = id(interval.value)
         if any(interval.value is param for param in function.params):
@@ -747,7 +748,6 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
             level, amount = quantity
             amount *= result_copies(interval.value)
             slots.append((level, amount))
-            limits[level] = limits.get(level, 0) + aligned(amount, alignment_of(interval.value))
         quantities[key] = tuple(slots)
     model = AllocationModel(
         current=context.root,
@@ -755,13 +755,17 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
         local=placement,
         quantities=quantities,
         persistent=frozenset(persistent),
-        limits=limits,
+        context=context,
     )
     allocation = AllocationConstraintVisitor(root_function=function, liveness=liveness)
 
-    allocation.visit_function_body(function, model)
+    returned = allocation.visit_function_body(function, model)
+    model.returned = leaves(returned)
+    model.parameters = {
+        item for item in model.values if any(item.value is formal for formal in function.params)
+    }
+    model.outputs = set(model.returned)
     context.allocation = model
-    external = model.addresses()
     definitions = {id(interval.value): index for index, interval in enumerate(liveness.intervals)}
     model.values.sort(
         key=lambda item: (
@@ -803,178 +807,19 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
                     ),
                 ),
             )
-    solver_options = (
-        context.options if isinstance(context.options, MemoryOptions) else MemoryOptions()
-    )
-    region_rmem_peaks: list[int] = []
-    claimed_rmem: set[AllocationValue] = set()
-    region_peaks = {}
-    for window in liveness.regions:
-        region_values = values_in_region(
-            allocation_values,
-            window.region,
-            window.entered_at,
-            window.exited_at,
-            facts,
-            owner_topologies,
-        )
-        region_levels = []
-        for name in sorted({item.lifetime.memory_level for item in region_values}):
-            resident = tuple(item for item in region_values if item.lifetime.memory_level == name)
-            declared = facts.explicit(name)
-            peak = max(
-                (
-                    sum(
-                        item.lifetime.bytes
-                        for item in resident
-                        if item.lifetime.persistent
-                        or item.lifetime.defined_at <= point <= item.lifetime.last_used_at
-                    )
-                    for point in range(window.entered_at, window.exited_at + 1)
-                ),
-                default=0,
-            )
-            persistent = {
-                item: item.lifetime.bytes for item in resident if item.lifetime.persistent
-            }
-            region_levels.append(
-                MemoryLevelPeak(
-                    memory_level=name,
-                    peak_bytes=peak,
-                    persistent_bytes=sum(persistent.values()),
-                    capacity_bytes=(declared.capacity_bytes if declared is not None else None),
-                ),
-            )
-            if name == str(StorageKind.RMEM):
-                region_rmem_peaks.append(peak)
-                claimed_rmem.update(resident)
-        if region_levels:
-            _region, held = region_peaks.setdefault(id(window.region), (window.region, {}))
-            for level in region_levels:
-                previous = held.get(level.memory_level)
-                held[level.memory_level] = (
-                    level
-                    if previous is None
-                    else replace(
-                        level,
-                        peak_bytes=max(previous.peak_bytes, level.peak_bytes),
-                        persistent_bytes=max(previous.persistent_bytes, level.persistent_bytes),
-                    )
-                )
-    for region, peaks in region_peaks.values():
-        attach(
-            region,
-            RegionMemoryMetadata(
-                solver_status="feasible",
-                topologies=tuple(locals_by_unit),
-                peaks=tuple(peaks.values()),
-            ),
-        )
-
-    placements = {}
-    offsets: dict[AllocationValue, int] = {}
-    levels_list: list[MemoryLevelPeak] = []
-    for name in sorted(
-        {item.lifetime.memory_level for item in allocation_values}
-        | set(memory_context.storage.total)
-    ):
-        declared = facts.explicit(name)
-        values = tuple(item for item in allocation_values if item.lifetime.memory_level == name)
-        capacity = declared.capacity_bytes if declared is not None else None
-        if name in (str(StorageKind.GMEM), str(StorageKind.SMEM)) and values:
-            solved = solve_allocation(name, model, solver_options)
-            offsets.update(solved.offsets)
-            peak = solved.peak_bytes
-            for item in values:
-                if item in external:
-                    if item in model.outputs and not item.lifetime.persistent:
-                        moved = get_metadata(item.value, MemoryMetadata) or MemoryMetadata()
-                        placements[id(item.value)] = replace(
-                            moved, buffer_bytes=item.lifetime.bytes, offsets=()
-                        )
-                    continue
-                if item not in model.material or item.lifetime.persistent:
-                    continue
-                if not isinstance(item.value, (Call, Var)) or isinstance(
-                    item.value.type, TupleType
-                ):
-                    continue
-                copies = result_copies(item.value)
-                buffer_bytes = item.lifetime.bytes // copies
-                moved = placements.get(id(item.value), get_metadata(item.value, MemoryMetadata))
-                if isinstance(item.value, Var) and moved is None:
-                    moved = MemoryMetadata()
-                if moved is None:
-                    raise AnalysisError("memory: placed Call has no movement record")
-                placements[id(item.value)] = replace(
-                    moved,
-                    buffer_bytes=buffer_bytes,
-                    offsets=tuple(
-                        solved.offsets[item] + copy * buffer_bytes for copy in range(copies)
-                    ),
-                )
-        elif name == str(StorageKind.RMEM):
-            unclaimed = tuple(item for item in values if item not in claimed_rmem)
-            peak = max(
-                max(region_rmem_peaks, default=0),
-                max(
-                    (
-                        sum(
-                            item.lifetime.bytes
-                            for item in unclaimed
-                            if item.lifetime.persistent
-                            or item.lifetime.defined_at <= point <= item.lifetime.last_used_at
-                        )
-                        for point in range(liveness.timeline_end + 1)
-                    ),
-                    default=0,
-                ),
-            )
-        else:
-            peak = max(
-                (
-                    sum(
-                        item.lifetime.bytes
-                        for item in values
-                        if item.lifetime.persistent
-                        or item.lifetime.defined_at <= point <= item.lifetime.last_used_at
-                    )
-                    for point in range(liveness.timeline_end + 1)
-                ),
-                default=0,
-            )
-        persistent = {item: item.lifetime.bytes for item in values if item.lifetime.persistent}
-        levels_list.append(
-            MemoryLevelPeak(
-                memory_level=name,
-                peak_bytes=peak,
-                persistent_bytes=sum(persistent.values()),
-                capacity_bytes=capacity,
-            ),
-        )
-    levels = tuple(levels_list)
-    tuple_results = {
-        id(item.value): item.value
-        for item in material_values
-        if isinstance(item.value, Call) and isinstance(item.value.type, TupleType)
+    model.definitions = dict(allocation.definitions)
+    model.uses = {
+        value: tuple(allocation.uses.get((id(value.value), value.index), ()))
+        for value in model.values
     }
-    for identity, producer in tuple_results.items():
-        moved = placements.get(identity, get_metadata(producer, MemoryMetadata))
-        if moved is None:
-            raise AnalysisError("memory: placed Call has no movement record")
-        placements[identity] = replace(
-            moved,
-            buffer_bytes=None,
-            offsets=tuple(
-                offsets[item]
-                for item in material_values
-                if item.value is producer and item in offsets
-            ),
-        )
-    by_definition = placements
-    values_by_identity = {id(item.value): item.value for item in allocation_values}
-    for identity, moved in by_definition.items():
-        attach(values_by_identity[identity], moved)
+    tie_analysis(model)
+    for node in {id(value.value): value.value for value in model.values}.values():
+        moved = get_metadata(node, MemoryMetadata)
+        if moved is not None:
+            attach(node, replace(moved, alias=None, buffer_bytes=None, offsets=()))
+    for value, alias in published_aliases(model).items():
+        moved = get_metadata(value.value, MemoryMetadata) or MemoryMetadata()
+        attach(value.value, replace(moved, alias=alias))
     footprint = None
     if (
         cache is not None
@@ -1028,7 +873,7 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
             ),
             footprint=footprint,
             lifetimes=lifetimes if context.root.is_root_definition else (),
-            peaks=levels if context.root.is_root_definition else (),
+            peaks=(),
             solver_status="feasible",
         ),
     )
@@ -1061,7 +906,13 @@ def _memory_findings(peaks, footprint, reuse, cache, wave):
         used = sum(
             spread.logical for _name, held in footprint.buffers for _level, spread in held.kinds
         )
-        if used >= cache[2] and not any(not row.time and row.holds_bytes == used for row in reuse):
+        if used >= cache[2] and not any(
+            not row.fits
+            and not row.time
+            and row.holds_bytes == used
+            and (row.precision in reliable) == (footprint.precision in reliable)
+            for row in reuse
+        ):
             message = (
                 f"{cache[0]} working set {format_bytes(used)} at the first iteration of a "
                 f"{wave[0]}-unit wave exceeds capacity {format_bytes(cache[2])}"
@@ -1073,11 +924,238 @@ def _memory_findings(peaks, footprint, reuse, cache, wave):
     return errors, advisories
 
 
+def _global_allocation(context):
+    """Join boundary instances; retain one address per non-boundary definition Buffer."""
+    from .footprint import instance_image  # noqa: PLC0415
+    from .visitor import VisitContext  # noqa: PLC0415
+
+    visits = []
+    bindings = {}
+    shared = {}
+    global_buffers = []
+    weights = {}
+    material_copies = []
+    for local, visit in context.walk_visits():
+        stack = visit.stack if isinstance(visit, VisitContext) else ()
+        path = tuple(id(frame.call) for frame in stack)
+        visits.append((local, visit, path))
+        model = local.allocation
+        timing = visit.request_valuation(TimingValuation)
+        prefix = "/".join(binding_name(frame.call) or "call" for frame in stack)
+        for buffer in model.buffers:
+            boundary = any(
+                value in model.parameters or value in model.outputs for value in buffer.members
+            )
+            key = (path, buffer) if boundary else (buffer,)
+            placed = shared.get(key)
+            if placed is None:
+                placed = shared[key] = Buffer([])
+                global_buffers.append(placed)
+            bindings[path, buffer] = placed
+            implicit = next(
+                (
+                    value
+                    for value in buffer.members
+                    if stack and any(value.value is formal for formal in stack[-1].implicit)
+                ),
+                None,
+            )
+            if implicit is not None:
+                keys, image = instance_image(stack)
+                reached = image.range()
+                if reached.dim(isl.dim_type.PARAM):
+                    reached = reached.project_out(
+                        isl.dim_type.PARAM, 0, reached.dim(isl.dim_type.PARAM)
+                    )
+                key = keys, id(implicit.value), implicit.index
+                if key not in weights:
+                    weights[key] = (placed, implicit, reached)
+                else:
+                    original, value, previous = weights[key]
+                    weights[key] = original, value, previous.union(reached)
+                    bindings[path, buffer] = original
+                    global_buffers.remove(placed)
+                continue
+            for item in buffer.members:
+                life = item.lifetime
+                start, end = timing.event(life.defined_at), timing.event(life.last_used_at)
+                if result_copies(item.value) > 1:
+                    for position, frame in enumerate(stack):
+                        owner = frame.scope
+                        while owner.parent is not None:
+                            owner = owner.parent
+                        caller = context.definitions[id(owner.owner)]
+                        outer = VisitContext(stack[:position]) if position else None
+                        for loop in frame.scope.enclosing_loops():
+                            entered, exited = caller.liveness.loop_windows[id(loop)]
+                            if outer is not None:
+                                entered, exited = outer.event(entered), outer.event(exited)
+                            start, end = min(start, entered), max(end, exited)
+                translated = replace(
+                    life,
+                    binding=f"{prefix}/{life.binding}" if prefix else life.binding,
+                    defined_at=start,
+                    last_used_at=end,
+                    persistent=life.persistent and not stack,
+                )
+                value = AllocationValue(item.value, item.index, translated)
+                placed.members.append(value)
+                if item in model.material and not (
+                    stack and any(item.value is formal for formal, _argument in stack[-1].bindings)
+                ):
+                    material_copies.append(value)
+
+    for (keys, _identity, _index), (buffer, item, reached) in weights.items():
+        life = replace(
+            item.lifetime,
+            binding=".".join((*keys, item.lifetime.binding)),
+            bytes=item.lifetime.bytes * reached.count_val().get_num_si(),
+            defined_at=0,
+            last_used_at=context.liveness.timeline_end,
+            persistent=True,
+        )
+        value = AllocationValue(item.value, item.index, life)
+        buffer.members.append(value)
+        material_copies.append(value)
+
+    def merge(left, right):
+        if left is right:
+            return
+        right.members.extend(left.members)
+        for key, value in tuple(bindings.items()):
+            if value is left:
+                bindings[key] = right
+        global_buffers.remove(left)
+
+    for local, visit, path in visits:
+        if not path:
+            continue
+        stack = visit.stack
+        parent = next(owner for owner, _valuation, key in visits if key == path[:-1])
+        caller_model = parent.allocation
+        model = local.allocation
+        call_id = path[-1]
+        for formal, actual in caller_model.call_bindings[call_id]:
+            merge(
+                bindings[path, model.partition[formal]],
+                bindings[path[:-1], caller_model.partition[actual]],
+            )
+        for returned, result in zip(
+            model.returned, caller_model.call_results[call_id], strict=True
+        ):
+            merge(
+                bindings[path, model.partition[returned]],
+                bindings[path[:-1], caller_model.partition[result]],
+            )
+    global_buffers = [buffer for buffer in global_buffers if buffer.members]
+    for buffer in global_buffers:
+        buffer.seal()
+    root = context.allocation
+    global_model = AllocationModel(
+        root.current,
+        root.liveness,
+        root.local,
+        {},
+        frozenset(),
+        buffers=global_buffers,
+        values=[item for buffer in global_buffers for item in buffer.members],
+    )
+    placements = {}
+    for local in context.definitions.values():
+        model = local.allocation
+        path = next(path for owner, _visit, path in visits if owner is local)
+        for value in model.material:
+            if value in model.parameters:
+                continue
+            buffer = model.partition[value]
+            boundary = not local.root.is_root_definition and any(
+                member in model.parameters or member in model.outputs for member in buffer.members
+            )
+            placements[value] = None if boundary else bindings[path, buffer]
+    return global_model, placements, tuple(material_copies), visits
+
+
+def _publish_placements(context, placements, offsets):
+    """Publish global addresses only for local non-boundary material storage."""
+    grouped = {}
+    for value, buffer in placements.items():
+        if value.lifetime.memory_level not in (str(StorageKind.GMEM), str(StorageKind.SMEM)):
+            continue
+        grouped.setdefault(id(value.value), (value.value, []))[1].append((value, buffer))
+    for expr, entries in grouped.values():
+        moved = get_metadata(expr, MemoryMetadata) or MemoryMetadata()
+        entries.sort(key=lambda pair: pair[0].index)
+        if isinstance(expr.type, TupleType):
+            addresses = tuple(offsets[buffer] for _value, buffer in entries if buffer in offsets)
+            attach(expr, replace(moved, buffer_bytes=None, offsets=addresses))
+            continue
+        value, buffer = entries[0]
+        copies = result_copies(expr)
+        size = value.lifetime.bytes // copies
+        addresses = (
+            tuple(offsets[buffer] + copy * size for copy in range(copies))
+            if buffer in offsets and not value.lifetime.persistent
+            else ()
+        )
+        attach(expr, replace(moved, buffer_bytes=size, offsets=addresses))
+
+
+def _buffer_peaks(buffers, offsets, facts, *, resident=None, window=None):
+    """Scan each event once, counting each Buffer's live bytes or address union."""
+    levels = {}
+    for buffer in buffers:
+        for value in buffer.members:
+            if resident is None or value in resident:
+                levels.setdefault(value.lifetime.memory_level, []).append((buffer, value))
+    result = []
+    for name, items in sorted(levels.items()):
+        events = {
+            point
+            for _buffer, value in items
+            for point in (value.lifetime.defined_at, value.lifetime.last_used_at)
+        }
+        if window is not None:
+            events = {
+                window[0],
+                window[1],
+                *(point for point in events if window[0] <= point <= window[1]),
+            }
+
+        def occupied(point, persistent=False):
+            live = {}
+            for buffer, value in items:
+                life = value.lifetime
+                if life.persistent or (
+                    not persistent and life.defined_at <= point <= life.last_used_at
+                ):
+                    live[buffer] = max(live.get(buffer, 0), life.bytes)
+            if name not in (str(StorageKind.GMEM), str(StorageKind.SMEM)):
+                return sum(live.values())
+            spans = sorted(
+                (offsets[buffer], offsets[buffer] + size) for buffer, size in live.items()
+            )
+            amount = 0
+            end = 0
+            for start, stop in spans:
+                amount += max(0, stop - max(start, end))
+                end = max(end, stop)
+            return amount
+
+        declared = facts.explicit(name)
+        result.append(
+            MemoryLevelPeak(
+                name,
+                max((occupied(point) for point in events), default=0),
+                occupied(0, True),
+                declared.capacity_bytes if declared else None,
+            )
+        )
+    return tuple(result)
+
+
 def _aggregate_root(function: Function, context: AnalyzeContext) -> None:
     """Publish only absolute root facts from composed call-stack visits."""
-    from .footprint import instance_image, root_footprint  # noqa: PLC0415
-    from .metadata import TimingValuation  # noqa: PLC0415
-    from .visitor import VisitContext  # noqa: PLC0415
+    from .footprint import root_footprint  # noqa: PLC0415
 
     record = get_metadata(function, RegionMemoryMetadata)
     facts = context.target.get_facts(MemoryHierarchyFacts)
@@ -1088,91 +1166,78 @@ def _aggregate_root(function: Function, context: AnalyzeContext) -> None:
     footprint, reuse = record.footprint, record.reuse_windows
     if cache is not None and wave is not None:
         footprint, reuse, _resources = root_footprint(context, memory_level=cache[1], wave=wave)
-    lifetimes = []
-    weights = {}
-    for local, visit in context.walk_visits():
-        stack = visit.stack if isinstance(visit, VisitContext) else ()
-        bound = tuple(formal for formal, _argument in stack[-1].bindings) if stack else ()
-        prefix = "/".join(binding_name(frame.call) or "call" for frame in stack)
-        timing = visit.request_valuation(TimingValuation)
-        for item in local.allocation.values:
-            if item not in local.allocation.material or any(
-                item.value is formal for formal in bound
-            ):
-                continue
-            lifetime = item.lifetime
-            if stack and any(item.value is formal for formal in stack[-1].implicit):
-                keys, image = instance_image(stack)
-                reached = image.range()
-                if reached.dim(isl.dim_type.PARAM):
-                    reached = reached.project_out(
-                        isl.dim_type.PARAM, 0, reached.dim(isl.dim_type.PARAM)
-                    )
-                key = keys, id(item.value), item.index
-                previous = weights.get(key)
-                weights[key] = (
-                    lifetime,
-                    reached if previous is None else previous[1].union(reached),
-                )
-                continue
-            start, end = timing.event(lifetime.defined_at), timing.event(lifetime.last_used_at)
-            if result_copies(item.value) > 1:
-                for position, frame in enumerate(stack):
-                    owner = frame.scope
-                    while owner.parent is not None:
-                        owner = owner.parent
-                    caller = context.definitions[id(owner.owner)]
-                    outer = VisitContext(stack[:position]) if position else None
-                    for loop in frame.scope.enclosing_loops():
-                        entered, exited = caller.liveness.loop_windows[id(loop)]
-                        if outer is not None:
-                            entered, exited = outer.event(entered), outer.event(exited)
-                        start, end = min(start, entered), max(end, exited)
-            lifetimes.append(
-                replace(
-                    lifetime,
-                    binding=f"{prefix}/{lifetime.binding}" if prefix else lifetime.binding,
-                    defined_at=start,
-                    last_used_at=end,
-                )
-            )
-    persistent = {}
-    for (keys, _identity, _index), (lifetime, image) in weights.items():
-        size = lifetime.bytes * image.count_val().get_num_si()
-        persistent[lifetime.memory_level] = persistent.get(lifetime.memory_level, 0) + size
-        lifetimes.append(
-            replace(
-                lifetime,
-                binding=".".join((*keys, lifetime.binding)),
-                bytes=size,
-                defined_at=0,
-                last_used_at=context.liveness.timeline_end,
-                persistent=True,
-            )
+    global_model, placements, copies, visits = _global_allocation(context)
+    options = context.options if isinstance(context.options, MemoryOptions) else MemoryOptions()
+    global_model.addresses()
+    offsets = {}
+    for level in sorted(global_model.models):
+        solved = solve_allocation(level, global_model, options)
+        offsets.update(solved.offsets)
+    _publish_placements(context, placements, offsets)
+    lifetimes = tuple(item.lifetime for item in copies)
+    peaks = _buffer_peaks(global_model.buffers, offsets, facts)
+    occupied = {peak.memory_level for peak in peaks}
+    peaks += tuple(
+        MemoryLevelPeak(
+            name, 0, 0, facts.explicit(name).capacity_bytes if facts.explicit(name) else None
         )
-    peaks = []
-    for peak in record.peaks:
-        resident = tuple(item for item in lifetimes if item.memory_level == peak.memory_level)
-        floor = sum(item.bytes for item in resident if item.persistent)
-        events = {}
-        for item in resident:
-            if item.persistent:
-                continue
-            events[item.defined_at] = events.get(item.defined_at, 0) + item.bytes
-            end = item.last_used_at + 1
-            events[end] = events.get(end, 0) - item.bytes
-        live = high = floor
-        for point in sorted(events):
-            live += events[point]
-            high = max(high, live)
-        peaks.append(
-            replace(
-                peak,
-                persistent_bytes=max(
-                    peak.persistent_bytes + persistent.get(peak.memory_level, 0), floor
-                ),
-                peak_bytes=max(peak.peak_bytes + persistent.get(peak.memory_level, 0), high),
+        for name, _spread in record.traffic.storage.kinds
+        if name not in occupied
+    )
+    peaks = tuple(sorted(peaks, key=lambda peak: peak.memory_level))
+    region_peaks = {}
+    topology_names = tuple(
+        level.name for level in context.target.get_facts(TopologyFacts).topologies
+    )
+    claimed_rmem = set()
+    rmem_peak = 0
+    for local, visit, path in visits:
+        timing = visit.request_valuation(TimingValuation)
+        for window in local.liveness.regions:
+            start, end = timing.event(window.entered_at), timing.event(window.exited_at)
+            resident = values_in_region(
+                tuple(global_model.values), window.region, start, end, facts, topology_names
             )
+            levels = _buffer_peaks(
+                global_model.buffers, offsets, facts, resident=set(resident), window=(start, end)
+            )
+            _region, held = region_peaks.setdefault(id(window.region), (window.region, {}))
+            for level in levels:
+                previous = held.get(level.memory_level)
+                held[level.memory_level] = (
+                    level
+                    if previous is None
+                    else replace(
+                        level,
+                        peak_bytes=max(previous.peak_bytes, level.peak_bytes),
+                        persistent_bytes=max(previous.persistent_bytes, level.persistent_bytes),
+                    )
+                )
+                if level.memory_level == str(StorageKind.RMEM):
+                    rmem_peak = max(rmem_peak, level.peak_bytes)
+                    claimed_rmem.update(
+                        item
+                        for item in resident
+                        if item.lifetime.memory_level == str(StorageKind.RMEM)
+                    )
+    for region, held in region_peaks.values():
+        attach(
+            region,
+            RegionMemoryMetadata(
+                solver_status="feasible", topologies=record.topologies, peaks=tuple(held.values())
+            ),
+        )
+    if claimed_rmem:
+        unclaimed = set(global_model.values) - claimed_rmem
+        others = _buffer_peaks(global_model.buffers, offsets, facts, resident=unclaimed)
+        other_peak = next(
+            (item.peak_bytes for item in others if item.memory_level == str(StorageKind.RMEM)), 0
+        )
+        peaks = tuple(
+            replace(item, peak_bytes=max(rmem_peak, other_peak))
+            if item.memory_level == str(StorageKind.RMEM)
+            else item
+            for item in peaks
         )
     errors, advisories = _memory_findings(peaks, footprint, reuse, cache, wave)
     attach(
