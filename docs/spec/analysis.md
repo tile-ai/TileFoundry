@@ -1491,9 +1491,9 @@ Metadata declares `requires` as a tuple of Valuation Protocol types and exposes
 | Protocol | Methods | Meaning |
 |---|---|---|
 | `TimingValuation` | `event(local)`, `timeline(local)` | Shift local liveness events and performance intervals into caller coordinates. |
-| `LoopNestValuation` | `repeats(call)`, `domain()` | Surrounding loop multiplicities, precision, and caller iteration domain. |
-| `VarianceValuation` | `varies(formal)` | The loops and formals on which an actual argument depends. |
-| `BindingValuation` | `actual(formal, index=0)`, `result()` | Caller source for a flattened formal tensor leaf and the call result's storage. Whole-tuple boundaries retain their definition-local identity source. |
+| `LoopNestValuation` | `repeats()`, `domain()` | Surrounding loop multiplicities, precision, and caller iteration domain. |
+| `VarianceValuation` | `varies(formal)`, `trips(formals)` | The loops and formals on which an actual argument depends; `trips` returns the union's trip product and joined precision, or `(1, EXACT)` for no formals. |
+| `BindingValuation` | `actual(formal, index=0)`, `result()`, `project(source)` | Caller source for a flattened formal tensor leaf and the call result's storage. Whole-tuple boundaries retain their definition-local identity source. `project` substitutes scalar formals, composes formal buffers with actuals, and prefixes the caller domain, returning `(BufferAlias, AnalysisPrecision)` with the joined substitution precision. |
 | `InstanceValuation` | `path()` | Module instance path, including slot indices. |
 
 `RootContext` explicitly implements Timing, LoopNest, and Instance with identity
@@ -1504,6 +1504,12 @@ by composing its call stack: timing shifts add, iteration domains concatenate,
 bindings and variance substitute from inner to outer, and paths concatenate.
 Family contexts delegate `request_valuation` to their current frame.
 
+A retained call's result source MUST project the callee's definition-local
+return source at that call site. Formal buffers substitute actual sources;
+callee-internal buffers keep their definition identity. Source precision MUST
+join the local and substitution precisions, using the source and precision
+parallel tables. Loop results continue to use their carried phi.
+
 Before any family writes, Analyze MUST compute each family's read set as its
 `produces` plus the produced types of its transitive analyzer dependencies.
 Every required Valuation on those types MUST satisfy `issubclass` for both
@@ -1511,6 +1517,53 @@ Every required Valuation on those types MUST satisfy `issubclass` for both
 family, metadata type, context, and missing Valuation. This applies equally to
 third-party analyzers. Readers that only inspect local fields with
 `get_metadata` do not resolve records and do not need a Valuation provider.
+
+Each family MUST run definitions in dependency postorder. Re-entering one
+family for the same definition in one analysis context MUST raise
+`AnalysisError`; incremental replacement of that family's record and a fresh
+`analyze` call are allowed.
+
+| Record | Required Valuations | Local form and resolution |
+|---|---|---|
+| `ComputeCostMetadata` | Variance | Local loop and mesh counts; resolve logical groups using caller variance. |
+| `MemoryMetadata` | Variance, Binding, LoopNest | Local traffic and reached addresses; resolve traffic groups and project reached coordinates through Binding. A retained Call carries its callee's summary. |
+| `RegionMemoryMetadata` | None | Definition-local traffic and footprint for callee rows; root records contain absolute aggregates and are read directly. |
+| `RooflineMetadata` | Variance, Binding, LoopNest | Computed once from each definition's local compute and memory records. |
+| `PerformanceMetadata`, `PerformanceSummaryMetadata` | Timing, LoopNest | Definition-local intervals; resolve shifts their origin into the caller timeline. |
+
+`Spread.logical_groups` is
+`tuple[tuple[tuple[Var, ...], V], ...] = ()`. When nonempty, `logical` is the sum
+of its groups. Each group records a local count and the formal parameters on
+which it depends. Resolution multiplies it by `VarianceValuation.trips` for
+that set, preserving the joined precision. Renderers MUST show only `logical`,
+`total`, and `per_unit`, and MUST NOT render the groups.
+
+Footprint evidence retains local reached sets, their `AccessRelation.values`
+expressions, and groups of reached sets with local window multiplicities.
+These fields support substitution and MUST NOT be rendered. They MUST NOT
+retain a scope or context. Numeric views of unresolved
+formal-dependent coordinates MUST use the existing widest legal bound and
+state `UPPER_BOUND`; call-site counts are computed after substitution.
+
+Root memory collection MUST project primitive local accesses through each
+`VisitContext`. Reuse windows use the caller and callee loops along that path,
+with formal variance substituted into caller loop dependencies. Distinct call
+paths distinguish local loops by the call-id prefix and local loop id; these
+transient objects MUST NOT enter metadata. Root lifetimes shift definition-local
+liveness templates using Timing. Each caller reserves a callee template's event
+span, and records argument uses at the shifted formal-use events. A staged
+`Empty` remains live across enclosing caller loops.
+
+Implicit weights MUST be counted by `(slot key chain, weight)` and the union of
+reached instance-index tuples. Caller induction variables map from the loop
+domain to those tuples; textual instance labels MUST NOT determine counts.
+Footprint coordinates prefix instance indices before unioning element addresses,
+and persistent bytes count each reached instance once.
+
+Root footprint, reuse windows, lifetimes and whole-program peaks MUST be
+absolute records. MeshRegion peak rows MUST also appear in report JSON under
+`meshes`, parallel to `calls` and `loops`. Callee rows display local records;
+a call-path view MUST resolve its Call records through the visit stack.
 
 ### 2.1 Shared IterationScope and Access
 

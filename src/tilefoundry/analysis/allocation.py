@@ -110,11 +110,19 @@ class AllocationModel:
 
     def addresses(self) -> set[AllocationValue]:
         """Create an independent address variable for every addressable value."""
+        limits = {
+            level: sum(
+                aligned(value.lifetime.bytes, alignment_of(value.value))
+                for value in self.values
+                if value.lifetime.memory_level == level
+            )
+            for level in self.models
+        }
         for index, value in enumerate(self.values):
             level = value.lifetime.memory_level
             if level in self.models:
                 self.address[value] = self.models[level].new_int_var(
-                    0, self.limits[level], f"address_{index}"
+                    0, limits[level], f"address_{index}"
                 )
         return set()
 

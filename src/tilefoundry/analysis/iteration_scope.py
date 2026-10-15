@@ -457,6 +457,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
     def _record_accesses(self, expr: Call, scope: IterationScope) -> None:
         if (
             isinstance(expr.target, Function)
+            or not leaves_of(expr.type)
             or access_relation_registry.lookup(type(expr.target)) is None
         ):
             for view in self.views:
@@ -524,6 +525,31 @@ class ScopeBuilder(CallFrameVisitor[None]):
         for view in self.views:
             self._record_source(expr, scope, view)
             binding = self.type_ctx.call_context(expr, view=view)
+            returned = definition.sources[view][id(callee.function.body)]
+            returned_precision = definition.precisions[view][id(callee.function.body)]
+
+            def project_return(source, precision):
+                if isinstance(source, tuple):
+                    projected = tuple(
+                        project_return(leaf, bounded)
+                        for leaf, bounded in zip(source, precision, strict=True)
+                    )
+                    return tuple(item[0] for item in projected), tuple(item[1] for item in projected)
+                projected, bounded = binding.project(source)
+                position = next(
+                    (index for index, formal in enumerate(formals) if source.buffer is formal), None
+                )
+                if position is not None:
+                    actual_precision = leaves(
+                        self.precisions[view][id(expr.args[position])]
+                    )[source.index]
+                    bounded = bounded.join(actual_precision)
+                return projected, precision.join(bounded)
+
+            self.sources[view][id(expr)], self.precisions[view][id(expr)] = project_return(
+                returned, returned_precision
+            )
+
             inputs = []
             for access, whole_tuple in definition.access_summary.get(view, ()):
                 position = next(

@@ -788,7 +788,8 @@ def test_dynamic_tuple_selection_keeps_all_possible_storage_resident(
 def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
     module, function, dims = _subject(family)
 
-    result = analyze(*check_program(module, function, dims=dims), analysis=family)
+    module, function = check_program(module, function, dims=dims)
+    result = analyze(module, function, analysis=family)
 
     assert result.metadata_types
     assert result.module is module
@@ -830,9 +831,11 @@ def test_without_a_size_the_result_names_the_record_bearing_view() -> None:
     module = QWEN3_1_7B.build()
     function = module.lookup("mlp")
 
-    result = analyze(*check_program(module, function), analysis="compute-cost")
+    checked, derived = check_program(module, function)
+    result = analyze(checked, derived, analysis="compute-cost")
 
-    assert result.module is module
+    assert result.module is checked
+    assert result.function is derived
     assert result.function.name == function.name
     assert origin_of(result.function) is function
     assert get_metadata(result.function, ComputeCostMetadata) is not None

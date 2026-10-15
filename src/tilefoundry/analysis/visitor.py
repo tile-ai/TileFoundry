@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable
+from dataclasses import dataclass, field, fields, replace
 
 import isl
 
@@ -13,6 +14,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.ir.types.utils import local_type_of
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import AccessRelation, identity_access, leaves_of
 from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
@@ -47,7 +49,7 @@ class RootContext(_FrameContext, TimingValuation, LoopNestValuation, InstanceVal
     def timeline(self, local: TimelineMetadata) -> TimelineMetadata:
         return local
 
-    def repeats(self, call: Call) -> Repeats:
+    def repeats(self) -> Repeats:
         from .iteration_scope import Repeats  # noqa: PLC0415
 
         return Repeats(1, 1, 1, AnalysisPrecision.EXACT)
@@ -91,7 +93,7 @@ class CallContext(
             end_ns=self.timeline_base + local.end_ns,
         )
 
-    def repeats(self, call: Call) -> Repeats:
+    def repeats(self) -> Repeats:
         """Scale outer loops; executing positions belong to the checked definition mesh."""
         return replace(self.scope.repeats_of(self.call, self.topology_level), mesh_positions=1)
 
@@ -106,6 +108,18 @@ class CallContext(
                 return self.scope.variance.get(id(index), frozenset())
             raise AnalysisError(f"call has no binding for parameter {formal.name!r}")
         return self.scope.variance.get(id(argument), frozenset())
+
+    def trips(self, formals: tuple[Var, ...]) -> tuple[int, AnalysisPrecision]:
+        changing = set().union(*(self.varies(formal) for formal in formals))
+        product = 1
+        precision = AnalysisPrecision.EXACT
+        cursor = self.scope
+        while cursor is not None:
+            if id(cursor) in changing:
+                product *= cursor.trips()
+                precision = precision.join(cursor.trips_precision)
+            cursor = cursor.parent
+        return product, precision
 
     def actual(self, formal: Var, index: int = 0) -> BufferAlias:
         argument = next((actual for param, actual in self.bindings if param is formal), None)
@@ -127,7 +141,11 @@ class CallContext(
                 self.scope.domain.insert_dims(isl.dim_type.SET, self.scope.depth, 1)
             )
             return BufferAlias(self.call, AccessRelation(relation, self.scope.domain_params))
-        return source
+        return source, precision
+
+    def project(self, source: BufferAlias) -> tuple[BufferAlias, AnalysisPrecision]:
+        """Interpret a definition-local source in this direct caller."""
+        return VisitContext((self,)).project(source)
 
     def path(self) -> tuple[str, ...]:
         return self.instance
@@ -156,13 +174,13 @@ class VisitContext(
             local = frame.timeline(local)
         return local
 
-    def repeats(self, call: Call) -> Repeats:
+    def repeats(self) -> Repeats:
         from .iteration_scope import Repeats  # noqa: PLC0415
 
         varying = trips = positions = 1
         precision = AnalysisPrecision.EXACT
         for frame in self.stack:
-            held = frame.repeats(call)
+            held = frame.repeats()
             varying *= held.varying_loop_trips
             trips *= held.loop_trips
             positions *= held.mesh_positions
@@ -184,7 +202,25 @@ class VisitContext(
                     changing.update(frame.varies(param))
         return frozenset(changing)
 
-    def _resolve_source(self, source: BufferAlias, frames: tuple[CallContext, ...]) -> BufferAlias:
+    def trips(self, formals: tuple[Var, ...]) -> tuple[int, AnalysisPrecision]:
+        changing = set().union(*(self.varies(formal) for formal in formals))
+        product = 1
+        precision = AnalysisPrecision.EXACT
+        seen = set()
+        for frame in self.stack:
+            cursor = frame.scope
+            while cursor is not None:
+                if id(cursor) in changing and id(cursor) not in seen:
+                    seen.add(id(cursor))
+                    product *= cursor.trips()
+                    precision = precision.join(cursor.trips_precision)
+                cursor = cursor.parent
+        return product, precision
+
+    def _resolve_source(
+        self, source: BufferAlias, frames: tuple[CallContext, ...]
+    ) -> tuple[BufferAlias, AnalysisPrecision]:
+        precision = AnalysisPrecision.EXACT
         for frame in reversed(frames):
             depth = frame.scope.depth
             relation = source.relation.relation.insert_dims(isl.dim_type.IN, 0, depth)
@@ -192,7 +228,7 @@ class VisitContext(
                 isl.dim_type.SET, depth, relation.dim(isl.dim_type.IN) - depth
             )
             relation = relation.intersect_domain(domain)
-            relation, _precision = bind_parameters(
+            relation, bounded = bind_parameters(
                 relation,
                 source.relation.values,
                 frame,
@@ -201,6 +237,7 @@ class VisitContext(
                 source.buffer.type,
                 narrow=frame.view == "narrow",
             )
+            precision = precision.join(bounded)
             if any(source.buffer is formal for formal, _argument in frame.bindings):
                 actual = frame.actual(source.buffer, source.index)
                 held = source.buffer.type
@@ -227,13 +264,17 @@ class VisitContext(
                     if relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
                 }
                 source = replace(source, relation=AccessRelation(relation, values))
-        return source
+        return source, precision
+
+    def project(self, source: BufferAlias) -> tuple[BufferAlias, AnalysisPrecision]:
+        """Compose a local source with every call boundary on the root stack."""
+        return self._resolve_source(source, self.stack)
 
     def actual(self, formal: Var, index: int = 0) -> BufferAlias:
-        return self._resolve_source(self.stack[-1].actual(formal, index), self.stack[:-1])
+        return self._resolve_source(self.stack[-1].actual(formal, index), self.stack[:-1])[0]
 
     def result(self) -> BufferAlias:
-        return self._resolve_source(self.stack[-1].result(), self.stack[:-1])
+        return self._resolve_source(self.stack[-1].result(), self.stack[:-1])[0]
 
     def path(self) -> tuple[str, ...]:
         return tuple(part for frame in self.stack for part in frame.path())
@@ -261,9 +302,55 @@ class AnalyzeContext(ValuationProvider):
     valuation: ValuationProvider = field(default_factory=RootContext)
     definitions: dict[int, AnalyzeContext] = field(default_factory=dict)
     sources: dict[str, dict[int, BufferAlias | tuple]] = field(default_factory=dict)
+    precisions: dict[str, dict[int, AnalysisPrecision | tuple]] = field(default_factory=dict)
     access_summary: dict[str, tuple[tuple[Access, bool], ...]] = field(default_factory=dict)
     access_parameters: dict[str, object] = field(default_factory=dict)
     node_scopes: dict[int, IterationScope] = field(default_factory=dict)
+    definition_runs: set[str] = field(default_factory=set)
+    liveness: Liveness | None = None
+    call_events: dict[int, int] = field(default_factory=dict)
+    call_times: dict[int, int] = field(default_factory=dict)
+    allocation: AllocationModel | None = None
+
+    def run_definitions(
+        self, selector: str, run: Callable[[Function, AnalyzeContext], None]
+    ) -> None:
+        """Run a family once per definition, with callees preceding callers."""
+        for local in self.definitions.values():
+            if selector in local.definition_runs:
+                raise AnalysisError(
+                    f"{selector}: metadata for definition {local.frame.function.name!r} "
+                    "is computed more than once"
+                )
+            local.definition_runs.add(selector)
+            run(local.frame.function, local)
+
+    def walk_visits(self, *, view: str = "narrow"):
+        """Yield local definitions with one composed frame for each root call path."""
+
+        def walk(local, stack):
+            yield local, VisitContext(stack) if stack else RootContext()
+            for node in collect_exprs(local.frame.function.body):
+                if not isinstance(node, Call):
+                    continue
+                callee = CallFrameVisitor.callee_frame(node, local.frame)
+                if callee is None:
+                    continue
+                frame = local.call_context(
+                    node,
+                    view=view,
+                    event_base=local.call_events.get(id(node), 0),
+                    timeline_base=local.call_times.get(id(node), 0),
+                )
+                yield from walk(self.definitions[id(callee.function)], (*stack, frame))
+
+        yield from walk(self, ())
+
+    def family[C](self, kind: type[C], **changes) -> C:
+        """Create family state while retaining the current definition's common context."""
+        values = {item.name: getattr(self, item.name) for item in fields(AnalyzeContext)}
+        values.update(changes)
+        return kind(**values)
 
     def request_valuation[V](self, valuation: type[V]) -> V:
         """Ask the current visit frame for its interpretation."""

@@ -34,13 +34,12 @@ from tilefoundry.analysis import (
     ThroughputFacts,
     Traffic,
 )
-from tilefoundry.analysis.api import analyze
+from tilefoundry.analysis.api import analyze, build_iteration_scopes
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import (
     local_duration_ns,
 )
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.iteration_scope import walk_scopes
 from tilefoundry.analysis.memory import MemoryOptions
 from tilefoundry.dsl import *
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
@@ -195,25 +194,33 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
 
     cross_scope = results["cross_scope"]
     timed = []
-    for occurrence in walk_scopes(cross_scope.scopes):
-        if occurrence.frame is None:
-            continue
-        offset, cursor = 0, occurrence
-        while cursor.parent is not None:
-            called = get_metadata(cursor.owner, PerformanceMetadata)
-            offset += 0 if called is None else called.timeline.start_ns
-            cursor = cursor.parent.occurrence
-        for call in collect_exprs(occurrence.frame.function.body):
-            if not isinstance(call, Call):
-                continue
+    context = build_iteration_scopes(cross_scope.module, cross_scope.function)
+    for local in context.definitions.values():
+        for call in _calls(local.frame.function):
+            record = get_metadata(call, PerformanceMetadata)
+            if record is not None:
+                local.call_times[id(call)] = record.timeline.start_ns
+    for local, visit in context.walk_visits():
+        for call in _calls(local.frame.function):
             record = get_metadata(call, PerformanceMetadata)
             if record is None:
                 continue
-            for iteration in range(record.timeline.trips):
-                start = offset + iteration * record.timeline.stride_ns
-                timed.append((call, replace(record, timeline=replace(record.timeline,
-                    start_ns=record.timeline.start_ns + start,
-                    end_ns=record.timeline.end_ns + start))))
+            resolved = record.resolve(visit)
+            for iteration in range(resolved.timeline.trips):
+                offset = iteration * resolved.timeline.stride_ns
+                timed.append(
+                    (
+                        call,
+                        replace(
+                            resolved,
+                            timeline=replace(
+                                resolved.timeline,
+                                start_ns=resolved.timeline.start_ns + offset,
+                                end_ns=resolved.timeline.end_ns + offset,
+                            ),
+                        ),
+                    )
+                )
     scalar_indices = tuple(
         (call, record)
         for call, record in timed
@@ -391,9 +398,9 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
     assert '#   error="smem placement peak 206.25KB exceeds capacity 103.12KB"' in render_text(
         render_analysis(tight_memory)
     )
-    assert render_analysis(tight_memory).data["functions"][0]['function_records']["memory"]["errors"] == [
-        "smem placement peak 206.25KB exceeds capacity 103.12KB"
-    ]
+    assert render_analysis(tight_memory).data["functions"][0]["function_records"]["memory"][
+        "errors"
+    ] == ["smem placement peak 206.25KB exceeds capacity 103.12KB"]
 
     tight_performance = analyze(*check_program(tight, split), analysis="performance")
     assert (

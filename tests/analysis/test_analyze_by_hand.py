@@ -49,7 +49,6 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis import footprint as footprint_analysis
-from tilefoundry.analysis import memory as memory_analysis
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
@@ -426,9 +425,9 @@ def test_capacity_exceeded_matches_the_written_ratio(
     precision: AnalysisPrecision,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    count = memory_analysis.footprint_of
+    count = footprint_analysis.footprint_of
     monkeypatch.setattr(
-        memory_analysis,
+        footprint_analysis,
         "footprint_of",
         lambda *args, **kwargs: replace(count(*args, **kwargs), precision=precision),
     )

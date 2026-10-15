@@ -152,6 +152,7 @@ def build_iteration_scopes(
         )
         context.root = context.current = builder.build()
         context.sources = builder.sources
+        context.precisions = builder.precisions
         context.access_summary = builder.summarize_formals(context.root)
         context.access_parameters = builder.access_parameters
         context.node_scopes = builder.definitions

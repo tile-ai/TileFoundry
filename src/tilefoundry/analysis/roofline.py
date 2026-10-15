@@ -138,22 +138,6 @@ class RooflineVisitor(ExprVisitor[None]):
         super().__init__()
         self.facts = facts
 
-    def visit_Call(self, call, ctx):
-        child = next((scope for scope in ctx.current.children if scope.owner is call), None)
-        if child is None:
-            return self.default_visit_leaf(call, self.visit_operands(call, ctx), ctx)
-        for arg in call.args:
-            self.visit(arg, ctx)
-        if isinstance(child.index, Expr):
-            self.visit(child.index, ctx)
-        memo, self._memo = self._memo, {}
-        try:
-            self.visit(child.frame.function.body, replace(ctx, current=child))
-        finally:
-            self._memo = memo
-        self.default_visit_leaf(call, (), ctx)
-        attach(child.frame.function, get_metadata(call, RooflineMetadata))
-
     def visit_MeshRegion(self, expr, ctx):
         for arg in expr.args:
             self.visit(arg, ctx)
@@ -189,7 +173,7 @@ class RooflineVisitor(ExprVisitor[None]):
         attach(expr, _cost_bound(cost, moved, self.facts))
 
 
-def analyze_roofline(
+def _analyze_roofline(
     function: Function,
     context: AnalyzeContext,
 ) -> None:
@@ -210,6 +194,11 @@ def analyze_roofline(
             "the memory family states for every function it measures"
         )
     attach(function, _cost_bound(total, moved, facts))
+
+
+def analyze_roofline(function: Function, context: AnalyzeContext) -> None:
+    """Derive each definition's local bound once from its recorded work and traffic."""
+    context.run_definitions(SELECTOR, _analyze_roofline)
 
 
 __all__ = ["SELECTOR", "analyze_roofline"]

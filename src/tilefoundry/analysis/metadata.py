@@ -9,8 +9,8 @@ across calls.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from dataclasses import dataclass, replace
+from typing import ClassVar, Protocol, runtime_checkable
 
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.visitor_registry.contexts import TrafficBytes
@@ -32,7 +32,7 @@ class TimingValuation(Protocol):
 class LoopNestValuation(Protocol):
     """Describe the loops surrounding a call in its caller's coordinates."""
 
-    def repeats(self, call: Call) -> Repeats: ...
+    def repeats(self) -> Repeats: ...
 
     def domain(self) -> isl.set: ...
 
@@ -43,6 +43,8 @@ class VarianceValuation(Protocol):
 
     def varies(self, formal: Var) -> frozenset[int]: ...
 
+    def trips(self, formals: tuple[Var, ...]) -> tuple[int, AnalysisPrecision]: ...
+
 
 @runtime_checkable
 class BindingValuation(Protocol):
@@ -51,6 +53,8 @@ class BindingValuation(Protocol):
     def actual(self, formal: Var, index: int = 0) -> BufferAlias: ...
 
     def result(self) -> BufferAlias: ...
+
+    def project(self, source: BufferAlias) -> tuple[BufferAlias, AnalysisPrecision]: ...
 
 
 @runtime_checkable
@@ -78,6 +82,14 @@ class Spread[V]:
     logical: V
     total: V
     per_unit: tuple[V, ...] = ()
+    logical_groups: tuple[tuple[tuple[Var, ...], V], ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.logical_groups:
+            logical = scaled(self.logical, 0)
+            for _formals, value in self.logical_groups:
+                logical = added(logical, value)
+            object.__setattr__(self, "logical", logical)
 
     def at(self, index: int) -> V:
         """One topology level's value by position, or ``total`` when absent."""
@@ -134,6 +146,37 @@ def shares[V](
     }
 
 
+def scaled[V](value: V, factor: int) -> V:
+    """Multiply a work count or a directional byte count."""
+    if isinstance(value, TrafficBytes):
+        return TrafficBytes(value.read * factor, value.write * factor)
+    return value * factor
+
+
+def added[V](left: V, right: V) -> V:
+    """Add work counts or directional byte counts."""
+    if isinstance(left, TrafficBytes):
+        return TrafficBytes(left.read + right.read, left.write + right.write)
+    return left + right
+
+
+def resolve_counts[V](
+    held: Breakdown[V], ctx: ValuationProvider
+) -> tuple[Breakdown[V], AnalysisPrecision]:
+    """Evaluate logical groups using only the declared variance interface."""
+    valuation = ctx.request_valuation(VarianceValuation)
+    precision = AnalysisPrecision.EXACT
+    entries = []
+    for kind, spread in held.kinds:
+        logical = scaled(spread.logical, 0)
+        for formals, value in spread.logical_groups or (((), spread.logical),):
+            factor, bounded = valuation.trips(formals)
+            logical = added(logical, scaled(value, factor))
+            precision = precision.join(bounded)
+        entries.append((kind, replace(spread, logical=logical, logical_groups=())))
+    return Breakdown(tuple(entries)), precision
+
+
 @dataclass(frozen=True)
 class ComputeCostMetadata(IRMetadata):
     """Floating-point and other operation kinds, each with one counting spread."""
@@ -142,6 +185,14 @@ class ComputeCostMetadata(IRMetadata):
     flops: Breakdown[int] = Breakdown()
     other_ops: Breakdown[int] = Breakdown()
     precision: AnalysisPrecision = AnalysisPrecision.EXACT
+    requires: ClassVar[tuple[type, ...]] = (VarianceValuation,)
+
+    def resolve(self, ctx: ValuationProvider) -> ComputeCostMetadata:
+        flops, first = resolve_counts(self.flops, ctx)
+        other, second = resolve_counts(self.other_ops, ctx)
+        return replace(
+            self, flops=flops, other_ops=other, precision=self.precision.join(first).join(second)
+        )
 
 
 @dataclass(frozen=True)
@@ -166,6 +217,9 @@ class Footprint:
 
     buffers: tuple[tuple[str, Breakdown[int]], ...] = ()
     precision: AnalysisPrecision = AnalysisPrecision.EXACT
+    reached: tuple[ReachedAddresses, ...] = ()
+    memory_level: str = ""
+    groups: tuple[tuple[int, tuple[ReachedAddresses, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -185,6 +239,18 @@ class MemoryMetadata(IRMetadata):
     buffer_bytes: int | None = None
     offsets: tuple[int, ...] = ()
     alias: BufferAlias | None = None
+    requires: ClassVar[tuple[type, ...]] = (VarianceValuation, BindingValuation, LoopNestValuation)
+
+    def resolve(self, ctx: ValuationProvider) -> MemoryMetadata:
+        from .footprint import resolve_footprint  # noqa: PLC0415
+
+        storage, _first = resolve_counts(self.traffic.storage, ctx)
+        communication, _second = resolve_counts(self.traffic.communication, ctx)
+        return replace(
+            self,
+            traffic=Traffic(storage, communication),
+            footprint=resolve_footprint(self.footprint, ctx),
+        )
 
 
 @dataclass(frozen=True)
@@ -264,6 +330,7 @@ class RegionMemoryMetadata(IRMetadata):
     peaks: tuple[MemoryLevelPeak, ...] = ()
     errors: tuple[str, ...] = ()
     advisories: tuple[str, ...] = ()
+    requires: ClassVar[tuple[type, ...]] = ()
 
     def peak_for(self, name: str) -> MemoryLevelPeak | None:
         """The peak recorded for *name*, if this region touches it."""
@@ -288,6 +355,7 @@ class RooflineMetadata(IRMetadata):
     memory_ns: int = 0
     ideal_ns: int = 0
     bound_by: str = "none"
+    requires: ClassVar[tuple[type, ...]] = (VarianceValuation, BindingValuation, LoopNestValuation)
 
 
 @dataclass(frozen=True)
@@ -316,6 +384,12 @@ class PerformanceMetadata(IRMetadata):
     """
 
     timeline: TimelineMetadata
+    requires: ClassVar[tuple[type, ...]] = (TimingValuation, LoopNestValuation)
+
+    def resolve(self, ctx: ValuationProvider) -> PerformanceMetadata:
+        timing = ctx.request_valuation(TimingValuation)
+        ctx.request_valuation(LoopNestValuation)
+        return replace(self, timeline=timing.timeline(self.timeline))
 
 
 @dataclass(frozen=True)
@@ -330,6 +404,12 @@ class PerformanceSummaryMetadata(IRMetadata):
 
     timeline: TimelineMetadata
     waves: int
+    requires: ClassVar[tuple[type, ...]] = (TimingValuation, LoopNestValuation)
+
+    def resolve(self, ctx: ValuationProvider) -> PerformanceSummaryMetadata:
+        timing = ctx.request_valuation(TimingValuation)
+        ctx.request_valuation(LoopNestValuation)
+        return replace(self, timeline=timing.timeline(self.timeline))
 
 
 __all__ = [

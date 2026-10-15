@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from typing import ClassVar
 
 from tilefoundry.ir.core import Call, Expr, Var
 from tilefoundry.ir.hir.function import Function
@@ -10,6 +11,10 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+
+from .errors import AnalysisError
+from .metadata import TimingValuation
 
 
 @dataclass(frozen=True)
@@ -47,15 +52,41 @@ class Liveness:
     uses: tuple[UseEvent, ...]
     regions: tuple[RegionInterval, ...]
     timeline_end: int
+    loop_windows: dict[int, tuple[int, int]] = field(default_factory=dict)
+    requires: ClassVar[tuple[type, ...]] = (TimingValuation,)
+
+    def resolve(self, ctx: ValuationProvider) -> Liveness:
+        """Translate the local template through the current call stack."""
+        timing = ctx.request_valuation(TimingValuation)
+        return Liveness(
+            tuple(
+                replace(
+                    item,
+                    defined_at=timing.event(item.defined_at),
+                    last_used_at=timing.event(item.last_used_at),
+                )
+                for item in self.intervals
+            ),
+            tuple(replace(use, at=timing.event(use.at)) for use in self.uses),
+            tuple(
+                replace(
+                    region,
+                    entered_at=timing.event(region.entered_at),
+                    exited_at=timing.event(region.exited_at),
+                )
+                for region in self.regions
+            ),
+            timing.event(self.timeline_end),
+            {
+                key: (timing.event(start), timing.event(end))
+                for key, (start, end) in self.loop_windows.items()
+            },
+        )
 
     def interval_of(self, value: Expr) -> LiveInterval | None:
         """Return *value*'s interval when it belongs to this timeline."""
         return next(
-            (
-                item
-                for item in self.intervals
-                if item.value is value
-            ),
+            (item for item in self.intervals if item.value is value),
             None,
         )
 
@@ -68,8 +99,12 @@ def result_copies(expr: Expr) -> int:
 class LivenessVisitor(ExprVisitor[None]):
     """Build definition/use intervals while preserving structured SSA edges."""
 
-    def __init__(self, function: Function, *, callee=False) -> None:
+    def __init__(
+        self, function: Function, context: AnalyzeContext | None = None, *, callee=False
+    ) -> None:
         super().__init__(root_function=function)
+        self.context = context
+        self.loop_windows = {}
         self.point = -1
         self.states: dict[int, LiveInterval] = {}
         self.definition_order: list[int] = []
@@ -127,6 +162,7 @@ class LivenessVisitor(ExprVisitor[None]):
             uses=tuple(self.uses),
             regions=tuple(self.regions),
             timeline_end=self.point,
+            loop_windows=self.loop_windows,
         )
 
     def visit_Var(self, value: Var, ctx=None) -> None:
@@ -140,9 +176,29 @@ class LivenessVisitor(ExprVisitor[None]):
             self.use(operand, point)
         self.define(value, point)
         if result_copies(value) > 1 and self.loop_entries:
-            self.loop_entries[-1][2].add(
-                id(value)
-            )
+            self.loop_entries[-1][2].add(id(value))
+
+    def visit_Call(self, call: Call, ctx=None) -> None:
+        context = self.context
+        callee = None if context is None else CallFrameVisitor.callee_frame(call, context.frame)
+        if callee is None:
+            return self.default_visit_leaf(call, self.visit_operands(call, ctx), ctx)
+        self.visit_operands(call, ctx)
+        argument_use = self.next_event()
+        for argument in call.args:
+            self.use(argument, argument_use)
+        template = context.definitions[id(callee.function)].liveness
+        if template is None:
+            raise AnalysisError(f"liveness: missing local template for {callee.function.name!r}")
+        start = self.next_event()
+        context.call_events[id(call)] = start
+        binding = context.call_context(call, event_base=start)
+        for formal, argument in binding.bindings:
+            for use in template.uses:
+                if use.value is formal:
+                    self.use(argument, binding.event(use.at), synthetic=use.synthetic)
+        self.point = start + template.timeline_end
+        self.define(call, self.next_event())
 
     def visit_MeshRegion(self, region: MeshRegion, ctx=None) -> None:
         """Make the argument/parameter and body/result binding edges explicit."""
@@ -168,7 +224,7 @@ class LivenessVisitor(ExprVisitor[None]):
         entry_use = self.next_event()
         for initial in region.args:
             self.use(initial, entry_use)
-        for parameter in region.params[len(region.yield_values):]:
+        for parameter in region.params[len(region.yield_values) :]:
             self.define(parameter, entry_use)
 
         phi_definition = self.next_event()
@@ -183,6 +239,7 @@ class LivenessVisitor(ExprVisitor[None]):
         backedge = self.next_event()
         for yielded in region.yield_values:
             self.use(yielded, backedge)
+        self.loop_windows[id(region)] = (phi_definition, backedge)
         outside, staged = self.loop_entries.pop()[1:]
         for key in outside:
             self.use(self.states[key].value, backedge, synthetic=True)
@@ -200,11 +257,13 @@ class LivenessVisitor(ExprVisitor[None]):
         self.define(region, self.next_event())
 
 
-def analyze_liveness(function: Function) -> Liveness:
+def analyze_liveness(function: Function, context: AnalyzeContext | None = None) -> Liveness:
     """Build target-independent intervals for a checked HIR function."""
     if function.body is None:
         raise ValueError(f"liveness: function {function.name!r} has no body")
-    visitor = LivenessVisitor(function)
+    visitor = LivenessVisitor(
+        function, context, callee=context is not None and not context.root.is_root_definition
+    )
     visitor.visit_function_body(function)
     return visitor.finish()
 

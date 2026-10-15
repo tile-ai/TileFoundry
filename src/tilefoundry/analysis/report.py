@@ -14,6 +14,7 @@ from tilefoundry.analysis.footprint import wave_of
 from tilefoundry.analysis.metadata import (
     Breakdown,
     ComputeCostMetadata,
+    Footprint,
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
@@ -25,6 +26,7 @@ from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.types.utils import tensor_types
@@ -94,6 +96,13 @@ def _reported_value(value: object, declared: object) -> object:
         stated = [arg for arg in get_args(declared) if arg is not type(None)]
         if len(stated) == 1:
             declared = stated[0]
+    if isinstance(value, Footprint):
+        return {
+            "buffers": {
+                name: _reported_value(held, Breakdown[int]) for name, held in value.buffers
+            },
+            "precision": value.precision.value,
+        }
     if is_dataclass(declared) and isinstance(declared, type):
         hints = get_type_hints(declared)
         return {
@@ -199,9 +208,7 @@ def _not_reported(_record: MemoryMetadata, _expr: object) -> None:
 expr_field(MemoryMetadata, "alias", _not_reported)
 
 
-def _records_of(
-    expr: object, selected: frozenset[type[IRMetadata]]
-) -> dict[str, object]:
+def _records_of(expr: object, selected: frozenset[type[IRMetadata]], ctx=None) -> dict[str, object]:
     """Every selected record on *expr*, keyed by the family that owns it."""
     result: dict[str, object] = {}
     for metadata_type in declared_records():
@@ -209,6 +216,8 @@ def _records_of(
             continue
         record = get_metadata(expr, metadata_type)
         if record is not None:
+            if ctx is not None:
+                record = record.resolve(ctx)
             result[family_of(metadata_type)] = render_record(record, expr)
     return result
 
@@ -242,6 +251,11 @@ def report_data(
     functions: tuple[Function, ...] = (),
 ) -> dict[str, object]:
     """Project every definition once, in root-first order."""
+    from tilefoundry.visitor_registry.call_frame import CallFrameVisitor  # noqa: PLC0415
+
+    from .api import build_iteration_scopes  # noqa: PLC0415
+
+    context = build_iteration_scopes(module, function, topology_level=topology_level)
     selected = frozenset(selected_types(module, analyses, metadata_types))
     target = module.resolve_target()
     wave = wave_of(module, target, topology_level)
@@ -255,28 +269,52 @@ def report_data(
         row = {
             "function": f"{owners.get(id(origin_of(body) or body), module.name)}.{body.name}",
             "function_records": _records_of(body, selected),
-            "calls": [], "loops": [],
+            "calls": [],
+            "loops": [],
+            "meshes": [],
         }
         for expr in collect_exprs(body.body):
-            if not isinstance(expr, (Call, LoopRegion)):
+            if not isinstance(expr, (Call, LoopRegion, MeshRegion)):
                 continue
-            held = _records_of(expr, selected)
+            valuation = None
+            if (
+                body is function
+                and isinstance(expr, Call)
+                and CallFrameVisitor.callee_frame(expr, context.frame) is not None
+            ):
+                valuation = context.call_context(expr)
+            held = _records_of(expr, selected, valuation)
             if not held:
                 continue
             value = (labels.get(id(expr)) if labels is not None else None) or (
-                expr.induction_var.name if isinstance(expr, LoopRegion)
+                expr.induction_var.name
+                if isinstance(expr, LoopRegion)
+                else f"mesh{len(row['meshes'])}"
+                if isinstance(expr, MeshRegion)
                 else binding_name(expr) or type(expr.target).__name__.lower()
             )
-            row["loops" if isinstance(expr, LoopRegion) else "calls"].append({"value": value, **held})
+            row[
+                "loops"
+                if isinstance(expr, LoopRegion)
+                else "meshes"
+                if isinstance(expr, MeshRegion)
+                else "calls"
+            ].append({"value": value, **held})
         asked = {ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata}
         if asked & selected or ("roofline" in analyses and asked & set(metadata_types)):
             row["totals"] = _work_totals(body)
         rows.append(row)
     return {
-        "target": target.identity, "module": module.name, "topology": topology_level,
-        "wave": {"counted": 0 if wave is None else wave[0],
-                 "declared": 0 if wave is None else wave[1]},
-        "requested": list(analyses), "executed": list(executed), "functions": rows,
+        "target": target.identity,
+        "module": module.name,
+        "topology": topology_level,
+        "wave": {
+            "counted": 0 if wave is None else wave[0],
+            "declared": 0 if wave is None else wave[1],
+        },
+        "requested": list(analyses),
+        "executed": list(executed),
+        "functions": rows,
     }
 
 

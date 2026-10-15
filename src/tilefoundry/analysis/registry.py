@@ -58,7 +58,7 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
         return _PerformanceAnalyzer(
             "performance",
             analyze_performance,
-            requires=("compute-cost", "memory"),
+            requires=("compute-cost", "memory", "roofline"),
             produces=(PerformanceMetadata, PerformanceSummaryMetadata),
         )
     return None
