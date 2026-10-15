@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.core import Call, Var, VerifyError
+from tilefoundry.ir.core import Call, Constant, Var, VerifyError
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.memory.ptr_of import PtrOf
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import LetStmt, Return, Sequential
-from tilefoundry.ir.types import DType, TensorType, make_tensor_type
+from tilefoundry.ir.tir.stmts import For, If, LetStmt, MeshScope, Return, Sequential
+from tilefoundry.ir.types import DType, Layout, Mesh, TensorType, Topology, make_tensor_type
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.passes.transforms.convert_hir_to_tir import _View
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
 
@@ -78,3 +79,52 @@ def test_letstmt_rejects_alloc_nested_in_other_expr():
     )
     with pytest.raises(VerifyError, match="AllocTensor"):
         verify_prim_function(_pf(_let(Var(type=t_scalar, name="v"), nested)))
+
+
+@pytest.mark.parametrize("scope", ("let", "if", "for", "mesh"))
+def test_var_use_must_be_inside_its_binding_scope(scope):
+    """A sibling statement cannot consume a variable held only inside a scope."""
+    scalar = make_tensor_type((), DType.i32, storage="rmem")
+    local = Var(type=scalar, name="local")
+    zero = Constant(type=scalar, value=0)
+    one = Constant(type=scalar, value=1)
+    empty = Sequential(body=())
+    if scope == "let":
+        binding = LetStmt(var=local, value=zero, body=empty)
+    elif scope == "if":
+        condition = Constant(
+            type=make_tensor_type((), DType.bool, storage="rmem"), value=True
+        )
+        binding = If(
+            cond=condition,
+            then_body=Sequential(body=(LetStmt(var=local, value=zero, body=empty),)),
+            else_body=empty,
+        )
+    elif scope == "for":
+        binding = For(induction_var=local, start=zero, stop=one, step=one, body=empty)
+    else:
+        mesh = Mesh((Topology("thread", 1),), Layout((1,), (1,)))
+        binding = MeshScope(mesh=mesh, binding=local, body=empty)
+    consumer = LetStmt(var=Var(type=scalar, name="escaped"), value=local, body=empty)
+    with pytest.raises(VerifyError, match="local.*used outside the scope that binds it"):
+        verify_prim_function(_pf(binding, consumer))
+
+
+def test_verify_rejects_a_non_ir_node():
+    """Lowering recipes must be materialized before entering TIR expression fields."""
+    tensor = make_tensor_type((4,), storage="rmem")
+    source = Var(type=tensor, name="source")
+    recipe = _View(base=source, starts=(), sizes=(4,), desired=tensor)
+    function = PrimFunction(
+        name="recipe",
+        params=(source,),
+        body=Sequential(body=(
+            LetStmt(
+                var=Var(type=tensor, name="leaked"),
+                value=recipe,
+                body=Sequential(body=()),
+            ),
+        )),
+    )
+    with pytest.raises(VerifyError, match="non-IR node _View"):
+        verify_prim_function(function)

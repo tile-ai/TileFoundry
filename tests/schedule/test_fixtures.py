@@ -114,6 +114,7 @@ from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
 
 PLAIN = (
+    "reshard_locations",
     "chunk_rmsnorm",
     "fp8_block_scaled_gemm",
     "gemm_8192x17408x5120_cta_grid",
@@ -134,6 +135,15 @@ FINALIZE_REFUSED = {
     "duplicate_output_storage": "return leaf (2,) shares storage with another output",
 }
 CANDIDATES_REFUSED = {
+    "reshard_views": "source has no unscheduled candidate site",
+    "scalar_ceildiv_gate": "source has no unscheduled candidate site",
+    "register_index_window": "source has no unscheduled candidate site",
+    "register_index_window_offset": "source has no unscheduled candidate site",
+    "register_arange": "source has no unscheduled candidate site",
+    "wgmma_b_mn_major_wide_lbo": "source has no unscheduled candidate site",
+    "cta_submesh_thread_scope": "source has no unscheduled candidate site",
+    "loop_variable_rebound": "source has no unscheduled candidate site",
+    "submesh_slice_in_sibling": "source has no unscheduled candidate site",
     "module_instances": "source has no unscheduled candidate site",
     "child_weight": "source has no unscheduled candidate site",
     "loop_carry_window": "source has no unscheduled candidate site",
@@ -234,6 +244,16 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "wgmma_b_mn_major_wide_lbo": 10240,
+    "register_index_window": 0,
+    "register_index_window_offset": 0,
+    "register_full_like": 0,
+    "register_arange": 0,
+    "reshard_views": 0,
+    "scalar_ceildiv_gate": 0,
+    "cta_submesh_thread_scope": 0,
+    "loop_variable_rebound": 0,
+    "submesh_slice_in_sibling": 32,
     "module_instances": 0,
     "duplicate_output_storage": 8,
     "loop_carry_rebind": 0,
@@ -272,6 +292,41 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "wgmma_b_mn_major_wide_lbo": {
+        "thread@0:128#0": _RmemExpectation(32768, "64x128 f32 accumulator and MMA result alias"),
+    },
+    "register_index_window": {
+        "thread@0:1#0": _RmemExpectation(32, "8 f32 output elements; index/view lifetimes reuse their storage"),
+        "cta@0:1#0": _RmemExpectation(32, "parent envelope of the register output"),
+    },
+    "register_index_window_offset": {
+        "thread@0:1#0": _RmemExpectation(32, "8 f32 output elements; index/view lifetimes reuse their storage"),
+        "cta@0:1#0": _RmemExpectation(32, "parent envelope of the register output"),
+    },
+    "register_full_like": {
+        "thread@0:1#0": _RmemExpectation(33, "8 f32 register values and a predicate"),
+        "cta@0:1#0": _RmemExpectation(33, "parent envelope of Where and its predicate"),
+    },
+    "register_arange": {
+        "thread@0:1#0": _RmemExpectation(32, "8 i32 indices and the output share storage"),
+        "cta@0:1#0": _RmemExpectation(32, "parent envelope of the indices"),
+    },
+    "reshard_views": {
+        "thread@0:1#0": _RmemExpectation(32, "8 f32 register output elements"),
+        "cta@0:2#0": _RmemExpectation(32, "parent envelope of the output"),
+    },
+    "scalar_ceildiv_gate": {
+        "thread@0:1#0": _RmemExpectation(32, "8 f32 register output elements"),
+        "cta@0:4#0": _RmemExpectation(32, "parent envelope of the output"),
+    },
+    "cta_submesh_thread_scope": {
+        "thread@0:128#0": _RmemExpectation(512, "4x32 f32 register tile"),
+    },
+    "loop_variable_rebound": {
+        "thread@0:1#0": _RmemExpectation(32, "2x4 f32 output and loop accumulator share storage"),
+        "cta@0:1#0": _RmemExpectation(32, "parent envelope of the loop accumulator"),
+    },
+    "submesh_slice_in_sibling": {},
     "duplicate_output_storage": {},
     "loop_carry_rebind": {
         "thread@0:32#0": _RmemExpectation(
@@ -1117,7 +1172,65 @@ def _check_finalize_unbound_dim(out: Path, captured: pytest.CaptureResult[str]) 
     assert not out.exists()
 
 
+def _check_reshard_locations(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    rows = _quiet_json(out, captured)["functions"][0]["calls"]
+    for index, byte_count in ((1, 256), (3, 32)):
+        memory = rows[index]["memory"]
+        assert memory["operands"][0]["read"] == byte_count
+        assert memory["operands"][1]["write"] == byte_count
+    for index in (4, 5):
+        memory = rows[index]["memory"]
+        assert memory["buffer_bytes"] is None
+        assert memory["offsets"] == []
+        assert memory["traffic"] == {"communication": {}, "storage": {}}
+
+
+def _check_reshape_matches_torch(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    report = _quiet_json(out, captured)
+    assert report["passed"]
+    comparison = report["runs"][0]["outputs"][0]["fns"][0]
+    assert comparison["fn"] == "allclose" and comparison["passed"]
+
+
+def _check_crossing_axes_refusal(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    assert captured.out == ""
+    assert "layout positions (2, 8, 2, 4, 2, 4, 8) cross logical axes of (64, 128)" in captured.err
+    assert "layout_crossing_axes.py:13:" in captured.err
+    assert not out.exists()
+
+
+def _check_selector_help(out: Path, captured: pytest.CaptureResult[str]) -> None:
+    assert captured.err == ""
+    assert "model.py[:Module[.function]]" in captured.out
+    assert "child_module" not in captured.out
+
+
+def _reshape_tensor(expected: bool = False) -> torch.Tensor:
+    x = torch.arange(128, dtype=torch.float32).reshape(1, 8, 1, 16)
+    return x.reshape(8, 16) if expected else x
+
+
 FIXTURES = (
+    FixtureCase(
+        "reshard is charged only when an element moves",
+        ("analyze", "tests/fixtures/schedule/plain/reshard_locations.py", "{out}", "--memory", "--json"),
+        _check_reshard_locations,
+    ),
+    FixtureCase(
+        "check binds two DimVars in a reshape",
+        ("check", "tests/fixtures/placed/two_dimvar_reshape.py:TwoDimVarReshape", "--inputs", "files:{tmp}/x.pt", "--expected", "{tmp}/expected.pt", "--dim", "T=8", "--dim", "C=16", "--device", "cpu", "--out", "output", "--fn", "allclose", "--atol", "0", "--rtol", "0", "--json", "{out}"),
+        _check_reshape_matches_torch,
+        files={"x.pt": _reshape_tensor, "expected.pt": partial(_reshape_tensor, True)},
+    ),
+    FixtureCase(
+        "finalize refuses a layout crossing logical axes where it is declared",
+        ("schedule", "finalize", "tests/fixtures/schedule/hir/refused/layout_crossing_axes.py", "{out}"),
+        _check_crossing_axes_refusal,
+        code=1,
+    ),
+    FixtureCase(
+        "analyze help names only Module.function", ("analyze", "--help"), _check_selector_help,
+    ),
     FixtureCase(
         "finalize binds an open row dimension",
         (
@@ -1313,7 +1426,11 @@ def test_fixture(case: FixtureCase, tmp_path: Path, capsys: pytest.CaptureFixtur
         torch.save(make(), tmp_path / name)
     out = tmp_path / "out"
     argv = [arg.format(out=out, tmp=tmp_path) for arg in case.argv]
-    assert cli_main(argv) == case.code
+    try:
+        code = cli_main(argv)
+    except SystemExit as error:
+        code = error.code
+    assert code == case.code
     case.check(out, capsys.readouterr())
 
 

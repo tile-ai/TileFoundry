@@ -314,3 +314,14 @@ def test_round_trip_lossless_for_every_dim_kind():
         isl_to_dim(domain.dim_max(i).add_constant(1), values) for i in range(len(dims))
     )
     assert recovered == dims
+
+
+@pytest.mark.parametrize("source", (
+    "{ [d] }", "{ [d] : d >= 0 }", "[n] -> { [i] : i >= 0 and 0 <= n < 3 }",
+))
+def test_cardinality_of_an_unbounded_set_is_unknown(source):
+    assert cardinality(isl.set(source)) is None
+
+
+def test_cardinality_of_a_bounded_parameter_box_stays_exact():
+    assert cardinality(isl.set("[n] -> { [i] : 0 <= i < n and 0 <= n < 3 }")) == 2

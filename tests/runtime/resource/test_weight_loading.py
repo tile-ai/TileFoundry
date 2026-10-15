@@ -15,6 +15,12 @@ from threading import Thread
 import pytest
 import torch
 
+from tests.fixtures.placed.cyclic_split_weight import (
+    CyclicSplitWeight,
+    CyclicSplitWeightTwin,
+    MeshOrderWeight,
+    MeshOrderWeightTwin,
+)
 from tests.fixtures.placed.tiny_tp_decoder import (
     DECODE_FULL,
     PROJECT_FULL,
@@ -96,3 +102,17 @@ def test_distributed_weight_loading(tmp_path) -> None:
     assert reads.counts == {"layer.project_weight": 2, "layer.decode_weight": 2}, (
         "each card reads the checkpoint once; neither read it twice"
     )
+
+
+@pytest.mark.parametrize("case", ("cyclic", "mesh_order"))
+def test_weight_loading_refuses_noncanonical_local_axes(tmp_path, case):
+    """Reject two unsupported views instead of silently loading the wrong elements."""
+    program, twin_type, size = {
+        "cyclic": (CyclicSplitWeight, CyclicSplitWeightTwin, 8),
+        "mesh_order": (MeshOrderWeight, MeshOrderWeightTwin, 32),
+    }[case]
+    program.prepare(DictResource({"weight": torch.arange(size, dtype=torch.float32)}), str(tmp_path))
+    twin = twin_type()
+    twin.load(SafetensorsResource(str(tmp_path), device="cpu"), placement=Placement({"gpu": 1}))
+    with pytest.raises(ValueError, match="not canonical.*not supported"):
+        twin.read()

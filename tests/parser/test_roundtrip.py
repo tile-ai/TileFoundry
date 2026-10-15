@@ -1,5 +1,7 @@
 """Parser-owned checks for canonical grid-loop bindings."""
 
+import math
+
 import pytest
 
 from tests._source import import_dsl
@@ -99,3 +101,24 @@ def test_signed_literals_are_constants_and_negated_values_are_calls(program, exp
         assert isinstance(result, Constant)
         assert type(result.value) is type(expected)
         assert result.value == expected
+
+
+@pytest.mark.parametrize("expression", ("(x, math.nan)", "tf.full_like(x, value=math.nan)"))
+def test_nan_round_trips_through_print_and_import(expression):
+    """Both tuple constants and static op attributes survive printable DSL."""
+    source = f'''import math
+from tilefoundry.dsl import *
+
+@func
+def nan_value(x: Tensor[(8,), "f32"]):
+    return {expression}
+'''
+    once = as_script(import_dsl(source))
+    restored = import_dsl(once)
+    assert "math.nan" in once
+    assert as_script(restored) == once
+    if expression.startswith("("):
+        assert isinstance(restored.body.elements[1], Constant)
+        assert math.isnan(restored.body.elements[1].value)
+    else:
+        assert math.isnan(restored.body.target.value)
