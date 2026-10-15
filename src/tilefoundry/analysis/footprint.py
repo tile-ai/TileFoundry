@@ -7,12 +7,13 @@ level.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 
 import isl
 
-from tilefoundry.ir.core import Call, get_metadata, value_labels
+from tilefoundry.ir.core import Call, get_metadata, value_label
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
@@ -66,6 +67,7 @@ class ReachedAddresses:
     may_coordinates: int | None = 0
     values: Mapping[str, object] = field(default_factory=dict)
     ownership: tuple[str, ...] = ()
+    label: str = ""
 
     def __post_init__(self) -> None:
         if (self.dtype is None) != (self.reached is None):
@@ -228,6 +230,7 @@ def _reached_addresses(
     precision: AnalysisPrecision,
     values: Mapping[str, object] | None = None,
     ownership: tuple[str, ...] = (),
+    label: str = "",
 ) -> ReachedAddresses:
     """Keep the possible image and the boundary's counting evidence together."""
     reached = relation.range()
@@ -240,6 +243,7 @@ def _reached_addresses(
             may_coordinates = cardinality(reached)
     return ReachedAddresses(
         target=access.target,
+        label=label,
         ownership=ownership,
         output_index=access.output_index,
         dtype=dtype,
@@ -886,7 +890,8 @@ def reached_by(
             )
         )
     result.extend(_missing_boundaries(call, accesses, operands, ctx))
-    return tuple(result)
+    labels = footprint_labels(result, scope)
+    return tuple(replace(item, label=labels[item.target]) for item in result)
 
 
 @dataclass
@@ -958,6 +963,7 @@ def _window_footprints(boundaries, uncounted, buffers, *, memory_level):
                     precision=boundary.access.precision,
                     values={**boundary.scope.domain_params, **dict(boundary.mesh_parameters)},
                     ownership=boundary.ownership,
+                    label=boundary.label.removeprefix("/".join((*boundary.ownership, ""))),
                 )
             )
         if time_scope in footprints:
@@ -1121,15 +1127,46 @@ def counted_precision(items):
     return precision
 
 
-def footprint_labels(items):
-    """Name reached SSA leaves consistently for footprint and reuse rows."""
-    targets = dict.fromkeys(item.target for item in items if item.reached is not None)
-    expressions = dict.fromkeys(target.expr for target in targets)
-    labels = dict(zip(expressions, value_labels(expressions), strict=True))
+def footprint_labels(items, scope=None):
+    """Capture names at collection; disambiguate stored names when rendering.
+
+    Declared roots keep their names. Other roots use their first capturing
+    parameter in program order, falling back to the existing SSA value label.
+    Stored labels include a tuple leaf suffix, but never instance ownership.
+    """
+    items = tuple(items)
+    captured = {}
+    if scope is not None:
+        while scope.parent is not None:
+            scope = scope.parent
+        for local in walk_scopes(scope):
+            for param, _argument in local.captures:
+                captured.setdefault(local.capture_root(param), param)
+    roots = {}
+    for item in items:
+        root = item.target.expr
+        suffix = f"[{item.target.index}]" if isinstance(root.type, TupleType) else ""
+        if scope is not None:
+            named = root if getattr(root, "name", None) else captured.get(root, root)
+            roots.setdefault(root, value_label(named) or f"<value {len(roots)}>")
+        else:
+            roots.setdefault(
+                root,
+                item.label.removesuffix(suffix)
+                if item.label
+                else value_label(root) or f"<value {len(roots)}>",
+            )
+    if scope is None:
+        repeated = Counter(roots.values())
+        seen = Counter()
+        for root, label in roots.items():
+            seen[label] += 1
+            if repeated[label] > 1 and seen[label] > 1:
+                roots[root] = f"{label}_{seen[label]}"
     return {
-        target: labels[target.expr]
-        + (f"[{target.index}]" if isinstance(target.expr.type, TupleType) else "")
-        for target in targets
+        item.target: roots[item.target.expr]
+        + (f"[{item.target.index}]" if isinstance(item.target.expr.type, TupleType) else "")
+        for item in items
     }
 
 
@@ -1223,16 +1260,19 @@ def resolve_footprint(footprint, ctx):
 
             target, image, values, precision = project_image(item.reached)
             must = image if item.must.is_equal(item.reached) else project_image(item.must)[1]
-            resolved.append(
-                replace(
-                    item,
-                    target=target,
-                    reached=image,
-                    must=must,
-                    precision=item.precision.join(precision),
-                    values=values,
-                )
+            projected = replace(
+                item,
+                target=target,
+                reached=image,
+                must=must,
+                precision=item.precision.join(precision),
+                values=values,
             )
+            if target != item.target:
+                projected = replace(
+                    projected, label=footprint_labels((projected,), ctx.current)[target]
+                )
+            resolved.append(projected)
         groups.append((windows, tuple(resolved)))
     return Footprint(tuple(groups))
 
