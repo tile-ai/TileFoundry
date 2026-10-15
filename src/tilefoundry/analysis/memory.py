@@ -1170,12 +1170,17 @@ def _aggregate_root(function: Function, context: AnalyzeContext) -> None:
     options = context.options if isinstance(context.options, MemoryOptions) else MemoryOptions()
     global_model.addresses()
     offsets = {}
+    placement_peaks = {}
     for level in sorted(global_model.models):
         solved = solve_allocation(level, global_model, options)
         offsets.update(solved.offsets)
+        placement_peaks[level] = solved.peak_bytes
     _publish_placements(context, placements, offsets)
     lifetimes = tuple(item.lifetime for item in copies)
-    peaks = _buffer_peaks(global_model.buffers, offsets, facts)
+    peaks = tuple(
+        replace(peak, peak_bytes=placement_peaks.get(peak.memory_level, peak.peak_bytes))
+        for peak in _buffer_peaks(global_model.buffers, offsets, facts)
+    )
     occupied = {peak.memory_level for peak in peaks}
     peaks += tuple(
         MemoryLevelPeak(

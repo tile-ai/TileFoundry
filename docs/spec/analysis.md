@@ -672,12 +672,27 @@ be placed using the instance-index union. One root global solve MUST replace
 independent per-definition placements. Non-boundary material offsets MUST come
 from that global solution.
 
+Capacity is settled against authored definition order, which fixes every
+Buffer member's lifetime before any is measured. Whole-Function `gmem` and `smem`
+peaks use exact polyhedral access relations to place addressable Buffers; the
+Call results report their concrete offsets. A `MeshRegion` peak instead scans
+Buffer occupancy over its entry-to-exit window, counting each Buffer once and
+using the union of live address intervals for addressable levels, but only for
+levels the region holds. In the target's ordered topology hierarchy, the region's
+outermost level MUST be the target-declared owner or an enclosing level; a
+region strictly inside the owner is not eligible to report that level, and a
+target-owned level makes no `MeshRegion` eligible. Eligibility does not decide
+attribution: every eligible region whose mesh contains the value's authored
+holder mesh reports it, so an enclosing region also counts values held by its
+nested regions. A value that declares no holder belongs to no region; analysis
+does not infer a holder from its layout or storage name. `rmem` is not
+address-solved: the Function reports the maximum of all stage peaks and a
+whole-Function live-byte scan of values that no `MeshRegion` claims.
+
 At each event, `rmem` counts a Buffer once, using its greatest live member span.
 `gmem` and `smem` window occupancy and persistent bytes MUST count the union of
-live physical address intervals. Mesh-region ownership filtering still applies;
-a repeated callee region reports the maximum across visits. The Function's
-register peak is the maximum of mesh-region stage peaks and the scan of values
-claimed by no region.
+live physical address intervals. A repeated callee region reports the maximum
+across visits.
 
 ```python
 class MemoryLevelPeak:
@@ -692,7 +707,7 @@ class MemoryLevelPeak:
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `MemoryLevelPeak.memory_level` | Each storage level with at least one lifetime or traffic entry, sorted by name. | No |
-| `MemoryLevelPeak.peak_bytes` | On a Function, the greatest union of live address intervals in the first feasible global `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest Buffer occupancy in its inclusive entry-to-exit event window. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
+| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible global `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest Buffer occupancy in its inclusive entry-to-exit event window. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
 | `MemoryLevelPeak.persistent_bytes` | Union of persistent address intervals at `gmem`/`smem`; greatest persistent member span per Buffer at other levels. | No |
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level. | As above |
