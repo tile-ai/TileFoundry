@@ -398,11 +398,13 @@ class Lowering(CallFrameVisitor[Expr | _View]):
 
         index(self.function.body, self.lexical_root)
         self.output_ties = {}
-        for value in calls.values():
-            alias = self.output_windows.get(id(value))
+        for value in values.values():
+            memory = get_metadata(value, MemoryMetadata)
+            alias = None if memory is None else memory.alias
             if (
                 alias is not None
                 and id(alias.buffer) in self.carried_initials
+                and self.carried_initials.get(id(value)) is not alias.buffer
                 and alias.relation.relation.is_identity()
                 and getattr(value.type, "shape", None) == alias.buffer.type.shape
             ):
