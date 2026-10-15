@@ -15,7 +15,7 @@ from typing import ClassVar, Protocol, runtime_checkable
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
-from .access import BufferAlias
+from .access import BufferAlias, SSAValue
 from .precision import AnalysisPrecision
 
 
@@ -255,11 +255,12 @@ class ValueLifetime:
     ones carry the numeric suffix the printed form of the same program uses.
     """
 
-    binding: str
-    memory_level: str
-    bytes: int
+    value: SSAValue
     defined_at: int
     last_used_at: int
+    binding: str = ""
+    memory_level: str = ""
+    bytes: int = 0
     persistent: bool = False
 
 

@@ -15,7 +15,7 @@ from math import prod
 import isl
 
 from tilefoundry.analysis import MemoryMetadata, analyze
-from tilefoundry.analysis.access import BufferAlias
+from tilefoundry.analysis.access import BufferAlias, SSAValue
 from tilefoundry.analysis.check import check_program
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
@@ -349,15 +349,15 @@ class Lowering(ValuationVisitor[Expr | _View]):
             alias = None if memory is None else memory.alias
             if (
                 alias is not None
-                and self._carry_initial(alias.buffer) is not None
-                and self._carry_initial(value) is not alias.buffer
+                and self._carry_initial(alias.target.expr) is not None
+                and self._carry_initial(value) is not alias.target.expr
                 and alias.relation.relation.is_identity()
-                and getattr(value.type, "shape", None) == alias.buffer.type.shape
+                and getattr(value.type, "shape", None) == alias.target.expr.type.shape
             ):
                 root = self._return_storage(value, (), aliases=False)
                 region = self.locations.get(id(root))
                 loops = () if region is None else region.enclosing_loops()
-                if any(any(alias.buffer is param for param in loop.params) for loop in loops):
+                if any(any(alias.target.expr is param for param in loop.params) for loop in loops):
                     self.output_ties[id(root)] = alias
                 self.output_ties[id(value)] = alias
         self.output_windows = {
@@ -482,7 +482,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
                 if (
                     memory is not None
                     and memory.alias is not None
-                    and memory.alias.buffer is initial
+                    and memory.alias.target.expr is initial
                 ):
                     return self._return_storage(initial, path, aliases=aliases)
                 return value if not path else None
@@ -497,7 +497,11 @@ class Lowering(ValuationVisitor[Expr | _View]):
         if isinstance(value, Call):
             memory = get_metadata(value, MemoryMetadata)
             if aliases and memory is not None and memory.alias is not None:
-                return self._return_storage(memory.alias.buffer, path, aliases=aliases)
+                return self._return_storage(
+                    memory.alias.target.expr,
+                    (*self._alias_path(memory.alias.target), *path),
+                    aliases=aliases,
+                )
             if isinstance(value.target, TupleGetItem):
                 index = static_dim_value(value.args[1])
                 if index is not None:
@@ -527,7 +531,9 @@ class Lowering(ValuationVisitor[Expr | _View]):
                     memory = get_metadata(root, MemoryMetadata)
                     if memory is None or memory.alias is None:
                         break
-                    base = self._return_storage(memory.alias.buffer, ())
+                    base = self._return_storage(
+                        memory.alias.target.expr, self._alias_path(memory.alias.target)
+                    )
                     if base is None or base is root:
                         break
                     root = base
@@ -747,17 +753,17 @@ class Lowering(ValuationVisitor[Expr | _View]):
         for slot, param in enumerate(loop.params[: len(loop.yield_values)]):
             memory = get_metadata(param, MemoryMetadata)
             if memory is not None and memory.alias is not None:
-                if memory.alias.buffer is not loop.args[slot]:
+                if memory.alias.target.expr is not loop.args[slot]:
                     raise LoweringError(
                         f"loop parameter {param.name!r} has an alias that is not a carry tie"
                     )
-                carried = self._alias_value(param, memory.alias.buffer)
+                carried = self._alias_value(param, memory.alias.target)
             else:
                 tie = self.output_ties.get(id(param))
                 carried = (
                     self._declare(param, param.type, 1)
                     if tie is None
-                    else self._alias_value(param, tie.buffer)
+                    else self._alias_value(param, tie.target)
                 )
                 self._emit_copy(self.visit(loop.args[slot]), carried)
             self._memo[id(param)] = (param, carried)
@@ -778,7 +784,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
                 tied = (
                     memory is not None
                     and memory.alias is not None
-                    and self._capture_root(memory.alias.buffer) is param
+                    and self._capture_root(memory.alias.target.expr) is param
                 )
                 if not tied:
                     self._emit_copy(value, carried)
@@ -957,7 +963,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
     def _declare_result(self, call: Call, buffers: int) -> Expr:
         tie = self.output_ties.get(id(call))
         if tie is not None:
-            return self._alias_value(call, tie.buffer)
+            return self._alias_value(call, tie.target)
         if call.type.storage is StorageKind.RMEM and buffers != 1:
             raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
         return self._declare(call, call.type, buffers)
@@ -970,7 +976,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
         return self._declare_result(call, call.target.buffers)
 
     def _bind_window_alias(self, producer: Call, window: BufferAlias) -> None:
-        self._alias_value(producer, window.buffer)
+        self._alias_value(producer, window.target)
         for value in window.relation.values.values():
             if (
                 isinstance(value, Expr)
@@ -1018,7 +1024,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
         tied = (
             memory is not None
             and memory.alias is not None
-            and self._capture_root(memory.alias.buffer) is self._capture_root(call.args[0])
+            and self._capture_root(memory.alias.target.expr) is self._capture_root(call.args[0])
         )
         result = target if tied else self._declare_result(call, 1)
         if not tied:
@@ -1036,7 +1042,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
             tied
             and memory is not None
             and memory.alias is not None
-            and memory.alias.buffer is destination
+            and memory.alias.target.expr is destination
         ):
             return result
         starts, desired = self._insert_window(call, result, update.type)
@@ -1124,9 +1130,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
         if destination_operand is not None and output_window is None:
             tie = self.output_ties.get(id(call))
             written = (
-                self.visit(destination_operand)
-                if tie is None
-                else self._alias_value(call, tie.buffer)
+                self.visit(destination_operand) if tie is None else self._alias_value(call, tie.target)
             )
             if tie is not None:
                 self._memo[id(destination_operand)] = (destination_operand, written)
@@ -1206,16 +1210,28 @@ class Lowering(ValuationVisitor[Expr | _View]):
             raise LoweringError(f"{_label(call)} produced no addressable result")
         return written
 
-    def _alias_value(self, producer: Expr, value: Expr) -> Expr:
+    def _alias_path(self, value: SSAValue) -> tuple[int, ...]:
+        return tuple(
+            path for path, held in self._return_leaves(value.expr.type) if isinstance(held, TensorType)
+        )[value.index]
+
+    def _alias_value(self, producer: Expr, value: Expr | SSAValue) -> Expr:
+        path = self._alias_path(value) if isinstance(value, SSAValue) else ()
+        value = value.expr if isinstance(value, SSAValue) else value
         known = self._memo.get(id(value))
         if known is None:
-            raise LoweringError(
-                f"{_label(producer)} alias requires lowered value {_label(value)!r}"
+            raise LoweringError(f"{_label(producer)} alias requires lowered value {_label(value)!r}")
+        result = known[1]
+        for index in path:
+            result = (
+                result.elements[index]
+                if isinstance(result, Tuple)
+                else Call(TupleGetItem(), (result, i64_const(index)), type=result.type.fields[index])
             )
-        return known[1]
+        return result
 
     def _output_window(self, alias: BufferAlias, desired: TensorType) -> _View:
-        target = self._memo[id(alias.buffer)][1]
+        target = self._alias_value(alias.target.expr, alias.target)
         origin = alias.relation.relation
         for axis in range(origin.dim(isl.dim_type.IN)):
             origin = origin.fix_val(isl.dim_type.IN, axis, isl.val(0))

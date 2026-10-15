@@ -254,7 +254,10 @@ class ConvertHIRToTIR(ModulePass):
     copying only when the update's alias names that HIR destination, resolved
     through region captures.
     A loop-carried entry alias must name its slot's initial value; any other
-    entry alias raises `LoweringError`. Lowering MUST execute published ties at
+    entry alias raises `LoweringError`. A published alias identifies its
+    destination as `BufferAlias.target: SSAValue`. Lowering MUST select the
+    flattened target leaf, including nested tuple paths, before binding storage.
+    Lowering MUST execute published ties at
     every storage level: a tied carry reuses its initial storage; otherwise it
     copies the initial into independent phi storage before the loop. A published
     yield-to-phi alias binds the producer output to phi storage, including rmem.

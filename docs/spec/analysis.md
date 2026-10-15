@@ -444,19 +444,44 @@ class Footprint:
   - A footprint MUST be absent, not empty, when analysis cannot state the wave
     it is taken over.
 
+##### `SSAValue`
+
+```python
+class SSAValue:
+    expr: Expr
+    index: int = 0
+```
+
+`SSAValue` identifies one expression's flattened tensor result. Equality and
+hashing MUST use expression identity and the flattened leaf index, rather than
+structural expression equality. A tensor result uses index zero. Nested tuple
+fields use consecutive flattened tensor leaf indices. Scalar event identities
+also use index zero, but do not create storage allocations.
+
+`Access.target`, `ReachedAddresses.target`, `BufferAlias.target`, and
+`ValueLifetime.value` MUST use this identity. Call boundary indices remain
+separate: they identify operands or output boundaries, rather than storage.
+
 ##### `ValueLifetime`
 
 ```python
 class ValueLifetime:
     """One value's residency, as positions in the Function's value order."""
 
-    binding: str
-    memory_level: str
-    bytes: int
+    value: SSAValue
     defined_at: int
     last_used_at: int
+    binding: str = ""
+    memory_level: str = ""
+    bytes: int = 0
     persistent: bool = False
 ```
+
+Liveness MUST produce the sole per-leaf interval representation, `ValueLifetime`.
+Memory enriches that record with its binding, storage level, byte span and
+persistence. Allocation MUST NOT recompute leaf intervals from a second use
+index. Reports MUST omit `value` and retain the existing binding, memory_level,
+bytes, defined_at, last_used_at and persistent fields.
 
 One ordinary expression event uses its operands and defines its result. A
 region adds separate binding and exit events: a mesh argument is used before
@@ -468,7 +493,7 @@ are monotonic across the whole Function, including nested and sibling regions.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names differ by the printer's numeric suffix in definition order. A value with neither name nor span is `<value N>` in definition order. A tuple result appends `[index]`, its flattened `AllocationValue.index`; tensor results retain the unsuffixed name. | No |
+| `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names differ by the printer's numeric suffix in definition order. A value with neither name nor span is `<value N>` in definition order. A tuple result appends `[index]`, its flattened `SSAValue.index`; tensor results retain the unsuffixed name. | No |
 | `ValueLifetime.memory_level` | Emit one lifetime per material `AllocationValue`, at the level occupied by its projected Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. A `ScheduleOp` whose selected instruction has a write-only result occupies `buffers` copies of those bytes; a `READ \| WRITE` result occupies one. | `MemoryHierarchyFacts.explicit_levels[].owner` |
 | `ValueLifetime.defined_at` | Definition event on the Function-wide structured SSA timeline. A staged (`buffers > 1`) result starts at the outermost enclosing loop's phi event rather than its own definition event. | No |
@@ -484,21 +509,21 @@ are monotonic across the whole Function, including nested and sibling regions.
 
 ```python
 class BufferAlias:
-    buffer: Expr                  # the value whose bytes hold this result
-    relation: AccessRelation      # result coordinates -> buffer coordinates
-    index: int = 0                # flattened tensor result index of buffer
+    target: SSAValue              # the result whose bytes hold this value
+    relation: AccessRelation      # result coordinates -> target coordinates
+    kind: AliasKind
 ```
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `BufferAlias.buffer` | A registered view: the operand `aliased_operand` names. An adopted InsertSlice update window: the destination resolved through region captures. A carried-phi tie: the initial or phi value; an accepted InsertSlice result tie: its destination. | No |
+| `BufferAlias.target` | A registered view: the operand `aliased_operand` names. An adopted InsertSlice update window: the destination resolved through region captures. A carried-phi tie: the initial or phi value; an accepted InsertSlice result tie: its destination. | No |
 | `BufferAlias.relation` | A registered view: `renaming_relation`. An update window: the proven operand-to-result relation with parameters resolved to values visible at the producer. A tie: identity. | No |
-| `BufferAlias.index` | The flattened tensor result index of `buffer`; zero for a tensor result. Source identity is `(buffer, index)`. | No |
+| `BufferAlias.kind` | VIEW when source composition passes through a registered view, otherwise FORWARD; allocation candidates and accepted ties use the kinds below. | No |
 
 - constraints:
   - An op registered with `@register_buffer_alias(Op)` returns the viewed
     input's position or `None` for each Call. `buffer_alias()` returns
-    `BufferAlias(buffer, relation)`, describing that input's bytes and the
+    `BufferAlias(SSAValue(buffer), relation, AliasKind.VIEW)`, describing that input's bytes and the
     result-to-input coordinates, and proves the declaration on every call.
     `Slice` and `Reshape` alias input zero and MUST NOT allocate independent
     buffers. `Tuple`, `MeshRegion`, and `LoopRegion` results and static tuple
@@ -519,7 +544,7 @@ class BufferAlias:
     declared access relation MUST bijectively map result coordinates to source
     coordinates with the same physical address, requiring the source's
     address and recording zero traffic.
-  - Registered buffer aliases MUST create an `AllocationValue(value, index, lifetime)`
+  - Registered buffer aliases MUST create an `AllocationValue(lifetime, aliases)`
     with its own SSA interval and the operand's byte span, requiring the same
     address. A persistent operand MUST pin its alias at the same
     address. Aliases MUST NOT receive independent `buffer_bytes` or
@@ -551,48 +576,55 @@ class BufferAlias:
     compute each value's source once
     per view in definition order, using only its operands' source entries.
     Registered views compose their result-to-input relation with the input's
-    source. MeshRegion results use their body's source; static tuple projections
+    source. The table MUST store the fully composed `BufferAlias` under an
+    `SSAValue` key, with precision in a parallel per-view table. All scopes in
+    one definition share those tables; other definitions use independent tables.
+    Allocation MUST consume the same structural source records instead of
+    recomputing view or forwarding links. MeshRegion results use their body's source; static tuple projections
     select a structural element or a material op's flattened result index;
     loop results use their corresponding carried phi; capture parameters use
     their arguments' sources. Every other source is the value itself and identity.
     `resolve_access` MUST perform one source lookup and one relation composition,
-    rather than trace producers per access. Boundary parameters MUST be eliminated
+    rather than trace producers per access. Formal-dependent coordinates are
+    retained only when the caller explicitly supplies the definition's formals;
+    resolving a boundary MUST NOT walk to a definition root to discover them. Boundary parameters MUST be eliminated
     before composition in the operand's coordinate space. View parameters MUST
     be eliminated when constructing that view's source, in the input's coordinate
     space and using the input's type for widening. Source relations retain their
     defining loop prefix, aligned to the access's enclosing loops; loops internal
     to an escaping region MUST be projected out.
-  - Liveness MUST record each SSA value's own interval. Every tensor SSA value,
+  - Liveness MUST record each SSA value's own interval. Except for dynamic
+    projections and their forwards described below, every tensor SSA value,
     including views, region parameters and results, and static tuple projections,
     MUST have its own `AllocationValue`; intervals MUST NOT be merged or extended
-    to include aliases. Every tuple value MUST have one `AllocationValue(value, index)`
+    to include aliases. Every tuple value MUST have one `AllocationValue` identified by `lifetime.value`
     per flattened tensor result. Its interval runs from the tuple's definition to
     the last use belonging to that result: a static tuple projection uses only
     the selected result, while whole-tuple operations, region captures, synthetic
     loop uses, and returns use every result. A dynamic tuple projection MUST
     conservatively
-    keep every possible tensor leaf resident until the function timeline ends,
-    using an `AllocationValue` at the projection's definition tied to that leaf's
-    address. The projection and its forwards have no independent storage
-    and MUST NOT participate in in-place reuse.
+    keep every possible tensor leaf resident until the function timeline ends:
+    liveness MUST record a synthetic use at `timeline_end` on each flattened
+    leaf of the tuple operand. These are the tuple leaves' own uses; their
+    structural source links keep the element storage resident. The projection's
+    own interval MUST follow only its own uses. The projection and its forwards,
+    including capture parameters and region results, MUST have no
+    `AllocationValue` (storage is `None`) and MUST NOT participate in in-place reuse.
 
 ##### `MemoryLevelPeak`
 
-Allocation first collects definition-local SSA intervals and storage relations,
-then partitions values into physical `Buffer`s, and only then creates address
-variables. A Buffer contains its members, their maximum byte span, maximum
-alignment, persistent flag, and the union of their live intervals. A Buffer
-has one address at `gmem` or `smem`; register memory is scanned instead.
-
-An internal `Alias(target: AllocationValue, relation: AccessRelation, kind:
-AliasKind)` records a result-to-target coordinate relation. `AllocationValue`
-retains its own interval and an `aliases: tuple[Alias, ...]`; at most one Alias
-is unconditional. The kind determines the following order and behavior:
+Allocation collects `AllocationValue(lifetime, aliases)` records.
+`AllocationValue.value` is a property returning `lifetime.value`; it MUST NOT
+store a second copy of the SSA identity. Each alias is a `BufferAlias` whose
+SSA target is looked up in the allocation table. Structural aliases and accepted
+ties form value links; there is no separate partition or merged Buffer object.
+An allocation root is found by following accepted links. The kind determines
+the following order and behavior:
 
 | Kind | Holder -> target | Acceptance | Published in `MemoryMetadata.alias` |
 |---|---|---|---|
-| VIEW | Registered view -> operand | Unconditional proved renaming | No |
-| FORWARD | Tuple, region result, capture or static projection -> source | Unconditional identity | No |
+| VIEW | Source path through a registered view -> source root | Unconditional cached, proved composition | No |
+| FORWARD | Source path without a view -> source root | Unconditional cached source | No |
 | CARRY_INIT | Phi -> initial | Ordinary tie condition | Yes |
 | CARRY_YIELD | Yield -> phi | Loop-body condition below | Yes |
 | INSERT_SLICE | Result -> destination | Ordinary tie condition | Yes |
@@ -1712,10 +1744,13 @@ An input `Access` stores its original Call boundary index as well as its relatio
 and allocation expression; an output stores `input_index=None` and its own output
 boundary index, which is the tuple field it answers for. Failed boundaries remain
 absent without shifting the index on later successful inputs or outputs. Storage
-level and element width are read from the allocation type. `Access.index` is the
-source's flattened tensor result index, zero for tensor results; buffers MUST be
-grouped by `(Access.buffer, Access.index)`, and a tuple result's label is
-`<name>[index]`. A refused descendant
+level and element width are read from `Access.target.expr` at
+`Access.target.index`. Sources MUST be grouped by `SSAValue`; a tuple result's
+label is `<name>[index]`. A whole-tuple input boundary uses leaf-slot coordinates;
+`resolve_access` MUST expand each possibly selected slot into a separate Access
+in that leaf's legal tensor-element coordinates. These accesses retain the
+original boundary index, precision and may-access flag, and their target remains
+the definition-local tuple leaf. No sentinel leaf index represents a whole tuple. A refused descendant
 makes its owning scope unknown for that view. Non-affine runtime indices retain
 the widest legal access approximation.
 Normalization shares one derived body and its records per reached definition

@@ -40,6 +40,7 @@ from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationV
 from tilefoundry.visitor_registry.contexts import Cost, CostContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
+from .access import SSAValue
 from .allocation import (
     AllocationConstraintVisitor,
     AllocationModel,
@@ -458,7 +459,7 @@ def values_in_region(
                 f"memory: level {lifetime.memory_level!r} owner {declared.owner!r} "
                 f"is not a declared topology in {topology_names}"
             )
-        held = leaves_of(item.value.type)[item.index]
+        held = leaves_of(item.value.expr.type)[item.value.index]
         if isinstance(held, TensorType) and is_unsharded_layout(held.layout):
             if not entered_at < lifetime.defined_at < exited_at:
                 continue
@@ -681,22 +682,23 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for _call, reached in calls
         for item in reached
     )
-    distinct: dict[tuple[int, int], Expr] = {}
+    distinct: dict[SSAValue, Expr] = {}
     for item in merged_reached:
         if item.reached is not None:
-            distinct.setdefault((id(item.buffer), item.index), item.buffer)
+            distinct.setdefault(item.target, item.target.expr)
     captured_names = {}
     for scope in walk_scopes(context.root):
         for param, _argument in scope.captures:
             captured_names.setdefault(id(scope.capture_root(param)), param)
-    label_sources = {key[0]: value for key, value in distinct.items()}
+    label_sources = {id(key.expr): value for key, value in distinct.items()}
     label_values = (
         value if getattr(value, "name", None) else captured_names.get(key, value)
         for key, value in label_sources.items()
     )
     source_labels = dict(zip(label_sources, value_labels(label_values), strict=True))
     footprint_labels = {
-        key: source_labels[key[0]] + (f"[{key[1]}]" if isinstance(value.type, TupleType) else "")
+        key: source_labels[id(key.expr)]
+        + (f"[{key.index}]" if isinstance(value.type, TupleType) else "")
         for key, value in distinct.items()
     }
     liveness = context.liveness = analyze_liveness(function, context)
@@ -709,27 +711,23 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
     persistent = set()
 
     for interval in liveness.intervals:
-        key = id(interval.value)
-        if any(interval.value is param for param in function.params):
-            persistent.add(key)
-        held = placement.local_type_of(interval.value)
-        slots = []
-        for leaf in leaves_of(held):
-            quantity = next(
-                (
-                    (level, amount)
-                    for level, amount in bytes_by_storage(leaf).items()
-                    if facts.explicit(level) is not None
-                ),
-                None,
-            )
-            if quantity is None:
-                slots.append(None)
-                continue
+        value = interval.value
+        if any(value.expr is param for param in function.params):
+            persistent.add(value)
+        types = leaves_of(placement.local_type_of(value.expr))
+        if value.index >= len(types):
+            continue
+        quantity = next(
+            (
+                (level, amount)
+                for level, amount in bytes_by_storage(types[value.index]).items()
+                if facts.explicit(level) is not None
+            ),
+            None,
+        )
+        if quantity is not None:
             level, amount = quantity
-            amount *= result_copies(interval.value)
-            slots.append((level, amount))
-        quantities[key] = tuple(slots)
+            quantities[value] = level, amount * result_copies(value.expr)
     model = AllocationModel(
         **vars(context),
         liveness=liveness,
@@ -741,27 +739,32 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
     returned = allocation.visit_function_body(function, model)
     model.returned = leaves(returned)
     model.parameters = {
-        item for item in model.values if any(item.value is formal for formal in function.params)
+        item
+        for item in model.values
+        if any(item.value.expr is formal for formal in function.params)
     }
     model.outputs = set(model.returned)
     context.allocation = model
-    definitions = {id(interval.value): index for index, interval in enumerate(liveness.intervals)}
+    definitions = {interval.value: index for index, interval in enumerate(liveness.intervals)}
     model.values.sort(
         key=lambda item: (
-            definitions[id(item.value)],
-            item.index,
+            definitions[item.value],
+            item.value.index,
         )
     )
     allocation_values = tuple(model.values)
     material_values = tuple(item for item in allocation_values if item in model.material)
-    producers = {id(item.value): item.value for item in (*material_values, *allocation_values)}
+    producers = {
+        id(item.value.expr): item.value.expr for item in (*material_values, *allocation_values)
+    }
     labels = dict(zip(producers, value_labels(producers.values()), strict=True))
     for item in allocation_values:
-        key = id(item.value)
+        key = id(item.value.expr)
         label = labels[key]
         item.lifetime = replace(
             item.lifetime,
-            binding=label + (f"[{item.index}]" if isinstance(item.value.type, TupleType) else ""),
+            binding=label
+            + (f"[{item.value.index}]" if isinstance(item.value.expr.type, TupleType) else ""),
         )
     lifetimes = tuple(item.lifetime for item in material_values)
     if memory_level is not None and wave is not None:
@@ -788,17 +791,17 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
             )
     model.definitions = dict(allocation.definitions)
     model.uses = {
-        value: tuple(allocation.uses.get((id(value.value), value.index), ()))
+        value: tuple(use for use in liveness.uses if use.value == value.value)
         for value in model.values
     }
     tie_analysis(model)
-    for node in {id(value.value): value.value for value in model.values}.values():
+    for node in {id(value.value.expr): value.value.expr for value in model.values}.values():
         moved = get_metadata(node, MemoryMetadata)
         if moved is not None:
             attach(node, replace(moved, alias=None, buffer_bytes=None, offsets=()))
     for value, alias in published_aliases(model).items():
-        moved = get_metadata(value.value, MemoryMetadata) or MemoryMetadata()
-        attach(value.value, replace(moved, alias=alias))
+        moved = get_metadata(value.value.expr, MemoryMetadata) or MemoryMetadata()
+        attach(value.value.expr, replace(moved, alias=alias))
     footprint = None
     if (
         cache is not None

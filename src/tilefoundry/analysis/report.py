@@ -21,6 +21,7 @@ from tilefoundry.analysis.metadata import (
     RegionMemoryMetadata,
     RooflineMetadata,
     Spread,
+    ValueLifetime,
 )
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.core.module import Module
@@ -102,6 +103,18 @@ def _reported_value(value: object, declared: object) -> object:
                 name: _reported_value(held, Breakdown[int]) for name, held in value.buffers
             },
             "precision": value.precision.value,
+        }
+    if isinstance(value, ValueLifetime):
+        return {
+            name: getattr(value, name)
+            for name in (
+                "binding",
+                "memory_level",
+                "bytes",
+                "defined_at",
+                "last_used_at",
+                "persistent",
+            )
         }
     if is_dataclass(declared) and isinstance(declared, type):
         hints = get_type_hints(declared)

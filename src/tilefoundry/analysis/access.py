@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import IntEnum
 
 import isl
 
@@ -17,7 +18,7 @@ from tilefoundry.ir.visitor import ExprCloner, collect_exprs
 from tilefoundry.utils.isl_utils import cardinality, has_unbounded_param
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
-    identity_access,
+    leaves_of,
     renaming_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
@@ -27,26 +28,52 @@ from .errors import AnalysisError
 from .precision import AnalysisPrecision
 
 
+@dataclass(frozen=True, eq=False)
+class SSAValue:
+    """One expression's flattened result, compared by SSA identity."""
+
+    expr: Expr
+    index: int = 0
+
+    def __eq__(self, other):
+        return isinstance(other, SSAValue) and self.expr is other.expr and self.index == other.index
+
+    def __hash__(self):
+        return hash((id(self.expr), self.index))
+
+
+class AliasKind(IntEnum):
+    """Structural sharing first, then the deterministic tie order."""
+
+    VIEW = 0
+    FORWARD = 1
+    CARRY_INIT = 2
+    CARRY_YIELD = 3
+    INSERT_SLICE = 4
+    WINDOW = 5
+    RETURN_REUSE = 6
+    IN_PLACE = 7
+
+
 @dataclass(frozen=True)
 class Access:
-    """One relation from an iteration scope to the allocation it reaches."""
+    """One relation from an iteration scope to an SSA result."""
 
     input_index: int | None
     relation: isl.map
-    buffer: Expr
+    target: SSAValue
     precision: AnalysisPrecision = AnalysisPrecision.EXACT
     output_index: int | None = None
-    index: int = 0
     may_access: bool = False
 
 
 @dataclass(frozen=True)
 class BufferAlias:
-    """The result is buffer's bytes, at the coordinates relation names."""
+    """A result's coordinates in one SSA result's storage."""
 
-    buffer: Expr
+    target: SSAValue
     relation: AccessRelation
-    index: int = 0
+    kind: AliasKind
 
 
 def aligned_source(
@@ -116,7 +143,7 @@ def buffer_alias(
             f"but its access relation {relation.relation} is not single-valued, injective, "
             "and within the operand"
         )
-    return BufferAlias(operand, relation)
+    return BufferAlias(SSAValue(operand), relation, AliasKind.VIEW)
 
 
 def widest_allowed(access: isl.map, name: str, held: object) -> int | None:
@@ -239,6 +266,8 @@ def eliminate_parameters(
     *,
     narrow: bool,
     retained: dict[str, object] | None = None,
+    formals: tuple[Var, ...] = (),
+    keep_possible: bool = False,
 ) -> tuple[isl.map, AnalysisPrecision]:
     """Eliminate scoped parameters, retaining formal-dependent coordinates for callers."""
     precision = AnalysisPrecision.EXACT
@@ -246,25 +275,25 @@ def eliminate_parameters(
     for name, value in parameters.items():
         if relation.find_dim_by_name(isl.dim_type.PARAM, name) < 0:
             raise AnalysisError(f"access pattern parameter {name!r} is missing from its relation")
-        root = scope
-        while root.parent is not None:
-            root = root.parent
-        resolved = _RegionBindingResolver(narrow=narrow).visit(value, scope) if isinstance(value, Expr) else value
-        formals = {id(formal) for formal in root.owner.params}
-        if (
-            not root.is_root_definition
-            and isinstance(resolved, Expr)
-            and any(id(expr) in formals for expr in collect_exprs(resolved))
+        resolved = (
+            _RegionBindingResolver(narrow=narrow).visit(value, scope)
+            if isinstance(value, Expr)
+            else value
+        )
+        if isinstance(resolved, Expr) and any(
+            expr is formal for expr in collect_exprs(resolved) for formal in formals
         ):
             if isinstance(resolved, Var):
-                label = f"formal_{next(index for index, formal in enumerate(root.owner.params) if resolved is formal)}"
+                label = f"formal_{next(index for index, formal in enumerate(formals) if resolved is formal)}"
             else:
                 label = f"value_{binding_name(value)}"
             target = f"__tf_binding_{label}"
             present = relation.find_dim_by_name(isl.dim_type.PARAM, target)
             position = relation.find_dim_by_name(isl.dim_type.PARAM, name)
             if present >= 0 and present != position:
-                relation = relation.equate(isl.dim_type.PARAM, position, isl.dim_type.PARAM, present)
+                relation = relation.equate(
+                    isl.dim_type.PARAM, position, isl.dim_type.PARAM, present
+                )
                 relation = relation.project_out(isl.dim_type.PARAM, position, 1)
             else:
                 relation = relation.set_dim_name(isl.dim_type.PARAM, position, target)
@@ -274,6 +303,8 @@ def eliminate_parameters(
         term, resolved_precision = _parameter_term(
             value, relation, name, scope, held, narrow=narrow, retained=retained
         )
+        if keep_possible and resolved_precision is not AnalysisPrecision.EXACT:
+            term = None
         if term is not None:
             term = term.add_dims(isl.dim_type.IN, rank - term.dim(isl.dim_type.IN))
             inputs = ", ".join(f"i{index}" for index in range(rank))
@@ -300,7 +331,9 @@ def bind_parameters(
     class BindParameters(ExprCloner):
         def visit_Var(self, node, ctx=None):
             return (
-                binding.actual(node).buffer if any(node is formal for formal in formals) else node
+                binding.actual(node).target.expr
+                if any(node is formal for formal in formals)
+                else node
             )
 
     bound = {}
@@ -327,83 +360,89 @@ def resolve_access(
     input_index: int | None,
     output_index: int | None = None,
     narrow: bool,
-    sources: Mapping[int, BufferAlias | tuple],
-    precisions: Mapping[int, AnalysisPrecision | tuple],
-    source_scope: "IterationScope",
-) -> Access | None:
-    """Resolve one declared boundary into an access from its iteration scope.
+    sources: Mapping[SSAValue, BufferAlias],
+    precisions: Mapping[SSAValue, AnalysisPrecision],
+    formals: tuple[Var, ...] = (),
+) -> tuple[Access, ...]:
+    """Resolve a boundary with one cached-source lookup per tensor leaf.
 
-    A whole-tuple input boundary names leaf slots rather than tensor elements,
-    so it uses the operand's own identity instead of an individual leaf source.
+    Whole-tuple boundaries select leaf slots. Each possible slot becomes a
+    separate access to that tuple value's leaf, in tensor-element coordinates,
+    over the selected iteration domain and the leaf's legal element box.
     """
-    relation = boundary.relation
-    loops = scope.enclosing_loops()
-    relation = relation.insert_dims(isl.dim_type.IN, 0, len(loops))
-    scope_domain = scope.domain.insert_dims(
-        isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
+    relation = boundary.relation.insert_dims(isl.dim_type.IN, 0, scope.depth)
+    relation = relation.intersect_domain(
+        scope.domain.insert_dims(
+            isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
+        )
     )
-    relation = relation.intersect_domain(scope_domain)
     try:
         held = (
-            ctx.local_type_of(operand) if getattr(ctx, "topology_level", None) is not None
-            else local_type_of(operand.type) if narrow else operand.type
+            ctx.local_type_of(operand)
+            if getattr(ctx, "topology_level", None) is not None
+            else local_type_of(operand.type)
+            if narrow
+            else operand.type
         )
     except (TypeError, ValueError, NotImplementedError):
-        return None
-    if output_index is not None and isinstance(held, TupleType):
-        held = held.fields[output_index]
-    relation, precision = eliminate_parameters(
-        relation,
-        boundary.values,
-        scope,
-        held if getattr(ctx, "topology_level", None) is not None else operand.type,
-        narrow=narrow,
-        retained=scope.domain_params,
-    )
-    if isinstance(held, TensorType) and is_literal_shape(held.shape):
-        relation = relation.intersect_range(shape_to_isl_set(tuple(held.shape), {}))
-    entry = sources[id(operand)]
-    source_precision = precisions[id(operand)]
-    source_type = ctx.local_type_of(operand)
-    if isinstance(entry, tuple):
-        if output_index is not None:
-            entry = entry[output_index]
-            source_precision = source_precision[output_index]
-            source_type = source_type.fields[output_index]
+        return ()
+    types = leaves_of(held)
+    if not types:
+        return ()
+    whole_tuple = isinstance(held, TupleType) and output_index is None
+    indexes = range(len(types)) if whole_tuple else (output_index or 0,)
+    built = []
+    for index in indexes:
+        leaf = types[index]
+        access, precision = eliminate_parameters(
+            relation,
+            boundary.values,
+            scope,
+            leaf
+            if getattr(ctx, "topology_level", None) is not None
+            else leaves_of(operand.type)[index],
+            narrow=narrow,
+            retained=scope.domain_params,
+            formals=formals,
+            keep_possible=whole_tuple,
+        )
+        if whole_tuple:
+            selected = access.fix_val(isl.dim_type.OUT, 0, isl.val(index))
+            if selected.is_empty():
+                continue
+            box = shape_to_isl_set(tuple(leaf.shape), {})
+            access = isl.map.from_domain_and_range(selected.domain(), box)
+            target = SSAValue(operand, index)
         else:
-            identity = identity_access(1).relation
-            identity = identity.insert_dims(isl.dim_type.IN, 0, source_scope.depth)
-            identity = identity.intersect_domain(
-                source_scope.domain.insert_dims(isl.dim_type.SET, source_scope.depth, 1)
+            if is_literal_shape(leaf.shape):
+                access = access.intersect_range(shape_to_isl_set(tuple(leaf.shape), {}))
+            value = SSAValue(operand, index)
+            entry = sources[value]
+            access = apply_source(access, entry, len(leaf.shape), scope.depth, scope.domain_params)
+            precision = precision.join(precisions[value])
+            target = entry.target
+        if has_unbounded_param(access) and any(
+            access.get_dim_name(isl.dim_type.PARAM, axis) not in scope.domain_params
+            for axis in range(access.dim(isl.dim_type.PARAM))
+        ):
+            precision = AnalysisPrecision.UNKNOWN
+        built.append(
+            Access(
+                input_index=input_index,
+                relation=access,
+                target=target,
+                precision=precision,
+                output_index=output_index,
+                may_access=boundary.may_access,
             )
-            values = {
-                name: value for name, value in source_scope.domain_params.items()
-                if identity.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
-            }
-            entry = BufferAlias(operand, AccessRelation(identity, values))
-            source_precision = AnalysisPrecision.EXACT
-    rank = len(source_type.shape) if isinstance(source_type, TensorType) else 1
-    relation = apply_source(relation, entry, rank, scope.depth, scope.domain_params)
-    precision = precision.join(source_precision)
-    operand = entry.buffer
-    if has_unbounded_param(relation) and any(
-        relation.get_dim_name(isl.dim_type.PARAM, axis) not in scope.domain_params
-        for axis in range(relation.dim(isl.dim_type.PARAM))
-    ):
-        precision = AnalysisPrecision.UNKNOWN
-    return Access(
-        input_index=input_index,
-        relation=relation,
-        buffer=operand,
-        precision=precision,
-        output_index=output_index,
-        index=entry.index,
-        may_access=boundary.may_access,
-    )
+        )
+    return tuple(built)
 
 
 __all__ = [
     "Access",
+    "SSAValue",
+    "AliasKind",
     "BufferAlias",
     "aligned_source",
     "apply_source",

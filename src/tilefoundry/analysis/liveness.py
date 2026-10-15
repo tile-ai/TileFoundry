@@ -5,24 +5,27 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import ClassVar
 
-from tilefoundry.ir.core import Call, Expr, Var
+from tilefoundry.ir.core import Call, Constant, Expr, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.empty import Empty
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.visitor import collect_exprs, expr_children
+from tilefoundry.visitor_registry.access_relation import leaf_span, leaves_of
 from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
 from tilefoundry.visitor_registry.contexts import ValuationContext
 
+from .access import SSAValue
 from .errors import AnalysisError
-from .metadata import TimingValuation
+from .metadata import TimingValuation, ValueLifetime
 
 
 @dataclass(frozen=True)
 class UseEvent:
     """One SSA use and whether it exists only to extend structured liveness."""
 
-    value: Expr
+    value: SSAValue
     at: int
     synthetic: bool = False
 
@@ -40,7 +43,7 @@ class RegionInterval:
 class Liveness:
     """Definition-ordered intervals on one function-wide event timeline."""
 
-    intervals: tuple[LiveInterval, ...]
+    intervals: tuple[ValueLifetime, ...]
     uses: tuple[UseEvent, ...]
     regions: tuple[RegionInterval, ...]
     timeline_end: int
@@ -48,10 +51,10 @@ class Liveness:
     requires: ClassVar[tuple[type, ...]] = (TimingValuation,)
 
 
-    def interval_of(self, value: Expr) -> LiveInterval | None:
+    def interval_of(self, value: SSAValue) -> ValueLifetime | None:
         """Return *value*'s interval when it belongs to this timeline."""
         return next(
-            (item for item in self.intervals if item.value is value),
+            (item for item in self.intervals if item.value == value),
             None,
         )
 
@@ -64,17 +67,15 @@ def result_copies(expr: Expr) -> int:
 class LivenessVisitor(ValuationVisitor[None]):
     """Build definition/use intervals while preserving structured SSA edges."""
 
-    def __init__(
-        self, function: Function, *, callee=False
-    ) -> None:
+    def __init__(self, function: Function, *, callee=False) -> None:
         super().__init__(root_function=function)
         self.loop_windows = {}
         self.point = -1
-        self.states: dict[int, LiveInterval] = {}
-        self.definition_order: list[int] = []
+        self.states: dict[SSAValue, ValueLifetime] = {}
+        self.definition_order: list[SSAValue] = []
         self.uses: list[UseEvent] = []
         self.regions: list[RegionInterval] = []
-        self.loop_entries: list[tuple[int, set[int], set[int]]] = []
+        self.loop_entries: list[tuple[int, set[SSAValue], set[SSAValue]]] = []
         if callee:
             definition = self.next_event()
         for parameter in function.params:
@@ -99,27 +100,43 @@ class LivenessVisitor(ValuationVisitor[None]):
         return self.point
 
     def define(self, value: Expr, point: int) -> None:
-        """Record the one definition of *value*."""
-        key = id(value)
-        if key in self.states:
-            raise ValueError(f"liveness: {type(value).__name__} is defined more than once")
-        self.states[key] = LiveInterval(value, point, point)
-        self.definition_order.append(key)
+        """Define each flattened leaf once, including scalar event identities."""
+        for index in range(len(leaves_of(value.type)) or 1):
+            key = SSAValue(value, index)
+            if key in self.states:
+                raise ValueError(f"liveness: {type(value).__name__} is defined more than once")
+            self.states[key] = ValueLifetime(key, point, point)
+            self.definition_order.append(key)
 
-    def use(self, value: Expr, point: int, *, synthetic: bool = False) -> None:
-        """Extend the SSA value through one use."""
-        key = id(value)
-        state = self.states.get(key)
-        if state is None:
-            raise ValueError(f"liveness: {type(value).__name__} is used before its definition")
-        for entry, outside in (loop_entry[:2] for loop_entry in self.loop_entries):
-            if state.defined_at < entry:
-                outside.add(key)
-        self.states[key] = replace(state, last_used_at=max(state.last_used_at, point))
-        self.uses.append(UseEvent(value, point, synthetic))
+    def use(self, value: Expr | SSAValue, point: int, *, synthetic: bool = False) -> None:
+        """Extend just the named leaf, or all leaves of an ordinary operand."""
+        keys = (
+            (value,)
+            if isinstance(value, SSAValue)
+            else tuple(SSAValue(value, index) for index in range(len(leaves_of(value.type)) or 1))
+        )
+        for key in keys:
+            state = self.states.get(key)
+            if state is None:
+                raise ValueError(f"liveness: {type(key.expr).__name__} is used before its definition")
+            for entry, outside in (loop_entry[:2] for loop_entry in self.loop_entries):
+                if state.defined_at < entry:
+                    outside.add(key)
+            self.states[key] = replace(state, last_used_at=max(state.last_used_at, point))
+            self.uses.append(UseEvent(key, point, synthetic))
 
     def finish(self) -> Liveness:
         """Freeze the definition-ordered result."""
+        for value in dict.fromkeys(
+            SSAValue(key.expr.args[0], index)
+            for key in self.definition_order
+            if key.index == 0
+            and isinstance(key.expr, Call)
+            and isinstance(key.expr.target, TupleGetItem)
+            and not (isinstance(key.expr.args[1], Constant) and type(key.expr.args[1].value) is int)
+            for index in range(len(leaves_of(key.expr.args[0].type)))
+        ):
+            self.use(value, self.point, synthetic=True)
         states = (self.states[key] for key in self.definition_order)
         return Liveness(
             intervals=tuple(states),
@@ -137,10 +154,23 @@ class LivenessVisitor(ValuationVisitor[None]):
         del operands, ctx
         point = self.next_event()
         for operand in expr_children(value):
-            self.use(operand, point)
+            if (
+                isinstance(value, Call)
+                and isinstance(value.target, TupleGetItem)
+                and operand is value.args[0]
+                and isinstance(value.args[1], Constant)
+                and type(value.args[1].value) is int
+            ):
+                begin, count = leaf_span(operand.type, value.args[1].value)
+                for index in range(begin, begin + count):
+                    self.use(SSAValue(operand, index), point)
+            else:
+                self.use(operand, point)
         self.define(value, point)
         if result_copies(value) > 1 and self.loop_entries:
-            self.loop_entries[-1][2].add(id(value))
+            self.loop_entries[-1][2].update(
+                SSAValue(value, index) for index in range(len(leaves_of(value.type)) or 1)
+            )
 
     def visit_Call(self, call: Call, ctx=None) -> None:
         context = ctx
@@ -159,8 +189,12 @@ class LivenessVisitor(ValuationVisitor[None]):
         binding = context.call_context(call, event_base=start)
         for formal, argument in binding.bindings:
             for use in template.uses:
-                if use.value is formal:
-                    self.use(argument, binding.event(use.at), synthetic=use.synthetic)
+                if use.value.expr is formal:
+                    self.use(
+                        SSAValue(argument, use.value.index),
+                        binding.event(use.at),
+                        synthetic=use.synthetic,
+                    )
         self.point = start + template.timeline_end
         self.define(call, self.next_event())
 
@@ -223,13 +257,13 @@ class LivenessVisitor(ValuationVisitor[None]):
         self.define(region, self.next_event())
 
 
-def analyze_liveness(function: Function, context: AnalyzeContext | None = None) -> Liveness:
+def analyze_liveness(
+    function: Function, context: AnalyzeContext | None = None, *, callee: bool = False
+) -> Liveness:
     """Build target-independent intervals for a checked HIR function."""
     if function.body is None:
         raise ValueError(f"liveness: function {function.name!r} has no body")
-    visitor = LivenessVisitor(
-        function, callee=context is not None and not context.root.is_root_definition
-    )
+    visitor = LivenessVisitor(function, callee=callee)
     visitor.visit_function_body(function, context or ValuationContext(owner=function))
     return visitor.finish()
 
