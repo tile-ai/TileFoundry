@@ -524,7 +524,7 @@ class BufferAlias:
     address and recording zero traffic.
   - Registered buffer aliases MUST create an `AllocationValue(value, index, lifetime)`
     with its own SSA interval and the operand's byte span, requiring the same
-    address and alias group. A persistent operand MUST pin its alias at the same
+    address. A persistent operand MUST pin its alias at the same
     address. Aliases MUST NOT receive independent `buffer_bytes` or
     `offsets`. Analysis MUST resolve structural tuple projections to their
     selected element without a coordinate-renaming proof. For other aliases,
@@ -547,13 +547,11 @@ class BufferAlias:
     Constants and dimension variables are always visible;
     a mesh coordinate is visible only if an enclosing mesh region declares its
     topology. Lowering MUST execute this decision without reading
-    the InsertSlice's parameters at the producer. An untied carry MUST receive
-    its own storage and a copy of its initial value before entering the loop.
-    A window adopted for a group containing a tied carried parameter MUST be
+    the InsertSlice's parameters at the producer.
+    A window adopted for a tied carried parameter MUST be
     recorded on its tie initial; the carried parameter MUST retain its tie alias.
-    This changes the alias's owner, not the group's placement constraints.
-    Ordinary `smem` aliases use their placed offsets; `rmem` alias groups only
-    estimate peaks. Scope construction MUST compute each value's source once
+    Ordinary `smem` aliases use their placed offsets. Scope construction MUST
+    compute each value's source once
     per view in definition order, using only its operands' source entries.
     Registered views compose their result-to-input relation with the input's
     source. MeshRegion results use their body's source; static tuple projections
@@ -574,16 +572,12 @@ class BufferAlias:
     per flattened tensor result. Its interval runs from the tuple's definition to
     the last use belonging to that result: a static tuple projection uses only
     the selected result, while whole-tuple operations, region captures, synthetic
-    loop uses, and returns use every result. Corresponding results MUST be joined
-    by required-alias constraints. Same-group values MAY overlap; different groups
-    with intersecting intervals MUST NOT overlap. Register and other non-address-solved
-    peaks MUST count each live alias group once, including alias values. In-place
-    checks MUST read liveness uses of every group member and reject a result when
-    a member has a later ordinary use. A dynamic tuple projection MUST conservatively
+    loop uses, and returns use every result. A dynamic tuple projection MUST
+    conservatively
     keep every possible tensor leaf resident until the function timeline ends,
     using an `AllocationValue` at the projection's definition tied to that leaf's
-    address and group. The projection and its forwards have no independent storage
-    and MUST NOT participate in in-place reuse or loop ties.
+    address. The projection and its forwards have no independent storage
+    and MUST NOT participate in in-place reuse.
 
 ##### `MemoryLevelPeak`
 
@@ -600,9 +594,8 @@ attribution: every eligible region whose mesh contains the value's authored
 holder mesh reports it, so an enclosing region also counts values held by its
 nested regions. A value that declares no holder belongs to no region; analysis
 does not infer a holder from its layout or storage name. `rmem` is not
-address-solved: required-alias groups count as one physical buffer, and the
-Function reports the maximum of all stage peaks and a whole-Function live-byte
-scan of values that no `MeshRegion` claims.
+address-solved: the Function reports the maximum of all stage peaks and a
+whole-Function live-byte scan of values that no `MeshRegion` claims.
 
 ```python
 class MemoryLevelPeak:
@@ -617,7 +610,7 @@ class MemoryLevelPeak:
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `MemoryLevelPeak.memory_level` | Each storage level with at least one lifetime or traffic entry, sorted by name. | No |
-| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest live-byte total in its inclusive entry-to-exit event window, counting each alias group once. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
+| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest live-byte total in its inclusive entry-to-exit event window. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
 | `MemoryLevelPeak.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level. | As above |

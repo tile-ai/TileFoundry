@@ -11,8 +11,6 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 
-from .iteration_scope import walk_scopes
-
 
 @dataclass(frozen=True)
 class LiveInterval:
@@ -21,7 +19,6 @@ class LiveInterval:
     value: Expr
     defined_at: int
     last_used_at: int
-    occurrence: object | None = None
 
 
 @dataclass(frozen=True)
@@ -31,7 +28,6 @@ class UseEvent:
     value: Expr
     at: int
     synthetic: bool = False
-    occurrence: object | None = None
 
 
 @dataclass(frozen=True)
@@ -41,7 +37,6 @@ class RegionInterval:
     region: MeshRegion
     entered_at: int
     exited_at: int
-    occurrence: object | None = None
 
 
 @dataclass(frozen=True)
@@ -53,14 +48,13 @@ class Liveness:
     regions: tuple[RegionInterval, ...]
     timeline_end: int
 
-    def interval_of(self, value: Expr, occurrence=None) -> LiveInterval | None:
+    def interval_of(self, value: Expr) -> LiveInterval | None:
         """Return *value*'s interval when it belongs to this timeline."""
         return next(
             (
                 item
                 for item in self.intervals
                 if item.value is value
-                and (item.occurrence is occurrence or (occurrence is None and item.occurrence is not None and item.occurrence.parent is None))
             ),
             None,
         )
@@ -74,10 +68,8 @@ def result_copies(expr: Expr) -> int:
 class LivenessVisitor(ExprVisitor[None]):
     """Build definition/use intervals while preserving structured SSA edges."""
 
-    def __init__(self, function: Function, occurrence=None, *, templates=None, callee=False) -> None:
+    def __init__(self, function: Function, *, callee=False) -> None:
         super().__init__(root_function=function)
-        self.occurrence = occurrence
-        self.templates = {} if templates is None else templates
         self.point = -1
         self.states: dict[int, LiveInterval] = {}
         self.definition_order: list[int] = []
@@ -109,15 +101,15 @@ class LivenessVisitor(ExprVisitor[None]):
 
     def define(self, value: Expr, point: int) -> None:
         """Record the one definition of *value*."""
-        key = (self.occurrence, id(value))
+        key = id(value)
         if key in self.states:
             raise ValueError(f"liveness: {type(value).__name__} is defined more than once")
-        self.states[key] = LiveInterval(value, point, point, self.occurrence)
+        self.states[key] = LiveInterval(value, point, point)
         self.definition_order.append(key)
 
     def use(self, value: Expr, point: int, *, synthetic: bool = False) -> None:
         """Extend the SSA value through one use."""
-        key = (self.occurrence, id(value))
+        key = id(value)
         state = self.states.get(key)
         if state is None:
             raise ValueError(f"liveness: {type(value).__name__} is used before its definition")
@@ -125,7 +117,7 @@ class LivenessVisitor(ExprVisitor[None]):
             if state.defined_at < entry:
                 outside.add(key)
         self.states[key] = replace(state, last_used_at=max(state.last_used_at, point))
-        self.uses.append(UseEvent(value, point, synthetic, self.occurrence))
+        self.uses.append(UseEvent(value, point, synthetic))
 
     def finish(self) -> Liveness:
         """Freeze the definition-ordered result."""
@@ -149,50 +141,8 @@ class LivenessVisitor(ExprVisitor[None]):
         self.define(value, point)
         if result_copies(value) > 1 and self.loop_entries:
             self.loop_entries[-1][2].add(
-                (self.occurrence, id(value))
+                id(value)
             )
-
-    def visit_Call(self, call, ctx=None):
-        child = None if self.occurrence is None else next((scope for scope in walk_scopes(self.occurrence) if scope.owner is call), None)
-        if child is None:
-            return self.default_visit_leaf(call, self.visit_operands(call, ctx), ctx)
-        for arg in call.args:
-            self.visit(arg, ctx)
-        if isinstance(child.index, Expr):
-            self.visit(child.index, ctx)
-        argument_use = self.next_event()
-        for arg in call.args:
-            self.use(arg, argument_use)
-        function = child.frame.function
-        if id(function) not in self.templates:
-            visitor = LivenessVisitor(function, child, templates=self.templates, callee=True)
-            visitor.visit_function_body(function)
-            visitor.use(function.body, visitor.next_event())
-            self.templates[id(function)] = child, visitor.finish()
-        origin, relative = self.templates[id(function)]
-        occurrences = dict(zip(
-            (scope for scope in walk_scopes(origin) if scope.frame is not None),
-            (scope for scope in walk_scopes(child) if scope.frame is not None), strict=True,
-        ))
-
-        start = self.next_event()
-        for interval in relative.intervals:
-            occurrence = occurrences[interval.occurrence]
-            key = occurrence, id(interval.value)
-            self.states[key] = replace(interval, occurrence=occurrence,
-                defined_at=start + interval.defined_at, last_used_at=start + interval.last_used_at)
-            self.definition_order.append(key)
-        self.uses.extend(replace(use, at=start + use.at, occurrence=occurrences[use.occurrence])
-                         for use in relative.uses)
-        self.regions.extend(replace(region, entered_at=start + region.entered_at,
-            exited_at=start + region.exited_at, occurrence=occurrences[region.occurrence])
-            for region in relative.regions)
-        for param, argument in child.captures:
-            for use in relative.uses:
-                if use.occurrence is origin and use.value is param:
-                    self.use(argument, start + use.at, synthetic=use.synthetic)
-        self.point = start + relative.timeline_end
-        self.define(call, self.next_event())
 
     def visit_MeshRegion(self, region: MeshRegion, ctx=None) -> None:
         """Make the argument/parameter and body/result binding edges explicit."""
@@ -208,7 +158,7 @@ class LivenessVisitor(ExprVisitor[None]):
         self.visit(region.body, ctx)
         body_use = self.next_event()
         self.use(region.body, body_use)
-        self.regions.append(RegionInterval(region, argument_use, body_use, self.occurrence))
+        self.regions.append(RegionInterval(region, argument_use, body_use))
         self.define(region, self.next_event())
 
     def visit_LoopRegion(self, region: LoopRegion, ctx=None) -> None:
@@ -235,9 +185,7 @@ class LivenessVisitor(ExprVisitor[None]):
             self.use(yielded, backedge)
         outside, staged = self.loop_entries.pop()[1:]
         for key in outside:
-            saved, self.occurrence = self.occurrence, self.states[key].occurrence
             self.use(self.states[key].value, backedge, synthetic=True)
-            self.occurrence = saved
         for key in staged:
             self.states[key] = replace(
                 self.states[key], defined_at=phi_definition, last_used_at=backedge
@@ -252,11 +200,11 @@ class LivenessVisitor(ExprVisitor[None]):
         self.define(region, self.next_event())
 
 
-def analyze_liveness(function: Function, occurrence=None) -> Liveness:
+def analyze_liveness(function: Function) -> Liveness:
     """Build target-independent intervals for a checked HIR function."""
     if function.body is None:
         raise ValueError(f"liveness: function {function.name!r} has no body")
-    visitor = LivenessVisitor(function, occurrence)
+    visitor = LivenessVisitor(function)
     visitor.visit_function_body(function)
     return visitor.finish()
 

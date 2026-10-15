@@ -38,7 +38,6 @@ class Access:
     output_index: int | None = None
     index: int = 0
     may_access: bool = False
-    occurrence: object | None = None
 
 
 @dataclass(frozen=True)
@@ -48,7 +47,6 @@ class BufferAlias:
     buffer: Expr
     relation: AccessRelation
     index: int = 0
-    occurrence: object | None = None
 
 
 def aligned_source(
@@ -344,7 +342,6 @@ def resolve_access(
         output_index=output_index,
         index=entry.index,
         may_access=boundary.may_access,
-        occurrence=entry.occurrence,
     )
 
 

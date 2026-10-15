@@ -13,9 +13,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.iteration_scope import IterationScope, ScopeBuilder
+from tilefoundry.analysis.iteration_scope import ScopeBuilder
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.visitor import AnalyzeContext
@@ -23,9 +22,7 @@ from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core import IRMetadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.types.substitute import DimSubstitutionError
 from tilefoundry.ir.visitor import function_values
 from tilefoundry.target import Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
@@ -43,7 +40,6 @@ class AnalysisResult:
 
     module: Module
     function: Function
-    scopes: IterationScope
     analyses: tuple[str, ...]
     topology_level: str | None
     executed: tuple[str, ...]
@@ -137,10 +133,6 @@ def build_iteration_scopes(
     if topology_level is None:
         topology_level = topologies[0].name if topologies else None
 
-    try:
-        module, function = check_program(module, function, topology_level=topology_level, analyzers=analyzers, dims=dims)
-    except (SpecializationError, DimSubstitutionError) as error:
-        raise AnalysisError(f"analyze: {error}") from None
     context = AnalyzeContext(
         module, target, topology_level, options
     )
@@ -216,7 +208,6 @@ def analyze(
     result = AnalysisResult(
         module=result_module,
         function=function,
-        scopes=context.root,
         analyses=roots,
         topology_level=topology_level,
         executed=tuple(algorithm.selector for algorithm in closure),

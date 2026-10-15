@@ -284,8 +284,7 @@ class ConvertHIRToTIR(ModulePass):
     Constant-address `smem` and scratch-backed `gmem` views are materialized in
     each consuming scope. Registers shared by tied carries and their initials,
     or region results and their body values, are declared at the outermost
-    definition among those values. Allocation's peak-estimation alias groups
-    do not imply that lowering shares registers. An RMEM allocation MUST retain
+    definition among those values. An RMEM allocation MUST retain
     its HIR tensor type with a physical-frame mesh. Whole-tensor operands reuse
     that allocation; only subwindows require views. Each instruction MUST call
     the shared admission check once, before declaring storage, and use that

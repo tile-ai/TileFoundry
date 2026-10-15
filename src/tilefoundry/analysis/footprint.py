@@ -53,7 +53,6 @@ class ReachedAddresses:
     reached: isl.set | None
     precision: AnalysisPrecision
     index: int = 0
-    occurrence: object | None = None
     must: isl.set | None = None
     may_coordinates: int | None = 0
 
@@ -209,7 +208,6 @@ def _reached_addresses(
         reached=reached,
         precision=precision,
         index=access.index,
-        occurrence=access.occurrence,
         must=must,
         may_coordinates=may_coordinates,
     )
@@ -337,8 +335,8 @@ def time_axis(boundary: MovingBoundary) -> int | None:
     for axis, loop_scope in enumerate(_loop_scopes(boundary.scope)):
         if (
             loop_scope.trips() <= 1
-            or loop_scope.is_variant(boundary.access.buffer, boundary.access.occurrence)
-            or loop_scope.is_variant(value, boundary.access.occurrence)
+            or loop_scope.is_variant(boundary.access.buffer)
+            or loop_scope.is_variant(value)
         ):
             continue
         if boundary.held(axis - 1).is_subset(boundary.held(axis)):
@@ -569,7 +567,7 @@ def moving_boundaries(
         TopologyFacts
     ).parallel_level
     definitions = {
-        (scope.occurrence, value_id): scope
+        value_id: scope
         for scope in walk_scopes(root)
         for value_id in scope.relations
     }
@@ -622,7 +620,7 @@ def moving_boundaries(
                 if len(leaves) != 1 or not isinstance(leaves[0], TensorType):
                     continue
                 label = labels.get(
-                    (access.occurrence, id(access.buffer), access.index)
+                    (id(access.buffer), access.index)
                 )
                 if label is None:
                     continue
@@ -647,9 +645,7 @@ def moving_boundaries(
                         mesh_parameters=mesh_parameters,
                         axis_parameters=axis_parameters
                         if _shared_origin(
-                            definitions.get(
-                                (access.occurrence, id(access.buffer))
-                            ),
+                            definitions.get(id(access.buffer)),
                             topology_level,
                             wave,
                         )
@@ -712,7 +708,6 @@ def _uncounted_movements(
                                 None,
                                 AnalysisPrecision.LOWER_BOUND,
                                 access.index,
-                                access.occurrence,
                             ),
                         )
                     )
@@ -774,7 +769,6 @@ def reached_by(
                     reached=None,
                     precision=AnalysisPrecision.LOWER_BOUND,
                     index=access.index,
-                    occurrence=access.occurrence,
                 )
             )
             continue
@@ -819,7 +813,6 @@ def _by_buffer(
         loops = _loop_scopes(boundary.scope)
         candidate = loops[axes.time] if axes.time is not None else None
         key = (
-            boundary.access.occurrence,
             id(boundary.access.buffer),
             boundary.access.index,
         )
@@ -863,7 +856,6 @@ def _window_footprints(
     """Count every moving buffer once in each distinct selected window."""
     labels = {
         (
-            boundary.access.occurrence,
             id(boundary.access.buffer),
             boundary.access.index,
         ): boundary.label
@@ -976,7 +968,6 @@ def merged(items: Iterable[ReachedAddresses]) -> tuple[ReachedAddresses, ...]:
     grouped: dict[tuple[int, int, int | None], ReachedAddresses] = {}
     for item in items:
         key = (
-            item.occurrence,
             id(item.buffer),
             item.index,
             item.output_index,
@@ -1033,7 +1024,7 @@ def footprint_of(
                 amount = min(amount, must + item.may_coordinates)
         packed = -(-(amount * item.dtype.bit_width) // 8)
         key = (
-            labels[(item.occurrence, id(item.buffer), item.index)],
+            labels[(id(item.buffer), item.index)],
             memory_level,
         )
         totals[key] = totals.get(key, 0) + packed

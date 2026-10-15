@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 
 import isl
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var, binding_name
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -96,7 +96,6 @@ class IterationScope:
     )
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
     topologies: tuple[Topology, ...] = ()
-    occurrence: IterationScope | None = None
     frame: CallFrame | None = None
     variance: dict[int, frozenset[int]] = field(default_factory=dict)
     slot: ModuleList | None = None
@@ -135,12 +134,11 @@ class IterationScope:
             cursor = cursor.parent
         return value
 
-    def is_variant(self, value: Expr, occurrence=None) -> bool:
+    def is_variant(self, value: Expr) -> bool:
         """Whether *value* depends on this loop's induction or carry values."""
         if not isinstance(self.owner, LoopRegion):
             return False
-        occurrence = self.occurrence if occurrence is None else occurrence
-        return occurrence is not None and id(self) in occurrence.variance.get(id(value), frozenset())
+        return id(self) in self.variance.get(id(value), frozenset())
 
     def enclosing_loops(self) -> tuple[LoopRegion, ...]:
         """Return this scope's loop owners in outer-to-inner order."""
@@ -196,7 +194,7 @@ class IterationScope:
             if isinstance(cursor.owner, LoopRegion):
                 trips = cursor.trips()
                 loops *= trips
-                if self.occurrence is not None and id(cursor) in self.occurrence.variance.get(
+                if id(cursor) in self.variance.get(
                     id(call), frozenset()
                 ):
                     varying *= trips
@@ -262,16 +260,6 @@ class IterationScope:
         """
         self.trips()
         return self._trips_cache[1]
-
-
-def occurrence_path(scope):
-    """Binding-name path to an occurrence, with an empty root path."""
-    parts = []
-    while scope.parent is not None:
-        if isinstance(scope.owner, Call):
-            parts.append(binding_name(scope.owner))
-        scope = scope.parent
-    return "/".join(reversed(parts))
 
 
 class ScopeBuilder(CallFrameVisitor[None]):
@@ -350,7 +338,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
             name: value for name, value in scope.domain_params.items()
             if relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
         }
-        return BufferAlias(expr, AccessRelation(relation, values), index, scope.occurrence)
+        return BufferAlias(expr, AccessRelation(relation, values), index)
 
     def _material_source(self, expr: Expr, held, scope: IterationScope) -> BufferAlias | tuple:
         """Number tensor leaves first, then retain the result's type structure."""
@@ -422,7 +410,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
         }
         return (
             BufferAlias(
-                operand.buffer, AccessRelation(relation, values), operand.index, operand.occurrence
+                operand.buffer, AccessRelation(relation, values), operand.index
             ),
             precision.join(self.precisions[view][id(alias.buffer)]),
         )
@@ -515,20 +503,20 @@ class ScopeBuilder(CallFrameVisitor[None]):
             target.args[0] if isinstance(target, Call) else None
         )
         if slot is not None:
-            slot = scope.occurrence.frame.module.children[slot.key]
+            slot = self.type_ctx.module.children[slot.key]
         index = target.args[1] if isinstance(target, Call) else None
         if isinstance(index, Constant):
             index = index.value
+        domain, domain_params = iteration_domain(frame.function, None)
         child = IterationScope(
-            expr, scope, (), scope.depth, scope.domain,
+            expr, scope, (), 0, domain,
             tuple(zip((p for p in frame.function.params
                        if isinstance(expr.target, Function) or not p.is_const), expr.args, strict=True)),
-            domain_params=scope.domain_params, accesses=self._empty_accesses(),
+            domain_params=domain_params, accesses=self._empty_accesses(),
             frame=frame, slot=slot, index=index,
         )
         if isinstance(child.index, Expr):
             self._visit(child.index, scope)
-        child.occurrence = child
         scope.children = (*scope.children, child)
         names = ("sources", "precisions", "definitions", "aliases", "seen", "seeds", "variance")
         saved = {name: getattr(self, name) for name in names}
@@ -540,17 +528,8 @@ class ScopeBuilder(CallFrameVisitor[None]):
         self.type_ctx = replace(self.type_ctx, module=frame.module, target=frame.target, current=child)
         self.unit_ctx = replace(self.unit_ctx, module=frame.module, target=frame.target, current=child)
         try:
-            for param, argument in child.captures:
-                self.seen.add(id(param))
-                self.definitions[id(param)] = child
-                self.variance[id(param)] = saved["variance"].get(id(argument), frozenset())
-                for view in self.views:
-                    self.sources[view][id(param)] = self._source_relation(
-                        saved["sources"][view][id(argument)],
-                        self._view_context(view).local_type_of(argument),
-                        child,
-                    )
-                    self.precisions[view][id(param)] = saved["precisions"][view][id(argument)]
+            for param, _argument in child.captures:
+                self._visit(param, child)
             for weight in frame.function.params:
                 if any(weight is param for param, _ in child.captures):
                     continue
@@ -577,12 +556,18 @@ class ScopeBuilder(CallFrameVisitor[None]):
             self.precisions[view][id(expr)] = precision
         self.variance[id(expr)] = changing
 
+    @staticmethod
+    def _parents(scope: IterationScope):
+        while scope is not None:
+            yield scope
+            scope = scope.parent
+
     def _visit(self, expr: Expr, scope: IterationScope) -> None:
         if id(expr) in self.seen:
             return
         self.seen.add(id(expr))
         self.definitions[id(expr)] = scope
-        if isinstance(expr, Call) and (frame := self.callee_frame(expr, scope.occurrence.frame)) is not None:
+        if isinstance(expr, Call) and (frame := self.callee_frame(expr, next(held.frame for held in self._parents(scope) if held.frame is not None))) is not None:
             self._visit_call(expr, scope, frame)
             return
         if isinstance(expr, LoopRegion):
@@ -598,7 +583,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
                 captures=expr.captures(),
                 domain_params=domain_params,
                 accesses=self._empty_accesses(),
-                occurrence=scope.occurrence,
+                variance=self.variance,
             )
             scope.children = (*scope.children, child)
             self.seeds[id(expr.induction_var)] = child
@@ -647,7 +632,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
                 captures=expr.captures(),
                 domain_params=scope.domain_params,
                 accesses=self._empty_accesses(),
-                occurrence=scope.occurrence,
+                variance=self.variance,
             )
             scope.children = (*scope.children, child)
             for param, argument in child.captures:
@@ -695,7 +680,6 @@ class ScopeBuilder(CallFrameVisitor[None]):
             accesses=self._empty_accesses(),
             topologies=self.topologies,
         )
-        root.occurrence = root
         root.frame = CallFrame(self.type_ctx.module, self.graph)
         root.variance = self.variance
         for param in self.graph.params:
