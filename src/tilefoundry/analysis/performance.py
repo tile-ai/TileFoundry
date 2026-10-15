@@ -51,10 +51,9 @@ class PerformanceVisitor(ExprVisitor[None]):
         callee = CallFrameVisitor.callee_frame(call, ctx.frame)
         if callee is None:
             return self.default_visit_leaf(call, (), ctx)
-        summary = get_metadata(callee.function, PerformanceSummaryMetadata)
-        if summary is None:
+        duration = ctx.definitions[id(callee.function)].schedule_ns
+        if duration is None:
             raise AnalysisError(f"performance: missing summary for {callee.function.name!r}")
-        duration = (summary.timeline.end_ns - summary.timeline.start_ns) // summary.waves
         ctx.occurrences.append((ctx.current, call, duration))
 
     def visit_MeshRegion(self, expr: MeshRegion, ctx: PerformanceContext) -> None:
@@ -159,9 +158,10 @@ def _analyze_performance(function: Function, context: AnalyzeContext) -> None:
     performance_context = context.family(PerformanceContext, facts=facts, services=services)
     PerformanceVisitor().visit(function.body, performance_context)
     total_cursor = schedule(performance_context.occurrences, context, origin=context.root)
+    context.schedule_ns = total_cursor
     summary_end = total_cursor
     roofline = get_metadata(function, RooflineMetadata)
-    if roofline is not None:
+    if context.root.is_root_definition and roofline is not None:
         summary_end = max(summary_end, roofline.ideal_ns)
     level = context.target.get_facts(TopologyFacts).parallel()
     if level is None or level.max_physical_units is None:

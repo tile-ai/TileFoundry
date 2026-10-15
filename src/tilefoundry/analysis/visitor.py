@@ -141,7 +141,7 @@ class CallContext(
                 self.scope.domain.insert_dims(isl.dim_type.SET, self.scope.depth, 1)
             )
             return BufferAlias(self.call, AccessRelation(relation, self.scope.domain_params))
-        return source, precision
+        return source
 
     def project(self, source: BufferAlias) -> tuple[BufferAlias, AnalysisPrecision]:
         """Interpret a definition-local source in this direct caller."""
@@ -228,13 +228,16 @@ class VisitContext(
                 isl.dim_type.SET, depth, relation.dim(isl.dim_type.IN) - depth
             )
             relation = relation.intersect_domain(domain)
+            held = source.buffer.type
+            if isinstance(held, TupleType):
+                held = leaves_of(held)[source.index]
             relation, bounded = bind_parameters(
                 relation,
                 source.relation.values,
                 frame,
                 tuple(param for param, _argument in frame.bindings),
                 frame.scope,
-                source.buffer.type,
+                held,
                 narrow=frame.view == "narrow",
             )
             precision = precision.join(bounded)
@@ -310,6 +313,7 @@ class AnalyzeContext(ValuationProvider):
     liveness: Liveness | None = None
     call_events: dict[int, int] = field(default_factory=dict)
     call_times: dict[int, int] = field(default_factory=dict)
+    schedule_ns: int | None = None
     allocation: AllocationModel | None = None
 
     def run_definitions(

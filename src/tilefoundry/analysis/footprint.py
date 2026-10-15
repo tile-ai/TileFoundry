@@ -586,6 +586,7 @@ def moving_boundaries(
     ctx: CostContext,
     labels: Mapping[tuple[int, int], str],
     outer_depth: int = 0,
+    origins: Mapping[int, IterationScope] | None = None,
 ) -> tuple[MovingBoundary, ...]:
     """Collect boundaries that move bytes at *memory_level* in one scope walk.
 
@@ -594,7 +595,11 @@ def moving_boundaries(
     whole = replace(ctx, topology_level=None, topologies=())
     wave_units, declared_units = wave
     topology_level = ctx.topology_level or ctx.frame.target.get_facts(TopologyFacts).parallel_level
-    definitions = {value_id: scope for scope in walk_scopes(root) for value_id in scope.relations}
+    definitions = (
+        origins
+        if origins is not None
+        else {value_id: scope for scope in walk_scopes(root) for value_id in scope.relations}
+    )
     found: list[MovingBoundary] = []
     for scope in walk_scopes(root):
         mesh = _wave_mesh(scope, topology_level)
@@ -1176,6 +1181,12 @@ def root_boundaries(context, *, memory_level, wave):
     labels = dict(zip(values, value_labels(values.values()), strict=True))
     groups = {}
     resources = {}
+    origins = {
+        identity: scope
+        for definition in context.definitions.values()
+        for scope in walk_scopes(definition.root)
+        for identity in scope.relations
+    }
     for local, visit in context.walk_visits():
         stack = visit.stack if isinstance(visit, VisitContext) else ()
         local_labels = {
@@ -1194,6 +1205,7 @@ def root_boundaries(context, *, memory_level, wave):
             ctx=cost,
             labels=local_labels,
             outer_depth=sum(frame.scope.depth for frame in stack),
+            origins=origins,
         )
         for boundary in boundaries:
             loops = []

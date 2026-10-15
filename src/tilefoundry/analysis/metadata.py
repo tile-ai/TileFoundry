@@ -160,23 +160,6 @@ def added[V](left: V, right: V) -> V:
     return left + right
 
 
-def resolve_counts[V](
-    held: Breakdown[V], ctx: ValuationProvider
-) -> tuple[Breakdown[V], AnalysisPrecision]:
-    """Evaluate logical groups using only the declared variance interface."""
-    valuation = ctx.request_valuation(VarianceValuation)
-    precision = AnalysisPrecision.EXACT
-    entries = []
-    for kind, spread in held.kinds:
-        logical = scaled(spread.logical, 0)
-        for formals, value in spread.logical_groups or (((), spread.logical),):
-            factor, bounded = valuation.trips(formals)
-            logical = added(logical, scaled(value, factor))
-            precision = precision.join(bounded)
-        entries.append((kind, replace(spread, logical=logical, logical_groups=())))
-    return Breakdown(tuple(entries)), precision
-
-
 @dataclass(frozen=True)
 class ComputeCostMetadata(IRMetadata):
     """Floating-point and other operation kinds, each with one counting spread."""
@@ -185,14 +168,7 @@ class ComputeCostMetadata(IRMetadata):
     flops: Breakdown[int] = Breakdown()
     other_ops: Breakdown[int] = Breakdown()
     precision: AnalysisPrecision = AnalysisPrecision.EXACT
-    requires: ClassVar[tuple[type, ...]] = (VarianceValuation,)
-
-    def resolve(self, ctx: ValuationProvider) -> ComputeCostMetadata:
-        flops, first = resolve_counts(self.flops, ctx)
-        other, second = resolve_counts(self.other_ops, ctx)
-        return replace(
-            self, flops=flops, other_ops=other, precision=self.precision.join(first).join(second)
-        )
+    requires: ClassVar[tuple[type, ...]] = ()
 
 
 @dataclass(frozen=True)
@@ -239,16 +215,13 @@ class MemoryMetadata(IRMetadata):
     buffer_bytes: int | None = None
     offsets: tuple[int, ...] = ()
     alias: BufferAlias | None = None
-    requires: ClassVar[tuple[type, ...]] = (VarianceValuation, BindingValuation, LoopNestValuation)
+    requires: ClassVar[tuple[type, ...]] = (BindingValuation, LoopNestValuation)
 
     def resolve(self, ctx: ValuationProvider) -> MemoryMetadata:
         from .footprint import resolve_footprint  # noqa: PLC0415
 
-        storage, _first = resolve_counts(self.traffic.storage, ctx)
-        communication, _second = resolve_counts(self.traffic.communication, ctx)
         return replace(
             self,
-            traffic=Traffic(storage, communication),
             footprint=resolve_footprint(self.footprint, ctx),
         )
 
@@ -355,7 +328,7 @@ class RooflineMetadata(IRMetadata):
     memory_ns: int = 0
     ideal_ns: int = 0
     bound_by: str = "none"
-    requires: ClassVar[tuple[type, ...]] = (VarianceValuation, BindingValuation, LoopNestValuation)
+    requires: ClassVar[tuple[type, ...]] = ()
 
 
 @dataclass(frozen=True)

@@ -1525,17 +1525,18 @@ family for the same definition in one analysis context MUST raise
 
 | Record | Required Valuations | Local form and resolution |
 |---|---|---|
-| `ComputeCostMetadata` | Variance | Local loop and mesh counts; resolve logical groups using caller variance. |
-| `MemoryMetadata` | Variance, Binding, LoopNest | Local traffic and reached addresses; resolve traffic groups and project reached coordinates through Binding. A retained Call carries its callee's summary. |
+| `ComputeCostMetadata` | None | One-execution local counts; resolving a Call does not multiply caller loops. |
+| `MemoryMetadata` | Binding, LoopNest | One-execution traffic is unchanged by resolve; reached coordinates project through Binding. A retained Call carries its callee's summary. |
 | `RegionMemoryMetadata` | None | Definition-local traffic and footprint for callee rows; root records contain absolute aggregates and are read directly. |
-| `RooflineMetadata` | Variance, Binding, LoopNest | Computed once from each definition's local compute and memory records. |
+| `RooflineMetadata` | None | Computed once from each definition's local compute and memory records. |
 | `PerformanceMetadata`, `PerformanceSummaryMetadata` | Timing, LoopNest | Definition-local intervals; resolve shifts their origin into the caller timeline. |
 
 `Spread.logical_groups` is
 `tuple[tuple[tuple[Var, ...], V], ...] = ()`. When nonempty, `logical` is the sum
 of its groups. Each group records a local count and the formal parameters on
-which it depends. Resolution multiplies it by `VarianceValuation.trips` for
-that set, preserving the joined precision. Renderers MUST show only `logical`,
+which it depends. Caller Function accumulation multiplies it by `VarianceValuation.trips` for
+that set, preserving the joined precision. Call resolution MUST NOT apply caller
+loop multiplicities to either work or traffic. Renderers MUST show only `logical`,
 `total`, and `per_unit`, and MUST NOT render the groups.
 
 Footprint evidence retains local reached sets, their `AccessRelation.values`
@@ -1559,6 +1560,11 @@ reached instance-index tuples. Caller induction variables map from the loop
 domain to those tuples; textual instance labels MUST NOT determine counts.
 Footprint coordinates prefix instance indices before unioning element addresses,
 and persistent bytes count each reached instance once.
+
+Callee call durations MUST use the definition-local schedule duration retained
+in analysis state, before any roofline floor or wave expansion. Only the root
+prediction applies its roofline floor. Callee summary waves still follow the
+checked definition mesh.
 
 Root footprint, reuse windows, lifetimes and whole-program peaks MUST be
 absolute records. MeshRegion peak rows MUST also appear in report JSON under

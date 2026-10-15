@@ -63,7 +63,6 @@ from .footprint import (
     footprint_of,
     merged,
     reached_by,
-    reuse_windows,
     wave_of,
 )
 from .iteration_scope import IterationScope, Repeats, walk_scopes
@@ -782,18 +781,6 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
             binding=label + (f"[{item.index}]" if isinstance(item.value.type, TupleType) else ""),
         )
     lifetimes = tuple(item.lifetime for item in material_values)
-    reuse = (
-        reuse_windows(
-            context.root,
-            memory_level=memory_level,
-            wave_units=wave[0],
-            declared_units=wave[1],
-            ctx=locals_by_unit.get(topology_level, whole),
-            labels=footprint_labels,
-        )
-        if memory_level is not None and wave is not None
-        else ()
-    )
     if memory_level is not None and wave is not None:
         seen_footprints = set()
         for scope, call, reached in memory_context.call_reached:
@@ -988,39 +975,7 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
     values_by_identity = {id(item.value): item.value for item in allocation_values}
     for identity, moved in by_definition.items():
         attach(values_by_identity[identity], moved)
-    errors = tuple(
-        f"{item.memory_level} placement peak {format_bytes(item.peak_bytes)} exceeds "
-        f"capacity {format_bytes(item.capacity_bytes)}"
-        for item in levels
-        if item.exceeds_capacity
-    )
-    advisories: tuple[str, ...] = ()
-    reliable = (AnalysisPrecision.EXACT, AnalysisPrecision.LOWER_BOUND)
-    overfull_snapshot_holds: set[tuple[int, bool]] = set()
-    if cache is not None and wave is not None:
-        cache_level, _backing_level, cache_capacity_bytes = cache
-        overfull_windows: dict[str, tuple[int, AnalysisPrecision]] = {}
-        for row in reuse:
-            if not row.fits:
-                window = row.time or row.space
-                overfull_windows.setdefault(window, (row.holds_bytes, row.precision))
-                if not row.time:
-                    overfull_snapshot_holds.add((row.holds_bytes, row.precision in reliable))
-        for window, (holds_bytes, precision) in overfull_windows.items():
-            message = (
-                f"{cache_level} reuse window {window} holds {format_bytes(holds_bytes)} at a "
-                f"{wave[0]}-unit wave, exceeding capacity "
-                f"{format_bytes(cache_capacity_bytes)}"
-            )
-            if precision in reliable:
-                errors += (message,)
-            else:
-                advisories += (message,)
     footprint = None
-    cache_level = ""
-    cache_capacity_bytes = None
-    wave_units = 0
-    declared_units = 0
     if (
         cache is not None
         and wave is not None
@@ -1063,26 +1018,6 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 for buffer, breakdown in footprint.buffers
             ),
         )
-        cache_level, _backing_level, cache_capacity_bytes = cache
-        wave_units, declared_units = wave
-        used = sum(
-            spread.logical
-            for _buffer, breakdown in footprint.buffers
-            for _level, spread in breakdown.kinds
-        )
-        if (
-            used >= cache_capacity_bytes
-            and (used, footprint.precision in reliable) not in overfull_snapshot_holds
-        ):
-            message = (
-                f"{cache_level} working set {format_bytes(used)} at the first iteration "
-                f"of a {wave_units}-unit wave exceeds capacity "
-                f"{format_bytes(cache_capacity_bytes)}"
-            )
-            if footprint.precision in reliable:
-                errors += (message,)
-            else:
-                advisories += (message,)
     attach(
         function,
         RegionMemoryMetadata(
@@ -1092,14 +1027,50 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 communication=_account_shares(memory_context.communication, tuple(locals_by_unit)),
             ),
             footprint=footprint,
-            reuse_windows=reuse if context.root.is_root_definition else (),
             lifetimes=lifetimes if context.root.is_root_definition else (),
             peaks=levels if context.root.is_root_definition else (),
             solver_status="feasible",
-            errors=errors if context.root.is_root_definition else (),
-            advisories=advisories if context.root.is_root_definition else (),
         ),
     )
+
+
+def _memory_findings(peaks, footprint, reuse, cache, wave):
+    """Build placement and cache findings once from absolute root conclusions."""
+    errors = tuple(
+        f"{peak.memory_level} placement peak {format_bytes(peak.peak_bytes)} exceeds "
+        f"capacity {format_bytes(peak.capacity_bytes)}"
+        for peak in peaks
+        if peak.exceeds_capacity
+    )
+    advisories = ()
+    if cache is not None and wave is not None and footprint is not None:
+        reliable = (AnalysisPrecision.EXACT, AnalysisPrecision.LOWER_BOUND)
+        messages = {}
+        for row in reuse:
+            if not row.fits:
+                messages.setdefault(row.time or row.space, (row.holds_bytes, row.precision))
+        for window, (held, precision) in messages.items():
+            message = (
+                f"{cache[0]} reuse window {window} holds {format_bytes(held)} at a "
+                f"{wave[0]}-unit wave, exceeding capacity {format_bytes(cache[2])}"
+            )
+            if precision in reliable:
+                errors += (message,)
+            else:
+                advisories += (message,)
+        used = sum(
+            spread.logical for _name, held in footprint.buffers for _level, spread in held.kinds
+        )
+        if used >= cache[2] and not any(not row.time and row.holds_bytes == used for row in reuse):
+            message = (
+                f"{cache[0]} working set {format_bytes(used)} at the first iteration of a "
+                f"{wave[0]}-unit wave exceeds capacity {format_bytes(cache[2])}"
+            )
+            if footprint.precision in reliable:
+                errors += (message,)
+            else:
+                advisories += (message,)
+    return errors, advisories
 
 
 def _aggregate_root(function: Function, context: AnalyzeContext) -> None:
@@ -1203,44 +1174,7 @@ def _aggregate_root(function: Function, context: AnalyzeContext) -> None:
                 peak_bytes=max(peak.peak_bytes + persistent.get(peak.memory_level, 0), high),
             )
         )
-    errors = tuple(
-        f"{peak.memory_level} placement peak {format_bytes(peak.peak_bytes)} exceeds "
-        f"capacity {format_bytes(peak.capacity_bytes)}"
-        for peak in peaks
-        if peak.exceeds_capacity
-    )
-    advisories = tuple(
-        error
-        for error in record.advisories
-        if "reuse window" not in error and "working set" not in error
-    )
-    if cache is not None and wave is not None and footprint is not None:
-        reliable = (AnalysisPrecision.EXACT, AnalysisPrecision.LOWER_BOUND)
-        messages = {}
-        for row in reuse:
-            if not row.fits:
-                messages.setdefault(row.time or row.space, (row.holds_bytes, row.precision))
-        for window, (held, precision) in messages.items():
-            message = (
-                f"{cache[0]} reuse window {window} holds {format_bytes(held)} at a "
-                f"{wave[0]}-unit wave, exceeding capacity {format_bytes(cache[2])}"
-            )
-            if precision in reliable:
-                errors += (message,)
-            else:
-                advisories += (message,)
-        used = sum(
-            spread.logical for _name, held in footprint.buffers for _level, spread in held.kinds
-        )
-        if used >= cache[2] and not any(not row.time and row.holds_bytes == used for row in reuse):
-            message = (
-                f"{cache[0]} working set {format_bytes(used)} at the first iteration of a "
-                f"{wave[0]}-unit wave exceeds capacity {format_bytes(cache[2])}"
-            )
-            if footprint.precision in reliable:
-                errors += (message,)
-            else:
-                advisories += (message,)
+    errors, advisories = _memory_findings(peaks, footprint, reuse, cache, wave)
     attach(
         function,
         replace(
@@ -1249,8 +1183,8 @@ def _aggregate_root(function: Function, context: AnalyzeContext) -> None:
             reuse_windows=reuse,
             lifetimes=tuple(lifetimes),
             peaks=tuple(peaks),
-            errors=errors if context.root.is_root_definition else (),
-            advisories=advisories if context.root.is_root_definition else (),
+            errors=errors,
+            advisories=advisories,
         ),
     )
 
