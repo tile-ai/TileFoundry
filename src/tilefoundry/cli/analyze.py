@@ -127,11 +127,11 @@ def run_authored_analysis(
         module = load_authored_ir(source)
         function = module.entry_function()
         require_bound_dims(module, function, dims, command="analyze")
+        try:
+            checked, root = check_program(module, function, topology_level=topology, dims=dims)
+        except SpecializationError as error:
+            raise ValueError(f"analyze: {error}") from None
         if not analyses:
-            try:
-                checked, root = check_program(module, function, dims=dims)
-            except SpecializationError as error:
-                raise ValueError(f"analyze: {error}") from None
             annotated = "\n".join(
                 as_script(frame.function, options=PythonPrintOptions(show_types=True))
                 for frame in CallFrameVisitor.walk_frames(CallFrame(checked, root))
@@ -140,7 +140,8 @@ def run_authored_analysis(
             return 0
 
         result = analyze(
-            *check_program(module, function, topology_level=topology, dims=dims),
+            checked,
+            root,
             analysis=analyses,
             topology_level=topology,
         )

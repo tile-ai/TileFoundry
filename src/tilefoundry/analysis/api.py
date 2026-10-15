@@ -16,11 +16,12 @@ from dataclasses import dataclass
 from tilefoundry.analysis.check import check_analyses
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import ScopeBuilder
+from tilefoundry.analysis.metadata import ExecutionMeshMetadata
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.visitor import AnalyzeContext, CallContext, VisitContext
 from tilefoundry.dump import DumpFlags, dump
-from tilefoundry.ir.core import IRMetadata
+from tilefoundry.ir.core import IRMetadata, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.visitor import function_values
@@ -146,7 +147,9 @@ def build_iteration_scopes(
             frame=frame,
             definitions=definitions,
         )
-        builder = ScopeBuilder(frame.module, frame.function, ctx=context)
+        builder = ScopeBuilder(
+            frame.module, frame.function, ctx=context, is_root=frame.function is function
+        )
         context.root = context.current = builder.build()
         context.sources = builder.sources
         context.access_summary = builder.summarize_formals(context.root)
@@ -193,6 +196,8 @@ def analyze(
         raise ValueError("analyze: topology_level and level disagree")
     topology_level = topology_level if topology_level is not None else level
     _check_subject(module, function)
+    if get_metadata(function, ExecutionMeshMetadata) is None:
+        raise AnalysisError("analyze needs the program returned by check_program")
     roots = _roots(analysis)
     result_module = module
     closure = _closure(module.resolve_target(), roots)

@@ -99,6 +99,7 @@ class IterationScope:
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
     topologies: tuple[Topology, ...] = ()
     outer_mesh: Mesh | None = None
+    is_root_definition: bool = True
     variance: dict[int, frozenset[int]] = field(default_factory=dict)
 
     def projected_relations(self, call: Call, ctx: TypeInferContext) -> tuple[AccessRelation, ...]:
@@ -280,8 +281,10 @@ class ScopeBuilder(CallFrameVisitor[None]):
         *,
         views: Sequence[str] = ("narrow", "device", "unit"),
         ctx: AnalyzeContext | None = None,
+        is_root: bool = True,
     ) -> None:
         self.graph = graph
+        self.is_root = is_root
         self.call_frame = CallFrame(module, graph) if ctx is None or ctx.frame is None else ctx.frame
         self.topologies = self.call_frame.topologies
         self.views = tuple(views)
@@ -728,6 +731,7 @@ class ScopeBuilder(CallFrameVisitor[None]):
             domain_params=domain_params,
             accesses=self._empty_accesses(),
             topologies=self.topologies,
+            is_root_definition=self.is_root,
         )
         mesh = get_metadata(self.graph, ExecutionMeshMetadata)
         root.outer_mesh = None if mesh is None else mesh.mesh

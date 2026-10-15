@@ -48,6 +48,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
 from tilefoundry.ir.hir.specialize import (
+    SpecializationError,
     origin_of,
     residual_dims,
     variant_for,
@@ -841,11 +842,8 @@ def test_without_a_size_the_result_names_the_record_bearing_view() -> None:
 def test_a_dimension_the_function_does_not_have_is_refused() -> None:
     module = _aimed()
 
-    with pytest.raises(AnalysisError, match="no dimension named"):
-        analyze(
-            *check_program(module, module.entry_function(), dims={**DIMS, "batch": 2}),
-            analysis="compute-cost",
-        )
+    with pytest.raises(SpecializationError, match="no dimension named"):
+        check_program(module, module.entry_function(), dims={**DIMS, "batch": 2})
 
 
 def test_a_dimension_left_unbound_is_refused() -> None:
@@ -857,11 +855,8 @@ def test_a_dimension_left_unbound_is_refused() -> None:
     """
     module = _aimed()
 
-    with pytest.raises(AnalysisError, match="was not given a size"):
-        analyze(
-            *check_program(module, module.entry_function(), dims={"batch": 4}),
-            analysis="compute-cost",
-        )
+    with pytest.raises(SpecializationError, match="was not given a size"):
+        check_program(module, module.entry_function(), dims={"batch": 4})
 
 
 def test_an_empty_or_malformed_size_is_refused_rather_than_ignored() -> None:
@@ -869,10 +864,10 @@ def test_an_empty_or_malformed_size_is_refused_rather_than_ignored() -> None:
     module = _aimed()
     entry = module.entry_function()
 
-    with pytest.raises(AnalysisError, match="non-empty mapping"):
-        analyze(*check_program(module, entry, dims={}), analysis="compute-cost")
-    with pytest.raises(AnalysisError, match="takes an integer extent"):
-        analyze(*check_program(module, entry, dims={"ctx_len": 32.0}), analysis="compute-cost")
+    with pytest.raises(SpecializationError, match="non-empty mapping"):
+        check_program(module, entry, dims={})
+    with pytest.raises(SpecializationError, match="takes an integer extent"):
+        check_program(module, entry, dims={"ctx_len": 32.0})
 
 
 def test_a_size_states_nothing_about_a_function_from_elsewhere() -> None:
@@ -884,8 +879,8 @@ def test_a_size_states_nothing_about_a_function_from_elsewhere() -> None:
     module = _aimed()
     foreign = QWEN3_1_7B.build().lookup("mlp")
 
-    with pytest.raises(AnalysisError, match="is not a function of module"):
-        analyze(*check_program(module, foreign, dims=DIMS), analysis="compute-cost")
+    with pytest.raises(AnalysisError, match="is owned by no single node of module"):
+        check_program(module, foreign, dims=DIMS)
 
 
 def test_the_entry_at_a_chosen_size_is_still_the_entry() -> None:

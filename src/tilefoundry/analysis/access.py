@@ -256,7 +256,11 @@ def eliminate_parameters(
             root = root.parent
         resolved = _RegionBindingResolver(narrow=narrow).visit(value, scope) if isinstance(value, Expr) else value
         formals = {id(formal) for formal in root.owner.params}
-        if isinstance(resolved, Expr) and any(id(expr) in formals for expr in collect_exprs(resolved)):
+        if (
+            not root.is_root_definition
+            and isinstance(resolved, Expr)
+            and any(id(expr) in formals for expr in collect_exprs(resolved))
+        ):
             if isinstance(resolved, Var):
                 label = f"formal_{next(index for index, formal in enumerate(root.owner.params) if resolved is formal)}"
             else:

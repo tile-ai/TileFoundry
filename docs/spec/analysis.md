@@ -1334,8 +1334,11 @@ class AnalysisCheckContext:
   - Records MUST live on IR once per definition, in local coordinates. The
     definition's scope tree MUST stop at its own root, whose parent is `None`.
     Source entries MUST stop at formals; formals' variance dependencies MUST
-    include their own identity. Root-only aggregate facts are computed using
-    the call stack and attached only to root.
+    include their own identity. Only called definitions retain formal-dependent
+    coordinate parameters. The selected root has no caller to bind them and
+    MUST use the existing widest-range approximation with `UPPER_BOUND` precision.
+    Root-only aggregate facts are computed using the call stack and attached
+    only to root.
     Performance MUST schedule each definition once relative to its own origin;
     call duration is the callee duration, scheduled in the caller's current scope.
     Callee region peaks MUST take the maximum across occurrences.
@@ -1434,7 +1437,9 @@ def analyze(
     proportionally different rates.
   - The Function MUST belong to the checked Module, including its derived
     definitions. Analyze MUST write metadata in place without cloning or
-    re-running type inference. Dimension binding belongs to `check_program`.
+    re-running type inference. A root without `ExecutionMeshMetadata` MUST be
+    rejected with `AnalysisError("analyze needs the program returned by check_program")`.
+    Dimension binding belongs to `check_program`.
   - Within `check_program`, stated `dims` MUST be a non-empty mapping whose
     keys name reached dimensions and whose integer extents satisfy their bounds.
     Every dispatch dimension MUST be supplied, exactly one variant MUST cover
