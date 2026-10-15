@@ -1,3 +1,4 @@
+"""Lower arithmetic on a scalar register index through a dynamic slice window."""
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 

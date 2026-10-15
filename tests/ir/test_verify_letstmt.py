@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry.ir.core import Call, Constant, Var, VerifyError
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.memory.ptr_of import PtrOf
@@ -127,4 +128,29 @@ def test_verify_rejects_a_non_ir_node():
         )),
     )
     with pytest.raises(VerifyError, match="non-IR node _View"):
+        verify_prim_function(function)
+
+
+def test_variant_cannot_use_its_parents_parameter():
+    """Each specialization owns its parameters; the parent's Var is invisible."""
+    function = import_dsl('''from tilefoundry.dsl import *
+
+N = DimVar("N", 1, 8)
+
+@prim_func
+def parent(x: Tensor[(N,), "f32"]):
+    pass
+
+@parent.specialize(RangePattern("N", 1, 4))
+def small(x: Tensor[(N,), "f32"]):
+    pass
+''', "parent")
+    variant = function.variants[0]
+    assert variant.params[0] is not function.params[0]
+    variant.body = Sequential(body=(LetStmt(
+        var=Var(type=function.params[0].type, name="escaped"),
+        value=function.params[0],
+        body=Sequential(body=()),
+    ),))
+    with pytest.raises(VerifyError, match="x.*used outside the scope that binds it"):
         verify_prim_function(function)

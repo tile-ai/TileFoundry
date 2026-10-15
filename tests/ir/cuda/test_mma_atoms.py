@@ -28,7 +28,6 @@ from tilefoundry.ir.types import (
     TensorType,
 )
 from tilefoundry.ir.types.int_tuple import flatten, product
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.typeinfer import inference_type
 
@@ -220,15 +219,25 @@ def _canonical_smem_cases():
     return cases
 
 
-def _swizzled_address(offset, bits):
-    return offset ^ ((offset >> 3) & (((1 << bits) - 1) << 4))
-
-
-def _layout_address(layout, correspondence, shape, coordinates):
-    """Interpret authored row-major positions independently of pattern matching."""
-    linear = coordinates[0] * shape[1] + coordinates[1]
-    digits = correspondence.digits(linear)
-    return sum(digit * stride for digit, stride in zip(digits, flatten(layout.strides), strict=True))
+def _assert_smem_addresses(full, shape, role, am, ak, sm, sk, ms, ks):
+    """Prove address equality at every tensor element using one bounded ISL map."""
+    digits = layout_to_isl_map(
+        shape, ShardLayout(full, wgmma.BROADCAST, wgmma.WARPGROUP), {},
+        divided=lambda _: (),
+    )
+    positions = [f"p{i}" for i in range(len(flatten(full.shape)))]
+    address = " + ".join(
+        f"{stride} * {position}"
+        for stride, position in zip(flatten(full.strides), positions, strict=True)
+    )
+    actual = digits.apply_range(isl.map(f"{{ [{', '.join(positions)}] -> [{address}] }}"))
+    domain = isl.set(f"{{ [c0, c1] : 0 <= c0 < {shape[0]} and 0 <= c1 < {shape[1]} }}")
+    m, k = ("c0", "c1") if role == "A" else ("c1", "c0")
+    expected = isl.map(
+        f"{{ [c0, c1] -> [{sm} * ({m} mod {am}) + {sk} * ({k} mod {ak})"
+        f" + {ms} * floor({m}/{am}) + {ks} * floor({k}/{ak})] }}"
+    )
+    assert actual.intersect_domain(domain).is_equal(expected.intersect_domain(domain))
 
 
 @pytest.mark.parametrize(
@@ -254,31 +263,22 @@ def test_wgmma_admits_every_canonical_smem_tiling(role, major, bits, element_byt
     if role == "B":
         full = Layout(tuple(reversed(full.shape)), tuple(reversed(full.strides)))
     shape = (mn, bk) if role == "A" else (bk, mn)
-    correspondence = layout_correspondence(full.shape, shape)
-    for m in range(mn):
-        for k in range(bk):
-            expected = (m % am) * sm + (k % ak) * sk + (m // am) * ms + (k // ak) * ks
-            coordinates = (m, k) if role == "A" else (k, m)
-            actual = _layout_address(full, correspondence, shape, coordinates)
-            assert _swizzled_address(actual, bits) == _swizzled_address(expected, bits)
+    _assert_smem_addresses(full, shape, role, am, ak, sm, sk, ms, ks)
 
     issue_k = 32 // element_bytes
-    for start in range(0, bk, issue_k):
-        if major == "MN":
-            view = Layout(((rm, am), (issue_k // ak, ak)), ((ms, sm), (ks, sk)))
-            offset = 0
-            factory = getattr(wgmma, f"_{role.lower()}_mn_major_smem_pattern")
-        elif bits <= 1:
-            view = Layout(((rm, am), (issue_k // ak, ak)), ((ms, sm), (ks, sk)))
-            offset = 0
-            factory = getattr(wgmma, f"_{role.lower()}_k_major_whole_smem_pattern")
-        else:
-            view = Layout(((rm, am), issue_k), ((ms, sm), 1))
-            offset = start % ak
-            factory = getattr(wgmma, f"_{role.lower()}_k_major_sliced_smem_pattern")
-        if role == "B":
-            view = Layout(tuple(reversed(view.shape)), tuple(reversed(view.strides)))
+    if major == "MN" or bits <= 1:
+        view = Layout(((rm, am), (issue_k // ak, ak)), ((ms, sm), (ks, sk)))
+        suffix = "mn_major" if major == "MN" else "k_major_whole"
+        offsets = (0,)
+    else:
+        view = Layout(((rm, am), issue_k), ((ms, sm), 1))
+        suffix = "k_major_sliced"
+        offsets = range(0, ak, issue_k)
+    factory = getattr(wgmma, f"_{role.lower()}_{suffix}_smem_pattern")
+    if role == "B":
+        view = Layout(tuple(reversed(view.shape)), tuple(reversed(view.strides)))
+    for offset in offsets:
         candidate = ComposedLayout(Swizzle(bits, 4, 3), offset, view)
         assert factory(element_bytes).match(candidate, {"n": mn}) is not None, (
-            role, major, bits, element_bytes, mn, bk, order, start, candidate
+            role, major, bits, element_bytes, mn, bk, order, offset, candidate
         )

@@ -1,3 +1,4 @@
+"""Admit an MN-major B descriptor with a wide leading byte offset."""
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
