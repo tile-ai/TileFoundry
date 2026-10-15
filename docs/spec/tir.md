@@ -219,10 +219,12 @@ The `callable` is one of:
 
 - an effect-form `Op` (e.g. `tir.memory.Copy`, `tir.cuda.nn.Mma`,
   `tir.tensor.Reduce`, `tir.Launch` [§2.3](#23-tir-ops)). `args` are
-  the Op's operands in `ParamDef` order. Verification runs its optional
-  per-Op verifier, then the declared `between` relations and operand patterns;
-  a context-dependent operand pattern MAY resolve itself against the callable
-  before matching.
+  the Op's operands in `ParamDef` order. Device-instruction verification uses the shared
+  `check_call`: match the execution mesh, project instruction tiles, check
+  operand patterns and declared `between` relations, then invoke the optional
+  leaf verifier. A context-dependent operand pattern MAY resolve itself against
+  the callable before matching. Host `Launch` instead checks its target,
+  arguments, and launch extents as a function invocation.
 - a `SymbolRef` ([§2.1](#21-symbolref)) — a reference to a callee
   `PrimFunction` in the enclosing `Module`. `args` follow the callee's
   parameter order, the final `output_count` positions binding output

@@ -83,11 +83,12 @@ owned by [visitor-mutator §5](./visitor-mutator.md#5-stmtvisitort--stmtmutator)
 `VerifyVisitor`, defined in [§5](#5-instance-2--verify), is the derived class
 that adds an explicit registry binding point.
 
-`@register_verify_stmt(Copy)` writes a handler into
-`verify_stmt_registry`; `VerifyVisitor.generic_visit` reads from the
-**same module-level `DispatchRegistry` instance**. That shared
-reference is the only thing pairing the two — swap the registry and
-you swap the analysis.
+`@register_verify_stmt(Fill)` writes an optional leaf handler into
+`verify_stmt_registry`. For effect Ops, `VerifyVisitor.generic_visit` and the
+whole-function walker both delegate device instructions to `check_call`, which reads this same
+module-level registry after checking the operation's declaration. The visitor's
+injected registry handles structural Stmts; it does not replace effect-call
+admission.
 
 ### 1.2 Two ways to write a visitor
 
@@ -479,10 +480,13 @@ def register_verify_stmt(cls: type): ...        # decorator: register a verify h
 (`Copy` / `Fill` / `TiledMma` / `ReLU` / `Reduce`) appear in
 Stmt position as `Evaluate(callable=op, args)`. The verify path keys
 on the Op class, not on `Evaluate` itself: `register_verify_stmt`
-takes the **Op class**, and `VerifyVisitor.generic_visit` —
-together with `visitor_registry.verify._walk_stmt` — detects `Evaluate` and
-dispatches `verify_stmt_registry.lookup(type(stmt.callable))`. The
-registry key is the Op class; the handler input shape is owned by the
+takes the **Op class**. `VerifyVisitor.generic_visit` and
+`visitor_registry.verify._walk_stmt` both pass device-instruction Ops to the same
+`check_call` used by ScheduleOp inference, candidate admission, and lowering.
+That check owns declaration matching and invokes any registered leaf verifier;
+a missing leaf handler MUST NOT bypass the declared constraints. Refusals from
+the common check are reported as `VerifyError` by both verification entries.
+The registry key is the Op class; the handler input shape is owned by the
 registry implementation. The stable IR shape is `Evaluate(op, args)`;
 the stable IR does not wrap a value-form `Call` inside `Evaluate`. See
 [visitor-mutator §7](./visitor-mutator.md#7-visitor-entry-forms-for-evaluate)
@@ -492,7 +496,7 @@ for the matching visitor entry-form contract and
 ```python
 # example
 # a verify handler keys on the Op class and returns None:
-@register_verify_stmt(Copy)
+@register_verify_stmt(Fill)
 def _(call: Call, ctx: VerifyContext) -> None: ...
 ```
 
@@ -509,14 +513,15 @@ type-inference driver rather than making either IR layer own the driver.
 ```python
 class VerifyVisitor(StmtVisitor[None]):
     def __init__(self, ctx: VerifyContext, registry: DispatchRegistry = verify_stmt_registry): ...   # ctx + injected verify registry
-    def generic_visit(self, stmt: Stmt) -> None: ...   # try the registry, fall back to base recursion on a miss
-    def visit_MeshScope(self, stmt): ...               # push/pop mesh_scope around recursion
+    def generic_visit(self, stmt: Stmt) -> None: ...   # check_call for effect Ops; registry/recursion for structural Stmts
+    def visit_MeshScope(self, stmt): ...               # push/pop current_mesh and mesh_scope around recursion
 ```
 
 - constraints:
-  - recurses `PrimFunction.body`; per Stmt subclass tries the registry, falling
-    back to `generic_visit` on a miss. The registry is injected via `__init__`,
-    not baked into `StmtVisitor` (see [§1.1](#11-registry-is-not-a-property-of-stmtvisitor--exprvisitor)).
+  - recurses `PrimFunction.body`; effect Ops go through `check_call`. Structural
+    Stmt subclasses try the injected registry and recurse on a miss. MeshScope
+    traversal MUST restore the enclosing context even when a nested call fails.
+    The structural registry is injected via `__init__`, not baked into `StmtVisitor` (see [§1.1](#11-registry-is-not-a-property-of-stmtvisitor--exprvisitor)).
 
 **Unregistered semantics.** A Stmt subclass without
 `register_verify_stmt` does not error — `VerifyVisitor` simply
