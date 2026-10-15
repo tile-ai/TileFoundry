@@ -421,7 +421,14 @@ def _landing(model, holder, alias, *, window=False):
         expected = scope.domain.flat_product(shape_to_isl_set(tuple(held.shape), {}))
         if not landed.domain().is_equal(expected.intersect_params(landed.params())):
             return None
-    return root, Alias(alias.target, _unprefix(landed, scope), alias.kind)
+    published = _unprefix(landed, scope)
+    relation = published.relation
+    if window and (
+        relation.dim(isl.dim_type.IN) != relation.dim(isl.dim_type.OUT)
+        or relation.is_translation() != 1
+    ):
+        return None
+    return root, Alias(alias.target, published, alias.kind)
 
 
 def _proved_at(model, left, right, start, landing):
@@ -586,6 +593,15 @@ def tie_analysis(model: AllocationModel) -> None:
                     if end_b == start_a and not _proved_at(model, left, right, start_a, landing):
                         continue
                     merge(left, right)
+                model.accepted[value] = (*model.accepted.get(value, ()), alias)
+
+    for value in model.values:
+        for alias in value.aliases:
+            if (
+                alias.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD, AliasKind.INSERT_SLICE)
+                and model.partition[value] is model.partition[alias.target]
+                and alias not in model.accepted.get(value, ())
+            ):
                 model.accepted[value] = (*model.accepted.get(value, ()), alias)
 
     for index, returned in enumerate(model.returned):

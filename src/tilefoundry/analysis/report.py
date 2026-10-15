@@ -253,9 +253,9 @@ def report_data(
     """Project every definition once, in root-first order."""
     from tilefoundry.visitor_registry.call_frame import CallFrameVisitor  # noqa: PLC0415
 
-    from .api import build_iteration_scopes  # noqa: PLC0415
+    from .api import _build_context  # noqa: PLC0415
 
-    context = build_iteration_scopes(module, function, topology_level=topology_level)
+    context = _build_context(module, function, topology_level=topology_level)
     selected = frozenset(selected_types(module, analyses, metadata_types))
     target = module.resolve_target()
     wave = wave_of(module, target, topology_level)

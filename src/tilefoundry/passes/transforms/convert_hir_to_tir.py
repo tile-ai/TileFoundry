@@ -1,6 +1,6 @@
 """Lower scheduled HIR to effect-form TIR.
 
-The pass consumes the checked, inlined view produced by ``analyze(memory)``.
+The pass analyzes a checked program and lowers each retained definition once.
 Memory metadata owns storage addresses; registered access relations own
 instruction issue geometry. This file only turns those two facts into statements.
 """
@@ -14,10 +14,9 @@ from math import prod
 
 import isl
 
-from tilefoundry.analysis import AnalysisResult, MemoryMetadata, analyze
+from tilefoundry.analysis import MemoryMetadata, analyze
 from tilefoundry.analysis.access import BufferAlias
 from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
 from tilefoundry.ir.core import (
@@ -43,7 +42,6 @@ from tilefoundry.ir.hir.schedule import ScheduleOp, instruction_schema, operand_
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.hir.tensor.empty import Empty
-from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
@@ -74,6 +72,7 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.layout import flatten, resolve_layout
+from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import (
     i64_const,
@@ -87,7 +86,7 @@ from tilefoundry.visitor_registry.access_relation import (
     projected_axes,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
 from tilefoundry.visitor_registry.candidates import (
     candidate_operands,
     candidate_ops,
@@ -182,12 +181,12 @@ class LoweringContext:
     """Own the open lexical scopes and their statement destinations."""
 
     def __init__(self, function: Function) -> None:
-        self.scopes = [_Scope(owner=function)]
+        self.blocks = [_Scope(owner=function)]
         self.loops = []
 
     @property
     def current(self) -> _Scope:
-        return self.scopes[-1]
+        return self.blocks[-1]
 
     @property
     def frame(self) -> Mesh | None:
@@ -204,25 +203,25 @@ class LoweringContext:
         scope = (
             self.current
             if owner is None
-            else next((scope for scope in self.scopes if scope.owner is owner), None)
+            else next((scope for scope in self.blocks if scope.owner is owner), None)
         )
         if scope is None:
             raise LoweringError("staged buffer has no owning scope")
-        self.scopes.append(scope)
+        self.blocks.append(scope)
         try:
             yield scope
         finally:
-            self.scopes.pop()
+            self.blocks.pop()
 
     @contextmanager
     def mesh_scope(self, frame: Mesh, binding: Var, owner: Expr | None = None):
         scope = _Scope(frame, owner)
         scope.bound[id(binding)] = binding
-        self.scopes.append(scope)
+        self.blocks.append(scope)
         try:
             yield scope
         finally:
-            self.scopes.pop()
+            self.blocks.pop()
         self.add(MeshScope(frame, binding, scope.build()))
 
     @contextmanager
@@ -231,13 +230,13 @@ class LoweringContext:
     ):
         scope = _Scope(self.frame, owner)
         scope.bound[id(induction)] = induction
-        self.scopes.append(scope)
+        self.blocks.append(scope)
         self.loops.append((induction, start, stop, step))
         try:
             yield scope
         finally:
             self.loops.pop()
-            self.scopes.pop()
+            self.blocks.pop()
         self.add(For(induction, start, stop, step, scope.build()))
 
 
@@ -263,16 +262,43 @@ class Names:
         return self.fresh(binding.name if binding is not None else fallback)
 
 
-def _scope_names(root: IterationScope, names: Names) -> dict[int, str]:
-    """Reserve all region bindings in lexical pre-order."""
-    found = {}
-    for scope in walk_scopes(root):
-        region = scope.owner
-        if scope.occurrence is not root.occurrence:
-            continue
-        if isinstance(region, MeshRegion):
-            found[id(region)] = names.fresh("cta" if region is root.frame.function.body else "scope")
-    return found
+@dataclass(eq=False)
+class _Region:
+    """Lexical ownership for declarations, captures and enclosing meshes."""
+
+    owner: Expr
+    parent: _Region | None = None
+    outer_mesh: Mesh | None = None
+
+    def enclosing_loops(self) -> tuple[LoopRegion, ...]:
+        owners = []
+        cursor = self
+        while cursor is not None:
+            if isinstance(cursor.owner, LoopRegion):
+                owners.append(cursor.owner)
+            cursor = cursor.parent
+        return tuple(reversed(owners))
+
+    def enclosing_mesh(self) -> Mesh | None:
+        cursor = self
+        while cursor is not None:
+            if isinstance(cursor.owner, MeshRegion):
+                return cursor.owner.mesh
+            if cursor.parent is None:
+                return cursor.outer_mesh
+            cursor = cursor.parent
+        return None
+
+    def execution_mesh(self) -> Mesh | None:
+        meshes = []
+        cursor = self
+        while cursor is not None:
+            if isinstance(cursor.owner, MeshRegion):
+                meshes.append(cursor.owner.mesh)
+            if cursor.parent is None and cursor.outer_mesh is not None:
+                meshes.append(cursor.outer_mesh)
+            cursor = cursor.parent
+        return make_mesh(*reversed(meshes)) if meshes else None
 
 
 def _frame(mesh: Mesh) -> Mesh:
@@ -309,16 +335,15 @@ def _label(call: Expr) -> str:
 class Lowering(CallFrameVisitor[Expr | _View]):
     """Mechanical lowering of one analyzed HIR function."""
 
-    result: AnalysisResult
+    frame: CallFrame
     authored: Function
-    occurrence: IterationScope | None = None
     callees: dict[int, Lowering] = field(default_factory=dict)
+    outer_mesh: Mesh | None = None
 
     def __post_init__(self) -> None:
         ExprVisitor.__init__(self)
-        self.module = self.result.scopes.frame.module
-        self.occurrence = self.result.scopes.occurrence if self.occurrence is None else self.occurrence
-        self.function = self.occurrence.frame.function
+        self.module = self.frame.module
+        self.function = self.frame.function
         self.names = Names(self.authored)
         self.logical: dict[int, TensorType] = {}
         self.staged: dict[int, tuple[Var, tuple[LoopRegion, ...]]] = {}
@@ -327,39 +352,71 @@ class Lowering(CallFrameVisitor[Expr | _View]):
         self.output_storage: dict[int, Var] = {}
         self.scratch: list[Var] = []
         self.ctx = LoweringContext(self.function)
+        values = {id(value): value for value in collect_exprs(self.function.body)}
+        calls = {key: value for key, value in values.items() if isinstance(value, Call)}
         self.output_windows = {
             id(call): memory.alias
-            for call in collect_exprs(self.function.body)
-            if isinstance(call, Call)
-            and (memory := get_metadata(call, MemoryMetadata)) is not None
+            for call in calls.values()
+            if (memory := get_metadata(call, MemoryMetadata)) is not None
             and memory.alias is not None
         }
         self.authored_values: dict[int, Expr] = {}
         if self.function.body is not None and self.authored.body is not None:
             self.authored_values[id(self.function.body)] = self.authored.body
-        self.scopes = self.occurrence
-        self.scope_for_call = {
-            expr_id: scope
-            for scope in walk_scopes(self.scopes)
-            if scope.occurrence is self.occurrence
-            for expr_id, (call, _relations) in scope.relations.items()
-            if id(call) == expr_id
-        }
-        self.capture_scopes = {
-            id(param): scope
-            for scope in walk_scopes(self.scopes)
-            if scope.occurrence is self.occurrence
-            for param, _argument in scope.captures
-        }
-        self.carried_initials = {
-            id(param): scope.owner.args[slot]
-            for scope in walk_scopes(self.scopes)
-            if scope.occurrence is self.occurrence
-            if isinstance(scope.owner, LoopRegion)
-            for slot, param in enumerate(scope.owner.params[: len(scope.owner.yield_values)])
+        self.lexical_root = _Region(self.function, outer_mesh=self.outer_mesh)
+        self.regions = [self.lexical_root]
+        self.scope_for_call = {}
+        self.capture_arguments = {}
+        self.carried_initials = {}
+        seen = set()
+
+        def index(expr, region):
+            if id(expr) in seen:
+                return
+            seen.add(id(expr))
+            if isinstance(expr, (MeshRegion, LoopRegion)):
+                for argument in expr.args:
+                    index(argument, region)
+                inner = _Region(expr, region)
+                self.regions.append(inner)
+                self.capture_arguments.update({id(param): arg for param, arg in expr.captures()})
+                if isinstance(expr, LoopRegion):
+                    self.carried_initials.update(
+                        {
+                            id(param): expr.args[slot]
+                            for slot, param in enumerate(expr.params[: len(expr.yield_values)])
+                        }
+                    )
+                index(expr.body, inner)
+                if isinstance(expr, LoopRegion):
+                    for value in expr.yield_values:
+                        index(value, inner)
+            else:
+                for child in expr_children(expr):
+                    index(child, region)
+            self.scope_for_call[id(expr)] = region
+
+        index(self.function.body, self.lexical_root)
+        self.output_ties = {}
+        for value in calls.values():
+            alias = self.output_windows.get(id(value))
+            if (
+                alias is not None
+                and id(alias.buffer) in self.carried_initials
+                and alias.relation.relation.is_identity()
+                and getattr(value.type, "shape", None) == alias.buffer.type.shape
+            ):
+                root = self._return_storage(value, (), aliases=False)
+                region = self.scope_for_call.get(id(root))
+                loops = () if region is None else region.enclosing_loops()
+                if any(any(alias.buffer is param for param in loop.params) for loop in loops):
+                    self.output_ties[id(root)] = alias
+                self.output_ties[id(value)] = alias
+        self.output_windows = {
+            key: alias for key, alias in self.output_windows.items() if key not in self.output_ties
         }
         self.register_scopes = self._register_scope_plan()
-        self.type_ctx = TypeInferContext(frame=self.occurrence.frame)
+        self.type_ctx = TypeInferContext(frame=self.frame)
         for param in self.function.params:
             physical = Var(param.name, type=param.type, is_const=param.is_const)
             self._memo[id(param)] = (param, physical)
@@ -369,7 +426,13 @@ class Lowering(CallFrameVisitor[Expr | _View]):
     def run(self) -> PrimFunction:
         if self.function.body is None:
             raise LoweringError(f"{self.function.name!r} has no body to lower")
-        self.scope_names = _scope_names(self.scopes, self.names)
+        self.scope_names = {
+            id(region.owner): self.names.fresh(
+                "cta" if region.owner is self.function.body else "scope"
+            )
+            for region in self.regions
+            if isinstance(region.owner, MeshRegion)
+        }
         roots = []
         seen = set()
         for path, type_ in self._return_leaves(self.function.return_type):
@@ -393,7 +456,7 @@ class Lowering(CallFrameVisitor[Expr | _View]):
                 isinstance(root, Call)
                 and (
                     isinstance(root.target, (Zeros, Empty))
-                    or self.callee_frame(root, self.occurrence.frame) is not None
+                    or self.callee_frame(root, self.frame) is not None
                 )
                 and getattr(root.target, "buffers", 1) == 1
                 and replace(root.type, layout=resolve_layout(root.type.layout, root.type.shape))
@@ -412,7 +475,7 @@ class Lowering(CallFrameVisitor[Expr | _View]):
         result = self.visit(body)
         if not isinstance(body, MeshRegion):
             self._finish(result)
-        statements = self.ctx.scopes[0].build()
+        statements = self.ctx.blocks[0].build()
 
         params = tuple(self._memo[id(param)][1] for param in self.function.params)
         return PrimFunction(
@@ -420,13 +483,13 @@ class Lowering(CallFrameVisitor[Expr | _View]):
             (*params, *self.scratch, *(output for _path, output in self.outputs)),
             statements,
             output_count=len(self.outputs),
-            target=self.occurrence.frame.target,
+            target=self.frame.target,
         )
 
     def _staging_owner(self, expr: Call) -> Expr:
         scope = self.scope_for_call.get(id(expr))
         outermost = None
-        while scope is not None and scope.occurrence is self.occurrence:
+        while scope is not None:
             if isinstance(scope.owner, LoopRegion):
                 outermost = scope
             scope = scope.parent
@@ -438,10 +501,7 @@ class Lowering(CallFrameVisitor[Expr | _View]):
 
     def _staging_loops(self, expr: Call) -> tuple[LoopRegion, ...]:
         scope = self.scope_for_call.get(id(expr))
-        return () if scope is None else tuple(
-            owner for owner in scope.enclosing_loops()
-            if any(item.owner is owner and item.occurrence is self.occurrence for item in walk_scopes(self.scopes))
-        )
+        return () if scope is None else scope.enclosing_loops()
 
     @staticmethod
     def _return_leaves(type_, path: tuple[int, ...] = ()):
@@ -451,17 +511,23 @@ class Lowering(CallFrameVisitor[Expr | _View]):
         else:
             yield path, type_
 
-    def _return_storage(self, value: Expr, path: tuple[int, ...]) -> Expr | None:
+    def _return_storage(
+        self, value: Expr, path: tuple[int, ...], *, aliases: bool = True
+    ) -> Expr | None:
         """Follow the HIR storage edges that lowering already implements."""
         if isinstance(value, MeshRegion):
-            return self._return_storage(value.body, path)
+            return self._return_storage(value.body, path, aliases=aliases)
         if isinstance(value, LoopRegion):
             if not value.yield_values:
                 return None
             slot, tail = (0, path) if len(value.yield_values) == 1 else (path[0], path[1:])
-            return self._return_storage(value.params[slot], tail)
+            return self._return_storage(value.params[slot], tail, aliases=aliases)
         if isinstance(value, Tuple):
-            return self._return_storage(value.elements[path[0]], path[1:]) if path else None
+            return (
+                self._return_storage(value.elements[path[0]], path[1:], aliases=aliases)
+                if path
+                else None
+            )
         if isinstance(value, Var):
             initial = self.carried_initials.get(id(value))
             if initial is not None:
@@ -471,40 +537,40 @@ class Lowering(CallFrameVisitor[Expr | _View]):
                     and memory.alias is not None
                     and memory.alias.buffer is initial
                 ):
-                    return self._return_storage(initial, path)
+                    return self._return_storage(initial, path, aliases=aliases)
                 return value if not path else None
-            scope = self.capture_scopes.get(id(value))
-            root = value if scope is None else scope.capture_root(value)
+            root = self._capture_root(value)
             return (
-                self._return_storage(root, path)
+                self._return_storage(root, path, aliases=aliases)
                 if root is not value
                 else value
                 if not path
                 else None
             )
         if isinstance(value, Call):
-            if isinstance(value.target, InsertSlice):
-                return self._return_storage(value.args[0], path)
+            memory = get_metadata(value, MemoryMetadata)
+            if aliases and memory is not None and memory.alias is not None:
+                return self._return_storage(memory.alias.buffer, path, aliases=aliases)
             if isinstance(value.target, TupleGetItem):
                 index = static_dim_value(value.args[1])
                 if index is not None:
-                    return self._return_storage(value.args[0], (index, *path))
+                    return self._return_storage(value.args[0], (index, *path), aliases=aliases)
                 return None
             slot = aliased_operand(value)
             if slot is not None:
-                return self._return_storage(value.args[slot], path)
+                return self._return_storage(value.args[slot], path, aliases=aliases)
         return value if not path else None
 
     def _register_scope_plan(self) -> dict[int, Expr]:
         """Place genuinely shared registers at their outermost HIR definition.
 
         Region results share their body's storage; ties and views follow the
-        same storage trace as outputs. Allocation's peak-estimation groups
+        same storage trace as outputs. Allocation's peak-estimation buffers
         are not physical register sharing and do not determine placement.
         """
         locations = {}
-        for scope in walk_scopes(self.scopes):
-            if scope.occurrence is not self.occurrence or scope is self.occurrence:
+        for scope in self.regions:
+            if scope is self.lexical_root:
                 continue
             for path, type_ in self._return_leaves(scope.owner.type):
                 if not isinstance(type_, TensorType) or type_.storage is not StorageKind.RMEM:
@@ -744,10 +810,13 @@ class Lowering(CallFrameVisitor[Expr | _View]):
                     )
                 carried = self._alias_value(param, memory.alias.buffer)
             else:
-                raise LoweringError(
-                    f"loop {loop.induction_var.name!r} carry {param.name!r} "
-                    "is not tied to its initial"
+                tie = self.output_ties.get(id(param))
+                carried = (
+                    self._declare(param, param.type, 1)
+                    if tie is None
+                    else self._alias_value(param, tie.buffer)
                 )
+                self._emit_copy(self.visit(loop.args[slot]), carried)
             self._memo[id(param)] = (param, carried)
             carried_values.append(carried)
         init = tuple(carried_values)
@@ -758,12 +827,17 @@ class Lowering(CallFrameVisitor[Expr | _View]):
         ) as scope:
             self.visit(loop.body)
             yielded = tuple(self.visit(value) for value in loop.yield_values)
-            for carried, value in zip(init, yielded, strict=True):
-                if carried is not value:
-                    raise LoweringError(
-                        f"loop {loop.induction_var.name!r} changes carry storage; "
-                        "write into its carry explicitly"
-                    )
+            for param, source, carried, value in zip(
+                loop.params, loop.yield_values, init, yielded, strict=False
+            ):
+                memory = get_metadata(source, MemoryMetadata)
+                tied = (
+                    memory is not None
+                    and memory.alias is not None
+                    and self._capture_root(memory.alias.buffer) is param
+                )
+                if not tied:
+                    self._emit_copy(value, carried)
         result = (
             init[0]
             if len(init) == 1
@@ -802,7 +876,7 @@ class Lowering(CallFrameVisitor[Expr | _View]):
 
     def visit_Call(self, call: Call, _ctx=None) -> Expr:
         target = call.target
-        if self.callee_frame(call, self.occurrence.frame) is not None:
+        if self.callee_frame(call, self.frame) is not None:
             return self._lower_call(call)
         if is_dim_op_call(call):
             result = self._dim(call)
@@ -815,8 +889,18 @@ class Lowering(CallFrameVisitor[Expr | _View]):
         return result
 
     def _lower_call(self, call: Call) -> Expr | _View:
-        frame = self.callee_frame(call, self.occurrence.frame)
-        lowering = self.callees[id(frame.function)]
+        frame = self.callee_frame(call, self.frame)
+        lowering = self.callees.get(id(frame.function))
+        if lowering is None:
+            region = self.scope_for_call[id(call)]
+            lowering = Lowering(
+                frame,
+                origin_of(frame.function) or frame.function,
+                self.callees,
+                region.execution_mesh(),
+            )
+            lowering.lowered = lowering.run()
+            self.callees[id(frame.function)] = lowering
         args = tuple(self.visit(arg) for arg in call.args)
         destination = self.output_storage.get(id(call))
         if destination is None:
@@ -928,6 +1012,9 @@ class Lowering(CallFrameVisitor[Expr | _View]):
         return self._lower_automatic_instruction(call)
 
     def _declare_result(self, call: Call, buffers: int) -> Expr:
+        tie = self.output_ties.get(id(call))
+        if tie is not None:
+            return self._alias_value(call, tie.buffer)
         if call.type.storage is StorageKind.RMEM and buffers != 1:
             raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
         return self._declare(call, call.type, buffers)
@@ -958,7 +1045,7 @@ class Lowering(CallFrameVisitor[Expr | _View]):
             return window
         result = self.output_storage.get(id(call))
         if result is None:
-            result = self._declare(call, call.type, 1)
+            result = self._declare_result(call, 1)
         else:
             self.logical[id(result)] = call.type
         self._emit_fill(result, call.type)
@@ -984,26 +1071,41 @@ class Lowering(CallFrameVisitor[Expr | _View]):
     def visit_InsertSlice(self, call: Call) -> Expr:
         target = self.visit(call.args[0])
         update = self.visit(call.args[1])
-        update_source = self._capture_root(call, call.args[1])
+        memory = get_metadata(call, MemoryMetadata)
+        tied = (
+            memory is not None
+            and memory.alias is not None
+            and self._capture_root(memory.alias.buffer) is self._capture_root(call.args[0])
+        )
+        result = target if tied else self._declare_result(call, 1)
+        if not tied:
+            self._emit_copy(target, result)
+        update_source = self._capture_root(call.args[1])
         if isinstance(update_source, Call) and isinstance(update_source.target, ScheduleOp):
             slot = aliased_operand(update_source)
-            update_source = self._capture_root(update_source, update_source.args[slot])
-        root = self._return_storage(update_source, ())
+            update_source = self._capture_root(update_source.args[slot])
+        root = self._return_storage(update_source, (), aliases=False)
         if root is not None:
             update_source = root
         memory = get_metadata(update_source, MemoryMetadata)
-        destination = self._capture_root(call, call.args[0])
-        if memory is not None and memory.alias is not None and memory.alias.buffer is destination:
-            return target
-        starts, desired = self._insert_window(call, target, update.type)
+        destination = self._capture_root(call.args[0])
+        if (
+            tied
+            and memory is not None
+            and memory.alias is not None
+            and memory.alias.buffer is destination
+        ):
+            return result
+        starts, desired = self._insert_window(call, result, update.type)
         self._emit_copy(
-            update, target, starts=starts, sizes=tuple(update.type.shape), desired=desired
+            update, result, starts=starts, sizes=tuple(update.type.shape), desired=desired
         )
-        return target
+        return result
 
-    def _capture_root(self, call: Call, value: Expr) -> Expr:
-        scope = self.scope_for_call.get(id(call))
-        return value if scope is None else scope.capture_root(value)
+    def _capture_root(self, value: Expr) -> Expr:
+        while id(value) in self.capture_arguments:
+            value = self.capture_arguments[id(value)]
+        return value
 
     def _insert_window(self, write: Call, target: Expr, desired: TensorType):
         offsets = write.args[2]
@@ -1079,7 +1181,14 @@ class Lowering(CallFrameVisitor[Expr | _View]):
         if produced and output_window is None and not isinstance(call.target, ScheduleOp):
             written = self._declare_result(call, 1)
         if destination_operand is not None and output_window is None:
-            written = self.visit(destination_operand)
+            tie = self.output_ties.get(id(call))
+            written = (
+                self.visit(destination_operand)
+                if tie is None
+                else self._alias_value(call, tie.buffer)
+            )
+            if tie is not None:
+                self._memo[id(destination_operand)] = (destination_operand, written)
         read_values = {}
         supplied = params if isinstance(call.target, ScheduleOp) else reads
         for param, operand in zip(
@@ -1524,15 +1633,10 @@ class ConvertHIRToTIR(ModulePass):
         if not isinstance(authored, Function):
             raise LoweringError(f"{getattr(authored, 'name', self.entry)!r} is not an HIR function")
         result = analyze(*check_program(module, authored, dims=self.dims), analysis=("memory",))
-        occurrences = tuple(scope for scope in walk_scopes(result.scopes) if scope.frame is not None)
         lowered = {}
-        for frame in CallFrameVisitor.walk_frames(result.scopes.frame, postorder=True):
-            body = frame.function
-            occurrence = next(scope for scope in occurrences if scope.frame.function is body)
-            lowering = Lowering(result, origin_of(body) or body, occurrence, lowered)
-            lowering.lowered = lowering.run()
-            lowered[id(body)] = lowering
-        root = lowered[id(result.function)].lowered
+        lowering = Lowering(CallFrame(result.module, result.function), authored, lowered)
+        root = lowering.lowered = lowering.run()
+        lowered[id(result.function)] = lowering
         root.metadata = result.function.metadata
         for record in render_analysis(result).summary:
             if isinstance(record, (ReportIdentity, ReportSelection)):
@@ -1549,9 +1653,8 @@ class ConvertHIRToTIR(ModulePass):
             node.functions = tuple(lowered[id(fn)].lowered if id(fn) in lowered else fn
                                    for fn in node.functions)
 
-        lower_module(result.scopes.frame.module)
-        return result.scopes.frame.module
-
+        lower_module(result.module)
+        return result.module
 
 
 __all__ = ["ConvertHIRToTIR", "LoweringError"]

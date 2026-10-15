@@ -1206,6 +1206,8 @@ def _aggregate_root(function: Function, context: AnalyzeContext) -> None:
             levels = _buffer_peaks(
                 global_model.buffers, offsets, facts, resident=set(resident), window=(start, end)
             )
+            if not levels:
+                continue
             _region, held = region_peaks.setdefault(id(window.region), (window.region, {}))
             for level in levels:
                 previous = held.get(level.memory_level)

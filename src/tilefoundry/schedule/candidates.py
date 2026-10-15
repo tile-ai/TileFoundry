@@ -4,20 +4,22 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from tilefoundry.analysis.api import build_iteration_scopes
-from tilefoundry.analysis.iteration_scope import walk_scopes
+from tilefoundry.analysis.check import check_program
 from tilefoundry.inspection import PatternPrinter, PythonPrinter
 from tilefoundry.ir.core import Call, OpCapability, get_metadata, op_identifier, value_label
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleRefusal, match_instruction
 from tilefoundry.ir.types import StorageKind, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
-from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.ir.types.mesh import make_mesh
+from tilefoundry.ir.visitor import collect_exprs, expr_children
 from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import access_relation_registry
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
 from tilefoundry.visitor_registry.candidates import (
     candidate_operands,
     candidate_ops,
@@ -39,14 +41,49 @@ def candidates(
     module, entry, *, source: str | None = None, dims: Mapping[str, int] | None = None
 ) -> dict[str, Any]:
     """Report instructions using the same acceptance boundary as explicit schedule inference."""
-    ctx = build_iteration_scopes(module, entry, dims=dims)
-    owners = {identity: scope for scope in walk_scopes(ctx.root) for identity in scope.relations}
-    declared = _instructions(ctx.target)
+    module, entry = check_program(module, entry, dims=dims)
+    target = module.resolve_target()
+    owners = {}
+    visited = set()
+
+    def enter(frame, outer_mesh=None):
+        if id(frame.function) in visited:
+            return
+        visited.add(id(frame.function))
+        seen = set()
+
+        def visit(expr, mesh):
+            if id(expr) in seen:
+                return
+            seen.add(id(expr))
+            if isinstance(expr, (MeshRegion, LoopRegion)):
+                for argument in expr.args:
+                    visit(argument, mesh)
+                inner = mesh
+                if isinstance(expr, MeshRegion):
+                    inner = make_mesh(mesh, expr.mesh) if mesh else expr.mesh
+                visit(expr.body, inner)
+                if isinstance(expr, LoopRegion):
+                    for value in expr.yield_values:
+                        visit(value, inner)
+            else:
+                for child in expr_children(expr):
+                    visit(child, mesh)
+            if isinstance(expr, Call):
+                owners[id(expr)] = frame, mesh
+                callee = CallFrameVisitor.callee_frame(expr, frame)
+                if callee is not None:
+                    enter(callee, mesh)
+
+        visit(frame.function.body, outer_mesh)
+
+    enter(CallFrame(module, entry))
+    declared = _instructions(target)
     type_printer = PythonPrinter()
     pattern_printer = PatternPrinter()
     rows = []
     calls = []
-    frames = CallFrameVisitor.walk_frames(ctx.root.frame)
+    frames = CallFrameVisitor.walk_frames(CallFrame(module, entry))
     for call in (call for frame in frames for call in collect_exprs(frame.function.body)):
         if (
             not isinstance(call, Call)
@@ -60,8 +97,7 @@ def candidates(
         if call.type.storage is StorageKind.UMAT and call.type.shape == ():
             continue
         calls.append(call)
-        scope = owners[id(call)]
-        mesh = scope.execution_mesh()
+        frame, mesh = owners[id(call)]
         level = None if mesh is None else mesh.topologies[-1].name
         usable, refused = [], []
         for op_type, capability in declared:
@@ -72,9 +108,7 @@ def candidates(
                 attributes, types = candidate_operands(call, op_type)
                 if capability.attribute is not None:
                     attributes[capability.attribute] = capability.declaration
-                instances = match_instruction(
-                    op_type, attributes, types, mesh, frame=scope.frame
-                )
+                instances = match_instruction(op_type, attributes, types, mesh, frame=frame)
             except ScheduleRefusal as error:
                 refused.append(
                     {"id": identifier, **pattern_printer.match_data((error.path,), error.reason)}
@@ -116,7 +150,7 @@ def candidates(
             ),
             module.name,
         )
-    return {"source": source, "target": ctx.target.identity, "lines": rows}
+    return {"source": source, "target": target.identity, "lines": rows}
 
 
 def render(data: dict[str, Any]) -> str:

@@ -1,18 +1,16 @@
 # TileFoundry Spec — analysis (authored-HIR metrics + per-stage target facts)
 
 This spec owns TileFoundry's fact layer: everything a later stage decides
-*over*, and nothing that decides anything itself. It has three surfaces:
+*over*, and nothing that decides anything itself. It has two surfaces:
 
 | Surface | Entry | What it states |
 |---|---|---|
 | Program check | `check_program(module, function, dims=..., topology_level=..., budget=..., analyzers=...)` | a checked Module and root Function; each derived Function carries internal `ExecutionMeshMetadata(mesh)` recording its unique enclosing mesh, or `None` for root |
-| Iteration context | `build_iteration_scopes(program, function, topology_level=..., options=None)` | an `AnalyzeContext` with resolved execution module and bound root/current scopes, without running an analysis family |
 | Composed measurement | `analyze(program, function, analysis=...)` | one or more root analyses and their union dependency closure, writing typed Metadata in place on the program returned by `check_program`; no cloning or dimension binding |
 
 The caller binds dimensions through `check_program`, then passes both returned
-objects to `analyze`. `build_iteration_scopes` builds local definition trees on
-that checked program without cloning or running a family. `AnalysisResult.module`
-and `AnalysisResult.function` identify the supplied program and root.
+objects to `analyze`. Local definition trees remain internal to analysis.
+`AnalysisResult.module` and `AnalysisResult.function` identify the supplied program and root.
 
 Per-Op semantic derivation — typeinfer, the forward access relation, shard
 propagation — is owned by [semantic-analysis](./semantic-analysis.md), and the
@@ -636,6 +634,12 @@ definition inside L's body. The resulting end(B) MUST be at most start(A), with
 the same zero-offset proof at equality. Liveness intervals themselves MUST
 remain unchanged.
 
+After partitioning, CARRY_INIT, CARRY_YIELD, and INSERT_SLICE candidates whose
+holder and target already share one Buffer MUST be recorded as accepted,
+including when another accepted edge established that storage identity. This
+completion MUST NOT merge Buffers or change placement. Publishing retains one
+alias per value, preferring INSERT_SLICE. WINDOW is excluded from this completion.
+
 WINDOW is the exception whose holder precedes its target. It MUST be accepted
 only when the same InsertSlice's result and destination already share B, and
 `update_alias` proves a window visible at the producer. A = Buffer(update)
@@ -648,7 +652,11 @@ published alias MUST follow VIEW, FORWARD, and accepted CARRY_INIT edges from
 the update to its storage root, reverse-composing those coordinate relations.
 The resulting producer-to-destination map MUST cover the producer's complete
 coordinate box and use only parameters visible at that producer; otherwise
-the WINDOW MUST be rejected. A tuple producer MUST NOT receive the alias.
+the WINDOW MUST be rejected. The map MUST be a same-rank translation supported
+by lowering: destination axis k equals producer axis k plus a producer-visible
+start. Rank-changing maps and non-translations MUST be rejected, leaving an
+independent update for lowering to copy at InsertSlice. A tuple producer MUST
+NOT receive the alias.
 When CARRY_YIELD and INSERT_SLICE both accept the same value, INSERT_SLICE MUST
 be published; its destination and phi already have identical storage. Rejected
 ties MUST publish no alias; lowering copies the corresponding carry or slice.

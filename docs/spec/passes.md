@@ -252,10 +252,19 @@ class ConvertHIRToTIR(ModulePass):
     counts must be constant. Instruction-generated loops do not enter this index.
     An adopted update window is written at its producer. `InsertSlice` skips
     copying only when the update's alias names that HIR destination, resolved
-    through region captures. A loop-carried alias must name its slot's initial
-    value; any other alias raises `LoweringError`. A carry without that tie, or
-    a yield that changes its storage, also raises `LoweringError`; HIR must
-    explicitly initialize writable carry storage and update it in place.
+    through region captures.
+    A loop-carried entry alias must name its slot's initial value; any other
+    entry alias raises `LoweringError`. Lowering MUST execute published ties at
+    every storage level: a tied carry reuses its initial storage; otherwise it
+    copies the initial into independent phi storage before the loop. A published
+    yield-to-phi alias binds the producer output to phi storage, including rmem.
+    The backedge needs no copy when the yield has that tie or its tied
+    InsertSlice destination resolves through captures to the phi; otherwise
+    lowering MUST copy yield to phi. A tied InsertSlice returns destination
+    storage; an untied one MUST copy destination to result before writing the
+    update window. An update without an adopted WINDOW alias MUST be copied
+    into the result window. Allocation's peak-estimation buffers do not imply
+    that lowering shares registers; only published aliases state that sharing.
   - Schedule type inference, candidate admission, finalization, and TIR effect
     verification MUST use the same `check_call` implementation. It checks the
     declared execution mesh, operand reachability, projected atom patterns,
@@ -294,7 +303,7 @@ class ConvertHIRToTIR(ModulePass):
     `umat` becomes `gmem`, retaining its layout. A non-tensor leaf raises
     `LoweringError` naming its position and type.
     Before lowering, return storage is traced through mesh results, tied loop
-    carries, insert destinations, captures, and static tuple selections. A leaf
+    carries, tied insert destinations, captures, and static tuple selections. A leaf
     ending at an unclaimed single-buffer `Zeros`, `Empty`, or caller-declared
     retained-call result of the output parameter's exact type places that
     storage at the output parameter,
@@ -302,8 +311,8 @@ class ConvertHIRToTIR(ModulePass):
     such a root raise `LoweringError`. Other `gmem` zeros use scratch.
     Every zero fill is emitted in the zero's current scope; `Empty` emits no
     fill. A lowered leaf that is not its output parameter raises
-    `LoweringError`. Lowering does not add output, carry-initialization, or
-    carry-backedge copies; data movement must be explicit in HIR.
+    `LoweringError`. Lowering does not add output copies. Carry entry and
+    backedge copies execute the analyzed storage decisions.
     A region result must not reference variables bound inside the region,
     including variables in a view's base or start coordinates.
   - Any construct without a complete lowering MUST raise `LoweringError`; the

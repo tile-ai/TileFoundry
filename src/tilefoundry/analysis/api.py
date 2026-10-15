@@ -123,7 +123,7 @@ def _check_subject(module: Module, function: Function) -> None:
 
 
 
-def build_iteration_scopes(
+def _build_context(
     module: Module,
     function: Function,
     *,
@@ -207,7 +207,7 @@ def analyze(
         topology_level = topologies[0].name if topologies else None
     _check_valuations(closure)
     check_analyses(module, function, closure, topology_level=topology_level)
-    context = build_iteration_scopes(
+    context = _build_context(
         module,
         function,
         topology_level=topology_level,
@@ -334,4 +334,4 @@ def _require_owned_writes(
     return written
 
 
-__all__ = ["AnalysisResult", "analyze", "build_iteration_scopes"]
+__all__ = ["AnalysisResult", "analyze"]
