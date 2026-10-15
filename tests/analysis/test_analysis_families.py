@@ -35,6 +35,7 @@ from tilefoundry.analysis import (
     Traffic,
 )
 from tilefoundry.analysis.api import analyze
+from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import (
     local_duration_ns,
 )
@@ -60,8 +61,7 @@ _ROUNDING_M = 14_593
 def test_invariant_gemm_operands_repeat_in_total_traffic() -> None:
     """The QKV tiles load again even when one operand is invariant in one loop."""
     result = analyze(
-        TiledQKVProjection,
-        TiledQKVProjection.entry_function(),
+        *check_program(TiledQKVProjection, TiledQKVProjection.entry_function()),
         analysis="memory",
     )
     record = get_metadata(result.function, RegionMemoryMetadata)
@@ -188,10 +188,8 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
     for name in ("cross_scope", "nested_control"):
         function = next(fn for fn in _CrossScopePerformance.functions if fn.name == name)
         results[name] = analyze(
-            _CrossScopePerformance,
-            function,
+            *check_program(_CrossScopePerformance, function, dims={"seq_len": 8192}),
             analysis=_ALL_FAMILIES,
-            dims={"seq_len": 8192},
         )
         assert get_metadata(results[name].function, PerformanceSummaryMetadata) is not None
 
@@ -265,10 +263,8 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
         ("symbolic", _SymbolicStoreOffset),
     ):
         result = analyze(
-            owner,
-            owner.entry_function(),
+            *check_program(owner, owner.entry_function(), dims={"seq_len": 8192}),
             analysis=_ALL_FAMILIES,
-            dims={"seq_len": 8192},
         )
         cost = get_metadata(result.function, ComputeCostMetadata)
         bound = get_metadata(result.function, RooflineMetadata)
@@ -294,8 +290,7 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
 
 def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:
     result = analyze(
-        _LargeRooflineRounding,
-        _LargeRooflineRounding.entry_function(),
+        *check_program(_LargeRooflineRounding, _LargeRooflineRounding.entry_function()),
         analysis="roofline",
     )
     bound = get_metadata(result.function, RooflineMetadata)
@@ -357,7 +352,7 @@ def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
     per_layout = {}
     for owner, name in ((_SplitLastAxis, "last_axis"), (_SplitStripMajor, "strip_major")):
         function = next(item for item in owner.functions if item.name == name)
-        report = analyze(owner, function, analysis="performance")
+        report = analyze(*check_program(owner, function), analysis="performance")
         product = next(
             expr
             for expr in collect_exprs(report.function.body)
@@ -390,7 +385,7 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
     split = next(function for function in tight.functions if function.name == "split")
     roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
 
-    tight_memory = analyze(tight, split, analysis="memory")
+    tight_memory = analyze(*check_program(tight, split), analysis="memory")
     tight_record = get_metadata(tight_memory.function, RegionMemoryMetadata)
     assert tight_record.errors == ("smem placement peak 206.25KB exceeds capacity 103.12KB",)
     assert '#   error="smem placement peak 206.25KB exceeds capacity 103.12KB"' in render_text(
@@ -400,7 +395,7 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
         "smem placement peak 206.25KB exceeds capacity 103.12KB"
     ]
 
-    tight_performance = analyze(tight, split, analysis="performance")
+    tight_performance = analyze(*check_program(tight, split), analysis="performance")
     assert (
         get_metadata(tight_performance.function, RegionMemoryMetadata).errors == tight_record.errors
     )
@@ -408,8 +403,7 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
     unrestated = next(item for item in _SharedTile.functions if item.name == "split")
     held = get_metadata(
         analyze(
-            _SharedTile,
-            unrestated,
+            *check_program(_SharedTile, unrestated),
             analysis="memory",
             options=MemoryOptions(timeout_seconds=1.0),
         ).function,
@@ -418,8 +412,7 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
     assert next(item.peak_bytes for item in held if item.memory_level == "smem") == 211_200
 
     fits = analyze(
-        roomy,
-        next(item for item in roomy.functions if item.name == "split"),
+        *check_program(roomy, next((item for item in roomy.functions if item.name == "split"))),
         analysis="performance",
     )
     summary = get_metadata(fits.function, PerformanceSummaryMetadata)
@@ -431,8 +424,7 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
 
     wider = replace(_SharedTile, target=_RoomierShared("nvidia.h200_sxm"))
     relieved = analyze(
-        wider,
-        next(item for item in wider.functions if item.name == "split"),
+        *check_program(wider, next((item for item in wider.functions if item.name == "split"))),
         analysis="memory",
     )
     assert [
@@ -455,7 +447,8 @@ def test_local_pricing_requires_compute_rates_and_uses_available_memory_rates() 
     throughput = target.get_facts(ThroughputFacts)
     services = target.get_facts(PerformanceServiceFacts)
     result = analyze(
-        _PricingBoundary, _PricingBoundary.functions[0], analysis=("compute-cost", "memory")
+        *check_program(_PricingBoundary, _PricingBoundary.functions[0]),
+        analysis=("compute-cost", "memory"),
     )
     records = [get_metadata(call, ComputeCostMetadata) for call in _calls(result.function)]
     work = next(

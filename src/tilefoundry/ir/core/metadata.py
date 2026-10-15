@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from typing import ClassVar
+
+
+class ValuationProvider(ABC):
+    """Supply the context needed to interpret a metadata record."""
+
+    @abstractmethod
+    def request_valuation[V](self, valuation: type[V]) -> V:
+        """Return the requested interpretation, or report an unsupported context."""
 
 
 @dataclass(frozen=True)
 class IRMetadata:
     """Base class for typed metadata attached to an IR expression."""
+
+    requires: ClassVar[tuple[type, ...]] = ()
+
+    def resolve(self, ctx: ValuationProvider) -> IRMetadata:
+        """Interpret this record in the current visit context."""
+        return self
 
 
 @dataclass(frozen=True)
@@ -130,6 +146,7 @@ def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr":
 
 __all__ = [
     "IRMetadata",
+    "ValuationProvider",
     "BindingMetadata",
     "RangeMetadata",
     "SourceSpanMetadata",

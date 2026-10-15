@@ -10,12 +10,61 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 from .access import BufferAlias
 from .precision import AnalysisPrecision
+
+
+@runtime_checkable
+class TimingValuation(Protocol):
+    """Translate a definition's event and time coordinates to its caller."""
+
+    def event(self, local: int) -> int: ...
+
+    def timeline(self, local: TimelineMetadata) -> TimelineMetadata: ...
+
+
+@runtime_checkable
+class LoopNestValuation(Protocol):
+    """Describe the loops surrounding a call in its caller's coordinates."""
+
+    def repeats(self, call: Call) -> Repeats: ...
+
+    def domain(self) -> isl.set: ...
+
+
+@runtime_checkable
+class VarianceValuation(Protocol):
+    """Resolve a formal parameter's dependency on enclosing loops."""
+
+    def varies(self, formal: Var) -> frozenset[int]: ...
+
+
+@runtime_checkable
+class BindingValuation(Protocol):
+    """Resolve parameter and return storage at one call boundary."""
+
+    def actual(self, formal: Var, index: int = 0) -> BufferAlias: ...
+
+    def result(self) -> BufferAlias: ...
+
+
+@runtime_checkable
+class InstanceValuation(Protocol):
+    """Name the owning module instance on the current call path."""
+
+    def path(self) -> tuple[str, ...]: ...
+
+
+@dataclass(frozen=True)
+class ExecutionMeshMetadata(IRMetadata):
+    """The unique enclosing mesh established while checking one definition."""
+
+    mesh: Mesh | None
 
 
 @dataclass(frozen=True)
@@ -284,6 +333,11 @@ class PerformanceSummaryMetadata(IRMetadata):
 
 
 __all__ = [
+    "BindingValuation",
+    "InstanceValuation",
+    "LoopNestValuation",
+    "TimingValuation",
+    "VarianceValuation",
     "Breakdown",
     "MemoryMetadata",
     "ComputeCostMetadata",

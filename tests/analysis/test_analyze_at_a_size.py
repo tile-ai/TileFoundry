@@ -34,6 +34,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.access import Access
 from tilefoundry.analysis.allocation import AllocationConstraintVisitor, aligned
+from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
@@ -664,7 +665,7 @@ def test_every_internal_record_agrees(case: ConcreteCase, monkeypatch: pytest.Mo
             return storage
 
         monkeypatch.setattr(AllocationConstraintVisitor, "visit_function_body", record_allocation)
-    result = analyze(owner, function, analysis=FAMILIES, dims=case.dims)
+    result = analyze(*check_program(owner, function, dims=case.dims), analysis=FAMILIES)
     assert result.module is owner
     report = report_data(
         module=result.module,
@@ -747,7 +748,10 @@ def test_dynamic_tuple_selection_keeps_all_possible_storage_resident(
         return storage
 
     monkeypatch.setattr(AllocationConstraintVisitor, "visit_function_body", record_allocation)
-    result = analyze(DynamicSelection, DynamicSelection.entry_function(), analysis="memory")
+    result = analyze(
+        *check_program(DynamicSelection, DynamicSelection.entry_function()),
+        analysis="memory",
+    )
     visitor, model = allocations[0]
     selected = next(
         expr for expr in collect_exprs(result.function.body)
@@ -783,7 +787,7 @@ def test_dynamic_tuple_selection_keeps_all_possible_storage_resident(
 def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
     module, function, dims = _subject(family)
 
-    result = analyze(module, function, analysis=family, dims=dims)
+    result = analyze(*check_program(module, function, dims=dims), analysis=family)
 
     assert result.metadata_types
     assert result.module is module
@@ -791,7 +795,11 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 
 def _predicted_ns(module, dims=None) -> int:
     """What the four families together say one program takes."""
-    result = analyze(module, module.entry_function(), analysis=FAMILIES, level="cta", dims=dims)
+    result = analyze(
+        *check_program(module, module.entry_function(), topology_level="cta", dims=dims),
+        analysis=FAMILIES,
+        level="cta",
+    )
     summary = get_metadata(result.function, PerformanceSummaryMetadata)
     assert summary is not None
     return summary.timeline.end_ns - summary.timeline.start_ns
@@ -806,7 +814,7 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     """
     module, authored, dims = _subject(family)
 
-    result = analyze(module, authored, analysis=family, dims=dims)
+    result = analyze(*check_program(module, authored, dims=dims), analysis=family)
 
     assert result.function is not authored
     assert result.function.name == authored.name
@@ -821,7 +829,7 @@ def test_without_a_size_the_result_names_the_record_bearing_view() -> None:
     module = QWEN3_1_7B.build()
     function = module.lookup("mlp")
 
-    result = analyze(module, function, analysis="compute-cost")
+    result = analyze(*check_program(module, function), analysis="compute-cost")
 
     assert result.module is module
     assert result.function.name == function.name
@@ -835,10 +843,8 @@ def test_a_dimension_the_function_does_not_have_is_refused() -> None:
 
     with pytest.raises(AnalysisError, match="no dimension named"):
         analyze(
-            module,
-            module.entry_function(),
+            *check_program(module, module.entry_function(), dims={**DIMS, "batch": 2}),
             analysis="compute-cost",
-            dims={**DIMS, "batch": 2},
         )
 
 
@@ -853,10 +859,8 @@ def test_a_dimension_left_unbound_is_refused() -> None:
 
     with pytest.raises(AnalysisError, match="was not given a size"):
         analyze(
-            module,
-            module.entry_function(),
+            *check_program(module, module.entry_function(), dims={"batch": 4}),
             analysis="compute-cost",
-            dims={"batch": 4},
         )
 
 
@@ -866,9 +870,9 @@ def test_an_empty_or_malformed_size_is_refused_rather_than_ignored() -> None:
     entry = module.entry_function()
 
     with pytest.raises(AnalysisError, match="non-empty mapping"):
-        analyze(module, entry, analysis="compute-cost", dims={})
+        analyze(*check_program(module, entry, dims={}), analysis="compute-cost")
     with pytest.raises(AnalysisError, match="takes an integer extent"):
-        analyze(module, entry, analysis="compute-cost", dims={"ctx_len": 32.0})
+        analyze(*check_program(module, entry, dims={"ctx_len": 32.0}), analysis="compute-cost")
 
 
 def test_a_size_states_nothing_about_a_function_from_elsewhere() -> None:
@@ -881,7 +885,7 @@ def test_a_size_states_nothing_about_a_function_from_elsewhere() -> None:
     foreign = QWEN3_1_7B.build().lookup("mlp")
 
     with pytest.raises(AnalysisError, match="is not a function of module"):
-        analyze(module, foreign, analysis="compute-cost", dims=DIMS)
+        analyze(*check_program(module, foreign, dims=DIMS), analysis="compute-cost")
 
 
 def test_the_entry_at_a_chosen_size_is_still_the_entry() -> None:

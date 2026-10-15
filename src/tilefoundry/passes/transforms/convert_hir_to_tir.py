@@ -16,6 +16,7 @@ import isl
 
 from tilefoundry.analysis import AnalysisResult, MemoryMetadata, analyze
 from tilefoundry.analysis.access import BufferAlias
+from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
@@ -1522,7 +1523,7 @@ class ConvertHIRToTIR(ModulePass):
         authored = module.entry_function() if self.entry is None else module.lookup(self.entry)
         if not isinstance(authored, Function):
             raise LoweringError(f"{getattr(authored, 'name', self.entry)!r} is not an HIR function")
-        result = analyze(module, authored, analysis=("memory",), dims=self.dims)
+        result = analyze(*check_program(module, authored, dims=self.dims), analysis=("memory",))
         occurrences = tuple(scope for scope in walk_scopes(result.scopes) if scope.frame is not None)
         lowered = {}
         for frame in CallFrameVisitor.walk_frames(result.scopes.frame, postorder=True):

@@ -7,13 +7,13 @@ from dataclasses import dataclass
 
 import isl
 
-from tilefoundry.ir.core import Call, Constant, Expr, Var
+from tilefoundry.ir.core import Call, Constant, Expr, Var, binding_name
 from tilefoundry.ir.hir.schedule import ScheduleOp, instruction_schema
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.isl_interop import IslParamValues, dim_to_isl_pw_aff, shape_to_isl_set
 from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.utils import is_literal_shape, local_type_of, static_dim_value
-from tilefoundry.ir.visitor import ExprCloner
+from tilefoundry.ir.visitor import ExprCloner, collect_exprs
 from tilefoundry.utils.isl_utils import cardinality, has_unbounded_param
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -245,12 +245,33 @@ def eliminate_parameters(
     narrow: bool,
     retained: dict[str, object] | None = None,
 ) -> tuple[isl.map, AnalysisPrecision]:
-    """Eliminate parameters using scoped affine expressions or widening."""
+    """Eliminate scoped parameters, retaining formal-dependent coordinates for callers."""
     precision = AnalysisPrecision.EXACT
     rank = relation.dim(isl.dim_type.IN)
     for name, value in parameters.items():
         if relation.find_dim_by_name(isl.dim_type.PARAM, name) < 0:
             raise AnalysisError(f"access pattern parameter {name!r} is missing from its relation")
+        root = scope
+        while root.parent is not None:
+            root = root.parent
+        resolved = _RegionBindingResolver(narrow=narrow).visit(value, scope) if isinstance(value, Expr) else value
+        formals = {id(formal) for formal in root.owner.params}
+        if isinstance(resolved, Expr) and any(id(expr) in formals for expr in collect_exprs(resolved)):
+            if isinstance(resolved, Var):
+                label = f"formal_{next(index for index, formal in enumerate(root.owner.params) if resolved is formal)}"
+            else:
+                label = f"value_{binding_name(value)}"
+            target = f"__tf_binding_{label}"
+            present = relation.find_dim_by_name(isl.dim_type.PARAM, target)
+            position = relation.find_dim_by_name(isl.dim_type.PARAM, name)
+            if present >= 0 and present != position:
+                relation = relation.equate(isl.dim_type.PARAM, position, isl.dim_type.PARAM, present)
+                relation = relation.project_out(isl.dim_type.PARAM, position, 1)
+            else:
+                relation = relation.set_dim_name(isl.dim_type.PARAM, position, target)
+            if retained is not None:
+                retained[target] = resolved
+            continue
         term, resolved_precision = _parameter_term(
             value, relation, name, scope, held, narrow=narrow, retained=retained
         )
@@ -263,6 +284,39 @@ def eliminate_parameters(
         param_index = relation.find_dim_by_name(isl.dim_type.PARAM, name)
         relation = relation.project_out(isl.dim_type.PARAM, param_index, 1)
     return relation, precision
+
+
+def bind_parameters(
+    relation: isl.map,
+    values: Mapping[str, object],
+    binding: BindingValuation,
+    formals: tuple[Var, ...],
+    scope: IterationScope,
+    held: object,
+    *,
+    narrow: bool,
+) -> tuple[isl.map, AnalysisPrecision]:
+    """Substitute formal-dependent coordinate parameters through one call."""
+
+    class BindParameters(ExprCloner):
+        def visit_Var(self, node, ctx=None):
+            return (
+                binding.actual(node).buffer if any(node is formal for formal in formals) else node
+            )
+
+    bound = {}
+    for name, value in values.items():
+        position = relation.find_dim_by_name(isl.dim_type.PARAM, name)
+        if position < 0:
+            continue
+        temporary = f"__tf_callee_{len(bound)}"
+        while relation.find_dim_by_name(isl.dim_type.PARAM, temporary) >= 0:
+            temporary += "_"
+        relation = relation.set_dim_name(isl.dim_type.PARAM, position, temporary)
+        bound[temporary] = BindParameters().visit(value) if isinstance(value, Expr) else value
+    return eliminate_parameters(
+        relation, bound, scope, held, narrow=narrow, retained=scope.domain_params
+    )
 
 
 def resolve_access(
@@ -305,6 +359,7 @@ def resolve_access(
         scope,
         held if getattr(ctx, "topology_level", None) is not None else operand.type,
         narrow=narrow,
+        retained=scope.domain_params,
     )
     if isinstance(held, TensorType) and is_literal_shape(held.shape):
         relation = relation.intersect_range(shape_to_isl_set(tuple(held.shape), {}))
@@ -332,7 +387,10 @@ def resolve_access(
     relation = apply_source(relation, entry, rank, scope.depth, scope.domain_params)
     precision = precision.join(source_precision)
     operand = entry.buffer
-    if has_unbounded_param(relation):
+    if has_unbounded_param(relation) and any(
+        relation.get_dim_name(isl.dim_type.PARAM, axis) not in scope.domain_params
+        for axis in range(relation.dim(isl.dim_type.PARAM))
+    ):
         precision = AnalysisPrecision.UNKNOWN
     return Access(
         input_index=input_index,

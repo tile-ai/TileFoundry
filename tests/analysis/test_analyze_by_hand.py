@@ -50,6 +50,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis import footprint as footprint_analysis
 from tilefoundry.analysis import memory as memory_analysis
+from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
 from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
@@ -62,11 +63,7 @@ from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFa
 
 
 def _report(module, *, analysis=("memory",)) -> dict:
-    result = analyze(
-        module,
-        module.entry_function(),
-        analysis=analysis,
-    )
+    result = analyze(*check_program(module, module.entry_function()), analysis=analysis)
     data = report_data(
         module=result.module,
         function=result.function,
@@ -194,8 +191,7 @@ def test_tuple_output_boundaries_add_instead_of_union(
 
 def test_invariant_reuse_matches_the_written_arithmetic() -> None:
     result = analyze(
-        InvariantReuse,
-        InvariantReuse.entry_function(),
+        *check_program(InvariantReuse, InvariantReuse.entry_function()),
         analysis=("compute-cost", "memory", "roofline", "performance"),
     )
     data = report_data(

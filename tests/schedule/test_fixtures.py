@@ -586,8 +586,7 @@ def test_plain_program_is_analyzable(name: str) -> None:
     program = next(value for value in vars(module).values() if type(value).__name__ == "Module")
     entry = program.entry_function()
     dims = PLAIN_DIMS.get(name)
-    check_program(program, entry, dims=dims)
-    result = analyze(program, entry, analysis=("memory", "performance"), dims=dims)
+    result = analyze(*check_program(program, entry, dims=dims), analysis=("memory", "performance"))
     assert result.metadata_types
 
 
@@ -622,7 +621,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
 ) -> None:
     program = _module_in(path)
     entry = next(function for function in program.functions if function.name == "gemm")
-    result = analyze(program, entry, analysis=analysis)
+    result = analyze(*check_program(program, entry), analysis=analysis)
     assert metadata_type in result.metadata_types
     if path.stem == "module_instances":
         record_type = PerformanceMetadata if analysis == "performance" else metadata_type
@@ -827,7 +826,7 @@ def test_wgmma_performance_prices_the_slower_of_tensor_clocks_and_shared_reads(
     path = next(path for path in HIR if path.stem == fixture)
     program = _module_in(path)
     entry = next(function for function in program.functions if function.name == "gemm")
-    result = analyze(program, entry, analysis="performance")
+    result = analyze(*check_program(program, entry), analysis="performance")
     schedule = next(
         expr
         for expr in collect_exprs(result.function.body)
@@ -1810,7 +1809,10 @@ def test_schedule_finalize_json_carries_the_same_source(
 def _m1_analysis():
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
     module = _module_in(source)
-    return source, module, analyze(module, module.entry_function(), analysis=("memory",))
+    return source, module, analyze(
+        *check_program(module, module.entry_function()),
+        analysis=("memory",),
+    )
 
 
 def _assert_cli_lowering_error(
@@ -1933,7 +1935,7 @@ def test_lowering_rejects_invalid_atom_geometry(
 ) -> None:
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_repeat_along_k.py"
     module = _module_in(source)
-    result = analyze(module, module.entry_function(), analysis=("memory",))
+    result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
     check = lowering_module.check_call
 
     def malformed(op, operands, mesh, *, frame, repeat=None, order=None):

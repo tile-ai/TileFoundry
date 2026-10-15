@@ -15,6 +15,7 @@ from tilefoundry.ir.core import (
     Call,
     Expr,
     RangeMetadata,
+    attach_metadata,
     binding_name,
 )
 from tilefoundry.ir.core.module import Module, ModuleList
@@ -41,6 +42,7 @@ from .errors import AnalysisError
 from .facts import PerformanceServiceFacts
 from .metadata import (
     ComputeCostMetadata,
+    ExecutionMeshMetadata,
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
@@ -51,6 +53,7 @@ from .metadata import (
 _NODE_BUDGET = 10_000
 _DERIVED_METADATA = {
     ComputeCostMetadata,
+    ExecutionMeshMetadata,
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
@@ -298,6 +301,7 @@ def check_program(
         for param, type_ in zip(definition.params, types, strict=True):
             param.type = type_
         _prepare_function(definition)
+        attach_metadata(definition, ExecutionMeshMetadata(mesh))
         TypeInferVisitor(ranges=True).visit(definition, TypeInferContext(frame=frame, current_mesh=mesh))
         definition.return_type = definition.body.type
         definition.type = callable_type_for(definition.params, definition.return_type)
@@ -344,7 +348,20 @@ def check_program(
                         f"{frame.module.name!r} calls {inner.module.name!r}, which resolves "
                         f"a different {noun} {actual!r} against {expected!r}; {suffix}"
                     )
-    ctx = analysis_check_context(module, root, topology_level)
+    check_analyses(module, root, analyzers, topology_level=topology_level)
+    return module, root
+
+
+def check_analyses(
+    module: Module,
+    function: Function,
+    analyzers: tuple[object, ...],
+    *,
+    topology_level: str | None = None,
+) -> None:
+    """Check requested families against a built program before any writes."""
+    functions = tuple(frame.function for frame in CallFrameVisitor.walk_frames(CallFrame(module, function)))
+    ctx = analysis_check_context(module, function, topology_level)
     for analyzer in analyzers:
         checker = analyzer.get_checker()
         if checker is None:
@@ -352,4 +369,3 @@ def check_program(
         checker.check_target_facts(ctx)
         for body in functions:
             checker.visit(body.body, replace(ctx, function=body))
-    return module, root

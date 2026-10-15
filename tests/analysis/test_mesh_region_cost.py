@@ -11,6 +11,7 @@ from tilefoundry.analysis import (
     RooflineMetadata,
     analyze,
 )
+from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.iteration_scope import walk_scopes
 from tilefoundry.analysis.metadata import shares
 from tilefoundry.dsl import *
@@ -56,8 +57,7 @@ class UnshardedInScope:
 
 def _cost(owner) -> tuple[int, int, int, int]:
     result = analyze(
-        owner,
-        owner.entry_function(),
+        *check_program(owner, owner.entry_function(), topology_level="thread"),
         analysis=("compute-cost", "memory", "roofline"),
         topology_level="thread",
     )
@@ -87,8 +87,7 @@ def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
 def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
     """Stepping into occurrences preserves repetition and counts the escaped value once."""
     helper = analyze(
-        RegionBoundaries,
-        RegionBoundaries.lookup("helper"),
+        *check_program(RegionBoundaries, RegionBoundaries.lookup("helper"), topology_level="thread"),
         analysis="compute-cost",
         topology_level="thread",
     )
@@ -98,8 +97,7 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
     assert helper_flops == 8
 
     result = analyze(
-        RegionBoundaries,
-        RegionBoundaries.entry_function(),
+        *check_program(RegionBoundaries, RegionBoundaries.entry_function(), topology_level="thread"),
         analysis=("compute-cost", "memory"),
         topology_level="thread",
     )

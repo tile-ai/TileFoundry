@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tilefoundry.analysis import analyze
+from tilefoundry.analysis.check import check_program
 from tilefoundry.inspection import as_script
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.ir.core.module import Module
@@ -58,7 +59,7 @@ def test_analysis_annotates_the_printed_program_without_changing_it(
     golden, so a type rendered two ways shows up as one diff.
     """
     module = _module_in(fixture, module_name)
-    result = analyze(module, module.entry_function(), analysis=families)
+    result = analyze(*check_program(module, module.entry_function()), analysis=families)
     rendered = render_analysis(result, operands=operands)
     assert rendered.annotated == golden.read_text()
     assert _without_comments(rendered.annotated) == _without_comments(

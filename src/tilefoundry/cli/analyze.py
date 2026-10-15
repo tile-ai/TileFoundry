@@ -139,7 +139,11 @@ def run_authored_analysis(
             Path(out_path).write_text(annotated, encoding="utf-8")
             return 0
 
-        result = analyze(module, function, analysis=analyses, topology_level=topology, dims=dims)
+        result = analyze(
+            *check_program(module, function, topology_level=topology, dims=dims),
+            analysis=analyses,
+            topology_level=topology,
+        )
         rendered = render_analysis(result, operands=operands and not as_json)
         if as_json:
             Path(out_path).write_text(

@@ -22,6 +22,7 @@ from tests.ops.ir.typeinfer_utils import (
 )
 from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.analysis.api import analyze
+from tilefoundry.analysis.check import check_program
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
@@ -219,7 +220,9 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
     )
 
     result = analyze(
-        _KVCacheAppend, entry, analysis=("compute-cost", "memory"), topology_level="cta"
+        *check_program(_KVCacheAppend, entry, topology_level="cta"),
+        analysis=("compute-cost", "memory"),
+        topology_level="cta",
     )
     analysed_update = next(
         expr

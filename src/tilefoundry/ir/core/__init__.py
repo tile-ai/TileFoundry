@@ -8,6 +8,7 @@ from .expr import Call, Constant, Expr, Tuple, Var
 from .metadata import (
     BindingMetadata,
     IRMetadata,
+    ValuationProvider,
     RangeMetadata,
     SourceSpanMetadata,
     attach_metadata,
@@ -48,6 +49,7 @@ __all__ = [
     "Call",
     "Tuple",
     "IRMetadata",
+    "ValuationProvider",
     "RangeMetadata",
     "BindingMetadata",
     "SourceSpanMetadata",

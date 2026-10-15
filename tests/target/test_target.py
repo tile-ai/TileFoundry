@@ -20,6 +20,7 @@ from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
 from tilefoundry import CompilerOptions, build, jit
 from tilefoundry.analysis import AnalysisError, analyze
+from tilefoundry.analysis.check import check_program
 from tilefoundry.dsl import *
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -164,7 +165,7 @@ def test_performance_refuses_a_target_without_its_required_compute_rate() -> Non
     function = subject.entry_function()
 
     with pytest.raises(AnalysisError, match=r"dtype 'f32'.*'cta'"):
-        analyze(subject, function, analysis="performance")
+        analyze(*check_program(subject, function), analysis="performance")
 
 
 def test_document_free_target_enforces_projection_and_capability_boundaries() -> None:

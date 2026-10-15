@@ -280,8 +280,19 @@ functions in different child modules are distinct symbols.
 ## 2. `Expr`
 
 ```python
+class ValuationProvider(ABC):
+    """Supply the current interpretation of metadata free variables."""
+
+    @abstractmethod
+    def request_valuation[V](self, valuation: type[V]) -> V: ...
+
+
 class IRMetadata:
     """Describe one immutable expression annotation."""
+
+    requires: ClassVar[tuple[type, ...]] = ()
+
+    def resolve(self, ctx: ValuationProvider) -> IRMetadata: ...
 
 class BindingMetadata(IRMetadata):
     """Describe an authored SSA binding name.
@@ -312,7 +323,11 @@ class SourceSpanMetadata(IRMetadata):
 
 - constraints:
   - the immutable base of every typed annotation stored on an `Expr`: typed
-    fields and nothing about how they are read. What a record looks like as text
+    fields and a context interpretation contract. `requires` lists Valuation
+    Protocol types; the default `resolve(ctx)` returns the same record. A
+    context implements `ValuationProvider.request_valuation`, while concrete
+    domain providers own unsupported-context errors. Core MUST NOT import
+    analysis to interpret metadata. What a record looks like as text
     or as JSON is decided by inspection
     ([inspection §2.8](./inspection.md#28-record-comment-forms)), so a record
     MUST NOT carry a rendering, a key name, or a family name of its own.

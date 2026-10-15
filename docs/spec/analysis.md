@@ -5,15 +5,14 @@ This spec owns TileFoundry's fact layer: everything a later stage decides
 
 | Surface | Entry | What it states |
 |---|---|---|
-| Program check | `check_program(module, function, dims=..., topology_level=..., budget=..., analyzers=...)` | a checked Module and root Function after validating one authored program, its declared topology, and what each requested analysis needs of it |
-| Iteration context | `build_iteration_scopes(module, function, topology_level=..., dims=..., analyzers=(), options=None)` | an `AnalyzeContext` with resolved execution module and bound root/current scopes, without running an analysis family |
-| Composed measurement | `analyze(module, function, analysis=...)` | one or more root analyses and their union dependency closure, leaving typed Metadata on the IR |
+| Program check | `check_program(module, function, dims=..., topology_level=..., budget=..., analyzers=...)` | a checked Module and root Function; each derived Function carries internal `ExecutionMeshMetadata(mesh)` recording its unique enclosing mesh, or `None` for root |
+| Iteration context | `build_iteration_scopes(program, function, topology_level=..., options=None)` | an `AnalyzeContext` with resolved execution module and bound root/current scopes, without running an analysis family |
+| Composed measurement | `analyze(program, function, analysis=...)` | one or more root analyses and their union dependency closure, writing typed Metadata in place on the program returned by `check_program`; no cloning or dimension binding |
 
-`build_iteration_scopes` resolves dimensions, runs `check_program` with the
-supplied analyzer checkers, and builds the scopes. Its `module` is the execution
-module after binding dimensions. `analyze` passes its dependency closure and
-options through this same entry; its `AnalysisResult.module` remains the
-caller's module.
+The caller binds dimensions through `check_program`, then passes both returned
+objects to `analyze`. `build_iteration_scopes` builds local definition trees on
+that checked program without cloning or running a family. `AnalysisResult.module`
+and `AnalysisResult.function` identify the supplied program and root.
 
 Per-Op semantic derivation — typeinfer, the forward access relation, shard
 propagation — is owned by [semantic-analysis](./semantic-analysis.md), and the
@@ -1308,14 +1307,11 @@ class AnalysisCheckContext:
     finite hardware limit. A rejection MUST name the level, its extent, and the
     reason.
   - A non-`None` `topology_level` MUST name exactly one effective Module topology.
-  - Analyze MUST call this operation before any consuming algorithm, and
-    MUST pass the whole resolved dependency closure as
-    `analyzers`, so every analysis about to run states its input contract here.
-  - The `analyzers` checkers MUST be bound to the derived Function and run in
-    closure order: every `check_target`, then every `check_call` over one
-    traversal of the derived non-Function calls, then every `finish`. One
-    program MUST be walked once for this however many analyses asked, and the
-    first refusal MUST stop the gate before any analysis writes.
+  - Callers MUST build the program before invoking Analyze. Analyze MUST run
+    the requested closure's checkers on that same program before any metadata
+    writes. `check_program(analyzers=...)` and Analyze use the same checker gate:
+    each checker's `check_target_facts`, followed by `visit` on each reached
+    definition. The first refusal MUST stop the gate before any family writes.
   - The returned Module MUST contain one typed derived function per reached
     definition, retaining calls and LoopRegions. Entry parameters and implicit
     child weights retain their names and roles; weights MUST NOT become root
@@ -1324,23 +1320,22 @@ class AnalysisCheckContext:
     binding. `budget` MUST be a non-negative integer limiting the sum of unique
     derived body nodes, independent of occurrence count. Exceeding it MUST fail
     with the program name, total size, and limit.
-  - At each retained call, analysis MUST step into its derived body through an
-    occurrence `IterationScope` whose owner is that Call, binding activations to arguments and resolving child weights
-    along the current call path. Loop call sites MUST be visited once;
+  - Definition-local analysis MUST visit definitions in dependency postorder,
+    once per definition. Calls are leaves with access summaries composed through
+    their bindings. Root aggregation MUST enter calls with a visit stack;
     enclosing trip counts multiply work and traffic. Recursion and a callee
     without a body MUST raise `AnalysisError` naming the function and call path.
   - One definition MUST receive one argument-type signature and one current
     mesh. Different shape, dtype, layout, storage, or mesh MUST raise
     `AnalysisError` naming the callee, both call paths, and both signatures.
-  - An occurrence MUST be the owner-Call `IterationScope`, or the owner-Function
-    scope for root. Other scopes point to their occurrence; its `CallFrame`
-    carries the current Module, function, target, and topologies. Diagnostic paths
-    join call binding names with `/`; root has an empty path.
-  - Records MUST live on IR, once per definition, describing its one execution.
-    Each analyzer MUST enter callees during traversal, then write the callee's
-    summary to its Function and call node. Compute-cost and traffic accumulate
-    primitive work into root with full repeats and each enclosing call with
-    repeats relative to that occurrence, preserving root logical totals.
+  - Check MUST attach internal `ExecutionMeshMetadata` to every derived
+    Function, recording its unique enclosing mesh; root records `None`. This
+    record is not exported by `tilefoundry.analysis` and does not opt into printing.
+  - Records MUST live on IR once per definition, in local coordinates. The
+    definition's scope tree MUST stop at its own root, whose parent is `None`.
+    Source entries MUST stop at formals; formals' variance dependencies MUST
+    include their own identity. Root-only aggregate facts are computed using
+    the call stack and attached only to root.
     Performance MUST schedule each definition once relative to its own origin;
     call duration is the callee duration, scheduled in the caller's current scope.
     Callee region peaks MUST take the maximum across occurrences.
@@ -1391,7 +1386,6 @@ class AnalysisResult:
     Attributes:
         module: attribute; Source Module.
         function: attribute; Function that received records.
-        scopes: attribute; Shared iteration-scope tree built for that Function by this Analyze call.
         analyses: attribute; Requested root analyses in first-occurrence order.
         topology_level: attribute; Topology level whose unit the per-unit quantities describe, or None.
         executed: attribute; Analyses executed in dependency order.
@@ -1401,7 +1395,6 @@ class AnalysisResult:
 
     module: "Module"
     function: "Function"
-    scopes: "IterationScope"
     analyses: tuple[str, ...]
     topology_level: str | None
     executed: tuple[str, ...]
@@ -1416,7 +1409,6 @@ def analyze(
     analysis: str | Iterable[str],
     topology_level: str | None = None,
     options: object | None = None,
-    dims: "Mapping[str, int] | None" = None,
 ) -> AnalysisResult: ...
 ```
 
@@ -1440,30 +1432,18 @@ def analyze(
     through is the device peak over however many of that unit the device holds,
     so the same program measured at two levels states the same work against
     proportionally different rates.
-  - The Function MUST be one the Module owns: one it declares, or a
-    specialization variant of one it declares
-    ([core-ir §1](./core-ir.md#1-module)). A Function derived by specialising one
-    of these MUST be refused, so that ownership is settled before anything is
-    rebuilt.
-  - `dims` states one extent per dimension reached through the Function graph,
-    its Mesh geometry, or the effective Module topology expressions. An analysis
-    counts elements and holds them against a machine, and has no answer for a
-    range in any of those positions, so the program MUST be analysed at a chosen
-    size rather than as authored.
-  - `dims=None` MUST behave as a call that states no size: the Function is
-    checked at its authored size; `AnalysisResult.function` MUST be the
-    record-bearing derived root.
+  - The Function MUST belong to the checked Module, including its derived
+    definitions. Analyze MUST write metadata in place without cloning or
+    re-running type inference. Dimension binding belongs to `check_program`.
   - Within `check_program`, stated `dims` MUST be a non-empty mapping whose
     keys name reached dimensions and whose integer extents satisfy their bounds.
     Every dispatch dimension MUST be supplied, exactly one variant MUST cover
     it, and no dimension MAY remain symbolic after substitution in types, Meshes,
     loop bounds, attributes, or effective topologies. Invalid bindings and missing
     bodies MUST fail with their names before any consuming algorithm runs.
-  - When `dims` is stated, `AnalysisResult.function` MUST be the derived root of
-    the concrete Function the records were written onto and MUST retain the
-    specialised Function's origin and extents. `AnalysisResult.module` MUST
-    remain the Module the caller supplied. A reader given the symbolic input
-    would find no records on it.
+  - `AnalysisResult.function` and `AnalysisResult.module` MUST be the exact
+    objects supplied by the caller. The checked Function retains its origin and
+    bound extents; analysis does not return the symbolic authored input.
   - The recorded extents MUST be what identifies which size a derived Function is
     at. They MUST NOT be inferred from its signature: a dimension occurring only
     in a loop bound, a body operation's attribute, or a nested callee leaves the
@@ -1478,9 +1458,9 @@ def analyze(
   - A dependency cycle MUST fail and MUST name the path that closes it. A
     missing root and a missing dependency MUST be distinguishable: one is the
     caller's selector, the other a broken Target capability.
-  - Type inference and validation MUST each run once per call, before any
-    analysis. No analysis MAY run once either has rejected the IR, because an
-    analysis reads inferred types and assumes a verified function.
+  - Type inference and structural validation belong to `check_program` and
+    MUST complete before Analyze receives the program. Analysis reads those
+    inferred types and assumes a verified function.
   - Family-specific readiness MUST be checked on that inferred derived program and
     MUST complete before the first analysis in the dependency closure runs. In
     particular, a performance request that lacks an execution placement MUST
@@ -1496,10 +1476,44 @@ def analyze(
     renderings of it and of the Metadata on the IR, and MUST NOT be fields of
     it.
 
+### Visit context and local coordinates
+
+Metadata declares `requires` as a tuple of Valuation Protocol types and exposes
+`resolve(ctx)`. The context implements core `ValuationProvider`;
+`request_valuation(type)` returns the requested interpretation or raises
+`AnalysisError`. The core default `resolve` returns the same record.
+
+| Protocol | Methods | Meaning |
+|---|---|---|
+| `TimingValuation` | `event(local)`, `timeline(local)` | Shift local liveness events and performance intervals into caller coordinates. |
+| `LoopNestValuation` | `repeats(call)`, `domain()` | Surrounding loop multiplicities, precision, and caller iteration domain. |
+| `VarianceValuation` | `varies(formal)` | The loops and formals on which an actual argument depends. |
+| `BindingValuation` | `actual(formal, index=0)`, `result()` | Caller source for a flattened formal tensor leaf and the call result's storage. Whole-tuple boundaries retain their definition-local identity source. |
+| `InstanceValuation` | `path()` | Module instance path, including slot indices. |
+
+`RootContext` explicitly implements Timing, LoopNest, and Instance with identity
+time, empty loops, and empty path. Binding or Variance requests on root MUST
+raise `AnalysisError`. `CallContext` explicitly implements all five Protocols
+for one call relative to its direct caller. `VisitContext` implements all five
+by composing its call stack: timing shifts add, iteration domains concatenate,
+bindings and variance substitute from inner to outer, and paths concatenate.
+Family contexts delegate `request_valuation` to their current frame.
+
+Before any family writes, Analyze MUST compute each family's read set as its
+`produces` plus the produced types of its transitive analyzer dependencies.
+Every required Valuation on those types MUST satisfy `issubclass` for both
+`CallContext` and `VisitContext`. Failure MUST raise `AnalysisError` naming the
+family, metadata type, context, and missing Valuation. This applies equally to
+third-party analyzers. Readers that only inspect local fields with
+`get_metadata` do not resolve records and do not need a Valuation provider.
+
 ### 2.1 Shared IterationScope and Access
 
-The normalized HIR is visited once per `analyze()` call. That visit produces an
-`IterationScope` tree parallel to Function, LoopRegion, and MeshRegion nesting
+Each reached definition is visited once in dependency postorder per `analyze()`
+call. That visit produces a local `IterationScope` tree parallel to Function,
+LoopRegion, and MeshRegion nesting; calls do not create scopes. A definition's
+root has `parent=None` and `depth=0`. Its inherited mesh comes from the checked
+Function's `ExecutionMeshMetadata`. The walk constructs sources
 and `Access` relations for the narrow, device and unit views. Without a selected
 topology level, the unit view MUST use logical coordinates. Every view MUST
 construct a source for every value in its own coordinates. Unit coordinates are the logical
@@ -1514,8 +1528,13 @@ boundaries. A mesh scope adds no
 iteration dimension: it keeps its parent's depth and domain, so the first
 `depth` input dimensions of an access relation remain the enclosing loops.
 `IterationScope.execution_mesh()` composes all enclosing MeshRegion meshes
-from outer to inner, matching type inference's current mesh.
-`enclosing_mesh()` returns only the nearest region's mesh.
+from outer to inner after the definition's inherited mesh, matching type
+inference's current mesh. `enclosing_mesh()` returns the nearest region's mesh,
+or the inherited mesh when no local region encloses the point. All upward
+traversals, including captures, loop domains, trips, repeats, and mesh positions,
+MUST stop at the definition boundary. A callee loop whose start or extent
+references a formal parameter MUST follow the existing runtime-bound refusal
+with `AnalysisError`, even if a particular call supplies a constant.
 
 `IterationScope.domain` is the accumulated authored loop domain;
 `IterationScope.accesses` and `IterationScope.refused` are the shared family

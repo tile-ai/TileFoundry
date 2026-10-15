@@ -6,6 +6,7 @@ import isl
 
 from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.analysis.api import analyze
+from tilefoundry.analysis.check import check_program
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.schedule import operand_relations
@@ -46,8 +47,7 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
 
     for topology_level in ("cta", "thread"):
         result = analyze(
-            _LocalProgram,
-            entry,
+            *check_program(_LocalProgram, entry, topology_level=topology_level),
             analysis=("compute-cost", "memory"),
             topology_level=topology_level,
         )

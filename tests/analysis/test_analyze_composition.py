@@ -9,6 +9,7 @@ import pytest
 
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.analysis.api import analyze
+from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.ir.core.module import Module
@@ -53,7 +54,7 @@ def test_analyze_orders_the_union_of_target_selected_dependency_roots_once() -> 
     )
     module, function = _module(target)
 
-    result = analyze(module, function, analysis=("left", "top", "right", "left"))
+    result = analyze(*check_program(module, function), analysis=("left", "top", "right", "left"))
 
     assert result.analyses == ("left", "top", "right")
     assert result.executed == ("base", "left", "right", "top")
@@ -64,12 +65,12 @@ def test_analyze_orders_the_union_of_target_selected_dependency_roots_once() -> 
 def test_analyze_reports_missing_root_and_missing_dependency_from_the_target() -> None:
     module, function = _module(_AnalysisTarget())
     with pytest.raises(AnalysisError, match="no analyzer for 'missing'"):
-        analyze(module, function, analysis="missing")
+        analyze(*check_program(module, function), analysis="missing")
 
     target = _AnalysisTarget((Analyzer("root", lambda *_args: None, requires=("lost",)),))
     module, function = _module(target)
     with pytest.raises(AnalysisError, match="'root' depends on 'lost'"):
-        analyze(module, function, analysis="root")
+        analyze(*check_program(module, function), analysis="root")
 
     target = _AnalysisTarget(
         (
@@ -86,7 +87,7 @@ def test_analyze_reports_missing_root_and_missing_dependency_from_the_target() -
         AnalysisError,
         match=r"needs-facts: _AnalysisTarget \(test.analysis\): no Facts projection",
     ):
-        analyze(module, function, analysis="needs-facts")
+        analyze(*check_program(module, function), analysis="needs-facts")
 
 
 def test_analyze_detects_cycles_declared_by_target_services() -> None:
@@ -99,7 +100,7 @@ def test_analyze_detects_cycles_declared_by_target_services() -> None:
     module, function = _module(target)
 
     with pytest.raises(AnalysisError, match="a -> b -> a"):
-        analyze(module, function, analysis="a")
+        analyze(*check_program(module, function), analysis="a")
 
 
 def test_analyze_keeps_a_provider_value_error_and_rejects_over_limit_topology() -> None:
@@ -112,7 +113,7 @@ def test_analyze_keeps_a_provider_value_error_and_rejects_over_limit_topology() 
 
     module, function = _module(_BrokenTarget())
     with pytest.raises(ValueError, match="provider analysis failure"):
-        analyze(module, function, analysis="broken")
+        analyze(*check_program(module, function), analysis="broken")
 
     function = RmsnormModule.entry_function()
     over_limit = Module(
@@ -123,4 +124,4 @@ def test_analyze_keeps_a_provider_value_error_and_rejects_over_limit_topology() 
         topologies=(Topology("cta", 1), Topology("thread", 1025)),
     )
     with pytest.raises(ValueError, match="1 <= extent <= 1024"):
-        analyze(over_limit, function, analysis="roofline")
+        analyze(*check_program(over_limit, function), analysis="roofline")
