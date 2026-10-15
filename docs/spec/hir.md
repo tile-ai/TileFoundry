@@ -1618,15 +1618,17 @@ class Reshard(Op):
     `x.storage`.
   - The output preserves the input logical `TensorType.shape`.
   - Supplied `layout` is a `LayoutBase` (`Layout` / `ComposedLayout` / `ShardLayout`).
-  - Memory analysis and lowering MUST treat a same-storage Reshard as a view
-    only when both layouts are plain (no nested `ShardLayout`) with strides
-    stated in every `Layout` component, the shape is literal, and every colex
-    coordinate maps to the same address in both layouts, including composed
-    swizzles. The result MUST reuse the source
-    buffer, lower to a view, and require no instruction candidate.
-  - A Reshard that changes addresses or storage, or whose layout contains a
-    `ShardLayout`, MUST retain its independent buffer and instruction selection
-    requirements.
+  - Memory analysis and lowering MUST treat a Reshard as a view iff storage
+    is unchanged, the shape is literal, and every logical element retains its
+    complete set of storage instances and addresses, including Broadcast
+    replicas. Gmem has one instance per device, smem one per device and CTA,
+    and rmem one per thread.
+    A plain smem/rmem end has a copy on every instance of the other end's mesh;
+    two sharded ends retain their own mesh selections.
+    The result MUST reuse the source buffer, lower to a view, and require no
+    instruction candidate.
+  - Every other Reshard MUST retain its independent buffer and instruction
+    selection requirements.
   - Destination storage is concrete, not unmaterialized.
   - The single op covers zero-copy view, cross-storage copy, cross-CTA
   redistribute, and mixed cases; typeinfer and the recursive-local Cost
@@ -1651,13 +1653,12 @@ dispatches on `(layout, storage)`:
 - `layout=Layout(strides=tuple)` (verbose) → dest strides are taken verbatim;
   typeinfer MUST NOT rewrite them (e.g. SM80 MMA fragment layouts).
 
-**Cost classification.** A Reshard whose source and destination storage are
-the same is a zero-copy view and reports zero traffic, including the
-`layout=None` no-op. A Reshard that changes storage is a copy and reports one
-full source read plus one full destination write. Layout changes alone do not
-turn a same-storage view into traffic. This follows the same boundary as
-`Slice`, whose consumers account for the data they move, and `Arange`, whose
-coordinates remain synthesized metadata until a consumer materializes them.
+**Cost classification.** A Reshard is a zero-copy view with zero traffic
+only when no element moves under the alias rule above, including the
+`layout=None` no-op. Every other Reshard reports one full source read plus one
+full destination write, including a same-storage change of addresses or
+storage instances. Cross-unit traffic is recorded alongside storage traffic;
+an aliased Reshard has neither storage traffic nor cross-unit traffic.
 
 **Cross-CTA fence.** The grid fence for a cross-CTA reshard is owned by the
 reshard lowering, not by a separately authored sync. When a reshard reads a

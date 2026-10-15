@@ -1175,12 +1175,12 @@ def _check_finalize_unbound_dim(out: Path, captured: pytest.CaptureResult[str]) 
 def _check_reshard_locations(out: Path, captured: pytest.CaptureResult[str]) -> None:
     rows = _quiet_json(out, captured)["functions"][0]["calls"]
     rows = {row["value"].rsplit(":", 1)[1]: row["memory"] for row in rows}
-    for line, byte_count in (("12", 256), ("14", 32)):
-        memory = rows[line]
+    for label, byte_count in (("12", 256), ("14", 32)):
+        memory = rows[label]
         assert memory["operands"][0]["read"] == byte_count
         assert memory["operands"][1]["write"] == byte_count
-    for line in ("15", "16"):
-        memory = rows[line]
+    for label in ("15", "16", "17"):
+        memory = rows[label]
         assert memory["buffer_bytes"] is None
         assert memory["offsets"] == []
         assert memory["traffic"] == {"communication": {}, "storage": {}}
@@ -1655,7 +1655,7 @@ def test_schedule_candidate_reports_cover_every_site(
         ("chunk_rmsnorm", ("chunks=16",), 0, 7, 0, "KN"),
         ("chunk_rmsnorm", ("chunks=32",), 0, 7, 0, "KN"),
         ("fp8_block_scaled_gemm", (), 1, 5, 0, "KN"),
-        ("gemm_8192x17408x5120_cta_grid", (), 1, 4, 0, "KN"),
+        ("gemm_8192x17408x5120_cta_grid", (), 1, 3, 0, "KN"),
         ("gemm_relu_gemm_tiled", (), 2, 2, 0, "KN"),
         ("gemm_relu_gemm_untiled", (), 2, 0, 0, "KN"),
         ("gemm_relu_gemm_untiled", (), 2, 0, 0, "NK"),

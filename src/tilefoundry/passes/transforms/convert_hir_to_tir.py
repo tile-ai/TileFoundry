@@ -1382,9 +1382,14 @@ class Lowering(ValuationVisitor[Expr | _View]):
             return known[1]
         desired = value.desired
         if isinstance(desired.layout, ShardLayout):
-            if self.ctx.frame is None:
-                raise LoweringError("a sharded view requires an issuing mesh")
-            desired = _with_frame(desired, self.ctx.frame)
+            holder = self._holder_mesh(desired)
+            frame = next((
+                scope.frame for scope in reversed(self.ctx.scopes)
+                if scope.frame is not None and scope.frame.topologies == holder.topologies
+            ), None)
+            if frame is None:
+                raise LoweringError(f"a sharded view requires an issuing mesh: {desired.layout!r}")
+            desired = _with_frame(desired, frame)
         if isinstance(value.base, Constant) and isinstance(value.base.type, PointerType):
             result = self.ctx.bind(
                 Var(value.stem, type=desired),

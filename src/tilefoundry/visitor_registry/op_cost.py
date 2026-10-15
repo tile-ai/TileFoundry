@@ -76,6 +76,7 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.utils import numel, tensor_bytes
 from tilefoundry.visitor_registry.access_relation import logical_axes_of
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 
 from .contexts import Cost, CostContext, TrafficBytes
 from .cost_utils import (
@@ -537,7 +538,7 @@ def _sent(source, destination, *, logical_source=None, logical_destination=None)
     it held. Every unit sends and receives the same amount, and the level
     named is the one owning the mesh axes whose split changed. Where the
     exchange lands is a separate question this does not answer: the storage
-    charge stays whatever crossing a storage level would have cost. Ownership
+    charge remains the source read and destination write. Ownership
     uses whole logical layouts; byte counts use the cost context's projected source.
     """
     before = _split_axes(source if logical_source is None else logical_source)
@@ -571,14 +572,14 @@ def _sent(source, destination, *, logical_source=None, logical_destination=None)
 
 @register_cost_evaluator(Reshard)
 def _reshard(call: Call, ctx: CostContext) -> Cost:
+    if aliased_operand(call) is not None:
+        return Cost({}, idle(call))
     source = input_types(call, ctx)[0]
     destination = output_type(call, ctx)
     sent = _sent(
         source, destination,
         logical_source=ctx.type_of(call.args[0]), logical_destination=ctx.type_of(call),
     )
-    if source.storage == destination.storage:
-        return Cost({}, idle(call), sent=sent)
     return Cost({}, (
         TrafficBytes(read=tensor_bytes(source)),
         TrafficBytes(write=tensor_bytes(destination)),

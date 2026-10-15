@@ -1,4 +1,4 @@
-"""Four Reshards distinguish changed addresses, owners, and views."""
+"""Reshards distinguish changed addresses, owners, and views."""
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
@@ -16,4 +16,5 @@ class ReshardLocations:
                 exchanged = tf.reshard(held, ((2, 2 @ threads.t, 2), (4, 2, 1)), "rmem")
                 repartitioned = tf.reshard(y, ((2 @ cta.b, 4), (4, 1)), "gmem")
                 same = tf.reshard(repartitioned, ((2 @ cta.b, 4), (4, 1)), "gmem")
-                return transposed, exchanged, repartitioned, same
+                shared_view = tf.reshard(shared, ((2 @ threads.t, 4, 8), (32, 8, 1)), "smem")
+                return transposed, exchanged, repartitioned, same, shared_view

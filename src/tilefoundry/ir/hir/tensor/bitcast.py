@@ -13,7 +13,6 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir.sharding.reshard import _plain
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import (
     ComposedLayout,
@@ -25,15 +24,16 @@ from tilefoundry.ir.types import (
     TensorType,
 )
 from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout import apply, get, rank, resolve_layout
+from tilefoundry.ir.types.layout import apply, resolve_layout
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
+from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.types.shard_layout import (
-    _positions,
     layout_axis_to_tensor_axis,
     local_layout_and_offset,
     shard_layout_of,
     split_target_axes,
 )
+from tilefoundry.ir.types.stride import compact_col_major, crd2idx, idx2crd
 from tilefoundry.ir.types.utils import is_literal_shape, participant_layout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -53,27 +53,35 @@ class Bitcast(Op):
     layout = ParamDef(kind="attribute", annotation=LayoutBase)
 
 
-def _addresses(layout, count: int, logical_shape: tuple):
-    layout = resolve_layout(layout, logical_shape)
-    """Enumerate each unit's local addresses using the shared shard definition.
+def _address_points(layout, count: int, logical_shape: tuple):
+    """Yield logical index, physical unit ids, full address, and local address.
 
-    Shard ownership uses the layout's factored domain, independently of its
-    grouping into logical tensor axes. Whole addresses identify colex elements.
+    Both byte reinterpretation and storage aliasing read the same factored
+    shard domain; their reducers decide whether repeated locations are legal.
     """
+    layout = resolve_layout(layout, logical_shape)
     if not isinstance(layout, ShardLayout):
-        return tuple(apply(layout, coord) for coord in range(count))
-    layout = participant_layout(layout)
+        for coordinate in range(count):
+            address = apply(layout, coordinate)
+            yield coordinate, (), address, address
+        return
     whole = {apply(layout.layout, coord): coord for coord in range(count)}
     if len(whole) != count:
         raise ValueError(f"rmem layout address function is not injective: {layout!r}")
-    stated = layout.mesh.layout
-    if isinstance(stated, ComposedLayout):
-        stated = stated.outer
-    levels = tuple(get(stated, index) for index in range(rank(stated)))
-    addresses = [None] * count
-    for coordinates in product(*(range(prod(flatten(level.shape))) for level in levels)):
-        ids = tuple(apply(level, coord) for level, coord in zip(levels, coordinates, strict=True))
-        unit = tuple(_positions(layout, ids).values())
+    corresponding = layout_correspondence(layout.layout.shape, logical_shape)
+    logical_layout = resolve_layout(None, logical_shape)
+    steps = compact_col_major(corresponding.extents)
+    for coordinate in range(count):
+        digits = corresponding.digits(apply(logical_layout, coordinate))
+        mode_index = crd2idx(digits, corresponding.extents, steps)
+        whole[apply(layout.layout, mode_index)] = coordinate
+    arrangements = levels(layout.mesh)
+    for coordinates in product(*(range(prod(flatten(level.shape))) for level in arrangements)):
+        ids = tuple(apply(level, coord) for level, coord in zip(arrangements, coordinates, strict=True))
+        unit = tuple(sorted(
+            (topology.name, start + index)
+            for topology, start, index in zip(layout.mesh.topologies, starts(layout.mesh), ids, strict=True)
+        ))
         local, offset = local_layout_and_offset(layout, tuple(layout.layout.shape), ids)
         for coord in range(prod(local.shape)):
             held = apply(local, coord)
@@ -82,26 +90,23 @@ def _addresses(layout, count: int, logical_shape: tuple):
                 raise ValueError(
                     f"local shard addresses extend outside the rmem layout: {layout!r}"
                 )
-            if addresses[logical] is not None:
-                raise ValueError(f"local shards overlap in rmem layout: {layout!r}")
-            addresses[logical] = (unit, held)
+            yield logical, unit, offset + held, held
+
+
+def _addresses(layout, count: int, logical_shape: tuple):
+    """Require one unique address per logical element for a Bitcast."""
+    layout = resolve_layout(layout, logical_shape)
+    if not isinstance(layout, ShardLayout):
+        return tuple(point[2] for point in _address_points(layout, count, logical_shape))
+    layout = participant_layout(layout)
+    addresses = [None] * count
+    for logical, unit, _full, held in _address_points(layout, count, logical_shape):
+        if addresses[logical] is not None:
+            raise ValueError(f"local shards overlap in rmem layout: {layout!r}")
+        addresses[logical] = (unit, held)
     if any(address is None for address in addresses):
         raise ValueError(f"local shards do not cover the rmem layout: {layout!r}")
-    corresponding = layout_correspondence(layout.layout.shape, logical_shape)
-    ordered = []
-    for coordinate in range(count):
-        linear = 0
-        for digit, extent in zip(
-            _coordinates(coordinate, logical_shape), logical_shape, strict=True
-        ):
-            linear = linear * extent + digit
-        mode_digits = corresponding.digits(linear)
-        mode_index, step = 0, 1
-        for digit, extent in zip(mode_digits, corresponding.extents, strict=True):
-            mode_index += digit * step
-            step *= extent
-        ordered.append(addresses[mode_index])
-    return tuple(ordered)
+    return tuple(addresses)
 
 
 @cache
@@ -123,11 +128,15 @@ def _address_mapping(
 
 
 def _coordinates(coord: int, shape: tuple[int, ...]) -> tuple[int, ...]:
-    digits = []
-    for extent in shape:
-        digits.append(coord % extent)
-        coord //= extent
-    return tuple(digits)
+    return idx2crd(coord, shape, compact_col_major(shape))
+
+
+def _stated_strides(layout) -> bool:
+    if isinstance(layout, Layout):
+        return layout.strides is not None
+    if isinstance(layout, ComposedLayout):
+        return _stated_strides(layout.outer) and _stated_strides(layout.inner)
+    return True
 
 
 @register_typeinfer(Bitcast)
@@ -183,7 +192,7 @@ def _(call: Call, ctx) -> TensorType:
             held = held.layout
         if not isinstance(held, (Layout, ComposedLayout)) or shard_layout_of(held) is not None:
             ctx.error(call, f"{end} layout must be plain (without ShardLayout): {held!r}")
-        if not _plain(held):
+        if not _stated_strides(held):
             ctx.error(call, f"{end} layout must have strides stated in every Layout component")
         if not is_literal_shape(flatten(held.shape)):
             ctx.error(call, f"{end} layout shape must be literal")

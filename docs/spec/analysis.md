@@ -534,12 +534,13 @@ class BufferAlias:
     Every other result, including `Transpose` or a result that overwrites
     a destination, MUST allocate its own. Analysis MUST use operation semantics
     for this distinction rather than infer aliasing from layouts.
-  - Reshard MUST alias its source when storage is unchanged, both layouts are
-    plain (including compositions without `ShardLayout` components) with
-    strides stated in every `Layout` component, the shape is literal, and the
-    two layouts map every colex coordinate to the same address. An
-    address-changing, storage-changing, or sharded Reshard MUST
-    retain its independent buffer.
+  - Reshard MUST alias its source iff storage is unchanged, the shape is
+    literal, and every logical element retains its complete set of storage
+    instances and addresses. Gmem has one instance per device; smem has one
+    per device and CTA; rmem has one per thread. Broadcast replicas MUST be included: removing a
+    replica changes the set. In smem/rmem a plain end has a copy on every
+    instance of the other end's mesh; two sharded ends retain their own mesh
+    selections. Every other Reshard MUST retain its independent buffer.
   - Bitcast MUST alias its source and allocate no independent buffer. Its
     declared access relation MUST bijectively map result coordinates to source
     coordinates with the same physical address, requiring the source's
@@ -1831,7 +1832,7 @@ widening; the two modules do not define a second affine graph representation.
     report unknown for a larger box. It MUST count directly when every retained
     parameter is already fixed to one integer point. An empty parameter context
     MUST count as zero; a non-empty context with an unbounded parameter MUST
-    report unknown.
+    report unknown. An unbounded set dimension MUST also report unknown.
   - `IterationScope.trips()` MUST count a loop off its bounds, not its domain:
     `max(1, ceil(max(stop - start) / step))`, refusing an unbounded span.
     `trips_precision` is `EXACT` where that span reaches one value and

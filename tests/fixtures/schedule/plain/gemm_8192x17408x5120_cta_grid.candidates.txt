@@ -48,25 +48,6 @@ target nvidia.h200_sxm
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8, 4),), ((*gs, 32, 4, 1),))))
     refused     T.cuda.sm80.Mma
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),))))
-  v6:35  tf.reshard  per cta  x=Tensor[(8192, 17408), "f32",
-    ShardLayout(
-        layout=Layout((64, 128, 68, 256), (2228224, 17408, 256, 1)),
-        attrs=(S(0), S(2)),
-        mesh=Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")),
-    ), "rmem"]  result=Tensor[(8192, 17408), "f32",
-    ShardLayout(
-        layout=Layout((64, 128, 68, 256), (2228224, 17408, 256, 1)),
-        attrs=(S(0), S(2)),
-        mesh=Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")),
-    ), "rmem"]
-    refused     T.copy_async
-                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
-    refused     T.copy_async_tensor
-                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*_, 32),), ((*_, 1),))))
-    refused     T.copy
-                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
-    refused     T.ldmatrix
-                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8),), ((1, 4),))))
   v7:35  tf.binary  per cta  lhs=Tensor[(8192, 17408), "f32",
     ShardLayout(
         layout=Layout((64, 128, 68, 256), None),

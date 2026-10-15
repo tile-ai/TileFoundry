@@ -244,7 +244,7 @@ class Cost:
     ``traffic`` says which storage level each operand touched. Data handed
     between two units of one topology level touches the same storage at both
     ends and has still gone somewhere, so it is stated against that level's
-    name instead, from the sending unit's own view.
+    name in addition to the storage traffic, from the sending unit's own view.
     """
 
     @property

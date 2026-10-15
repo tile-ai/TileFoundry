@@ -10,9 +10,9 @@ from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import Broadcast, TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, apply, resolve_layout
+from tilefoundry.ir.types.layout import Layout, LayoutBase, resolve_layout
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
@@ -21,7 +21,7 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
-from tilefoundry.ir.types.utils import is_literal_shape, is_unsharded_layout, strip_broadcast_layout
+from tilefoundry.ir.types.utils import is_literal_shape, strip_broadcast_layout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -174,46 +174,58 @@ class Reshard(Op):
     storage = ParamDef(kind="attribute", default=None)
 
 
-def _stated_strides(layout) -> bool:
-    if isinstance(layout, Layout):
-        return layout.strides is not None
-    if isinstance(layout, ComposedLayout):
-        return _stated_strides(layout.outer) and _stated_strides(layout.inner)
-    return True
-
-
-def _plain(layout) -> bool:
-    """Plain address functions include full broadcasts with stated strides."""
-    if not is_unsharded_layout(layout):
-        return False
-    layout = strip_broadcast_layout(layout)
-    return (
-        isinstance(layout, (Layout, ComposedLayout))
-        and shard_layout_of(layout) is None
-        and _stated_strides(layout)
-    )
-
-
 @cache
-def _same_addresses(source, result, count: int) -> bool:
-    """Compare complete colex address functions, including composed swizzles."""
-    return all(apply(source, coord) == apply(result, coord) for coord in range(count))
+def _same_locations(source: TensorType, result: TensorType) -> bool:
+    """Every element must retain its complete set of storage instances and addresses."""
+    from tilefoundry.ir.hir.tensor.bitcast import _address_points  # noqa: PLC0415
+    from tilefoundry.ir.types.int_tuple import flatten  # noqa: PLC0415
+
+    def locations(type_, other):
+        shard = shard_layout_of(type_.layout)
+        mesh = shard.mesh if shard is not None else getattr(shard_layout_of(other.layout), "mesh", None)
+        layout = strip_broadcast_layout(type_.layout)
+        if mesh is not None and not isinstance(layout, ShardLayout):
+            layout = ShardLayout(layout, (Broadcast(),) * len(flatten(mesh.layout.shape)), mesh)
+        ignored = {StorageKind.GMEM: ("cta", "thread"), StorageKind.SMEM: ("thread",)}.get(type_.storage, ())
+        points = [set() for _ in range(prod(type_.shape))]
+        for logical, unit, full, local in _address_points(layout, len(points), type_.shape):
+            instance = tuple(pair for pair in unit if pair[0] not in ignored)
+            points[logical].add((instance, local if type_.storage is StorageKind.RMEM else full))
+        return points
+
+    try:
+        if source.layout == result.layout:
+            return True
+        if source.storage is StorageKind.GMEM and all(
+            topology.name in ("cta", "thread")
+            for type_ in (source, result)
+            for topology in getattr(getattr(shard_layout_of(type_.layout), "mesh", None), "topologies", ())
+        ):
+            before = getattr(shard_layout_of(source.layout), "layout", source.layout)
+            after = getattr(shard_layout_of(result.layout), "layout", result.layout)
+            if before == after:
+                return True
+        if all(shard_layout_of(type_.layout) is None for type_ in (source, result)):
+            return all(
+                before[2] == after[2]
+                for before, after in zip(
+                    _address_points(source.layout, prod(source.shape), source.shape),
+                    _address_points(result.layout, prod(result.shape), result.shape), strict=True,
+                )
+            )
+        return locations(source, result) == locations(result, source)
+    except ValueError:
+        return False
 
 
 @register_buffer_alias(Reshard)
 def _buffer_alias(call: Call) -> int | None:
     source, result = call.args[0].type, call.type
-    if result.storage is not source.storage:
+    if result.storage is not source.storage or not is_literal_shape(result.shape):
         return None
     source = replace(source, layout=resolve_layout(source.layout, source.shape))
     result = replace(result, layout=resolve_layout(result.layout, result.shape))
-    if not (_plain(source.layout) and _plain(result.layout)):
-        return None
-    if not is_literal_shape(result.shape):
-        return None
-    source_layout = strip_broadcast_layout(source.layout)
-    result_layout = strip_broadcast_layout(result.layout)
-    return 0 if _same_addresses(source_layout, result_layout, prod(result.shape)) else None
+    return 0 if _same_locations(source, result) else None
 
 
 @register_access_relation(Reshard)

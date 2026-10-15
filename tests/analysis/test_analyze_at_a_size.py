@@ -102,6 +102,9 @@ class _PersistentScheduleExpectation:
 
 
 EXPECTED_MEMORY_PEAKS = {
+    "cyclic_split_weight.CyclicSplitWeight.read[static]": {"gmem": 8 * 4 // 4},
+    "cyclic_split_weight.MeshOrderWeight.read[static]": {"gmem": 32 * 4 // 32},
+    "two_dimvar_reshape.TwoDimVarReshape.squeeze[C=128,T=128]": {"gmem": 128 * 128 * 4},
     "child_matmul_target.ChildMatmul.run[static]": {
         "gmem": 64 * 64 * 2 + 64 * 32 * 2 + 64 * 32 * 4,
         "rmem": 16384,

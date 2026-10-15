@@ -5,11 +5,11 @@ from tilefoundry.target import CudaTarget
 
 
 def weight_module(size, layout, attrs, mesh):
-    @module(entry="read", target=CudaTarget("nvidia.h200_sxm"), topologies=mesh.topologies)
+    @module(entry="read", target=CudaTarget("nvidia.h200_sxm"), topologies=(*mesh.topologies, Topology("cta", 1)))
     class Weight:
         @func
         def read(weight: ConstTensor[(size,), "f32", ShardLayout(layout, attrs, mesh)]):
-            return weight
+            return tf.reshard(weight)
 
     @runtime_module(Weight)
     class WeightTwin:

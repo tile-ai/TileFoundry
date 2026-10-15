@@ -44,6 +44,8 @@ class ParameterBoxTooLarge(ParameterBoxError):
 def _count(image: "isl.set") -> int | None:
     """Count *image* without enumerating its parameter space."""
     image = image.coalesce()
+    if not image.is_bounded():
+        return None
     if image.is_box():
         amount = 1
         for axis in range(image.tuple_dim()):
