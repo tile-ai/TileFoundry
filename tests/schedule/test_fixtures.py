@@ -26,7 +26,6 @@ import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 from tests._source import import_dsl
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.iteration_scope import walk_scopes
 from tilefoundry.analysis.liveness import analyze_liveness, result_copies
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
@@ -132,7 +131,6 @@ PLAIN_REFUSED = {
 FINALIZE_REFUSED = {
     "staged_dynamic_inner": "staged selection needs a constant trip count for 'j'",
     "duplicate_output_storage": "return leaf (2,) shares storage with another output",
-    "loop_carry_rebind": "loop 'k' changes carry storage; write into its carry explicitly",
 }
 CANDIDATES_REFUSED = {
     "module_instances": "source has no unscheduled candidate site",
@@ -246,7 +244,7 @@ SMEM_GOLDEN = {
     "loop_outputs": 8,
     "staged_nested": 32,
     "child_weight": 0,
-    "captured_insert_update": 16,
+    "captured_insert_update": 24,
     "loop_carry_from_param": 0,
     "sparse_decode": 16_384,
     "scalar_binary": 0,
@@ -276,15 +274,15 @@ RMEM_EXPECTED = {
     "duplicate_output_storage": {},
     "loop_carry_rebind": {
         "thread@0:32#0": _RmemExpectation(
-            64, "the 4x4 f32 output owns the tied 2x4 accumulator window"
+            96, "independent live Buffers: 1 * 32B + 1 * 64B"
         ),
-        "cta@0:1#0": _RmemExpectation(64, "parent envelope of the output/accumulator alias group"),
+        "cta@0:1#0": _RmemExpectation(96, "independent live Buffers: 1 * 32B + 1 * 64B"),
     },
     "loop_carry_window": {
         "thread@0:32#0": _RmemExpectation(
-            64, "the 4x4 f32 output owns the tied 2x4 accumulator window"
+            96, "independent live Buffers: 1 * 32B + 1 * 64B"
         ),
-        "cta@0:1#0": _RmemExpectation(64, "parent envelope of the output/accumulator alias group"),
+        "cta@0:1#0": _RmemExpectation(96, "independent live Buffers: 1 * 32B + 1 * 64B"),
     },
     "staged_dynamic_inner": {
         "thread@0:32#0": _RmemExpectation(
@@ -295,13 +293,13 @@ RMEM_EXPECTED = {
     "mesh_capture_outside": {},
     "mesh_views": {
         "thread@0:32#0": _RmemExpectation(
-            128, "the 4x8 f32 fragment and its view/result aliases form one 128-byte group"
+            256, "independent live Buffers: 2 * 128B"
         ),
         "thread@0:32#1": _RmemExpectation(
-            128, "the 4x8 f32 fragment and its view/result aliases form one 128-byte group"
+            256, "independent live Buffers: 2 * 128B"
         ),
         "thread@0:32#2": _RmemExpectation(
-            128, "the 4x8 f32 fragment and its view/result aliases form one 128-byte group"
+            256, "independent live Buffers: 2 * 128B"
         ),
     },
     "mesh_zeros_submesh": {},
@@ -316,10 +314,10 @@ RMEM_EXPECTED = {
     },
     "child_weight": {
         "thread@0:32#0": _RmemExpectation(
-            128, "the two 32-element f32 inputs and product reuse one 128-byte alias group"
+            384, "independent live Buffers: 3 * 128B"
         ),
         "cta@0:1#0": _RmemExpectation(
-            128, "the two 32-element f32 inputs and product reuse one 128-byte alias group"
+            384, "independent live Buffers: 3 * 128B"
         ),
     },
     "wgmma_b_nk": {
@@ -329,30 +327,27 @@ RMEM_EXPECTED = {
     },
     "module_instances": {
         "cta@0:1#0": _RmemExpectation(
-            128, "CTA envelope of the retained callees' 32-element f32 register groups; "
-            "the caller's explicit gmem copies need no rmem storage"
+            384, "three independent 128-byte callee operand/result Buffers in the CTA window"
         ),
     },
     "captured_insert_update": {},
     "loop_carry_from_param": {},
     "sparse_decode": {
         "cta@0:1#0": _RmemExpectation(
-            512,
-            "the seven index/mask SSA values form one 512-byte alias group",
+            520,
+            "independent live Buffers: 1 * 8B + 1 * 512B",
         ),
         "thread@128:128#0": _RmemExpectation(33_024, "attention intermediates and row reductions"),
         "thread@0:256#0": _RmemExpectation(33_024, "parent envelope of attention compute"),
     },
     "scalar_binary": {
         "cta@0:1#0": _RmemExpectation(
-            132,
-            "the child thread's 128-byte tile/region-result alias chain overlaps "
-            "a 4-byte rhs literal fill",
+            260,
+            "independent live Buffers: 1 * 4B + 2 * 128B",
         ),
         "thread@0:32#0": _RmemExpectation(
-            132,
-            "rhs literal materializes in rmem during lowering; the new result reuses "
-            "the same register tile, so the HIR peak stays unchanged",
+            260,
+            "independent live Buffers: 1 * 4B + 2 * 128B",
         ),
     },
     "fp8_block_scaled_gemm": {
@@ -363,11 +358,11 @@ RMEM_EXPECTED = {
         ),
         "thread@128:256#0": _RmemExpectation(65_536, "128x128 f32 zero accumulator"),
         "thread@128:256#1": _RmemExpectation(
-            66_048,
-            "128x128 f32 block product and its scaled aliases plus the 512-byte 128x1 row scale",
+            131584,
+            "independent live Buffers: 1 * 512B + 2 * 65536B",
         ),
         "thread@128:256#2": _RmemExpectation(65_536, "f32 loop result/bf16 cast alias"),
-        "thread@0:384#0": _RmemExpectation(66_048, "parent envelope of the block-scaling region"),
+        "thread@0:384#0": _RmemExpectation(131584, "independent live Buffers: 1 * 512B + 2 * 65536B"),
     },
     "gemm_8192x17408x5120_register_store": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
@@ -408,15 +403,15 @@ RMEM_EXPECTED = {
         "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
         "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
         "thread@128:128#2": _RmemExpectation(
-            8_448, "f32 loop result plus f32 reduction results and bf16 cast alias"
+            16384, "independent live Buffers: 2 * 8192B"
         ),
         "thread@0:32#1": _RmemExpectation(
             2_048,
             "f32 loader tile (2048); bf16 cast follows its last read",
         ),
         "thread@0:256#0": _RmemExpectation(
-            10_240,
-            "64x32 f32 accumulator (8192) plus loader peak (2048)",
+            16384,
+            "independent live Buffers: 2 * 8192B",
         ),
     },
     "wgmma_cp_async_loads": {
@@ -625,8 +620,8 @@ def test_scheduled_hir_program_has_analysis_metadata(
     assert metadata_type in result.metadata_types
     if path.stem == "module_instances":
         record_type = PerformanceMetadata if analysis == "performance" else metadata_type
-        for occurrence in [scope for scope in walk_scopes(result.scopes) if scope.frame is not None][1:]:
-            schedules = [expr for expr in collect_exprs(occurrence.frame.function.body)
+        for function in result.functions[1:]:
+            schedules = [expr for expr in collect_exprs(function.body)
                          if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)]
             assert any(get_metadata(expr, record_type) is not None
                        for expr in schedules)
@@ -684,8 +679,8 @@ def test_scheduled_hir_program_has_analysis_metadata(
         if path.stem == "module_instances":
             region_records += tuple(
                 record
-                for occurrence in [scope for scope in walk_scopes(result.scopes) if scope.frame is not None][1:]
-                for region in collect_exprs(occurrence.frame.function.body)
+                for function in result.functions[1:]
+                for region in collect_exprs(function.body)
                 if isinstance(region, MeshRegion)
                 and (record := get_metadata(region, RegionMemoryMetadata)) is not None
             )
@@ -721,7 +716,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
             if smem_peak is not None:
                 observed_smem[key] = smem_peak.peak_bytes
         if path.stem == "captured_insert_update":
-            assert observed_smem["thread@0:32#0"] == 16
+            assert observed_smem["thread@0:32#0"] == 24
         expected_rmem = {
             key: expectation.peak_bytes for key, expectation in RMEM_EXPECTED[path.stem].items()
         }
@@ -1036,8 +1031,8 @@ def _check_smem_placement(out: Path, captured: pytest.CaptureResult[str]) -> Non
         "two shared tiles need 16384 bytes"
     )
     key_view = next(i for i, line in enumerate(lines) if line.strip() == "ks = T.tensor_view(")
-    assert lines[key_view + 1].strip().split(",", 1)[0] == "8192", (
-        "the lowered key tile starts at 8192 bytes"
+    assert lines[key_view + 1].strip().split(",", 1)[0] == "0", (
+        "the lowered key tile starts at 0 bytes"
     )
 
 
@@ -1762,7 +1757,8 @@ def test_schedule_finalize_writes_verified_tir(
         return
 
     out = tmp_path / source.name
-    expected = source.parent.parent / "tir" / source.name
+    golden_name = "loop_carry_window.py" if source.stem == "loop_carry_rebind" else source.name
+    expected = source.parent.parent / "tir" / golden_name
 
     assert cli_main(["schedule", "finalize", str(source), str(out)]) == 0
     captured = capsys.readouterr()

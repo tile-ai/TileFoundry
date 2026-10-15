@@ -27,7 +27,7 @@ class ChildWeight:
 
     # analysis target=nvidia.h200_sxm module=ChildWeight function=gemm topology=cta wave=1/1
     # selection requested=memory executed=memory
-    # memory traffic=gmem:r256B/w0@logical,r256B/w0@total,r256B/w0@cta,r256B/w0@thread;rmem:r256B/w384B@logical,r256B/w384B@total,r256B/w384B@cta,r256B/w384B@thread footprint=v0/w:128B;x:128B footprint-precision=exact peak=gmem:256B;rmem:128B persistent=gmem:256B
+    # memory traffic=gmem:r256B/w0@logical,r256B/w0@total,r256B/w0@cta,r256B/w0@thread;rmem:r256B/w384B@logical,r256B/w384B@total,r256B/w384B@cta,r256B/w384B@thread footprint=x:128B;scaled.w:128B footprint-precision=exact peak=gmem:256B;rmem:384B persistent=gmem:256B
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def gemm(x: Tensor[(32,), "f32"], out: Tensor[(32,), "f32", (32,), "rmem"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:

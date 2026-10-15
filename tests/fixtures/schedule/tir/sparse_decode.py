@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=SparseDecode function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r17.00KB/w16.00KB@logical,r17.00KB/w16.00KB@total,r17.00KB/w16.00KB@cta,r17.00KB/w8.06KB@thread;rmem:r189.60KB/w153.52KB@logical,r189.60KB/w153.52KB@total,r189.60KB/w153.52KB@cta,r6.51KB/w2.20KB@thread;smem:r40.00KB/w48.00KB@logical,r40.00KB/w48.00KB@total,r40.00KB/w48.00KB@cta,r18.75KB/w48.00KB@thread footprint=idx:512B;kv:128B;q:128B;v48:168:8.00KB footprint-precision=exact peak=gmem:72.50KB;rmem:32.25KB;smem:16.00KB persistent=gmem:64.50KB
+# memory traffic=gmem:r17.00KB/w16.00KB@logical,r17.00KB/w16.00KB@total,r17.00KB/w16.00KB@cta,r17.00KB/w8.06KB@thread;rmem:r189.60KB/w153.52KB@logical,r189.60KB/w153.52KB@total,r189.60KB/w153.52KB@cta,r6.51KB/w2.20KB@thread;smem:r40.00KB/w48.00KB@logical,r40.00KB/w48.00KB@total,r40.00KB/w48.00KB@cta,r18.75KB/w48.00KB@thread footprint=kv:128B;idx:512B;q:128B;v48:168:8.00KB footprint-precision=exact peak=gmem:72.50KB;rmem:32.25KB;smem:16.00KB persistent=gmem:64.50KB
 #   buffer=kv holds=264B time=r space=none reuse=7.88KB fits=yes precision=exact
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ def gemm(
         with Mesh((Topology("thread", 256),), layout=(2, 128), names=("d0", "d1")) as scope:
             with scope[:1, :32] as scope_1:
                 qs = T.tensor_view(
-                    0,
+                    8192,
                     dtype="bf16",
                     storage="smem",
                     layout=(64, 64) | Swizzle(3, 4, 3),
@@ -25,7 +25,7 @@ def gemm(
                 )
                 T.fill(qs, 0.0)
                 ks = T.tensor_view(
-                    8192,
+                    0,
                     dtype="bf16",
                     storage="smem",
                     layout=(64, 64) | Swizzle(3, 4, 3),
@@ -40,7 +40,7 @@ def gemm(
                             shape=(256, 64),
                         )
                         ks_2 = T.tensor_view(
-                            8192,
+                            0,
                             dtype="bf16",
                             storage="smem",
                             layout=(64, 64) | Swizzle(3, 4, 3),
@@ -67,7 +67,7 @@ def gemm(
                             T.ptr_of(tile_3[r:r + 1, 0:0 + 64]), layout=(1, 64), shape=(1, 64)
                         )
                         qs_2 = T.tensor_view(
-                            0,
+                            8192,
                             dtype="bf16",
                             storage="smem",
                             layout=(64, 64) | Swizzle(3, 4, 3),
@@ -127,7 +127,7 @@ def gemm(
                     for o_n in range(0, 64, 64):
                         for o_k in range(0, 64, 64):
                             qs_3 = T.tensor_view(
-                                0,
+                                8192,
                                 dtype="bf16",
                                 storage="smem",
                                 layout=(64, 64) | Swizzle(3, 4, 3),
@@ -144,7 +144,7 @@ def gemm(
                                 shape=(64, 16),
                             )
                             ks_3 = T.tensor_view(
-                                8192,
+                                0,
                                 dtype="bf16",
                                 storage="smem",
                                 layout=(64, 64) | Swizzle(3, 4, 3),
@@ -300,7 +300,7 @@ def gemm(
                                 shape=(64, 16),
                             )
                             ks_4 = T.tensor_view(
-                                8192,
+                                0,
                                 dtype="bf16",
                                 storage="smem",
                                 layout=(64, 64) | Swizzle(3, 4, 3),

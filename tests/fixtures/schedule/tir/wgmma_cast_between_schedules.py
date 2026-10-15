@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=WGMMA_CAST_BETWEEN_SCHEDULES function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r16.00KB/w256B@logical,r16.00KB/w256B@total,r16.00KB/w256B@cta,r4.19KB/w132B@thread;rmem:r62.95KB/w54.88KB@logical,r62.95KB/w54.88KB@total,r62.95KB/w54.88KB@cta,r708B/w596B@thread;smem:r6.00KB/w6.00KB@logical,r6.00KB/w6.00KB@total,r6.00KB/w6.00KB@cta,r640B/w4.06KB@thread footprint=a:2.00KB;b_f32:2.00KB;bias:8.00KB;v21:131:128B footprint-precision=exact peak=gmem:16.12KB;rmem:10.00KB;smem:6.00KB persistent=gmem:16.00KB
+# memory traffic=gmem:r16.00KB/w256B@logical,r16.00KB/w256B@total,r16.00KB/w256B@cta,r4.19KB/w132B@thread;rmem:r62.95KB/w54.88KB@logical,r62.95KB/w54.88KB@total,r62.95KB/w54.88KB@cta,r708B/w596B@thread;smem:r6.00KB/w6.00KB@logical,r6.00KB/w6.00KB@total,r6.00KB/w6.00KB@cta,r640B/w4.06KB@thread footprint=a:2.00KB;b_f32:2.00KB;bias:8.00KB;v21:131:128B footprint-precision=exact peak=gmem:16.12KB;rmem:16.00KB;smem:6.00KB persistent=gmem:16.00KB
 
 from __future__ import annotations
 
@@ -33,12 +33,12 @@ def gemm(
             with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                 T.fill(acc, 0.0)
             lhs_ring_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
                 T.tensor_view(2048, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
+                T.tensor_view(4096, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
             )
             rhs_ring_stages = (
-                T.tensor_view(4096, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
-                T.tensor_view(5120, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
+                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
+                T.tensor_view(1024, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
             )
             for k in range(0, 32, 16):
                 with Mesh((Topology("thread", 256),), layout=(32,), names=("d0",)) as scope_2:

@@ -12,7 +12,6 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.iteration_scope import walk_scopes
 from tilefoundry.analysis.metadata import shares
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
@@ -111,7 +110,8 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
     } == {"gmem": 384, "smem": 64, "rmem": 720}
     binaries = [
         get_metadata(expr, ComputeCostMetadata)
-        for occurrence, expr in ((scope, expr) for scope in walk_scopes(result.scopes) if scope.frame is not None for expr in collect_exprs(scope.frame.function.body))
+        for function in result.functions
+        for expr in collect_exprs(function.body)
         if isinstance(expr, Call) and isinstance(expr.target, Binary)
     ]
     binary_flops = sorted(shares(item.flops, item.topologies)["f32"] for item in binaries)

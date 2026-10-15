@@ -128,7 +128,9 @@ def run_authored_analysis(
         function = module.entry_function()
         require_bound_dims(module, function, dims, command="analyze")
         try:
-            checked, root = check_program(module, function, topology_level=topology, dims=dims)
+            checked, root = check_program(
+                module, function, topology_level=topology if analyses else None, dims=dims
+            )
         except SpecializationError as error:
             raise ValueError(f"analyze: {error}") from None
         if not analyses:

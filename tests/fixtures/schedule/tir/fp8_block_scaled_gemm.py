@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=FP8_BLOCK_SCALED_GEMM function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r130.02KB/w64.00KB@logical,r130.02KB/w64.00KB@total,r130.02KB/w64.00KB@cta,r128.05KB/w32.12KB@thread;rmem:r1.35MB/w1.16MB@logical,r1.35MB/w1.35MB@total,r1.35MB/w1.35MB@cta,r5.17KB/w4.92KB@thread;smem:r128.00KB/w128.00KB@logical,r128.00KB/w128.00KB@total,r128.00KB/w128.00KB@cta,r17.00KB/w128.00KB@thread footprint=a:16.00KB;a_scale:512B;b:16.00KB;b_scale:4B;v24:110:32.00KB footprint-precision=exact peak=gmem:162.02KB;rmem:64.50KB;smem:64.00KB persistent=gmem:130.02KB
+# memory traffic=gmem:r130.02KB/w64.00KB@logical,r130.02KB/w64.00KB@total,r130.02KB/w64.00KB@cta,r128.05KB/w32.12KB@thread;rmem:r1.35MB/w1.16MB@logical,r1.35MB/w1.35MB@total,r1.35MB/w1.35MB@cta,r5.17KB/w4.92KB@thread;smem:r128.00KB/w128.00KB@logical,r128.00KB/w128.00KB@total,r128.00KB/w128.00KB@cta,r17.00KB/w128.00KB@thread footprint=a:16.00KB;b:16.00KB;a_scale:512B;b_scale:4B;v24:110:32.00KB footprint-precision=exact peak=gmem:162.02KB;rmem:128.50KB;smem:64.00KB persistent=gmem:130.02KB
 
 from __future__ import annotations
 

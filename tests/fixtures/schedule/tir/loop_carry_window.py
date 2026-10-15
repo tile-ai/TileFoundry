@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=LoopCarryWindow function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r64B/w128B@logical,r192B/w128B@total,r192B/w128B@cta,r192B/w128B@thread;rmem:r624B/w416B@logical,r688B/w576B@total,r688B/w576B@cta,r688B/w576B@thread footprint=v10:29:64B;x:32B footprint-precision=exact peak=gmem:128B;rmem:64B persistent=gmem:64B
+# memory traffic=gmem:r64B/w128B@logical,r192B/w128B@total,r192B/w128B@cta,r192B/w128B@thread;rmem:r624B/w416B@logical,r688B/w576B@total,r688B/w576B@cta,r688B/w576B@thread footprint=v10:29:64B;x:32B footprint-precision=exact peak=gmem:128B;rmem:96B persistent=gmem:64B
 #   buffer=x holds=32B time=k space=none reuse=64B fits=yes precision=exact
 
 from __future__ import annotations

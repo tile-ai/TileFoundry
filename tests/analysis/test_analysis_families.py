@@ -34,7 +34,7 @@ from tilefoundry.analysis import (
     ThroughputFacts,
     Traffic,
 )
-from tilefoundry.analysis.api import analyze, build_iteration_scopes
+from tilefoundry.analysis.api import _build_context, analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import (
     local_duration_ns,
@@ -194,7 +194,7 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
 
     cross_scope = results["cross_scope"]
     timed = []
-    context = build_iteration_scopes(cross_scope.module, cross_scope.function)
+    context = _build_context(cross_scope.module, cross_scope.function)
     for local in context.definitions.values():
         for call in _calls(local.frame.function):
             record = get_metadata(call, PerformanceMetadata)

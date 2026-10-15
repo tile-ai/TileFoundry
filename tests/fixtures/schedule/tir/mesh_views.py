@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=MeshViews function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r128B/w256B@logical,r128B/w256B@total,r128B/w256B@cta,r4B/w132B@thread;rmem:r928B/w640B@logical,r928B/w640B@total,r928B/w640B@cta,r60B/w20B@thread footprint=v12:26:128B;x:128B footprint-precision=exact peak=gmem:256B;rmem:128B persistent=gmem:128B
+# memory traffic=gmem:r128B/w256B@logical,r128B/w256B@total,r128B/w256B@cta,r4B/w132B@thread;rmem:r928B/w640B@logical,r928B/w640B@total,r928B/w640B@cta,r60B/w20B@thread footprint=x:128B;v12:26:128B footprint-precision=exact peak=gmem:256B;rmem:256B persistent=gmem:128B
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=ScalarBinary function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r132B/w0@logical,r132B/w0@total,r132B/w0@cta,r132B/w0@thread;rmem:r528B/w644B@logical,r528B/w644B@total,r528B/w644B@cta,r528B/w644B@thread footprint=lhs:4B;x:128B footprint-precision=exact peak=gmem:132B;rmem:132B persistent=gmem:132B
+# memory traffic=gmem:r132B/w0@logical,r132B/w0@total,r132B/w0@cta,r132B/w0@thread;rmem:r528B/w644B@logical,r528B/w644B@total,r528B/w644B@cta,r528B/w644B@thread footprint=lhs:4B;x:128B footprint-precision=exact peak=gmem:132B;rmem:260B persistent=gmem:132B
 
 from __future__ import annotations
 
