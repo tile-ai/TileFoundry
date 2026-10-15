@@ -1175,11 +1175,13 @@ def _check_finalize_unbound_dim(out: Path, captured: pytest.CaptureResult[str]) 
 def _check_reshard_locations(out: Path, captured: pytest.CaptureResult[str]) -> None:
     rows = _quiet_json(out, captured)["functions"][0]["calls"]
     rows = {row["value"].rsplit(":", 1)[1]: row["memory"] for row in rows}
-    for label, byte_count in (("12", 256), ("14", 32)):
+    for label, byte_count in (("12", 256), ("14", 32), ("20", 224)):
         memory = rows[label]
         assert memory["operands"][0]["read"] == byte_count
         assert memory["operands"][1]["write"] == byte_count
-    for label in ("15", "16", "17"):
+    assert rows["20"]["buffer_bytes"] == 112
+    assert rows["20"]["offsets"]
+    for label in ("15", "16", "17", "18"):
         memory = rows[label]
         assert memory["buffer_bytes"] is None
         assert memory["offsets"] == []

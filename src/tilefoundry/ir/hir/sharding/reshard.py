@@ -21,7 +21,7 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
-from tilefoundry.ir.types.utils import is_literal_shape, strip_broadcast_layout
+from tilefoundry.ir.types.utils import is_literal_shape
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -183,8 +183,8 @@ def _same_locations(source: TensorType, result: TensorType) -> bool:
     def locations(type_, other):
         shard = shard_layout_of(type_.layout)
         mesh = shard.mesh if shard is not None else getattr(shard_layout_of(other.layout), "mesh", None)
-        layout = strip_broadcast_layout(type_.layout)
-        if mesh is not None and not isinstance(layout, ShardLayout):
+        layout = type_.layout
+        if shard is None and mesh is not None:
             layout = ShardLayout(layout, (Broadcast(),) * len(flatten(mesh.layout.shape)), mesh)
         ignored = {StorageKind.GMEM: ("cta", "thread"), StorageKind.SMEM: ("thread",)}.get(type_.storage, ())
         points = [set() for _ in range(prod(type_.shape))]
@@ -201,18 +201,10 @@ def _same_locations(source: TensorType, result: TensorType) -> bool:
             for type_ in (source, result)
             for topology in getattr(getattr(shard_layout_of(type_.layout), "mesh", None), "topologies", ())
         ):
-            before = getattr(shard_layout_of(source.layout), "layout", source.layout)
-            after = getattr(shard_layout_of(result.layout), "layout", result.layout)
+            before = getattr(source.layout, "layout", source.layout)
+            after = getattr(result.layout, "layout", result.layout)
             if before == after:
                 return True
-        if all(shard_layout_of(type_.layout) is None for type_ in (source, result)):
-            return all(
-                before[2] == after[2]
-                for before, after in zip(
-                    _address_points(source.layout, prod(source.shape), source.shape),
-                    _address_points(result.layout, prod(result.shape), result.shape), strict=True,
-                )
-            )
         return locations(source, result) == locations(result, source)
     except ValueError:
         return False

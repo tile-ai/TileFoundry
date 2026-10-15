@@ -1623,7 +1623,7 @@ class Reshard(Op):
     complete set of storage instances and addresses, including Broadcast
     replicas. Gmem has one instance per device, smem one per device and CTA,
     and rmem one per thread.
-    A plain smem/rmem end has a copy on every instance of the other end's mesh;
+    A plain end has a copy on every instance of the other end's mesh;
     two sharded ends retain their own mesh selections.
     The result MUST reuse the source buffer, lower to a view, and require no
     instruction candidate.

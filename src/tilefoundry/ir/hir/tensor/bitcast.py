@@ -60,14 +60,15 @@ def _address_points(layout, count: int, logical_shape: tuple):
     shard domain; their reducers decide whether repeated locations are legal.
     """
     layout = resolve_layout(layout, logical_shape)
-    if not isinstance(layout, ShardLayout):
+    shard = shard_layout_of(layout)
+    if shard is None:
         for coordinate in range(count):
             address = apply(layout, coordinate)
             yield coordinate, (), address, address
         return
-    whole = {apply(layout.layout, coord): coord for coord in range(count)}
-    if len(whole) != count:
-        raise ValueError(f"rmem layout address function is not injective: {layout!r}")
+    shift = layout.offset if isinstance(layout, ComposedLayout) else 0
+    layout = shard
+    whole = {}
     corresponding = layout_correspondence(layout.layout.shape, logical_shape)
     logical_layout = resolve_layout(None, logical_shape)
     steps = compact_col_major(corresponding.extents)
@@ -75,6 +76,8 @@ def _address_points(layout, count: int, logical_shape: tuple):
         digits = corresponding.digits(apply(logical_layout, coordinate))
         mode_index = crd2idx(digits, corresponding.extents, steps)
         whole[apply(layout.layout, mode_index)] = coordinate
+    if len(whole) != count:
+        raise ValueError(f"rmem layout address function is not injective: {layout!r}")
     arrangements = levels(layout.mesh)
     for coordinates in product(*(range(prod(flatten(level.shape))) for level in arrangements)):
         ids = tuple(apply(level, coord) for level, coord in zip(arrangements, coordinates, strict=True))
@@ -90,7 +93,7 @@ def _address_points(layout, count: int, logical_shape: tuple):
                 raise ValueError(
                     f"local shard addresses extend outside the rmem layout: {layout!r}"
                 )
-            yield logical, unit, offset + held, held
+            yield logical, unit, shift + offset + held, shift + held
 
 
 def _addresses(layout, count: int, logical_shape: tuple):
@@ -125,10 +128,6 @@ def _address_mapping(
     if not set(result_at).issubset(source_at):
         raise ValueError("result layout addresses extend outside the source address set")
     return tuple(source_at[address] for address in result_at)
-
-
-def _coordinates(coord: int, shape: tuple[int, ...]) -> tuple[int, ...]:
-    return idx2crd(coord, shape, compact_col_major(shape))
 
 
 def _stated_strides(layout) -> bool:
@@ -238,7 +237,7 @@ def _quasi_affine_equations(coordinates: tuple, result_shape: tuple) -> list[str
             for axis, base in enumerate(origin)
         )
         for coord, source in enumerate(coordinates)
-        for digits in (_coordinates(coord, result_shape),)
+        for digits in (idx2crd(coord, result_shape, compact_col_major(result_shape)),)
     ):
         return None
     return [
@@ -259,7 +258,7 @@ def _address_relation(source_layout, result_layout, source_shape: tuple, result_
     )
     domain = ", ".join(f"d{axis}" for axis in range(len(result_shape)))
     image = ", ".join(f"s{axis}" for axis in range(len(source_shape)))
-    coordinates = tuple(_coordinates(coord, source_shape) for coord in pairs)
+    coordinates = tuple(idx2crd(coord, source_shape, compact_col_major(source_shape)) for coord in pairs)
     if coordinates:
         origin = coordinates[0]
         steps = []
@@ -278,7 +277,7 @@ def _address_relation(source_layout, result_layout, source_shape: tuple, result_
                 for axis, base in enumerate(origin)
             )
             for coord, source in enumerate(coordinates)
-            for digits in (_coordinates(coord, result_shape),)
+            for digits in (idx2crd(coord, result_shape, compact_col_major(result_shape)),)
         ):
             equations = [
                 f"s{axis} = {base}"
@@ -298,10 +297,10 @@ def _address_relation(source_layout, result_layout, source_shape: tuple, result_
     points = []
     for coord, source_coord in enumerate(pairs):
         constraints = [
-            *(f"d{axis} = {value}" for axis, value in enumerate(_coordinates(coord, result_shape))),
+            *(f"d{axis} = {value}" for axis, value in enumerate(idx2crd(coord, result_shape, compact_col_major(result_shape)))),
             *(
                 f"s{axis} = {value}"
-                for axis, value in enumerate(_coordinates(source_coord, source_shape))
+                for axis, value in enumerate(idx2crd(source_coord, source_shape, compact_col_major(source_shape)))
             ),
         ]
         points.append(f"[{domain}] -> [{image}] : " + (" and ".join(constraints) or "true"))
@@ -327,10 +326,10 @@ def _eval_bitcast(ctx):
     indices = [0] * len(pairs)
     for coord, source_coord in enumerate(pairs):
         result_index = source_index = 0
-        for digit, extent in zip(_coordinates(coord, result.shape), result.shape, strict=True):
+        for digit, extent in zip(idx2crd(coord, result.shape, compact_col_major(result.shape)), result.shape, strict=True):
             result_index = result_index * extent + digit
         for digit, extent in zip(
-            _coordinates(source_coord, source.type.shape), source.type.shape, strict=True
+            idx2crd(source_coord, source.type.shape, compact_col_major(source.type.shape)), source.type.shape, strict=True
         ):
             source_index = source_index * extent + digit
         indices[result_index] = source_index

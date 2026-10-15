@@ -17,4 +17,7 @@ class ReshardLocations:
                 repartitioned = tf.reshard(y, ((2 @ cta.b, 4), (4, 1)), "gmem")
                 same = tf.reshard(repartitioned, ((2 @ cta.b, 4), (4, 1)), "gmem")
                 shared_view = tf.reshard(shared, ((2 @ threads.t, 4, 8), (32, 8, 1)), "smem")
-                return transposed, exchanged, repartitioned, same, shared_view
+                placed = tf.reshard(x, ((2 @ cta.b, 4, 8), (32, 8, 1)), "gmem")
+                window = placed[:, 1:8]
+                shifted = tf.reshard(window, ((2 @ cta.b, 4, 7), (32, 8, 1)), "gmem")
+                return transposed, exchanged, repartitioned, same, shared_view, shifted
