@@ -168,7 +168,9 @@ class PassManager:
 wraps the run in a `DumpScope` and `DumpFlags.PASS_IR` is enabled,
 each pass writes `before.txt` / `after.txt` under
 `<scope-root>/{NN}_{pass_name}/`. Without an active scope or with
-the flag off, `dump(...)` is a no-op.
+the flag off, `dump(...)` is a no-op. The before/after representations MUST
+be passed as no-argument producers, so `repr` is evaluated only when
+`PASS_IR` is enabled in an active scope.
 
 ## 6. Top-level API
 
@@ -244,29 +246,77 @@ class ConvertHIRToTIR(ModulePass):
     internal bindings.
   - Address placement comes only from `MemoryMetadata`: integer shared-memory
     addresses are byte offsets, and every analyzed offset becomes one concrete
-    buffer view. Multiple offsets form a tuple selected by the enclosing loop.
-  - Instruction issue geometry comes only from the public `issue_plan` result.
-    Lowering does not call private HIR schedule helpers or reconstruct their
-    access relations.
+    buffer view. Multiple offsets form a staged tuple declared outside the
+    outermost enclosing HIR loop. Selection uses the linear iteration ordinal
+    from outermost to innermost, modulo the number of buffers; inner loop trip
+    counts must be constant. Instruction-generated loops do not enter this index.
+    An adopted update window is written at its producer. `InsertSlice` skips
+    copying only when the update's alias names that HIR destination, resolved
+    through region captures. A loop-carried alias must name its slot's initial
+    value; any other alias raises `LoweringError`. A carry without that tie, or
+    a yield that changes its storage, also raises `LoweringError`; HIR must
+    explicitly initialize writable carry storage and update it in place.
+  - Schedule type inference, candidate admission, finalization, and TIR effect
+    verification MUST use the same `check_call` implementation. It checks the
+    declared execution mesh, operand reachability, projected atom patterns,
+    `between` relations, and any registered leaf verifier. Lowering consumes
+    its projection rather than maintaining a second instruction geometry rule.
+    An unscheduled HIR operation MUST have exactly one registered candidate;
+    its operand hook supplies any explicit source view (including Transpose),
+    and that candidate is admitted through `check_call`.
   - HIR mesh and loop regions become `MeshScope` and `For`; register allocations
     become `AllocTensor`; scheduled and ordinary value operations become
     effect-form TIR calls. Views follow their storage root, so a parameter view
     is addressed through `PtrOf` rather than an analyzed arena offset.
   - Generated region bindings MUST be reserved in lexical pre-order before
     statement emission, so an outer `scope` index precedes its nested indices.
-    The root CTA and zero-only regions MUST NOT reserve a `scope` name.
-    Adjacent `MeshScope` statements with identical physical meshes are merged
-    by `_MeshScopeCoalescer`, retaining the first binding. Their reserved source
-    indices MAY therefore have gaps; merging MUST NOT trigger renaming after
-    emission or require the naming pass to predict coalescing decisions.
+    The root region reserves `cta`; all other mesh regions, including zero-only
+    regions, reserve `scope` names.
+    Every HIR `MeshRegion` becomes one `MeshScope`, with its arguments evaluated
+    outside it. Non-atom instructions without an operand-declared mesh use
+    the current scope, retaining unit axes. An instruction issued on the enclosing
+    scope's physical frame
+    is emitted directly; another frame opens a nested `MeshScope`. Frames compare
+    after removing trivial composed-layout wrappers, preserving unit axes.
+    Adjacent scopes are not merged. A view is bound in each consuming scope,
+    never at its definition; its sharding refers to that scope's mesh.
+    Storage declarations follow their HIR definition's scope and position.
+    Constant-address `smem` and scratch-backed `gmem` views are materialized in
+    each consuming scope. Registers shared by tied carries and their initials,
+    or region results and their body values, are declared at the outermost
+    definition among those values. Allocation's peak-estimation alias groups
+    do not imply that lowering shares registers. An RMEM allocation MUST retain
+    its HIR tensor type with a physical-frame mesh. Whole-tensor operands reuse
+    that allocation; only subwindows require views. Each instruction MUST call
+    the shared admission check once, before declaring storage, and use that
+    projection for both storage handling and emission. Staged storage retains its
+    placement outside the outermost HIR loop.
+    Each return-type leaf becomes one output parameter with that leaf's type;
+    `umat` becomes `gmem`, retaining its layout. A non-tensor leaf raises
+    `LoweringError` naming its position and type.
+    Before lowering, return storage is traced through mesh results, tied loop
+    carries, insert destinations, captures, and static tuple selections. A leaf
+    ending at an unclaimed single-buffer `Zeros`, `Empty`, or caller-declared
+    retained-call result of the output parameter's exact type places that
+    storage at the output parameter,
+    regardless of storage kind. Repeated storage roots and leaves without
+    such a root raise `LoweringError`. Other `gmem` zeros use scratch.
+    Every zero fill is emitted in the zero's current scope; `Empty` emits no
+    fill. A lowered leaf that is not its output parameter raises
+    `LoweringError`. Lowering does not add output, carry-initialization, or
+    carry-backedge copies; data movement must be explicit in HIR.
+    A region result must not reference variables bound inside the region,
+    including variables in a view's base or start coordinates.
   - Any construct without a complete lowering MUST raise `LoweringError`; the
     pass never emits a partial `PrimFunction` or silently preserves HIR.
 
 Scheduled lowering MUST retain loops and produce one `PrimFunction` per reached
-definition, preserving shared child definitions. Callee Tensor parameters and
-output buffers MUST use physical types: a `ShardLayout` contributes its inner
-layout, and layout-free gmem uses a contiguous `Layout`. The root's public
-parameters MUST remain unchanged. Call boundaries MAY create matching views of
+definition, preserving shared child definitions. Tensor parameters retain their
+HIR types, and output parameters follow the return-leaf rule above, including
+`ShardLayout`. Default and explicit compact row-major layouts denote the same
+physical layout. A returned retained call MUST receive the caller's output
+parameter directly when it satisfies the same placement rule as `Empty`.
+Call boundaries MAY create matching views of
 existing buffers, but MUST NOT insert copies, scheduling, or storage transfers.
 The original destination remains the call's result after passing its view.
 

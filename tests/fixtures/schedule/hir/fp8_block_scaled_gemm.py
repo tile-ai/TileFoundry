@@ -41,7 +41,7 @@ class FP8_BLOCK_SCALED_GEMM:
                 wgmma = T.cuda.sm90.Wgmma(n=128, dtype="fp8e4m3", form=T.cuda.sm90.Form.SS)
 
                 with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
-                    acc = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 16), (8192, 1, 8, 16, 64, 128, 512)), "rmem"])
+                    acc = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 16, 4 @ _compute.lane4, 2,), (8192, 16, 8, 1, 512, 128, 64)), "rmem"])
 
                 for kb in range(K_BLOCKS):
                     with threads[0, :32] as _loader:
@@ -71,7 +71,7 @@ class FP8_BLOCK_SCALED_GEMM:
                         )
 
                     with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
-                        part = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 16), (8192, 1, 8, 16, 64, 128, 512)), "rmem"])
+                        part = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 16, 4 @ _compute.lane4, 2,), (8192, 16, 8, 1, 512, 128, 64)), "rmem"])
                         part = tf.schedule(
                             (part, lhs, rhs),
                             op=T.tiled_mma(atom=wgmma),
@@ -101,8 +101,11 @@ class FP8_BLOCK_SCALED_GEMM:
                         tile_scale = tf.schedule(
                             (b_scale[kb:kb + 1, :], tile_scale_dst), op=T.copy()
                         )
-                        acc = acc + part * row_scale * tile_scale
+                        scaled = part * row_scale * tile_scale
+                        acc = tf.schedule((acc, scaled, acc), op=T.binary(kind=BinaryKind.ADD))
 
+                output = tf.zeros(Tensor[(M, N), "bf16"])
                 with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                     result = tf.cast(acc, dtype="bf16")
+                    result = tf.insert_slice(output, result, (0, 0))
                 return result

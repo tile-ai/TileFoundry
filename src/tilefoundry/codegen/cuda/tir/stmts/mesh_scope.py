@@ -3,11 +3,14 @@
 The ``CudaEmitter`` owns Stmt traversal and invokes these stateless mesh
 layout helpers while visiting a ``MeshScope``.
 """
+
 from __future__ import annotations
+
+from dataclasses import replace
 
 from tilefoundry.codegen.cuda.context import topology_scope_str
 from tilefoundry.ir.tir.sync import participation
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten, get
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten, get, resolve_layout
 from tilefoundry.ir.types.mesh import Mesh, Topology
 from tilefoundry.target import validate_cuda_topology_levels
 
@@ -46,6 +49,7 @@ def _levelwise_layout(mesh: Mesh, topos) -> str:
     nests are evaluated. A level every instance shares keeps a mode of one, so
     that ``get<level>`` still has something to pick.
     """
+    mesh = replace(mesh, layout=resolve_layout(mesh.layout))
     shapes, strides = [], []
     for topology in topos:
         stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
@@ -55,24 +59,14 @@ def _levelwise_layout(mesh: Mesh, topos) -> str:
         level_strides = tuple(flatten(arrangement.strides))
         if not level_shape:
             level_shape, level_strides = (1,), (0,)
-        shapes.append(
-            "cute::Shape<"
-            + ", ".join(f"cute::Int<{s}>" for s in level_shape)
-            + ">"
-        )
-        strides.append(
-            "cute::Stride<"
-            + ", ".join(f"cute::Int<{s}>" for s in level_strides)
-            + ">"
-        )
-    return (
-        f"cute::Layout<cute::Shape<{', '.join(shapes)}>, "
-        f"cute::Stride<{', '.join(strides)}>>"
-    )
+        shapes.append("cute::Shape<" + ", ".join(f"cute::Int<{s}>" for s in level_shape) + ">")
+        strides.append("cute::Stride<" + ", ".join(f"cute::Int<{s}>" for s in level_strides) + ">")
+    return f"cute::Layout<cute::Shape<{', '.join(shapes)}>, cute::Stride<{', '.join(strides)}>>"
 
 
 def mesh_type(mesh: Mesh) -> str:
     """The C++ ``tilefoundry::Mesh`` type for *mesh*, offset included."""
+    mesh = replace(mesh, layout=resolve_layout(mesh.layout))
     topos = program_topologies(mesh)
     layout_value = mesh.layout
     if isinstance(layout_value, ComposedLayout):
@@ -91,10 +85,7 @@ def mesh_type(mesh: Mesh) -> str:
         level = get(stated, 0)
         shape_types = ", ".join(f"cute::Int<{s}>" for s in flatten(level.shape))
         stride_types = ", ".join(f"cute::Int<{s}>" for s in flatten(level.strides))
-        layout = (
-            f"cute::Layout<cute::Shape<{shape_types}>, "
-            f"cute::Stride<{stride_types}>>"
-        )
+        layout = f"cute::Layout<cute::Shape<{shape_types}>, cute::Stride<{stride_types}>>"
     else:
         if base:
             raise NotImplementedError(

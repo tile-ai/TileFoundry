@@ -41,7 +41,7 @@ class WGMMA_RS_A_FROM_SMEM:
                 register = T.cuda.sm90.Wgmma(n=32, dtype="fp8e4m3", form=T.cuda.sm90.Form.RS)
 
                 with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
-                    acc = tf.zeros(Tensor[(M, N), "f32", ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 4), (1, 8, 16, 64, 128, 512)), "rmem"])
+                    acc = tf.zeros(Tensor[(M, N), "f32", ((4 @ _compute.warp, 2, 8 @ _compute.lane8, 4, 4 @ _compute.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"])
 
                 for k in tf.tile(K, BK):
                     with threads[0, :32] as _loader:
@@ -75,8 +75,8 @@ class WGMMA_RS_A_FROM_SMEM:
                             Tensor[
                                 (64, 32), "fp8e4m3",
                                 ShardLayout(
-                                    layout=Layout((8, 2, 4, 4, 4, 2), (1, 8, 16, 64, 256, 1024)),
-                                    attrs=(S(2), S(0), S(4)),
+                                    layout=Layout((4, 2, 8, 2, 4, 4,), (16, 8, 1, 1024, 256, 64)),
+                                    attrs=(S(0), S(2), S(4)),
                                     mesh=_compute,
                                 ),
                                 "rmem",
@@ -91,6 +91,8 @@ class WGMMA_RS_A_FROM_SMEM:
                             op=T.tiled_mma(atom=register),
                         )
 
+                output = tf.zeros(Tensor[(M, N), "bf16"])
                 with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                     result = tf.cast(acc, dtype="bf16")
+                    result = tf.insert_slice(output, result, (0, 0))
                 return result

@@ -73,6 +73,7 @@ class SparseDecode:
                                 ),
                                 (r, 0),
                             )
+                output = tf.zeros(Tensor[(64, 64), "bf16"])
                 with Mesh(
                     th[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")
                 ) as m:
@@ -80,8 +81,8 @@ class SparseDecode:
                     kt = tf.bitcast(ks, K_TRANSPOSED)
                     s = tf.zeros(Tensor[
                         (64, 64), "f32",
-                        ((8 @ m.lane8, 2, 4 @ m.warp, 2, 4 @ m.lane4, 8),
-                         (1, 8, 16, 64, 128, 512)),
+                        ((4 @ m.warp, 2, 8 @ m.lane8, 8, 4 @ m.lane4, 2,),
+                         (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ])
                     s = tf.schedule(
@@ -115,15 +116,15 @@ class SparseDecode:
                     p = tf.cast(p / denom, "bf16")
                     pv = tf.bitcast(
                         p,
-                        ((8 @ m.lane8, 2, 4 @ m.warp, 4 @ m.lane4, 2, 8),
-                         (1, 8, 16, 128, 64, 512)),
+                        ((4 @ m.warp, 2, 8 @ m.lane8, 8, 2, 4 @ m.lane4),
+                         (16, 8, 1, 512, 64, 128)),
                     )
                     pr_dst = tf.empty(
                         Tensor[
                             (64, 64), "bf16",
                             ShardLayout(
-                                layout=Layout((4, 8, 2, 4, 2, 4, 2), (1024, 1, 8, 16, 64, 128, 512)),
-                                attrs=(S(3), S(1), S(5)),
+                                layout=Layout((4, 2, 8, 4, 2, 4, 2,), (16, 8, 1, 1024, 512, 128, 64)),
+                                attrs=(S(0), S(2), S(5)),
                                 mesh=m,
                             ),
                             "rmem",
@@ -143,8 +144,8 @@ class SparseDecode:
                     v = tf.bitcast(ks_view, V_GROUPED)
                     o = tf.zeros(Tensor[
                         (64, 64), "f32",
-                        ((8 @ m.lane8, 2, 4 @ m.warp, 2, 4 @ m.lane4, 8),
-                         (1, 8, 16, 64, 128, 512)),
+                        ((4 @ m.warp, 2, 8 @ m.lane8, 8, 4 @ m.lane4, 2,),
+                         (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ])
                     o = tf.schedule(
@@ -160,8 +161,9 @@ class SparseDecode:
                     )
                     out = tf.bitcast(
                         o,
-                        ((2, 4 @ m.warp, 8 @ m.lane8, 2, 4 @ m.lane4, 8),
-                         (8, 16, 1, 64, 128, 512)),
+                        ((8 @ m.lane8, 4 @ m.warp, 2, 8, 4 @ m.lane4, 2),
+                         (1, 16, 8, 512, 128, 64)),
                     )
                     result = tf.cast(out, "bf16")
+                    result = tf.insert_slice(output, result, (0, 0))
         return result

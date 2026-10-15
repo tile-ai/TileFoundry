@@ -529,7 +529,7 @@ def _split_axes(type_) -> "dict[int, int] | None":
     }
 
 
-def _sent(source, destination) -> tuple[tuple[str, TrafficBytes], ...]:
+def _sent(source, destination, *, logical_source=None, logical_destination=None) -> tuple[tuple[str, TrafficBytes], ...]:
     """What each level's boundary carries when a reshard changes its shards.
 
     A unit keeps what both shards give it and sends the rest, so splitting the
@@ -537,9 +537,11 @@ def _sent(source, destination) -> tuple[tuple[str, TrafficBytes], ...]:
     it held. Every unit sends and receives the same amount, and the level
     named is the one owning the mesh axes whose split changed. Where the
     exchange lands is a separate question this does not answer: the storage
-    charge stays whatever crossing a storage level would have cost.
+    charge stays whatever crossing a storage level would have cost. Ownership
+    uses whole logical layouts; byte counts use the cost context's projected source.
     """
-    before, after = _split_axes(source), _split_axes(destination)
+    before = _split_axes(source if logical_source is None else logical_source)
+    after = _split_axes(destination if logical_destination is None else logical_destination)
     if before is None or after is None or before == after:
         return ()
     mesh = shard_layout_of(source.layout).mesh
@@ -571,7 +573,10 @@ def _sent(source, destination) -> tuple[tuple[str, TrafficBytes], ...]:
 def _reshard(call: Call, ctx: CostContext) -> Cost:
     source = input_types(call, ctx)[0]
     destination = output_type(call, ctx)
-    sent = _sent(source, destination)
+    sent = _sent(
+        source, destination,
+        logical_source=ctx.type_of(call.args[0]), logical_destination=ctx.type_of(call),
+    )
     if source.storage == destination.storage:
         return Cost({}, idle(call), sent=sent)
     return Cost({}, (

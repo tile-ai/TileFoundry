@@ -41,7 +41,7 @@ class GEMM_8192X17408X5120_TMA_STORE:
                 for m in tf.tile(M, BM):
                     for n in tf.tile(N, BN):
                         with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
-                            acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                            acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 32, 4 @ _compute.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
 
                         for k in tf.tile(K, BK):
                             with threads[0, :32] as _loader:

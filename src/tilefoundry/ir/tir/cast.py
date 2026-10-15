@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
     DistinctConstraint,
     SameConstraint,
+    WildcardPattern,
     utils,
 )
 from tilefoundry.ir.types import DType, StorageKind, UnitType
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
@@ -28,8 +31,12 @@ class Cast(Op):
     capability = OpCapability(None)
 
     src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
-    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
-    dtype = ParamDef(kind="attribute", annotation=DType)
+    dst = ParamDef(
+        kind="input",
+        effect=MemoryEffect.WRITE,
+        pattern=replace(_IN_RMEM, dtype=WildcardPattern("cast_dtype")),
+    )
+    dtype = ParamDef(kind="attribute", annotation=DType, pattern=WildcardPattern("cast_dtype"))
     between = (
         SameConstraint("shape", "src", "dst"),
         DistinctConstraint("dtype", "src", "dst"),
@@ -49,19 +56,3 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 register_access_relation(Cast)(identity_relations)
-
-
-@register_verify_stmt(Cast)
-def _(call: "Call", ctx: "VerifyContext") -> None:
-    op = call.target
-    src = ctx.type_of(call.args[0])
-    dst = ctx.type_of(call.args[1])
-    if src.shape != dst.shape:
-        ctx.error(call, f"Cast shape mismatch: {src.shape} vs {dst.shape}")
-    if src.dtype == dst.dtype:
-        ctx.error(call, f"Cast requires distinct dtypes, both are {src.dtype}")
-    if op.dtype != dst.dtype:
-        ctx.error(call, f"Cast dtype {op.dtype} does not match dst dtype {dst.dtype}")
-
-
-__all__ = ["Cast"]

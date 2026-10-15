@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 from tilefoundry.inspection.print_context import TirPrintContext
 from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var, get_metadata
@@ -11,13 +9,15 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import (
     Evaluate,
+    For,
+    LetStmt,
+    MeshScope,
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, LayoutBase, PointerType, TensorType, UnitType
@@ -88,7 +88,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
         return PythonPrinter.visit(self, node, ctx)
 
     def visit_Var(self, expr: Var, ctx=None) -> str:
-        return expr.name
+        return self.context.binding_name(expr)
 
     def visit_Constant(self, expr: Constant, ctx=None) -> str:
         return self.print(expr.value, ctx)
@@ -101,10 +101,10 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
         return f"(\n{elements}\n{self.indent})"
 
     def visit_SymbolRef(self, expr: SymbolRef, ctx=None) -> str:
-        return getattr(self.context, "symbol_bindings", {}).get(expr.name, _binding_name(expr.name))
+        return ".".join(_binding_name(part) for part in (*expr.nested, expr.name))
 
     def visit_ShapeOf(self, expr: ShapeOf, ctx=None) -> str:
-        return f"shape_of({expr.param.name}, axis={expr.axis})"
+        return f"shape_of({self.visit(expr.param, ctx)}, axis={expr.axis})"
 
     def visit_Op(self, expr: Op, ctx=None) -> str:
         name = getattr(getattr(expr, "_op_schema", None), "name", type(expr).__name__.lower())
@@ -164,13 +164,13 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
 
     def visit_LetStmt(self, stmt, ctx=None):
         rendered = self.visit(stmt.value)
-        line = f"{self.indent}{stmt.var.name} = {rendered}"
+        line = f"{self.indent}{self.visit(stmt.var)} = {rendered}"
         if len(line) + 4 <= _LINE_LENGTH or not isinstance(stmt.value, Call):
             return [line] + self.visit(stmt.body)
         if isinstance(stmt.value.target, AllocTensor):
             lines = self._wrapped_alloc(stmt)
         else:
-            lines = self._wrapped_call(f"{stmt.var.name} = ", rendered)
+            lines = self._wrapped_call(f"{self.visit(stmt.var)} = ", rendered)
         return lines + self.visit(stmt.body)
 
     def _wrapped_call(self, prefix: str, rendered: str) -> list[str]:
@@ -187,7 +187,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
 
     def _wrapped_alloc(self, stmt) -> list[str]:
         target = stmt.value.target
-        tensor = self.print(target.tensor_type, self.context)
+        tensor = self.print(target.tensor_type, self.context, self.indent + "    ")
         argument = f"tensor_type={tensor}"
         continuation = f"{self.indent}    {argument}"
         if len(continuation) + 4 <= _LINE_LENGTH:
@@ -207,7 +207,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
                 f"{self.indent}    ]",
             ]
         return [
-            f"{self.indent}{stmt.var.name} = T.alloc_tensor(",
+            f"{self.indent}{self.visit(stmt.var)} = T.alloc_tensor(",
             *middle,
             f"{self.indent})",
         ]
@@ -215,9 +215,14 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
     def visit_Evaluate(self, stmt, ctx=None):
         return self._emit_evaluate(stmt)
 
+    def _body(self, body):
+        indent = self.indent + "    "
+        lines = TirPrinter(context=self.context, indent=indent).visit(body)
+        return lines or [f"{indent}pass"]
+
     def visit_MeshScope(self, stmt, ctx=None):
         rendered = self.mesh_context(stmt.mesh, self.context)
-        line = f"{self.indent}with {rendered} as {stmt.binding.name}:"
+        line = f"{self.indent}with {rendered} as {self.visit(stmt.binding)}:"
         if len(line) + 4 <= _LINE_LENGTH:
             lines = [line]
         else:
@@ -225,10 +230,10 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
             lines = [
                 f"{self.indent}with Mesh(",
                 f"{self.indent}    {content}",
-                f"{self.indent}) as {stmt.binding.name}:",
+                f"{self.indent}) as {self.visit(stmt.binding)}:",
             ]
-        self.context.push_mesh(stmt.mesh, stmt.binding.name)
-        lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
+        self.context.push_mesh(stmt.mesh, self.visit(stmt.binding))
+        lines.extend(self._body(stmt.body))
         self.context.pop_mesh()
         return lines
 
@@ -242,26 +247,20 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
         bounds = ", ".join(
             self.visit(bound, self.context) for bound in (stmt.start, stmt.stop, stmt.step)
         )
-        lines = [f"{self.indent}for {stmt.induction_var.name} in range({bounds}):"]
-        lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
+        lines = [f"{self.indent}for {self.visit(stmt.induction_var)} in range({bounds}):"]
+        lines.extend(self._body(stmt.body))
         return lines
 
     def visit_If(self, stmt, ctx=None):
         lines = [f"{self.indent}if {self.visit(stmt.cond)}:"]
-        lines.extend(
-            TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.then_body)
-        )
+        lines.extend(self._body(stmt.then_body))
         if stmt.else_body.body:
             lines.append(f"{self.indent}else:")
-            lines.extend(
-                TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.else_body)
-            )
+            lines.extend(self._body(stmt.else_body))
         return lines
 
     def visit_While(self, stmt, ctx=None):
-        return [f"{self.indent}while {self.visit(stmt.cond)}:"] + TirPrinter(
-            context=self.context, indent=self.indent + "    "
-        ).visit(stmt.body)
+        return [f"{self.indent}while {self.visit(stmt.cond)}:"] + self._body(stmt.body)
 
     def visit_Return(self, stmt, ctx=None):
         return [f"{self.indent}return"]
@@ -305,7 +304,7 @@ def register_tir_printer(node_type: type):
 
 
 def _binding_name(name: str) -> str:
-    return re.sub(r"\W", "_", name)
+    return TirPrintContext.identifier(name)
 
 
 @register_tir_printer(Launch)
@@ -317,6 +316,14 @@ def _print_launch(stmt: Evaluate, printer: TirPrinter) -> list[str]:
     return [
         f"{indent}launch({printer.visit(callee)}, {printer._join_args(forwarded)}, grid={printer.visit(Tuple(type=grid[0].type, elements=tuple(grid)))}, block={printer.visit(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"
     ]
+
+
+@register_tir_printer(SymbolRef)
+def _print_symbol_call(stmt: Evaluate, printer: TirPrinter) -> list[str]:
+    rendered = f"{printer.visit(stmt.callable)}({printer._join_args(stmt.args)})"
+    if len(printer.indent + rendered) + 4 <= _LINE_LENGTH:
+        return [printer.indent + rendered]
+    return printer._wrapped_call("", rendered)
 
 
 @register_tir_printer(Op)
@@ -347,13 +354,47 @@ def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
     ]
 
 
-def _function_block(fn: PrimFunction, *, symbol_bindings=None, frame=None) -> list[str]:
-    ctx = TirPrintContext()
+class _BindingCollector(StmtVisitor):
+    def __init__(self, params):
+        self.bindings = list(params)
+
+    def generic_visit(self, stmt):
+        binding = (
+            stmt.var if isinstance(stmt, LetStmt) else
+            stmt.binding if isinstance(stmt, MeshScope) else
+            stmt.induction_var if isinstance(stmt, For) else None
+        )
+        if binding is not None:
+            self.bindings.append(binding)
+        super().generic_visit(stmt)
+
+
+def _definition_lines(fn: PrimFunction, name: str, ctx: TirPrintContext) -> list[str]:
+    collector = _BindingCollector(fn.params)
+    collector.visit(fn.body)
+    with ctx.definition(collector.bindings):
+        printer = TirPrinter(context=ctx)
+        rendered = []
+        for param in fn.params:
+            type_ = printer.visit(param.type, ctx) if isinstance(param.type, (TensorType, PointerType)) else repr(param.type)
+            if param.is_const and isinstance(param.type, TensorType):
+                type_ = type_.replace("Tensor[", "ConstTensor[", 1)
+            rendered.append(f"{printer.visit(param)}: {type_}")
+        params = ", ".join(rendered)
+        definition = f"def {name}({params}):"
+        lines = (
+            [definition] if len(definition) + 4 <= _LINE_LENGTH else
+            [f"def {name}(", f"    {params}", "):"]
+        )
+        body = TirPrinter(context=ctx, indent="    ").visit(fn.body)
+        lines.extend(body or ["    pass"])
+        return lines
+
+
+def _function_block(fn: PrimFunction, context: TirPrintContext | None = None, *, frame=None) -> list[str]:
+    ctx = context or TirPrintContext()
     ctx.frame = frame
-    ctx.symbol_bindings = symbol_bindings or {}
-    target_expr = fn.target.to_python()
-    ctx.imports.update(target_expr.imports)
-    target = target_expr.text
+    target = ctx.use(fn.target.to_python())
     dim_vars = {
         d.name: d
         for p in fn.params
@@ -366,37 +407,15 @@ def _function_block(fn: PrimFunction, *, symbol_bindings=None, frame=None) -> li
     if fn.output_count != 1:
         attrs.append(f"output_count={fn.output_count}")
     lines.append(f"@prim_func({', '.join(attrs)})")
-    parameters = []
-    for param in fn.params:
-        printer = TirPrinter(context=ctx)
-        with printer.type_surface(const=param.is_const):
-            annotation = (
-                printer.visit(param.type, ctx)
-                if isinstance(param.type, (TensorType, PointerType)) else repr(param.type)
-            )
-        parameters.append(f"{param.name}: {annotation}")
-    params = ", ".join(parameters)
-    definition = f"def {_binding_name(fn.name)}({params}):"
-    if len(definition) + 4 <= _LINE_LENGTH:
-        lines.append(definition)
-    else:
-        lines.extend((f"def {_binding_name(fn.name)}(", f"    {params}", "):"))
-    body = TirPrinter(context=ctx, indent="    ").visit(fn.body)
-    lines.extend(body or ["    pass"])
+    lines.extend(_definition_lines(fn, _binding_name(fn.name), ctx))
     for variant in fn.variants:
         pat = variant.specializations[0]
         lines.append("")
         lines.append(
             f"@{_binding_name(fn.name)}.specialize({TirPrinter(context=ctx).render_pattern(pat, ctx)})"
         )
-        variant_name = _binding_name(getattr(variant, "_display_name", variant.name))
-        definition = f"def {variant_name}({params}):"
-        if len(definition) + 4 <= _LINE_LENGTH:
-            lines.append(definition)
-        else:
-            lines.extend((f"def {variant_name}(", f"    {params}", "):"))
-        vbody = TirPrinter(context=ctx, indent="    ").visit(variant.body)
-        lines.extend(vbody or ["    pass"])
+        name = _binding_name(getattr(variant, "_display_name", variant.name))
+        lines.extend(_definition_lines(variant, name, ctx))
     return _RenderedLines(lines, ctx.imports)
 
 
@@ -435,15 +454,6 @@ def _function_comments(fn: PrimFunction, options) -> list[str]:
     return render_summary(records, opt_in=options.comment_opt_in).splitlines()
 
 
-def _module_symbol_bindings(mod: Module) -> dict[str, str]:
-    """Render unique subtree PrimFunction bare names through their slot bindings."""
-    candidates = {}
-    for selector, frame in list_call_paths(mod).items():
-        if isinstance(frame.function, PrimFunction):
-            candidates.setdefault(frame.function.name, []).append(selector)
-    return {name: paths[0] for name, paths in candidates.items() if len(paths) == 1}
-
-
 def _single_module_to_python(mod: Module, module_name: str, names, *, options=None) -> str:
     name = module_name or mod.name
     lines: list[str] = []
@@ -479,7 +489,7 @@ def _single_module_to_python(mod: Module, module_name: str, names, *, options=No
             if isinstance(fn, HirFunction):
                 raise NotImplementedError("mixed HIR/TIR module printing is not yet supported")
             raise TypeError(f"TIR printer cannot serialize {type(fn).__name__}")
-        block = _function_block(fn, symbol_bindings=_module_symbol_bindings(mod), frame=CallFrame(mod, fn))
+        block = _function_block(fn, frame=CallFrame(mod, fn))
         ctx.imports.update(block.imports)
         blocks.append([*_function_comments(fn, options), *block])
     for index, block in enumerate(blocks):

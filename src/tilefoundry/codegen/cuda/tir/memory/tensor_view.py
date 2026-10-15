@@ -6,6 +6,7 @@ or ``tilefoundry::make_shard_tensor`` (shard) depending on ``layout`` type.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import reduce
 from operator import mul
 
@@ -18,25 +19,26 @@ from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import (
     mesh_type,
     program_topologies,
 )
-from tilefoundry.ir.core import Call, Constant
+from tilefoundry.ir.core import Call, Constant, Tuple
 from tilefoundry.ir.core.kinds import ReduceKind
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.tir.memory.ptr_of import PtrOf
 from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types import ComposedLayout
 from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
-from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
+from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten, resolve_layout
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Dynamic,
     Partial,
     Split,
+    register_strides,
     shard_layout_local_shape,
 )
 from tilefoundry.ir.types.shard_layout import ShardLayout as SL
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.swizzle_layout import get_swizzle_portion
 from tilefoundry.ir.types.utils import shape_numel_upper_bound, upper_bound
 from tilefoundry.ir.visitor import ExprVisitor
@@ -57,6 +59,7 @@ def _render_layout_type(layout: LayoutBase) -> str:
     underneath. The XOR mapping is not expressible as strides, so there is no
     affine form to fall back to.
     """
+    layout = resolve_layout(layout)
     swizzle = get_swizzle_portion(layout)
     if swizzle is not None:
         return (
@@ -64,6 +67,8 @@ def _render_layout_type(layout: LayoutBase) -> str:
             f"cute::Int<{int(layout.offset)}>, {_render_layout_type(layout.outer)}>"
         )
     if isinstance(layout, Layout):
+        if not layout.shape:
+            return "cute::Layout<cute::Shape<cute::Int<1>>, cute::Stride<cute::Int<0>>>"
         shape_args = ", ".join(f"cute::Int<{s}>" for s in layout.shape)
         stride_args = ", ".join(f"cute::Int<{s}>" for s in layout.strides)
         return f"cute::Layout<cute::Shape<{shape_args}>, cute::Stride<{stride_args}>>"
@@ -74,8 +79,10 @@ def _render_layout_value(layout: LayoutBase, dim, stride) -> str:
     """Render a CuTe layout value, the mirror of :func:`_render_layout_type`.
 
     *dim* and *stride* render one shape entry and one stride entry, which is
-    where a runtime-provided extent reaches the emitted layout.
+    where a runtime-provided extent reaches the emitted layout. CuTe encodes
+    the single rank-0 address as a singleton mode.
     """
+    layout = resolve_layout(layout)
     swizzle = get_swizzle_portion(layout)
     if swizzle is not None:
         return (
@@ -85,6 +92,8 @@ def _render_layout_value(layout: LayoutBase, dim, stride) -> str:
             f"{_render_layout_value(layout.outer, dim, stride)})"
         )
     if isinstance(layout, Layout):
+        if not layout.shape:
+            return "cute::make_layout(cute::Shape<cute::Int<1>>{}, cute::Stride<cute::Int<0>>{})"
         shape_args = ", ".join(dim(d) for d in layout.shape)
         stride_args = ", ".join(stride(s) for s in layout.strides)
         return (
@@ -167,28 +176,24 @@ def _composed_mesh_layout(positions: str, base: int) -> str:
     return f"cute::make_composed_layout(cute::identity{{}}, cute::Int<{base}>{{}}, {positions})"
 
 
-def register_strides(sl: SL) -> tuple[int, ...]:
-    """``sl``'s strides as steps on a *register* engine, not on a shared buffer.
+def shard_engine_layout(shard: SL, storage: StorageKind) -> LayoutBase:
+    """Read the physical layout of the storage this shard tensor wraps.
 
-    Registers are the distinct-engine-per-instance case of [shard
-    §7.1.2](docs/spec/shard.md#712-layoutstrides): a ``Split(k)`` axis gets
-    ``0``, so the projection offsets no instance along it, and the rest get
-    the array's own steps -- the compact product in mode order, fastest
-    first, which is how ``_emit_plain_alloc`` lays the backing array out. An
-    extent-1 axis names no step.
+    Global memory and CTA-shared storage retain their declared address steps.
+    Registers use the same local extents and numbering as the emitted shard.
     """
-    local = shard_layout_local_shape(sl, require_static=False)
-    split_axes = {int(a.axis) for a in sl.attrs if isinstance(a, Split)}
-    strides: list[int] = []
-    step = 1
-    for axis, extent in enumerate(local):
-        width = int(upper_bound(extent))
-        if axis in split_axes or width == 1:
-            strides.append(0)
-        else:
-            strides.append(step)
-            step *= width
-    return tuple(strides)
+    shard = resolve_layout(shard)
+    physical = flatten(shard.layout)
+    if storage is StorageKind.RMEM:
+        return Layout(shard_layout_local_shape(shard), register_strides(shard))
+    if storage is StorageKind.GMEM or (
+        storage is StorageKind.SMEM and program_topologies(shard.mesh)[0].name == "thread"
+    ):
+        return physical
+    local = shard_layout_local_shape(shard)
+    if isinstance(physical, Layout):
+        return replace(physical, shape=local)
+    return replace(physical, outer=replace(physical.outer, shape=local))
 
 
 def render_shard_layout_value(var_name: str, sl: SL, dynamic_extents=None, storage=None, ctx=None):
@@ -202,6 +207,7 @@ def render_shard_layout_value(var_name: str, sl: SL, dynamic_extents=None, stora
     *storage* is the engine's storage class: ``rmem`` takes
     ``register_strides``, anything else the layout's own.
     """
+    sl = resolve_layout(sl)
     sll = sl.layout
     if storage is StorageKind.RMEM:
         if get_swizzle_portion(sll) is not None:
@@ -354,6 +360,21 @@ def _pointer_ref(pointer, ctx: CudaCodegenContext) -> tuple[str, object | None]:
     """Render a TensorView pointer and return its syntactic source tensor, if any."""
     if isinstance(pointer, Call) and isinstance(pointer.target, PtrOf):
         source = pointer.args[0]
+        if isinstance(source, Call) and isinstance(source.target, Slice):
+            from tilefoundry.codegen.cuda.tir.stmts.scalar_expr import (  # noqa: PLC0415
+                render_scalar_expr,
+            )
+
+            base = source.args[0]
+            layout = resolve_layout(base.type.layout, base.type.shape)
+            if not isinstance(layout, Layout):
+                raise NotImplementedError("CUDA pointer slices require a plain source layout")
+            origin = source.args[1]
+            starts = origin.elements if isinstance(origin, Tuple) else (origin,)
+            coords = ", ".join(render_scalar_expr(start, ctx) for start in starts)
+            offset = f"{_plain_layout_value(layout)}(cute::make_coord({coords}))"
+            pointer, root = _pointer_ref(Call(PtrOf(), (base,), type=pointer.type), ctx)
+            return f"({pointer} + {offset})", root
         return f"{_tensor_ref(source, ctx)}.data()", source
     if isinstance(pointer, Constant):
         cpp_type = ctx.dtype_to_cpp(pointer.type.dtype.name)
@@ -381,7 +402,7 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
     pointer = call.args[0]
     pointer_ref, memory_var = _pointer_ref(pointer, ctx)
     var_name = ctx.name_for(let.var)
-    layout = call.target.layout
+    layout = resolve_layout(call.target.layout, let.var.type.shape)
 
     if len(call.args) > 1:
         if memory_var is None:
@@ -421,9 +442,9 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
                 )
                 source_stride_args = ", ".join(
                     f"cute::Int<{stride}>{{}}"
-                    for stride in compact_row_major(
-                        tuple(int(upper_bound(dim)) for dim in source_shape)
-                    )
+                    for stride in resolve_layout(
+                        None, tuple(int(upper_bound(dim)) for dim in source_shape)
+                    ).strides
                 )
                 source_name = f"{var_name}__source"
                 ctx.emit(
@@ -485,18 +506,7 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
     if isinstance(layout, SL):
         target_total = shape_numel_upper_bound(let.var.type.shape)
         target_global = f"cute::make_layout(cute::Shape<cute::Int<{target_total}>>{{}})"
-        if memory_var is not None and not ctx.is_kernel_param(memory_var):
-            local_shape = shard_layout_local_shape(layout)
-            local_shape = tuple(s for s in local_shape if s != 1) or (1,)
-            if len(local_shape) > 1:
-                shape_args = ", ".join(f"cute::Int<{int(s)}>" for s in local_shape)
-                engine_layout = f"cute::make_layout(cute::Shape<{shape_args}>{{}})"
-            else:
-                engine_layout = (
-                    f"cute::make_layout(cute::Shape<cute::Int<{int(local_shape[0])}>>{{}})"
-                )
-        else:
-            engine_layout = target_global
+        engine_layout = _plain_layout_value(shard_engine_layout(layout, let.var.type.storage))
         ctx.emit(
             f"auto {var_name}_tensor = "
             f"tilefoundry::ops::tensor_view({pointer_ref}, {engine_layout});"

@@ -48,16 +48,18 @@ class MmaTile:
         ) as m:
             a_view = T.tensor_view(
                 T.ptr_of(a),
+                shape=(16, 16),
                 layout=ShardLayout(
-                    layout=Layout(shape=(256,), strides=(1,)),
+                    layout=Layout(shape=(16, 16), strides=(16, 1)),
                     attrs=(Broadcast(), Broadcast()),
                     mesh=m,
                 ),
             )
             b_view = T.tensor_view(
                 T.ptr_of(b),
+                shape=(16, 8),
                 layout=ShardLayout(
-                    layout=Layout(shape=(128,), strides=(1,)),
+                    layout=Layout(shape=(16, 8), strides=(8, 1)),
                     attrs=(Broadcast(), Broadcast()),
                     mesh=m,
                 ),
@@ -90,7 +92,7 @@ class MmaTile:
                 Tensor[
                     (16, 16),
                     "bf16",
-                    ((2, 4 @ m.warp, 2, 8 @ m.lane, 2), (1, 2, 8, 16, 128)),
+                    ((2, 8 @ m.lane, 2, 4 @ m.warp, 2), (128, 16, 8, 2, 1)),
                     "rmem",
                 ]
             )
@@ -98,7 +100,7 @@ class MmaTile:
                 Tensor[
                     (16, 8),
                     "bf16",
-                    ((8 @ m.lane, 2, 4 @ m.warp, 2), (1, 8, 16, 64)),
+                    ((2, 4 @ m.warp, 2, 8 @ m.lane), (64, 16, 8, 1)),
                     "rmem",
                 ]
             )
@@ -106,7 +108,7 @@ class MmaTile:
                 Tensor[
                     (16, 8),
                     "f32",
-                    ((2, 4 @ m.warp, 8 @ m.lane, 2), (1, 2, 8, 64)),
+                    ((2, 8 @ m.lane, 4 @ m.warp, 2), (64, 8, 2, 1)),
                     "rmem",
                 ]
             )
@@ -115,14 +117,14 @@ class MmaTile:
             T.sync(m)
             b_fragment_view = T.tensor_view(
                 T.ptr_of(b_tile),
-                layout=((8 @ m.lane, 2, 4 @ m.warp, 2), (1, 8, 16, 64)),
+                layout=((2, 4 @ m.warp, 2, 8 @ m.lane), (64, 16, 8, 1)),
             )
             T.ldmatrix(a_tile, a_frag)
             T.copy(b_fragment_view, b_frag)
             T.fill(acc, 0.0)
             T.tiled_mma(acc, a_frag, b_frag, atom=T.cuda.sm80.Mma())
             c_view = T.tensor_view(
-                T.ptr_of(c), layout=((2, 4 @ m.warp, 8 @ m.lane, 2), (1, 2, 8, 64))
+                T.ptr_of(c), shape=(16, 8), layout=((2, 8 @ m.lane, 4 @ m.warp, 2), (64, 8, 2, 1))
             )
             T.copy(acc, c_view)
 

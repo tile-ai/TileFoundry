@@ -44,7 +44,7 @@ target nvidia.h200_sxm
         attrs=(S(0), S(2)),
         mesh=Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")),
     ), "rmem"]
-    refused     T.cuda.sm90.Wgmma
+    refused     T.cuda.sm90.Wgmma  n=256, dtype=f16, form=SS, a_major=MN, b_major=MN
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8, 4),), ((*gs, 32, 4, 1),))))
     refused     T.cuda.sm80.Mma
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),))))
@@ -96,7 +96,7 @@ target nvidia.h200_sxm
         attrs=(S(0), S(2)),
         mesh=Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")),
     ), "rmem"]
-    refused     T.cast
+    refused     T.cast  cast_dtype=bf16
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   v9:36  tf.reshard  per cta  x=Tensor[(8192, 17408), "bf16",
     ShardLayout(

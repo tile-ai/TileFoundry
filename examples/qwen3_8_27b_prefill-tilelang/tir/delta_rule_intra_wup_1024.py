@@ -41,12 +41,12 @@ def intra_wup(
         )
         value_1 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_2 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         ps = T.tensor_view(
@@ -60,12 +60,12 @@ def intra_wup(
         value_3 = T.alloc_tensor(tensor_type=Tensor[(64, 64), "f32", (4, 8, 2, 4, 16), "rmem"])
         value_4 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bool", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bool", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         dif = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "i32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "i32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_5 = T.alloc_tensor(tensor_type=Tensor[(64, 64), "i32", (4, 8, 2, 4, 16), "rmem"])
@@ -90,14 +90,14 @@ def intra_wup(
         value_9 = T.alloc_tensor(tensor_type=Tensor[(64, 64), "f32", (4, 8, 2, 4, 16), "rmem"])
         value_10 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bool", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bool", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_11 = T.alloc_tensor(tensor_type=Tensor[(64, 64), "f32", (4, 8, 2, 4, 16), "rmem"])
         value_12 = T.alloc_tensor(tensor_type=Tensor[(64, 64), "f32", (4, 8, 2, 4, 16), "rmem"])
         value_13 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         br = T.alloc_tensor(
@@ -255,22 +255,22 @@ def intra_wup(
         )
         value_51 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bf16", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bf16", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         tm = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_52 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bool", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bool", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         d2 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "i32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "i32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_53 = T.alloc_tensor(tensor_type=Tensor[(64, 64), "i32", (4, 8, 2, 4, 16), "rmem"])
@@ -283,27 +283,27 @@ def intra_wup(
         zi2 = T.alloc_tensor(tensor_type=Tensor[(1, 1), "i32", (1, 1), "rmem"])
         value_54 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_55 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bool", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bool", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_56 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_57 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bool", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bool", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         db = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "i32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "i32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_58 = T.alloc_tensor(tensor_type=Tensor[(64, 64), "i32", (4, 8, 2, 4, 16), "rmem"])
@@ -318,12 +318,12 @@ def intra_wup(
         )
         an = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         at = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         vs = T.tensor_view(
@@ -351,12 +351,12 @@ def intra_wup(
         )
         value_65 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bf16", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bf16", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_66 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         bq_1 = T.alloc_tensor(tensor_type=Tensor[(8, 8, 1, 1), "f32", (8, 8, 1, 1), "rmem"])
@@ -377,12 +377,12 @@ def intra_wup(
         )
         value_69 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bf16", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bf16", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_70 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         ost_1 = T.tensor_view(
@@ -415,12 +415,12 @@ def intra_wup(
         )
         value_75 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bf16", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bf16", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_76 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         bq_3 = T.alloc_tensor(tensor_type=Tensor[(8, 8, 1, 1), "f32", (8, 8, 1, 1), "rmem"])
@@ -446,12 +446,12 @@ def intra_wup(
         )
         value_81 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bf16", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bf16", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_82 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         T.fill(out, 0.0)
@@ -572,7 +572,7 @@ def intra_wup(
                             for o_k in range(0, 128, 64):
                                 acc_view = T.tensor_view(
                                     T.ptr_of(value_1[o_m:o_m + 64, o_n:o_n + 64]),
-                                    layout=((8 @ threads_8.d1, 2, 4 @ threads_8.d0, 2, 4 @ threads_8.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_8.d0, 2, 8 @ threads_8.d1, 8, 4 @ threads_8.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view = T.tensor_view(
@@ -593,7 +593,7 @@ def intra_wup(
                                 )
                                 acc_view_1 = T.tensor_view(
                                     T.ptr_of(value_1[o_m:o_m + 64, o_n:o_n + 64]),
-                                    layout=((8 @ threads_8.d1, 2, 4 @ threads_8.d0, 2, 4 @ threads_8.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_8.d0, 2, 8 @ threads_8.d1, 8, 4 @ threads_8.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_1 = T.tensor_view(
@@ -614,7 +614,7 @@ def intra_wup(
                                 )
                                 acc_view_2 = T.tensor_view(
                                     T.ptr_of(value_1[o_m:o_m + 64, o_n:o_n + 64]),
-                                    layout=((8 @ threads_8.d1, 2, 4 @ threads_8.d0, 2, 4 @ threads_8.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_8.d0, 2, 8 @ threads_8.d1, 8, 4 @ threads_8.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_2 = T.tensor_view(
@@ -635,7 +635,7 @@ def intra_wup(
                                 )
                                 acc_view_3 = T.tensor_view(
                                     T.ptr_of(value_1[o_m:o_m + 64, o_n:o_n + 64]),
-                                    layout=((8 @ threads_8.d1, 2, 4 @ threads_8.d0, 2, 4 @ threads_8.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_8.d0, 2, 8 @ threads_8.d1, 8, 4 @ threads_8.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_3 = T.tensor_view(
@@ -660,7 +660,7 @@ def intra_wup(
                             for o_k_1 in range(0, 128, 64):
                                 acc_view_4 = T.tensor_view(
                                     T.ptr_of(value_2[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 64]),
-                                    layout=((8 @ threads_8.d1, 2, 4 @ threads_8.d0, 2, 4 @ threads_8.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_8.d0, 2, 8 @ threads_8.d1, 8, 4 @ threads_8.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_4 = T.tensor_view(
@@ -681,7 +681,7 @@ def intra_wup(
                                 )
                                 acc_view_5 = T.tensor_view(
                                     T.ptr_of(value_2[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 64]),
-                                    layout=((8 @ threads_8.d1, 2, 4 @ threads_8.d0, 2, 4 @ threads_8.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_8.d0, 2, 8 @ threads_8.d1, 8, 4 @ threads_8.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_5 = T.tensor_view(
@@ -702,7 +702,7 @@ def intra_wup(
                                 )
                                 acc_view_6 = T.tensor_view(
                                     T.ptr_of(value_2[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 64]),
-                                    layout=((8 @ threads_8.d1, 2, 4 @ threads_8.d0, 2, 4 @ threads_8.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_8.d0, 2, 8 @ threads_8.d1, 8, 4 @ threads_8.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_6 = T.tensor_view(
@@ -723,7 +723,7 @@ def intra_wup(
                                 )
                                 acc_view_7 = T.tensor_view(
                                     T.ptr_of(value_2[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 64]),
-                                    layout=((8 @ threads_8.d1, 2, 4 @ threads_8.d0, 2, 4 @ threads_8.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_8.d0, 2, 8 @ threads_8.d1, 8, 4 @ threads_8.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_7 = T.tensor_view(
@@ -781,7 +781,7 @@ def intra_wup(
                     )
                     dst_frame_6 = T.tensor_view(
                         T.ptr_of(dif[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_12.d1, 2, 4 @ threads_12.d0, 2, 4 @ threads_12.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_12.d0, 2, 8 @ threads_12.d1, 8, 4 @ threads_12.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.copy(src_frame_1, dst_frame_6)
@@ -789,12 +789,12 @@ def intra_wup(
                 with scope_3 as threads_15:
                     lhs_frame_1 = T.tensor_view(
                         T.ptr_of(dif[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_15.d1, 2, 4 @ threads_15.d0, 2, 4 @ threads_15.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_15.d0, 2, 8 @ threads_15.d1, 8, 4 @ threads_15.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_7 = T.tensor_view(
                         T.ptr_of(value_4[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_15.d1, 2, 4 @ threads_15.d0, 2, 4 @ threads_15.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_15.d0, 2, 8 @ threads_15.d1, 8, 4 @ threads_15.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.binary(lhs_frame_1, zi, dst_frame_7, kind=BinaryKind.GE)
@@ -847,7 +847,7 @@ def intra_wup(
                     T.unary(src_frame_2, dst_frame_11, kind=UnaryKind.EXP)
                     lhs_frame_3 = T.tensor_view(
                         T.ptr_of(value_2[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_17.d1, 2, 4 @ threads_17.d0, 2, 4 @ threads_17.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_17.d0, 2, 8 @ threads_17.d1, 8, 4 @ threads_17.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     rhs_frame_2 = T.tensor_view(
@@ -880,7 +880,7 @@ def intra_wup(
                 with scope_3 as threads_22:
                     cond_frame = T.tensor_view(
                         T.ptr_of(value_4[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_22.d1, 2, 4 @ threads_22.d0, 2, 4 @ threads_22.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_22.d0, 2, 8 @ threads_22.d1, 8, 4 @ threads_22.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     lhs_frame_5 = T.tensor_view(
@@ -915,12 +915,12 @@ def intra_wup(
                 with scope_3 as threads_25:
                     lhs_frame_6 = T.tensor_view(
                         T.ptr_of(dif[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_16 = T.tensor_view(
                         T.ptr_of(value_10[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.binary(lhs_frame_6, zi, dst_frame_16, kind=BinaryKind.GT)
@@ -936,7 +936,7 @@ def intra_wup(
                     T.copy(tile_15, dst_frame_17)
                     lhs_frame_7 = T.tensor_view(
                         T.ptr_of(value_1[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_26.d1, 2, 4 @ threads_26.d0, 2, 4 @ threads_26.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_26.d0, 2, 8 @ threads_26.d1, 8, 4 @ threads_26.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     rhs_frame_3 = T.tensor_view(
@@ -946,13 +946,13 @@ def intra_wup(
                     )
                     dst_frame_18 = T.tensor_view(
                         T.ptr_of(value_13[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_26.d1, 2, 4 @ threads_26.d0, 2, 4 @ threads_26.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_26.d0, 2, 8 @ threads_26.d1, 8, 4 @ threads_26.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.binary(lhs_frame_7, rhs_frame_3, dst_frame_18, kind=BinaryKind.MUL)
                     lhs_frame_8 = T.tensor_view(
                         T.ptr_of(value_13[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_26.d1, 2, 4 @ threads_26.d0, 2, 4 @ threads_26.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_26.d0, 2, 8 @ threads_26.d1, 8, 4 @ threads_26.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     rhs_frame_4 = T.tensor_view(
@@ -982,7 +982,7 @@ def intra_wup(
                 with scope_3 as threads_30:
                     cond_frame_1 = T.tensor_view(
                         T.ptr_of(value_10[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_30.d1, 2, 4 @ threads_30.d0, 2, 4 @ threads_30.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_30.d0, 2, 8 @ threads_30.d1, 8, 4 @ threads_30.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     lhs_frame_9 = T.tensor_view(
@@ -2339,7 +2339,7 @@ def intra_wup(
                     )
                     dst_frame_95 = T.tensor_view(
                         T.ptr_of(d2[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_115.d1, 2, 4 @ threads_115.d0, 2, 4 @ threads_115.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_115.d0, 2, 8 @ threads_115.d1, 8, 4 @ threads_115.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.copy(src_frame_36, dst_frame_95)
@@ -2347,12 +2347,12 @@ def intra_wup(
                 with scope_12 as threads_118:
                     lhs_frame_27 = T.tensor_view(
                         T.ptr_of(d2[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_118.d1, 2, 4 @ threads_118.d0, 2, 4 @ threads_118.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_118.d0, 2, 8 @ threads_118.d1, 8, 4 @ threads_118.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_96 = T.tensor_view(
                         T.ptr_of(value_52[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_118.d1, 2, 4 @ threads_118.d0, 2, 4 @ threads_118.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_118.d0, 2, 8 @ threads_118.d1, 8, 4 @ threads_118.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.binary(lhs_frame_27, zi2, dst_frame_96, kind=BinaryKind.EQ)
@@ -2361,12 +2361,12 @@ def intra_wup(
                 with scope_12 as threads_119:
                     lhs_frame_28 = T.tensor_view(
                         T.ptr_of(d2[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_119.d1, 2, 4 @ threads_119.d0, 2, 4 @ threads_119.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_119.d0, 2, 8 @ threads_119.d1, 8, 4 @ threads_119.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_97 = T.tensor_view(
                         T.ptr_of(value_55[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_119.d1, 2, 4 @ threads_119.d0, 2, 4 @ threads_119.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_119.d0, 2, 8 @ threads_119.d1, 8, 4 @ threads_119.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.binary(lhs_frame_28, zi2, dst_frame_97, kind=BinaryKind.GT)
@@ -2421,18 +2421,18 @@ def intra_wup(
                     )
                     dst_frame_101 = T.tensor_view(
                         T.ptr_of(db[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_120.d1, 2, 4 @ threads_120.d0, 2, 4 @ threads_120.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_120.d0, 2, 8 @ threads_120.d1, 8, 4 @ threads_120.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.copy(src_frame_37, dst_frame_101)
                     lhs_frame_32 = T.tensor_view(
                         T.ptr_of(db[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_120.d1, 2, 4 @ threads_120.d0, 2, 4 @ threads_120.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_120.d0, 2, 8 @ threads_120.d1, 8, 4 @ threads_120.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_102 = T.tensor_view(
                         T.ptr_of(value_57[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_120.d1, 2, 4 @ threads_120.d0, 2, 4 @ threads_120.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_120.d0, 2, 8 @ threads_120.d1, 8, 4 @ threads_120.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.binary(lhs_frame_32, zi2, dst_frame_102, kind=BinaryKind.EQ)
@@ -2444,7 +2444,7 @@ def intra_wup(
                 with scope_12 as threads_127:
                     dst_frame_103 = T.tensor_view(
                         T.ptr_of(an[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_127.d1, 2, 4 @ threads_127.d0, 2, 4 @ threads_127.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_127.d0, 2, 8 @ threads_127.d1, 8, 4 @ threads_127.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.copy(tile_83, dst_frame_103)
@@ -2461,28 +2461,28 @@ def intra_wup(
                 with scope_12 as threads_128:
                     dst_frame_104 = T.tensor_view(
                         T.ptr_of(at[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_128.d1, 2, 4 @ threads_128.d0, 2, 4 @ threads_128.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_128.d0, 2, 8 @ threads_128.d1, 8, 4 @ threads_128.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.copy(tile_85, dst_frame_104)
                     cond_frame_2 = T.tensor_view(
                         T.ptr_of(value_57[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_128.d1, 2, 4 @ threads_128.d0, 2, 4 @ threads_128.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_128.d0, 2, 8 @ threads_128.d1, 8, 4 @ threads_128.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     lhs_frame_33 = T.tensor_view(
                         T.ptr_of(an[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_128.d1, 2, 4 @ threads_128.d0, 2, 4 @ threads_128.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_128.d0, 2, 8 @ threads_128.d1, 8, 4 @ threads_128.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     rhs_frame_27 = T.tensor_view(
                         T.ptr_of(at[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_128.d1, 2, 4 @ threads_128.d0, 2, 4 @ threads_128.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_128.d0, 2, 8 @ threads_128.d1, 8, 4 @ threads_128.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_105 = T.tensor_view(
                         T.ptr_of(value_56[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_128.d1, 2, 4 @ threads_128.d0, 2, 4 @ threads_128.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_128.d0, 2, 8 @ threads_128.d1, 8, 4 @ threads_128.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.where(cond_frame_2, lhs_frame_33, rhs_frame_27, dst_frame_105)
@@ -2491,50 +2491,50 @@ def intra_wup(
                 with scope_12 as threads_130:
                     cond_frame_3 = T.tensor_view(
                         T.ptr_of(value_55[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_130.d1, 2, 4 @ threads_130.d0, 2, 4 @ threads_130.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_130.d0, 2, 8 @ threads_130.d1, 8, 4 @ threads_130.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     lhs_frame_34 = T.tensor_view(
                         T.ptr_of(value_56[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_130.d1, 2, 4 @ threads_130.d0, 2, 4 @ threads_130.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_130.d0, 2, 8 @ threads_130.d1, 8, 4 @ threads_130.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_106 = T.tensor_view(
                         T.ptr_of(value_54[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_130.d1, 2, 4 @ threads_130.d0, 2, 4 @ threads_130.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_130.d0, 2, 8 @ threads_130.d1, 8, 4 @ threads_130.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.where(cond_frame_3, lhs_frame_34, scalar_5, dst_frame_106)
                     cond_frame_4 = T.tensor_view(
                         T.ptr_of(value_52[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_130.d1, 2, 4 @ threads_130.d0, 2, 4 @ threads_130.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_130.d0, 2, 8 @ threads_130.d1, 8, 4 @ threads_130.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     rhs_frame_28 = T.tensor_view(
                         T.ptr_of(value_54[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_130.d1, 2, 4 @ threads_130.d0, 2, 4 @ threads_130.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_130.d0, 2, 8 @ threads_130.d1, 8, 4 @ threads_130.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_107 = T.tensor_view(
                         T.ptr_of(tm[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_130.d1, 2, 4 @ threads_130.d0, 2, 4 @ threads_130.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_130.d0, 2, 8 @ threads_130.d1, 8, 4 @ threads_130.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.where(cond_frame_4, scalar_3, rhs_frame_28, dst_frame_107)
                     src_frame_38 = T.tensor_view(
                         T.ptr_of(tm[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_130.d1, 2, 4 @ threads_130.d0, 2, 4 @ threads_130.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_130.d0, 2, 8 @ threads_130.d1, 8, 4 @ threads_130.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_108 = T.tensor_view(
                         T.ptr_of(value_51[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_130.d1, 2, 4 @ threads_130.d0, 2, 4 @ threads_130.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_130.d0, 2, 8 @ threads_130.d1, 8, 4 @ threads_130.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.cast(src_frame_38, dst_frame_108, dtype="bf16")
                     src_frame_39 = T.tensor_view(
                         T.ptr_of(value_51[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_130.d1, 2, 4 @ threads_130.d0, 2, 4 @ threads_130.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_130.d0, 2, 8 @ threads_130.d1, 8, 4 @ threads_130.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.copy(src_frame_39, tb)
@@ -2634,7 +2634,7 @@ def intra_wup(
                             for o_k_2 in range(0, 64, 64):
                                 acc_view_8 = T.tensor_view(
                                     T.ptr_of(value_66[o_m_2:o_m_2 + 64, o_n_2:o_n_2 + 64]),
-                                    layout=((8 @ threads_141.d1, 2, 4 @ threads_141.d0, 2, 4 @ threads_141.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_141.d0, 2, 8 @ threads_141.d1, 8, 4 @ threads_141.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_8 = T.tensor_view(
@@ -2655,7 +2655,7 @@ def intra_wup(
                                 )
                                 acc_view_9 = T.tensor_view(
                                     T.ptr_of(value_66[o_m_2:o_m_2 + 64, o_n_2:o_n_2 + 64]),
-                                    layout=((8 @ threads_141.d1, 2, 4 @ threads_141.d0, 2, 4 @ threads_141.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_141.d0, 2, 8 @ threads_141.d1, 8, 4 @ threads_141.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_9 = T.tensor_view(
@@ -2676,7 +2676,7 @@ def intra_wup(
                                 )
                                 acc_view_10 = T.tensor_view(
                                     T.ptr_of(value_66[o_m_2:o_m_2 + 64, o_n_2:o_n_2 + 64]),
-                                    layout=((8 @ threads_141.d1, 2, 4 @ threads_141.d0, 2, 4 @ threads_141.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_141.d0, 2, 8 @ threads_141.d1, 8, 4 @ threads_141.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_10 = T.tensor_view(
@@ -2697,7 +2697,7 @@ def intra_wup(
                                 )
                                 acc_view_11 = T.tensor_view(
                                     T.ptr_of(value_66[o_m_2:o_m_2 + 64, o_n_2:o_n_2 + 64]),
-                                    layout=((8 @ threads_141.d1, 2, 4 @ threads_141.d0, 2, 4 @ threads_141.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_141.d0, 2, 8 @ threads_141.d1, 8, 4 @ threads_141.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_11 = T.tensor_view(
@@ -2718,18 +2718,18 @@ def intra_wup(
                                 )
                     src_frame_42 = T.tensor_view(
                         T.ptr_of(value_66[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_141.d1, 2, 4 @ threads_141.d0, 2, 4 @ threads_141.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_141.d0, 2, 8 @ threads_141.d1, 8, 4 @ threads_141.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_114 = T.tensor_view(
                         T.ptr_of(value_65[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_141.d1, 2, 4 @ threads_141.d0, 2, 4 @ threads_141.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_141.d0, 2, 8 @ threads_141.d1, 8, 4 @ threads_141.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.cast(src_frame_42, dst_frame_114, dtype="bf16")
                     value_65_view = T.tensor_view(
                         T.ptr_of(value_65[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_141.d1, 2, 4 @ threads_141.d0, 2, 4 @ threads_141.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_141.d0, 2, 8 @ threads_141.d1, 8, 4 @ threads_141.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     window_23 = T.tensor_view(
@@ -2821,7 +2821,7 @@ def intra_wup(
                             for o_k_3 in range(0, 64, 64):
                                 acc_view_12 = T.tensor_view(
                                     T.ptr_of(value_70[o_m_3:o_m_3 + 64, o_n_3:o_n_3 + 64]),
-                                    layout=((8 @ threads_151.d1, 2, 4 @ threads_151.d0, 2, 4 @ threads_151.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_151.d0, 2, 8 @ threads_151.d1, 8, 4 @ threads_151.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_12 = T.tensor_view(
@@ -2842,7 +2842,7 @@ def intra_wup(
                                 )
                                 acc_view_13 = T.tensor_view(
                                     T.ptr_of(value_70[o_m_3:o_m_3 + 64, o_n_3:o_n_3 + 64]),
-                                    layout=((8 @ threads_151.d1, 2, 4 @ threads_151.d0, 2, 4 @ threads_151.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_151.d0, 2, 8 @ threads_151.d1, 8, 4 @ threads_151.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_13 = T.tensor_view(
@@ -2863,7 +2863,7 @@ def intra_wup(
                                 )
                                 acc_view_14 = T.tensor_view(
                                     T.ptr_of(value_70[o_m_3:o_m_3 + 64, o_n_3:o_n_3 + 64]),
-                                    layout=((8 @ threads_151.d1, 2, 4 @ threads_151.d0, 2, 4 @ threads_151.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_151.d0, 2, 8 @ threads_151.d1, 8, 4 @ threads_151.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_14 = T.tensor_view(
@@ -2884,7 +2884,7 @@ def intra_wup(
                                 )
                                 acc_view_15 = T.tensor_view(
                                     T.ptr_of(value_70[o_m_3:o_m_3 + 64, o_n_3:o_n_3 + 64]),
-                                    layout=((8 @ threads_151.d1, 2, 4 @ threads_151.d0, 2, 4 @ threads_151.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_151.d0, 2, 8 @ threads_151.d1, 8, 4 @ threads_151.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_15 = T.tensor_view(
@@ -2905,18 +2905,18 @@ def intra_wup(
                                 )
                     src_frame_45 = T.tensor_view(
                         T.ptr_of(value_70[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_151.d1, 2, 4 @ threads_151.d0, 2, 4 @ threads_151.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_151.d0, 2, 8 @ threads_151.d1, 8, 4 @ threads_151.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_120 = T.tensor_view(
                         T.ptr_of(value_69[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_151.d1, 2, 4 @ threads_151.d0, 2, 4 @ threads_151.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_151.d0, 2, 8 @ threads_151.d1, 8, 4 @ threads_151.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.cast(src_frame_45, dst_frame_120, dtype="bf16")
                     value_69_view = T.tensor_view(
                         T.ptr_of(value_69[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_151.d1, 2, 4 @ threads_151.d0, 2, 4 @ threads_151.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_151.d0, 2, 8 @ threads_151.d1, 8, 4 @ threads_151.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     window_24 = T.tensor_view(
@@ -3046,7 +3046,7 @@ def intra_wup(
                             for o_k_4 in range(0, 64, 64):
                                 acc_view_16 = T.tensor_view(
                                     T.ptr_of(value_76[o_m_4:o_m_4 + 64, o_n_4:o_n_4 + 64]),
-                                    layout=((8 @ threads_164.d1, 2, 4 @ threads_164.d0, 2, 4 @ threads_164.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_164.d0, 2, 8 @ threads_164.d1, 8, 4 @ threads_164.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_16 = T.tensor_view(
@@ -3067,7 +3067,7 @@ def intra_wup(
                                 )
                                 acc_view_17 = T.tensor_view(
                                     T.ptr_of(value_76[o_m_4:o_m_4 + 64, o_n_4:o_n_4 + 64]),
-                                    layout=((8 @ threads_164.d1, 2, 4 @ threads_164.d0, 2, 4 @ threads_164.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_164.d0, 2, 8 @ threads_164.d1, 8, 4 @ threads_164.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_17 = T.tensor_view(
@@ -3088,7 +3088,7 @@ def intra_wup(
                                 )
                                 acc_view_18 = T.tensor_view(
                                     T.ptr_of(value_76[o_m_4:o_m_4 + 64, o_n_4:o_n_4 + 64]),
-                                    layout=((8 @ threads_164.d1, 2, 4 @ threads_164.d0, 2, 4 @ threads_164.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_164.d0, 2, 8 @ threads_164.d1, 8, 4 @ threads_164.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_18 = T.tensor_view(
@@ -3109,7 +3109,7 @@ def intra_wup(
                                 )
                                 acc_view_19 = T.tensor_view(
                                     T.ptr_of(value_76[o_m_4:o_m_4 + 64, o_n_4:o_n_4 + 64]),
-                                    layout=((8 @ threads_164.d1, 2, 4 @ threads_164.d0, 2, 4 @ threads_164.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_164.d0, 2, 8 @ threads_164.d1, 8, 4 @ threads_164.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_19 = T.tensor_view(
@@ -3130,18 +3130,18 @@ def intra_wup(
                                 )
                     src_frame_49 = T.tensor_view(
                         T.ptr_of(value_76[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_164.d1, 2, 4 @ threads_164.d0, 2, 4 @ threads_164.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_164.d0, 2, 8 @ threads_164.d1, 8, 4 @ threads_164.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_129 = T.tensor_view(
                         T.ptr_of(value_75[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_164.d1, 2, 4 @ threads_164.d0, 2, 4 @ threads_164.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_164.d0, 2, 8 @ threads_164.d1, 8, 4 @ threads_164.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.cast(src_frame_49, dst_frame_129, dtype="bf16")
                     value_75_view = T.tensor_view(
                         T.ptr_of(value_75[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_164.d1, 2, 4 @ threads_164.d0, 2, 4 @ threads_164.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_164.d0, 2, 8 @ threads_164.d1, 8, 4 @ threads_164.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     window_25 = T.tensor_view(
@@ -3270,7 +3270,7 @@ def intra_wup(
                             for o_k_5 in range(0, 64, 64):
                                 acc_view_20 = T.tensor_view(
                                     T.ptr_of(value_82[o_m_5:o_m_5 + 64, o_n_5:o_n_5 + 64]),
-                                    layout=((8 @ threads_177.d1, 2, 4 @ threads_177.d0, 2, 4 @ threads_177.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_177.d0, 2, 8 @ threads_177.d1, 8, 4 @ threads_177.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_20 = T.tensor_view(
@@ -3291,7 +3291,7 @@ def intra_wup(
                                 )
                                 acc_view_21 = T.tensor_view(
                                     T.ptr_of(value_82[o_m_5:o_m_5 + 64, o_n_5:o_n_5 + 64]),
-                                    layout=((8 @ threads_177.d1, 2, 4 @ threads_177.d0, 2, 4 @ threads_177.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_177.d0, 2, 8 @ threads_177.d1, 8, 4 @ threads_177.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_21 = T.tensor_view(
@@ -3312,7 +3312,7 @@ def intra_wup(
                                 )
                                 acc_view_22 = T.tensor_view(
                                     T.ptr_of(value_82[o_m_5:o_m_5 + 64, o_n_5:o_n_5 + 64]),
-                                    layout=((8 @ threads_177.d1, 2, 4 @ threads_177.d0, 2, 4 @ threads_177.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_177.d0, 2, 8 @ threads_177.d1, 8, 4 @ threads_177.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_22 = T.tensor_view(
@@ -3333,7 +3333,7 @@ def intra_wup(
                                 )
                                 acc_view_23 = T.tensor_view(
                                     T.ptr_of(value_82[o_m_5:o_m_5 + 64, o_n_5:o_n_5 + 64]),
-                                    layout=((8 @ threads_177.d1, 2, 4 @ threads_177.d0, 2, 4 @ threads_177.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                    layout=((4 @ threads_177.d0, 2, 8 @ threads_177.d1, 8, 4 @ threads_177.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                     shape=(64, 64),
                                 )
                                 lhs_view_23 = T.tensor_view(
@@ -3354,18 +3354,18 @@ def intra_wup(
                                 )
                     src_frame_53 = T.tensor_view(
                         T.ptr_of(value_82[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_177.d1, 2, 4 @ threads_177.d0, 2, 4 @ threads_177.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_177.d0, 2, 8 @ threads_177.d1, 8, 4 @ threads_177.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     dst_frame_138 = T.tensor_view(
                         T.ptr_of(value_81[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_177.d1, 2, 4 @ threads_177.d0, 2, 4 @ threads_177.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_177.d0, 2, 8 @ threads_177.d1, 8, 4 @ threads_177.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     T.cast(src_frame_53, dst_frame_138, dtype="bf16")
                     value_81_view = T.tensor_view(
                         T.ptr_of(value_81[0:0 + 64, 0:0 + 64]),
-                        layout=((8 @ threads_177.d1, 2, 4 @ threads_177.d0, 2, 4 @ threads_177.d2, 8), (1, 8, 16, 64, 128, 512)),
+                        layout=((4 @ threads_177.d0, 2, 8 @ threads_177.d1, 8, 4 @ threads_177.d2, 2,), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 64),
                     )
                     window_26 = T.tensor_view(

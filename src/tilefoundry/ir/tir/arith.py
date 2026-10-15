@@ -12,6 +12,9 @@ result value), matching the TIR convention shared with
 
 from __future__ import annotations
 
+from tilefoundry.evaluator.kernels import binary
+from tilefoundry.evaluator.registry import register_schedule_eval
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
@@ -51,11 +54,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 register_access_relation(Binary)(identity_relations)
 
 
+@register_schedule_eval(Binary)
+def _eval_scheduled_binary(ctx):
+    return TensorValue(
+        data=binary(ctx.op.kind, ctx.args[0].data, ctx.args[1].data), type=ctx.result_type
+    )
+
+
 @register_verify_stmt(Binary)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    op = call.target
-    if not isinstance(op.kind, BinaryKind):
-        ctx.error(call, f"Binary: kind must be BinaryKind enum, got {type(op.kind)}")
     lty, rty, dty = (ctx.type_of(arg) for arg in call.args)
     shape = broadcast_shapes(lty.shape, rty.shape, raising=False)
     if shape != tuple(dty.shape):
@@ -83,14 +90,3 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 register_access_relation(Unary)(identity_relations)
-
-
-@register_verify_stmt(Unary)
-def _(call: "Call", ctx: "VerifyContext") -> None:
-    op = call.target
-    if not isinstance(op.kind, UnaryKind):
-        ctx.error(call, f"Unary: kind must be UnaryKind enum, got {type(op.kind)}")
-    sty = ctx.type_of(call.args[0])
-    dty = ctx.type_of(call.args[1])
-    if sty.shape != dty.shape:
-        ctx.error(call, f"Unary shape mismatch: src {sty.shape} vs dst {dty.shape}")

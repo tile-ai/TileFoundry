@@ -227,6 +227,27 @@ program. After the body has been visited, the context emits the file header;
 it MUST contain only imports and `DimVar` declarations reached by the output.
 There is no module-level mesh hoist or global mesh name map.
 
+TIR binding names MUST be allocated independently for each `def`, including
+every specialization and each parent or child function. Collect all bindings
+before allocating names: preserve valid identifiers, replace other characters
+with underscores, and resolve collisions with `_2`, `_3`, and later suffixes
+without consuming a later authored identifier. Parameters, LetStmt bindings,
+mesh bindings, loop variables, and their references MUST use the same map.
+Parent and child modules share the file's import collection, not binding names.
+
+HIR printing MUST preserve existing binding names after identifier normalization
+and collision resolution. Only unnamed values receive generated names. Their
+numeric positions follow definition order independently of which values already
+have names. Name allocation MUST reserve later authored identifiers before
+assigning generated names or collision suffixes.
+Constant tensor parameters MUST retain `ConstTensor` annotations.
+
+A TIR `SymbolRef` MUST print its nested child-slot path followed by its function
+name, with each component rendered as a Python identifier. The printer reads
+that path from the IR and MUST NOT infer it by searching the module tree.
+On import, a local `helper(...)` remains a retained `PrimFunction` call;
+`child.run(...)` and launch targets retain their slot paths in `SymbolRef`.
+
 The DSL surface MUST be imported with `from tilefoundry.dsl import *`, which
 re-exports `ir.types` and the `func`, `module`, and `prim_func` decorators.
 The file header starts with `from __future__ import annotations`, a blank line,
@@ -244,6 +265,11 @@ a matching slice uses the slice form. Otherwise the printer emits a complete
 mesh constructor. The function's execution mesh is available while printing
 its signature and body; a named constant outside those bindings does not
 create a printable lexical name.
+A sharded type uses placement sugar only when each referenced mesh level has
+an active binding with the same geometry. Equal axis names and topology sizes
+alone do not establish that binding. Otherwise it MUST print the complete
+`ShardLayout(..., mesh=Mesh(...))` value, including in a register allocation
+outside the scope that uses it.
 
 Analysis annotations use the same type text for value-producing statements, but
 a structural `LoopRegion` or `MeshRegion` line MUST NOT restate the aggregate
@@ -281,9 +307,9 @@ For authored TIR, canonical fixture source is the contract:
 `as_script(module) == fixture_source`. This pins the spelling authors consume,
 not merely a printer/parser fixed point.
 
-Lowering-only `ShapeOf` nodes have no authored parser surface. The printer MUST
-render them without raising and preserve their semantics in readable text, but
-that text is not required to import.
+`ShapeOf` has the authored DSL spelling `shape_of(x, axis=0)`. The printer MUST
+use that spelling, and the expression MUST survive printing and re-import.
+This TIR runtime extent query is distinct from HIR `tf.shape_of`.
 
 A rendering is one of two surfaces:
 
@@ -302,10 +328,10 @@ MUST agree over
   attrs-position mesh axis in the underlying IR
 
 **Display-only** — the rendering of a function with a `DimVar` parameter, a
-dispatch prototype and its `.specialize` variants ([§2.6](#26-specialization-printing)),
-or lowering-only `ShapeOf` nodes. A display-only rendering is
+dispatch prototype and its `.specialize` variants ([§2.6](#26-specialization-printing)).
+A display-only rendering is
 human-readable and MUST NOT be used as a structural round-trip validation
-artifact. Lowering-only node renderings need not import.
+artifact.
 
 The printer MUST emit all LoopRegion `args` before its `for` statement.
 Invariant parameters print using their external argument names through the
@@ -618,12 +644,32 @@ class DumpScope:
         *,
         dumper: IDumpper | None = None,
     ) -> None: ...
+
+    def dump(
+        self,
+        name: str,
+        content: str | bytes | Callable[[], str | bytes],
+        flag: DumpFlags,
+    ) -> None: ...
+
+
+def dump(
+    name: str,
+    content: str | bytes | Callable[[], str | bytes],
+    flag: DumpFlags,
+) -> None: ...
 ```
 
 - constraints:
   - `DumpScope(subdir, flags)` MUST nest beneath the active scope and intersect
     its flags with the parent's. Without a parent it MUST remain a no-op.
   - `DumpScope(dumper=..., flags=...)` MUST replace the active scope.
+  - Both `dump(...)` and `DumpScope.dump(...)` accept strings, bytes, or a
+    no-argument callable returning either. Module-level `dump(...)` MUST NOT
+    call the producer without an active scope. Both interfaces MUST NOT call
+    the producer when the requested flag is disabled. When
+    enabled, the producer MUST be called once immediately before writing;
+    its exceptions propagate to the caller.
   - Plain child threads MUST start without the parent's scope; asyncio tasks
     MUST inherit a copy of the creating context.
   - Test output MUST be rooted at `test_results/<file-stem>/<test-name>/`.

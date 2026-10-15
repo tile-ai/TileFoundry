@@ -40,10 +40,10 @@ class PassManager:
         for seq, p in enumerate(self.passes):
             prev = module
             with DumpScope(f"{seq:02d}_{p.name}"):
-                dump("before.txt", repr(prev), DumpFlags.PASS_IR)
+                dump("before.txt", lambda: repr(prev), DumpFlags.PASS_IR)
                 module = p.run(module)
                 self._post_pass_recheck(prev, module)
-                dump("after.txt", repr(module), DumpFlags.PASS_IR)
+                dump("after.txt", lambda: repr(module), DumpFlags.PASS_IR)
         return module
 
     def _post_pass_recheck(self, prev: Module, curr: Module) -> None:

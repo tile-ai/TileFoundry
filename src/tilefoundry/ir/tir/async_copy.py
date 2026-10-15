@@ -11,6 +11,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
     DistinctConstraint,
     OrPattern,
+    SameConstraint,
     SameModesConstraint,
     TensorPattern,
     utils,
@@ -112,6 +113,7 @@ class CopyAsync(Op):
         ),
     )
     between = (
+        SameConstraint("dtype", "src", "dst"),
         DistinctConstraint("storage", "src", "dst"),
         _CopyModes("src", "dst"),
     )
@@ -150,15 +152,9 @@ def _eval_scheduled_copy_async(ctx):
 
 @register_verify_stmt(CopyAsync)
 def verify_copy_async(call: "Call", ctx: "VerifyContext") -> None:
-    """Run native storage checks before layout relations and vector patterns."""
+    """Check indexed-copy geometry and the index-dependent fill option."""
     src = ctx.type_of(call.args[0])
     dst = ctx.type_of(call.args[1])
-    if dst.storage != S.SMEM:
-        ctx.error(call, f"CopyAsync destination must be smem, got {dst.storage}")
-    if src.storage != S.GMEM:
-        ctx.error(call, f"CopyAsync source must be gmem, got {src.storage}")
-    if src.dtype != dst.dtype:
-        ctx.error(call, f"CopyAsync dtype mismatch: {src.dtype} vs {dst.dtype}")
     if not is_indexed_copy(call.args):
         if call.target.fill is not None:
             ctx.error(call, "CopyAsync fill requires an index operand")
@@ -183,22 +179,26 @@ def verify_copy_async(call: "Call", ctx: "VerifyContext") -> None:
 class CpAsyncCommit(Op):
     """Close the current in-flight ``cp.async`` group (``commit_group``)."""
 
+    execution_mesh = utils.thread_execution_mesh()
+
 
 @register_typeinfer(CpAsyncCommit)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
-@register_verify_stmt(CpAsyncCommit)
-def _(call: "Call", ctx: "VerifyContext") -> None:
-    return None
-
-
 @register_op(dialect="T", category="async", name="cp_async_wait")
 class CpAsyncWait(Op):
     """Wait until all but the ``n`` newest committed async groups arrive."""
 
-    n = ParamDef(kind="attribute", annotation=int, default=0)
+    execution_mesh = utils.thread_execution_mesh()
+
+    n = ParamDef(
+        kind="attribute",
+        annotation=int,
+        pattern=WildcardPattern("wait_groups", predicates=(WildcardPattern("wait_groups") >= 0,)),
+        default=0,
+    )
 
 
 @register_typeinfer(CpAsyncWait)
@@ -206,11 +206,26 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
-@register_verify_stmt(CpAsyncWait)
-def _(call: "Call", ctx: "VerifyContext") -> None:
-    n = call.target.n
-    if not isinstance(n, int) or n < 0:
-        ctx.error(call, f"CpAsyncWait.n must be a non-negative int, got {n!r}")
-
-
 __all__ = ["ASYNC_WIDTHS", "CopyAsync", "CpAsyncCommit", "CpAsyncWait"]
+
+
+register_access_relation(CpAsyncCommit)(identity_relations)
+register_access_relation(CpAsyncWait)(identity_relations)
+
+
+@register_verify_stmt(CpAsyncCommit)
+def _verify_cpasynccommit(call, ctx) -> None:
+    """Admit a control effect with no input contract.
+
+    See [tir §1.3](docs/spec/tir.md#13-primfunction).
+    """
+    return None
+
+
+@register_verify_stmt(CpAsyncWait)
+def _verify_cpasyncwait(call, ctx) -> None:
+    """Admit a control effect with no input contract.
+
+    See [tir §1.3](docs/spec/tir.md#13-primfunction).
+    """
+    return None

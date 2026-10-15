@@ -190,14 +190,10 @@ class PatternMatcher:
 
     def _match_repeated(self, owner, patterns, subjects) -> bool:
         names = tuple(dict.fromkeys(self._captured_names(patterns)))
-        prior = {
-            name: self.bindings.pop(name) for name in names if name in self.bindings
-        }
+        prior = {name: self.bindings.pop(name) for name in names if name in self.bindings}
         captured = {name: [] for name in names}
         for values in subjects:
-            if not all(
-                self.match(pattern, value) for pattern, value in zip(patterns, values)
-            ):
+            if not all(self.match(pattern, value) for pattern, value in zip(patterns, values)):
                 return False
             for name in names:
                 if name not in self.bindings:
@@ -430,10 +426,16 @@ class PatternMatcher:
             return False
         if pattern.shape is not None and (
             len(pattern.shape) != len(subject.shape)
-            or not all(self.match(place, value) for place, value in zip(pattern.shape, subject.shape))
+            or not all(
+                self.match(place, value) for place, value in zip(pattern.shape, subject.shape)
+            )
         ):
             return False
-        return pattern.layout is None or self.match(pattern.layout, subject.layout)
+        from tilefoundry.ir.types.layout import resolve_layout  # noqa: PLC0415
+
+        return pattern.layout is None or self.match(
+            pattern.layout, resolve_layout(subject.layout, subject.shape)
+        )
 
     def visit_ShardLayoutPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, ShardLayout):

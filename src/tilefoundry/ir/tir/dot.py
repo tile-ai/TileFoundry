@@ -5,13 +5,28 @@ See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 
 from __future__ import annotations
 
+import isl
+
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.isl_interop import layout_to_isl_map, shape_to_isl_set
 from tilefoundry.ir.pattern import is_ranked_tensor, utils
-from tilefoundry.ir.types import StorageKind, UnitType
-from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_local_shape
+from tilefoundry.ir.tir.reduce import _workspace_slots
+from tilefoundry.ir.types import Layout, Mesh, StorageKind, Topology, UnitType
+from tilefoundry.ir.types.layout import resolve_layout
+from tilefoundry.ir.types.shard_layout import (
+    Broadcast,
+    ShardLayout,
+    register_strides,
+    shard_layout_local_shape,
+)
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelation,
+    iterating,
+    register_access_relation,
+)
 
 __all__ = ["Dot"]
 
@@ -19,6 +34,8 @@ __all__ = ["Dot"]
 @register_op(dialect="T", category="tensor")
 class Dot(Op):
     """Fused multiply-contract; every participant leaves holding the total."""
+
+    execution_mesh = utils.thread_execution_mesh()
 
     lhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=is_ranked_tensor())
     rhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=is_ranked_tensor())
@@ -81,3 +98,46 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
             "that post a partial are the ones lhs's mesh names; lhs must "
             "carry a ShardLayout",
         )
+
+
+@register_access_relation(Dot)
+def _dot_access(call, ctx):
+    """Pair inputs by their per-thread register index, then collapse the total."""
+    types = tuple(ctx.type_of(arg) for arg in call.args)
+    length = _local_numel(types[0])
+    if length is None:
+        raise ValueError("Dot access needs a static local register count")
+    values = {}
+    unit = Mesh((Topology("thread", 1),), Layout((1,), (1,)), ("unit",))
+
+    def registers(type_):
+        layout = resolve_layout(type_.layout, type_.shape)
+        shard = (
+            layout if isinstance(layout, ShardLayout) else ShardLayout(layout, (Broadcast(),), unit)
+        )
+        coordinates = layout_to_isl_map(
+            type_.shape, shard, values, divided=lambda layer: range(len(layer.attrs))
+        )
+        strides = register_strides(shard)
+        modes = ", ".join(f"p{axis}" for axis in range(len(strides)))
+        index = " + ".join(f"{step} * p{axis}" for axis, step in enumerate(strides) if step) or "0"
+        slots = coordinates.apply_range(isl.map(f"{{ [{modes}] -> [{index}] }}"))
+        return slots.intersect_domain(shape_to_isl_set(type_.shape, values)).reverse()
+
+    reads = [registers(type_) for type_ in types[:2]]
+    result = registers(types[2])
+    destination = isl.map("{ [r] -> [0] }").apply_range(result)
+    boundaries = [*reads, destination]
+    if len(types) > 3:
+        slots = _workspace_slots(types[0]) if isinstance(types[0].layout, ShardLayout) else 1
+        boundaries.append(isl.map(f"{{ [r] -> [s] : 0 <= s < {slots} }}"))
+    boundaries.append(destination)
+
+    def access(relation):
+        names = {
+            relation.get_dim_name(isl.dim_type.PARAM, i)
+            for i in range(relation.dim(isl.dim_type.PARAM))
+        }
+        return AccessRelation(relation, {name: values[name] for name in names})
+
+    return iterating((max(1, length),), tuple(access(relation) for relation in boundaries))

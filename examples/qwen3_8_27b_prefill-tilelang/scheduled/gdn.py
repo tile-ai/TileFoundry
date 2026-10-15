@@ -85,9 +85,9 @@ def delta_rule_intra(M: int):
                         qs = tf.schedule((tf.reshape(q[t0:t0 + CH, kh:kh + 1, :], (CH, D)),), op=T.copy_async_tensor(smem_layout=Layout(((8, 8), (2, 4, 16)), ((512, 64), (4096, 16, 1))) | Swizzle(3, 4, 3)))
                     with Mesh(threads, layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as s:
                         kt = tf.bitcast(ks, layout=Layout(((2, 4, 16), (8, 8)), ((4096, 16, 1), (512, 64))) | Swizzle(3, 4, 3))
-                        kk = tf.schedule((tf.zeros(Tensor[(CH, CH), "f32", ((8 @ s.lane8, 2, 4 @ s.warp, 2, 4 @ s.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"]), ks, kt),
+                        kk = tf.schedule((tf.zeros(Tensor[(CH, CH), "f32", ((4 @ s.warp, 2, 8 @ s.lane8, 8, 4 @ s.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"]), ks, kt),
                                          op=T.tiled_mma(atom=w_qk), repeat=(1, 1, 8))
-                        qk = tf.schedule((tf.zeros(Tensor[(CH, CH), "f32", ((8 @ s.lane8, 2, 4 @ s.warp, 2, 4 @ s.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"]), qs, kt),
+                        qk = tf.schedule((tf.zeros(Tensor[(CH, CH), "f32", ((4 @ s.warp, 2, 8 @ s.lane8, 8, 4 @ s.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"]), qs, kt),
                                          op=T.tiled_mma(atom=w_qk), repeat=(1, 1, 8))
                     # V lands after Q K^T, in Q's place
                     with threads[0, :] as _loader2:
@@ -106,7 +106,7 @@ def delta_rule_intra(M: int):
                     with Mesh(threads, layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as s:
                         ir = tf.schedule((tf.reshape(iota, (CH, 1)),), op=T.copy(rmem_layout=((8 @ s.lane8, 2, 4 @ s.warp, 1), (1, 8, 16, 0))))
                         jc = tf.schedule((tf.reshape(iota, (1, CH)),), op=T.copy(rmem_layout=((1, 2, 4 @ s.lane4, 8), (0, 64, 128, 512))))
-                        dif = tf.schedule((ir - jc,), op=T.copy(rmem_layout=((8 @ s.lane8, 2, 4 @ s.warp, 2, 4 @ s.lane4, 8), (1, 8, 16, 64, 128, 512))))
+                        dif = tf.schedule((ir - jc,), op=T.copy(rmem_layout=((4 @ s.warp, 2, 8 @ s.lane8, 8, 4 @ s.lane4, 2,), (16, 8, 1, 512, 128, 64))))
                         zi = tf.zeros(Tensor[(1, 1), "i32", (1, 1), "rmem"])   # an i32 zero (an integer literal is i64)
                         gr = tf.schedule((tf.reshape(gcs, (CH, 1)),), op=T.copy(rmem_layout=((8 @ s.lane8, 2, 4 @ s.warp, 1), (1, 8, 16, 0))))
                         gcl = tf.schedule((tf.reshape(gcs, (1, CH)),), op=T.copy(rmem_layout=((1, 2, 4 @ s.lane4, 8), (0, 64, 128, 512))))
@@ -235,10 +235,10 @@ def delta_rule_intra(M: int):
                         jc2 = tf.schedule((tf.reshape(iota, (1, CH)),), op=T.copy(rmem_layout=((1, 2, 4 @ s2.lane4, 8), (0, 64, 128, 512))))
                         zi2 = tf.zeros(Tensor[(1, 1), "i32", (1, 1), "rmem"])
                         c16 = tf.cast(tf.zeros(Tensor[(1, 1), "f32", (1, 1), "rmem"]) + 16.0, "i32")   # i32 sixteen
-                        d2 = tf.schedule((ir2 - jc2,), op=T.copy(rmem_layout=((8 @ s2.lane8, 2, 4 @ s2.warp, 2, 4 @ s2.lane4, 8), (1, 8, 16, 64, 128, 512))))
-                        db = tf.schedule((ir2 // c16 - jc2 // c16,), op=T.copy(rmem_layout=((8 @ s2.lane8, 2, 4 @ s2.warp, 2, 4 @ s2.lane4, 8), (1, 8, 16, 64, 128, 512))))
-                        an = tf.schedule((asm[:, 0:CH],), op=T.copy(rmem_layout=((8 @ s2.lane8, 2, 4 @ s2.warp, 2, 4 @ s2.lane4, 8), (1, 8, 16, 64, 128, 512))))
-                        at = tf.schedule((tf.bitcast(asm[:, 0:CH], layout=Layout((64, 64), (1, 65))),), op=T.copy(rmem_layout=((8 @ s2.lane8, 2, 4 @ s2.warp, 2, 4 @ s2.lane4, 8), (1, 8, 16, 64, 128, 512))))
+                        d2 = tf.schedule((ir2 - jc2,), op=T.copy(rmem_layout=((4 @ s2.warp, 2, 8 @ s2.lane8, 8, 4 @ s2.lane4, 2,), (16, 8, 1, 512, 128, 64))))
+                        db = tf.schedule((ir2 // c16 - jc2 // c16,), op=T.copy(rmem_layout=((4 @ s2.warp, 2, 8 @ s2.lane8, 8, 4 @ s2.lane4, 2,), (16, 8, 1, 512, 128, 64))))
+                        an = tf.schedule((asm[:, 0:CH],), op=T.copy(rmem_layout=((4 @ s2.warp, 2, 8 @ s2.lane8, 8, 4 @ s2.lane4, 2,), (16, 8, 1, 512, 128, 64))))
+                        at = tf.schedule((tf.bitcast(asm[:, 0:CH], layout=Layout((64, 64), (1, 65))),), op=T.copy(rmem_layout=((4 @ s2.warp, 2, 8 @ s2.lane8, 8, 4 @ s2.lane4, 2,), (16, 8, 1, 512, 128, 64))))
                         tm = tf.where(d2 == zi2, 1.0, tf.where(d2 > zi2, tf.where(db == zi2, an, at), 0.0))
                         tb = tf.schedule((tf.cast(tm, "bf16"),), op=T.copy(smem_layout=Layout(((8, 8), (4, 16)), ((512, 64), (16, 1))) | Swizzle(3, 4, 3)))
                     # w = T bf16(beta k e^g), u = T bf16(beta v), one 64-wide column chunk at a time on the tensor
@@ -246,11 +246,11 @@ def delta_rule_intra(M: int):
                     # stored by TMA into the packed row.
                     ost = tf.zeros(Tensor[(CH, D), "bf16", Layout((CH, (2, 64)), (64, (4096, 1))) | Swizzle(3, 4, 3), "smem"])
                     with Mesh(threads, layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as mw0:
-                        ow0 = tf.schedule((tf.zeros(Tensor[(CH, 64), "f32", ((8 @ mw0.lane8, 2, 4 @ mw0.warp, 2, 4 @ mw0.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"]), tb, xw0s),
+                        ow0 = tf.schedule((tf.zeros(Tensor[(CH, 64), "f32", ((4 @ mw0.warp, 2, 8 @ mw0.lane8, 8, 4 @ mw0.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"]), tb, xw0s),
                                              op=T.tiled_mma(atom=w_tx), repeat=(1, 1, 4))
                         ost = tf.insert_slice(ost, tf.cast(ow0, "bf16"), (0, 0))
                     with Mesh(threads, layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as mw1:
-                        ow1 = tf.schedule((tf.zeros(Tensor[(CH, 64), "f32", ((8 @ mw1.lane8, 2, 4 @ mw1.warp, 2, 4 @ mw1.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"]), tb, xw1s),
+                        ow1 = tf.schedule((tf.zeros(Tensor[(CH, 64), "f32", ((4 @ mw1.warp, 2, 8 @ mw1.lane8, 8, 4 @ mw1.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"]), tb, xw1s),
                                              op=T.tiled_mma(atom=w_tx), repeat=(1, 1, 4))
                         ost = tf.insert_slice(ost, tf.cast(ow1, "bf16"), (0, 64))
                     with threads[0, :] as _storer:
@@ -258,11 +258,11 @@ def delta_rule_intra(M: int):
                         out = tf.insert_slice(out, tile, (t0, cta.h * WUP))
                     ost = tf.zeros(Tensor[(CH, D), "bf16", Layout((CH, (2, 64)), (64, (4096, 1))) | Swizzle(3, 4, 3), "smem"])
                     with Mesh(threads, layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as mu0:
-                        ou0 = tf.schedule((tf.zeros(Tensor[(CH, 64), "f32", ((8 @ mu0.lane8, 2, 4 @ mu0.warp, 2, 4 @ mu0.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"]), tb, xu0s),
+                        ou0 = tf.schedule((tf.zeros(Tensor[(CH, 64), "f32", ((4 @ mu0.warp, 2, 8 @ mu0.lane8, 8, 4 @ mu0.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"]), tb, xu0s),
                                              op=T.tiled_mma(atom=w_tx), repeat=(1, 1, 4))
                         ost = tf.insert_slice(ost, tf.cast(ou0, "bf16"), (0, 0))
                     with Mesh(threads, layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as mu1:
-                        ou1 = tf.schedule((tf.zeros(Tensor[(CH, 64), "f32", ((8 @ mu1.lane8, 2, 4 @ mu1.warp, 2, 4 @ mu1.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"]), tb, xu1s),
+                        ou1 = tf.schedule((tf.zeros(Tensor[(CH, 64), "f32", ((4 @ mu1.warp, 2, 8 @ mu1.lane8, 8, 4 @ mu1.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"]), tb, xu1s),
                                              op=T.tiled_mma(atom=w_tx), repeat=(1, 1, 4))
                         ost = tf.insert_slice(ost, tf.cast(ou1, "bf16"), (0, 64))
                     with threads[0, :] as _storer:
@@ -304,7 +304,7 @@ def delta_rule_recur(M: int):
                     v0 = cta.vb * BV
                     # WG0: the state S (d x v, f32), and its bf16 copy for the tensor cores
                     with Mesh(threads[0, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as s0:
-                        st = tf.zeros(Tensor[(D, BV), "f32", ((2, 8 @ s0.lane8, 2, 4 @ s0.warp, 2, 4 @ s0.lane4, 8), (4096, 1, 8, 16, 64, 128, 512)), "rmem"])
+                        st = tf.zeros(Tensor[(D, BV), "f32", ((2, 4 @ s0.warp, 2, 8 @ s0.lane8, 8, 4 @ s0.lane4, 2,), (4096, 16, 8, 1, 512, 128, 64)), "rmem"])
                     for c in range(C):
                         t0 = c * CH
                         # WG0: S_c in bf16 for the tensor cores (3-deep: WG1 reads it a chunk behind)
@@ -326,11 +326,11 @@ def delta_rule_recur(M: int):
                             eqs = tf.schedule((tf.exp(g64) * SCALE,), op=T.copy(smem_layout=Layout((CH,), (1,))), buffers=3)
                         # WG0: v_new = u - w S;  S <- e^gl S + K^T (v_new e^(gl - g))
                         with Mesh(threads[0, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as s0:
-                            vn = tf.zeros(Tensor[(CH, BV), "f32", ((8 @ s0.lane8, 2, 4 @ s0.warp, 2, 4 @ s0.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"])
+                            vn = tf.zeros(Tensor[(CH, BV), "f32", ((4 @ s0.warp, 2, 8 @ s0.lane8, 8, 4 @ s0.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"])
                             vn = tf.schedule((vn, ws, tf.bitcast(sb, layout=Layout(((8, 2, 8), (1, 64)), ((1024, 512, 64), (1024, 1))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=w_kmn), repeat=(1, 1, 8))
                             el = tf.exp(tf.schedule((tf.reshape(gs[0:1, CH - 1:CH], (1, 1)),), op=T.copy(rmem_layout=(1, 1))))
                             st = st * el
-                            uu = tf.cast(tf.schedule((us,), op=T.copy(rmem_layout=((8 @ s0.lane8, 2, 4 @ s0.warp, 2, 4 @ s0.lane4, 8), (1, 8, 16, 64, 128, 512)))), "f32")
+                            uu = tf.cast(tf.schedule((us,), op=T.copy(rmem_layout=((4 @ s0.warp, 2, 8 @ s0.lane8, 8, 4 @ s0.lane4, 2,), (16, 8, 1, 512, 128, 64)))), "f32")
                             vn = uu - vn
                             edr = tf.schedule((tf.reshape(eds, (CH, 1)),), op=T.copy(rmem_layout=((8 @ s0.lane8, 2, 4 @ s0.warp, 1), (1, 8, 16, 0))))
                             vnb = tf.schedule((tf.cast(vn, "bf16"),), op=T.copy(smem_layout=Layout(((4, 2, 8), (1, 64)), ((1024, 512, 64), (1024, 1))) | Swizzle(3, 4, 3)), buffers=3)
@@ -338,7 +338,7 @@ def delta_rule_recur(M: int):
                             st = tf.schedule((st, tf.bitcast(ks, layout=Layout(((2, 1, 64), (4, 2, 8)), ((4096, 1024, 1), (1024, 512, 64))) | Swizzle(3, 4, 3)), vd), op=T.tiled_mma(atom=w_mnmn), repeat=(2, 1, 4))
                         # WG1: o = scale e^g (q S_c) + P v_new, staged and stored by TMA
                         with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as s1:
-                            o = tf.zeros(Tensor[(CH, BV), "f32", ((8 @ s1.lane8, 2, 4 @ s1.warp, 2, 4 @ s1.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"])
+                            o = tf.zeros(Tensor[(CH, BV), "f32", ((4 @ s1.warp, 2, 8 @ s1.lane8, 8, 4 @ s1.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"])
                             o = tf.schedule((o, qs, tf.bitcast(sb, layout=Layout(((8, 2, 8), (1, 64)), ((1024, 512, 64), (1024, 1))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=w_kmn), repeat=(1, 1, 8))
                             eqr = tf.schedule((tf.reshape(eqs, (CH, 1)),), op=T.copy(rmem_layout=((8 @ s1.lane8, 2, 4 @ s1.warp, 1), (1, 8, 16, 0))))
                             o = o * eqr

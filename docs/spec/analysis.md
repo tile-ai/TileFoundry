@@ -549,6 +549,9 @@ class BufferAlias:
     topology. Lowering MUST execute this decision without reading
     the InsertSlice's parameters at the producer. An untied carry MUST receive
     its own storage and a copy of its initial value before entering the loop.
+    A window adopted for a group containing a tied carried parameter MUST be
+    recorded on its tie initial; the carried parameter MUST retain its tie alias.
+    This changes the alias's owner, not the group's placement constraints.
     Ordinary `smem` aliases use their placed offsets; `rmem` alias groups only
     estimate peaks. Scope construction MUST compute each value's source once
     per view in definition order, using only its operands' source entries.

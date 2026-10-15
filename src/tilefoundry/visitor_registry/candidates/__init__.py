@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 
+from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.core.op import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, collect_param_defs
 from tilefoundry.ir.hir.schedule import ScheduleRefusal
@@ -81,10 +82,20 @@ def candidate_operands(call, op_type):
 
 def sole_candidate(hir_op: Op) -> Op | None:
     """Build the one registered instruction from same-named attributes, or None."""
-    candidates = candidate_ops(type(hir_op))
+    call = hir_op if isinstance(hir_op, Call) else None
+    target = call.target if call is not None else hir_op
+    candidates = candidate_ops(type(target))
     if len(candidates) != 1:
         return None
-    return instruction_from_hir(hir_op, candidates[0])
+    if call is None:
+        return instruction_from_hir(target, candidates[0])
+    attributes, _types = candidate_operands(call, candidates[0])
+    if any(
+        param.kind == "attribute" and not param.has_default and param.name not in attributes
+        for param in collect_param_defs(candidates[0])
+    ):
+        return None
+    return candidates[0](**attributes)
 
 
 def _auto_import(pkg_name: str) -> None:

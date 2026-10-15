@@ -84,7 +84,7 @@ def candidates(
                 "id": identifier,
                 **pattern_printer.match_data(tuple(match.path for match in instances)),
             }
-            if sole_candidate(call.target) is not None:
+            if sole_candidate(call) is not None:
                 candidate["default"] = True
             usable.append(candidate)
         parameters = [

@@ -18,7 +18,7 @@ from tilefoundry.ir.tir.cuda.sync.mbarrier import (
     MBarrierWaitParity,
 )
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
@@ -29,10 +29,20 @@ _PHASE = make_tensor_type((), DType.from_name("i32"), storage="rmem")
 
 def _pf(op, *types) -> PrimFunction:
     args = tuple(Var(type=t, name=f"a{i}") for i, t in enumerate(types))
+    mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
     return PrimFunction(
         name="fn",
         params=args,
-        body=Sequential(body=(Evaluate(callable=op, args=args), Return())),
+        body=Sequential(
+            body=(
+                MeshScope(
+                    mesh=mesh,
+                    binding=Var(name="thread", type=mesh),
+                    body=Sequential(body=(Evaluate(callable=op, args=args),)),
+                ),
+                Return(),
+            )
+        ),
     )
 
 
@@ -43,7 +53,7 @@ def test_init_accepts_a_shared_barrier_and_a_positive_count() -> None:
 @pytest.mark.parametrize("count", [0, -1])
 def test_init_refuses_a_non_positive_arrive_count(count: int) -> None:
     """A non-positive arrive count is refused."""
-    with pytest.raises(VerifyError, match="arrive_count must be a positive int"):
+    with pytest.raises(VerifyError, match="arrive_count: could not satisfy arrive_count > 0"):
         verify_prim_function(_pf(MBarrierInit(arrive_count=count), _SMEM_BAR))
 
 
@@ -62,7 +72,7 @@ def test_invalidate_accepts_a_shared_barrier() -> None:
 )
 def test_every_entry_refuses_a_barrier_outside_shared_memory(stated) -> None:
     """A barrier outside shared memory is refused."""
-    with pytest.raises(VerifyError, match="barrier must be smem"):
+    with pytest.raises(VerifyError, match="barrier: gmem does not match smem"):
         verify_prim_function(stated)
 
 
@@ -72,7 +82,7 @@ def test_arrive_expect_tx_accepts_a_positive_byte_count() -> None:
 
 @pytest.mark.parametrize("tx", [0, -16])
 def test_arrive_expect_tx_refuses_a_non_positive_byte_count(tx: int) -> None:
-    with pytest.raises(VerifyError, match="tx_bytes must be a positive int"):
+    with pytest.raises(VerifyError, match="tx_bytes: could not satisfy tx_bytes > 0"):
         verify_prim_function(_pf(MBarrierArriveExpectTx(tx_bytes=tx), _SMEM_BAR))
 
 
@@ -85,9 +95,7 @@ class MBarrierRing:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def mbarrier_ring_device(a: Tensor[(4,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
-            bar = T.alloc_tensor(
-                Tensor[(1,), "i64", None, "smem"]
-            )
+            bar = T.alloc_tensor(Tensor[(1,), "i64", None, "smem"])
             T.mbarrier_init(bar, arrive_count=1)
             T.sync(m)
             T.mbarrier_arrive_expect_tx(bar, tx_bytes=1024)

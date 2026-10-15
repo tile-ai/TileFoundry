@@ -17,10 +17,11 @@ class WGMMA_B_NK:
     ) -> Tensor[(64, 16), "f32", "umat"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as threads:
+                output = tf.zeros(Tensor[(64, 16), "f32"])
                 acc = tf.zeros(Tensor[
                     (64, 16), "f32",
-                    ((8 @ threads.lane8, 2, 4 @ threads.warp, 2, 4 @ threads.lane4, 2),
-                     (1, 8, 16, 64, 128, 512)), "rmem",
+                    ((4 @ threads.warp, 2, 8 @ threads.lane8, 2, 4 @ threads.lane4, 2,),
+                     (16, 8, 1, 512, 128, 64)), "rmem",
                 ])
                 lhs_dst = tf.empty(Tensor[
                     (64, 16), "bf16",
@@ -33,10 +34,11 @@ class WGMMA_B_NK:
                     Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))), "smem",
                 ])
                 rhs = tf.schedule((rhs_kn, rhs_dst), op=T.copy())
-                return tf.schedule(
+                result = tf.schedule(
                     (acc, lhs, rhs),
                     op=T.tiled_mma(atom=T.cuda.sm90.Wgmma(
                         n=16, dtype="bf16", form=T.cuda.sm90.Form.SS,
                         a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K,
                     )),
                 )
+                return tf.insert_slice(output, result, (0, 0))

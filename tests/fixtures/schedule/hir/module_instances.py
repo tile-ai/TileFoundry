@@ -45,11 +45,18 @@ def _program():
 
         @func
         def gemm(x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"]) -> Tensor[(32,), "f32"]:
-            for i in range(3):
-                x = layers[i](x)  # noqa: F821 -- class-body binding
-            x = mm(mm(x))  # noqa: F821 -- class-body binding
-            x = layers[0](x)  # noqa: F821 -- class-body binding
-            return helper(x, w)  # noqa: F821 -- class-body binding
+            with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
+                with Mesh(("thread",), layout=(32,), names=("lane",)) as _thread:
+                    out = tf.empty(Tensor[(32,), "f32", None, "gmem"])
+                    state = tf.schedule((x, out), op=T.copy())
+                for i in range(3):
+                    updated = layers[i](state)  # noqa: F821 -- class-body binding
+                    with Mesh(("thread",), layout=(32,), names=("lane",)) as _thread:
+                        state = tf.schedule((updated, state), op=T.copy())
+                x = mm(mm(state))  # noqa: F821 -- class-body binding
+                x = layers[0](x)  # noqa: F821 -- class-body binding
+                return helper(x, w)  # noqa: F821 -- class-body binding
+
 
     return ModuleInstances
 

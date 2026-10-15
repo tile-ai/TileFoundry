@@ -54,7 +54,7 @@ def attention(M: int):
                     with threads[2, :32] as _loader:
                         qs = tf.schedule((qkv[q0:q0 + BM, cta.h * 2 * D:cta.h * 2 * D + D],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 4, 16)), ((4096, 512, 64), (8192, 16, 1))) | Swizzle(3, 4, 3)))
                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                        o = tf.zeros(Tensor[(BM, D), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                        o = tf.zeros(Tensor[(BM, D), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                         mx = tf.zeros(Tensor[(BM, 1), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 1), (64, 1, 8, 16, 0)), "rmem"]) - 1e30
                         rows = tf.schedule((tf.reshape(iota, (BM, 1)),), op=T.copy(rmem_layout=((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 1), (64, 1, 8, 16, 0)))) + tf.cast(tf.zeros(Tensor[(1, 1), "i64", (1, 1), "rmem"]) + q0, "i32")
                         lsum = tf.zeros(Tensor[(BM, 1), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 1), (64, 1, 8, 16, 0)), "rmem"])
@@ -64,23 +64,23 @@ def attention(M: int):
                             ks = tf.schedule((qkv[k0:k0 + BN, K0 + g * D:K0 + g * D + D],), op=T.copy_async_tensor(smem_layout=Layout((80, (4, 64)), (64, (5120, 1))) | Swizzle(3, 4, 3)), buffers=2)
                             vs = tf.schedule((qkv[k0:k0 + BN, V0 + g * D:V0 + g * D + D],), op=T.copy_async_tensor(smem_layout=Layout(((5, 16), (4, 64)), ((4096, 64), (1024, 1))) | Swizzle(3, 4, 3)), buffers=2)
                         with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                            s0 = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 10), (5120, 1, 8, 16, 64, 128, 512)), "rmem"])
+                            s0 = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 10, 4 @ c.lane4, 2,), (5120, 16, 8, 1, 512, 128, 64)), "rmem"])
                             s = tf.schedule((s0, qs, tf.bitcast(ks, layout=Layout(((4, 4, 16), (10, 8)), ((5120, 16, 1), (512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=wqk), repeat=(2, 1, 16))
                             for _dg in range(((NQB - 1 - cta.qb) * BM) // BN - 1, (cta.qb * 0 + kb) % KBMOD, 1048576):   # once for a block the diagonal crosses (kb >= q0 // BN)
                                 cols = tf.schedule((tf.reshape(iota[0:BN], (1, BN)),), op=T.copy(rmem_layout=((1, 2, 4 @ c.lane4, 10), (0, 64, 128, 512)))) + tf.cast(tf.zeros(Tensor[(1, 1), "i64", (1, 1), "rmem"]) + k0, "i32")
-                                dif = tf.schedule((rows - cols,), op=T.copy(rmem_layout=((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 10), (5120, 1, 8, 16, 64, 128, 512))))
+                                dif = tf.schedule((rows - cols,), op=T.copy(rmem_layout=((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 10, 4 @ c.lane4, 2,), (5120, 16, 8, 1, 512, 128, 64))))
                                 s = tf.where(dif >= tf.zeros(Tensor[(1, 1), "i32", (1, 1), "rmem"]), s, -1e30)
                             mnew = tf.maximum(mx, tf.schedule((tf.reduce(s, (1,), True, ReduceKind.MAX),), op=T.copy(rmem_layout=((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 1), (64, 1, 8, 16, 0)))))
                             corr = tf.exp2(mx * SCALE - mnew * SCALE)
                             p = tf.exp2(s * SCALE - mnew * SCALE)
                             lsum = lsum * corr + tf.schedule((tf.reduce(p, (1,), True, ReduceKind.SUM),), op=T.copy(rmem_layout=((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 1), (64, 1, 8, 16, 0))))
                             o = o * corr
-                            pb = tf.schedule((tf.cast(p, "bf16"),), op=T.copy(rmem_layout=((2 @ c.group, 5, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 2), (5120, 1024, 1, 8, 16, 64, 128, 512))))
+                            pb = tf.schedule((tf.cast(p, "bf16"),), op=T.copy(rmem_layout=((2 @ c.group, 5, 4 @ c.warp, 2, 8 @ c.lane8, 2, 4 @ c.lane4, 2,), (5120, 1024, 16, 8, 1, 512, 128, 64))))
                             o = tf.schedule((o, pb, tf.bitcast(vs, layout=Layout(((5, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=wpv), repeat=(2, 1, 5))
                             mx = mnew
                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                         ob = tf.cast(tf.cast(o / lsum, "bf16"), "f32")
-                        gt = tf.cast(tf.schedule((qkv[q0:q0 + BM, cta.h * 2 * D + D:cta.h * 2 * D + 2 * D],), op=T.copy(rmem_layout=((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)))), "f32")
+                        gt = tf.cast(tf.schedule((qkv[q0:q0 + BM, cta.h * 2 * D + D:cta.h * 2 * D + 2 * D],), op=T.copy(rmem_layout=((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)))), "f32")
                         sg = tf.cast(tf.cast(1.0 / (tf.exp(-gt) + 1.0), "bf16"), "f32")
                         y = tf.cast(ob * sg, "bf16")
                         staged = tf.schedule((y,), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))

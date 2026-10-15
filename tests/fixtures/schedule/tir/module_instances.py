@@ -11,19 +11,16 @@ from tilefoundry.target import CudaTarget
 )
 class ScheduledScale:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
-    def run(
-        x: Tensor[(32,), "f32", (32,)], w: ConstTensor[(32,), "f32", (32,)], out: Tensor[(32,), "f32", (32,)]
-    ):
+    def run(x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"], out: Tensor[(32,), "f32"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
-            T.fill(out, 0.0)
-            scaled_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-            value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-            weight_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
-                with scope[:] as threads:
-                    T.copy(x, value_dst)
-                    T.copy(w, weight_dst)
-                    T.binary(value_dst, weight_dst, scaled_dst, kind=BinaryKind.MUL)
+                T.fill(out, 0.0)
+                scaled_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+                value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+                T.copy(x, value_dst)
+                weight_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+                T.copy(w, weight_dst)
+                T.binary(value_dst, weight_dst, scaled_dst, kind=BinaryKind.MUL)
                 window = T.tensor_view(T.ptr_of(out[0:0 + 32]), layout=(32,), shape=(32,))
                 T.copy(scaled_dst, window)
 
@@ -37,40 +34,52 @@ class ModuleInstances:
     mm = ScheduledScale
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
-    def helper(
-        x: Tensor[(32,), "f32", (32,)], w: ConstTensor[(32,), "f32", (32,)], out: Tensor[(32,), "f32", (32,)]
-    ):
+    def helper(x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"], out: Tensor[(32,), "f32"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
-            T.fill(out, 0.0)
-            value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
-                with scope[:] as threads:
-                    T.copy(x, value_dst)
+                T.fill(out, 0.0)
+                value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+                T.copy(x, value_dst)
                 window = T.tensor_view(T.ptr_of(out[0:0 + 32]), layout=(32,), shape=(32,))
                 T.copy(value_dst, window)
 
     # analysis target=nvidia.h200_sxm module=ModuleInstances function=gemm topology=cta wave=1/1
     # selection requested=memory executed=memory
-    # memory traffic=gmem:r1.62KB/w1.50KB@logical,r1.62KB/w1.75KB@total,r1.62KB/w1.75KB@cta,r1.62KB/w1.75KB@thread;rmem:r2.43KB/w2.38KB@logical,r2.43KB/w2.38KB@total,r2.43KB/w2.38KB@cta,r2.43KB/w2.38KB@thread footprint=v2/v0:24:128B;v2/v7:25:128B;v2/w:128B;v3/v7:25_2:256B;v3/w_2:128B;v4/v7:25_3:256B;v4/w_3:128B;v5/v7:25_4:256B;v5/w_4:128B;v6/v3:44:128B;x:128B footprint-precision=exact peak=gmem:1.00KB;rmem:128B persistent=gmem:768B
+    # memory traffic=gmem:r2.12KB/w2.00KB@logical,r2.12KB/w2.25KB@total,r2.12KB/w2.25KB@cta,r2.12KB/w2.25KB@thread;rmem:r2.43KB/w2.38KB@logical,r2.43KB/w2.38KB@total,r2.43KB/w2.38KB@cta,r2.43KB/w2.38KB@thread footprint=state:128B;v1:50:128B;v4/v0:24:128B;v4/v7:25:256B;v4/w:128B;v6/v7:25_2:256B;v6/w_2:128B;v7/v7:25_3:256B;v7/w_3:128B;v8/v7:25_4:256B;v8/w_4:128B;v9/v3:44:128B;x:128B footprint-precision=exact peak=gmem:1.00KB;rmem:128B persistent=gmem:768B
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def gemm(
-        x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"], scratch: Tensor[(32,), "f32"], scratch_1: Tensor[(32,), "f32"], scratch_2: Tensor[(32,), "f32"], scratch_3: Tensor[(32,), "f32"], scratch_4: Tensor[(32,), "f32"], scratch_5: Tensor[(32,), "f32"], out: Tensor[(32,), "f32"]
+        x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"], scratch: Tensor[(32,), "f32"], scratch_1: Tensor[(32,), "f32"], scratch_2: Tensor[(32,), "f32"], scratch_3: Tensor[(32,), "f32"], scratch_4: Tensor[(32,), "f32"], out: Tensor[(32,), "f32"]
     ):
-        x_1_1 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
-        T.copy(x, x_1_1)
-        for i in range(0, 3, 1):
-            x_2_1 = T.tensor_view(T.ptr_of(scratch_1[0:0 + 32]), layout=(32,), shape=(32,))
-            layers[i](x_1_1, x_2_1)
-            T.copy(x_2_1, x_1_1)
-        value_1 = T.tensor_view(T.ptr_of(scratch_2[0:0 + 32]), layout=(32,), shape=(32,))
-        mm(x_1_1, value_1)
-        x_3_1 = T.tensor_view(T.ptr_of(scratch_3[0:0 + 32]), layout=(32,), shape=(32,))
-        mm(value_1, x_3_1)
-        x_4_1 = T.tensor_view(T.ptr_of(scratch_4[0:0 + 32]), layout=(32,), shape=(32,))
-        layers[0](x_3_1, x_4_1)
-        value_2_1 = T.tensor_view(T.ptr_of(scratch_5[0:0 + 32]), layout=(32,), shape=(32,))
-        argument = T.tensor_view(T.ptr_of(w), layout=(32,), shape=(32,))
-        helper(x_4_1, argument, value_2_1)
-        T.copy(value_2_1, out)
+        with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
+            with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
+                out_1_1 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
+                T.copy(x, out_1_1)
+            for i in range(0, 3, 1):
+                out_1_2 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
+                argument = T.tensor_view(T.ptr_of(out_1_2), layout=(32,), shape=(32,))
+                updated_1 = T.tensor_view(T.ptr_of(scratch_1[0:0 + 32]), layout=(32,), shape=(32,))
+                argument_1 = T.tensor_view(T.ptr_of(updated_1), layout=(32,), shape=(32,))
+                layers[i](argument, argument_1)
+                with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope_1:
+                    updated_2 = T.tensor_view(
+                        T.ptr_of(scratch_1[0:0 + 32]), layout=(32,), shape=(32,)
+                    )
+                    out_1_3 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
+                    T.copy(updated_2, out_1_3)
+            out_1_4 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
+            argument_2 = T.tensor_view(T.ptr_of(out_1_4), layout=(32,), shape=(32,))
+            value_1 = T.tensor_view(T.ptr_of(scratch_2[0:0 + 32]), layout=(32,), shape=(32,))
+            argument_3 = T.tensor_view(T.ptr_of(value_1), layout=(32,), shape=(32,))
+            mm(argument_2, argument_3)
+            argument_4 = T.tensor_view(T.ptr_of(value_1), layout=(32,), shape=(32,))
+            x_1_1 = T.tensor_view(T.ptr_of(scratch_3[0:0 + 32]), layout=(32,), shape=(32,))
+            argument_5 = T.tensor_view(T.ptr_of(x_1_1), layout=(32,), shape=(32,))
+            mm(argument_4, argument_5)
+            argument_6 = T.tensor_view(T.ptr_of(x_1_1), layout=(32,), shape=(32,))
+            x_2_1 = T.tensor_view(T.ptr_of(scratch_4[0:0 + 32]), layout=(32,), shape=(32,))
+            argument_7 = T.tensor_view(T.ptr_of(x_2_1), layout=(32,), shape=(32,))
+            layers[0](argument_6, argument_7)
+            argument_8 = T.tensor_view(T.ptr_of(x_2_1), layout=(32,), shape=(32,))
+            helper(argument_8, w, out)
 
 del ScheduledScale

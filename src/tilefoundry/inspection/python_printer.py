@@ -570,7 +570,6 @@ def _emit_def(
     if root_mesh is not None:
         ctx.push_mesh(root_mesh, "mesh")
 
-    _counter = [0]
     _names: dict[int, str] = {}
 
     _seen: set[int] = set()
@@ -689,8 +688,13 @@ def _emit_def(
         if not isinstance(expr, LoopRegion) or id(expr) in _nested_grid_ids:
             continue
         for init in expr.args:
-            for _ in iter_exprs(init, _root_grid_init_ids):
-                pass
+            pending = [init]
+            while pending:
+                value = pending.pop()
+                if id(value) in _root_grid_init_ids:
+                    continue
+                _root_grid_init_ids.add(id(value))
+                pending.extend(value.args if isinstance(value, region_types) else expr_children(value))
     _grid_internal_ids.difference_update(_root_grid_init_ids)
 
     for expr in _order:
@@ -737,32 +741,42 @@ def _emit_def(
                     _tuple_index_ids.add(id(nested))
     _inlined_start_ids.update(_tuple_index_ids)
 
+    def _preferred_name(expr: Expr) -> str | None:
+        key = id(expr)
+        if key in _forced_names:
+            return _forced_names[key]
+        if isinstance(expr, Var) and expr.name:
+            return _sanitize_name(expr.name)
+        if key not in _window_start_call_ids and (authored_name := binding_name(expr)):
+            return _sanitize_name(authored_name)
+        return None
+
+    _positions = {
+        id(expr): position
+        for position, expr in enumerate(expr for expr in _order if not isinstance(expr, Var) or not expr.name)
+    }
+    _reserved_names = {
+        name for expr in _order if (name := _preferred_name(expr)) is not None
+    }
+
     def _assign_name(expr: Expr) -> str:
+        """Use definition positions independent of import-supplied binding names.
+
+        Named Vars declare parameters; other values occupy definition positions.
+        Reserve authored identifiers before generating names or suffixes.
+        """
         key = id(expr)
         if key in _names:
             return _names[key]
-        if key in _forced_names:
-            name = _forced_names[key]
-        elif isinstance(expr, Var):
-            name = _sanitize_name(expr.name)
-        elif (
-            isinstance(expr, Call)
-            and key not in _window_start_call_ids
-            and (authored_name := binding_name(expr))
-        ):
-            name = _sanitize_name(authored_name)
-        else:
-            name = f"v{_counter[0]}"
-            _counter[0] += 1
+        preferred = _preferred_name(expr)
+        name = preferred if preferred is not None else f"v{_positions[key]}"
         if key in _forced_names and name in _names.values():
             _names[key] = name
             return name
 
-        if name in _op_names_set:
-            name = f"{name}_out"
         base = name
         n = 2
-        while name in _names.values():
+        while name in _names.values() or (name in _reserved_names and name != preferred):
             name = f"{base}_{n}"
             n += 1
         _names[key] = name
@@ -775,6 +789,9 @@ def _emit_def(
         if isinstance(expr, LoopRegion):
             for carry in expr.params[: len(expr.yield_values)]:
                 _assign_name(carry)
+    for expr in _order:
+        if isinstance(expr, LoopRegion):
+            _assign_name(expr.induction_var)
     printer.bind_def(_names, _param_alias, child_entries, _moved_window)
 
     return_type = fn.return_type
@@ -902,7 +919,7 @@ def _emit_def(
         else:
             loop = f"range({start}, {extent}, {step})"
         lines.append(
-            f"{level}for {region.induction_var.name} in {loop}:{_comments(region, options, printer, ctx)}"
+            f"{level}for {_names[id(region.induction_var)]} in {loop}:{_comments(region, options, printer, ctx)}"
         )
         printed.add(key)
         inner = level + "    "

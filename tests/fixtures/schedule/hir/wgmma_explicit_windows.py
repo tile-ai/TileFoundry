@@ -45,7 +45,7 @@ class WGMMA_EXPLICIT_WINDOWS:
                 for m in range(0, M, BM):
                     for n in range(0, N, BN):
                         with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
-                            acc = tf.zeros(Tensor[(BM, BN), "f32", ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 4), (1, 8, 16, 64, 128, 512)), "rmem"])
+                            acc = tf.zeros(Tensor[(BM, BN), "f32", ((4 @ _compute.warp, 2, 8 @ _compute.lane8, 4, 4 @ _compute.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"])
 
                         for k in tf.tile(K, BK):
                             with threads[0, :32] as _loader:

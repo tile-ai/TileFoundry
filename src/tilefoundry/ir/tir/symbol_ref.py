@@ -15,17 +15,25 @@ class SymbolRef(Expr):
     nested: tuple[str, ...] = ()
 
 
-def symbol_call(callee, args) -> "Evaluate":  # noqa: F821 -- lazy Evaluate
-    """Build ``Evaluate(SymbolRef(callee), args)``.
+def symbol_ref(callee, symbol: str | None = None) -> SymbolRef:
+    """Construct a typed symbol, splitting an explicit child-slot selector."""
+    from tilefoundry.ir.types.callable_type import (  # noqa: PLC0415
+        CallableType,
+        callable_type_for_prim_function,
+    )
 
-    Build ``Evaluate(SymbolRef(callee), args)`` — a Stmt-position call of a
-    callee ``PrimFunction`` by symbol.
-    """
+    type_ = getattr(callee, "type", None)
+    if not isinstance(type_, CallableType):
+        type_ = callable_type_for_prim_function(callee)
+    parts = (callee.name,) if symbol is None else tuple(symbol.split("."))
+    return SymbolRef(name=parts[-1], nested=parts[:-1], type=type_)
+
+
+def symbol_call(callee, args, *, symbol: str | None = None) -> "Evaluate":  # noqa: F821
+    """Build an effect call with an optional child-slot selector."""
     from tilefoundry.ir.tir.stmts import Evaluate  # noqa: PLC0415
-    from tilefoundry.ir.types.callable_type import callable_type_for_prim_function  # noqa: PLC0415
 
-    ref = SymbolRef(name=callee.name, type=callable_type_for_prim_function(callee))
-    return Evaluate(callable=ref, args=tuple(args))
+    return Evaluate(callable=symbol_ref(callee, symbol), args=tuple(args))
 
 
-__all__ = ["SymbolRef", "symbol_call"]
+__all__ = ["SymbolRef", "symbol_ref", "symbol_call"]

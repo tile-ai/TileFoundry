@@ -736,13 +736,22 @@ second presentation of the result.
   MUST be the group's least-stepping modes, as many as its size takes, in the
   order the group wrote them. A start that is not a multiple of the size, a
   size landing on no mode boundary, and a step MUST each be refused.
-- A `ShardLayout` slice MUST preserve its mesh attributes when every narrowed
-  logical axis is unsplit. The corresponding primitive layout position takes
-  the window size and stepped stride. Static starts wrap that shard layout in a
-  `ComposedLayout` only when the resulting offset is nonzero. A zero offset,
-  runtime starts, or a static start multiplied by a symbolic source stride
-  preserve the bare `ShardLayout`: the distribution remains directly visible
-  while no useful static displacement is present.
+- `ShardLayout` slices and instruction projection MUST use one window derivation.
+  On a logical axis containing a Split mode, the window MUST be one complete
+  suffix block in the logical row-major mode order. A mode `(a*b):(d)` MAY be
+  factored as `(a,b):(b*d,d)`. Every Split mode MUST remain in the suffix,
+  with its stride and mesh attribute preserved, and the slice step MUST be 1.
+  The start MUST be a multiple of the block size: constants are checked directly,
+  and induction expressions MUST be proved aligned with isl over the enclosing
+  loop domain carried by type inference. Prefix coordinates contribute a
+  per-thread displacement; they MUST NOT change which thread owns an element.
+- On an axis without Split modes, the existing representable affine-window
+  rules remain: a primitive mode takes the window size and stepped stride.
+  This includes an unsplit `6 -> 4` QKV group window, non-unit steps, and runtime
+  starts. Static nonzero offsets wrap the retained shard layout in a
+  `ComposedLayout`; runtime starts without a known displacement preserve the
+  bare distribution. A window crossing a Split mode or lacking its required
+  alignment proof MUST be refused.
 - `ComposedLayout(inner=None, outer=ShardLayout(...))` is a sharded view.
   Relation-driven consumers, local projection, execution-domain discovery, and
   Partial checks MUST read distribution from its outer layout. Its offset is

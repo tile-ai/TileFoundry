@@ -14,16 +14,16 @@ class MmHandwritten:
             (Topology("thread", 32),), layout=((4, 8), (1, 4)), names=("warp", "lane")
         ) as _warp:
             a_view = T.tensor_view(
-                T.ptr_of(a), layout=((2, 4 @ _warp.warp, 2, 8 @ _warp.lane, 2), (1, 2, 8, 16, 128))
+                T.ptr_of(a), layout=((2, 8 @ _warp.lane, 2, 4 @ _warp.warp, 2), (128, 16, 8, 2, 1))
             )
             b_view = T.tensor_view(
-                T.ptr_of(b), layout=((8 @ _warp.lane, 2, 4 @ _warp.warp, 2), (1, 8, 16, 64))
+                T.ptr_of(b), layout=((2, 4 @ _warp.warp, 2, 8 @ _warp.lane), (64, 16, 8, 1))
             )
             a_frag = T.alloc_tensor(
                 tensor_type=Tensor[
                     (16, 16),
                     "bf16",
-                    ((2, 4 @ _warp.warp, 2, 8 @ _warp.lane, 2), (1, 2, 8, 16, 128)),
+                    ((2, 8 @ _warp.lane, 2, 4 @ _warp.warp, 2), (128, 16, 8, 2, 1)),
                     "rmem",
                 ]
             )
@@ -31,13 +31,13 @@ class MmHandwritten:
                 tensor_type=Tensor[
                     (16, 8),
                     "bf16",
-                    ((8 @ _warp.lane, 2, 4 @ _warp.warp, 2), (1, 8, 16, 64)),
+                    ((2, 4 @ _warp.warp, 2, 8 @ _warp.lane), (64, 16, 8, 1)),
                     "rmem",
                 ]
             )
             acc = T.alloc_tensor(
                 tensor_type=Tensor[
-                    (16, 8), "f32", ((2, 4 @ _warp.warp, 8 @ _warp.lane, 2), (1, 2, 8, 64)), "rmem"
+                    (16, 8), "f32", ((2, 8 @ _warp.lane, 4 @ _warp.warp, 2), (64, 8, 2, 1)), "rmem"
                 ]
             )
             T.copy(a_view, a_frag)
@@ -45,7 +45,7 @@ class MmHandwritten:
             T.fill(acc, 0.0)
             T.tiled_mma(acc, a_frag, b_frag, atom=T.cuda.sm80.Mma())
             c_view = T.tensor_view(
-                T.ptr_of(c), layout=((2, 4 @ _warp.warp, 8 @ _warp.lane, 2), (1, 2, 8, 64))
+                T.ptr_of(c), layout=((2, 8 @ _warp.lane, 4 @ _warp.warp, 2), (64, 8, 2, 1))
             )
             T.copy(acc, c_view)
 

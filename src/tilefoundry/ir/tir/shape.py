@@ -25,4 +25,9 @@ class ShapeOf(Expr):
     axis: int
 
 
-__all__ = ["ShapeOf"]
+def shape_of(param: Var, *, axis: int) -> ShapeOf:
+    """Author the same runtime extent expression that the TIR printer emits."""
+    return ShapeOf(param=param, axis=axis)
+
+
+__all__ = ["ShapeOf", "shape_of"]

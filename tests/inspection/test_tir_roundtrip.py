@@ -14,7 +14,14 @@ from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Constant, Var
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.stmts import For, Sequential
+from tilefoundry.visitor_registry.verify import verify_module
+
+
+def _module_functions(module):
+    return tuple(frame.function for frame in list_call_paths(module).values())
+
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 CANONICAL = tuple(path for path in (FIXTURES / "tir").glob("*.py") if path.name != "layouts.py")
@@ -26,16 +33,31 @@ def _module_in(path: Path):
     assert spec is not None and spec.loader is not None
     loaded = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(loaded)
-    return next(value for value in vars(loaded).values() if isinstance(value, Module))
+    modules = [value for value in vars(loaded).values() if isinstance(value, Module)]
+    return loaded.Root if path.parent.name == "scaffold" else modules[0]
 
 
 @pytest.mark.parametrize(
     "path",
-    sorted(path for path in CANONICAL if path.name != "__init__.py"),
+    sorted(path for path in CANONICAL if path.name != "__init__.py")
+    + sorted((FIXTURES / "scaffold").glob("tir_*.py")),
     ids=lambda path: path.stem,
 )
-def test_fixture_prints_back_to_its_own_source(path: Path) -> None:
-    assert as_script(_module_in(path)) == path.read_text()
+def test_tir_roundtrip(path: Path) -> None:
+    module = _module_in(path)
+    printed = as_script(module)
+    if path in CANONICAL:
+        assert printed == path.read_text()
+    rebuilt = import_dsl(printed, name=module.name)
+    assert as_script(rebuilt) == printed
+    verify_module(rebuilt)
+    original = [param.is_const for fn in _module_functions(module) for param in fn.params]
+    restored = [param.is_const for fn in _module_functions(rebuilt) for param in fn.params]
+    assert restored == original
+    if any(original):
+        assert "ConstTensor[" in printed
+    if path.stem == "tir_launches":
+        assert "launch(child.run," in printed
 
 
 def test_placed_types_print_and_reparse_as_layout_sugar() -> None:
@@ -54,19 +76,19 @@ def test_placed_types_print_and_reparse_as_layout_sugar() -> None:
 def test_mixed_hir_tir_module_prints_both_function_families() -> None:
     mixed = import_dsl(
         (
-            'from tilefoundry.dsl import *\n'
-            '\n'
-            'from tilefoundry.target import CpuTarget\n'
-            '\n'
-            '@module()\n'
-            'class Mixed:\n'
-            '    @func\n'
+            "from tilefoundry.dsl import *\n"
+            "\n"
+            "from tilefoundry.target import CpuTarget\n"
+            "\n"
+            "@module()\n"
+            "class Mixed:\n"
+            "    @func\n"
             "    def h(a: Tensor[(1,), 'f32']):\n"
-            '        return a\n'
-            '\n'
-            '    @prim_func(target=CpuTarget())\n'
+            "        return a\n"
+            "\n"
+            "    @prim_func(target=CpuTarget())\n"
             "    def t(a: Tensor[(1,), 'f32']):\n"
-            '        return\n'
+            "        return\n"
         ),
         name="Mixed",
     )
@@ -78,15 +100,16 @@ def test_mixed_hir_tir_module_prints_both_function_families() -> None:
 def test_tir_for_if_and_abort_roundtrip() -> None:
     function = import_dsl(
         (
-            'from tilefoundry.dsl import *\n'
-            '\n'
-            'from tilefoundry.target import CpuTarget\n'
-            '\n'
-            '@prim_func(target=CpuTarget())\n'
+            "from tilefoundry.dsl import *\n"
+            "\n"
+            "from tilefoundry.target import CpuTarget\n"
+            "\n"
+            "@prim_func(target=CpuTarget())\n"
             "def control(a: Tensor[(1,), 'f32']):\n"
-            '    for i in range(2):\n'
-            '        if i < 1:\n'
-            "            T.abort(message='stop')\n"
+            "    with Mesh((Topology('thread', 32),), Layout((32,), (1,))) as thread:\n"
+            "        for i in range(2):\n"
+            "            if i < 1:\n"
+            "                T.abort(message='stop')\n"
         ),
         name="control",
     )
@@ -99,19 +122,19 @@ def test_tir_for_if_and_abort_roundtrip() -> None:
 def test_tir_for_if_and_sync_mesh_forms_roundtrip() -> None:
     function = import_dsl(
         (
-            'from tilefoundry.dsl import *\n'
-            '\n'
-            '\n'
-            'from tilefoundry.target import CudaTarget\n'
-            '\n'
+            "from tilefoundry.dsl import *\n"
+            "\n"
+            "\n"
+            "from tilefoundry.target import CudaTarget\n"
+            "\n"
             "@prim_func(target=CudaTarget('nvidia.h200_sxm'))\n"
             "def device(a: Tensor[(64,), 'f32'], out: Tensor[(64,), 'f32']):\n"
             "    with Mesh((Topology('thread', 32),), Layout((32,), (1,))) as thread:\n"
-            '        for i in range(0, 2, 1):\n'
-            '            if i < 1:\n'
-            '                T.sync(thread)\n'
-            '            else:\n'
-            '                T.sync(thread[:])\n'
+            "        for i in range(0, 2, 1):\n"
+            "            if i < 1:\n"
+            "                T.sync(thread)\n"
+            "            else:\n"
+            "                T.sync(thread[:])\n"
         ),
         name="device",
     )
@@ -124,14 +147,14 @@ def test_tir_for_if_and_sync_mesh_forms_roundtrip() -> None:
 def test_tir_for_accepts_nonconstant_bounds() -> None:
     import_dsl(
         (
-            'from tilefoundry.dsl import *\n'
-            '\n'
-            'from tilefoundry.target import CpuTarget\n'
-            '\n'
-            '@prim_func(target=CpuTarget())\n'
+            "from tilefoundry.dsl import *\n"
+            "\n"
+            "from tilefoundry.target import CpuTarget\n"
+            "\n"
+            "@prim_func(target=CpuTarget())\n"
             "def dynamic(n: Tensor[(), 'i64']):\n"
-            '    for i in range(n):\n'
-            '        return\n'
+            "    for i in range(n):\n"
+            "        return\n"
         ),
         name="dynamic",
     )

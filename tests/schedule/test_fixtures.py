@@ -97,7 +97,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout_algebra import cosize
-from tilefoundry.ir.types.mesh import levels, starts
+from tilefoundry.ir.types.mesh import levels, make_mesh, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.passes.transforms.convert_hir_to_tir import LoweringError
 from tilefoundry.schedule import finalize
@@ -108,7 +108,8 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import TypeInferContext, VerifyContext
+from tilefoundry.visitor_registry.instruction import check_call
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
 
@@ -128,21 +129,35 @@ PLAIN_REFUSED = {
         r"(.|\n)*gemm_relu_gemm_smem_staged\.py:39:29"
     ),
 }
+FINALIZE_REFUSED = {
+    "staged_dynamic_inner": "staged selection needs a constant trip count for 'j'",
+    "duplicate_output_storage": "return leaf (2,) shares storage with another output",
+    "loop_carry_rebind": "loop 'k' changes carry storage; write into its carry explicitly",
+}
 CANDIDATES_REFUSED = {
     "module_instances": "source has no unscheduled candidate site",
+    "child_weight": "source has no unscheduled candidate site",
+    "loop_carry_window": "source has no unscheduled candidate site",
+    "staged_dynamic_inner": "source has no unscheduled candidate site",
+    "mesh_capture_outside": "source has no unscheduled candidate site",
+    "mesh_zeros_submesh": "source has no unscheduled candidate site",
+    "loop_outputs": "source has no unscheduled candidate site",
+    "duplicate_output_storage": "source has no unscheduled candidate site",
+    "staged_nested": "source has no unscheduled candidate site",
     "captured_insert_update": "source has no unscheduled candidate site",
     "loop_carry_from_param": "source has no unscheduled candidate site",
-    "wgmma_b_nk": "source has no unscheduled candidate site",
 }
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
-FACT_INSTRUCTIONS = sorted({
-    op_identifier(declaration)
-    for op_type, capability in supported_op_capabilities(CudaTarget("nvidia.h200_sxm"))
-    for declaration in (
-        (op_type, capability.declaration) if capability.attribute is not None else (op_type,)
-    )
-})
+FACT_INSTRUCTIONS = sorted(
+    {
+        op_identifier(declaration)
+        for op_type, capability in supported_op_capabilities(CudaTarget("nvidia.h200_sxm"))
+        for declaration in (
+            (op_type, capability.declaration) if capability.attribute is not None else (op_type,)
+        )
+    }
+)
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
 _H200_FACTS_TEXT = """\
 target nvidia.h200_sxm
@@ -221,6 +236,16 @@ class _RmemExpectation:
 
 SMEM_GOLDEN = {
     "module_instances": 0,
+    "duplicate_output_storage": 8,
+    "loop_carry_rebind": 0,
+    "loop_carry_window": 0,
+    "staged_dynamic_inner": 32,
+    "mesh_capture_outside": 0,
+    "mesh_views": 0,
+    "mesh_zeros_submesh": 128,
+    "loop_outputs": 8,
+    "staged_nested": 32,
+    "child_weight": 0,
     "captured_insert_update": 16,
     "loop_carry_from_param": 0,
     "sparse_decode": 16_384,
@@ -248,6 +273,58 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "duplicate_output_storage": {},
+    "loop_carry_rebind": {
+        "thread@0:32#0": _RmemExpectation(
+            64, "the 4x4 f32 output owns the tied 2x4 accumulator window"
+        ),
+        "cta@0:1#0": _RmemExpectation(64, "parent envelope of the output/accumulator alias group"),
+    },
+    "loop_carry_window": {
+        "thread@0:32#0": _RmemExpectation(
+            64, "the 4x4 f32 output owns the tied 2x4 accumulator window"
+        ),
+        "cta@0:1#0": _RmemExpectation(64, "parent envelope of the output/accumulator alias group"),
+    },
+    "staged_dynamic_inner": {
+        "thread@0:32#0": _RmemExpectation(
+            16, "the 1x8 bf16 accumulator and insert aliases form one 16-byte group"
+        ),
+        "cta@0:1#0": _RmemExpectation(16, "parent envelope of the 1x8 bf16 accumulator"),
+    },
+    "mesh_capture_outside": {},
+    "mesh_views": {
+        "thread@0:32#0": _RmemExpectation(
+            128, "the 4x8 f32 fragment and its view/result aliases form one 128-byte group"
+        ),
+        "thread@0:32#1": _RmemExpectation(
+            128, "the 4x8 f32 fragment and its view/result aliases form one 128-byte group"
+        ),
+        "thread@0:32#2": _RmemExpectation(
+            128, "the 4x8 f32 fragment and its view/result aliases form one 128-byte group"
+        ),
+    },
+    "mesh_zeros_submesh": {},
+    "loop_outputs": {},
+    "staged_nested": {
+        "thread@0:32#0": _RmemExpectation(
+            96, "the 6x8 bf16 accumulator and its insert aliases form one 96-byte group"
+        ),
+        "cta@0:1#0": _RmemExpectation(
+            96, "the 6x8 bf16 accumulator and its insert aliases form one 96-byte group"
+        ),
+    },
+    "child_weight": {
+        "thread@0:32#0": _RmemExpectation(
+            128, "the two 32-element f32 inputs and product reuse one 128-byte alias group"
+        ),
+        "thread@0:32#1": _RmemExpectation(
+            128, "the two 32-element f32 inputs and product reuse one 128-byte alias group"
+        ),
+        "cta@0:1#0": _RmemExpectation(
+            128, "the two 32-element f32 inputs and product reuse one 128-byte alias group"
+        ),
+    },
     "wgmma_b_nk": {
         "thread@0:128#0": _RmemExpectation(
             4096, "64x16 f32 C fragment, shared by zeros and MMA result"
@@ -258,14 +335,16 @@ RMEM_EXPECTED = {
     "loop_carry_from_param": {},
     "sparse_decode": {
         "cta@0:1#0": _RmemExpectation(
-            512, "the seven index/mask SSA values form one 512-byte alias group",
+            512,
+            "the seven index/mask SSA values form one 512-byte alias group",
         ),
         "thread@128:128#0": _RmemExpectation(33_024, "attention intermediates and row reductions"),
         "thread@0:256#0": _RmemExpectation(33_024, "parent envelope of attention compute"),
     },
     "scalar_binary": {
         "cta@0:1#0": _RmemExpectation(
-            132, "the child thread's 128-byte tile/region-result alias chain overlaps "
+            132,
+            "the child thread's 128-byte tile/region-result alias chain overlaps "
             "a 4-byte rhs literal fill",
         ),
         "thread@0:32#0": _RmemExpectation(
@@ -276,7 +355,8 @@ RMEM_EXPECTED = {
     },
     "fp8_block_scaled_gemm": {
         "cta@0:1#0": _RmemExpectation(
-            4, "the 1x1 f32 tile-scale copy is unsplit; thread-split accumulators "
+            4,
+            "the 1x1 f32 tile-scale copy is unsplit; thread-split accumulators "
             "do not contribute to the CTA record",
         ),
         "thread@128:256#0": _RmemExpectation(65_536, "128x128 f32 zero accumulator"),
@@ -306,7 +386,7 @@ RMEM_EXPECTED = {
             "512-byte accumulator plus 512-byte lhs and 256-byte rhs fragments",
         ),
         "thread@32:32#2": _RmemExpectation(
-            768, "512-byte f32 loop result plus 256-byte bf16 cast result"
+            512, "analysis coalesces the f32 loop result and bf16 cast: max(512, 256)"
         ),
         "thread@0:64#0": _RmemExpectation(1_280, "parent envelope of accumulator/fragments"),
     },
@@ -329,12 +409,12 @@ RMEM_EXPECTED = {
             8_448, "f32 loop result plus f32 reduction results and bf16 cast alias"
         ),
         "thread@0:32#1": _RmemExpectation(
-            3_072,
-            "16x32 f32 loader tile (2048) plus bf16 cast tile (1024)",
+            2_048,
+            "f32 loader tile (2048); bf16 cast follows its last read",
         ),
         "thread@0:256#0": _RmemExpectation(
-            11_264,
-            "64x32 f32 accumulator (8192) plus overlapping loader tiles (3072)",
+            10_240,
+            "64x32 f32 accumulator (8192) plus loader peak (2048)",
         ),
     },
     "wgmma_cp_async_loads": {
@@ -463,31 +543,29 @@ class _OperandMatchVisitor(StmtVisitor[None]):
     def __init__(self) -> None:
         self.matches: list[tuple[object, str, dict]] = []
 
+    def visit_MeshScope(self, stmt: MeshScope) -> None:
+        previous = getattr(self, "meshes", ())
+        self.meshes = (*previous, stmt.mesh)
+        try:
+            self.visit(stmt.body)
+        finally:
+            self.meshes = previous
+
     def visit_Evaluate(self, stmt: Evaluate) -> None:
         op = stmt.callable
-        schema = getattr(type(op), "_op_schema", None)
-        if schema is None:
+        if getattr(type(op), "_op_schema", None) is None:
             return
-        inputs = tuple(param for param in schema.signature if param.kind == "input")
-        supplied_optional = len(stmt.args) - sum(not param.optional for param in inputs)
-        optional = tuple(param for param in inputs if param.optional)
-        included = {id(param) for param in optional[: max(0, supplied_optional)]}
-        inputs = tuple(
-            param for param in inputs if not param.optional or id(param) in included
+        meshes = getattr(self, "meshes", ())
+        mesh = make_mesh(*meshes) if meshes else None
+        bindings, projection = check_call(
+            op,
+            stmt.args,
+            mesh,
+            frame=VerifyContext(current_mesh=mesh, mesh_scope=meshes),
         )
-        atom = getattr(op, "atom", None)
-        for param, arg in zip(inputs, stmt.args, strict=True):
-            if param.pattern is None:
-                continue
-            pattern = (
-                param.pattern.read_on(op)
-                if hasattr(param.pattern, "read_on")
-                else param.pattern
-            )
-            matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
-            assert matcher.match(pattern, arg.type)
-            assert matcher.solve()
-            self.matches.append((op, param.name, dict(matcher.bindings)))
+        for param, pattern in zip(projection.params, projection.patterns, strict=True):
+            if pattern is not None:
+                self.matches.append((op, param.name, dict(bindings)))
 
 
 def _direct_operand_matches(function: PrimFunction) -> list[tuple[object, str, dict]]:
@@ -527,8 +605,7 @@ def test_scheduled_hir_structural_calls_declare_layouts() -> None:
         structural_calls.extend(
             (path.stem, type(expr.target).__name__, expr)
             for expr in collect_exprs(entry.body)
-            if isinstance(expr, Call)
-            and isinstance(expr.target, (Reshape, Slice, Transpose))
+            if isinstance(expr, Call) and isinstance(expr.target, (Reshape, Slice, Transpose))
         )
     missing = [(path, op) for path, op, expr in structural_calls if expr.type.layout is None]
     assert not missing, (
@@ -561,7 +638,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
             if aliased_operand(expr) is not None:
                 assert record.buffer_bytes is None
                 assert not record.offsets
-            elif isinstance(expr.target, Transpose):
+            elif isinstance(expr.target, Transpose) and expr.type.storage is not StorageKind.RMEM:
                 assert record.buffer_bytes == prod(expr.type.shape) * expr.type.dtype.bit_width // 8
                 assert record.offsets
             if isinstance(expr.target, ScheduleOp) and isinstance(
@@ -645,14 +722,15 @@ def test_scheduled_hir_program_has_analysis_metadata(
         if path.stem == "captured_insert_update":
             assert observed_smem["thread@0:32#0"] == 16
         expected_rmem = {
-            key: expectation.peak_bytes
-            for key, expectation in RMEM_EXPECTED[path.stem].items()
+            key: expectation.peak_bytes for key, expectation in RMEM_EXPECTED[path.stem].items()
         }
         assert observed_rmem == expected_rmem, {
-            key: expectation.derivation
-            for key, expectation in RMEM_EXPECTED[path.stem].items()
+            key: expectation.derivation for key, expectation in RMEM_EXPECTED[path.stem].items()
         }
-        assert placement.peak_for("rmem").peak_bytes == max(region_rmem_peaks, default=0)
+        global_rmem = placement.peak_for("rmem")
+        assert (global_rmem.peak_bytes if global_rmem is not None else 0) == max(
+            region_rmem_peaks, default=0
+        )
 
         intervals = {id(item.value): item for item in liveness.intervals}
         loop_bounds = tuple(
@@ -673,11 +751,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
         for use in liveness.uses:
             interval = intervals[id(use.value)]
             for phi, backedge in loop_bounds:
-                if (
-                    not use.synthetic
-                    and phi < use.at < backedge
-                    and interval.defined_at < phi
-                ):
+                if not use.synthetic and phi < use.at < backedge and interval.defined_at < phi:
                     outside_uses += 1
                     assert interval.last_used_at >= backedge
         if loop_bounds:
@@ -687,6 +761,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
             if result_copies(interval.value) == 1:
                 continue
             assert (interval.defined_at, interval.last_used_at) in loop_bounds
+
 
 @pytest.mark.parametrize("path", HIR, ids=lambda path: path.stem)
 def test_schedule_memory_report_carries_allocations(
@@ -714,9 +789,7 @@ def test_schedule_memory_report_carries_allocations(
         allocation = row["memory"]
         if "operands" not in allocation:
             continue
-        result = next(
-            operand for operand in allocation["operands"] if operand["arg"] == "result"
-        )
+        result = next(operand for operand in allocation["operands"] if operand["arg"] == "result")
         storage = result["type"].rsplit(" ", 1)[-1]
         offsets = allocation["offsets"]
         if storage == "rmem":
@@ -728,6 +801,7 @@ def test_schedule_memory_report_carries_allocations(
         for offset in offsets:
             assert offset % 16 == 0
             assert offset + allocation["buffer_bytes"] <= peaks[storage]
+
 
 @pytest.mark.parametrize(
     ("fixture", "n", "bound_by"),
@@ -879,7 +953,9 @@ def test_fp8_block_scaled_gemm_matches_its_block_scaled_reference() -> None:
     block's own positive row and tile scales; the scales differ across blocks,
     so scaling a running total instead of each block would not match.
     """
-    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "fp8_block_scaled_gemm.py"
+    source = (
+        Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "fp8_block_scaled_gemm.py"
+    )
     module = _module_in(source)
     m, n, k, block = 128, 128, 512, 128
     generator = torch.Generator().manual_seed(0)
@@ -948,7 +1024,6 @@ def _check_gmem_gather_refusal(out: Path, captured: pytest.CaptureResult[str]) -
     assert 'Topology("cta"' in indexed["refused"][0]["reason"]
 
 
-
 def _check_smem_placement(out: Path, captured: pytest.CaptureResult[str]) -> None:
     """The second 64x64 bf16 tile ends at 8192 + 8192, the analyzed peak."""
     assert captured == ("", "")
@@ -959,9 +1034,10 @@ def _check_smem_placement(out: Path, captured: pytest.CaptureResult[str]) -> Non
     assert dict(item.split(":") for item in peaks.split(";"))["smem"] == "16.00KB", (
         "two shared tiles need 16384 bytes"
     )
-    lines = lines[5:]
-    assert lines[29].strip() == "ks = T.tensor_view(", "the lowered key tile is at line 30"
-    assert lines[30].strip() == "8192,", "the lowered key tile starts at 8192 bytes"
+    key_view = next(i for i, line in enumerate(lines) if line.strip() == "ks = T.tensor_view(")
+    assert lines[key_view + 1].strip().split(",", 1)[0] == "8192", (
+        "the lowered key tile starts at 8192 bytes"
+    )
 
 
 def _attention_tensor(name: str) -> torch.Tensor:
@@ -999,7 +1075,10 @@ def _check_golden(out: Path, captured: pytest.CaptureResult[str], *, golden: Pat
 
 
 def _check_facts(
-    out: Path, captured: pytest.CaptureResult[str], *, expected: str | dict,
+    out: Path,
+    captured: pytest.CaptureResult[str],
+    *,
+    expected: str | dict,
 ) -> None:
     if isinstance(expected, dict):
         assert _quiet_json(out, captured) == expected
@@ -1009,7 +1088,10 @@ def _check_facts(
 
 
 def _check_facts_declaration(
-    out: Path, captured: pytest.CaptureResult[str], *, instruction: str,
+    out: Path,
+    captured: pytest.CaptureResult[str],
+    *,
+    instruction: str,
 ) -> None:
     report = _quiet_json(out, captured)
     assert report["id"] == instruction
@@ -1042,8 +1124,11 @@ FIXTURES = (
     FixtureCase(
         "finalize binds an open row dimension",
         (
-            "schedule", "finalize", "tests/fixtures/schedule/hir/dim/row_copy.py",
-            "{out}", "--dim=rows=128",
+            "schedule",
+            "finalize",
+            "tests/fixtures/schedule/hir/dim/row_copy.py",
+            "{out}",
+            "--dim=rows=128",
         ),
         _check_finalized_rows,
     ),
@@ -1139,8 +1224,13 @@ FIXTURES = (
         FixtureCase(
             f"facts describe {instruction}",
             (
-                "schedule", "facts", instruction, "--target", "nvidia.h200_sxm",
-                "{out}", "--json",
+                "schedule",
+                "facts",
+                instruction,
+                "--target",
+                "nvidia.h200_sxm",
+                "{out}",
+                "--json",
             ),
             partial(_check_facts_declaration, instruction=instruction),
         )
@@ -1155,13 +1245,22 @@ FIXTURES = (
         )
         for name, target, options, expected in (
             ("facts list CUDA instructions as text", "nvidia.h200_sxm", (), _H200_FACTS_TEXT),
-            ("facts list CUDA instructions as JSON", "nvidia.h200_sxm", ("--json",), _H200_FACTS_JSON),
             (
-                "CPU facts list only target neutral instructions", "cpu", (),
+                "facts list CUDA instructions as JSON",
+                "nvidia.h200_sxm",
+                ("--json",),
+                _H200_FACTS_JSON,
+            ),
+            (
+                "CPU facts list only target neutral instructions",
+                "cpu",
+                (),
                 _TARGET_NEUTRAL_FACTS.format(target="cpu"),
             ),
             (
-                "Apple facts list only target neutral instructions", "apple.m2_pro", (),
+                "Apple facts list only target neutral instructions",
+                "apple.m2_pro",
+                (),
                 _TARGET_NEUTRAL_FACTS.format(target="apple.m2_pro"),
             ),
         )
@@ -1294,11 +1393,19 @@ def test_schedule_typeinfer_requires_instruction_verifier(monkeypatch) -> None:
         identity_relations,
     )
 
-    with pytest.raises(ValueError, match="has no registered verifier"):
-        inference_type(
-            call,
-            TypeInferContext(current_mesh=Mesh((Topology("thread", 32),), Layout((32,), (1,)))),
-        )
+    context = TypeInferContext(current_mesh=Mesh((Topology("thread", 32),), Layout((32,), (1,))))
+    assert inference_type(call, replace(context, memo={})) == type_
+    param = _UnstatedInstruction._op_schema.signature[0]
+    monkeypatch.setattr(param, "pattern", TensorPattern(shape=(3,)))
+    with pytest.raises(
+        ValueError, match="iteration extent 4 is not divisible by single-issue extent 3"
+    ):
+        inference_type(call, replace(context, memo={}))
+    monkeypatch.setattr(param, "pattern", None)
+    with pytest.raises(
+        ValueError, match="has no input pattern, between relation, or registered verifier"
+    ):
+        inference_type(call, replace(context, memo={}))
 
 
 def test_schedule_typeinfer_requires_whole_instruction_tiles(monkeypatch) -> None:
@@ -1373,11 +1480,7 @@ def test_tir_program_is_verified_and_canonical(path: Path) -> None:
 
 
 def test_parameter_structure_does_not_repeat_its_name() -> None:
-    declarations = {
-        schema.op_class
-        for schema in iter_schemas()
-        if schema.op_class is not None
-    }
+    declarations = {schema.op_class for schema in iter_schemas() if schema.op_class is not None}
     for schema in iter_schemas():
         if schema.op_class is None:
             continue
@@ -1457,7 +1560,8 @@ def test_schedule_candidates_reports_every_plain_site(
     if b_layout == "NK":
         variant = tmp_path / f"{name}_nk.py"
         variant.write_text(
-            Path(source).read_text()
+            Path(source)
+            .read_text()
             .replace("tf.matmul(a, b)", 'tf.matmul(a, b, b_layout="NK")')
             .replace("tf.matmul(y, c)", 'tf.matmul(y, c, b_layout="NK")')
         )
@@ -1535,7 +1639,8 @@ def test_schedule_candidates_omit_selected_schedule_calls(
     assert "tf.matmul" not in ops
     assert "tf.reshard" not in ops
     assert any(
-        op in {"tf.binary", "tf.cast", "tf.clamp", "tf.relu", "tf.reduce", "tf.unary"}
+        op
+        in {"tf.binary", "tf.cast", "tf.clamp", "tf.relu", "tf.reduce", "tf.unary", "tf.transpose"}
         for op in ops
     )
     if source.stem == "wgmma_cast_between_schedules":
@@ -1544,11 +1649,7 @@ def test_schedule_candidates_omit_selected_schedule_calls(
 
 def test_operand_match_refusal_names_the_failed_pattern() -> None:
     function = _prim_in(
-        Path(__file__).parents[1]
-        / "fixtures"
-        / "schedule"
-        / "tir"
-        / "wgmma_a_k_major.py"
+        Path(__file__).parents[1] / "fixtures" / "schedule" / "tir" / "wgmma_a_k_major.py"
     )
     rejected = None
 
@@ -1596,26 +1697,34 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
             defined[id(statement.var)] = last[id(statement.var)] = clock
             fields = (
                 statement.value.elements
-                if isinstance(statement.value, Tuple) else (statement.value,)
+                if isinstance(statement.value, Tuple)
+                else (statement.value,)
             )
             for field in fields:
                 if (
-                    isinstance(field, Call) and isinstance(field.target, TensorView)
+                    isinstance(field, Call)
+                    and isinstance(field.target, TensorView)
                     and field.target.storage is StorageKind.SMEM
                     and isinstance(field.args[0], Constant)
                 ):
                     span = (
-                        cosize(field.type.layout) if field.type.layout is not None
+                        cosize(field.type.layout)
+                        if field.type.layout is not None
                         else prod(field.type.shape)
                     )
-                    views.append((
-                        statement.var, int(field.args[0].value), span * field.type.dtype.bit_width // 8,
-                    ))
+                    views.append(
+                        (
+                            statement.var,
+                            int(field.args[0].value),
+                            span * field.type.dtype.bit_width // 8,
+                        )
+                    )
             walk(statement.body)
         elif isinstance(statement, (For, While)):
             use(
                 (statement.start, statement.stop, statement.step)
-                if isinstance(statement, For) else (statement.cond,)
+                if isinstance(statement, For)
+                else (statement.cond,)
             )
             entered = clock
             walk(statement.body)
@@ -1635,9 +1744,7 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
     for (left, start, size), (right, other_start, other_size) in combinations(views, 2):
         if left is right:
             continue
-        live = max(defined[id(left)], defined[id(right)]) <= min(
-            last[id(left)], last[id(right)]
-        )
+        live = max(defined[id(left)], defined[id(right)]) <= min(last[id(left)], last[id(right)])
         overlap = max(start, other_start) < min(start + size, other_start + other_size)
         assert not (live and overlap), (
             f"{source.name}: live smem views overlap: "
@@ -1649,6 +1756,10 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
 def test_schedule_finalize_writes_verified_tir(
     source: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    if source.stem in FINALIZE_REFUSED:
+        _assert_cli_lowering_error(source, FINALIZE_REFUSED[source.stem], tmp_path, capsys)
+        return
+
     out = tmp_path / source.name
     expected = source.parent.parent / "tir" / source.name
 
@@ -1666,6 +1777,9 @@ def test_schedule_finalize_writes_verified_tir(
     for function in functions:
         _assert_live_smem_views_do_not_overlap(function, source)
         found.extend(_direct_operand_matches(function))
+    if source.stem == "loop_outputs":
+        assert lowered.output_count == 3
+        assert import_dsl(as_script(lowered)).output_count == 3
     assert found
     wgmma_lhs = [
         captures
@@ -1673,11 +1787,7 @@ def test_schedule_finalize_writes_verified_tir(
         if isinstance(getattr(op, "atom", None), Wgmma) and name == "lhs"
     ]
     assert all("a_major" in captures for captures in wgmma_lhs)
-    assert all(
-        "a_swizzle" in captures
-        for captures in wgmma_lhs
-        if captures["form"].name == "SS"
-    )
+    assert all("a_swizzle" in captures for captures in wgmma_lhs if captures["form"].name == "SS")
 
 
 def test_schedule_finalize_json_carries_the_same_source(
@@ -1746,10 +1856,10 @@ def test_lowering_rejects_instruction_without_access_relation(
         and isinstance(expr.target, ScheduleOp)
         and not isinstance(expr.target.op, TiledMma)
     )
-    transfer.target.op = _UnstatedInstruction()
+    monkeypatch.delitem(access_relation_registry._map, type(transfer.target.op))
     monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
 
-    _assert_cli_lowering_error(source, "no registered access relation", tmp_path, capsys)
+    _assert_cli_lowering_error(source, "states no access relations", tmp_path, capsys)
 
 
 def test_lowering_rejects_addressable_result_without_offsets(
@@ -1798,7 +1908,7 @@ def test_lowering_rejects_unscheduled_gmem_cast(
 
     _assert_cli_lowering_error(
         source,
-        "T.cast accepts only rmem operands, so write an explicit tf.schedule",
+        "dst: gmem does not match rmem",
         tmp_path,
         capsys,
     )
@@ -1807,9 +1917,9 @@ def test_lowering_rejects_unscheduled_gmem_cast(
 @pytest.mark.parametrize(
     ("case", "message"),
     (
-        ("group", "is not outer modes followed by participant frame"),
-        ("atom", "axis n extent 17 is not divisible by atom 16"),
-        ("row", "axis k extent 80 is not divisible by row 16 * 4"),
+        ("group", "input 0 is laid out more finely than the scope"),
+        ("atom", "iteration extent 17 is not divisible by single-issue extent 16"),
+        ("row", "iteration axis 2 repeat 5 is not divisible by row issues 4"),
     ),
 )
 def test_lowering_rejects_invalid_atom_geometry(
@@ -1822,54 +1932,50 @@ def test_lowering_rejects_invalid_atom_geometry(
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_repeat_along_k.py"
     module = _module_in(source)
     result = analyze(module, module.entry_function(), analysis=("memory",))
-    emit = lowering_module.Lowering._emit_instruction
+    check = lowering_module.check_call
 
-    def malformed(self, call, op, operands, mesh, output_window, written, cursor):
+    def malformed(op, operands, mesh, *, frame, repeat=None, order=None):
         if getattr(op, "atom", None) is None:
-            return emit(self, call, op, operands, mesh, output_window, written, cursor)
-        acc, lhs, rhs = (value for _role, value in operands)
-        acc_type = self.logical.get(id(acc), acc.type)
+            return check(op, operands, mesh, frame=frame, repeat=repeat, order=order)
+        acc_type, lhs_type, rhs_type = operands
         assert isinstance(acc_type.layout, ShardLayout)
-        if case == "atom":
+        if case == "group":
+            held = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+            changed = replace(held, shape=(*held.shape[:-1], (3, *held.shape[-1][1:])))
+            mesh = replace(
+                mesh,
+                layout=replace(mesh.layout, outer=changed)
+                if isinstance(mesh.layout, ComposedLayout)
+                else changed,
+            )
+        elif case == "atom":
             acc_type = replace(acc_type, shape=(acc_type.shape[0], 17))
-            rhs_type = self.logical.get(id(rhs), rhs.type)
-            self.logical[id(rhs)] = replace(rhs_type, shape=(rhs_type.shape[0], 17))
+            rhs_type = replace(rhs_type, shape=(rhs_type.shape[0], 17))
         elif case == "row":
-            lhs_type = self.logical.get(id(lhs), lhs.type)
+            repeat = (2, 1, 5)
             assert isinstance(lhs_type.layout, ComposedLayout)
             assert isinstance(lhs_type.layout.outer, Layout)
             lhs_outer = replace(
                 lhs_type.layout.outer,
                 shape=(*lhs_type.layout.outer.shape[:-1], (5, 16)),
             )
-            self.logical[id(lhs)] = replace(
+            lhs_type = replace(
                 lhs_type,
                 shape=(lhs_type.shape[0], 80),
                 layout=replace(lhs_type.layout, outer=lhs_outer),
             )
-            rhs_type = self.logical.get(id(rhs), rhs.type)
             assert isinstance(rhs_type.layout, Layout)
             rhs_layout = replace(
                 rhs_type.layout,
                 shape=((5, *rhs_type.layout.shape[0][1:]), *rhs_type.layout.shape[1:]),
             )
-            self.logical[id(rhs)] = replace(
-                rhs_type,
-                shape=(80, rhs_type.shape[1]),
-                layout=rhs_layout,
-            )
-        self.logical[id(acc)] = acc_type
-        return emit(self, call, op, operands, mesh, output_window, written, cursor)
+            rhs_type = replace(rhs_type, shape=(80, rhs_type.shape[1]), layout=rhs_layout)
+        return check(
+            op, (acc_type, lhs_type, rhs_type), mesh, frame=frame, repeat=repeat, order=order
+        )
 
     monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
-    if case == "group":
-        frames = lowering_module.issue_frames
-
-        def misplaced(source, required, repeat, tile):
-            return frames(source, required, (3, *repeat[1:]), tile)
-
-        monkeypatch.setattr(lowering_module, "issue_frames", misplaced)
-    monkeypatch.setattr(lowering_module.Lowering, "_emit_instruction", malformed)
+    monkeypatch.setattr(lowering_module, "check_call", malformed)
 
     _assert_cli_lowering_error(source, message, tmp_path, capsys)
 
@@ -1933,18 +2039,13 @@ def _returned_view(storage):
 
 
 def test_a_returned_gmem_view_requires_explicit_scheduled_copy():
-    with pytest.raises(LoweringError, match="callee 'run'.*v0.*explicit tf.schedule copy"):
+    with pytest.raises(LoweringError, match=r"return leaf \(\) cannot be placed on its output: x"):
         finalize(_returned_view(StorageKind.GMEM))
 
 
-def test_a_returned_smem_view_is_copied_into_the_callers_out():
-    lowered = finalize(_returned_view(StorageKind.SMEM))
-    verify_module(lowered)
-    callee = lowered.children["child"].elements[0].entry_function()
-    assert callee.params[-1].type.storage is StorageKind.SMEM
-    visitor = _RetainedStatements()
-    visitor.visit(callee.body)
-    assert sum(isinstance(operation, Copy) for operation in visitor.operations) == 1
+def test_a_returned_smem_view_requires_explicit_scheduled_copy():
+    with pytest.raises(LoweringError, match=r"return leaf \(\) cannot be placed on its output: x"):
+        finalize(_returned_view(StorageKind.SMEM))
 
 
 @pytest.mark.parametrize("wrong,refused", [

@@ -12,6 +12,10 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_scalar_tensor, utils
 from tilefoundry.ir.types import UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 
 @register_op
@@ -33,12 +37,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
+register_access_relation(Fill)(identity_relations)
+
+
 @register_verify_stmt(Fill)
 def _(call: "Call", ctx: "VerifyContext") -> None:
     t_ty = ctx.type_of(call.args[0])
     v_ty = ctx.type_of(call.args[1])
-    if v_ty.shape != ():
-        ctx.error(call, "Fill value must be rank-0 scalar")
     if v_ty.dtype != t_ty.dtype and not (
         isinstance(call.args[1], Constant) and call.args[1].value == 0
     ):

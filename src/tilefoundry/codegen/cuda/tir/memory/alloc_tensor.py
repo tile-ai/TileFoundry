@@ -9,14 +9,20 @@ backing cute Tensor in ``tilefoundry::make_shard_tensor(...)``. A non-shard
 storage (``gmem`` / ``smem`` / ``rmem``) keeps the plain ``TensorType.shape``
 materialisation path.
 """
+
 from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
-from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
-from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import program_topologies
+from tilefoundry.codegen.cuda.tir.memory.tensor_view import (
+    _render_layout_value,
+    render_shard_layout_value,
+    shard_engine_layout,
+)
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.stmts import LetStmt
-from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_local_shape
+from tilefoundry.ir.types.layout import resolve_layout
+from tilefoundry.ir.types.layout_algebra import cosize
+from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import shape_numel_upper_bound, shape_upper_bound, upper_bound
 from tilefoundry.target import CudaTarget
@@ -28,7 +34,7 @@ def _emit_plain_alloc(
     var,
     name: str,
     storage: StorageKind,
-    local_shape: tuple,
+    engine_layout,
 ) -> str:
     """Emit the backing cute tensor and return the identifier for it.
 
@@ -46,29 +52,20 @@ def _emit_plain_alloc(
             f"AllocTensor for {name!r} has unmaterialized storage (storage=umat); "
             "a memory-resident tensor must carry a concrete StorageKind"
         )
-    total = shape_numel_upper_bound(local_shape)
-    if len(local_shape) > 1:
-        shape_args = ", ".join(
-            f"cute::Int<{upper_bound(s)}>" for s in local_shape
-        )
-        layout = f"cute::make_layout(cute::Shape<{shape_args}>{{}})"
-    else:
-        layout = f"cute::make_layout(cute::Shape<cute::Int<{total}>>{{}})"
+    engine_layout = resolve_layout(engine_layout)
+    total = int(upper_bound(cosize(engine_layout)))
+
+    def literal(value):
+        return f"cute::Int<{upper_bound(value)}>{{}}"
+
+    layout = _render_layout_value(engine_layout, literal, literal)
     cpp_type = ctx.dtype_to_cpp(var.type.dtype.name)
     if storage == StorageKind.SMEM:
-
-
         ctx.emit(f"__shared__ __align__(16) {cpp_type} {name}_buf[{total}];")
-        ctx.emit(
-            f"auto {name} = cute::make_tensor("
-            f"cute::make_smem_ptr({name}_buf), {layout});"
-        )
+        ctx.emit(f"auto {name} = cute::make_tensor(cute::make_smem_ptr({name}_buf), {layout});")
     elif storage == StorageKind.RMEM:
         ctx.emit(f"__align__(16) {cpp_type} {name}_buf[{total}];")
-        ctx.emit(
-            f"auto {name} = cute::make_tensor("
-            f"cute::make_rmem_ptr({name}_buf), {layout});"
-        )
+        ctx.emit(f"auto {name} = cute::make_tensor(cute::make_rmem_ptr({name}_buf), {layout});")
     else:
         ctx.emit(f"auto {name} = cute::make_tensor<{cpp_type}>({layout});")
     return name
@@ -89,36 +86,15 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
     var = let.var
     name = ctx.name_for(var)
     storage = var.type.storage
-    layout_obj = getattr(var.type, "layout", None)
+    layout_obj = resolve_layout(var.type.layout, var.type.shape)
 
     if isinstance(layout_obj, ShardLayout):
-
-
-
-
-
-
-        if (
-            storage is StorageKind.SMEM
-            and program_topologies(layout_obj.mesh)[0].name == "thread"
-        ):
-            backing_shape = shape_upper_bound(layout_obj.layout.shape)
-        else:
-            backing_shape = shard_layout_local_shape(layout_obj)
-        local_shape = tuple(s for s in backing_shape if s != 1) or (1,)
-
-
+        engine_layout = shard_engine_layout(layout_obj, storage)
         buf_name = f"{name}_buf_t"
-        _emit_plain_alloc(ctx, var, buf_name, storage, local_shape)
-
-
-
-
+        _emit_plain_alloc(ctx, var, buf_name, storage, engine_layout)
 
         global_total = shape_numel_upper_bound(shape_upper_bound(var.type.shape))
-        global_layout = (
-            f"cute::make_layout(cute::Shape<cute::Int<{global_total}>>{{}})"
-        )
+        global_layout = f"cute::make_layout(cute::Shape<cute::Int<{global_total}>>{{}})"
         preamble, shard_value = render_shard_layout_value(
             name, layout_obj, ctx.dynamic_extents, storage, ctx
         )
@@ -129,8 +105,4 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
             f"{buf_name}, {global_layout}, {shard_value});"
         )
     else:
-
-
-
-        local_shape = shape_upper_bound(var.type.shape)
-        _emit_plain_alloc(ctx, var, name, storage, local_shape)
+        _emit_plain_alloc(ctx, var, name, storage, layout_obj)

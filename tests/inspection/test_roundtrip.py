@@ -9,11 +9,17 @@ See [inspection §2.7](docs/spec/inspection.md#27-round-trip-contract).
 from pathlib import Path
 
 import pytest
+import torch
 
 from tests._source import import_dsl
-from tests.fixtures.shapes.tile_window_syntax import nested_scan_copy, scan_copy
+from tests.fixtures.shapes.tile_window_syntax import (
+    nested_scan_copy,
+    scan_copy,
+    sequential_scan_copy,
+)
 from tests.schedule.test_fixtures import PLAIN_REFUSED
 from tilefoundry.dsl import *
+from tilefoundry.evaluator import evaluate
 from tilefoundry.inspection import as_script
 
 _HEADER = (
@@ -86,6 +92,7 @@ def test_two_argument_tile_window_roundtrips_as_a_subscript() -> None:
     for fn, index in (
         (scan_copy, "x[row, :]"),
         (nested_scan_copy, "x[row, col]"),
+        (sequential_scan_copy, "x[row, :]"),
     ):
         script = as_script(fn)
 
@@ -95,7 +102,11 @@ def test_two_argument_tile_window_roundtrips_as_a_subscript() -> None:
             inner = next(i for i, line in enumerate(lines) if line.strip() == "for col in tf.tile(4, 2):")
             assert lines[inner - 1].strip() != "out = out"
             assert lines[-2].strip() == "out = out"
-        assert as_script(import_dsl(script)) == script
+        rebuilt = import_dsl(script)
+        assert as_script(rebuilt) == script
+        if fn is sequential_scan_copy:
+            x = torch.arange(16, dtype=torch.float32).reshape(4, 4)
+            torch.testing.assert_close(evaluate(rebuilt, x), (x + 1) * 2)
 
 
 def test_non_unit_scalar_index_loop_roundtrips_as_range() -> None:
@@ -117,14 +128,10 @@ def test_non_unit_scalar_index_loop_roundtrips_as_range() -> None:
 
 
 def test_shadowed_call_loc_roundtrips() -> None:
-    """Test shadowed call loc roundtrips.
+    """Preserve a binding that has the same name as its qualified operation.
 
-    When a call's source loc collides with an op name (``vals, idx = topk``
-    gives the ``topk`` call loc ``"topk"``), the printer renames the binding to
-    ``topk_out`` to avoid shadowing the op. The renamed binding is carried by the
-    left-hand side and nothing else, so re-printing the imported source is what
-    proves the label survived: had it come back as ``topk``, the fixed point would
-    not hold.
+    The tuple assignment labels its producer ``topk``. The qualified
+    ``tf.topk`` call keeps that binding usable without renaming it.
     """
     fn = import_dsl(
         _HEADER + "\n@func\n"
@@ -133,7 +140,7 @@ def test_shadowed_call_loc_roundtrips() -> None:
         "    return vals\n"
     )
     script = as_script(fn)
-    assert "topk_out = tf.topk(" in script, script
+    assert "topk = tf.topk(" in script, script
     assert as_script(import_dsl(script)) == script
 
 

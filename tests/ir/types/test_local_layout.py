@@ -164,5 +164,5 @@ def test_an_extent_its_mesh_axis_does_not_divide_is_refused() -> None:
     held = make_shard_tensor_type((8,), mesh=mesh, attrs=(Split(0),), dtype=DType.f32)
     shard = shard_layout_of(held.layout)
 
-    with pytest.raises(ValueError, match=r"extent 6, which its mesh axis of 4"):
+    with pytest.raises(ValueError, match=r"layout positions .* cross logical axes of \(6,\)"):
         local_layout_and_offset(shard, (6,), (0,))

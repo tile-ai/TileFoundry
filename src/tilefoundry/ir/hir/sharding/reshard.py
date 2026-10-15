@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import cache
 from math import prod
 
@@ -11,7 +12,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, apply
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, apply, resolve_layout
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
@@ -166,6 +167,8 @@ def _materialize_reshard_strides(
 class Reshard(Op):
     """Convert *x* to a target layout / storage in place, preserving the logical shape."""
 
+    scope_inputs = ()
+
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     layout = ParamDef(kind="attribute", annotation=LayoutBase, default=None)
     storage = ParamDef(kind="attribute", default=None)
@@ -202,6 +205,8 @@ def _buffer_alias(call: Call) -> int | None:
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage:
         return None
+    source = replace(source, layout=resolve_layout(source.layout, source.shape))
+    result = replace(result, layout=resolve_layout(result.layout, result.shape))
     if not (_plain(source.layout) and _plain(result.layout)):
         return None
     if not is_literal_shape(result.shape):

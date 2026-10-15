@@ -20,7 +20,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -82,7 +82,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 80),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 10, 4, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -90,7 +90,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 80),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 10, 4, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -98,7 +98,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 80),
                 "bool",
-                ((2, 8, 2, 4, 2, 4, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 10, 4, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -106,7 +106,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 80),
                 "i32",
-                ((2, 8, 2, 4, 2, 4, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 10, 4, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -135,7 +135,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 80),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 10, 4, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -143,7 +143,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 80),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 10, 4, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -151,7 +151,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 80),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 10, 4, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -162,7 +162,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -170,7 +170,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 80),
                 "bf16",
-                ((2, 5, 8, 2, 4, 2, 4, 2), (5120, 1024, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 5, 2, 4, 2,), (5120, 16, 8, 1, 1024, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -178,7 +178,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 80),
                 "bf16",
-                ((2, 8, 2, 4, 2, 4, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 10, 4, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -193,7 +193,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "bf16",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -201,7 +201,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -209,7 +209,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -217,7 +217,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "bf16",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -225,7 +225,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -233,7 +233,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -241,7 +241,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "bf16",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -249,7 +249,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -257,7 +257,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -265,7 +265,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -273,7 +273,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -281,7 +281,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -289,7 +289,7 @@ def attention(
             tensor_type=Tensor[
                 (128, 256),
                 "bf16",
-                ((2, 8, 2, 4, 2, 4, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 32, 4, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -406,7 +406,7 @@ def attention(
                                 for o_k in range(0, 256, 64):
                                     acc_view = T.tensor_view(
                                         T.ptr_of(s0[o_m:o_m + 64, o_n:o_n + 80]),
-                                        layout=((8 @ threads_13.d1, 2, 4 @ threads_13.d0, 2, 4 @ threads_13.d2, 10), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_13.d0, 2, 8 @ threads_13.d1, 10, 4 @ threads_13.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 80),
                                     )
                                     lhs_view = T.tensor_view(
@@ -427,7 +427,7 @@ def attention(
                                     )
                                     acc_view_1 = T.tensor_view(
                                         T.ptr_of(s0[o_m:o_m + 64, o_n:o_n + 80]),
-                                        layout=((8 @ threads_13.d1, 2, 4 @ threads_13.d0, 2, 4 @ threads_13.d2, 10), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_13.d0, 2, 8 @ threads_13.d1, 10, 4 @ threads_13.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 80),
                                     )
                                     lhs_view_1 = T.tensor_view(
@@ -448,7 +448,7 @@ def attention(
                                     )
                                     acc_view_2 = T.tensor_view(
                                         T.ptr_of(s0[o_m:o_m + 64, o_n:o_n + 80]),
-                                        layout=((8 @ threads_13.d1, 2, 4 @ threads_13.d0, 2, 4 @ threads_13.d2, 10), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_13.d0, 2, 8 @ threads_13.d1, 10, 4 @ threads_13.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 80),
                                     )
                                     lhs_view_2 = T.tensor_view(
@@ -469,7 +469,7 @@ def attention(
                                     )
                                     acc_view_3 = T.tensor_view(
                                         T.ptr_of(s0[o_m:o_m + 64, o_n:o_n + 80]),
-                                        layout=((8 @ threads_13.d1, 2, 4 @ threads_13.d0, 2, 4 @ threads_13.d2, 10), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_13.d0, 2, 8 @ threads_13.d1, 10, 4 @ threads_13.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 80),
                                     )
                                     lhs_view_3 = T.tensor_view(
@@ -496,7 +496,7 @@ def attention(
                                 for o_k_1 in range(0, 256, 64):
                                     acc_view_4 = T.tensor_view(
                                         T.ptr_of(s0[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 80]),
-                                        layout=((8 @ threads_14.d1, 2, 4 @ threads_14.d0, 2, 4 @ threads_14.d2, 10), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_14.d0, 2, 8 @ threads_14.d1, 10, 4 @ threads_14.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 80),
                                     )
                                     lhs_view_4 = T.tensor_view(
@@ -517,7 +517,7 @@ def attention(
                                     )
                                     acc_view_5 = T.tensor_view(
                                         T.ptr_of(s0[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 80]),
-                                        layout=((8 @ threads_14.d1, 2, 4 @ threads_14.d0, 2, 4 @ threads_14.d2, 10), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_14.d0, 2, 8 @ threads_14.d1, 10, 4 @ threads_14.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 80),
                                     )
                                     lhs_view_5 = T.tensor_view(
@@ -538,7 +538,7 @@ def attention(
                                     )
                                     acc_view_6 = T.tensor_view(
                                         T.ptr_of(s0[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 80]),
-                                        layout=((8 @ threads_14.d1, 2, 4 @ threads_14.d0, 2, 4 @ threads_14.d2, 10), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_14.d0, 2, 8 @ threads_14.d1, 10, 4 @ threads_14.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 80),
                                     )
                                     lhs_view_6 = T.tensor_view(
@@ -559,7 +559,7 @@ def attention(
                                     )
                                     acc_view_7 = T.tensor_view(
                                         T.ptr_of(s0[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 80]),
-                                        layout=((8 @ threads_14.d1, 2, 4 @ threads_14.d0, 2, 4 @ threads_14.d2, 10), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_14.d0, 2, 8 @ threads_14.d1, 10, 4 @ threads_14.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 80),
                                     )
                                     lhs_view_7 = T.tensor_view(
@@ -632,7 +632,7 @@ def attention(
                             )
                             dst_frame_7 = T.tensor_view(
                                 T.ptr_of(dif[0:0 + 128, 0:0 + 80]),
-                                layout=((2 @ threads_16.d0, 8 @ threads_16.d2, 2, 4 @ threads_16.d1, 2, 4 @ threads_16.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                                layout=((2 @ threads_16.d0, 4 @ threads_16.d1, 2, 8 @ threads_16.d2, 10, 4 @ threads_16.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                                 shape=(128, 80),
                             )
                             T.copy(src_frame, dst_frame_7)
@@ -640,12 +640,12 @@ def attention(
                         with scope_4 as threads_21:
                             lhs_frame_5 = T.tensor_view(
                                 T.ptr_of(dif[0:0 + 128, 0:0 + 80]),
-                                layout=((2 @ threads_21.d0, 8 @ threads_21.d2, 2, 4 @ threads_21.d1, 2, 4 @ threads_21.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                                layout=((2 @ threads_21.d0, 4 @ threads_21.d1, 2, 8 @ threads_21.d2, 10, 4 @ threads_21.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                                 shape=(128, 80),
                             )
                             dst_frame_8 = T.tensor_view(
                                 T.ptr_of(value_11[0:0 + 128, 0:0 + 80]),
-                                layout=((2 @ threads_21.d0, 8 @ threads_21.d2, 2, 4 @ threads_21.d1, 2, 4 @ threads_21.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                                layout=((2 @ threads_21.d0, 4 @ threads_21.d1, 2, 8 @ threads_21.d2, 10, 4 @ threads_21.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                                 shape=(128, 80),
                             )
                             T.binary(lhs_frame_5, value_17, dst_frame_8, kind=BinaryKind.GE)
@@ -654,30 +654,30 @@ def attention(
                         with scope_4 as threads_22:
                             cond_frame = T.tensor_view(
                                 T.ptr_of(value_11[0:0 + 128, 0:0 + 80]),
-                                layout=((2 @ threads_22.d0, 8 @ threads_22.d2, 2, 4 @ threads_22.d1, 2, 4 @ threads_22.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                                layout=((2 @ threads_22.d0, 4 @ threads_22.d1, 2, 8 @ threads_22.d2, 10, 4 @ threads_22.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                                 shape=(128, 80),
                             )
                             lhs_frame_6 = T.tensor_view(
                                 T.ptr_of(s0[0:0 + 128, 0:0 + 80]),
-                                layout=((2 @ threads_22.d0, 8 @ threads_22.d2, 2, 4 @ threads_22.d1, 2, 4 @ threads_22.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                                layout=((2 @ threads_22.d0, 4 @ threads_22.d1, 2, 8 @ threads_22.d2, 10, 4 @ threads_22.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                                 shape=(128, 80),
                             )
                             dst_frame_9 = T.tensor_view(
                                 T.ptr_of(s[0:0 + 128, 0:0 + 80]),
-                                layout=((2 @ threads_22.d0, 8 @ threads_22.d2, 2, 4 @ threads_22.d1, 2, 4 @ threads_22.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                                layout=((2 @ threads_22.d0, 4 @ threads_22.d1, 2, 8 @ threads_22.d2, 10, 4 @ threads_22.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                                 shape=(128, 80),
                             )
                             T.where(cond_frame, lhs_frame_6, scalar_4, dst_frame_9)
                             s_view = T.tensor_view(
                                 T.ptr_of(s[0:0 + 128, 0:0 + 80]),
-                                layout=((2 @ threads_22.d0, 8 @ threads_22.d2, 2, 4 @ threads_22.d1, 2, 4 @ threads_22.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                                layout=((2 @ threads_22.d0, 4 @ threads_22.d1, 2, 8 @ threads_22.d2, 10, 4 @ threads_22.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                                 shape=(128, 80),
                             )
                             T.copy(s_view, s0)
                     with scope_4 as threads_24:
                         src_frame_1 = T.tensor_view(
                             T.ptr_of(s0[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_24.d0, 8 @ threads_24.d2, 2, 4 @ threads_24.d1, 2, 4 @ threads_24.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_24.d0, 4 @ threads_24.d1, 2, 8 @ threads_24.d2, 10, 4 @ threads_24.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         dst_frame_10 = T.tensor_view(
@@ -781,12 +781,12 @@ def attention(
                     with scope_4 as threads_31:
                         lhs_frame_11 = T.tensor_view(
                             T.ptr_of(s0[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_31.d0, 8 @ threads_31.d2, 2, 4 @ threads_31.d1, 2, 4 @ threads_31.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_31.d0, 4 @ threads_31.d1, 2, 8 @ threads_31.d2, 10, 4 @ threads_31.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         dst_frame_17 = T.tensor_view(
                             T.ptr_of(value_21[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_31.d0, 8 @ threads_31.d2, 2, 4 @ threads_31.d1, 2, 4 @ threads_31.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_31.d0, 4 @ threads_31.d1, 2, 8 @ threads_31.d2, 10, 4 @ threads_31.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         T.binary(lhs_frame_11, scalar_6, dst_frame_17, kind=BinaryKind.MUL)
@@ -806,7 +806,7 @@ def attention(
                         T.binary(lhs_frame_12, scalar_7, dst_frame_18, kind=BinaryKind.MUL)
                         lhs_frame_13 = T.tensor_view(
                             T.ptr_of(value_21[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_32.d0, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 10, 4 @ threads_32.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         rhs_frame_4 = T.tensor_view(
@@ -816,24 +816,24 @@ def attention(
                         )
                         dst_frame_19 = T.tensor_view(
                             T.ptr_of(value_20[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_32.d0, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 10, 4 @ threads_32.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         T.binary(lhs_frame_13, rhs_frame_4, dst_frame_19, kind=BinaryKind.SUB)
                         src_frame_4 = T.tensor_view(
                             T.ptr_of(value_20[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_32.d0, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 10, 4 @ threads_32.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         dst_frame_20 = T.tensor_view(
                             T.ptr_of(p[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_32.d0, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 10, 4 @ threads_32.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         T.unary(src_frame_4, dst_frame_20, kind=UnaryKind.EXP2)
                         src_frame_5 = T.tensor_view(
                             T.ptr_of(p[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_32.d0, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 10, 4 @ threads_32.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         dst_frame_21 = T.tensor_view(
@@ -877,7 +877,7 @@ def attention(
                         T.binary(lhs_frame_14, rhs_frame_5, dst_frame_23, kind=BinaryKind.ADD)
                         lhs_frame_15 = T.tensor_view(
                             T.ptr_of(o[0:0 + 128, 0:0 + 256]),
-                            layout=((2 @ threads_32.d0, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 32, 4 @ threads_32.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 256),
                         )
                         rhs_frame_6 = T.tensor_view(
@@ -887,29 +887,29 @@ def attention(
                         )
                         dst_frame_24 = T.tensor_view(
                             T.ptr_of(o_1[0:0 + 128, 0:0 + 256]),
-                            layout=((2 @ threads_32.d0, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 32, 4 @ threads_32.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 256),
                         )
                         T.binary(lhs_frame_15, rhs_frame_6, dst_frame_24, kind=BinaryKind.MUL)
                         src_frame_7 = T.tensor_view(
                             T.ptr_of(p[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_32.d0, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 10, 4 @ threads_32.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         dst_frame_25 = T.tensor_view(
                             T.ptr_of(value_23[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_32.d0, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 10, 4 @ threads_32.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         T.cast(src_frame_7, dst_frame_25, dtype="bf16")
                         src_frame_8 = T.tensor_view(
                             T.ptr_of(value_23[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_32.d0, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 10), (5120, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 10, 4 @ threads_32.d3, 2,), (5120, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         dst_frame_26 = T.tensor_view(
                             T.ptr_of(pb[0:0 + 128, 0:0 + 80]),
-                            layout=((2 @ threads_32.d0, 5, 8 @ threads_32.d2, 2, 4 @ threads_32.d1, 2, 4 @ threads_32.d3, 2), (5120, 1024, 1, 8, 16, 64, 128, 512)),
+                            layout=((2 @ threads_32.d0, 5, 4 @ threads_32.d1, 2, 8 @ threads_32.d2, 2, 4 @ threads_32.d3, 2,), (5120, 1024, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 80),
                         )
                         T.copy(src_frame_8, dst_frame_26)
@@ -926,12 +926,12 @@ def attention(
                                 for o_k_2 in range(0, 80, 16):
                                     acc_view_8 = T.tensor_view(
                                         T.ptr_of(o_1[o_m_2:o_m_2 + 64, o_n_2:o_n_2 + 256]),
-                                        layout=((8 @ threads_41.d1, 2, 4 @ threads_41.d0, 2, 4 @ threads_41.d2, 32), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_41.d0, 2, 8 @ threads_41.d1, 32, 4 @ threads_41.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 256),
                                     )
                                     lhs_view_8 = T.tensor_view(
                                         T.ptr_of(pb[o_m_2:o_m_2 + 64, o_k_2:o_k_2 + 16]),
-                                        layout=((8 @ threads_41.d1, 2, 4 @ threads_41.d0, 2, 4 @ threads_41.d2, 2), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_41.d0, 2, 8 @ threads_41.d1, 2, 4 @ threads_41.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 16),
                                     )
                                     rhs_view_8 = T.tensor_view(
@@ -953,12 +953,12 @@ def attention(
                                 for o_k_3 in range(0, 80, 16):
                                     acc_view_9 = T.tensor_view(
                                         T.ptr_of(o_1[o_m_3:o_m_3 + 64, o_n_3:o_n_3 + 256]),
-                                        layout=((8 @ threads_42.d1, 2, 4 @ threads_42.d0, 2, 4 @ threads_42.d2, 32), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_42.d0, 2, 8 @ threads_42.d1, 32, 4 @ threads_42.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 256),
                                     )
                                     lhs_view_9 = T.tensor_view(
                                         T.ptr_of(pb[o_m_3:o_m_3 + 64, o_k_3:o_k_3 + 16]),
-                                        layout=((8 @ threads_42.d1, 2, 4 @ threads_42.d0, 2, 4 @ threads_42.d2, 2), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_42.d0, 2, 8 @ threads_42.d1, 2, 4 @ threads_42.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 16),
                                     )
                                     rhs_view_9 = T.tensor_view(
@@ -980,7 +980,7 @@ def attention(
                     T.copy(lsum_1_view, lsum)
                     o_1_view = T.tensor_view(
                         T.ptr_of(o_1[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ scope_4.d0, 8 @ scope_4.d2, 2, 4 @ scope_4.d1, 2, 4 @ scope_4.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ scope_4.d0, 4 @ scope_4.d1, 2, 8 @ scope_4.d2, 32, 4 @ scope_4.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.copy(o_1_view, o)
@@ -996,7 +996,7 @@ def attention(
                 with scope_5 as threads_46:
                     lhs_frame_16 = T.tensor_view(
                         T.ptr_of(o[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_46.d0, 8 @ threads_46.d2, 2, 4 @ threads_46.d1, 2, 4 @ threads_46.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_46.d0, 4 @ threads_46.d1, 2, 8 @ threads_46.d2, 32, 4 @ threads_46.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     rhs_frame_7 = T.tensor_view(
@@ -1006,29 +1006,29 @@ def attention(
                     )
                     dst_frame_27 = T.tensor_view(
                         T.ptr_of(value_26[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_46.d0, 8 @ threads_46.d2, 2, 4 @ threads_46.d1, 2, 4 @ threads_46.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_46.d0, 4 @ threads_46.d1, 2, 8 @ threads_46.d2, 32, 4 @ threads_46.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.binary(lhs_frame_16, rhs_frame_7, dst_frame_27, kind=BinaryKind.DIV)
                     src_frame_9 = T.tensor_view(
                         T.ptr_of(value_26[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_46.d0, 8 @ threads_46.d2, 2, 4 @ threads_46.d1, 2, 4 @ threads_46.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_46.d0, 4 @ threads_46.d1, 2, 8 @ threads_46.d2, 32, 4 @ threads_46.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_28 = T.tensor_view(
                         T.ptr_of(value_25[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_46.d0, 8 @ threads_46.d2, 2, 4 @ threads_46.d1, 2, 4 @ threads_46.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_46.d0, 4 @ threads_46.d1, 2, 8 @ threads_46.d2, 32, 4 @ threads_46.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.cast(src_frame_9, dst_frame_28, dtype="bf16")
                     src_frame_10 = T.tensor_view(
                         T.ptr_of(value_25[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_46.d0, 8 @ threads_46.d2, 2, 4 @ threads_46.d1, 2, 4 @ threads_46.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_46.d0, 4 @ threads_46.d1, 2, 8 @ threads_46.d2, 32, 4 @ threads_46.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_29 = T.tensor_view(
                         T.ptr_of(ob[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_46.d0, 8 @ threads_46.d2, 2, 4 @ threads_46.d1, 2, 4 @ threads_46.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_46.d0, 4 @ threads_46.d1, 2, 8 @ threads_46.d2, 32, 4 @ threads_46.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.cast(src_frame_10, dst_frame_29, dtype="f32")
@@ -1042,40 +1042,40 @@ def attention(
                 with scope_5 as threads_49:
                     dst_frame_30 = T.tensor_view(
                         T.ptr_of(value_32[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_49.d0, 8 @ threads_49.d2, 2, 4 @ threads_49.d1, 2, 4 @ threads_49.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_49.d0, 4 @ threads_49.d1, 2, 8 @ threads_49.d2, 32, 4 @ threads_49.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.copy(tile_8, dst_frame_30)
                     src_frame_11 = T.tensor_view(
                         T.ptr_of(value_32[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_49.d0, 8 @ threads_49.d2, 2, 4 @ threads_49.d1, 2, 4 @ threads_49.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_49.d0, 4 @ threads_49.d1, 2, 8 @ threads_49.d2, 32, 4 @ threads_49.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_31 = T.tensor_view(
                         T.ptr_of(gt[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_49.d0, 8 @ threads_49.d2, 2, 4 @ threads_49.d1, 2, 4 @ threads_49.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_49.d0, 4 @ threads_49.d1, 2, 8 @ threads_49.d2, 32, 4 @ threads_49.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.cast(src_frame_11, dst_frame_31, dtype="f32")
                     src_frame_12 = T.tensor_view(
                         T.ptr_of(gt[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_49.d0, 8 @ threads_49.d2, 2, 4 @ threads_49.d1, 2, 4 @ threads_49.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_49.d0, 4 @ threads_49.d1, 2, 8 @ threads_49.d2, 32, 4 @ threads_49.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_32 = T.tensor_view(
                         T.ptr_of(value_31[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_49.d0, 8 @ threads_49.d2, 2, 4 @ threads_49.d1, 2, 4 @ threads_49.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_49.d0, 4 @ threads_49.d1, 2, 8 @ threads_49.d2, 32, 4 @ threads_49.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.unary(src_frame_12, dst_frame_32, kind=UnaryKind.NEG)
                     src_frame_13 = T.tensor_view(
                         T.ptr_of(value_31[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_49.d0, 8 @ threads_49.d2, 2, 4 @ threads_49.d1, 2, 4 @ threads_49.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_49.d0, 4 @ threads_49.d1, 2, 8 @ threads_49.d2, 32, 4 @ threads_49.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_33 = T.tensor_view(
                         T.ptr_of(value_30[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_49.d0, 8 @ threads_49.d2, 2, 4 @ threads_49.d1, 2, 4 @ threads_49.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_49.d0, 4 @ threads_49.d1, 2, 8 @ threads_49.d2, 32, 4 @ threads_49.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.unary(src_frame_13, dst_frame_33, kind=UnaryKind.EXP)
@@ -1084,78 +1084,78 @@ def attention(
                 with scope_5 as threads_53:
                     lhs_frame_17 = T.tensor_view(
                         T.ptr_of(value_30[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_34 = T.tensor_view(
                         T.ptr_of(value_29[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.binary(lhs_frame_17, scalar_9, dst_frame_34, kind=BinaryKind.ADD)
                     rhs_frame_8 = T.tensor_view(
                         T.ptr_of(value_29[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_35 = T.tensor_view(
                         T.ptr_of(value_28[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.binary(scalar_8, rhs_frame_8, dst_frame_35, kind=BinaryKind.DIV)
                     src_frame_14 = T.tensor_view(
                         T.ptr_of(value_28[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_36 = T.tensor_view(
                         T.ptr_of(value_27[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.cast(src_frame_14, dst_frame_36, dtype="bf16")
                     src_frame_15 = T.tensor_view(
                         T.ptr_of(value_27[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_37 = T.tensor_view(
                         T.ptr_of(sg[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.cast(src_frame_15, dst_frame_37, dtype="f32")
                     lhs_frame_18 = T.tensor_view(
                         T.ptr_of(ob[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     rhs_frame_9 = T.tensor_view(
                         T.ptr_of(sg[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_38 = T.tensor_view(
                         T.ptr_of(value_24[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.binary(lhs_frame_18, rhs_frame_9, dst_frame_38, kind=BinaryKind.MUL)
                     src_frame_16 = T.tensor_view(
                         T.ptr_of(value_24[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     dst_frame_39 = T.tensor_view(
                         T.ptr_of(y[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.cast(src_frame_16, dst_frame_39, dtype="bf16")
                     src_frame_17 = T.tensor_view(
                         T.ptr_of(y[0:0 + 128, 0:0 + 256]),
-                        layout=((2 @ threads_53.d0, 8 @ threads_53.d2, 2, 4 @ threads_53.d1, 2, 4 @ threads_53.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                        layout=((2 @ threads_53.d0, 4 @ threads_53.d1, 2, 8 @ threads_53.d2, 32, 4 @ threads_53.d3, 2,), (16384, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 256),
                     )
                     T.copy(src_frame_17, staged)

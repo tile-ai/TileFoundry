@@ -35,7 +35,7 @@ class SM80_MMA_LDMATRIX:
                 warp = T.cuda.sm80.Mma()
 
                 with Mesh(threads[1, :], layout=((4, 8), (1, 4)), names=("warp", "lane")) as _compute:
-                    acc = tf.zeros(Tensor[(M, N), "f32", ((2, 4 @ _compute.warp, 8 @ _compute.lane, 2), (1, 2, 8, 64)), "rmem"])
+                    acc = tf.zeros(Tensor[(M, N), "f32", ((2, 8 @ _compute.lane, 4 @ _compute.warp, 2), (64, 8, 2, 1)), "rmem"])
 
                 for k in tf.tile(K, BK):
                     with threads[0, :32] as _loader:
@@ -69,8 +69,8 @@ class SM80_MMA_LDMATRIX:
                             Tensor[
                                 (16, 16), "bf16",
                                 ShardLayout(
-                                    layout=Layout((2, 4, 2, 8, 2), (1, 2, 8, 16, 128)),
-                                    attrs=(S(1), S(3)),
+                                    layout=Layout((2, 8, 2, 4, 2), (128, 16, 8, 2, 1)),
+                                    attrs=(S(3), S(1)),
                                     mesh=_compute,
                                 ),
                                 "rmem",
@@ -81,8 +81,8 @@ class SM80_MMA_LDMATRIX:
                             Tensor[
                                 (16, 8), "bf16",
                                 ShardLayout(
-                                    layout=Layout((8, 2, 4, 2), (1, 8, 16, 64)),
-                                    attrs=(S(2), S(0)),
+                                    layout=Layout((2, 4, 2, 8), (64, 16, 8, 1)),
+                                    attrs=(S(1), S(3)),
                                     mesh=_compute,
                                 ),
                                 "rmem",
@@ -94,6 +94,8 @@ class SM80_MMA_LDMATRIX:
                             op=T.tiled_mma(atom=warp),
                         )
 
+                output = tf.empty(Tensor[(M, N), "bf16"])
                 with Mesh(threads[1, :], layout=((4, 8), (1, 4)), names=("warp", "lane")) as _compute:
                     result = tf.cast(acc, dtype="bf16")
+                    result = tf.insert_slice(output, result, (0, 0))
                 return result

@@ -9,8 +9,7 @@ the TIR effect-form ``Binary`` Stmt that writes into ``dst``.
 
 from __future__ import annotations
 
-import torch
-
+from tilefoundry.evaluator.kernels import binary
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -21,6 +20,7 @@ from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import TensorPattern
 from tilefoundry.ir.types import DType, Layout, TensorType
+from tilefoundry.ir.types.layout import resolve_layout
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
@@ -69,7 +69,7 @@ def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
     Any other genuine mismatch raises — there is no silent lhs pick; a real
     shard mismatch is propagated through the shard engine, not merged here.
     """
-    if a == b:
+    if resolve_layout(a, out_shape) == resolve_layout(b, out_shape):
         if a is None:
             return None
         layout = a
@@ -177,26 +177,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Binary)
 def _eval_binary(ctx):
-
-    fns = {
-        BinaryKind.ADD: torch.add,
-        BinaryKind.SUB: torch.sub,
-        BinaryKind.MUL: torch.mul,
-        BinaryKind.DIV: torch.div,
-        BinaryKind.FLOOR_DIV: torch.floor_divide,
-        BinaryKind.MOD: torch.remainder,
-        BinaryKind.MIN: torch.minimum,
-        BinaryKind.MAX: torch.maximum,
-        BinaryKind.EQ: torch.eq,
-        BinaryKind.NE: torch.ne,
-        BinaryKind.LT: torch.lt,
-        BinaryKind.LE: torch.le,
-        BinaryKind.GT: torch.gt,
-        BinaryKind.GE: torch.ge,
-        BinaryKind.AND: torch.logical_and,
-        BinaryKind.OR: torch.logical_or,
-    }
-    out = fns[ctx.op.kind](ctx.args[0].data, ctx.args[1].data)
+    out = binary(ctx.op.kind, ctx.args[0].data, ctx.args[1].data)
     return TensorValue(data=out, type=ctx.result_type)
 
 

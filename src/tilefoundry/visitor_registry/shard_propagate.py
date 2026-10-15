@@ -195,7 +195,10 @@ def _carrier_layout(
 
 
 
-    la2ta_out = layout_axis_to_tensor_axis(tuple(new_shape), tuple(output_shape))
+    try:
+        la2ta_out = layout_axis_to_tensor_axis(tuple(new_shape), tuple(output_shape))
+    except ValueError:
+        return None
     mapped: list = [Broadcast() for _ in range(mesh_rank)]
     for p_mesh, attr in enumerate(out_attrs):
         if isinstance(attr, Split):

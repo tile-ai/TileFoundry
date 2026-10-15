@@ -39,7 +39,7 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                     n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
                 with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
-                    acc = tf.zeros(Tensor[(M, N), "f32", ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 4), (1, 8, 16, 64, 128, 512)), "rmem"])
+                    acc = tf.zeros(Tensor[(M, N), "f32", ((4 @ _compute.warp, 2, 8 @ _compute.lane8, 4, 4 @ _compute.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"])
 
                 for k in tf.tile(K, BK):
                     with Mesh(threads[0, :32], layout=(32,), names=("lane",)) as _loader:
@@ -61,8 +61,8 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                             Tensor[
                                 (16, 32), "f32",
                                 ShardLayout(
-                                    layout=Layout((32, 16), (16, 1)),
-                                    attrs=(S(0),),
+                                    layout=Layout((16, 32), (1, 16)),
+                                    attrs=(S(1),),
                                     mesh=_loader,
                                 ),
                                 "rmem",
@@ -92,13 +92,14 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                             op=T.tiled_mma(atom=wgmma),
                         )
 
+                output = tf.zeros(Tensor[(M, 1), "bf16"])
                 with Mesh(threads[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _compute:
                     bias_r_dst = tf.empty(
                         Tensor[
                             (64, 32), "f32",
                             ShardLayout(
-                                layout=Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)),
-                                attrs=(S(2), S(0), S(4)),
+                                layout=Layout((4, 2, 8, 4, 4, 2,), (16, 8, 1, 512, 128, 64)),
+                                attrs=(S(0), S(2), S(4)),
                                 mesh=_compute,
                             ),
                             "rmem",
@@ -127,4 +128,5 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                         acc, axes=(1,), keepdim=True, kind=ReduceKind.SUM
                     )
                     result = tf.cast(explicit + automatic, dtype="bf16")
+                    result = tf.insert_slice(output, result, (0, 0))
                 return result

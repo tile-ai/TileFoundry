@@ -29,7 +29,6 @@ from .types.dim import (
     DimMul,
     DimSub,
     DimVar,
-    simplify_dim,
 )
 from .types.dtype import IntegerDType
 from .types.int_tuple import flatten as flatten_tuple
@@ -492,90 +491,6 @@ def shape_to_isl_set(shape: tuple, values: IslParamValues) -> "isl.set":
     return isl.set(prefix + f"{{ [{', '.join(dims)}] : {' and '.join(constraints)} }}")
 
 
-def _same_extent(a, b) -> bool:
-    """Whether two extents are provably equal."""
-    if a is b or a == b:
-        return True
-    if static_dim_value(a) is not None and static_dim_value(b) is not None:
-        return False
-    try:
-        return normalize_dim(simplify_dim(DimSub, (a, b))) == 0
-    except (TypeError, ValueError, NotImplementedError):
-        return False
-
-
-def _congruent_groups(shape: tuple, extents: tuple) -> list[list[int]] | None:
-    """Which layout positions each logical axis owns, when they line up in order.
-
-    Each logical axis takes the next positions whose product is provably its
-    extent. Anything else -- an axis spread over a boundary, or positions left
-    over that hold more than one -- is not congruent, and None says so.
-    """
-    groups: list[list[int]] = []
-    position = 0
-    for extent in shape:
-        group: list[int] = []
-        product = 1
-        while not _same_extent(product, extent):
-            if position >= len(extents):
-                return None
-            held = extents[position]
-            product = held if product == 1 else simplify_dim(DimMul, (product, held))
-            if static_dim_value(product) is not None and static_dim_value(extent) is not None:
-                product = static_dim_value(product)
-                if product > static_dim_value(extent):
-                    return None
-            group.append(position)
-            position += 1
-        groups.append(group)
-    if any(static_dim_value(extent) != 1 for extent in extents[position:]):
-        return None
-    return groups
-
-
-def _regrouped(shape: tuple, extents: tuple, coords: list[str]) -> list[str]:
-    """Each layout position's coordinate, by the row-major regroup of *coords*.
-
-    A position of extent 1 is 0. The outermost of the rest is not reduced
-    modulo its extent, so a coordinate past the value is not folded back onto
-    one inside it; every other divisor and modulus has to be a number.
-    """
-    image = ["0"] * len(extents)
-    groups = _congruent_groups(shape, extents)
-    if groups is not None:
-        runs = list(zip(coords, groups, strict=True))
-    else:
-        whole = [static_dim_value(extent) for extent in shape]
-        if None in whole or any(static_dim_value(extent) is None for extent in extents):
-            raise ValueError(
-                f"shape {shape} regroups onto layout positions {extents} across axes, "
-                "which needs static extents on both sides"
-            )
-        terms = []
-        stride = 1
-        for coord, extent in reversed(list(zip(coords, whole))):
-            terms.append(coord if stride == 1 else f"{stride} * {coord}")
-            stride *= extent
-        runs = [(f"({' + '.join(reversed(terms)) or '0'})", list(range(len(extents))))]
-    for coord, group in runs:
-        held = [position for position in group if static_dim_value(extents[position]) != 1]
-        inner = 1
-        for position in reversed(held):
-            term = coord if inner == 1 else f"floor({coord}/{inner})"
-            if position == held[0]:
-                image[position] = term
-                break
-            extent = static_dim_value(extents[position])
-            if extent is None:
-                raise ValueError(
-                    f"layout position {position} has extent {extents[position]!r} and a "
-                    "position outside it; dividing a coordinate by it is not affine"
-                )
-            image[position] = f"({term}) mod {extent}"
-            inner *= extent
-    return image
-
-
 def _mesh_coordinate(mesh, axis: int, values: IslParamValues) -> str:
     """The parameter standing for this unit's coordinate on one mesh axis."""
     from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord  # noqa: PLC0415 - cycle guard
@@ -634,7 +549,9 @@ def layout_to_isl_map(
         if logical == 0:
             positions = ", ".join(f"p{index}" for index in range(len(extents)))
             return isl.map(f"{{ [{domain}] -> [{positions}] : 1 = 0 }}")
-    image = _regrouped(tuple(shape), extents, coords)
+    from .types.layout_correspondence import layout_correspondence  # noqa: PLC0415
+
+    image = layout_correspondence(layers[0].shape, tuple(shape)).coordinates(coords)
     cutting: dict[int, list[tuple[ShardLayout, int, bool]]] = {}
     for layer in reversed(layers):
         mesh_extents = flatten(layer.mesh.layout).shape

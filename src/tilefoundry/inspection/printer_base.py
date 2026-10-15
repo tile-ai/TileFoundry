@@ -456,7 +456,9 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             attrs += ","
         with self.type_surface(indent=child):
             layout_text = self.visit(value.layout, ctx)
-            mesh_text = self.visit(value.mesh, ctx)
+            mesh_text = (
+                ctx.mesh_alias(value.mesh) if ctx is not None else None
+            ) or self._mesh_text(value.mesh, ctx)
         return (
             "ShardLayout(\n"
             f"{child}layout={layout_text},\n"

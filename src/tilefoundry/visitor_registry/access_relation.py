@@ -411,10 +411,7 @@ def _placed(
     name. A value with no placement is addressed at its own coordinates.
     """
     relation = access.relation
-    if (
-        not isinstance(local, TensorType)
-        or not isinstance(logical, TensorType)
-    ):
+    if not isinstance(local, TensorType) or not isinstance(logical, TensorType):
         return relation
     if relation.dim(isl.dim_type.OUT) != len(logical.shape):
         raise ValueError(
@@ -502,9 +499,12 @@ def logical_axes_of(local: "Type", logical: "Type") -> list[int]:
     projected Type keeps those positions. So the projected rank is not the
     authored rank and an Op's own axis numbers do not index it: reducing "axis
     1" by position would reduce the mesh factor of axis 0 and carry its residual
-    through. Amounts can stay right while that happens; a mapping cannot.
+    through. A plain projected view already names logical axes even when its
+    engine retains a larger source domain, as Local does.
     """
     layout = getattr(local, "layout", None)
+    if shard_layout_of(layout) is None and len(local.shape) == len(logical.shape):
+        return layout_axis_to_tensor_axis(tuple(logical.shape), tuple(logical.shape))
     inner = getattr(layout, "layout", None)
     shape = getattr(inner, "shape", None) or getattr(layout, "shape", None)
     if shape is None or len(shape) != len(local.shape):
@@ -1383,3 +1383,13 @@ __all__ = [
     "unread_access",
     "window_source",
 ]
+
+
+def state_access(type_, domain_rank=0):
+    """Conservatively cover an opaque state's cells from one effect event."""
+    domain = ", ".join(f"d{axis}" for axis in range(domain_rank))
+    image = ", ".join(f"s{axis}" for axis in range(len(type_.shape)))
+    relation = isl.map(f"{{ [{domain}] -> [{image}] }}")
+    values = {}
+    relation = relation.intersect_range(shape_to_isl_set(type_.shape, values))
+    return AccessRelation(relation, values, may_access=True)

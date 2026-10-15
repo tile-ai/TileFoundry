@@ -6,13 +6,15 @@ from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import flatten, rank
 from tilefoundry.ir.types.stride import idx2crd
 
-from .layout import ComposedLayout, Layout, LayoutBase, get
+from .layout import ComposedLayout, Layout, LayoutBase, get, resolve_layout
+from .layout_correspondence import layout_correspondence
 from .mesh import Mesh
 from .stride import compact_row_major, try_compact_major
 
 
 class ShardAttr:
     """Base for per-mesh-axis sharding attributes."""
+
     pass
 
 
@@ -29,6 +31,7 @@ class Partial(ShardAttr):
 @dataclass(frozen=True)
 class Broadcast(ShardAttr):
     pass
+
 
 @dataclass(frozen=True)
 class Dynamic(ShardAttr):
@@ -158,9 +161,7 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
     )
 
 
-def shard_layout_local_shape(
-    sl: "ShardLayout", *, require_static: bool = True
-) -> tuple:
+def shard_layout_local_shape(sl: "ShardLayout", *, require_static: bool = True) -> tuple:
     """Derive one shard's local shape from its global layout.
 
     Splits divide by mesh extents: equal symbols yield one, matching products
@@ -211,47 +212,12 @@ def shard_layout_local_shape(
 
 
 def layout_axis_to_tensor_axis(layout_shape: tuple, tensor_shape: tuple) -> list[int]:
-    """Map factored layout positions to their logical tensor axes.
+    """Map modes to logical axes through the shared row-major correspondence.
 
-    Positions are consumed left-to-right until their product reaches each
-    tensor extent. Singleton tensor axes claim one singleton position; trailing
-    positions attach to the final tensor axis.
-
-    Defer static_dim_value: utils imports shard_layout at module load, before
-    its layout definitions and canonicalization functions have been initialized.
-
-    See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
+    A mode crossing a logical-axis boundary has no single target and is refused.
+    See [semantic-analysis §3.1](docs/spec/semantic-analysis.md#31-logical-shape-to-layout-domain).
     """
-    from .utils import static_dim_value  # noqa: PLC0415 - cycle guard
-
-    result: list[int] = []
-    layout_idx = 0
-    for t_axis, t_dim in enumerate(tensor_shape):
-        t_dim_int = static_dim_value(t_dim)
-        if t_dim_int is None:
-            if layout_idx < len(layout_shape) and layout_shape[layout_idx] == t_dim:
-                result.append(t_axis)
-                layout_idx += 1
-                continue
-            while layout_idx < len(layout_shape):
-                result.append(t_axis)
-                layout_idx += 1
-            return result
-        if t_dim_int == 1:
-            if layout_idx < len(layout_shape):
-                result.append(t_axis)
-                layout_idx += 1
-            continue
-        running = 1
-        while layout_idx < len(layout_shape) and running < t_dim_int:
-            sh = static_dim_value(layout_shape[layout_idx])
-            running *= 1 if sh is None else sh
-            result.append(t_axis)
-            layout_idx += 1
-    while layout_idx < len(layout_shape):
-        result.append(len(tensor_shape) - 1)
-        layout_idx += 1
-    return result
+    return layout_correspondence(layout_shape, tensor_shape).tensor_axes()
 
 
 def split_target_axes(sl: "ShardLayout", tensor_shape: tuple) -> tuple:
@@ -297,9 +263,7 @@ def _strides(shard: ShardLayout, tensor_shape: tuple) -> tuple[int, ...]:
     return tuple(found.get(axis, fallback[axis]) for axis in range(len(tensor_shape)))
 
 
-def _narrowed(
-    shard: ShardLayout, tensor_shape: tuple, axis: int, dividing: Iterable[int]
-) -> int:
+def _narrowed(shard: ShardLayout, tensor_shape: tuple, axis: int, dividing: Iterable[int]) -> int:
     """Tensor *axis* divided by each mesh axis in *dividing* that cuts it.
 
     Several may. Two axes of one level cut a tensor axis into a grid, and so
@@ -377,15 +341,11 @@ def _positions(shard: ShardLayout, ids: tuple[int | None, ...]) -> dict[int, int
             )
         )
     return {
-        axis: position
-        for axis, position in enumerate(flatten(tuple(read)))
-        if position is not None
+        axis: position for axis, position in enumerate(flatten(tuple(read))) if position is not None
     }
 
 
-def local_layout(
-    shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None, ...]
-) -> Layout:
+def local_layout(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None, ...]) -> Layout:
     """What one instance holds: each tensor axis narrowed by what cuts it.
 
     Narrowed by the axes *ids* names, and no others: an axis nothing cuts is
@@ -397,8 +357,7 @@ def local_layout(
     dividing = _positions(shard, ids).keys()
     return Layout(
         shape=tuple(
-            _narrowed(shard, tensor_shape, axis, dividing)
-            for axis in range(len(tensor_shape))
+            _narrowed(shard, tensor_shape, axis, dividing) for axis in range(len(tensor_shape))
         ),
         strides=_strides(shard, tensor_shape),
     )
@@ -441,4 +400,31 @@ __all__ = [
     "shard_layout_local_shape",
     "layout_axis_to_tensor_axis",
     "split_target_axes",
+    "register_strides",
 ]
+
+
+def register_strides(sl: ShardLayout) -> tuple[int, ...]:
+    """``sl``'s strides as steps on a *register* engine, not on a shared buffer.
+
+    Registers are the distinct-engine-per-instance case of [shard
+    §7.1.2](docs/spec/shard.md#712-layoutstrides): a ``Split(k)`` axis gets
+    ``0``, so the projection offsets no instance along it, and the rest get
+    the array's own compact steps, assigned from smallest to largest stated
+    physical stride. This preserves register numbering when modes are reordered.
+    An extent-1 axis names no step.
+    """
+    from .utils import upper_bound  # noqa: PLC0415 - staged type imports
+
+    local = shard_layout_local_shape(sl, require_static=False)
+    split_axes = {int(a.axis) for a in sl.attrs if isinstance(a, Split)}
+    physical = flatten(resolve_layout(sl.layout))
+    order = sorted(range(len(local)), key=lambda axis: int(upper_bound(physical.strides[axis])))
+    strides: list[int] = [0] * len(local)
+    step = 1
+    for axis in order:
+        width = int(upper_bound(local[axis]))
+        if axis not in split_axes and width != 1:
+            strides[axis] = step
+            step *= width
+    return tuple(strides)

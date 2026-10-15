@@ -9,29 +9,25 @@ from tilefoundry.target import CudaTarget
 
 
 @prim_func(target=CudaTarget("nvidia.h200_sxm"))
-def gemm(x: Tensor[(32,), "f32"], lhs: Tensor[(1,), "f32"], out: Tensor[(32,), "f32"]):
+def gemm(
+    x: Tensor[(32,), "f32"], lhs: Tensor[(1,), "f32"], out: Tensor[(32,), "f32", (32,), "rmem"]
+):
     with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
-        result_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-        left_dst = T.alloc_tensor(tensor_type=Tensor[(1,), "f32", (1,), "rmem"])
-        scaled = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-        offset = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-        shifted_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-        held_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
         with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
-            with scope[:] as threads:
-                T.copy(lhs, left_dst)
+            left_dst = T.alloc_tensor(tensor_type=Tensor[(1,), "f32", (1,), "rmem"])
+            T.copy(lhs, left_dst)
+            shifted_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+            held_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+            T.copy(x, held_dst)
             scalar = T.alloc_tensor(tensor_type=Tensor[(), "f32", "rmem"])
-            T.fill(scalar, 1.0)
-            with scope[:] as threads_1:
-                T.copy(x, held_dst)
+            T.fill(scalar, 0.25)
+            T.binary(held_dst, scalar, shifted_dst, kind=BinaryKind.ADD)
+            offset = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
             scalar_1 = T.alloc_tensor(tensor_type=Tensor[(), "f32", "rmem"])
-            T.fill(scalar_1, 0.25)
-            with scope[:] as threads_2:
-                T.binary(held_dst, scalar_1, shifted_dst, kind=BinaryKind.ADD)
-                T.binary(scalar, shifted_dst, offset, kind=BinaryKind.SUB)
+            T.fill(scalar_1, 1.0)
+            T.binary(scalar_1, shifted_dst, offset, kind=BinaryKind.SUB)
+            scaled = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
             scalar_2 = T.alloc_tensor(tensor_type=Tensor[(), "f32", "rmem"])
             T.fill(scalar_2, 0.5)
-            with scope[:] as threads_4:
-                T.binary(offset, scalar_2, scaled, kind=BinaryKind.MUL)
-                T.binary(left_dst, scaled, result_dst, kind=BinaryKind.MUL)
-        T.copy(result_dst, out)
+            T.binary(offset, scalar_2, scaled, kind=BinaryKind.MUL)
+            T.binary(left_dst, scaled, out, kind=BinaryKind.MUL)

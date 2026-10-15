@@ -18,6 +18,7 @@ from tilefoundry.ir.types import (
     Layout,
     Mesh,
     ShardLayout,
+    TensorType,
     Topology,
     make_shard_tensor_type,
     make_tensor_type,
@@ -67,6 +68,21 @@ CASES = [
         ),
         ExpectedError(match=r"reduction axis 1.*Split-sharded.*Reshard"),
     ),
+    TypeInferCase(
+        "nested_modes_fall_back_to_flat_axis_projection",
+        ArgMax(axis=1),
+        (TensorType(
+            (8, 512), DType.f32,
+            ShardLayout(
+                Layout(((8, 8), (4, 16)), ((512, 64), (16, 1))),
+                (Split(1),),
+                Mesh((Topology("thread", 8),), Layout((8,), (1,)), ("lane",)),
+            ),
+            "rmem",
+        ),),
+        ExpectedError(match=r"reduction axis 1.*Split-sharded.*Reshard"),
+    ),
+
 ]
 
 

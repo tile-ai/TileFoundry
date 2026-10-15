@@ -829,13 +829,48 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         return True
 
     def adopt_update(
-        self, result: AllocationValue, update: AllocationValue, relation: isl.map,
-        alias: BufferAlias, ctx: AllocationModel
+        self,
+        result: AllocationValue,
+        update: AllocationValue,
+        relation: isl.map,
+        alias: BufferAlias,
+        ctx: AllocationModel,
     ) -> None:
-        """Apply the window constraint and publish it together for lowering."""
+        """Publish a group's window on its tie initial, retaining carried ties."""
+        producer = update
+        group = ctx.groups.find(update)
+        for member in ctx.values:
+            if ctx.groups.find(member) is not group:
+                continue
+            owner = self.definitions.get(id(member.value))
+            if owner is None or not isinstance(owner.owner, LoopRegion):
+                continue
+            loop = owner.owner
+            tie = ctx.aliases.get(member)
+            if not any(
+                member.value is param and tie is not None and tie.buffer is initial
+                for param, initial in zip(loop.params[:len(loop.yield_values)], loop.args)
+            ):
+                continue
+            producer = member
+            while True:
+                scope = self.definitions[id(producer.value)]
+                value = scope.capture_root(producer.value)
+                if value is not producer.value:
+                    producer = self.storage_of(value, producer.occurrence)
+                    continue
+                loop = scope.owner
+                tie = ctx.aliases.get(producer)
+                if not isinstance(loop, LoopRegion) or tie is None or not any(
+                    producer.value is param and tie.buffer is initial
+                    for param, initial in zip(loop.params[:len(loop.yield_values)], loop.args)
+                ):
+                    break
+                producer = self.storage_of(tie.buffer, tie.occurrence)
+            break
         if self.alias(result, update, relation, ctx):
-            if not isinstance(update.value.type, TupleType):
-                ctx.aliases[update] = alias
+            if not isinstance(producer.value.type, TupleType):
+                ctx.aliases[producer] = alias
 
     def default_visit_leaf(
         self, node: Expr, operands: tuple[Storage, ...], ctx: AllocationModel

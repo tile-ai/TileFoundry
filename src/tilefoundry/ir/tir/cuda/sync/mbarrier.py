@@ -6,12 +6,18 @@ See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor, is_scalar_tensor
+from tilefoundry.ir.pattern import WildcardPattern, is_scalar_tensor, utils
 from tilefoundry.ir.types import UnitType
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_access,
+    iterating,
+    register_access_relation,
+    state_access,
+)
 
 __all__ = [
     "MBarrierInit",
@@ -21,19 +27,20 @@ __all__ = [
 ]
 
 
-def _require_smem_barrier(ctx, call, who: str) -> None:
-    """Report unless argument 0 is a shared-memory barrier object."""
-    ty = ctx.type_of(call.args[0])
-    if ty.storage != StorageKind.SMEM:
-        ctx.error(call, f"{who} barrier must be smem, got {ty.storage}")
-
-
 @register_op(dialect="T", category="sync", name="mbarrier_init")
 class MBarrierInit(Op):
     """Arm ``barrier`` so ``arrive_count`` arrivals complete a phase."""
 
-    barrier = ParamDef(kind="input", pattern=is_ranked_tensor())
-    arrive_count = ParamDef(kind="attribute", annotation=int)
+    execution_mesh = utils.thread_execution_mesh()
+
+    barrier = ParamDef(
+        kind="input", effect=MemoryEffect.WRITE, pattern=utils.tensor_in(StorageKind.SMEM)
+    )
+    arrive_count = ParamDef(
+        kind="attribute",
+        annotation=int,
+        pattern=WildcardPattern("arrive_count", predicates=(WildcardPattern("arrive_count") > 0,)),
+    )
 
 
 @register_typeinfer(MBarrierInit)
@@ -41,20 +48,22 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
-@register_verify_stmt(MBarrierInit)
-def _(call: "Call", ctx: "VerifyContext") -> None:
-    count = call.target.arrive_count
-    if not isinstance(count, int) or count <= 0:
-        ctx.error(call, f"MBarrierInit.arrive_count must be a positive int, got {count!r}")
-    _require_smem_barrier(ctx, call, "MBarrierInit")
-
-
 @register_op(dialect="T", category="sync", name="mbarrier_arrive_expect_tx")
 class MBarrierArriveExpectTx(Op):
     """Arrive on ``barrier`` and declare ``tx_bytes`` of asynchronous data."""
 
-    barrier = ParamDef(kind="input", pattern=is_ranked_tensor())
-    tx_bytes = ParamDef(kind="attribute", annotation=int)
+    execution_mesh = utils.thread_execution_mesh()
+
+    barrier = ParamDef(
+        kind="input",
+        effect=MemoryEffect.READ | MemoryEffect.WRITE,
+        pattern=utils.tensor_in(StorageKind.SMEM),
+    )
+    tx_bytes = ParamDef(
+        kind="attribute",
+        annotation=int,
+        pattern=WildcardPattern("tx_bytes", predicates=(WildcardPattern("tx_bytes") > 0,)),
+    )
 
 
 @register_typeinfer(MBarrierArriveExpectTx)
@@ -62,20 +71,16 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
-@register_verify_stmt(MBarrierArriveExpectTx)
-def _(call: "Call", ctx: "VerifyContext") -> None:
-    tx = call.target.tx_bytes
-    if not isinstance(tx, int) or tx <= 0:
-        ctx.error(call, f"MBarrierArriveExpectTx.tx_bytes must be a positive int, got {tx!r}")
-    _require_smem_barrier(ctx, call, "MBarrierArriveExpectTx")
-
-
 @register_op(dialect="T", category="sync", name="mbarrier_wait_parity")
 class MBarrierWaitParity(Op):
     """Block until ``barrier``'s phase parity reaches ``phase``."""
 
-    barrier = ParamDef(kind="input", pattern=is_ranked_tensor())
-    phase = ParamDef(kind="input", pattern=is_scalar_tensor())
+    execution_mesh = utils.thread_execution_mesh()
+
+    barrier = ParamDef(
+        kind="input", effect=MemoryEffect.READ, pattern=utils.tensor_in(StorageKind.SMEM)
+    )
+    phase = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=is_scalar_tensor())
 
 
 @register_typeinfer(MBarrierWaitParity)
@@ -83,16 +88,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
-@register_verify_stmt(MBarrierWaitParity)
-def _(call: "Call", ctx: "VerifyContext") -> None:
-    _require_smem_barrier(ctx, call, "MBarrierWaitParity")
-
-
 @register_op(dialect="T", category="sync", name="mbarrier_invalidate")
 class MBarrierInvalidate(Op):
     """Release ``barrier``'s shared-memory word for other use."""
 
-    barrier = ParamDef(kind="input", pattern=is_ranked_tensor())
+    execution_mesh = utils.thread_execution_mesh()
+
+    barrier = ParamDef(
+        kind="input", effect=MemoryEffect.WRITE, pattern=utils.tensor_in(StorageKind.SMEM)
+    )
 
 
 @register_typeinfer(MBarrierInvalidate)
@@ -100,6 +104,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
-@register_verify_stmt(MBarrierInvalidate)
-def _(call: "Call", ctx: "VerifyContext") -> None:
-    _require_smem_barrier(ctx, call, "MBarrierInvalidate")
+def _barrier_access(call, ctx):
+    inputs = [state_access(ctx.type_of(call.args[0]))]
+    if len(call.args) > 1:
+        inputs.append(identity_access(0))
+    return iterating((), (*inputs, identity_access(0)))
+
+
+register_access_relation(MBarrierInit)(_barrier_access)
+register_access_relation(MBarrierArriveExpectTx)(_barrier_access)
+register_access_relation(MBarrierWaitParity)(_barrier_access)
+register_access_relation(MBarrierInvalidate)(_barrier_access)

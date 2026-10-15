@@ -9,6 +9,7 @@ from tilefoundry.ir.core import Op, VerifyError
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.mesh_scope import device_layout
+from tilefoundry.ir.pattern import MeshPattern, OrPattern, utils
 from tilefoundry.ir.types import UnitType
 from tilefoundry.ir.types.int_tuple import flatten, product
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, get
@@ -16,6 +17,10 @@ from tilefoundry.ir.types.layout import apply as _apply
 from tilefoundry.ir.types.layout_algebra import size as _size
 from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 WARP_SIZE = 32
 
@@ -23,6 +28,11 @@ WARP_SIZE = 32
 @register_op(dialect="T", category="sync")
 class Sync(Op):
     """Mesh-scoped barrier — emitted by ``T.sync(m)``."""
+
+    execution_mesh = OrPattern(
+        utils.thread_execution_mesh(),
+        MeshPattern(("cta",), utils.thread_execution_mesh().layout),
+    )
 
     mesh = ParamDef(kind="attribute", annotation=Mesh)
 
@@ -251,3 +261,6 @@ __all__ = [
     "classify",
     "WARP_SIZE",
 ]
+
+
+register_access_relation(Sync)(identity_relations)

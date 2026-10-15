@@ -132,11 +132,7 @@ def _reduce_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     axes = _reduced_axes(op, rank)
     out_shape = _result_shape(op, source)
     surviving = [axis for axis in range(rank) if axis not in axes]
-    came_from = (
-        {axis: axis for axis in range(rank)}
-        if op.keepdim
-        else dict(enumerate(surviving))
-    )
+    came_from = {axis: axis for axis in range(rank)} if op.keepdim else dict(enumerate(surviving))
     writes_at = [
         "0" if axis not in came_from or came_from[axis] in axes else f"d{came_from[axis]}"
         for axis in range(len(out_shape))
@@ -152,9 +148,6 @@ def _reduce_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
 
 @register_verify_stmt(Reduce)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    op = call.target
-    if not isinstance(op.kind, ReduceKind):
-        ctx.error(call, f"Reduce: kind must be ReduceKind enum, got {type(op.kind)}")
     if len(call.args) <= 2:
         return
     source, workspace = ctx.type_of(call.args[0]), ctx.type_of(call.args[2])

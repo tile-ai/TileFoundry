@@ -23,6 +23,7 @@ from tilefoundry.ir.types import *
 from tilefoundry.ir.pattern import RangePattern, Pattern
 from tilefoundry.ir.types.dim import DimVar, ceildiv
 from tilefoundry.ir.core.kinds import ReduceKind, UnaryKind, BinaryKind
+from tilefoundry.ir.tir.shape import shape_of
 
 __all__ = [
     "tf",
@@ -33,6 +34,7 @@ __all__ = [
     "module",
     "ModuleList",
     "prim_func",
+    "shape_of",
     *_types.__all__,
     "Pattern",
     "RangePattern",

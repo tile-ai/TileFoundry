@@ -12,14 +12,14 @@ from typing import Iterable
 from tilefoundry.inspection.tir_printer import TirPrinter
 from tilefoundry.ir.core import Expr, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
-from tilefoundry.ir.core.module import Module, ModuleList
+from tilefoundry.ir.core.module import Module, ModuleList, resolve_symbol
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import canonical_specialization_signature
 from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.pattern import PatternMatcher, RangePattern, between_rules, locate_dim_var
+from tilefoundry.ir.pattern import RangePattern, locate_dim_var
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor as AllocTensorOp
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -48,7 +48,7 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
-from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.layout import flatten, resolve_layout
 from tilefoundry.ir.types.mesh import Mesh, make_mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
@@ -60,6 +60,7 @@ from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
 from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 from tilefoundry.visitor_registry.contexts import TypeInferContext, VerifyContext
+from tilefoundry.visitor_registry.instruction import ScheduleRefusal, check_call
 from tilefoundry.visitor_registry.typeinfer import inference_type
 
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
@@ -317,47 +318,6 @@ def input_params(op_type: type) -> tuple:
     return tuple(param for param in op_type._op_schema.signature if param.kind == "input")
 
 
-def verify_between(call, ctx) -> None:
-    """Hold one call to the relations declared between its operands."""
-    op_type = type(call.target)
-    rules = between_rules(op_type)
-    if not rules:
-        return
-    names = tuple(param.name for param in input_params(op_type))
-    operands = dict(zip(names, (ctx.type_of(arg) for arg in call.args)))
-    for rule in rules:
-        if not rule.holds(operands):
-            ctx.error(call, rule.refused(operands))
-
-
-def verify_operands(call, ctx) -> None:
-    """Hold each operand to its pattern; solver UNKNOWN passes for phase-4 reporting."""
-    from tilefoundry.inspection.pattern_printer import PatternPrinter  # noqa: PLC0415
-
-    label = type(call.target)._op_schema.name
-    atom = getattr(call.target, "atom", None)
-    matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
-    printer = PatternPrinter()
-    for param, arg in zip(input_params(type(call.target)), call.args):
-        if param.pattern is None:
-            continue
-        value = ctx.type_of(arg)
-        pattern = (
-            param.pattern.read_on(call.target)
-            if hasattr(param.pattern, "read_on")
-            else param.pattern
-        )
-        if not matcher.match(pattern, value):
-            held = (
-                f"{tuple(value.shape)} {value.dtype.name} storage={value.storage}"
-                if isinstance(value, TensorType)
-                else type(value).__name__
-            )
-            ctx.error(call, f"{label} {param.name} is {held}: {printer.refusal(matcher.refusal)}")
-    if not matcher.solve():
-        ctx.error(call, f"{label}: {printer.refusal(matcher.refusal)}")
-
-
 def verify_prim_function(
     fn: PrimFunction, *, module_fns: Iterable[PrimFunction] | Module = ()
 ) -> None:
@@ -380,22 +340,13 @@ def verify_prim_function(
     ctx = VerifyContext()
     scope: list[Mesh] = []
 
-    module_fn_map: dict[str, tuple[PrimFunction | Function, ...]] = {}
+    module_context = module_fns if isinstance(module_fns, Module) else tuple(module_fns)
     if isinstance(module_fns, Module):
-        ctx.frame = next((frame for frame in list_call_paths(module_fns).values() if frame.function is fn), None)
-        module_fn_map.update({path: (frame.function,) for path, frame in list_call_paths(module_fns).items() if isinstance(frame.function, Function)})
-        module_fns = (
-            function
-            for frame in list_call_paths(module_fns).values() for function in (frame.function,)
-            if isinstance(function, PrimFunction)
-        )
-    for f in module_fns:
-        prior = module_fn_map.get(f.name, ())
-        if all(candidate is not f for candidate in prior):
-            module_fn_map[f.name] = (*prior, f)
+        ctx.frame = next((frame for frame in list_call_paths(module_fns).values()
+                          if fn is frame.function or any(fn is v for v in frame.function.variants)), None)
 
     bound_var_ids: set[int] = {id(p) for p in fn.params}
-    _walk_stmt(fn.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+    _walk_stmt(fn.body, ctx, scope, fn, module_context, bound_var_ids)
 
 
 def _check_param_homogeneity(fn: PrimFunction) -> None:
@@ -417,11 +368,11 @@ def _check_param_homogeneity(fn: PrimFunction) -> None:
         )
 
 
-def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
+def _walk_stmt(stmt, ctx, scope, fn, module_context, bound_var_ids: set[int]):
     match stmt:
         case Sequential():
             for s in stmt.body:
-                _walk_stmt(s, ctx, scope, fn, module_fn_map, bound_var_ids)
+                _walk_stmt(s, ctx, scope, fn, module_context, bound_var_ids)
             return
         case LetStmt():
             if id(stmt.var) in bound_var_ids:
@@ -442,7 +393,7 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
             _check_embedded_sharding(stmt.value, scope, fn)
 
             bound_var_ids.add(id(stmt.var))
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_context, bound_var_ids)
             return
         case For():
             _check_rank0_int(ctx, stmt, stmt.start, "For.start")
@@ -463,49 +414,43 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
                 and iv_ty.dtype in (DType.i32, DType.i64)
             ):
                 raise VerifyError("For.induction_var must be rank-0 integer")
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_context, bound_var_ids)
             return
         case While():
             _check_rank0_bool(ctx, stmt, stmt.cond)
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_context, bound_var_ids)
             return
         case If():
             _check_rank0_bool(ctx, stmt, stmt.cond)
-            _walk_stmt(stmt.then_body, ctx, scope, fn, module_fn_map, bound_var_ids)
-            _walk_stmt(stmt.else_body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.then_body, ctx, scope, fn, module_context, bound_var_ids)
+            _walk_stmt(stmt.else_body, ctx, scope, fn, module_context, bound_var_ids)
             return
         case MeshScope():
             scope.append(stmt.mesh)
-            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_context, bound_var_ids)
             scope.pop()
             return
         case Return():
             return
         case Evaluate():
             if isinstance(stmt.callable, Launch):
-                _verify_launch(stmt, fn, module_fn_map, ctx)
+                _verify_launch(stmt, fn, module_context, ctx)
             elif isinstance(stmt.callable, SymbolRef):
-                _verify_symbol_call(stmt, fn, module_fn_map, ctx)
+                _verify_symbol_call(stmt, fn, module_context, ctx)
             elif isinstance(stmt.callable, (PrimFunction, ModuleList, Call)):
-                _verify_retained_call(stmt, fn, module_fn_map, ctx)
+                _verify_retained_call(stmt, fn, module_context, ctx)
             else:
                 op = stmt.callable
-                op_cls = type(op)
-                fn_verify = verify_stmt_registry.lookup(op_cls)
-                if fn_verify is None and not (
-                    any(param.pattern is not None for param in input_params(op_cls))
-                    or between_rules(op_cls)
-                ):
-                    raise VerifyError(
-                        f"Op {op_cls.__name__} states no verifier and no declaration"
-                    )
-
                 ctx.mesh_scope = tuple(scope)
-                call = Call(type=UnitType(), target=op, args=stmt.args)
-                if fn_verify is not None:
-                    fn_verify(call, ctx)
-                verify_between(call, ctx)
-                verify_operands(call, ctx)
+                ctx.current_mesh = None
+                for mesh in scope:
+                    ctx.current_mesh = (
+                        make_mesh(ctx.current_mesh, mesh) if ctx.current_mesh else mesh
+                    )
+                try:
+                    check_call(op, stmt.args, ctx.current_mesh, frame=ctx)
+                except ScheduleRefusal as error:
+                    raise VerifyError(str(error)) from error
 
             for arg in stmt.args:
                 _reject_nested_alloc_tensor(arg, at_letstmt_value=False)
@@ -643,33 +588,32 @@ def _verify_shape_of(expr: ShapeOf) -> None:
         raise VerifyError(f"ShapeOf.type must be rank-0 i32 scalar TensorType, got {expr.type}")
 
 
-def _resolve_symbol_ref(name, module_fn_map):
-    """Resolve a SymbolRef name to its unique module ``PrimFunction``.
+def _resolve_symbol_ref(ref, module_context, caller, frame=None):
+    """Resolve relative to the caller's slot context, through the shared reader."""
+    scope = module_context
+    if frame is not None:
+        scope = frame.module
+    elif isinstance(scope, Module):
+        owner = next((item for item in list_call_paths(scope).values()
+                      if caller is item.function or any(caller is v for v in item.function.variants)), None)
+        if owner is None:
+            path = ".".join((*ref.nested, ref.name))
+            raise VerifyError(f"symbol {path!r}: caller {caller.name!r} has no owning Module")
+        scope = owner.module
+    try:
+        return resolve_symbol(scope, ref.name, nested=ref.nested)
+    except ValueError as error:
+        raise VerifyError(str(error)) from error
 
-    Zero or more than one same-name match is an error — the same
-    uniqueness contract as ``Module.lookup``.
-    """
-    matches = module_fn_map.get(name, ())
-    if len(matches) != 1:
-        raise VerifyError(
-            f"SymbolRef {name!r} must resolve to exactly one module function, found {len(matches)}"
-        )
-    return matches[0]
 
-
-def _verify_symbol_call(stmt: Evaluate, fn, module_fn_map, ctx):
+def _verify_symbol_call(stmt: Evaluate, fn, module_context, ctx):
     ref = stmt.callable
-    if ref.nested:
-        raise VerifyError(
-            f"SymbolRef {ref.name!r}: nested {ref.nested!r} must be empty "
-            f"(the module holds only top-level functions)"
-        )
-    if not module_fn_map:
+    if not module_context:
         raise VerifyError(
             f"Evaluate(SymbolRef {ref.name!r}) requires module context; "
             f"call verify_prim_function(fn, module_fns=...) or verify_module([...])"
         )
-    callee = _resolve_symbol_ref(ref.name, module_fn_map)
+    callee = _resolve_symbol_ref(ref, module_context, fn, ctx.frame)
     expected_type = callable_type_for_prim_function(callee)
     if ref.type != expected_type:
         raise VerifyError(
@@ -678,7 +622,7 @@ def _verify_symbol_call(stmt: Evaluate, fn, module_fn_map, ctx):
         )
     if callee is fn:
         raise VerifyError("Evaluate(SymbolRef): recursion not allowed")
-    _assert_no_path_back(callee, fn, module_fn_map, visited=set())
+    _assert_no_path_back(callee, fn, module_context, visited=set(), frame=ctx.frame)
     _verify_call_arguments(stmt, callee.params, f"Evaluate(SymbolRef {ref.name!r})", ctx)
 
 
@@ -696,6 +640,9 @@ def _verify_call_arguments(stmt, params, label, ctx):
                 f"{label}: arg[{i}] type kind "
                 f"{type(arg_ty).__name__} != param type kind {type(param_ty).__name__}"
             )
+        if isinstance(arg_ty, TensorType):
+            arg_ty = dataclasses.replace(arg_ty, layout=resolve_layout(arg_ty.layout, arg_ty.shape))
+            param_ty = dataclasses.replace(param_ty, layout=resolve_layout(param_ty.layout, param_ty.shape))
         if arg_ty != param_ty:
             raise VerifyError(
                 f"{label}: arg[{i}] type {arg_ty} != "
@@ -717,7 +664,7 @@ def _retained_callee(target, frame):
     return callee, inner
 
 
-def _verify_retained_call(stmt, fn, module_fn_map, ctx):
+def _verify_retained_call(stmt, fn, module_context, ctx):
     target = stmt.callable
     callee, frame = _retained_callee(target, ctx.frame)
     direct = isinstance(target, PrimFunction)
@@ -727,7 +674,7 @@ def _verify_retained_call(stmt, fn, module_fn_map, ctx):
     )
     prefix = f"Evaluate({label})"
     _assert_no_path_back(
-        callee, fn, module_fn_map, visited=set(), frame=frame,
+        callee, fn, module_context, visited=set(), frame=frame,
         recursion=f"{prefix}: recursion not allowed",
     )
     params = tuple(param for param in callee.params if direct or not param.is_const)
@@ -791,7 +738,7 @@ def _verify_launch_extent(extent, extent_params, ref_name) -> None:
     _LaunchExtentVisitor(extent_params, ref_name).visit(extent)
 
 
-def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
+def _verify_launch(stmt: Evaluate, fn, module_context, ctx):
     """Host-launch checks; full placement validation lands in CUDA lowering.
 
     Host-launch checks; full placement validation lands in CUDA lowering
@@ -806,11 +753,6 @@ def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
     ref = stmt.args[0]
     if not isinstance(ref, SymbolRef):
         raise VerifyError(f"Launch: args[0] must be a SymbolRef callee, got {type(ref).__name__}")
-    if ref.nested:
-        raise VerifyError(
-            f"Launch callee SymbolRef {ref.name!r}: nested {ref.nested!r} must "
-            f"be empty (the module holds only top-level functions)"
-        )
     if len(stmt.args) < 7:
         raise VerifyError(
             f"Launch of {ref.name!r}: expected at least 7 args (callee + six "
@@ -827,9 +769,9 @@ def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
     for i, arg in enumerate(forwarded):
         if not isinstance(ctx.type_of(arg), TensorType):
             raise VerifyError(f"Launch of {ref.name!r}: forwarded arg[{i}] must be a tensor")
-    if not module_fn_map:
+    if not module_context:
         return
-    callee = _resolve_symbol_ref(ref.name, module_fn_map)
+    callee = _resolve_symbol_ref(ref, module_context, fn, ctx.frame)
     if isinstance(callee, Function):
         return
     if not isinstance(callee.target, CudaTarget):
@@ -855,7 +797,7 @@ def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
             )
 
 
-def _assert_no_path_back(callee, root, module_fn_map, visited, frame=None, recursion=None):
+def _assert_no_path_back(callee, root, module_context, visited, frame=None, recursion=None):
     if callee is root:
         raise VerifyError(recursion or f"call DAG violation: {callee.name!r} calls back into {root.name!r}")
     key = (id(callee), id(frame.module) if frame is not None else None)
@@ -868,13 +810,13 @@ def _assert_no_path_back(callee, root, module_fn_map, visited, frame=None, recur
         target = stmt.callable
         reached, inner = None, frame
         if isinstance(target, SymbolRef):
-            matches = module_fn_map.get(target.name, ())
-            if len(matches) == 1:
-                reached = matches[0]
+            reached = _resolve_symbol_ref(target, module_context, callee, frame)
+            if frame is not None:
+                inner = dataclasses.replace(frame, function=reached)
         elif isinstance(target, (PrimFunction, ModuleList, Call)):
             reached, inner = _retained_callee(target, frame)
         if reached is not None:
-            _assert_no_path_back(reached, root, module_fn_map, visited, inner, recursion)
+            _assert_no_path_back(reached, root, module_context, visited, inner, recursion)
 
 
 def _iter_all_stmts(body):
@@ -893,14 +835,12 @@ def _iter_all_stmts(body):
 
 
 def verify_module(fns) -> None:
-    """V1 helper: fns is a list mixing hir.Function and tir.PrimFunction.
+    """Verify a Module tree or a legacy flat function iterable.
 
-    Each name maps to exactly one entry. Specialization variants live on a
-    dispatch prototype's ``variants`` field
-    ([hir §1.1](docs/spec/hir.md#11-function)), never as separate
-    same-name entries. Sealed-module structural invariants: a top-level entry
-    is never a variant, and every entry is callable (``body is None`` only when
-    it carries variants).
+    Names are unique within each Module. Variants live on their prototype's
+    `variants` field, not as separate same-name entries. A top-level entry is
+    never an HIR variant and remains callable when it has no body.
+    See [hir §1.1](docs/spec/hir.md#11-function).
     """
     root = fns if isinstance(fns, Module) else None
     if root is not None:
@@ -912,7 +852,6 @@ def verify_module(fns) -> None:
         groups = (tuple(fns),)
         fns = groups[0]
     prim_fns = [f for f in fns if isinstance(f, PrimFunction)]
-    prim_fns_with_variants = [variant for f in prim_fns for variant in (f, *f.variants)]
     for f in fns:
         if isinstance(f, Function):
             verify_function(f)
@@ -928,7 +867,7 @@ def verify_module(fns) -> None:
                     f"module function must be callable"
                 )
         elif isinstance(f, PrimFunction):
-            verify_prim_function(f, module_fns=root if root is not None else prim_fns_with_variants)
+            verify_prim_function(f, module_fns=root if root is not None else tuple(each for f in prim_fns for each in (f, *f.variants)))
         else:
             raise VerifyError(f"verify_module: unknown function type {type(f).__name__}")
 
@@ -947,10 +886,8 @@ def verify_module(fns) -> None:
 
 __all__ = [
     "input_params",
-    "verify_between",
     "verify_function",
     "verify_module",
-    "verify_operands",
     "verify_prim_function",
     "verify_region_isolated",
 ]

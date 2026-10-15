@@ -117,14 +117,10 @@ def launch_call(
     from tilefoundry.ir.core import Call, Constant  # noqa: PLC0415
     from tilefoundry.ir.tir.shape import ShapeOf  # noqa: PLC0415
     from tilefoundry.ir.tir.stmts import Evaluate  # noqa: PLC0415
-    from tilefoundry.ir.tir.symbol_ref import SymbolRef  # noqa: PLC0415
+    from tilefoundry.ir.tir.symbol_ref import symbol_ref  # noqa: PLC0415
     from tilefoundry.ir.types import (  # noqa: PLC0415
-        CallableType,
         DType,
         TensorType,
-    )
-    from tilefoundry.ir.types.callable_type import (  # noqa: PLC0415
-        callable_type_for_prim_function,
     )
     from tilefoundry.ir.types.dim import (  # noqa: PLC0415
         DimAdd,
@@ -176,10 +172,7 @@ def launch_call(
     grid_e = tuple(_canon(d) for d in grid)
     block_e = tuple(_canon(d) for d in block)
 
-    callee_type = getattr(callee, "type", None)
-    if not isinstance(callee_type, CallableType):
-        callee_type = callable_type_for_prim_function(callee)
-    ref = SymbolRef(name=symbol or callee.name, type=callee_type)
+    ref = symbol_ref(callee, symbol)
     op = Launch(
         cluster=cluster,
         dynamic_smem=dynamic_smem,

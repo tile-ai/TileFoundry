@@ -88,6 +88,12 @@ class TensorType:
     is no separate `Scalar` type.
   - `layout` is either `None` or one member of the `LayoutBase` hierarchy
     defined by [shard §2](./shard.md#2-layout-hierarchy).
+    Concrete layout readers MUST use `resolve_layout(layout, logical_shape)`:
+    `None` and omitted strides mean compact row-major. The reader recursively
+    resolves ShardLayout and ComposedLayout while retaining mesh, attributes,
+    swizzle, offset, and explicit strides; it does not mutate the stored type.
+    In signature compatibility, a declared `layout=None` instead imposes no
+    layout constraint. This is a signature rule, not a physical layout.
   - `storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` / `tmem` /
     `umat`). A concrete level (`gmem` / `smem` / `rmem` / `host` /
     `tmem`) is the value's **abstract result residency** — where the result tensor

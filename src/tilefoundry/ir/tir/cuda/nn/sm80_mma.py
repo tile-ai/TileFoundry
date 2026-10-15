@@ -19,18 +19,18 @@ WARP = Mesh(
 )
 
 _A_FRAGMENT = ShardLayout(
-    layout=Layout(shape=(2, 4, 2, 8, 2), strides=(1, 2, 8, 16, 128)),
-    attrs=(Split(1), Split(3)),
+    layout=Layout(shape=(2, 8, 2, 4, 2), strides=(128, 16, 8, 2, 1)),
+    attrs=(Split(3), Split(1)),
     mesh=WARP,
 )
 _B_FRAGMENT = ShardLayout(
-    layout=Layout(shape=(8, 2, 4, 2), strides=(1, 8, 16, 64)),
-    attrs=(Split(2), Split(0)),
+    layout=Layout(shape=(2, 4, 2, 8), strides=(64, 16, 8, 1)),
+    attrs=(Split(1), Split(3)),
     mesh=WARP,
 )
 _C_FRAGMENT = ShardLayout(
-    layout=Layout(shape=(2, 4, 8, 2), strides=(1, 2, 8, 64)),
-    attrs=(Split(1), Split(2)),
+    layout=Layout(shape=(2, 8, 4, 2), strides=(64, 8, 2, 1)),
+    attrs=(Split(2), Split(1)),
     mesh=WARP,
 )
 

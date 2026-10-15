@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import math
-from itertools import product
+from dataclasses import replace
 from typing import Optional
 
 from tilefoundry.ir.types.int_tuple import flatten as flatten_tuple
 from tilefoundry.ir.types.int_tuple import repeat_like
-from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.layout import flatten, resolve_layout
 from tilefoundry.ir.types.storage import StorageKind
 
 from .dtype import DType
 from .layout import ComposedLayout, Layout, apply
 from .layout_algebra import size
+from .layout_correspondence import layout_correspondence
 from .mesh import Mesh, Topology, make_mesh, separate
 from .shard_layout import (
     Broadcast,
@@ -21,63 +22,55 @@ from .shard_layout import (
     shard_layout_of,
     split_target_axes,
 )
-from .stride import compact_row_major
 from .tensor_type import TensorType, TupleType, Type
 
 
-def _inner_layout(layout: Layout, counts: tuple[int, ...]) -> tuple[Layout, dict[int, int]]:
-    """Drop each logical axis's leading tile modes, preserving its mode nesting."""
-    shapes = [tuple(flatten_tuple(mode)) for mode in layout.shape]
-    strides = (
-        None if layout.strides is None else [tuple(flatten_tuple(mode)) for mode in layout.strides]
-    )
+def _inner_layout(
+    layout: Layout, counts: tuple[int, ...], logical_shape: tuple
+) -> tuple[Layout, dict[int, int]]:
+    """Drop each logical axis's outer tile digits using the shared correspondence.
+
+    A unit logical axis retains a physical unit coordinate in grouped layouts.
+    """
+    if isinstance(layout, ComposedLayout):
+        outer, positions = _inner_layout(layout.outer, counts, logical_shape)
+        return replace(layout, outer=outer), positions
+    corresponding = layout_correspondence(layout.shape, logical_shape)
+    if corresponding.groups is None:
+        raise ValueError(f"layout {layout!r} crosses logical axes of {logical_shape}")
+    if len(counts) != len(logical_shape):
+        raise ValueError(f"tile counts {counts} do not match logical shape {logical_shape}")
+    steps = None if layout.strides is None else tuple(flatten_tuple(layout.strides))
     grouped = any(isinstance(mode, tuple) for mode in layout.shape)
-    if grouped and len(shapes) != len(counts):
-        raise ValueError(f"grouped layout has {len(shapes)} modes for a rank-{len(counts)} tensor")
-
-    prefixes: list[int] = []
-    if grouped:
-        for axis, (mode, count) in enumerate(zip(shapes, counts, strict=True)):
-            taken = 1
-            prefix = 0
-            while taken != count and prefix < len(mode):
-                extent = mode[prefix]
-                if not isinstance(extent, int) or isinstance(extent, bool):
-                    break
-                taken *= extent
-                prefix += 1
-            if taken != count:
-                raise ValueError(
-                    f"layout axis {axis} has no leading modes whose product is tile count {count}"
-                )
-            prefixes.append(prefix)
-    else:
-        tiled = tuple(count for count in counts if count != 1)
-        if tuple(mode[0] for mode in shapes[: len(tiled)]) != tiled:
+    shape_modes, stride_modes = [], []
+    positions = {}
+    for axis, (group, count) in enumerate(zip(corresponding.groups, counts, strict=True)):
+        taken, prefix = 1, 0
+        while taken != count and prefix < len(group):
+            extent = static_dim_value(corresponding.extents[group[prefix]])
+            if extent is None:
+                break
+            taken *= extent
+            prefix += 1
+        if taken != count:
             raise ValueError(
-                f"flat layout does not begin with tile modes {tiled}: {tuple(layout.shape)}"
+                f"layout axis {axis} has no leading modes whose product is tile count {count}"
             )
-        prefixes = [1] * len(tiled) + [0] * (len(shapes) - len(tiled))
-
-    shape_modes = []
-    stride_modes = []
-    old_to_new: dict[int, int] = {}
-    for old_index, shape_mode in enumerate(shapes):
-        prefix = prefixes[old_index]
-        kept_shape = list(shape_mode[prefix:])
-        stride_mode = None if strides is None else strides[old_index]
-        kept_stride = [] if stride_mode is None else list(stride_mode[prefix:])
-        if not kept_shape:
-            continue
-        old_to_new[old_index] = len(shape_modes)
-        nested = isinstance(layout.shape[old_index], tuple) and len(kept_shape) > 1
-        shape_modes.append(tuple(kept_shape) if nested else kept_shape[0])
-        if strides is not None:
-            stride_modes.append(tuple(kept_stride) if nested else kept_stride[0])
-    return (
-        Layout(tuple(shape_modes), None if strides is None else tuple(stride_modes)),
-        old_to_new,
-    )
+        kept = group[prefix:]
+        shapes = tuple(corresponding.extents[position] for position in kept) or (1,)
+        strides = None if steps is None else (tuple(steps[position] for position in kept) or (0,))
+        start = sum(len(tuple(flatten_tuple(mode))) for mode in shape_modes)
+        for offset, position in enumerate(kept):
+            positions[position] = start + offset
+        if grouped:
+            shape_modes.append(shapes if len(shapes) > 1 else shapes[0])
+            if strides is not None:
+                stride_modes.append(strides if len(strides) > 1 else strides[0])
+        else:
+            shape_modes.extend(shapes)
+            if strides is not None:
+                stride_modes.extend(strides)
+    return Layout(tuple(shape_modes), None if steps is None else tuple(stride_modes)), positions
 
 
 def participant_layout(
@@ -90,6 +83,7 @@ def participant_layout(
     an instruction frame, retain distributed levels, or the innermost level for
     an entirely broadcast value.
     """
+
     def topology_name(topology):
         return getattr(topology, "name", topology)
 
@@ -97,11 +91,12 @@ def participant_layout(
     required_names = (
         {topology_name(topology) for topology in required.topologies}
         if isinstance(required, Mesh)
-        else None if required is None else set(required)
+        else None
+        if required is None
+        else set(required)
     )
     if len(levels) == 1 and (
-        required_names is None
-        or topology_name(levels[0].topologies[0]) in required_names
+        required_names is None or topology_name(levels[0].topologies[0]) in required_names
     ):
         return layout
     attrs_by_level = []
@@ -169,67 +164,13 @@ def _participant_frame(source: Mesh, required: Mesh) -> tuple[Mesh, int]:
     return (
         Mesh(
             source.topologies[-len(required.topologies) :],
-            ComposedLayout(None, starts(source)[-1], required.layout),
+            required.layout
+            if starts(source)[-1] == 0
+            else ComposedLayout(None, starts(source)[-1], required.layout),
             required.names,
         ),
         dropped,
     )
-
-
-def nonunit_mesh(source: Mesh) -> Mesh:
-    """Return the source mesh with lexical unit modes omitted."""
-    layout = flatten(source.layout)
-    if not isinstance(layout, Layout) or layout.strides is None:
-        raise ValueError("instruction issue needs a static strided mesh")
-    modes = tuple(
-        (extent, stride)
-        for extent, stride in zip(layout.shape, layout.strides, strict=True)
-        if extent != 1
-    ) or ((1, 1),)
-    from .mesh import starts  # noqa: PLC0415 - Mesh imports this module through types
-
-    return Mesh(
-        source.topologies,
-        ComposedLayout(None, starts(source)[0], Layout(*zip(*modes, strict=True))),
-        tuple(f"d{index}" for index in range(len(modes))),
-    )
-
-
-def issue_frames(source: Mesh, required: Mesh, repeat: tuple, tile: tuple):
-    """Yield each declared issue frame and its grouped work-axis origins."""
-    physical = flatten(source.layout)
-    if not isinstance(physical, Layout) or physical.strides is None:
-        raise ValueError("group axes need a static strided physical mesh")
-    participant, dropped = _participant_frame(source, required)
-    outer = tuple(
-        (index, extent)
-        for index, extent in enumerate(physical.shape[:dropped])
-        if extent != 1
-    )
-    grouped = tuple(axis for axis, count in enumerate(repeat) if count > 1)[: len(outer)]
-    expected = tuple(repeat[axis] for axis in grouped)
-    if tuple(extent for _, extent in outer) != expected:
-        raise ValueError(
-            f"physical mesh {tuple(physical.shape)} is not outer modes followed by "
-            "participant frame"
-        )
-    from .mesh import starts  # noqa: PLC0415 - Mesh imports this module through types
-
-    local = flatten(participant.layout)
-    for coordinates in product(*(range(extent) for _, extent in outer)):
-        offset = starts(source)[0] + sum(
-            coordinate * physical.strides[index]
-            for (index, _extent), coordinate in zip(outer, coordinates, strict=True)
-        )
-        frame = Mesh(
-            source.topologies,
-            ComposedLayout(None, offset, local),
-            required.names,
-        )
-        yield frame, {
-            axis: coordinate * tile[axis]
-            for axis, coordinate in zip(grouped, coordinates, strict=True)
-        }
 
 
 def tile_view_layout(
@@ -241,42 +182,38 @@ def tile_view_layout(
     enclosing: Mesh | None = None,
     shard_attrs: tuple | None = None,
 ) -> object:
-    """Return the layout presented by one tile after leading modes are removed.
+    """Return one tile, removing repeat digits within their own logical axes.
 
-    Tensor and mesh layouts use the same convention: leading modes are tile or
-    group coordinates and trailing modes are the instruction fragment/frame.
-    ``counts`` comes from the caller's validated repeat projected onto operand
-    axes; this function reads the layout's prefix structure, not shape ratios.
+    ``counts`` is the validated repeat projected onto operand axes. Tensor modes
+    follow logical-axis correspondence; mesh participant frames remain physical.
     """
-    layout = type_.layout
-    if layout is None:
-        inner_layout = Layout(inner_shape, tuple(compact_row_major(inner_shape)))
+    layout = resolve_layout(type_.layout, type_.shape)
+    composed = isinstance(layout, ComposedLayout)
+    inner = layout.inner if composed else None
+    outer = layout.outer if composed else layout
+    if isinstance(outer, ShardLayout):
+        from .window import shard_window_layout  # noqa: PLC0415
+
+        projected = outer if participant is None else participant_layout(outer, participant)
+        mesh, dropped = (
+            (projected.mesh, 0)
+            if participant is None
+            else _participant_frame(projected.mesh, participant)
+        )
+        source = replace(projected, mesh=mesh, attrs=projected.attrs[dropped:])
+        inner_layout = shard_window_layout(
+            source,
+            type_.shape,
+            (0,) * len(type_.shape),
+            tuple(extent // count for extent, count in zip(type_.shape, counts, strict=True)),
+            (1,) * len(type_.shape),
+        )
+    elif isinstance(outer, Layout):
+        inner_layout, _positions = _inner_layout(outer, counts, type_.shape)
     else:
-        composed = isinstance(layout, ComposedLayout)
-        inner = layout.inner if composed else None
-        outer = layout.outer if composed else layout
-        if isinstance(outer, ShardLayout):
-            held, positions = _inner_layout(outer.layout, counts)
-            projected = outer if participant is None else participant_layout(outer, participant)
-            mesh, dropped = (
-                (projected.mesh, 0)
-                if participant is None
-                else _participant_frame(projected.mesh, participant)
-            )
-            attrs = []
-            for attr in projected.attrs[dropped:]:
-                if isinstance(attr, Split):
-                    if attr.axis not in positions:
-                        raise ValueError(f"tile prefix removes sharded layout axis {attr.axis}")
-                    attr = Split(positions[attr.axis])
-                attrs.append(attr)
-            inner_layout = ShardLayout(held, tuple(attrs), mesh)
-        elif isinstance(outer, Layout):
-            inner_layout, _positions = _inner_layout(outer, counts)
-        else:
-            raise ValueError(f"cannot take tile inner modes from {type(outer).__name__}")
-        if composed:
-            inner_layout = ComposedLayout(inner, 0, inner_layout)
+        raise ValueError(f"cannot take tile inner modes from {type(outer).__name__}")
+    if composed and inner is not None:
+        inner_layout = ComposedLayout(inner, 0, inner_layout)
     if shard_attrs is not None and not isinstance(inner_layout, ShardLayout):
         if participant is None or enclosing is None:
             raise ValueError("a declared shard fragment needs an enclosing participant mesh")
@@ -328,6 +265,7 @@ def types_compatible(declared: Type, actual: Type) -> bool:
     field. ``UMAT`` is the storage field's undecided value. Layout descriptors
     apply the same rule recursively.
     """
+
     def field_compatible(declared_field, actual_field) -> bool:
         return declared_field is None or declared_field == actual_field
 
@@ -350,7 +288,7 @@ def types_compatible(declared: Type, actual: Type) -> bool:
                 and field_compatible(declared_layout.attrs, actual_layout.attrs)
                 and layout_compatible(declared_layout.layout, actual_layout.layout)
             )
-        return actual_layout == declared_layout
+        return actual_layout == resolve_layout(declared_layout)
 
     if isinstance(declared, TensorType):
         if not isinstance(actual, TensorType):
@@ -361,17 +299,20 @@ def types_compatible(declared: Type, actual: Type) -> bool:
             compatible_layout = (
                 declared_layout is None
                 or actual_layout is None
-                or layout_compatible(declared_layout, actual_layout)
+                or layout_compatible(
+                    declared_layout,
+                    resolve_layout(actual_layout, actual.shape),
+                )
             )
         else:
-            compatible_layout = layout_compatible(declared.layout, actual.layout)
+            compatible_layout = declared.layout is None or layout_compatible(
+                declared.layout,
+                resolve_layout(actual.layout, actual.shape),
+            )
         return (
             declared.shape == actual.shape
             and declared.dtype == actual.dtype
-            and (
-                declared.storage is StorageKind.UMAT
-                or declared.storage == actual.storage
-            )
+            and (declared.storage is StorageKind.UMAT or declared.storage == actual.storage)
             and compatible_layout
         )
     if isinstance(declared, TupleType):
@@ -419,8 +360,7 @@ def tensor_bytes(type: Type) -> int:
     a leaf is addressed on its own.
     """
     return sum(
-        math.ceil(_leaf_numel(leaf) * leaf.dtype.bit_width / 8)
-        for leaf in tensor_types(type)
+        math.ceil(_leaf_numel(leaf) * leaf.dtype.bit_width / 8) for leaf in tensor_types(type)
     )
 
 
@@ -433,9 +373,7 @@ def tensor_types(type: Type) -> tuple[TensorType, ...]:
     return ()
 
 
-def bytes_by_storage(
-    type: Type, *, umat_level: str | None = None
-) -> dict[str, int]:
+def bytes_by_storage(type: Type, *, umat_level: str | None = None) -> dict[str, int]:
     """Logical bytes occupied by *type*, grouped by storage level."""
     result: dict[str, int] = {}
     for tensor in tensor_types(type):
@@ -461,14 +399,10 @@ def topology_extent(type: Type, name: str) -> int | None:
             continue
         count = size(flatten(layout.mesh.layout))
         if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
-            raise ValueError(
-                f"topology_extent: {name!r} needs a positive static layout size"
-            )
+            raise ValueError(f"topology_extent: {name!r} needs a positive static layout size")
         extents.add(count)
     if len(extents) > 1:
-        raise ValueError(
-            f"one value references conflicting {name!r} extents {sorted(extents)}"
-        )
+        raise ValueError(f"one value references conflicting {name!r} extents {sorted(extents)}")
     return next(iter(extents), None)
 
 
@@ -740,8 +674,7 @@ def is_literal_shape(shape) -> bool:
     so a reader that clips to a box only does so for a shape written in numbers.
     """
     return all(
-        isinstance(extent, int) and not isinstance(extent, bool) and extent >= 0
-        for extent in shape
+        isinstance(extent, int) and not isinstance(extent, bool) and extent >= 0 for extent in shape
     )
 
 

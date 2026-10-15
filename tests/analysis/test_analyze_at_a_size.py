@@ -1,12 +1,11 @@
 """Analysing a function authored for a range of sizes.
 
-An analysis counts elements and holds them against a machine. It has no answer
-for a dimension that is still a range, so the size is stated at the call and the
-program that gets measured is the one at that size.
+An analysis needs concrete dimensions to count elements against a machine.
+The size is stated at the call; the accepted functions remain owned by its Module.
 
-What the call accepts stays narrow: a function this Module owns. Choosing the
-size happens after that, so nothing here widens which programs a Module will
-answer for -- it only lets the ones it owns be asked about at a size.
+The five same-address GMEM reshards in paged MHA alias row-major input buffers.
+Each peak holds persistent inputs plus one material cache transpose; the two
+transpose lifetimes do not overlap. The named constants add alignment padding.
 """
 
 from __future__ import annotations
@@ -83,10 +82,10 @@ assert API_INVENTORY <= {case.id for case in CASES}
 _GQA_MATERIAL_TRANSPOSE_GMEM = 280_616
 _PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 197_632
 _QWEN_LOOP_INVARIANT_VALUES_GMEM = 152_708_112
-_MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING = 5_245_008
-_MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_195_376
-_MHA_SHORTER_GMEM_WITH_20_BYTES_ALIGNMENT_PADDING = 2_098_216
-_MHA_SINGLE_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 8_392_752
+_MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING = 2_099_240 + 2_097_152 + 8
+_MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 2_098_196 + 1_048_576 + 12
+_MHA_SHORTER_GMEM_WITH_20_BYTES_ALIGNMENT_PADDING = 1_049_612 + 524_288 + 20
+_MHA_SINGLE_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_198_420 + 2_097_152 + 12
 
 KNOWN_OVER_BOUND: dict[tuple[str, str], str] = {}
 

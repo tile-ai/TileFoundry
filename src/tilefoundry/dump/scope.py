@@ -8,6 +8,7 @@ even when exceptions leave a scope.
 from __future__ import annotations
 
 import contextvars
+from collections.abc import Callable
 from typing import Optional
 
 from .dumpers import IDumpper, NullDumper
@@ -47,16 +48,20 @@ class DumpScope:
     def flags(self) -> DumpFlags:
         return self._flags
 
-    def dump(self, name: str, content: str | bytes, flag: DumpFlags) -> None:
+    def dump(
+        self,
+        name: str,
+        content: str | bytes | Callable[[], str | bytes],
+        flag: DumpFlags,
+    ) -> None:
         """Write ``content`` to logical path ``name`` if ``flag`` is enabled in this scope.
 
-        Write ``content`` to logical path ``name`` if ``flag`` is enabled
-        in this scope. Falls through to ``NullDumper`` when the scope has
-        no active dumper (e.g. ``DumpScope("foo")`` outside any parent).
+        A callable is evaluated only when the flag is enabled, immediately
+        before writing. Producer errors propagate to the caller.
         """
         if not (self._flags & flag):
             return
-        self.dumper.write(name, content)
+        self.dumper.write(name, content() if callable(content) else content)
 
     def __enter__(self) -> "DumpScope":
         parent = _current.get()
@@ -86,8 +91,12 @@ def current_scope() -> DumpScope | None:
     return _current.get()
 
 
-def dump(name: str, content: str | bytes, flag: DumpFlags) -> None:
-    """Convenience: route through the current scope, no-op if none."""
+def dump(
+    name: str,
+    content: str | bytes | Callable[[], str | bytes],
+    flag: DumpFlags,
+) -> None:
+    """Route through the current scope; without one, do not evaluate content."""
     scope = _current.get()
     if scope is None:
         return

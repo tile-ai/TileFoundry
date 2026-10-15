@@ -520,4 +520,37 @@ class LoadedModule:
         return self.module.entry_function(), self
 
 
-__all__ = ["Module", "ModuleList", "LoadedModule"]
+def resolve_symbol(module, name: str, *, nested: tuple[str, ...] = ()) -> ModuleFunction:
+    """Resolve one function in the current module or a child-slot path.
+
+    An iterable is the legacy flat function scope; it cannot contain child slots.
+    Every failure names the complete requested path, with no subtree name search.
+    """
+    path = ".".join((*nested, name))
+    if isinstance(module, Module):
+        selected = module
+        for slot in nested:
+            child = selected.children.get(slot)
+            if child is None:
+                raise ValueError(f"symbol {path!r}: child slot {slot!r} does not exist")
+            if child.indexed:
+                raise ValueError(f"symbol {path!r}: child slot {slot!r} requires an instance index")
+            selected = child.elements[0]
+        functions = selected.functions
+    else:
+        if nested:
+            raise ValueError(f"symbol {path!r}: child slots require a Module tree")
+        functions = module
+    functions = tuple(functions)
+    matches = tuple(function for function in functions if function.name == name)
+    if not matches:
+        matches = tuple(
+            variant for function in functions for variant in function.variants
+            if variant.name == name
+        )
+    if len(matches) != 1:
+        raise ValueError(f"symbol {path!r} must resolve to exactly one function, found {len(matches)}")
+    return matches[0]
+
+
+__all__ = ["Module", "ModuleList", "LoadedModule", "resolve_symbol"]

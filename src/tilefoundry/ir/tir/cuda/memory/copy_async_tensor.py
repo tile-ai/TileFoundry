@@ -15,6 +15,7 @@ from tilefoundry.ir.pattern import (
     LayoutPattern,
     MeshPattern,
     OrPattern,
+    SameConstraint,
     SameModesConstraint,
     StarPattern,
     SwitchPattern,
@@ -27,7 +28,7 @@ from tilefoundry.ir.pattern import (
 )
 from tilefoundry.ir.types import Mesh, Swizzle, UnitType
 from tilefoundry.ir.types.storage import StorageKind as S
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
@@ -174,6 +175,8 @@ class CopyAsyncTensor(Op):
         ),
     )
     between = (
+        SameConstraint("shape", "src", "dst"),
+        SameConstraint("dtype", "src", "dst"),
         DistinctConstraint("storage", "src", "dst"),
         SameModesConstraint("src", "dst"),
     )
@@ -197,17 +200,6 @@ register_access_relation(CopyAsyncTensor)(identity_relations)
 @register_schedule_eval(CopyAsyncTensor)
 def _eval_scheduled_copy_async_tensor(ctx):
     return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
-
-
-@register_verify_stmt(CopyAsyncTensor)
-def verify_copy_async_tensor(call: "Call", ctx: "VerifyContext") -> None:
-    src, dst = tuple(ctx.type_of(arg) for arg in call.args)
-    if tuple(src.shape) != tuple(dst.shape) or src.dtype != dst.dtype:
-        ctx.error(
-            call,
-            f"copy_async_tensor moves one tile: src is {tuple(src.shape)} "
-            f"{src.dtype.name} and dst is {tuple(dst.shape)} {dst.dtype.name}",
-        )
 
 
 __all__ = [

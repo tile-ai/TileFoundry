@@ -20,8 +20,8 @@ from tests.fixtures.tir.async_sync import AsyncStage
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.async_copy import CopyAsync, CpAsyncWait
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
-from tilefoundry.ir.types import DType, TensorType, make_tensor_type
+from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
+from tilefoundry.ir.types import DType, Layout, Mesh, TensorType, Topology, make_tensor_type
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
@@ -29,18 +29,38 @@ from tilefoundry.visitor_registry.verify import verify_prim_function
 def _copy_async_pf(src_ty: TensorType, dst_ty: TensorType) -> PrimFunction:
     src = Var(type=src_ty, name="src")
     dst = Var(type=dst_ty, name="dst")
+    mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
     return PrimFunction(
         name="fn",
         params=(src, dst),
-        body=Sequential(body=(Evaluate(callable=CopyAsync(), args=(src, dst)), Return())),
+        body=Sequential(
+            body=(
+                MeshScope(
+                    mesh,
+                    Var(name="thread", type=mesh),
+                    Sequential(body=(Evaluate(callable=CopyAsync(), args=(src, dst)),)),
+                ),
+                Return(),
+            )
+        ),
     )
 
 
 def _wait_pf(n: int) -> PrimFunction:
+    mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
     return PrimFunction(
         name="fn",
         params=(),
-        body=Sequential(body=(Evaluate(callable=CpAsyncWait(n=n), args=()), Return())),
+        body=Sequential(
+            body=(
+                MeshScope(
+                    mesh,
+                    Var(name="thread", type=mesh),
+                    Sequential(body=(Evaluate(callable=CpAsyncWait(n=n), args=()),)),
+                ),
+                Return(),
+            )
+        ),
     )
 
 
@@ -50,7 +70,7 @@ REJECTED = [
             make_tensor_type((128, 4), DType.from_name("f32"), storage="gmem"),
             make_tensor_type((128, 4), DType.from_name("f32"), storage="gmem"),
         ),
-        "destination must be smem",
+        "dst: gmem does not match smem",
         id="non_smem_destination",
     ),
     pytest.param(
@@ -58,7 +78,7 @@ REJECTED = [
             make_tensor_type((128, 4), DType.from_name("f32"), storage="smem"),
             make_tensor_type((128, 4), DType.from_name("f32"), storage="smem"),
         ),
-        "source must be gmem",
+        "src: smem does not match gmem",
         id="non_gmem_source",
     ),
     pytest.param(
@@ -66,10 +86,10 @@ REJECTED = [
             make_tensor_type((128, 4), DType.from_name("f16"), storage="gmem"),
             make_tensor_type((128, 4), DType.from_name("f32"), storage="smem"),
         ),
-        "dtype mismatch",
+        "reads src.dtype = dst.dtype",
         id="dtype_mismatch",
     ),
-    pytest.param(_wait_pf(-1), "non-negative", id="negative_wait"),
+    pytest.param(_wait_pf(-1), "could not satisfy wait_groups >= 0", id="negative_wait"),
 ]
 
 

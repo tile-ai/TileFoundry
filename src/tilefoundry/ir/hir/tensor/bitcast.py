@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import cache
 from itertools import product
 from math import prod
@@ -24,7 +25,8 @@ from tilefoundry.ir.types import (
     TensorType,
 )
 from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout import apply, get, rank
+from tilefoundry.ir.types.layout import apply, get, rank, resolve_layout
+from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import (
     _positions,
     layout_axis_to_tensor_axis,
@@ -51,7 +53,8 @@ class Bitcast(Op):
     layout = ParamDef(kind="attribute", annotation=LayoutBase)
 
 
-def _addresses(layout, count: int):
+def _addresses(layout, count: int, logical_shape: tuple):
+    layout = resolve_layout(layout, logical_shape)
     """Enumerate each unit's local addresses using the shared shard definition.
 
     Shard ownership uses the layout's factored domain, independently of its
@@ -76,22 +79,42 @@ def _addresses(layout, count: int):
             held = apply(local, coord)
             logical = whole.get(offset + held)
             if logical is None:
-                raise ValueError(f"local shard addresses extend outside the rmem layout: {layout!r}")
+                raise ValueError(
+                    f"local shard addresses extend outside the rmem layout: {layout!r}"
+                )
             if addresses[logical] is not None:
                 raise ValueError(f"local shards overlap in rmem layout: {layout!r}")
             addresses[logical] = (unit, held)
     if any(address is None for address in addresses):
         raise ValueError(f"local shards do not cover the rmem layout: {layout!r}")
-    return tuple(addresses)
+    corresponding = layout_correspondence(layout.layout.shape, logical_shape)
+    ordered = []
+    for coordinate in range(count):
+        linear = 0
+        for digit, extent in zip(
+            _coordinates(coordinate, logical_shape), logical_shape, strict=True
+        ):
+            linear = linear * extent + digit
+        mode_digits = corresponding.digits(linear)
+        mode_index, step = 0, 1
+        for digit, extent in zip(mode_digits, corresponding.extents, strict=True):
+            mode_index += digit * step
+            step *= extent
+        ordered.append(addresses[mode_index])
+    return tuple(ordered)
 
 
 @cache
-def _address_mapping(source, result, count: int) -> tuple[int, ...]:
+def _address_mapping(
+    source, result, count: int, source_shape: tuple, result_shape: tuple
+) -> tuple[int, ...]:
     """Result colex coordinates mapped bijectively to source colex coordinates."""
-    source_at = {address: coord for coord, address in enumerate(_addresses(source, count))}
+    source_at = {
+        address: coord for coord, address in enumerate(_addresses(source, count, source_shape))
+    }
     if len(source_at) != count:
         raise ValueError("source layout address function is not injective")
-    result_at = _addresses(result, count)
+    result_at = _addresses(result, count, result_shape)
     if len(set(result_at)) != count:
         raise ValueError("result layout address function is not injective")
     if not set(result_at).issubset(source_at):
@@ -110,7 +133,9 @@ def _coordinates(coord: int, shape: tuple[int, ...]) -> tuple[int, ...]:
 @register_typeinfer(Bitcast)
 def _(call: Call, ctx) -> TensorType:
     source = ctx.type_of(call.args[0])
-    layout = call.target.layout
+    source = replace(source, layout=resolve_layout(source.layout, source.shape))
+    stated_layout = call.target.layout
+    layout = resolve_layout(stated_layout, source.shape)
     if not is_literal_shape(source.shape):
         ctx.error(call, "source tensor shape must be literal")
     sharded = isinstance(source.layout, ShardLayout) or isinstance(layout, ShardLayout)
@@ -170,10 +195,10 @@ def _(call: Call, ctx) -> TensorType:
     if prod(shape) != count:
         ctx.error(call, f"element count differs: source {count}, result {prod(shape)}")
     try:
-        _address_mapping(source.layout, layout, count)
+        _address_mapping(source.layout, layout, count, source.shape, shape)
     except ValueError as error:
         ctx.error(call, str(error))
-    return TensorType(shape, source.dtype, layout, source.storage)
+    return TensorType(shape, source.dtype, stated_layout, source.storage)
 
 
 @register_buffer_alias(Bitcast)
@@ -220,7 +245,9 @@ def _quasi_affine_equations(coordinates: tuple, result_shape: tuple) -> list[str
 
 @cache
 def _address_relation(source_layout, result_layout, source_shape: tuple, result_shape: tuple):
-    pairs = _address_mapping(source_layout, result_layout, prod(result_shape))
+    pairs = _address_mapping(
+        source_layout, result_layout, prod(result_shape), source_shape, result_shape
+    )
     domain = ", ".join(f"d{axis}" for axis in range(len(result_shape)))
     image = ", ".join(f"s{axis}" for axis in range(len(source_shape)))
     coordinates = tuple(_coordinates(coord, source_shape) for coord in pairs)
@@ -285,7 +312,9 @@ def _bitcast_access(call: Call, ctx) -> tuple[AccessRelation, ...]:
 def _eval_bitcast(ctx):
     source = ctx.args[0]
     result = ctx.result_type
-    pairs = _address_mapping(source.type.layout, result.layout, prod(result.shape))
+    pairs = _address_mapping(
+        source.type.layout, result.layout, prod(result.shape), source.type.shape, result.shape
+    )
     indices = [0] * len(pairs)
     for coord, source_coord in enumerate(pairs):
         result_index = source_index = 0

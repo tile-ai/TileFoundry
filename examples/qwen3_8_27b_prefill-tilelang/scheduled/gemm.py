@@ -111,7 +111,7 @@ def residual(fname: str, M: int, K: int):
                                     m = (G0 * GROUP + mi) * BM
                                     n = bb * BN
                                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                     for kk in range(KPP):
                                         k = (pc * KPP + kk) * BK
                                         with threads[2, :32] as _loader:
@@ -140,7 +140,7 @@ def residual(fname: str, M: int, K: int):
                                 m = (g * GROUP + mi) * BM
                                 n = bn * BN
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                 for k in tf.tile(K, BK):
                                     with threads[2, :32] as _loader:
                                         lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
@@ -151,7 +151,7 @@ def residual(fname: str, M: int, K: int):
                                 with threads[0, :32] as _rload:
                                     res = tf.schedule((r[m:m + BM, n:n + BN],), op=T.copy_async_tensor(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    y = tf.schedule((res,), op=T.copy(rmem_layout=((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)))) + tf.cast(acc, "bf16")
+                                    y = tf.schedule((res,), op=T.copy(rmem_layout=((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)))) + tf.cast(acc, "bf16")
                                     staged = tf.schedule((y,), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
                                 with threads[0, :32] as _storer:
                                     tile = tf.schedule((staged,), op=T.copy_async_tensor())
@@ -161,7 +161,7 @@ def residual(fname: str, M: int, K: int):
                             m = (G0 * GROUP + mi) * BM
                             n = bn * BN
                             with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                             for k in tf.tile(K, BK):
                                 with threads[2, :32] as _loader:
                                     lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
@@ -172,7 +172,7 @@ def residual(fname: str, M: int, K: int):
                             with threads[0, :32] as _rload:
                                 res = tf.schedule((r[m:m + BM, n:n + BN],), op=T.copy_async_tensor(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
                             with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                y = tf.schedule((res,), op=T.copy(rmem_layout=((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)))) + tf.cast(acc, "bf16")
+                                y = tf.schedule((res,), op=T.copy(rmem_layout=((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)))) + tf.cast(acc, "bf16")
                                 staged = tf.schedule((y,), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
                             with threads[0, :32] as _storer:
                                 tile = tf.schedule((staged,), op=T.copy_async_tensor())
@@ -261,7 +261,7 @@ def gate_up(M: int):
                                     m = (G0 * GROUP + mi) * BM
                                     n = bb * BN
                                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                     for kk in range(KPP):
                                         k = (pc * KPP + kk) * BK
                                         with threads[2, :32] as _loader:
@@ -288,7 +288,7 @@ def gate_up(M: int):
                                 m = (g * GROUP + mi) * BM
                                 n = bn * BN
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                 for k in tf.tile(K, BK):
                                     with threads[2, :32] as _loader:
                                         lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
@@ -311,7 +311,7 @@ def gate_up(M: int):
                             m = (G0 * GROUP + mi) * BM
                             n = bn * BN
                             with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                             for k in tf.tile(K, BK):
                                 with threads[2, :32] as _loader:
                                     lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
@@ -412,7 +412,7 @@ def in_proj(M: int):
                                 m = (g * GROUP + mi) * BM
                                 n = bn * BN
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                 for k in tf.tile(K, BK):
                                     with threads[2, :32] as _loader:
                                         lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
@@ -490,7 +490,7 @@ def qkv(M: int):
                                     m = (G0 * GROUP + mi) * BM
                                     n = bb * BN
                                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                     for kk in range(KPP):
                                         k = (pc * KPP + kk) * BK
                                         with threads[2, :32] as _loader:
@@ -518,7 +518,7 @@ def qkv(M: int):
                                 m = (g * GROUP + mi) * BM
                                 n = bn * BN
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                 for k in tf.tile(K, BK):
                                     with threads[2, :32] as _loader:
                                         lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
@@ -590,7 +590,7 @@ def qkv(M: int):
                                     m = (g * GROUP + mi) * BM
                                     n = bn * BN
                                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                     for k in tf.tile(K, BK):
                                         with threads[2, :32] as _loader:
                                             lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
@@ -660,7 +660,7 @@ def qkv(M: int):
                                 m = (G0 * GROUP + mi) * BM
                                 n = bn * BN
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 8 @ c.lane8, 2, 4 @ c.warp, 2, 4 @ c.lane4, 32), (16384, 1, 8, 16, 64, 128, 512)), "rmem"])
+                                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                 for k in tf.tile(K, BK):
                                     with threads[2, :32] as _loader:
                                         lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)

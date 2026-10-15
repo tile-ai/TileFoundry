@@ -18,7 +18,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
-from .mma_atom import AtomPattern, FromAtom, MmaAtom, physical_frames_match
+from .mma_atom import AtomPattern, FromAtom, MmaAtom
 from .sm80_mma import Mma as _Sm80Mma
 from .wgmma import Wgmma
 
@@ -99,25 +99,13 @@ def _eval_scheduled_mma(ctx):
 
 @register_verify_stmt(TiledMma)
 def verify_mma(call: "Call", ctx: "VerifyContext") -> None:
-    """Check each operand against its atom and the active physical frame."""
+    """Check target capability and operand shapes/dtypes after shared admission."""
     op = call.target
     atom = op.atom
     if ctx.frame is not None and ctx.frame.module is not None:
         capabilities = ctx.frame.target.architecture.capabilities
         if atom.capability not in capabilities:
             ctx.error(call, f"target does not support {atom.capability}")
-    if not ctx.mesh_scope:
-        ctx.error(call, "MMA requires an active physical mesh scope")
-    current = ctx.mesh_scope[-1]
-    participation = atom.execution_mesh_pattern()
-    if participation.match(current) is None:
-        ctx.error(
-            call,
-            "MMA enclosing mesh violates declared instruction participation, "
-            f"which is {participation!r}",
-        )
-    if atom.mesh is not None and not physical_frames_match(atom.mesh, current):
-        ctx.error(call, "MMA atom frame differs from active mesh scope")
     verify_operand_shapes(call, ctx)
 
 

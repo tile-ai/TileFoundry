@@ -271,6 +271,12 @@ class ModuleList(Expr):
   - A single slot MUST NOT be indexed; an indexed slot MUST NOT be called
     without an index. Only the instance entry may be called, not other methods.
 
+TIR symbol resolution uses `resolve_symbol(module, name, nested=...)`: each
+`nested` component MUST select a child slot of the current node, and `name`
+MUST select exactly one function in the reached node. Empty `nested` stays in
+the current module. Failures MUST include the complete path; same-named
+functions in different child modules are distinct symbols.
+
 ## 2. `Expr`
 
 ```python

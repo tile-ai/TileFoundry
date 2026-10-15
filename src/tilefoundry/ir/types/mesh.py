@@ -48,9 +48,7 @@ class Mesh:
             not isinstance(topology, Topology) for topology in self.topologies
         ):
             raise ValueError("a multi-level Mesh requires Topology values")
-        topology_names = tuple(
-            getattr(topology, "name", topology) for topology in self.topologies
-        )
+        topology_names = tuple(getattr(topology, "name", topology) for topology in self.topologies)
         if len(set(topology_names)) != len(topology_names):
             raise ValueError(f"Mesh topology names must be unique, got {topology_names!r}")
         object.__setattr__(self, "layout", _nested(self.layout, tuple(self.topologies)))
@@ -321,7 +319,9 @@ def _joined(
         sizes = tuple(topology.size for topology in topologies)
         if not all(isinstance(size, int) for size in sizes):
             raise ValueError("joining sliced meshes needs static topology extents")
-        layout = ComposedLayout(None, crd2idx(starts, sizes, compact_major(sizes)), layout)
+        offset = crd2idx(starts, sizes, compact_major(sizes))
+        if offset != 0:
+            layout = ComposedLayout(None, offset, layout)
     return Mesh(topologies, layout, names)
 
 
@@ -407,7 +407,7 @@ def separate(mesh: Mesh) -> tuple[Mesh, ...]:
         axis_count = len(flatten(level.shape))
         names = mesh.names[names_at : names_at + axis_count]
         layout: Layout | ComposedLayout = level
-        if sliced:
+        if sliced and start != 0:
             layout = ComposedLayout(None, start, level)
         separated.append(Mesh((topology,), layout, names))
         names_at += axis_count

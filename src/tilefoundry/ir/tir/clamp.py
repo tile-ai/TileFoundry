@@ -5,9 +5,9 @@ from __future__ import annotations
 from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import utils
+from tilefoundry.ir.pattern import SameConstraint, utils
 from tilefoundry.ir.types import StorageKind, UnitType
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
@@ -28,6 +28,8 @@ class Clamp(Op):
     src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
 
+    between = (SameConstraint("dtype", "src", "dst"),)
+
 
 @register_typeinfer(Clamp)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
@@ -35,14 +37,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 register_access_relation(Clamp)(identity_relations)
-
-
-@register_verify_stmt(Clamp)
-def _(call: "Call", ctx: "VerifyContext") -> None:
-    src_ty = ctx.type_of(call.args[0])
-    dst_ty = ctx.type_of(call.args[1])
-    if src_ty.dtype != dst_ty.dtype:
-        ctx.error(call, "Clamp: src and dst dtype must match")
 
 
 __all__ = ["Clamp"]

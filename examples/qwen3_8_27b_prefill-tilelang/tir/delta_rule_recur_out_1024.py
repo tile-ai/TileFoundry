@@ -17,7 +17,7 @@ def recur_out(
             tensor_type=Tensor[
                 (128, 64),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 8), (4096, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 8, 4, 2,), (4096, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -32,7 +32,7 @@ def recur_out(
             tensor_type=Tensor[
                 (128, 64),
                 "bf16",
-                ((2, 8, 2, 4, 2, 4, 8), (4096, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 8, 4, 2,), (4096, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -40,7 +40,7 @@ def recur_out(
             tensor_type=Tensor[
                 (128, 64),
                 "f32",
-                ((2, 8, 2, 4, 2, 4, 8), (4096, 1, 8, 16, 64, 128, 512)),
+                ((2, 4, 2, 8, 8, 4, 2,), (4096, 16, 8, 1, 512, 128, 64)),
                 "rmem",
             ]
         )
@@ -48,32 +48,32 @@ def recur_out(
         value_5 = T.alloc_tensor(tensor_type=Tensor[(1, 1), "f32", (1, 1), "rmem"])
         value_6 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bf16", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bf16", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_7 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         vn = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         uu = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_8 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bf16", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bf16", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         vn_1 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         edr = T.alloc_tensor(
@@ -81,22 +81,22 @@ def recur_out(
         )
         value_9 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bf16", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bf16", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         value_10 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "bf16", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "bf16", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         o = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         o_1 = T.alloc_tensor(
             tensor_type=Tensor[
-                (64, 64), "f32", ((8, 2, 4, 2, 4, 8), (1, 8, 16, 64, 128, 512)), "rmem"
+                (64, 64), "f32", ((4, 2, 8, 8, 4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"
             ]
         )
         eqr = T.alloc_tensor(
@@ -306,18 +306,18 @@ def recur_out(
                     with scope_3 as threads_15:
                         src_frame_4 = T.tensor_view(
                             T.ptr_of(st[0:0 + 128, 0:0 + 64]),
-                            layout=((2, 8 @ threads_15.d1, 2, 4 @ threads_15.d0, 2, 4 @ threads_15.d2, 8), (4096, 1, 8, 16, 64, 128, 512)),
+                            layout=((2, 4 @ threads_15.d0, 2, 8 @ threads_15.d1, 8, 4 @ threads_15.d2, 2,), (4096, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 64),
                         )
                         dst_frame_5 = T.tensor_view(
                             T.ptr_of(value_4[0:0 + 128, 0:0 + 64]),
-                            layout=((2, 8 @ threads_15.d1, 2, 4 @ threads_15.d0, 2, 4 @ threads_15.d2, 8), (4096, 1, 8, 16, 64, 128, 512)),
+                            layout=((2, 4 @ threads_15.d0, 2, 8 @ threads_15.d1, 8, 4 @ threads_15.d2, 2,), (4096, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 64),
                         )
                         T.cast(src_frame_4, dst_frame_5, dtype="bf16")
                         src_frame_5 = T.tensor_view(
                             T.ptr_of(value_4[0:0 + 128, 0:0 + 64]),
-                            layout=((2, 8 @ threads_15.d1, 2, 4 @ threads_15.d0, 2, 4 @ threads_15.d2, 8), (4096, 1, 8, 16, 64, 128, 512)),
+                            layout=((2, 4 @ threads_15.d0, 2, 8 @ threads_15.d1, 8, 4 @ threads_15.d2, 2,), (4096, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 64),
                         )
                         T.copy(src_frame_5, sb_stages[c % 3])
@@ -334,12 +334,12 @@ def recur_out(
                         T.unary(value_5, el, kind=UnaryKind.EXP)
                         lhs_frame_1 = T.tensor_view(
                             T.ptr_of(st[0:0 + 128, 0:0 + 64]),
-                            layout=((2, 8 @ threads_17.d1, 2, 4 @ threads_17.d0, 2, 4 @ threads_17.d2, 8), (4096, 1, 8, 16, 64, 128, 512)),
+                            layout=((2, 4 @ threads_17.d0, 2, 8 @ threads_17.d1, 8, 4 @ threads_17.d2, 2,), (4096, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 64),
                         )
                         dst_frame_6 = T.tensor_view(
                             T.ptr_of(st_1[0:0 + 128, 0:0 + 64]),
-                            layout=((2, 8 @ threads_17.d1, 2, 4 @ threads_17.d0, 2, 4 @ threads_17.d2, 8), (4096, 1, 8, 16, 64, 128, 512)),
+                            layout=((2, 4 @ threads_17.d0, 2, 8 @ threads_17.d1, 8, 4 @ threads_17.d2, 2,), (4096, 16, 8, 1, 512, 128, 64)),
                             shape=(128, 64),
                         )
                         T.binary(lhs_frame_1, el, dst_frame_6, kind=BinaryKind.MUL)
@@ -351,18 +351,18 @@ def recur_out(
                     with scope_3 as threads_20:
                         dst_frame_7 = T.tensor_view(
                             T.ptr_of(value_8[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_20.d1, 2, 4 @ threads_20.d0, 2, 4 @ threads_20.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_20.d0, 2, 8 @ threads_20.d1, 8, 4 @ threads_20.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.copy(us_stages[c % 2], dst_frame_7)
                         src_frame_6 = T.tensor_view(
                             T.ptr_of(value_8[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_20.d1, 2, 4 @ threads_20.d0, 2, 4 @ threads_20.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_20.d0, 2, 8 @ threads_20.d1, 8, 4 @ threads_20.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         dst_frame_8 = T.tensor_view(
                             T.ptr_of(uu[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_20.d1, 2, 4 @ threads_20.d0, 2, 4 @ threads_20.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_20.d0, 2, 8 @ threads_20.d1, 8, 4 @ threads_20.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.cast(src_frame_6, dst_frame_8, dtype="f32")
@@ -378,7 +378,7 @@ def recur_out(
                                 for o_k in range(0, 128, 64):
                                     acc_view = T.tensor_view(
                                         T.ptr_of(vn_1[o_m:o_m + 64, o_n:o_n + 64]),
-                                        layout=((8 @ threads_23.d1, 2, 4 @ threads_23.d0, 2, 4 @ threads_23.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_23.d0, 2, 8 @ threads_23.d1, 8, 4 @ threads_23.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view = T.tensor_view(
@@ -399,7 +399,7 @@ def recur_out(
                                     )
                                     acc_view_1 = T.tensor_view(
                                         T.ptr_of(vn_1[o_m:o_m + 64, o_n:o_n + 64]),
-                                        layout=((8 @ threads_23.d1, 2, 4 @ threads_23.d0, 2, 4 @ threads_23.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_23.d0, 2, 8 @ threads_23.d1, 8, 4 @ threads_23.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_1 = T.tensor_view(
@@ -420,7 +420,7 @@ def recur_out(
                                     )
                                     acc_view_2 = T.tensor_view(
                                         T.ptr_of(vn_1[o_m:o_m + 64, o_n:o_n + 64]),
-                                        layout=((8 @ threads_23.d1, 2, 4 @ threads_23.d0, 2, 4 @ threads_23.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_23.d0, 2, 8 @ threads_23.d1, 8, 4 @ threads_23.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_2 = T.tensor_view(
@@ -441,7 +441,7 @@ def recur_out(
                                     )
                                     acc_view_3 = T.tensor_view(
                                         T.ptr_of(vn_1[o_m:o_m + 64, o_n:o_n + 64]),
-                                        layout=((8 @ threads_23.d1, 2, 4 @ threads_23.d0, 2, 4 @ threads_23.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_23.d0, 2, 8 @ threads_23.d1, 8, 4 @ threads_23.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_3 = T.tensor_view(
@@ -462,17 +462,17 @@ def recur_out(
                                     )
                         lhs_frame_2 = T.tensor_view(
                             T.ptr_of(uu[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_23.d1, 2, 4 @ threads_23.d0, 2, 4 @ threads_23.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_23.d0, 2, 8 @ threads_23.d1, 8, 4 @ threads_23.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         rhs_frame_1 = T.tensor_view(
                             T.ptr_of(vn_1[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_23.d1, 2, 4 @ threads_23.d0, 2, 4 @ threads_23.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_23.d0, 2, 8 @ threads_23.d1, 8, 4 @ threads_23.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         dst_frame_9 = T.tensor_view(
                             T.ptr_of(vn[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_23.d1, 2, 4 @ threads_23.d0, 2, 4 @ threads_23.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_23.d0, 2, 8 @ threads_23.d1, 8, 4 @ threads_23.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.binary(lhs_frame_2, rhs_frame_1, dst_frame_9, kind=BinaryKind.SUB)
@@ -488,7 +488,7 @@ def recur_out(
                         T.copy(tile_18, dst_frame_10)
                         lhs_frame_3 = T.tensor_view(
                             T.ptr_of(vn[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         rhs_frame_2 = T.tensor_view(
@@ -498,24 +498,24 @@ def recur_out(
                         )
                         dst_frame_11 = T.tensor_view(
                             T.ptr_of(value_7[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.binary(lhs_frame_3, rhs_frame_2, dst_frame_11, kind=BinaryKind.MUL)
                         src_frame_7 = T.tensor_view(
                             T.ptr_of(value_7[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         dst_frame_12 = T.tensor_view(
                             T.ptr_of(value_6[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.cast(src_frame_7, dst_frame_12, dtype="bf16")
                         src_frame_8 = T.tensor_view(
                             T.ptr_of(value_6[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.copy(src_frame_8, vd)
@@ -524,7 +524,7 @@ def recur_out(
                                 for o_k_1 in range(0, 64, 16):
                                     acc_view_4 = T.tensor_view(
                                         T.ptr_of(st_1[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 64]),
-                                        layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_4 = T.tensor_view(
@@ -545,18 +545,18 @@ def recur_out(
                                     )
                         src_frame_9 = T.tensor_view(
                             T.ptr_of(vn[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         dst_frame_13 = T.tensor_view(
                             T.ptr_of(value_9[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.cast(src_frame_9, dst_frame_13, dtype="bf16")
                         src_frame_10 = T.tensor_view(
                             T.ptr_of(value_9[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_25.d1, 2, 4 @ threads_25.d0, 2, 4 @ threads_25.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_25.d0, 2, 8 @ threads_25.d1, 8, 4 @ threads_25.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.copy(src_frame_10, vnb_stages[c % 3])
@@ -574,7 +574,7 @@ def recur_out(
                                 for o_k_2 in range(0, 128, 64):
                                     acc_view_5 = T.tensor_view(
                                         T.ptr_of(o_1[o_m_2:o_m_2 + 64, o_n_2:o_n_2 + 64]),
-                                        layout=((8 @ threads_33.d1, 2, 4 @ threads_33.d0, 2, 4 @ threads_33.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_33.d0, 2, 8 @ threads_33.d1, 8, 4 @ threads_33.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_5 = T.tensor_view(
@@ -595,7 +595,7 @@ def recur_out(
                                     )
                                     acc_view_6 = T.tensor_view(
                                         T.ptr_of(o_1[o_m_2:o_m_2 + 64, o_n_2:o_n_2 + 64]),
-                                        layout=((8 @ threads_33.d1, 2, 4 @ threads_33.d0, 2, 4 @ threads_33.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_33.d0, 2, 8 @ threads_33.d1, 8, 4 @ threads_33.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_6 = T.tensor_view(
@@ -616,7 +616,7 @@ def recur_out(
                                     )
                                     acc_view_7 = T.tensor_view(
                                         T.ptr_of(o_1[o_m_2:o_m_2 + 64, o_n_2:o_n_2 + 64]),
-                                        layout=((8 @ threads_33.d1, 2, 4 @ threads_33.d0, 2, 4 @ threads_33.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_33.d0, 2, 8 @ threads_33.d1, 8, 4 @ threads_33.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_7 = T.tensor_view(
@@ -637,7 +637,7 @@ def recur_out(
                                     )
                                     acc_view_8 = T.tensor_view(
                                         T.ptr_of(o_1[o_m_2:o_m_2 + 64, o_n_2:o_n_2 + 64]),
-                                        layout=((8 @ threads_33.d1, 2, 4 @ threads_33.d0, 2, 4 @ threads_33.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_33.d0, 2, 8 @ threads_33.d1, 8, 4 @ threads_33.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_8 = T.tensor_view(
@@ -668,7 +668,7 @@ def recur_out(
                         T.copy(tile_20, dst_frame_14)
                         lhs_frame_4 = T.tensor_view(
                             T.ptr_of(o_1[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_34.d1, 2, 4 @ threads_34.d0, 2, 4 @ threads_34.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_34.d0, 2, 8 @ threads_34.d1, 8, 4 @ threads_34.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         rhs_frame_3 = T.tensor_view(
@@ -678,7 +678,7 @@ def recur_out(
                         )
                         dst_frame_15 = T.tensor_view(
                             T.ptr_of(o[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_34.d1, 2, 4 @ threads_34.d0, 2, 4 @ threads_34.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_34.d0, 2, 8 @ threads_34.d1, 8, 4 @ threads_34.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.binary(lhs_frame_4, rhs_frame_3, dst_frame_15, kind=BinaryKind.MUL)
@@ -687,7 +687,7 @@ def recur_out(
                                 for o_k_3 in range(0, 64, 64):
                                     acc_view_9 = T.tensor_view(
                                         T.ptr_of(o[o_m_3:o_m_3 + 64, o_n_3:o_n_3 + 64]),
-                                        layout=((8 @ threads_34.d1, 2, 4 @ threads_34.d0, 2, 4 @ threads_34.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_34.d0, 2, 8 @ threads_34.d1, 8, 4 @ threads_34.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_9 = T.tensor_view(
@@ -708,7 +708,7 @@ def recur_out(
                                     )
                                     acc_view_10 = T.tensor_view(
                                         T.ptr_of(o[o_m_3:o_m_3 + 64, o_n_3:o_n_3 + 64]),
-                                        layout=((8 @ threads_34.d1, 2, 4 @ threads_34.d0, 2, 4 @ threads_34.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_34.d0, 2, 8 @ threads_34.d1, 8, 4 @ threads_34.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_10 = T.tensor_view(
@@ -729,7 +729,7 @@ def recur_out(
                                     )
                                     acc_view_11 = T.tensor_view(
                                         T.ptr_of(o[o_m_3:o_m_3 + 64, o_n_3:o_n_3 + 64]),
-                                        layout=((8 @ threads_34.d1, 2, 4 @ threads_34.d0, 2, 4 @ threads_34.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_34.d0, 2, 8 @ threads_34.d1, 8, 4 @ threads_34.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_11 = T.tensor_view(
@@ -750,7 +750,7 @@ def recur_out(
                                     )
                                     acc_view_12 = T.tensor_view(
                                         T.ptr_of(o[o_m_3:o_m_3 + 64, o_n_3:o_n_3 + 64]),
-                                        layout=((8 @ threads_34.d1, 2, 4 @ threads_34.d0, 2, 4 @ threads_34.d2, 8), (1, 8, 16, 64, 128, 512)),
+                                        layout=((4 @ threads_34.d0, 2, 8 @ threads_34.d1, 8, 4 @ threads_34.d2, 2,), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 64),
                                     )
                                     lhs_view_12 = T.tensor_view(
@@ -771,18 +771,18 @@ def recur_out(
                                     )
                         src_frame_11 = T.tensor_view(
                             T.ptr_of(o[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_34.d1, 2, 4 @ threads_34.d0, 2, 4 @ threads_34.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_34.d0, 2, 8 @ threads_34.d1, 8, 4 @ threads_34.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         dst_frame_16 = T.tensor_view(
                             T.ptr_of(value_10[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_34.d1, 2, 4 @ threads_34.d0, 2, 4 @ threads_34.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_34.d0, 2, 8 @ threads_34.d1, 8, 4 @ threads_34.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.cast(src_frame_11, dst_frame_16, dtype="bf16")
                         src_frame_12 = T.tensor_view(
                             T.ptr_of(value_10[0:0 + 64, 0:0 + 64]),
-                            layout=((8 @ threads_34.d1, 2, 4 @ threads_34.d0, 2, 4 @ threads_34.d2, 8), (1, 8, 16, 64, 128, 512)),
+                            layout=((4 @ threads_34.d0, 2, 8 @ threads_34.d1, 8, 4 @ threads_34.d2, 2,), (16, 8, 1, 512, 128, 64)),
                             shape=(64, 64),
                         )
                         T.copy(src_frame_12, os_stages[c % 2])
@@ -803,7 +803,7 @@ def recur_out(
                 with Mesh(scope[:1], layout=(4, 8, 4), names=("d0", "d1", "d2")) as threads_40:
                     st_1_view = T.tensor_view(
                         T.ptr_of(st_1[0:0 + 128, 0:0 + 64]),
-                        layout=((2, 8 @ threads_40.d1, 2, 4 @ threads_40.d0, 2, 4 @ threads_40.d2, 8), (4096, 1, 8, 16, 64, 128, 512)),
+                        layout=((2, 4 @ threads_40.d0, 2, 8 @ threads_40.d1, 8, 4 @ threads_40.d2, 2,), (4096, 16, 8, 1, 512, 128, 64)),
                         shape=(128, 64),
                     )
                     T.copy(st_1_view, st)

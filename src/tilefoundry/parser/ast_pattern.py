@@ -1592,7 +1592,8 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
                     node, context, "indexed ModuleList static function references are unsupported"
                 )
             try:
-                return owner.elements[0].lookup(node.attr)
+                child = owner.elements[0].children.get(node.attr)
+                return child if child is not None else owner.elements[0].lookup(node.attr)
             except ValueError as error:
                 raise ParseError.from_node(node, context, str(error)) from error
         try:
@@ -1786,6 +1787,7 @@ def _infer_call(operation, args, context):
     infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
     if not isinstance(infer_context, runtime.TypeInferContext):
         infer_context = runtime.TypeInferContext()
+    infer_context = infer_context.with_captures(context.values.get("loop_captures", ()))
     inferred = runtime.TypeInferVisitor().visit(placeholder, infer_context)
     return dataclasses.replace(placeholder, type=inferred)
 

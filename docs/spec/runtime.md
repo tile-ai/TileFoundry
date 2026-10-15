@@ -1093,9 +1093,9 @@ template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_instances();
 **Terms.** A *shard tensor* is an engine, the global layout it came from, and a shard layout. *Projecting* it is resolving it to the slice this instance owns: `local_tensor`, whose type-level half is `local_view_t`, while `ShardTensorLike` is the one test for "is this operand sharded". All three are `tilefoundry::` names, not `detail` ones.
 
 - constraints:
-  - `engine` is a CuTe tensor or view, never a raw pointer: residency lives on the engine type, and `data()` drops it.
+  - `engine` is a CuTe tensor or view, never a raw pointer: residency lives on the engine type, and `data()` drops it. Its layout MUST be the declared local shard layout read through `resolve_layout`, using the shared register numbering for rmem; codegen MUST NOT choose a separate default engine order. Storage spans the layout codomain, including any pitch. A rank-0 address is encoded in CuTe as one singleton mode with stride zero.
   - A shard layout whose layout is a `cute::ComposedLayout` -- which is how a [`Swizzle`](./shard.md#41-swizzle) reaches the device -- is projected with its function kept: `shard_layout_is_composed_v` picks that path, and `local_tensor` returns a tensor over the engine's own pointer whose layout is the same composition, this instance's origin folded into its offset. Advancing the pointer instead would run the function on a slice-relative index and hand two instances one address, so the offset MUST NOT move to the engine.
-  - A composed layout takes that path even when no mesh axis splits it. The whole-tensor shortcut returns the backing engine, whose layout states no function at all, so taking it would drop the swizzle.
+  - A composed layout takes that path even when no mesh axis splits it. The composed path reconstructs the declared function and the participant offset over the engine pointer, including when every mesh attribute broadcasts.
   - `local_tensor`, `local_view_t` and `ShardTensorLike` are public: a step every op must take, and the word an op writes its own constraints in, are not implementation details. `is_shard_tensor` -- how `ShardTensorLike` is decided, which nothing outside needs -- stays in `detail`.
   - A tensor whose layout is a `ShardLayout` has distributed semantics -- it is the whole tensor, and each instance owns the slice its shard layout gives it.
   - One attr per mesh axis, against the mesh's axes flattened: a mesh naming several levels states them grouped one nest per level, and its rank is then how many levels it names rather than how many axes the attrs answer for.
@@ -1310,6 +1310,13 @@ __device__ void copy_async(TSrc const &src, TDst &dst, TIndex const &index,
                            TFill fill);
 ```
 <!-- /generated -->
+
+For an RMEM `ShardLayout`, the shared `ir.types.register_strides` reader
+used by codegen and Dot access relations MUST assign compact
+register-engine steps to non-Split, non-unit modes in ascending order of their
+physical strides read through `resolve_layout`; omitted strides therefore use
+compact row-major. Split and unit modes have engine step zero. This
+numbering is independent of mode order in the logical-domain correspondence.
 
 **`tensor_view`.** Rebuilds the CuTe tensor engine that a TIR `TensorView`
 describes from its typed pointer and emitted layout. Residency stays on the

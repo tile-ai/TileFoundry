@@ -80,6 +80,18 @@ def test_binding_metadata_names_the_emitted_binding():
 
     assert "v0 = tf.add(source, source)" in as_script(unbound_function)
 
+    named_later = Call(
+        target=Binary(kind=BinaryKind.ADD), args=(unbound, source), type=tensor_type,
+        metadata=(BindingMetadata("v0"),),
+    )
+    reserved_function = Function.build(
+        name="reserved_name", params=(source,), body=named_later, return_type=tensor_type,
+    )
+    reserved = as_script(reserved_function)
+    assert "v0_2 = tf.add(source, source)" in reserved
+    assert "v0 = tf.add(v0_2, source)" in reserved
+    assert as_script(import_dsl(reserved)) == reserved
+
 
 def test_umat_type_is_printed_and_round_trips() -> None:
     tensor_type = TensorType.scalar(DType.i64, storage=StorageKind.UMAT)

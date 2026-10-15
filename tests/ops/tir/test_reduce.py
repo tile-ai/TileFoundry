@@ -18,7 +18,7 @@ from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.reduce import Reduce
-from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.target import CpuTarget, CudaTarget
@@ -47,14 +47,24 @@ def _sharded(
 
 def _pf(*types, axes: tuple = (0,)) -> PrimFunction:
     args = tuple(Var(type=type_, name=f"a{index}") for index, type_ in enumerate(types))
+    layout = getattr(types[0], "layout", None)
+    mesh = layout.mesh if isinstance(layout, ShardLayout) else _MESH
     return PrimFunction(
         name="fn",
         params=args,
         body=Sequential(
             body=(
-                Evaluate(
-                    callable=Reduce(axes=axes, keepdim=True, kind=ReduceKind.MEAN),
-                    args=args,
+                MeshScope(
+                    mesh,
+                    Var(name="thread", type=mesh),
+                    Sequential(
+                        body=(
+                            Evaluate(
+                                callable=Reduce(axes=axes, keepdim=True, kind=ReduceKind.MEAN),
+                                args=args,
+                            ),
+                        )
+                    ),
                 ),
                 Return(),
             )
@@ -91,7 +101,7 @@ def _replicated(shape: tuple, storage: str = "rmem"):
         pytest.param(
             (_sharded(8), _sharded(1), _sharded(4, storage="rmem")),
             (0,),
-            r"(?s)workspace .*rmem does not match smem",
+            r"(?s)workspace: rmem does not match smem",
             id="outside_shared_memory",
         ),
         pytest.param(
@@ -109,13 +119,13 @@ def _replicated(shape: tuple, storage: str = "rmem"):
         pytest.param(
             (UnitType(), _replicated((1, 8)), _replicated((4,), "smem")),
             (0,),
-            r"src is UnitType",
+            r"src: None does not match dtype=src_dtype",
             id="source_not_a_tensor",
         ),
         pytest.param(
             (_split((128, 8), 0), _replicated((1, 8)), UnitType()),
             (0,),
-            r"workspace is UnitType",
+            r"workspace: None does not match storage=smem",
             id="workspace_not_a_tensor",
         ),
         pytest.param(
@@ -145,7 +155,7 @@ def test_a_workspace_holds_one_slot_per_warp(operands, axes, refused) -> None:
             verify_prim_function(function)
         return
     verify_prim_function(function)
-    (statement,) = (stmt for stmt in function.body.body if isinstance(stmt, Evaluate))
+    (statement,) = (stmt for stmt in function.body.body[0].body.body if isinstance(stmt, Evaluate))
     types = tuple(arg.type for arg in statement.args)
     reached = operand_relations(statement.callable, types)[2].relation
     source = shape_to_isl_set(tuple(operands[0].shape), {})

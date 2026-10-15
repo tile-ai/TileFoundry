@@ -34,7 +34,7 @@ class WGMMA_TMA_3STAGE:
                     n=16, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
                 with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
-                    acc = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 2), (1024, 1, 8, 16, 64, 128, 512)), "rmem"])
+                    acc = tf.zeros(Tensor[(M, N), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 2, 4 @ _compute.lane4, 2,), (1024, 16, 8, 1, 512, 128, 64)), "rmem"])
 
                 for k in tf.tile(K, BK):
                     with threads[0, :32] as _loader:
@@ -69,6 +69,8 @@ class WGMMA_TMA_3STAGE:
                             op=T.tiled_mma(atom=wgmma),
                         )
 
+                output = tf.zeros(Tensor[(M, N), "bf16"])
                 with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                     result = tf.cast(acc, dtype="bf16")
+                    result = tf.insert_slice(output, result, (0, 0))
                 return result

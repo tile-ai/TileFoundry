@@ -55,3 +55,13 @@ class MeshInsideTileWindow:
                 local = tf.reshard(x[m * 2 + 1, :], (2 @ mesh.unit, 8), "smem")
             out = local
         return out
+
+
+@func
+def sequential_scan_copy(x: Tensor[(4, 4), "f32"]):
+    out = tf.zeros(Tensor[(4, 4), "f32"])
+    for row in tf.tile(4, 2):
+        out = tf.insert_slice(out, x[row, :] + 1.0, (row, 0))
+    for row in tf.tile(4, 2):
+        out = tf.insert_slice(out, out[row, :] * 2.0, (row, 0))
+    return out

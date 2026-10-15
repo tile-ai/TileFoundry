@@ -20,7 +20,7 @@ from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.tir.arith import Binary
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
@@ -43,11 +43,15 @@ class ColumnBroadcast:
         out_scalar: Tensor[(32,), "f32"],
     ):
         with Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",)) as m:
-            a_view = T.tensor_view(T.ptr_of(a), layout=bcast((32,), (1,), m))
-            r_view = T.tensor_view(T.ptr_of(r), layout=bcast((4,), (1,), m))
-            out_view = T.tensor_view(T.ptr_of(out), layout=bcast((32,), (1,), m))
-            out_sub_view = T.tensor_view(T.ptr_of(out_sub), layout=bcast((32,), (1,), m))
-            out_scalar_view = T.tensor_view(T.ptr_of(out_scalar), layout=bcast((32,), (1,), m))
+            a_view = T.tensor_view(T.ptr_of(a), shape=(4, 8), layout=bcast((4, 8), (8, 1), m))
+            r_view = T.tensor_view(T.ptr_of(r), shape=(4, 1), layout=bcast((4, 1), (1, 1), m))
+            out_view = T.tensor_view(T.ptr_of(out), shape=(4, 8), layout=bcast((4, 8), (8, 1), m))
+            out_sub_view = T.tensor_view(
+                T.ptr_of(out_sub), shape=(4, 8), layout=bcast((4, 8), (8, 1), m)
+            )
+            out_scalar_view = T.tensor_view(
+                T.ptr_of(out_scalar), shape=(4, 8), layout=bcast((4, 8), (8, 1), m)
+            )
             lhs = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "rmem"])
             col = T.alloc_tensor(Tensor[(4, 1), "f32", bcast((4, 1), (1, 1), m), "rmem"])
             dst = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "rmem"])
@@ -158,17 +162,22 @@ def test_binary_refuses_an_operand_outside_register_memory() -> None:
         make_tensor_type((8,), storage="rmem"),
     )
     args = tuple(Var(type=type_, name=f"a{index}") for index, type_ in enumerate(types))
+    mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
     fn = PrimFunction(
         name="fn",
         params=args,
         body=Sequential(
             body=(
-                Evaluate(callable=Binary(kind=BinaryKind.ADD), args=args),
+                MeshScope(
+                    mesh,
+                    Var(name="thread", type=mesh),
+                    Sequential(body=(Evaluate(callable=Binary(kind=BinaryKind.ADD), args=args),)),
+                ),
                 Return(),
             )
         ),
     )
-    with pytest.raises(VerifyError, match=r"lhs .*smem does not match rmem"):
+    with pytest.raises(VerifyError, match=r"lhs: smem does not match rmem"):
         verify_prim_function(fn)
 
 
@@ -194,8 +203,8 @@ def test_a_mesh_names_what_holds_a_tile_three_ways() -> None:
     rm(a, r, out, out_sub, out_scalar, rows, level_out, rows, axis_out)
     torch.cuda.synchronize()
 
-    assert torch.allclose(out, a * r.repeat(8), rtol=0, atol=0)
-    assert torch.allclose(out_sub, r.repeat(8) - a, rtol=0, atol=0)
+    assert torch.allclose(out, a * r.repeat_interleave(8), rtol=0, atol=0)
+    assert torch.allclose(out_sub, r.repeat_interleave(8) - a, rtol=0, atol=0)
     assert torch.allclose(out_scalar, a + 0.5, rtol=0, atol=0)
     assert torch.allclose(level_out, rows * rows, rtol=0, atol=0)
     assert torch.equal(level_out, axis_out)

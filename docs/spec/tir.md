@@ -193,7 +193,11 @@ parameters; omitting it means one output.
   `PrimFunction` of that name in the enclosing `Module`, `args` length
   MUST match the resolved callee's `params`, and the `SymbolRef.type`
   MUST equal the resolved callee's `CallableType`. When `callable` is
-  an `Op`, every input operand MUST match its `ParamDef.pattern` and every
+  an `Op`, it MUST pass the same `check_call` used by ScheduleOp type inference,
+  candidate admission, and lowering. Its declared execution mesh MUST match
+  the enclosing mesh and its operands MUST be reachable from that scope.
+  For atom calls, operand patterns apply to the shared projected issue tiles.
+  Every input operand MUST match its `ParamDef.pattern` and every
   declared `between` relation MUST hold. A per-Op verifier registered via
   `@register_verify_stmt(Op)` MAY impose additional rules that the declaration
   does not express. An effect Op with neither an input pattern nor a `between`
@@ -386,7 +390,7 @@ class SymbolRef(Expr):
 
     Attributes:
         name: attribute; Canonical callee name.
-        nested: attribute; Nested path, empty for the flat Module symbol table.
+        nested: attribute; Child module slot path from the current Module.
     """
 
     name: str
@@ -409,8 +413,12 @@ target: the `callable` of an `Evaluate(SymbolRef, args)`
   specialization name.
 
 #### `nested`
-- MUST be empty: the `Module` holds only top-level functions, so a
-  non-empty `nested` is rejected.
+- MUST name child module slots relative to the caller's current `Module`.
+  An empty path selects the current module's own functions. Resolution MUST
+  traverse those slots and find one function named `name` in the reached
+  module; it MUST NOT search descendants by an unqualified name. Missing slots
+  or functions MUST report the full requested path. Verify and codegen MUST
+  use the same slot-path resolver.
 
 #### `type`
 - MUST be the resolved callee's IR-level `CallableType`
@@ -424,9 +432,11 @@ target: the `callable` of an `Evaluate(SymbolRef, args)`
   checks `type` against the resolved callee ([§1.3](#13-primfunction)) —
   it never back-fills.
 
-Resolution is module level: a unique lookup over the `Module`
+Resolution starts in the caller's `Module` and traverses `nested` child slots.
+A unique lookup in the reached `Module`
 ([core-ir.md §1](./core-ir.md#1-module)) MUST map `name` to exactly
-one `PrimFunction`; zero or more than one match is an error.
+one `PrimFunction`; zero or more than one match is an error. Functions with
+that name in other modules do not participate in this lookup.
 Specialization variants each carry a distinct canonical
 `PrimFunction.name`, so a `SymbolRef` to a variant resolves
 unambiguously; the unmangled dispatcher is represented by its prototype and
@@ -446,7 +456,13 @@ class ShapeOf(Expr):
 
     param: Var
     axis: int
+
+def shape_of(param: Var, *, axis: int) -> ShapeOf: ...  # exported by tilefoundry.dsl
 ```
+
+`shape_of(x, axis=0)` is the authored and printed spelling of this TIR
+expression. The parser MUST accept it, and printing followed by re-import
+MUST preserve it. It is distinct from HIR `tf.shape_of`.
 
 - constraints:
   - `type` is a rank-0 `i32` `TensorType` (scalar): one runtime tensor extent.
@@ -576,12 +592,10 @@ class Copy(Op):
   - `src` declares `READ`; `dst` declares `WRITE`.
   - both operands are whole-byte tensors in gmem, smem, or rmem, with equal
     dtype. Their storages MAY be equal; same-storage copy is still a byte move.
-  - with equal storage, `src` and `dst` have equal shapes, or both carry a
-    `ShardLayout` with the same `layout`. Then both shapes regroup row-major onto
-    that per-thread buffer ([semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain)),
-    and `dst` receives each element of `src` at the same linear index: its access
-    relation walks `src` and reaches `dst` at the row-major reshape of each
-    coordinate.
+  - `src` and `dst` MUST have equal logical shapes for every storage direction.
+    Copy's access relation pairs the same logical coordinate on both ends.
+    A caller changing shape MUST state that shape in its source or destination
+    view; Copy does not infer a reshape from the runtime's enumeration order.
   - `execution_mesh` is the mesh declaration shared by every rmem operand's
     `ShardLayoutPattern.mesh`.
 
@@ -948,8 +962,11 @@ An instruction Op reserves the class-body name `execution_mesh` for the mesh
 that executes one issue. A fixed instruction declaration MAY state a concrete
 `Mesh`; an Op with a caller-selectable frame MAY state a `ParamDef` whose
 pattern is a `MeshPattern`; and an element-wise Op MAY point directly at the
-same `MeshPattern` used by its operand shard declarations. These are the only
-three forms. An instruction whose `execution_mesh` has another form MUST be
+same `MeshPattern` used by its operand shard declarations. A declaration
+MAY use an `OrPattern` of mesh patterns when it supports distinct execution
+topologies: `Sync` accepts thread or CTA meshes; its leaf verifier retains
+the complete-grid requirement for CTA synchronization. These are the supported
+forms. An instruction whose `execution_mesh` has another form MUST be
 rejected by name rather than treated as running on arbitrary threads.
 
 An operand that carries a `ShardLayout` and executes element-wise MUST use that
@@ -1012,6 +1029,12 @@ def variants(
     `vary_defaulted=False` and binds `int` parameters to `1..` the site's
     largest extent; CUDA `MatMul` typing calls it with `vary_defaulted=True`
     and leaves `int` parameters unbound.
+  - Role-pattern modes MUST follow the logical row-major correspondence in
+    [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain):
+    A `(M, K)`, B `(K, N)`, and C `(M, N)`. Split modes MUST place each element
+    on the thread specified by PTX; strides retain their physical values.
+    Repeat modes belong to their logical axes, and operand tiles remove those
+    axes' outer digits rather than a shared prefix of the entire layout.
   - `MmaAtom` is `Printable` ([core-ir §2.4](./core-ir.md#24-printable-and-printerbase)):
     `print(printer, ctx)` is the atom's importable DSL source. It states every
     binding in declaration order, implied ones included, writes an Enum as

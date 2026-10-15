@@ -58,8 +58,7 @@ class Swizzle:
             raise ValueError(f"Swizzle base must be non-negative, got {self.base}")
         if abs(self.shift) < self.bits:
             raise ValueError(
-                f"abs(Swizzle shift) must be >= bits, got shift={self.shift}, "
-                f"bits={self.bits}"
+                f"abs(Swizzle shift) must be >= bits, got shift={self.shift}, bits={self.bits}"
             )
 
     @property
@@ -227,7 +226,9 @@ def get(layout: LayoutBase, index: int) -> "Layout":
     strides = layout.strides[index] if getattr(layout, "strides", None) is not None else None
     return Layout(
         shape=shape if isinstance(shape, tuple) else (shape,),
-        strides=None if strides is None else (strides if isinstance(strides, tuple) else (strides,)),
+        strides=None
+        if strides is None
+        else (strides if isinstance(strides, tuple) else (strides,)),
     )
 
 
@@ -256,5 +257,45 @@ __all__ = [
     "get",
     "make_swizzle",
     "rank",
+    "resolve_layout",
     "take",
 ]
+
+
+def resolve_layout(layout: LayoutBase | None, shape: tuple | None = None) -> LayoutBase:
+    """Read an omitted layout or stride as compact row-major, without mutating IR.
+
+    Concrete address functions, sharding, and nontrivial composition remain
+    explicit. Signature compatibility treats an omitted constraint separately.
+    """
+    from dataclasses import replace  # noqa: PLC0415
+
+    from .stride import compact_row_major  # noqa: PLC0415
+
+    def multiply(left, right):
+        if isinstance(left, int) and isinstance(right, int):
+            return left * right
+        from .dim import DimMul, simplify_dim  # noqa: PLC0415
+
+        return simplify_dim(DimMul, (left, right))
+
+    if layout is None:
+        if shape is None:
+            raise ValueError("an omitted tensor layout needs its logical shape")
+        return Layout(tuple(shape), compact_row_major(tuple(shape), mul=multiply))
+    if isinstance(layout, Layout):
+        return (
+            layout
+            if layout.strides is not None
+            else replace(layout, strides=compact_row_major(layout.shape, mul=multiply))
+        )
+    if isinstance(layout, ComposedLayout):
+        inner = layout.inner
+        if isinstance(inner, LayoutBase):
+            inner = resolve_layout(inner)
+        return replace(layout, inner=inner, outer=resolve_layout(layout.outer))
+    from .shard_layout import ShardLayout  # noqa: PLC0415 - staged types
+
+    if isinstance(layout, ShardLayout):
+        return replace(layout, layout=resolve_layout(layout.layout))
+    raise TypeError(f"not a tensor layout: {type(layout).__name__}")

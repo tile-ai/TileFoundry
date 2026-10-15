@@ -14,7 +14,7 @@ from tilefoundry.dsl import *
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.dot import Dot
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
@@ -25,7 +25,16 @@ def _pf(*types) -> PrimFunction:
     return PrimFunction(
         name="fn",
         params=args,
-        body=Sequential(body=(Evaluate(callable=Dot(), args=args), Return())),
+        body=Sequential(
+            body=(
+                MeshScope(
+                    mesh=_MESH,
+                    binding=Var(name="thread", type=_MESH),
+                    body=Sequential(body=(Evaluate(callable=Dot(), args=args),)),
+                ),
+                Return(),
+            )
+        ),
     )
 
 
@@ -69,7 +78,7 @@ def test_refuses_a_destination_wider_than_one_cell() -> None:
 
 def test_refuses_a_workspace_outside_shared_memory() -> None:
     """One warp posts its partial and every thread reads the posted ones."""
-    with pytest.raises(VerifyError, match=r"workspace .*gmem does not match smem"):
+    with pytest.raises(VerifyError, match=r"workspace: gmem does not match smem"):
         verify_prim_function(
             _pf(_sharded(8), _sharded(8), _sharded(1), _sharded(4, storage="gmem"))
         )

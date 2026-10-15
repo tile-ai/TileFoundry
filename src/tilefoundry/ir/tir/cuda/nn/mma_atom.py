@@ -12,22 +12,18 @@ from tilefoundry.ir.pattern import (
     LayoutPattern,
     MeshPattern,
     Pattern,
-    PatternMatcher,
-    ShardLayoutPattern,
     StarPattern,
     SwitchPattern,
-    TensorPattern,
     WildcardPattern,
     matched,
 )
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
-from tilefoundry.ir.pattern.utils import declared_shape, matched_row_issues, selected_pattern
-from tilefoundry.ir.types import ComposedLayout, DType, Layout, Mesh, ShardLayout, TensorType
+from tilefoundry.ir.pattern.utils import declared_shape, selected_pattern
+from tilefoundry.ir.types import ComposedLayout, DType, Layout, Mesh
 from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.mesh import levels, starts
-from tilefoundry.ir.types.utils import tile_view_layout
 
 _MISS = object()
 
@@ -122,47 +118,6 @@ class MmaAtom(Printable):
         if any(shape is None for shape in shapes):
             raise ValueError(f"{self.reference_name} does not declare fixed operand shapes")
         return shapes
-
-    def operand_tiles(
-        self,
-        whole_types: tuple[TensorType, ...],
-        frame: Mesh,
-        axes: tuple[tuple[int, ...], ...],
-        *,
-        repeat: tuple[int, ...],
-    ) -> tuple[tuple[TensorType, ...], tuple[tuple[int, int] | None, ...]]:
-        """Return the operand tiles and declared adjacent-issue properties."""
-        shapes = self.operand_shapes()
-        patterns = tuple(
-            selected_pattern(self.role(role), self.bindings) for role in ("C", "A", "B")
-        )
-        tiles = []
-        for whole, shape, pattern, mapped in zip(whole_types, shapes, patterns, axes, strict=True):
-            layout = tile_view_layout(
-                whole, shape, counts=tuple(repeat[axis] for axis in mapped), participant=frame
-            )
-            if (
-                isinstance(pattern, TensorPattern)
-                and isinstance(pattern.layout, ShardLayoutPattern)
-                and not isinstance(layout, ShardLayout)
-            ):
-                layout = ShardLayout(layout, pattern.layout.attrs, frame)
-            if isinstance(layout, ShardLayout):
-                layout = replace(layout, mesh=frame)
-            tiles.append(TensorType(shape, whole.dtype, layout, whole.storage))
-        matcher = PatternMatcher(self.bindings)
-        if not all(
-            matcher.match(pattern, tile)
-            for pattern, tile in zip(patterns, tiles, strict=True)
-        ) or not matcher.solve():
-            raise ValueError(f"{self.reference_name} tile violates its operand declaration")
-        rows = tuple(
-            None
-            if (row := matched_row_issues(pattern, matcher)) is None
-            else (mapped[row[0]], row[1])
-            for pattern, mapped in zip(patterns, axes, strict=True)
-        )
-        return tuple(tiles), rows
 
     @property
     def required_execution_mesh(self) -> Mesh:
@@ -266,6 +221,9 @@ def physical_frames_match(left: Mesh, right: Mesh) -> bool:
     def frame(mesh):
         if isinstance(mesh.layout, ComposedLayout) and mesh.layout.inner is not None:
             return None
+        from tilefoundry.ir.types.layout import resolve_layout  # noqa: PLC0415
+
+        mesh = replace(mesh, layout=resolve_layout(mesh.layout))
         try:
             arranged = levels(mesh)
         except (IndexError, TypeError, ValueError):

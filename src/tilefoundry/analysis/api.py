@@ -225,7 +225,7 @@ def analyze(
     )
     dump(
         "analysis.json",
-        render_json(
+        lambda: render_json(
             report_data(
                 module=result.module,
                 function=result.function,

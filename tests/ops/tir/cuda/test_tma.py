@@ -14,7 +14,7 @@ from tilefoundry.dsl import *
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.cuda.memory.copy_async_bulk import CopyAsyncBulk
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
@@ -24,10 +24,20 @@ _BAR = make_tensor_type((1,), DType.from_name("i64"), storage="smem")
 
 def _pf(src, dst, bar=_BAR) -> PrimFunction:
     args = tuple(Var(type=t, name=n) for t, n in ((src, "src"), (dst, "dst"), (bar, "bar")))
+    mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
     return PrimFunction(
         name="fn",
         params=args,
-        body=Sequential(body=(Evaluate(callable=CopyAsyncBulk(), args=args), Return())),
+        body=Sequential(
+            body=(
+                MeshScope(
+                    mesh=mesh,
+                    binding=Var(name="thread", type=mesh),
+                    body=Sequential(body=(Evaluate(callable=CopyAsyncBulk(), args=args),)),
+                ),
+                Return(),
+            )
+        ),
     )
 
 
@@ -42,14 +52,14 @@ def test_accepts_a_whole_grain_gmem_to_smem_run() -> None:
 
 def test_refuses_the_wrong_direction() -> None:
     """Only gmem into smem is this instruction."""
-    with pytest.raises(VerifyError, match="source must be gmem"):
+    with pytest.raises(VerifyError, match="src: smem does not match gmem"):
         verify_prim_function(_pf(_ty(8, storage="smem"), _ty(8, storage="smem")))
-    with pytest.raises(VerifyError, match="destination must be smem"):
+    with pytest.raises(VerifyError, match="dst: gmem does not match smem"):
         verify_prim_function(_pf(_ty(8), _ty(8, storage="gmem")))
 
 
 def test_refuses_a_barrier_outside_shared_memory() -> None:
-    with pytest.raises(VerifyError, match="barrier must be smem"):
+    with pytest.raises(VerifyError, match="barrier: gmem does not match smem"):
         verify_prim_function(
             _pf(
                 _ty(8),
@@ -61,12 +71,12 @@ def test_refuses_a_barrier_outside_shared_memory() -> None:
 
 def test_refuses_a_dtype_change() -> None:
     """A staging copy moves bytes; it does not convert them."""
-    with pytest.raises(VerifyError, match="dtype mismatch"):
+    with pytest.raises(VerifyError, match="reads src.dtype = dst.dtype"):
         verify_prim_function(_pf(_ty(8), _ty(8, DType.from_name("bf16"), storage="smem")))
 
 
 def test_refuses_a_shape_change() -> None:
-    with pytest.raises(VerifyError, match="shape mismatch"):
+    with pytest.raises(VerifyError, match="reads src.shape = dst.shape"):
         verify_prim_function(_pf(_ty(8), _ty(4, storage="smem")))
 
 

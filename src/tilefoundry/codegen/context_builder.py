@@ -15,7 +15,7 @@ from tilefoundry.codegen.signature import (
     called_as,
     program_id_params,
 )
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, resolve_symbol
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.launch import Launch
@@ -224,26 +224,6 @@ def _launch_statements(function: PrimFunction | Function) -> tuple[Evaluate, ...
     )
 
 
-def _resolve_launch_definition(root, frame, name):
-    for node in (frame.module, root):
-        local = tuple(fn for fn in node.functions if fn.name == name)
-        if len(local) == 1:
-            return local[0]
-    paths = list_call_paths(root)
-    if name in paths:
-        return paths[name].function
-    matches = tuple(
-        inner.function for inner in list_call_paths(frame.module).values()
-        if inner.function.name == name
-    )
-    if len(matches) == 1:
-        return matches[0]
-    raise ValueError(
-        f"codegen: launch from {frame.function.name!r} names {name!r}: "
-        f"expected one match, found {len(matches)}"
-    )
-
-
 def build_codegen_context(
     module: Module, options: CodegenOptions = CodegenOptions()
 ) -> CodegenContext:
@@ -267,7 +247,7 @@ def build_codegen_context(
     }
     launched = {
         id(
-            _resolve_launch_definition(module, contexts[id(caller)][1], stmt.args[0].name)
+            resolve_symbol(contexts[id(caller)][1].module, stmt.args[0].name, nested=stmt.args[0].nested)
         ): stmt.args[7:]
         for caller in functions
         for stmt in _launch_statements(caller)
@@ -314,8 +294,6 @@ def build_codegen_context(
         raise ValueError(f"codegen: expected one device Target, found {len(device_targets)}")
     program_ids = program_id_params(module, device_targets[0])
     by_function: dict[int, FunctionSymbol] = {}
-    selectors = {id(fn): selector for selector, fn in selected}
-    by_selector: dict[str, FunctionSymbol] = {}
     device_functions = tuple(
         fn for fn in identities.values() if not isinstance(targets[id(fn)], CpuTarget)
     )
@@ -324,7 +302,12 @@ def build_codegen_context(
     )
     for function in (*device_functions, *cpu_functions):
         launches = _launch_statements(function)
-        launched = by_selector.get(launches[0].args[0].name) if len(launches) == 1 else None
+        launched = (
+            by_function.get(id(resolve_symbol(
+                ownership[id(function)], launches[0].args[0].name,
+                nested=launches[0].args[0].nested,
+            ))) if len(launches) == 1 else None
+        )
         if launched is not None and isinstance(launched.function, Function):
             mangled = launched.symbol
             registered_name = launched.export_name
@@ -348,8 +331,6 @@ def build_codegen_context(
             callable=signature,
         )
         by_function[id(function)] = symbol
-        if id(function) in selectors:
-            by_selector[selectors[id(function)]] = symbol
 
     table = FunctionSymbolTable(
         MappingProxyType(by_function),
@@ -359,7 +340,7 @@ def build_codegen_context(
     for caller in functions:
         for stmt in _launch_statements(caller):
             reference = stmt.args[0]
-            callee = _resolve_launch_definition(module, contexts[id(caller)][1], reference.name)
+            callee = resolve_symbol(contexts[id(caller)][1].module, reference.name, nested=reference.nested)
             symbol = by_function[id(callee)]
             grid_x, block_x = _launch_extents(contexts[id(callee)][1])
             callable_signature = replace(symbol.callable, trailing=LAUNCH_ABI)

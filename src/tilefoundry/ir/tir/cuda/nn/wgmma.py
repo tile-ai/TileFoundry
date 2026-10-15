@@ -57,7 +57,7 @@ bb, Wb, rb, lb, sb, pb, gb = (
 SWIZZLE_BYTES = (16, 32, 64, 128)
 DTYPES = (DType.bf16, DType.f16, DType.fp8e4m3)
 BROADCAST = (Broadcast(), Broadcast(), Broadcast())
-PER_THREAD = (Split(2), Split(0), Split(4))
+PER_THREAD = (Split(0), Split(2), Split(4))
 
 
 def _swizzle_row_elements(swizzle: WildcardPattern, element_bytes: int):
@@ -121,7 +121,7 @@ def _a_register_fragment_pattern(element_bytes: int) -> LayoutPattern:
     """A's register fragment; each thread holds 4 bytes of K per pair of rows."""
     per_register = 4 // element_bytes
     return LayoutPattern(
-        (8, 2, 4, per_register, 4, 2), (1, 8, 16, 64, 64 * per_register, 256 * per_register)
+        (4, 2, 8, 2, 4, per_register), (16, 8, 1, 256 * per_register, 64 * per_register, 64)
     )
 
 
@@ -182,7 +182,7 @@ def _b_k_major_sliced_smem_pattern(element_bytes: int) -> ComposedLayoutPattern:
     )
 
 
-fragment = LayoutPattern((8, 2, 4, 2, 4, c), (1, 8, 16, 64, 128, 512))
+fragment = LayoutPattern((4, 2, 8, c, 4, 2), (16, 8, 1, 512, 128, 64))
 
 
 N = DimVar("n", 8, 256)

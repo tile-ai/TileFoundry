@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import threading
 
+import pytest
+
 from tilefoundry.dump import (
     DumpFlags,
     DumpScope,
@@ -14,7 +16,8 @@ from tilefoundry.dump import (
 )
 
 
-def test_file_dumper_writes_files(tmp_path) -> None:
+@pytest.mark.parametrize("content", ["kernel", lambda: "kernel"], ids=("str", "callable"))
+def test_file_dumper_writes_files(tmp_path, content) -> None:
     """A real file lands at the nested path a subdir scope composes.
 
     A real file lands at the nested path a subdir scope composes, and a
@@ -27,8 +30,8 @@ def test_file_dumper_writes_files(tmp_path) -> None:
     fd = FileDumper(tmp_path / "scope")
     with DumpScope(dumper=fd, flags=DumpFlags.CODEGEN_SOURCE):
         with DumpScope("nested", DumpFlags.ALL):
-            dump("module.cu", "kernel", DumpFlags.CODEGEN_SOURCE)
-            dump("ir.txt", "pass", DumpFlags.PASS_IR)
+            dump("module.cu", content, DumpFlags.CODEGEN_SOURCE)
+            dump("ir.txt", lambda: pytest.fail("masked content was evaluated"), DumpFlags.PASS_IR)
     assert (tmp_path / "scope" / "nested" / "module.cu").read_text() == "kernel"
     assert not (tmp_path / "scope" / "nested" / "ir.txt").exists()
 

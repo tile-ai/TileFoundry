@@ -115,7 +115,11 @@ Both use the one `IslParamValues` dictionary, from isl parameter name to IR valu
 - `layout` has its own domain shape.
 - The current interpretation is canonical regroup: linearize first
   along the logical shape's row-major order, then reinterpret along
-  the layout domain's row-major order.
+  the layout domain's row-major order. Strides describe physical positions only
+  and MUST NOT participate in logical-coordinate correspondence. Nested
+  domains associate their top-level modes with the corresponding logical axes
+  only when the number of top-level modes equals the logical rank and each
+  mode's size equals its axis extent; otherwise, the flattened modes regroup.
 - `layout_to_isl_map` ([types §11](./types.md#11-isl-interoperability))
   implements this regroup for a `ShardLayout`. A logical axis whose extent is
   the product of consecutive flattened layout positions maps onto them, so a

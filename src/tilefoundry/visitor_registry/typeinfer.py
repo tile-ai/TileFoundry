@@ -14,50 +14,21 @@ from tilefoundry.ir.core.module import ModuleList
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.sharding.reshard import Reshard as HirReshard
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.mesh_scope import covered_by_scope, storage_reaches
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.types.callable_type import callable_type_for
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.dtype import IntegerDType
 from tilefoundry.ir.types.mesh import make_mesh
-from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
-from tilefoundry.ir.types.utils import participant_layout, types_compatible
+from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 
 from .contexts import TypeInferContext, TypeInferResults
+from .instruction import check_input_reachability
 from .registries import typeinfer_registry
-
-
-def input_scope_refusal(operand_types, mesh) -> str | None:
-    """The first input whose holder or storage does not reach its execution scope."""
-    if mesh is None:
-        return None
-    for index, arg_type in enumerate(operand_types):
-        layout = getattr(arg_type, "layout", None)
-        if not isinstance(layout, ShardLayout):
-            continue
-        try:
-            projected = participant_layout(layout)
-            covered = covered_by_scope(projected.mesh, mesh)
-        except ValueError as error:
-            return str(error)
-        if not covered:
-            return (
-                f"input {index} is laid out more finely than the scope it "
-                "runs in; write it inside that scope, or reshard it back first"
-            )
-        if not storage_reaches(arg_type.storage, projected.mesh, mesh):
-            return (
-                f"input {index} is laid out more coarsely and kept in "
-                f"{arg_type.storage.name.lower()}, which does not reach the units "
-                "this runs on; reshard it to smem or gmem first"
-            )
-    return None
 
 
 def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
@@ -179,12 +150,10 @@ class TypeInferVisitor(CallFrameVisitor[Type]):
                 target = child_frame.function
         except (KeyError, ValueError) as error:
             ctx.error(call, str(error))
-        from tilefoundry.ir.hir.schedule import ScheduleOp  # noqa: PLC0415
-
-        if not isinstance(target, (HirReshard, ScheduleOp)):
-            refusal = input_scope_refusal(arg_types, ctx.current_mesh)
-            if refusal is not None:
-                ctx.error(call, refusal)
+        try:
+            check_input_reachability(target, arg_types, ctx.current_mesh)
+        except ValueError as error:
+            ctx.error(call, str(error))
         if isinstance(target, Function):
             return self._call_function(call, target, arg_types, ctx, child_frame=child_frame)
         op_cls = type(target)
@@ -319,6 +288,10 @@ class TypeInferVisitor(CallFrameVisitor[Type]):
             owns_body=self._owns_body,
             ranges=self._ranges,
         )
+        ctx = replace(
+            ctx.with_captures(region.captures()),
+            loops=(*ctx.loops, (region.induction_var, region.start, region.extent, region.step)),
+        )
         body_type = inner.visit(region.body, ctx)
         carried = region.params[: len(region.yield_values)]
         for index, (phi, y) in enumerate(zip(carried, region.yield_values, strict=True)):
@@ -346,7 +319,9 @@ class TypeInferVisitor(CallFrameVisitor[Type]):
         memo = self._region_memo(expr, ctx)
         mesh = make_mesh(ctx.current_mesh, expr.mesh) if ctx.current_mesh else expr.mesh
         inner = TypeInferVisitor(memo=memo, owns_body=self._owns_body, ranges=self._ranges)
-        return inner.visit(expr.body, replace(ctx, current_mesh=mesh, memo=memo))
+        return inner.visit(
+            expr.body, replace(ctx.with_captures(expr.captures()), current_mesh=mesh, memo=memo)
+        )
 
     def visit_Function(self, fn: Function, ctx: TypeInferContext) -> Type:
         """Refresh one complete function after binding its parameter types."""
@@ -393,5 +368,4 @@ def inference_type(
 __all__ = [
     "TypeInferVisitor",
     "inference_type",
-    "input_scope_refusal",
 ]

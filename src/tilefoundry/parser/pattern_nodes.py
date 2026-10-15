@@ -34,6 +34,7 @@ from tilefoundry.ir.core.param_def import variadic_item_annotation
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.pattern import _mangle_variant_name
 from tilefoundry.ir.tir.launch import launch_call
+from tilefoundry.ir.tir.symbol_ref import symbol_ref
 from tilefoundry.ir.types import (
     Broadcast,
     ComposedLayout,
@@ -1030,7 +1031,10 @@ class ComposedLayoutConstructionRule:
     STATEMENT: ClassVar[str] = "A checked composition constructs its inner, offset, and outer layout."
 
     def apply(self, value, *, match, context):
-        return ComposedLayout(value.get("inner"), value.get("offset", 0), value["outer"])
+        inner, offset = value.get("inner"), value.get("offset", 0)
+        if inner is None and offset == 0:
+            return value["outer"]
+        return ComposedLayout(inner, offset, value["outer"])
 
 
 class ComposedLayoutSugarPattern(ElementPattern):
@@ -2117,12 +2121,13 @@ class StaticUnaryPattern(ElementPattern):
 @dataclass(frozen=True)
 class InlineMeshCallRule:
     STATEMENT: ClassVar[str] = (
-        "Inside an open mesh scope, Mesh constructors open a with header rather than a static call."
+        "Inside an open mesh scope, Mesh constructors open a with header unless used as a ShardLayout mesh value."
     )
 
     def apply(self, value, *, match, context):
         if (
             value["callee"] is runtime.Mesh
+            and not context.values.get("shard_layout_mesh", False)
             and context.function is not None
             and context.function.state.mesh_stack
         ):
@@ -2190,6 +2195,10 @@ class StaticCallPattern(ElementPattern):
             return PatternFailure(
                 "static_call", node, f"keyword given more than once: {', '.join(repeated)}"
             )
+        shard_layout = (
+            isinstance(node.func, (ast.Name, ast.Attribute))
+            and _resolve_reference(node.func, context) is runtime.ShardLayout
+        )
         children = [AstChild("callee", StaticValuePattern(), node.func, "static_callee")]
         children.extend(
             AstChild(
@@ -2197,6 +2206,7 @@ class StaticCallPattern(ElementPattern):
                 StaticValuePattern(),
                 argument,
                 "static_argument",
+                values={"shard_layout_mesh": shard_layout and index == 2},
             )
             for index, argument in enumerate(node.args)
         )
@@ -2207,6 +2217,7 @@ class StaticCallPattern(ElementPattern):
                 keyword.value,
                 "static_argument",
                 keyword.arg,
+                values={"shard_layout_mesh": shard_layout and keyword.arg == "mesh"},
             )
             for keyword in node.keywords
             if keyword.arg is not None
@@ -2460,7 +2471,9 @@ class CallTypeInferenceRule:
         infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
         if not isinstance(infer_context, runtime.TypeInferContext):
             infer_context = runtime.TypeInferContext()
-        if context.function.dialect == "tir" and match.branch_id == "function_call":
+        if isinstance(value.target, runtime.SymbolRef) or (
+            context.function.dialect == "tir" and match.branch_id == "function_call"
+        ):
             return value
         computed = runtime.TypeInferVisitor().visit(value, infer_context)
         value.type = computed
@@ -2977,7 +2990,7 @@ class CallPattern(ElementPattern):
                 owner = _resolve_reference(reference, context)
             except ParseError:
                 owner = None
-            if isinstance(owner, runtime.ModuleList):
+            if isinstance(owner, runtime.ModuleList) and context.function.dialect != "tir":
                 return PatternFailure("op_call", node.func, "only calling an instance entry is supported")
         if isinstance(node.func, ast.Subscript):
             try:
@@ -3001,6 +3014,21 @@ class CallPattern(ElementPattern):
                 )
             if isinstance(callee, runtime.ModuleList):
                 instance_target = callee
+        if (
+            isinstance(callee, runtime.PrimFunction)
+            and context.function.dialect == "tir"
+            and isinstance(node.func, ast.Attribute)
+        ):
+            if node.keywords:
+                return PatternFailure("symbol_call", node, "a symbol call takes positional arguments only")
+            return dataclasses.replace(
+                matched, pattern_id="call.symbol", branch_id="symbol_call",
+                captures={**matched.captures, "callee": callee, "module_entry": False},
+                children=tuple(
+                    AstChild(f"arg_{index}", ExpressionPattern(), argument, "call_argument", "argument")
+                    for index, argument in enumerate(node.args)
+                ),
+            )
         if instance_target is not None:
             binding = node.func.value if isinstance(node.func, ast.Subscript) else node.func
             module = context.function.module
@@ -3090,6 +3118,11 @@ class CallPattern(ElementPattern):
                 target=operation,
                 args=inputs,
             )
+        elif match.branch_id == "symbol_call":
+            callee = match.captures["callee"]
+            symbol = _callee_symbol(match.node.func, callee, module_entry=match.captures["module_entry"])
+            reference = symbol_ref(callee, symbol)
+            return runtime.Call(type=reference.type.return_type, target=reference, args=tuple(children.values()))
         elif match.branch_id == "function_call":
             callee = match.captures["callee"]
             target = children.get("target", callee)
@@ -3859,7 +3892,9 @@ class SelectionConstructionRule:
         assert value.outer is not None
         mesh = runtime.Mesh(
             value.selection.topologies,
-            ComposedLayout(None, starts(value.selection)[0], value.outer),
+            value.outer
+            if starts(value.selection)[0] == 0
+            else ComposedLayout(None, starts(value.selection)[0], value.outer),
             value.names,
         )
         return _finish_mesh_context(mesh, match, context)
@@ -4416,6 +4451,11 @@ class WithPattern(ElementPattern):
                         if context.function.dialect == "hir"
                         else None
                     ),
+                    values={
+                        "loop_captures": (
+                            *context.values.get("loop_captures", ()), *zip(params, args)
+                        )
+                    },
                 ),
             ),
         )
@@ -4462,6 +4502,21 @@ class WithPattern(ElementPattern):
         return runtime.MeshScope(mesh=mesh, binding=binding, body=children["body"])
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+def _callee_symbol(node, callee, *, module_entry=False):
+    """Retain authored child slots while using the resolved function's name."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    else:
+        raise ValueError("symbol callee must be a name or child-slot attribute path")
+    parts.reverse()
+    slots = parts if module_entry else parts[:-1]
+    return ".".join((*slots, callee.name))
 
 
 class LaunchPattern(ElementPattern):
@@ -4523,7 +4578,8 @@ class LaunchPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         callee = children["callee"]
-        if isinstance(callee, runtime.Module):
+        module_entry = isinstance(callee, runtime.Module)
+        if module_entry:
             callee = callee.entry_function()
         options = {
             name: children[name]
@@ -4535,6 +4591,7 @@ class LaunchPattern(ElementPattern):
             tuple(children[f"arg_{index}"] for index in range(match.captures["arg_count"])),
             children["grid"],
             children["block"],
+            symbol=_callee_symbol(match.node.args[0], callee, module_entry=module_entry),
             **options,
         )
 
@@ -4904,6 +4961,11 @@ class LoopHeaderPattern(ElementPattern):
             ]
             context.lexical_scope.push_frame()
             context.lexical_scope.define(match.captures["target"], iv)
+            inference = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
+            context.lexical_scope.define(
+                _TYPE_INFER_CONTEXT,
+                dataclasses.replace(inference, loops=(*inference.loops, (iv, *bounds))),
+            )
             return (iv, *bounds)
         if context.function is None or context.function.dialect != "hir":
             raise ParseError.from_node(match.node, context, "HIR loop header in a non-HIR context")
@@ -4941,6 +5003,14 @@ class LoopHeaderPattern(ElementPattern):
         else:
             binding = induction_var
         context.lexical_scope.define(match.captures["target"], binding)
+        inference = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
+        context.lexical_scope.define(
+            _TYPE_INFER_CONTEXT,
+            dataclasses.replace(
+                inference.with_captures(zip(params, args)),
+                loops=(*inference.loops, (induction_var, start, extent, step)),
+            ),
+        )
         for name, phi in zip(carry_names, phi_vars):
             context.lexical_scope.define(name, phi)
         return LoopFrame(
