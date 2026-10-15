@@ -193,12 +193,36 @@ class TypeInferContext:
         default_factory=dict, repr=False, compare=False
     )
 
+    loops: tuple[tuple[Expr, object, object, object], ...] = ()
+    loop_aliases: dict[int, Expr] = field(default_factory=dict)
+    call: Call | None = None
+    owner: Expr | None = None
+    parent: TypeInferContext | None = None
+
+    def for_region(self, region) -> TypeInferContext: ...
+    def for_call(self, call: Call) -> TypeInferContext: ...
+    def capture_root(self, expr: Expr) -> Expr: ...
     def resolve_target(self) -> Target | None: ...
-    def for_callee(self, callee: Function) -> TypeInferContext: ...
+    def for_callee(self, callee: Function, *, frame=None) -> TypeInferContext: ...
     def type_of(self, expr: Expr) -> Type: ...
     def local_type_of(self, expr: Expr) -> Type: ...
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
 ```
+
+`ValuationContext(TypeInferContext, ValuationProvider)` adds only
+`request_valuation(type)`: it returns the current context when that context
+implements the requested valuation, and otherwise uses the context's diagnostic.
+`CostContext` and `VerifyContext` inherit from `ValuationContext`.
+
+`ValuationVisitor(CallFrameVisitor)` provides the shared HIR region traversal.
+Region arguments are visited outside the region. The body and loop yields use
+`for_region`, extracted from TypeInfer's existing mesh, loop and capture handling.
+`owner` and `parent` describe lexical region ownership; only entering a region
+adds a parent link. A Call uses `for_call` without changing the caller frame or
+entering a callee body. Explicit definition entry uses `for_callee` with fresh
+memo state. Captures map parameter identities to their originating expressions;
+carry initial values are not invariant captures. Planning consumers may index
+references to these contexts without maintaining another lexical tree.
 
 `CallFrame` carries the current Module, function, effective target, and
 whole topology hierarchy. It is imported internally from
@@ -276,7 +300,7 @@ code-generation visitor, and cost-evaluation visitor remain in
 `tilefoundry.visitor_registry.visitors`.
 
 ```python
-class TypeInferVisitor(ExprVisitor[Type]):
+class TypeInferVisitor(ValuationVisitor[Type]):
     def __init__(self, *, memo=None, owns_body=True, ranges=False): ...
     def visit(self, expr: Expr, ctx: TypeInferContext) -> Type: ...
     def visit_leaf_Var(self, var: Var, operands, ctx): ...
@@ -449,7 +473,7 @@ Context (extends `TypeInferContext` with the TIR traversal scope cache):
 
 ```python
 @dataclass
-class VerifyContext(TypeInferContext):   # inherits frame / current_mesh
+class VerifyContext(ValuationContext):   # inherits frame / current_mesh
     """TIR verification context with its statement-walk scope cache.
 
     Attributes:

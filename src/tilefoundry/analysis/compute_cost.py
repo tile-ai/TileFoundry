@@ -7,11 +7,8 @@ from dataclasses import dataclass, field, replace
 from tilefoundry.ir.core import Call, Expr, VerifyError, get_metadata
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
@@ -306,23 +303,9 @@ class ComputeCostContext(AnalyzeContext):
     precision: list[AnalysisPrecision] = field(default_factory=lambda: [AnalysisPrecision.EXACT])
 
 
-class ComputeCostVisitor(ExprVisitor[None]):
+class ComputeCostVisitor(ValuationVisitor[None]):
     """Attach per-Call work and accumulate multiplicity-aware totals."""
 
-    def visit_MeshRegion(self, expr: MeshRegion, ctx: ComputeCostContext) -> None:
-        child = next(item for item in ctx.current.children if item.owner is expr)
-        for arg in expr.args:
-            self.visit(arg, ctx)
-        self.visit(expr.body, replace(ctx, current=child))
-
-    def visit_LoopRegion(self, expr: LoopRegion, ctx: ComputeCostContext) -> None:
-        child = next(item for item in ctx.current.children if item.owner is expr)
-        inner = replace(ctx, current=child)
-        for operand in expr.args:
-            self.visit(operand, ctx)
-        self.visit(expr.body, inner)
-        for operand in expr.yield_values:
-            self.visit(operand, inner)
 
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: ComputeCostContext
@@ -337,7 +320,11 @@ class ComputeCostVisitor(ExprVisitor[None]):
         binding = None
         if callee is None:
             record = _call_cost_record(
-                expr, ctx.locals_by_unit, repeats.mesh_positions, ctx.whole, ctx.topology_level
+                expr,
+                {unit: replace(ctx, topology_level=unit) for unit in ctx.locals_by_unit},
+                repeats.mesh_positions,
+                replace(ctx, topology_level=None),
+                ctx.topology_level,
             )
             dependencies = tuple(
                 formal
@@ -376,8 +363,8 @@ def _analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
         for unit in units
         if unit is not None
     }
-    cost_context = context.family(
-        ComputeCostContext,
+    cost_context = ComputeCostContext(
+        **vars(context),
         locals_by_unit=locals_by_unit,
         whole=CostContext(frame=frame, current_mesh=context.root.execution_mesh()),
     )

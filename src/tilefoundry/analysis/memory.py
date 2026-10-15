@@ -15,7 +15,6 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
@@ -26,7 +25,6 @@ from tilefoundry.ir.types.utils import (
     is_unsharded_layout,
     participant_layout,
 )
-from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.units import format_bytes
 from tilefoundry.visitor_registry.access_relation import (
@@ -38,7 +36,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
     static_bytes,
 )
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
 from tilefoundry.visitor_registry.contexts import Cost, CostContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
@@ -47,8 +45,6 @@ from .allocation import (
     AllocationModel,
     AllocationValue,
     leaves,
-    published_aliases,
-    tie_analysis,
 )
 from .compute_cost import accumulate_logical, grouped_breakdown
 from .errors import AnalysisError
@@ -529,23 +525,9 @@ def _footprint_inputs(
     return refused, available
 
 
-class MemoryVisitor(ExprVisitor[None]):
+class MemoryVisitor(ValuationVisitor[None]):
     """Attach per-Call traffic and aggregate it over each enclosing loop."""
 
-    def visit_MeshRegion(self, expr: MeshRegion, ctx: MemoryContext) -> None:
-        child = next(item for item in ctx.current.children if item.owner is expr)
-        for arg in expr.args:
-            self.visit(arg, ctx)
-        self.visit(expr.body, replace(ctx, current=child))
-
-    def visit_LoopRegion(self, expr: LoopRegion, ctx: MemoryContext) -> None:
-        child = next(item for item in ctx.current.children if item.owner is expr)
-        inner = replace(ctx, current=child)
-        for operand in expr.args:
-            self.visit(operand, ctx)
-        self.visit(expr.body, inner)
-        for operand in expr.yield_values:
-            self.visit(operand, inner)
 
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: MemoryContext
@@ -559,7 +541,13 @@ class MemoryVisitor(ExprVisitor[None]):
         binding = None
         if callee is None:
             moved = (
-                call_traffic(expr, ctx.whole, ctx.locals_by_unit, ctx.current, ctx.topology_level)
+                call_traffic(
+                    expr,
+                    replace(ctx, topology_level=None),
+                    {unit: replace(ctx, topology_level=unit) for unit in ctx.locals_by_unit},
+                    ctx.current,
+                    ctx.topology_level,
+                )
                 if recorded
                 else MemoryMetadata()
             )
@@ -606,7 +594,7 @@ class MemoryVisitor(ExprVisitor[None]):
                 wave_units=ctx.wave[0],
                 declared_units=ctx.wave[1],
                 operands=moved.operands,
-                ctx=ctx.whole,
+                ctx=replace(ctx, topology_level=None),
                 window=ctx.current.depth - 1,
             )
             if reached is not None:
@@ -677,8 +665,8 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
         )
         for unit in units
     }
-    memory_context = context.family(
-        MemoryContext,
+    memory_context = MemoryContext(
+        **vars(context),
         whole=whole,
         locals_by_unit=locals_by_unit,
         memory_level=memory_level,
@@ -743,12 +731,10 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
             slots.append((level, amount))
         quantities[key] = tuple(slots)
     model = AllocationModel(
-        current=context.root,
+        **vars(context),
         liveness=liveness,
-        local=placement,
         quantities=quantities,
         persistent=frozenset(persistent),
-        context=context,
     )
     allocation = AllocationConstraintVisitor(root_function=function, liveness=liveness)
 

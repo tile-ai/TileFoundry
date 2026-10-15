@@ -10,11 +10,13 @@ from tilefoundry.ir.core.expr import Call, Expr
 from tilefoundry.ir.core.metadata import (
     BindingMetadata,
     SourceSpanMetadata,
+    ValuationProvider,
     binding_name,
     get_metadata,
 )
 from tilefoundry.ir.core.stmt import Stmt
 from tilefoundry.ir.types import Mesh, Topology
+from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.tensor_type import DType, Type
 from tilefoundry.ir.types.utils import local_type_of
 
@@ -43,23 +45,73 @@ class TypeInferContext:
         default_factory=dict, repr=False, compare=False
     )
     loops: tuple[tuple[Expr, object, object, object], ...] = ()
-    loop_aliases: dict[int, int] = field(default_factory=dict, repr=False, compare=False)
+    loop_aliases: dict[int, Expr] = field(default_factory=dict, repr=False, compare=False)
+
+    call: Call | None = None
+    owner: Expr | None = None
+    parent: TypeInferContext | None = field(default=None, repr=False, compare=False)
 
     def with_captures(self, captures):
         """Keep captured induction parameters in their original loop coordinate."""
         aliases = dict(self.loop_aliases)
         for param, arg in captures:
-            aliases[id(param)] = aliases.get(id(arg), id(arg))
+            aliases[id(param)] = self.capture_root(arg)
         return replace(self, loop_aliases=aliases)
+
+    def for_region(self, region):
+        """Enter a region after its arguments have been visited outside it."""
+        from tilefoundry.ir.hir.loop_region import LoopRegion  # noqa: PLC0415
+
+        inner = self.with_captures(region.captures())
+        if isinstance(region, LoopRegion):
+            loop = (region.induction_var, region.start, region.extent, region.step)
+            inner = replace(inner, loops=(*self.loops, loop))
+        else:
+            mesh = make_mesh(self.current_mesh, region.mesh) if self.current_mesh else region.mesh
+            inner = replace(inner, current_mesh=mesh)
+        return replace(inner, owner=region, parent=self)
+
+    def for_call(self, call):
+        """Interpret a call in its caller's frame."""
+        return replace(self, call=call)
+
+    def capture_root(self, expr):
+        """Resolve captures without treating carried values as invariant aliases."""
+        return self.loop_aliases.get(id(expr), expr)
+
+    def ancestors(self):
+        """Lexical regions, from the innermost context to the definition root."""
+        current = self
+        while current is not None:
+            yield current
+            current = current.parent
+
+    def enclosing_loops(self):
+        """Loop owners in their lexical order."""
+        from tilefoundry.ir.hir.loop_region import LoopRegion  # noqa: PLC0415
+
+        return tuple(
+            reversed([ctx.owner for ctx in self.ancestors() if isinstance(ctx.owner, LoopRegion)])
+        )
+
+    def enclosing_mesh(self):
+        """The nearest authored mesh, or the definition's external mesh."""
+        from tilefoundry.ir.hir.mesh_region import MeshRegion  # noqa: PLC0415
+
+        return next(
+            (ctx.owner.mesh for ctx in self.ancestors() if isinstance(ctx.owner, MeshRegion)),
+            self.current_mesh,
+        )
 
     def resolve_target(self):
         """The target carried by this visitor's current call frame."""
         return None if self.frame is None else self.frame.target
 
-    def for_callee(self, callee: object) -> TypeInferContext:
+    def for_callee(self, callee: object, *, frame=None) -> TypeInferContext:
         """Enter a same-module function with fresh type bindings."""
-        frame = None if self.frame is None else replace(self.frame, function=callee)
-        return replace(self, frame=frame, memo={})
+        if frame is None and self.frame is not None:
+            frame = replace(self.frame, function=callee)
+        return replace(self, frame=frame, owner=callee, parent=None, call=None, memo={})
 
     def type_of(self, expr: Expr) -> Type:
         """The type this inference derived or bound for *expr*.
@@ -91,13 +143,24 @@ class TypeInferContext:
             location = binding_name(node)
             where = f"\n  at {location}" if location else ""
         else:
-            loc = node.loc
+            loc = getattr(node, "loc", None)
             where = f"\n  at {loc}" if loc else ""
         raise VerifyError(f"{name}: {msg}{where}")
 
 
+class ValuationContext(TypeInferContext, ValuationProvider):
+    """Provide the interpretations implemented by the current family context."""
+
+    def request_valuation[V](self, valuation: type[V]) -> V:
+        if isinstance(self, valuation):
+            return self
+        self.error(
+            self.call or self.owner, f"{type(self).__name__} does not provide {valuation.__name__}"
+        )
+
+
 @dataclass
-class VerifyContext(TypeInferContext):
+class VerifyContext(ValuationContext):
     """The context a per-stmt verify handler is annotated against.
 
     The enclosing scope a handler asks about is the TIR ``mesh_scope``
@@ -113,7 +176,7 @@ class VerifyContext(TypeInferContext):
 
 
 @dataclass
-class CostContext(TypeInferContext):
+class CostContext(ValuationContext):
     """Cost Evaluator context for one topology window.
 
     ``topology_level=None`` exposes the types as written. A named level projects
@@ -214,6 +277,7 @@ class Cost:
 
 __all__ = [
     "TypeInferContext",
+    "ValuationContext",
     "VerifyContext",
     "CostContext",
     "Cost",

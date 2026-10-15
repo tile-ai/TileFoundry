@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from tilefoundry.analysis.check import check_program
+from tilefoundry.analysis.metadata import ExecutionMeshMetadata
 from tilefoundry.inspection import PatternPrinter, PythonPrinter
 from tilefoundry.ir.core import Call, OpCapability, get_metadata, op_identifier, value_label
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
@@ -16,12 +17,13 @@ from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import access_relation_registry
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame, ValuationVisitor
 from tilefoundry.visitor_registry.candidates import (
     candidate_operands,
     candidate_ops,
     sole_candidate,
 )
+from tilefoundry.visitor_registry.contexts import ValuationContext
 
 
 def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
@@ -40,16 +42,18 @@ def candidates(
     """Report instructions using the same acceptance boundary as explicit schedule inference."""
     module, entry = check_program(module, entry, dims=dims)
     target = module.resolve_target()
-    owners = {}
-
-
-    enter(CallFrame(module, entry))
+    contexts = {}
+    frames = tuple(ValuationVisitor.walk_frames(CallFrame(module, entry)))
+    for frame in frames:
+        mesh = get_metadata(frame.function, ExecutionMeshMetadata)
+        contexts.update(ValuationVisitor.index_contexts(frame.function, ValuationContext(
+            frame=frame, owner=frame.function, current_mesh=None if mesh is None else mesh.mesh,
+        )))
     declared = _instructions(target)
     type_printer = PythonPrinter()
     pattern_printer = PatternPrinter()
     rows = []
     calls = []
-    frames = CallFrameVisitor.walk_frames(CallFrame(module, entry))
     for call in (call for frame in frames for call in collect_exprs(frame.function.body)):
         if (
             not isinstance(call, Call)
@@ -63,7 +67,8 @@ def candidates(
         if call.type.storage is StorageKind.UMAT and call.type.shape == ():
             continue
         calls.append(call)
-        frame, mesh = owners[id(call)]
+        context = contexts[id(call)]
+        frame, mesh = context.frame, context.current_mesh
         level = None if mesh is None else mesh.topologies[-1].name
         usable, refused = [], []
         for op_type, capability in declared:

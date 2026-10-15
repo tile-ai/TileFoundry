@@ -19,12 +19,11 @@ from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.types.callable_type import callable_type_for
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.dtype import IntegerDType
-from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import expr_children
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.visitor_registry.call_frame import ValuationVisitor
 
 from .contexts import TypeInferContext, TypeInferResults
 from .instruction import check_input_reachability
@@ -66,7 +65,7 @@ def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
     return index
 
 
-class TypeInferVisitor(CallFrameVisitor[Type]):
+class TypeInferVisitor(ValuationVisitor[Type]):
     """Derive one type for each ``Expr`` kind.
 
     See [hir §1.1](docs/spec/hir.md#11-function) and
@@ -210,7 +209,7 @@ class TypeInferVisitor(CallFrameVisitor[Type]):
         if callee.body is None or callee.variants:
             return callee.return_type
 
-        inner = replace(ctx, frame=child_frame, memo={}) if child else ctx.for_callee(callee)
+        inner = ctx.for_callee(callee, frame=child_frame)
         context = None if inner.frame is None else (
             id(inner.frame.module), inner.frame.target, inner.frame.topologies
         )
@@ -288,10 +287,7 @@ class TypeInferVisitor(CallFrameVisitor[Type]):
             owns_body=self._owns_body,
             ranges=self._ranges,
         )
-        ctx = replace(
-            ctx.with_captures(region.captures()),
-            loops=(*ctx.loops, (region.induction_var, region.start, region.extent, region.step)),
-        )
+        ctx = replace(ctx.for_region(region), memo=memo)
         body_type = inner.visit(region.body, ctx)
         carried = region.params[: len(region.yield_values)]
         for index, (phi, y) in enumerate(zip(carried, region.yield_values, strict=True)):
@@ -317,14 +313,14 @@ class TypeInferVisitor(CallFrameVisitor[Type]):
         produced, and what one unit costs is cost's question.
         """
         memo = self._region_memo(expr, ctx)
-        mesh = make_mesh(ctx.current_mesh, expr.mesh) if ctx.current_mesh else expr.mesh
         inner = TypeInferVisitor(memo=memo, owns_body=self._owns_body, ranges=self._ranges)
         return inner.visit(
-            expr.body, replace(ctx.with_captures(expr.captures()), current_mesh=mesh, memo=memo)
+            expr.body, replace(ctx.for_region(expr), memo=memo)
         )
 
     def visit_Function(self, fn: Function, ctx: TypeInferContext) -> Type:
         """Refresh one complete function after binding its parameter types."""
+        ctx = replace(ctx, owner=fn)
         if ctx.frame is not None and ctx.frame.function is not fn:
             ctx = replace(ctx, frame=replace(ctx.frame, function=fn))
         memo = {id(param): (param, param.annotation) for param in fn.params}

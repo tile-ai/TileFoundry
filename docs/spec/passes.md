@@ -277,6 +277,10 @@ class ConvertHIRToTIR(ModulePass):
     become `AllocTensor`; scheduled and ordinary value operations become
     effect-form TIR calls. Views follow their storage root, so a parameter view
     is addressed through `PtrOf` rather than an analyzed arena offset.
+  - Lowering MUST obtain HIR lexical ownership, captures and enclosing execution
+    meshes from the shared valuation visitor/context. Planning stores references
+    to those contexts rather than constructing a separate region tree. TIR
+    statement builders retain their own emitted scopes and destinations.
   - Generated region bindings MUST be reserved in lexical pre-order before
     statement emission, so an outer `scope` index precedes its nested indices.
     The root region reserves `cta`; all other mesh regions, including zero-only

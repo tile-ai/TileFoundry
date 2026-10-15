@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
 
 from .compute_cost import local_duration_ns
 from .errors import AnalysisError
@@ -43,7 +40,7 @@ class PerformanceContext(AnalyzeContext):
     occurrences: list[tuple[IterationScope, Call, int]] = field(default_factory=list)
 
 
-class PerformanceVisitor(ExprVisitor[None]):
+class PerformanceVisitor(ValuationVisitor[None]):
     """Collect one duration per Call in authored order."""
 
     def visit_Call(self, call, ctx):
@@ -56,20 +53,6 @@ class PerformanceVisitor(ExprVisitor[None]):
             raise AnalysisError(f"performance: missing summary for {callee.function.name!r}")
         ctx.occurrences.append((ctx.current, call, duration))
 
-    def visit_MeshRegion(self, expr: MeshRegion, ctx: PerformanceContext) -> None:
-        child = next(item for item in ctx.current.children if item.owner is expr)
-        for arg in expr.args:
-            self.visit(arg, ctx)
-        self.visit(expr.body, replace(ctx, current=child))
-
-    def visit_LoopRegion(self, expr: LoopRegion, ctx: PerformanceContext) -> None:
-        child = next(item for item in ctx.current.children if item.owner is expr)
-        inner = replace(ctx, current=child)
-        for operand in expr.args:
-            self.visit(operand, ctx)
-        self.visit(expr.body, inner)
-        for operand in expr.yield_values:
-            self.visit(operand, inner)
 
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: PerformanceContext
@@ -155,7 +138,7 @@ def _analyze_performance(function: Function, context: AnalyzeContext) -> None:
         raise AnalysisError("performance requires a resolved topology level")
     facts = context.target.get_facts(ThroughputFacts)
     services = context.target.get_facts(PerformanceServiceFacts, context.topology_level)
-    performance_context = context.family(PerformanceContext, facts=facts, services=services)
+    performance_context = PerformanceContext(**vars(context), facts=facts, services=services)
     PerformanceVisitor().visit(function.body, performance_context)
     total_cursor = schedule(performance_context.occurrences, context, origin=context.root)
     context.schedule_ns = total_cursor

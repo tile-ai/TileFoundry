@@ -35,18 +35,17 @@ from tilefoundry.ir.types.utils import (
     static_dim_value,
     tensor_types,
 )
-from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
 from tilefoundry.visitor_registry.access_relation import AccessRelation, leaf_span, leaves_of
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
-from tilefoundry.visitor_registry.contexts import CostContext
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
 
 from .access import Access, BufferAlias, apply_source, buffer_alias, eliminate_parameters
 from .errors import AnalysisError
-from .iteration_scope import IterationScope, walk_scopes
+from .iteration_scope import IterationScope
 from .liveness import Liveness, UseEvent, result_copies
 from .metadata import ValueLifetime
 from .precision import AnalysisPrecision
+from .visitor import AnalyzeContext
 
 
 class SolverOptions(Protocol):
@@ -106,13 +105,11 @@ class AllocationResult:
     solver_status: str
 
 
-@dataclass
-class AllocationModel:
+@dataclass(kw_only=True)
+class AllocationModel(AnalyzeContext):
     """Definition-local relations and their independently computed Buffer partition."""
 
-    current: IterationScope
     liveness: Liveness
-    local: CostContext
     quantities: dict[int, tuple[tuple[str, int] | None, ...]]
     persistent: frozenset[int]
     values: list[AllocationValue] = field(default_factory=list)
@@ -662,7 +659,7 @@ def operand_scope(node: Call, ctx: AllocationModel) -> IterationScope:
     when its footprint source names the much larger backing tensor.
     """
     scope = ctx.current
-    logical = replace(ctx.local, topology_level=None)
+    logical = replace(ctx, topology_level=None)
     relations = scope.projected_relations(node, logical) if id(node) in scope.relations else ()
     inputs, outputs = [], []
     for index, boundary in enumerate(relations):
@@ -695,12 +692,11 @@ def operand_scope(node: Call, ctx: AllocationModel) -> IterationScope:
     )
 
 
-class AllocationConstraintVisitor(ExprVisitor[Storage]):
+class AllocationConstraintVisitor(ValuationVisitor[Storage]):
     """Build each SSA value with its own live interval and byte span."""
 
     def __init__(self, *, root_function, liveness: Liveness) -> None:
         super().__init__(root_function=root_function)
-        self.bound: dict[int, Storage] = {}
         self.definitions: dict[int, IterationScope] = {}
         projections = {}
         for interval in liveness.intervals:
@@ -851,8 +847,9 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         return tuple(slots) if isinstance(node.type, TupleType) else slots[0]
 
     def visit_Var(self, node: Var, ctx: AllocationModel) -> Storage:
-        if id(node) in self.bound:
-            return self.same_storage(node, self.bound[id(node)], ctx)
+        source = ctx.capture_root(node)
+        if source is not node:
+            return self.same_storage(node, self.visit(source, ctx), ctx)
         return self.allocate(node, ctx)
 
     def visit_leaf_Tuple(
@@ -861,19 +858,16 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         return self.same_storage(node, operands, ctx)
 
     def visit_MeshRegion(self, node: MeshRegion, ctx: AllocationModel) -> Storage:
-        child = next(item for item in walk_scopes(ctx.current) if item.owner is node)
-        for parameter, argument in node.captures():
-            self.bound[id(parameter)] = self.visit(argument, ctx)
-            self.visit(parameter, ctx)
-        storage = self.visit(node.body, replace(ctx, current=child))
+        self.visit_operands_outside(node, ctx)
+        inner = self.region_context(node, ctx)
+        for parameter in node.params:
+            self.visit(parameter, inner)
+        storage = self.visit(node.body, inner)
         return self.same_storage(node, storage, ctx)
 
     def visit_LoopRegion(self, node: LoopRegion, ctx: AllocationModel) -> Storage:
-        child = next(item for item in walk_scopes(ctx.current) if item.owner is node)
-        inner = replace(ctx, current=child)
         initials = tuple(self.visit(argument, ctx) for argument in node.args)
-        for parameter, argument in node.captures():
-            self.bound[id(parameter)] = self.visit(argument, ctx)
+        inner = self.region_context(node, ctx)
         self.visit(node.induction_var, inner)
         carried = tuple(
             self.visit(parameter, inner) for parameter in node.params[: len(node.yield_values)]
@@ -892,7 +886,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
         return self.same_storage(node, storage, ctx)
 
     def visit_Call(self, node: Call, ctx: AllocationModel) -> Storage:
-        context = ctx.context
+        context = ctx
         callee = None if context is None else CallFrameVisitor.callee_frame(node, context.frame)
         if callee is None:
             return self.default_visit_leaf(node, self.visit_operands(node, ctx), ctx)
@@ -959,7 +953,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                 (value for value in leaves(self.storage_of(operand)) if value.index == index), None
             )
         for argument in node.args:
-            source = ctx.context.sources["narrow"].get(id(argument))
+            source = ctx.sources["narrow"].get(id(argument))
 
             for held, value in zip(
                 _source_leaves(source), leaves(self.storage_of(argument)), strict=False
@@ -998,7 +992,7 @@ class AllocationConstraintVisitor(ExprVisitor[Storage]):
                             last_used_at=ctx.liveness.timeline_end,
                         )
                 return None
-            logical = replace(ctx.local, topology_level=None)
+            logical = replace(ctx, topology_level=None)
             local_relations = (
                 ctx.current.projected_relations(node, logical)
                 if id(node) in ctx.current.relations

@@ -178,15 +178,10 @@ def _at_first_iteration(relation: isl.map, depth: int) -> isl.map:
 
 
 def _loop_scopes(scope: IterationScope) -> tuple[IterationScope, ...]:
-    """Return enclosing loop scopes in outer-to-inner order."""
-    lineage: list[IterationScope] = []
-    cursor: IterationScope | None = scope
-    while cursor is not None:
-        if isinstance(cursor.owner, LoopRegion):
-            lineage.append(cursor)
-        cursor = cursor.parent
-    lineage.reverse()
-    return tuple(lineage)
+    """Read loop facts from the common lexical contexts."""
+    return tuple(reversed([
+        ctx.current for ctx in scope.context.ancestors() if isinstance(ctx.owner, LoopRegion)
+    ]))
 
 
 def _project_mesh_parameters(reached: isl.set, parameters: tuple[tuple[str, Call], ...]) -> isl.set:
@@ -530,19 +525,15 @@ def _axis_parameters(scope: IterationScope, mesh: Mesh | None) -> tuple[str | No
 
 def _wave_mesh(scope: IterationScope, topology_level: str) -> Mesh | None:
     """Find the enclosing mesh, including the definition's checked outer mesh."""
-    cursor = scope
-    while cursor is not None:
-        mesh = (
-            cursor.owner.mesh
-            if isinstance(cursor.owner, MeshRegion)
-            else (cursor.outer_mesh if cursor.parent is None else None)
+    for ctx in scope.context.ancestors():
+        mesh = ctx.owner.mesh if isinstance(ctx.owner, MeshRegion) else (
+            ctx.current_mesh if ctx.parent is None else None
         )
         if mesh is not None:
             for component in separate(mesh):
                 topology = component.topologies[0]
                 if getattr(topology, "name", topology) == topology_level:
                     return component
-        cursor = cursor.parent
     return None
 
 

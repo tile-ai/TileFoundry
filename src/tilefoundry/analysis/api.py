@@ -10,7 +10,7 @@ it and of the Metadata left on the IR, not fields of it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from tilefoundry.analysis.check import check_analyses
@@ -19,7 +19,7 @@ from tilefoundry.analysis.iteration_scope import ScopeBuilder
 from tilefoundry.analysis.metadata import ExecutionMeshMetadata
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
-from tilefoundry.analysis.visitor import AnalyzeContext, CallContext, VisitContext
+from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core import IRMetadata, get_metadata
 from tilefoundry.ir.core.module import Module
@@ -139,12 +139,11 @@ def _build_context(
     frames = tuple(CallFrameVisitor.walk_frames(CallFrame(module, function), postorder=True))
     for frame in frames:
         context = AnalyzeContext(
-            frame.module,
-            frame.target,
-            topology_level,
-            options,
             frame=frame,
-            definitions=definitions,
+            owner=frame.function,
+            topologies=frame.topologies,
+            topology_level=topology_level,
+            options=options,
         )
         builder = ScopeBuilder(
             frame.module, frame.function, ctx=context, is_root=frame.function is function
@@ -154,7 +153,9 @@ def _build_context(
     return definitions[id(function)]
 
 
-def _check_valuations(closure: tuple[Analyzer, ...]) -> None:
+def _check_valuations(
+    closure: tuple[Analyzer, ...], context_types: Mapping[str, type[AnalyzeContext]]
+) -> None:
     """Validate declared record requirements before a family can write metadata."""
     read_types = {}
     for algorithm in closure:
@@ -162,14 +163,14 @@ def _check_valuations(closure: tuple[Analyzer, ...]) -> None:
         for dependency in algorithm.requires:
             records.update(read_types[dependency])
         read_types[algorithm.selector] = records
+        context_type = context_types[algorithm.selector]
         for record in sorted(records, key=lambda item: item.__name__):
             for valuation in record.requires:
-                for frame in (CallContext, VisitContext):
-                    if not issubclass(frame, valuation):
-                        raise AnalysisError(
-                            f"{algorithm.selector}: {frame.__name__} does not "
-                            f"provide {valuation.__name__} for {record.__name__}"
-                        )
+                if not issubclass(context_type, valuation):
+                    raise AnalysisError(
+                        f"{algorithm.selector}: {context_type.__name__} does not "
+                        f"provide {valuation.__name__} for {record.__name__}"
+                    )
 
 
 def analyze(
@@ -199,7 +200,6 @@ def analyze(
     if topology_level is None:
         topologies = module.effective_topologies()
         topology_level = topologies[0].name if topologies else None
-    _check_valuations(closure)
     check_analyses(module, function, closure, topology_level=topology_level)
     context = _build_context(
         module,

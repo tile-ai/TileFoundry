@@ -10,8 +10,9 @@ from tilefoundry.ir.core.expr import Call, Expr
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
 from tilefoundry.ir.types.mesh import make_mesh
-from tilefoundry.ir.visitor import ExprWalker, StmtVisitor
+from tilefoundry.ir.visitor import StmtVisitor
 
+from .call_frame import ValuationVisitor
 from .contexts import Cost, CostContext, VerifyContext
 from .instruction import ScheduleRefusal, check_call
 from .registries import (
@@ -72,7 +73,6 @@ class VerifyVisitor(StmtVisitor[None]):
             self.ctx = outer
 
 
-
 class CodegenVisitor:
     """Dispatch a node to the handler that writes it, for a caller holding a registry.
 
@@ -113,7 +113,7 @@ class CodegenVisitor:
         self._handler(type(expr.target))(expr, self.ctx)
 
 
-class CostEvaluator(ExprWalker[Cost]):
+class CostEvaluator(ValuationVisitor[Cost]):
     """Dispatch the registered recursive-local Cost Evaluator per Op class.
 
     A missing evaluator fails closed — it is a construction error, not a
@@ -128,6 +128,7 @@ class CostEvaluator(ExprWalker[Cost]):
         self.registry = registry
 
     def visit_Call(self, call: Call, ctx: CostContext) -> Cost:
+        ctx = ctx.for_call(call)
         fn = self.registry.lookup(type(call.target))
         if fn is None:
             ctx.error(call, f"no cost evaluator registered for {type(call.target).__name__}")

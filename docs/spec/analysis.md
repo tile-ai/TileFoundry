@@ -1601,13 +1601,13 @@ Metadata declares `requires` as a tuple of Valuation Protocol types and exposes
 | `BindingValuation` | `actual(formal, index=0)`, `result()`, `project(source)` | Caller source for a flattened formal tensor leaf and the call result's storage. Whole-tuple boundaries retain their definition-local identity source. `project` substitutes scalar formals, composes formal buffers with actuals, and prefixes the caller domain, returning `(BufferAlias, AnalysisPrecision)` with the joined substitution precision. |
 | `InstanceValuation` | `path()` | Module instance path, including slot indices. |
 
-`RootContext` explicitly implements Timing, LoopNest, and Instance with identity
-time, empty loops, and empty path. Binding or Variance requests on root MUST
-raise `AnalysisError`. `CallContext` explicitly implements all five Protocols
-for one call relative to its direct caller. `VisitContext` implements all five
-by composing its call stack: timing shifts add, iteration domains concatenate,
-bindings and variance substitute from inner to outer, and paths concatenate.
-Family contexts delegate `request_valuation` to their current frame.
+Analysis families use their own contexts as valuation providers through
+`AnalyzeContext(CostContext)` and `ValuationContext`. They implement the
+Valuation Protocols they require directly; `request_valuation` returns that
+context rather than delegating to a separate call or visit frame. The current
+Call remains in the caller's frame, with its lexical mesh, loop and capture
+state supplied by the shared visitor. Each definition starts with its own root
+context; lexical parents do not form a cross-call scope tree.
 
 A retained call's result source MUST project the callee's definition-local
 return source at that call site. Formal buffers substitute actual sources;
@@ -1617,8 +1617,8 @@ parallel tables. Loop results continue to use their carried phi.
 
 Before any family writes, Analyze MUST compute each family's read set as its
 `produces` plus the produced types of its transitive analyzer dependencies.
-Every required Valuation on those types MUST satisfy `issubclass` for both
-`CallContext` and `VisitContext`. Failure MUST raise `AnalysisError` naming the
+Every required Valuation on those types MUST satisfy `issubclass` for the
+family context type. Failure MUST raise `AnalysisError` naming the
 family, metadata type, context, and missing Valuation. This applies equally to
 third-party analyzers. Readers that only inspect local fields with
 `get_metadata` do not resolve records and do not need a Valuation provider.

@@ -184,13 +184,8 @@ class _RegionBindingResolver(ExprCloner):
         return self.default_visit(value, scope)
 
     def visit_Var(self, value: Var, scope: "IterationScope") -> Expr:
-        cursor = scope
-        while cursor is not None:
-            for param, argument in cursor.captures:
-                if value is param:
-                    return self.visit(argument, cursor.parent)
-            cursor = cursor.parent
-        return value
+        root = scope.capture_root(value)
+        return value if root is value else self.visit(root, scope)
 
 
 def _parameter_term(

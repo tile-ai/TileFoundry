@@ -8,13 +8,11 @@ different count of the same flops.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from tilefoundry.ir.core import Call, Expr, describe_expr, get_metadata
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.visitor_registry.call_frame import ValuationVisitor
 
 from .errors import AnalysisError
 from .facts import ThroughputFacts
@@ -131,27 +129,13 @@ def _cost_bound(
     )
 
 
-class RooflineVisitor(ExprVisitor[None]):
+class RooflineVisitor(ValuationVisitor[None]):
     """Attach one bound per Call in expression order."""
 
     def __init__(self, facts: ThroughputFacts) -> None:
         super().__init__()
         self.facts = facts
 
-    def visit_MeshRegion(self, expr, ctx):
-        for arg in expr.args:
-            self.visit(arg, ctx)
-        child = next(scope for scope in ctx.current.children if scope.owner is expr)
-        self.visit(expr.body, replace(ctx, current=child))
-
-    def visit_LoopRegion(self, expr, ctx):
-        for arg in expr.args:
-            self.visit(arg, ctx)
-        child = next(scope for scope in ctx.current.children if scope.owner is expr)
-        inner = replace(ctx, current=child)
-        self.visit(expr.body, inner)
-        for arg in expr.yield_values:
-            self.visit(arg, inner)
 
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: AnalyzeContext

@@ -10,8 +10,9 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.empty import Empty
-from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.ir.visitor import collect_exprs, expr_children
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
+from tilefoundry.visitor_registry.contexts import ValuationContext
 
 from .errors import AnalysisError
 from .metadata import TimingValuation
@@ -60,14 +61,13 @@ def result_copies(expr: Expr) -> int:
     return expr.target.buffers if isinstance(expr, Call) and isinstance(expr.target, Empty) else 1
 
 
-class LivenessVisitor(ExprVisitor[None]):
+class LivenessVisitor(ValuationVisitor[None]):
     """Build definition/use intervals while preserving structured SSA edges."""
 
     def __init__(
-        self, function: Function, context: AnalyzeContext | None = None, *, callee=False
+        self, function: Function, *, callee=False
     ) -> None:
         super().__init__(root_function=function)
-        self.context = context
         self.loop_windows = {}
         self.point = -1
         self.states: dict[int, LiveInterval] = {}
@@ -143,7 +143,7 @@ class LivenessVisitor(ExprVisitor[None]):
             self.loop_entries[-1][2].add(id(value))
 
     def visit_Call(self, call: Call, ctx=None) -> None:
-        context = self.context
+        context = ctx
         callee = None if context is None else CallFrameVisitor.callee_frame(call, context.frame)
         if callee is None:
             return self.default_visit_leaf(call, self.visit_operands(call, ctx), ctx)
@@ -175,7 +175,8 @@ class LivenessVisitor(ExprVisitor[None]):
         for parameter in region.params:
             self.define(parameter, parameter_definition)
 
-        self.visit(region.body, ctx)
+        inner = self.region_context(region, ctx)
+        self.visit(region.body, inner)
         body_use = self.next_event()
         self.use(region.body, body_use)
         self.regions.append(RegionInterval(region, argument_use, body_use))
@@ -197,9 +198,10 @@ class LivenessVisitor(ExprVisitor[None]):
             self.define(phi, phi_definition)
 
         self.loop_entries.append((phi_definition, set(), set()))
-        self.visit(region.body, ctx)
+        inner = self.region_context(region, ctx)
+        self.visit(region.body, inner)
         for yielded in region.yield_values:
-            self.visit(yielded, ctx)
+            self.visit(yielded, inner)
         backedge = self.next_event()
         for yielded in region.yield_values:
             self.use(yielded, backedge)
@@ -226,9 +228,9 @@ def analyze_liveness(function: Function, context: AnalyzeContext | None = None) 
     if function.body is None:
         raise ValueError(f"liveness: function {function.name!r} has no body")
     visitor = LivenessVisitor(
-        function, context, callee=context is not None and not context.root.is_root_definition
+        function, callee=context is not None and not context.root.is_root_definition
     )
-    visitor.visit_function_body(function)
+    visitor.visit_function_body(function, context or ValuationContext(owner=function))
     return visitor.finish()
 
 

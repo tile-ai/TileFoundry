@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from tilefoundry.ir.core import Call, Constant
+from tilefoundry.ir.core import Call, Constant, Expr
 from tilefoundry.ir.core.module import ModuleList
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -81,3 +81,56 @@ class CallFrameVisitor[T](ExprVisitor[T]):
                 yield current
 
         yield from visit(frame)
+
+
+class ValuationVisitor[T](CallFrameVisitor[T]):
+    """Visit lexical regions with the same context transitions in every family."""
+
+    def __init__(self, *, contexts=None, **kwargs):
+        super().__init__(**kwargs)
+        self.contexts = contexts
+
+    def dispatch_visit(self, expr, ctx):
+        if isinstance(expr, Call):
+            ctx = ctx.for_call(expr)
+        if self.contexts is not None and id(expr) not in self._memo:
+            self.contexts[id(expr)] = ctx
+        return super().dispatch_visit(expr, ctx)
+
+    def region_context(self, region, ctx):
+        inner = ctx.for_region(region)
+        if self.contexts is not None:
+            self.contexts[id(region)] = inner
+        return inner
+
+    def visit_MeshRegion(self, region, ctx):
+        operands = self.visit_operands_outside(region, ctx)
+        inner = self.region_context(region, ctx)
+        for param in region.params:
+            self.visit(param, inner)
+        return self.default_visit_leaf(region, (*operands, self.visit(region.body, inner)), inner)
+
+    def visit_LoopRegion(self, region, ctx):
+        for bound in (region.start, region.extent, region.step):
+            if isinstance(bound, Expr):
+                self.visit(bound, ctx)
+        operands = self.visit_operands_outside(region, ctx)
+        inner = self.region_context(region, ctx)
+        for param in (region.induction_var, *region.params):
+            self.visit(param, inner)
+        body = self.visit(region.body, inner)
+        yielded = tuple(self.visit(value, inner) for value in region.yield_values)
+        return self.default_visit_leaf(region, (*operands, body, *yielded), inner)
+
+    def visit_operands_outside(self, region, ctx):
+        return tuple(self.visit(arg, ctx) for arg in region.args)
+
+    def default_visit_leaf(self, expr, operands, ctx):
+        return None
+
+    @staticmethod
+    def index_contexts(function, ctx):
+        """Index references to one definition's contexts for planning consumers."""
+        contexts = {id(function): ctx, **{id(param): ctx for param in function.params}}
+        ValuationVisitor(contexts=contexts).visit_function_body(function, ctx)
+        return contexts

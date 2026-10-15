@@ -282,8 +282,6 @@ def _dim_mul(left, right):
     return simplify_dim(DimMul, (left, right))
 
 
-
-
 def window_image(layout, starts: tuple, sizes: tuple, steps: tuple) -> "tuple[int, Layout] | None":
     """Where a window of *layout* starts and how it lies, at static starts.
 
@@ -408,7 +406,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 op.sizes,
                 op.strides,
                 loops=ctx.loops,
-                aliases=ctx.loop_aliases,
+                aliases={key: id(value) for key, value in ctx.loop_aliases.items()},
             )
         except ValueError as error:
             ctx.error(call, str(error))
