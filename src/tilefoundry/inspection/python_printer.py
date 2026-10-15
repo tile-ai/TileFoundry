@@ -57,6 +57,7 @@ from tilefoundry.ir.types.shard_layout import (
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.utils.python_source import PythonExpr
+from tilefoundry.visitor_registry.call_frame import CallFrame
 
 from .print_context import HirPrintContext
 from .printer_base import PythonPrinter
@@ -1278,9 +1279,7 @@ def _emit_module_class(
         if isinstance(fn, HirFunction):
             blocks.append(_emit_decorated_defs(fn, ctx, indent, options, child_entries))
         elif isinstance(fn, PrimFunction):
-            from .tir_printer import _module_symbol_bindings  # noqa: PLC0415
-
-            tir_block = _tir_function_block(fn, symbol_bindings=_module_symbol_bindings(mod))
+            tir_block = _tir_function_block(fn, frame=CallFrame(mod, fn))
             ctx.imports.update(tir_block.imports)
             blocks.append(tir_block)
         else:

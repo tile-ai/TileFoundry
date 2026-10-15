@@ -56,10 +56,8 @@ class ModuleInstances:
                 T.copy(x, out_1_1)
             for i in range(0, 3, 1):
                 out_1_2 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
-                argument = T.tensor_view(T.ptr_of(out_1_2), layout=(32,), shape=(32,))
                 updated_1 = T.tensor_view(T.ptr_of(scratch_1[0:0 + 32]), layout=(32,), shape=(32,))
-                argument_1 = T.tensor_view(T.ptr_of(updated_1), layout=(32,), shape=(32,))
-                layers[i](argument, argument_1)
+                layers[i](out_1_2, updated_1)
                 with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope_1:
                     updated_2 = T.tensor_view(
                         T.ptr_of(scratch_1[0:0 + 32]), layout=(32,), shape=(32,)
@@ -67,19 +65,12 @@ class ModuleInstances:
                     out_1_3 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
                     T.copy(updated_2, out_1_3)
             out_1_4 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
-            argument_2 = T.tensor_view(T.ptr_of(out_1_4), layout=(32,), shape=(32,))
             value_1 = T.tensor_view(T.ptr_of(scratch_2[0:0 + 32]), layout=(32,), shape=(32,))
-            argument_3 = T.tensor_view(T.ptr_of(value_1), layout=(32,), shape=(32,))
-            mm(argument_2, argument_3)
-            argument_4 = T.tensor_view(T.ptr_of(value_1), layout=(32,), shape=(32,))
+            mm(out_1_4, value_1)
             x_1_1 = T.tensor_view(T.ptr_of(scratch_3[0:0 + 32]), layout=(32,), shape=(32,))
-            argument_5 = T.tensor_view(T.ptr_of(x_1_1), layout=(32,), shape=(32,))
-            mm(argument_4, argument_5)
-            argument_6 = T.tensor_view(T.ptr_of(x_1_1), layout=(32,), shape=(32,))
+            mm(value_1, x_1_1)
             x_2_1 = T.tensor_view(T.ptr_of(scratch_4[0:0 + 32]), layout=(32,), shape=(32,))
-            argument_7 = T.tensor_view(T.ptr_of(x_2_1), layout=(32,), shape=(32,))
-            layers[0](argument_6, argument_7)
-            argument_8 = T.tensor_view(T.ptr_of(x_2_1), layout=(32,), shape=(32,))
-            helper(argument_8, w, out)
+            layers[0](x_1_1, x_2_1)
+            helper(x_2_1, w, out)
 
 del ScheduledScale

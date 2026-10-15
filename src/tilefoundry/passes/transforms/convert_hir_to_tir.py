@@ -837,7 +837,9 @@ class Lowering(CallFrameVisitor[Expr | _View]):
         )
         passed = []
         for value, param in zip((*args, *scratch, destination), params, strict=True):
-            if isinstance(param.type, TensorType) and value.type != param.type:
+            if isinstance(param.type, TensorType) and replace(
+                value.type, layout=resolve_layout(value.type.layout, value.type.shape)
+            ) != replace(param.type, layout=resolve_layout(param.type.layout, param.type.shape)):
                 value = _View(
                     value, tuple(i64_const(0) for _ in value.type.shape), tuple(value.type.shape),
                     param.type, "argument", whole_tensor=True,

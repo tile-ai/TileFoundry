@@ -800,6 +800,12 @@ def _verify_launch(stmt: Evaluate, fn, module_context, ctx):
 def _assert_no_path_back(callee, root, module_context, visited, frame=None, recursion=None):
     if callee is root:
         raise VerifyError(recursion or f"call DAG violation: {callee.name!r} calls back into {root.name!r}")
+    if isinstance(module_context, Module):
+        frame = next(
+            (item for item in list_call_paths(module_context).values()
+             if callee is item.function or any(callee is variant for variant in item.function.variants)),
+            frame,
+        )
     key = (id(callee), id(frame.module) if frame is not None else None)
     if key in visited:
         return

@@ -318,9 +318,6 @@ RMEM_EXPECTED = {
         "thread@0:32#0": _RmemExpectation(
             128, "the two 32-element f32 inputs and product reuse one 128-byte alias group"
         ),
-        "thread@0:32#1": _RmemExpectation(
-            128, "the two 32-element f32 inputs and product reuse one 128-byte alias group"
-        ),
         "cta@0:1#0": _RmemExpectation(
             128, "the two 32-element f32 inputs and product reuse one 128-byte alias group"
         ),
@@ -330,7 +327,12 @@ RMEM_EXPECTED = {
             4096, "64x16 f32 C fragment, shared by zeros and MMA result"
         ),
     },
-    "module_instances": {},
+    "module_instances": {
+        "cta@0:1#0": _RmemExpectation(
+            128, "CTA envelope of the retained callees' 32-element f32 register groups; "
+            "the caller's explicit gmem copies need no rmem storage"
+        ),
+    },
     "captured_insert_update": {},
     "loop_carry_from_param": {},
     "sparse_decode": {
