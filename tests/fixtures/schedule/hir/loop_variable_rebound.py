@@ -13,5 +13,6 @@ class LoopVariableRebound:
                 u = tf.zeros(Tensor[(2, 4), "f32", (2, 4), "rmem"])
                 acc = tf.schedule((x, tf.empty(Tensor[(2, 4), "f32", (2, 4), "rmem"])), op=T.copy())
                 for u in range(2):
-                    acc = tf.schedule((acc[:, :], 1.0, acc), op=T.binary(kind=BinaryKind.ADD))
+                    part = tf.schedule((x, tf.empty(Tensor[(2, 4), "f32", (2, 4), "rmem"])), op=T.copy())
+                    acc = tf.schedule((acc[:, :], part, acc), op=T.binary(kind=BinaryKind.ADD))
                 return tf.insert_slice(u, acc, (0, 0))
