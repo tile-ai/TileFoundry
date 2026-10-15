@@ -392,8 +392,8 @@ a cache backs. It is stated per source buffer, named as a lifetime names one.
 class Footprint:
     """Unique bytes one wave touches, with directional counting evidence."""
 
-    buffers: tuple[tuple[str, Breakdown[int]], ...] = ()
-    precision: AnalysisPrecision = AnalysisPrecision.EXACT
+    groups: tuple[tuple[int, tuple[ReachedAddresses, ...]], ...] = ()
+    # reached, buffers and precision are derived properties.
 ```
 
 | Field | How it is computed | Reads the target |
@@ -1458,8 +1458,9 @@ class AnalysisCheckContext:
     derived body nodes, independent of occurrence count. Exceeding it MUST fail
     with the program name, total size, and limit.
   - Definition-local analysis MUST visit definitions in dependency postorder,
-    once per definition. Calls are leaves with access summaries composed through
-    their bindings. Root aggregation MUST enter calls with a visit stack;
+    once per definition. Calls are leaves whose completed callee metadata is
+    resolved through the current family context and accumulated like primitive
+    records. The entry is the final definition, without a second aggregation;
     enclosing trip counts multiply work and traffic. Recursion and a callee
     without a body MUST raise `AnalysisError` naming the function and call path.
   - One definition MUST receive one argument-type signature and one current
@@ -1474,8 +1475,8 @@ class AnalysisCheckContext:
     include their own identity. Only called definitions retain formal-dependent
     coordinate parameters. The selected root has no caller to bind them and
     MUST use the existing widest-range approximation with `UPPER_BOUND` precision.
-    Root-only aggregate facts are computed using the call stack and attached
-    only to root.
+    Each definition publishes its own one-execution summary; caller records
+    compose those summaries at Call boundaries.
     Performance MUST schedule each definition once relative to its own origin;
     call duration is the callee duration, scheduled in the caller's current scope.
     Callee region peaks MUST take the maximum across occurrences.
@@ -1655,42 +1656,60 @@ family, metadata type, context, and missing Valuation. This applies equally to
 third-party analyzers. Readers that only inspect local fields with
 `get_metadata` do not resolve records and do not need a Valuation provider.
 
-Each family MUST run definitions in dependency postorder. Re-entering one
-family for the same definition in one analysis context MUST raise
-`AnalysisError`; incremental replacement of that family's record and a fresh
-`analyze` call are allowed.
+Analyze MUST drive each family once per definition in dependency postorder,
+with the entry definition last. A retained Call MUST read and resolve its
+callee's completed metadata, then accumulate it through the same path as a
+primitive Call. The entry uses that same path, without another root traversal
+or aggregation. Fresh analysis calls may replace previously attached records.
 
 | Record | Required Valuations | Local form and resolution |
 |---|---|---|
 | `ComputeCostMetadata` | None | One-execution local counts; resolving a Call does not multiply caller loops. |
 | `MemoryMetadata` | Binding, LoopNest | One-execution traffic is unchanged by resolve; reached coordinates project through Binding. A retained Call carries its callee's summary. |
-| `RegionMemoryMetadata` | None | Definition-local traffic and footprint for callee rows; root records contain absolute aggregates and are read directly. |
+| `RegionMemoryMetadata` | None | One execution of this definition; the entry is the final definition, using the same accumulation as callees. |
+| `Liveness` (internal) | Timing | Definition-local `ValueLifetime`, use and region events, timeline end, and loop windows; resolve only translates events. |
 | `RooflineMetadata` | None | Computed once from each definition's local compute and memory records. |
 | `PerformanceMetadata`, `PerformanceSummaryMetadata` | Timing, LoopNest | Definition-local intervals; resolve shifts their origin into the caller timeline. |
 
 `Spread.logical_groups` is
-`tuple[tuple[tuple[Var, ...], V], ...] = ()`. When nonempty, `logical` is the sum
-of its groups. Each group records a local count and the formal parameters on
-which it depends. Caller Function accumulation multiplies it by `VarianceValuation.trips` for
-that set, preserving the joined precision. Call resolution MUST NOT apply caller
+`tuple[tuple[tuple[Var, ...], V], ...] = ()`. `logical` is derived by summing
+its groups, or the typed zero for empty groups. Call groups name local induction
+variables and formals; Function accumulation consumes local induction variables
+and retains only the formals on which the count depends. Caller Function
+accumulation multiplies it by `VarianceValuation.trips` for that set, preserving the joined precision. Call resolution MUST NOT apply caller
 loop multiplicities to either work or traffic. Renderers MUST show only `logical`,
 `total`, and `per_unit`, and MUST NOT render the groups.
 
 Footprint evidence retains local reached sets, their `AccessRelation.values`
 expressions, and groups of reached sets with local window multiplicities.
-These fields support substitution and MUST NOT be rendered. They MUST NOT
+Loop coordinates MUST remain bounded parameters, named by induction identity,
+with values referring to their induction Vars. Resolve substitutes formals and
+retains callee loop parameters. Runtime scalar bindings remain symbolic until
+the numeric window is selected. Function and Call footprint numbers hold every
+loop parameter at its first iteration. A caller reuse window instead unions
+all iterations inside its selected window, including complete callee executions;
+loops outside that window stay at their first iteration. Caller candidates
+remain its own axes. These fields support substitution and MUST NOT be rendered. They MUST NOT
 retain a scope or context. Numeric views of unresolved
 formal-dependent coordinates MUST use the existing widest legal bound and
 state `UPPER_BOUND`; call-site counts are computed after substitution.
 
-Root memory collection MUST project primitive local accesses through each
-`VisitContext`. Reuse windows use the caller and callee loops along that path,
-with formal variance substituted into caller loop dependencies. Distinct call
-paths distinguish local loops by the call-id prefix and local loop id; these
-transient objects MUST NOT enter metadata. Root lifetimes shift definition-local
-liveness templates using Timing. Each caller reserves a callee template's event
-span, and records argument uses at the shifted formal-use events. A staged
-`Empty` remains live across enclosing caller loops.
+Reuse windows MUST be computed once per definition. Callee internal loops are
+candidates only on that callee's Function record; caller records use only the
+caller's own loops and mesh axes. Their window footprint includes resolved
+callee reached sets. A callee's unresolved formal coordinates use their widest
+legal bound and state `UPPER_BOUND`. ReuseWindow retains its seven numeric and
+label fields and is not resolved through calls. Local source values use local
+variance. A callee-internal source absent from that table conservatively follows
+the current Call's variance; implicit const weights remain invariant, and
+instance-index dependence is tested through the reached image. This may omit
+reuse for an internal temporary that depends only on constants.
+
+Liveness is internal metadata, not a report family. Each caller reserves a
+callee template's event span and records actual leaf uses at the translated
+formal-use events, preserving synthetic flags. Resolve only shifts the local
+template; it stores neither child templates nor a second timeline origin.
+Allocation may resolve the callee template at a Call to obtain internal windows.
 
 Implicit weights MUST be counted by `(slot key chain, weight)` and the union of
 reached instance-index tuples. Caller induction variables map from the loop
@@ -1698,15 +1717,16 @@ domain to those tuples; textual instance labels MUST NOT determine counts.
 Footprint coordinates prefix instance indices before unioning element addresses,
 and persistent bytes count each reached instance once.
 
-Callee call durations MUST use the definition-local schedule duration retained
-in analysis state, before any roofline floor or wave expansion. Only the root
-prediction applies its roofline floor. Callee summary waves still follow the
-checked definition mesh.
+Callee call durations MUST use the resolved callee summary's duration divided
+by its waves. Non-entry summaries use the local schedule without a roofline
+floor; only the entry prediction applies its roofline floor. Callee summary
+waves still follow the checked definition mesh.
 
 Root footprint, reuse windows, lifetimes and whole-program peaks MUST be
 absolute records. MeshRegion peak rows MUST also appear in report JSON under
-`meshes`, parallel to `calls` and `loops`. Callee rows display local records;
-a call-path view MUST resolve its Call records through the visit stack.
+`meshes`, parallel to `calls` and `loops`. Callee rows display local records.
+Call records are already resolved in their own definition; reporting MUST read them directly without rebuilding scope
+trees or resolving them again.
 
 ### 2.1 Shared IterationScope and Access
 

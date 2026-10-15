@@ -207,30 +207,19 @@ def _domain_values(held: Breakdown[int], domain: str) -> tuple[tuple[str, int], 
     return tuple((name, getattr(spread, domain)) for name, spread in held.kinds)
 
 
-def accumulate_logical(into, name, spread, expr, ctx, binding=None):
-    """Accumulate logical groups in the current definition's formal coordinates."""
+def accumulate_logical(into, name, spread, ctx):
+    """Consume local loop dependencies, retaining only this definition's formals."""
     precision = AnalysisPrecision.EXACT
-    formals = ctx.root.owner.params
-    if binding is None:
-        changing = ctx.current.variance.get(id(expr), frozenset())
-        dependencies = tuple(formal for formal in formals if id(formal) in changing)
-        repeats = ctx.current.repeats_of(expr, ctx.topology_level)
-        terms = ((dependencies, spread.logical, repeats.varying_loop_trips),)
-        precision = repeats.trips_precision
-    else:
-        terms = []
-        for dependencies, value in spread.logical_groups or (((), spread.logical),):
-            changing = set().union(*(binding.varies(formal) for formal in dependencies))
-            factor, bounded = binding.trips(dependencies)
-            precision = precision.join(bounded)
-            dependencies = tuple(formal for formal in formals if id(formal) in changing)
-            terms.append((dependencies, value, factor))
-    for dependencies, value, factor in terms:
-        key = (name, tuple(id(formal) for formal in dependencies))
+    for dependencies, value in spread.logical_groups:
+        changing = set().union(*(ctx.varies(dependency) for dependency in dependencies))
+        factor, bounded = ctx.trips(dependencies)
+        precision = precision.join(bounded)
+        formals = tuple(formal for formal in ctx.root.owner.params if id(formal) in changing)
+        key = (name, tuple(id(formal) for formal in formals))
         value = scaled(value, factor)
         if key in into:
             value = added(into[key][1], value)
-        into[key] = dependencies, value
+        into[key] = formals, value
     return precision
 
 
@@ -259,19 +248,14 @@ def _accumulate(
     ctx: "ComputeCostContext",
     record: ComputeCostMetadata,
     repeats: Repeats,
-    expr: Call,
-    binding=None,
 ) -> None:
-    for held, groups, logical in (
-        (record.flops, ctx.flop_groups, ctx.flops_logical),
-        (record.other_ops, ctx.other_groups, ctx.other_ops_logical),
+    for held, groups in (
+        (record.flops, ctx.flop_groups),
+        (record.other_ops, ctx.other_groups),
     ):
         for name, spread in held.kinds:
-            bounded = accumulate_logical(groups, name, spread, expr, ctx, binding)
+            bounded = accumulate_logical(groups, name, spread, ctx)
             ctx.precision[0] = ctx.precision[0].join(bounded)
-        logical.clear()
-        for (name, _ids), (_dependencies, value) in groups.items():
-            logical[name] = logical.get(name, 0) + value
     _add(ctx.flops, _domain_values(record.flops, "total"), repeats.loop_trips)
     _add(ctx.other_ops, _domain_values(record.other_ops, "total"), repeats.loop_trips)
     for index, unit in enumerate(record.topologies):
@@ -295,29 +279,23 @@ class ComputeCostContext(AnalyzeContext):
     locals_by_unit: dict[str, CostContext] = field(default_factory=dict)
     whole: CostContext | None = None
     flops: dict[str, int] = field(default_factory=dict)
-    flops_logical: dict[str, int] = field(default_factory=dict)
     other_ops: dict[str, int] = field(default_factory=dict)
-    other_ops_logical: dict[str, int] = field(default_factory=dict)
     by_unit: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
-    call_count: list[int] = field(default_factory=lambda: [0])
     precision: list[AnalysisPrecision] = field(default_factory=lambda: [AnalysisPrecision.EXACT])
 
 
 class ComputeCostVisitor(ValuationVisitor[None]):
     """Attach per-Call work and accumulate multiplicity-aware totals."""
 
-
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: ComputeCostContext
     ) -> None:
         if not isinstance(expr, Call):
             return
-        ctx.call_count[0] += 1
         if not ctx.locals_by_unit or ctx.whole is None:
             raise AnalysisError("compute-cost: visitor context is missing its cost context")
         repeats = ctx.current.repeats_of(expr, ctx.topology_level)
         callee = CallFrameVisitor.callee_frame(expr, ctx.frame)
-        binding = None
         if callee is None:
             record = _call_cost_record(
                 expr,
@@ -326,11 +304,7 @@ class ComputeCostVisitor(ValuationVisitor[None]):
                 replace(ctx, topology_level=None),
                 ctx.topology_level,
             )
-            dependencies = tuple(
-                formal
-                for formal in ctx.root.owner.params
-                if id(formal) in ctx.current.variance.get(id(expr), frozenset())
-            )
+            dependencies = ctx.dependencies(expr)
 
             def grouped(held):
                 return replace(
@@ -345,14 +319,13 @@ class ComputeCostVisitor(ValuationVisitor[None]):
                 record, flops=grouped(record.flops), other_ops=grouped(record.other_ops)
             )
         else:
-            record = get_metadata(callee.function, ComputeCostMetadata) or ComputeCostMetadata()
-            binding = ctx.call_context(expr)
+            record = get_metadata(callee.function, ComputeCostMetadata).resolve(ctx)
         attach(expr, record)
         ctx.precision[0] = ctx.precision[0].join(repeats.trips_precision).join(record.precision)
-        _accumulate(ctx, record, repeats, expr, binding)
+        _accumulate(ctx, record, repeats)
 
 
-def _analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
+def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
     """Attach one-trip work per Call and multiplicity-aware totals per Function."""
     topology_level = context.topology_level
     topologies = context.topologies
@@ -369,8 +342,7 @@ def _analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
         whole=CostContext(frame=frame, current_mesh=context.root.execution_mesh()),
     )
     ComputeCostVisitor().visit(function.body, cost_context)
-    if cost_context.call_count[0] > 0:
-        attach(function, _summary(cost_context))
+    attach(function, _summary(cost_context))
 
 
 def _summary(ctx):
@@ -383,7 +355,6 @@ def _summary(ctx):
                 ctx.flops,
                 tuple(ctx.by_unit[u]["flops"] for u in units),
                 0,
-                logical=ctx.flops_logical,
             ),
             ctx.flop_groups,
         ),
@@ -392,16 +363,10 @@ def _summary(ctx):
                 ctx.other_ops,
                 tuple(ctx.by_unit[u]["other_ops"] for u in units),
                 0,
-                logical=ctx.other_ops_logical,
             ),
             ctx.other_groups,
         ),
     )
-
-
-def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
-    """Measure each definition once, treating calls as summary-bearing leaves."""
-    context.run_definitions(SELECTOR, _analyze_compute_cost)
 
 
 __all__ = ["SELECTOR", "analyze_compute_cost"]

@@ -221,7 +221,7 @@ def _not_reported(_record: MemoryMetadata, _expr: object) -> None:
 expr_field(MemoryMetadata, "alias", _not_reported)
 
 
-def _records_of(expr: object, selected: frozenset[type[IRMetadata]], ctx=None) -> dict[str, object]:
+def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str, object]:
     """Every selected record on *expr*, keyed by the family that owns it."""
     result: dict[str, object] = {}
     for metadata_type in declared_records():
@@ -229,8 +229,6 @@ def _records_of(expr: object, selected: frozenset[type[IRMetadata]], ctx=None) -
             continue
         record = get_metadata(expr, metadata_type)
         if record is not None:
-            if ctx is not None:
-                record = record.resolve(ctx)
             result[family_of(metadata_type)] = render_record(record, expr)
     return result
 
@@ -264,11 +262,6 @@ def report_data(
     functions: tuple[Function, ...] = (),
 ) -> dict[str, object]:
     """Project every definition once, in root-first order."""
-    from tilefoundry.visitor_registry.call_frame import CallFrameVisitor  # noqa: PLC0415
-
-    from .api import _build_context  # noqa: PLC0415
-
-    context = _build_context(module, function, topology_level=topology_level)
     selected = frozenset(selected_types(module, analyses, metadata_types))
     target = module.resolve_target()
     wave = wave_of(module, target, topology_level)
@@ -289,14 +282,7 @@ def report_data(
         for expr in collect_exprs(body.body):
             if not isinstance(expr, (Call, LoopRegion, MeshRegion)):
                 continue
-            valuation = None
-            if (
-                body is function
-                and isinstance(expr, Call)
-                and CallFrameVisitor.callee_frame(expr, context.frame) is not None
-            ):
-                valuation = context.call_context(expr)
-            held = _records_of(expr, selected, valuation)
+            held = _records_of(expr, selected)
             if not held:
                 continue
             value = (labels.get(id(expr)) if labels is not None else None) or (

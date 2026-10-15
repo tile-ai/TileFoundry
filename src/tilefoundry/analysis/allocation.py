@@ -37,12 +37,12 @@ from tilefoundry.ir.types.utils import (
 )
 from tilefoundry.utils.isl_utils import equates
 from tilefoundry.visitor_registry.access_relation import AccessRelation, leaf_span, leaves_of
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
+from tilefoundry.visitor_registry.call_frame import ValuationVisitor
 
 from .access import Access, AliasKind, BufferAlias, SSAValue, apply_source, eliminate_parameters
 from .errors import AnalysisError
 from .iteration_scope import IterationScope
-from .liveness import Liveness, UseEvent, result_copies
+from .liveness import Liveness, result_copies
 from .metadata import ValueLifetime
 from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
@@ -828,58 +828,6 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
                 add_alias(value, operand, AliasKind.CARRY_YIELD)
                 ctx.carry_loops[value, operand] = node
         return self.forward(node, ctx)
-
-    def visit_Call(self, node: Call, ctx: AllocationModel) -> Storage:
-        context = ctx
-        callee = None if context is None else CallFrameVisitor.callee_frame(node, context.frame)
-        if callee is None:
-            return self.default_visit_leaf(node, self.visit_operands(node, ctx), ctx)
-        self.visit_operands(node, ctx)
-        local = context.definitions[id(callee.function)].allocation
-        result = self.allocate(node, ctx)
-        results = leaves(result)
-        frame = context.call_context(node, event_base=context.call_events[id(node)])
-        bindings = []
-        for formal, argument in frame.bindings:
-            formal_values = sorted(
-                (value for value in local.parameters if value.value.expr is formal),
-                key=lambda value: value.value.index,
-            )
-            for parameter, actual in zip(formal_values, leaves(self.storage_of(argument)), strict=True):
-                end = frame.event(local.partition[parameter].lifetime.last_used_at)
-                actual.lifetime = replace(
-                    actual.lifetime, last_used_at=max(actual.lifetime.last_used_at, end)
-                )
-                self.uses[actual.value].append(UseEvent(actual.value, end))
-                bindings.append((parameter, actual))
-        call_reads = defaultdict(set)
-        for index, value in enumerate(results):
-            returned = local.returned[index]
-            start = frame.event(local.partition[returned].lifetime.defined_at)
-            value.lifetime = replace(value.lifetime, defined_at=start)
-            for parameter in local.returns.get(index, ()):
-                actual = next((actual for formal, actual in bindings if formal is parameter), None)
-                if actual is not None:
-                    source = ctx.current.sources["narrow"][actual.value]
-                    precision = ctx.current.precisions["narrow"][actual.value]
-                    if precision is not AnalysisPrecision.EXACT or not is_zero_offset(
-                        source.relation.relation
-                    ):
-                        continue
-                    target = self.source_storage(source.target, node, ctx)
-                    if target is not None:
-                        add_alias(value, target, AliasKind.RETURN_REUSE)
-                        ctx.proofs.setdefault(value, set()).add(target)
-                        call_reads[value].add(actual)
-        for value in results:
-            identity = _bound_relation(ctx, identity_of(value), ctx.current, value.value.expr.type)
-            ctx.writes[value] = Access(None, identity, value.value, output_index=value.value.index)
-            ctx.reads[value] = tuple(
-                Access(None, identity, actual.value) for actual in call_reads[value]
-            )
-        ctx.call_bindings[id(node)] = tuple(bindings)
-        ctx.call_results[id(node)] = results
-        return result
 
     def source_storage(self, operand: SSAValue, node, ctx):
         """Locate storage through the same precomposed source table."""

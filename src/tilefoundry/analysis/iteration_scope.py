@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 import isl
@@ -63,8 +63,7 @@ def _positions_at(mesh: Mesh, unit: str, topologies: tuple[Topology, ...]) -> in
         count = size(get(stated, index))
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise AnalysisError(
-                f"mesh level {topology.name!r} needs positive static "
-                f"extents, got {count!r}"
+                f"mesh level {topology.name!r} needs positive static extents, got {count!r}"
             )
         positions *= count
     return positions
@@ -148,7 +147,11 @@ class IterationScope:
 
     def mesh_positions(self, unit: str | None, stop=None) -> int:
         mesh = self.context.current_mesh
-        return 1 if mesh is None or unit is None else _positions_at(mesh, unit, self.context.topologies)
+        return (
+            1
+            if mesh is None or unit is None
+            else _positions_at(mesh, unit, self.context.topologies)
+        )
 
     def repeats_of(self, call: Call, unit: str | None, stop=None) -> Repeats:
         """Return this Call's loop and mesh multiplicities in the current scope."""
@@ -159,9 +162,7 @@ class IterationScope:
             if isinstance(cursor.owner, LoopRegion):
                 trips = cursor.trips()
                 loops *= trips
-                if id(cursor) in self.variance.get(
-                    id(call), frozenset()
-                ):
+                if id(cursor) in self.variance.get(id(call), frozenset()):
                     varying *= trips
                 precision = precision.join(cursor.trips_precision)
             cursor = cursor.parent
@@ -242,10 +243,13 @@ class ScopeBuilder(ValuationVisitor[None]):
         views: Sequence[str] = ("narrow", "device", "unit"),
         ctx: AnalyzeContext | None = None,
         is_root: bool = True,
+        returns: Mapping[int, Mapping[str, tuple[tuple[BufferAlias, AnalysisPrecision], ...]]]
+        | None = None,
     ) -> None:
         super().__init__(root_function=graph)
         self.graph = graph
         self.is_root = is_root
+        self.returns = {} if returns is None else returns
         frame = CallFrame(module, graph) if ctx is None or ctx.frame is None else ctx.frame
         self.views = tuple(views)
         self.sources: dict[str, dict[SSAValue, BufferAlias]] = {view: {} for view in self.views}
@@ -267,7 +271,9 @@ class ScopeBuilder(ValuationVisitor[None]):
 
     def _view_context(self, view: str, scope: IterationScope) -> TypeInferContext:
         return replace(
-            scope.context, topology_level=self.unit_ctx.topology_level if view == "unit" else None
+            scope.context,
+            topology_level=self.unit_ctx.topology_level if view == "unit" else None,
+            access_view=view,
         )
 
     def _source_relation(self, source: BufferAlias, held, scope: IterationScope) -> BufferAlias:
@@ -306,7 +312,9 @@ class ScopeBuilder(ValuationVisitor[None]):
         types = leaves_of(self._view_context(view, scope).local_type_of(expr))
         for index, (operand, held) in enumerate(zip(operands, types, strict=True)):
             value = SSAValue(expr, index)
-            self.sources[view][value] = self._source_relation(self.sources[view][operand], held, scope)
+            self.sources[view][value] = self._source_relation(
+                self.sources[view][operand], held, scope
+            )
             self.precisions[view][value] = self.precisions[view][operand]
 
     def _record_source(self, expr, scope, view, local_relations=(), alias=None):
@@ -328,7 +336,10 @@ class ScopeBuilder(ValuationVisitor[None]):
         ):
             begin, count = leaf_span(expr.args[0].type, expr.args[1].value)
             self._forward(
-                expr, tuple(SSAValue(expr.args[0], i) for i in range(begin, begin + count)), scope, view
+                expr,
+                tuple(SSAValue(expr.args[0], i) for i in range(begin, begin + count)),
+                scope,
+                view,
             )
             return
         if alias is not None and view == "unit":
@@ -393,7 +404,8 @@ class ScopeBuilder(ValuationVisitor[None]):
             return
         alias = (
             buffer_alias(expr, logical, scope.projected_relations(expr, logical))
-            if aliased_operand(expr) is not None else None
+            if aliased_operand(expr) is not None
+            else None
         )
         for view in self.views:
             ctx = self._view_context(view, scope)
@@ -469,7 +481,9 @@ class ScopeBuilder(ValuationVisitor[None]):
             self._memo[id(param)] = (param, None)
             self.definitions[id(param)] = child
             for view in self.views:
-                operands = tuple(SSAValue(argument, i) for i in range(len(leaves_of(argument.type))))
+                operands = tuple(
+                    SSAValue(argument, i) for i in range(len(leaves_of(argument.type)))
+                )
                 self._forward(param, operands, child, view)
         return inner
 
@@ -485,7 +499,19 @@ class ScopeBuilder(ValuationVisitor[None]):
             for view in self.views:
                 self._forward(expr, values, scope, view)
         elif isinstance(expr, Call):
-            self._record_accesses(expr, scope)
+            callee = self.callee_frame(expr, ctx.frame)
+            if callee is None:
+                self._record_accesses(expr, scope)
+            else:
+                for view in self.views:
+                    binding = self._view_context(view, scope).for_call(expr)
+                    for index, (source, precision) in enumerate(
+                        self.returns[id(callee.function)][view]
+                    ):
+                        projected, bounded = binding.project(source)
+                        value = SSAValue(expr, index)
+                        self.sources[view][value] = projected
+                        self.precisions[view][value] = precision.join(bounded)
         else:
             for view in self.views:
                 self._record_source(expr, scope, view)

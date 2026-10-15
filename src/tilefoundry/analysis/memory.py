@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
@@ -43,10 +42,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .access import SSAValue
 from .allocation import (
-    AllocationConstraintVisitor,
-    AllocationModel,
     AllocationValue,
-    leaves,
 )
 from .compute_cost import accumulate_logical, grouped_breakdown
 from .errors import AnalysisError
@@ -55,14 +51,16 @@ from .footprint import (
     ReachedAddresses,
     cached_level,
     footprint_of,
-    merged,
+    qualify_instances,
     reached_by,
+    reuse_windows,
     wave_of,
 )
 from .iteration_scope import IterationScope, Repeats, walk_scopes
-from .liveness import analyze_liveness, result_copies
+from .liveness import analyze_liveness
 from .metadata import (
     Breakdown,
+    Footprint,
     MemoryMetadata,
     RegionMemoryMetadata,
     Spread,
@@ -326,7 +324,7 @@ def _occurrence_shares(
             (
                 name,
                 Spread(
-                    logical=whole.get(name, TrafficBytes()),
+                    logical_groups=(((), whole.get(name, TrafficBytes())),),
                     total=TrafficBytes(moved.read * factor, moved.write * factor),
                     per_unit=tuple(
                         per_unit.get(name, {}).get(level, TrafficBytes()) for level in topologies
@@ -341,7 +339,6 @@ def _occurrence_shares(
 class _TrafficAccounts:
     """Function traffic kept separate in its three counting domains."""
 
-    logical: dict[str, TrafficBytes] = field(default_factory=dict)
     groups: dict = field(default_factory=dict)
     total: dict[str, TrafficBytes] = field(default_factory=dict)
     per_unit: dict[str, dict[str, TrafficBytes]] = field(default_factory=dict)
@@ -351,14 +348,13 @@ def _account_shares(
     accounts: _TrafficAccounts, topologies: tuple[str, ...]
 ) -> Breakdown[TrafficBytes]:
     """Build a breakdown without encoding an account as a topology key."""
-    names = sorted({*accounts.logical, *accounts.total, *accounts.per_unit})
+    names = sorted({*accounts.total, *accounts.per_unit})
     return grouped_breakdown(
         Breakdown(
             tuple(
                 (
                     name,
                     Spread(
-                        logical=accounts.logical.get(name, TrafficBytes()),
                         total=accounts.total.get(name, TrafficBytes()),
                         per_unit=tuple(
                             accounts.per_unit.get(name, {}).get(unit, TrafficBytes())
@@ -386,9 +382,7 @@ def add_traffic(
     communication: _TrafficAccounts,
     record: MemoryMetadata,
     repeats: Repeats,
-    expr: Call,
     ctx: MemoryContext,
-    binding=None,
 ) -> None:
     """Add one occurrence to each independent Function counting domain."""
     for into, stated in (
@@ -396,10 +390,7 @@ def add_traffic(
         (communication, record.traffic.communication),
     ):
         for name, spread in stated.kinds:
-            accumulate_logical(into.groups, name, spread, expr, ctx, binding)
-            into.logical.clear()
-            for (kind, _ids), (_formals, amount) in into.groups.items():
-                _accumulate(into.logical, kind, amount, 1)
+            accumulate_logical(into.groups, name, spread, ctx)
             _accumulate(into.total, name, spread.total, repeats.loop_trips)
             for unit, moved in zip(record.topologies, spread.per_unit, strict=False):
                 _accumulate(into.per_unit.setdefault(name, {}), unit, moved, repeats.loop_trips)
@@ -492,6 +483,11 @@ class MemoryContext(AnalyzeContext):
     )
     footprint_available: bool = False
 
+    @property
+    def _binding_formals(self):
+        """Keep scalar bindings until the footprint's numeric window is selected."""
+        return self.frame.function.params
+
 
 def _footprint_inputs(
     root: IterationScope,
@@ -530,7 +526,6 @@ def _footprint_inputs(
 class MemoryVisitor(ValuationVisitor[None]):
     """Attach per-Call traffic and aggregate it over each enclosing loop."""
 
-
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: MemoryContext
     ) -> None:
@@ -540,7 +535,6 @@ class MemoryVisitor(ValuationVisitor[None]):
         if ctx.whole is None or not ctx.locals_by_unit:
             raise AnalysisError("memory: visitor context is missing cost contexts")
         callee = CallFrameVisitor.callee_frame(expr, ctx.frame)
-        binding = None
         if callee is None:
             moved = (
                 call_traffic(
@@ -553,11 +547,7 @@ class MemoryVisitor(ValuationVisitor[None]):
                 if recorded
                 else MemoryMetadata()
             )
-            dependencies = tuple(
-                formal
-                for formal in ctx.root.owner.params
-                if id(formal) in ctx.current.variance.get(id(expr), frozenset())
-            )
+            dependencies = ctx.dependencies(expr)
 
             def grouped(held):
                 return replace(
@@ -580,14 +570,14 @@ class MemoryVisitor(ValuationVisitor[None]):
                 raise AnalysisError(f"memory: missing summary for {callee.function.name!r}")
             moved = MemoryMetadata(
                 topologies=summary.topologies, traffic=summary.traffic, footprint=summary.footprint
-            )
-            binding = ctx.call_context(expr)
+            ).resolve(ctx)
+            moved = replace(moved, footprint=qualify_instances(moved.footprint, ctx))
         if callee is not None and moved.footprint is not None:
-            from .footprint import resolve_footprint  # noqa: PLC0415
-
-            footprint = resolve_footprint(moved.footprint, binding)
+            footprint = moved.footprint
             if footprint is not None:
-                ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, footprint.reached))
+                reached = tuple(item for _windows, items in footprint.groups for item in items)
+                ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, reached))
+                ctx.call_reached.append((ctx.current, expr, reached))
         if callee is None and recorded and ctx.wave is not None and ctx.memory_level is not None:
             reached = reached_by(
                 ctx.current,
@@ -605,22 +595,18 @@ class MemoryVisitor(ValuationVisitor[None]):
             else:
                 ctx.footprint_available = False
         attach(expr, moved)
-        if not recorded:
-            return
         repeats = ctx.current.repeats_of(expr, ctx.topology_level)
         add_traffic(
             ctx.storage,
             ctx.communication,
             moved,
             repeats,
-            expr,
             ctx,
-            binding,
         )
 
 
-def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
-    """Attach Call movement and Function-wide movement and placement."""
+def analyze_memory(function: Function, context: AnalyzeContext) -> None:
+    """Attach one definition's movement, reached addresses and liveness."""
     module = context.module
     topology_level = context.topology_level
     facts = context.target.get_facts(MemoryHierarchyFacts)
@@ -677,7 +663,7 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
         footprint_available=footprint_available,
     )
     MemoryVisitor().visit(function.body, memory_context)
-    merged_reached = merged(
+    merged_reached = tuple(
         item
         for calls in memory_context.reached_by_scope.values()
         for _call, reached in calls
@@ -702,75 +688,12 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
         + (f"[{key.index}]" if isinstance(value.type, TupleType) else "")
         for key, value in distinct.items()
     }
-    liveness = context.liveness = analyze_liveness(function, context)
-    placement = CostContext(
-        frame=context.frame,
-        topology_level=topology_level,
-        topologies=topologies,
-    )
-    quantities = {}
-    persistent = set()
-
-    for interval in liveness.intervals:
-        value = interval.value
-        if any(value.expr is param for param in function.params):
-            persistent.add(value)
-        types = leaves_of(placement.local_type_of(value.expr))
-        if value.index >= len(types):
-            continue
-        quantity = next(
-            (
-                (level, amount)
-                for level, amount in bytes_by_storage(types[value.index]).items()
-                if facts.explicit(level) is not None
-            ),
-            None,
-        )
-        if quantity is not None:
-            level, amount = quantity
-            quantities[value] = level, amount * result_copies(value.expr)
-    model = AllocationModel(
-        **vars(context),
-        liveness=liveness,
-        quantities=quantities,
-        persistent=frozenset(persistent),
-    )
-    allocation = AllocationConstraintVisitor(root_function=function, liveness=liveness)
-
-    returned = allocation.visit_function_body(function, model)
-    model.returned = leaves(returned)
-    model.parameters = {
-        item
-        for item in model.values
-        if any(item.value.expr is formal for formal in function.params)
-    }
-    model.outputs = set(model.returned)
-    context.allocation = model
-    definitions = {interval.value: index for index, interval in enumerate(liveness.intervals)}
-    model.values.sort(
-        key=lambda item: (
-            definitions[item.value],
-            item.value.index,
-        )
-    )
-    allocation_values = tuple(model.values)
-    material_values = tuple(item for item in allocation_values if item in model.material)
-    producers = {
-        id(item.value.expr): item.value.expr for item in (*material_values, *allocation_values)
-    }
-    labels = dict(zip(producers, value_labels(producers.values()), strict=True))
-    for item in allocation_values:
-        key = id(item.value.expr)
-        label = labels[key]
-        item.lifetime = replace(
-            item.lifetime,
-            binding=label
-            + (f"[{item.value.index}]" if isinstance(item.value.expr.type, TupleType) else ""),
-        )
-    lifetimes = tuple(item.lifetime for item in material_values)
+    attach(function, analyze_liveness(function, context, callee=function is not context.entry))
     if memory_level is not None and wave is not None:
         seen_footprints = set()
         for scope, call, reached in memory_context.call_reached:
+            if CallFrameVisitor.callee_frame(call, context.frame) is not None:
+                continue
             if id(call) in seen_footprints:
                 continue
             seen_footprints.add(id(call))
@@ -783,26 +706,13 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 replace(
                     moved,
                     footprint=footprint_of(
-                        merged(reached),
+                        reached,
                         memory_level=memory_level,
                         labels=footprint_labels,
                         windows=-(-repeats.mesh_positions // wave[0]),
                     ),
                 ),
             )
-    model.definitions = dict(allocation.definitions)
-    uses = defaultdict(list)
-    for use in liveness.uses:
-        uses[use.value].append(use)
-    model.uses = {value: tuple(uses[value.value]) for value in model.values}
-    tie_analysis(model)
-    for node in {id(value.value.expr): value.value.expr for value in model.values}.values():
-        moved = get_metadata(node, MemoryMetadata)
-        if moved is not None:
-            attach(node, replace(moved, alias=None, buffer_bytes=None, offsets=()))
-    for value, alias in published_aliases(model).items():
-        moved = get_metadata(value.value.expr, MemoryMetadata) or MemoryMetadata()
-        attach(value.value.expr, replace(moved, alias=alias))
     footprint = None
     if (
         cache is not None
@@ -810,42 +720,45 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
         and memory_level is not None
         and memory_context.footprint_available
     ):
-        footprint = footprint_of(
-            merged_reached,
-            memory_level=memory_level,
-            labels=footprint_labels,
-        )
-        totals: dict[tuple[str, str], int] = {}
         groups = []
         for scope, calls in memory_context.reached_by_scope.items():
             repeats = scope.repeats_of(calls[0][0], topology_level)
-            counted = footprint_of(
-                merged(item for _call, reached in calls for item in reached),
-                memory_level=memory_level,
-                labels=footprint_labels,
-                windows=-(-repeats.mesh_positions // wave[0]) * repeats.loop_trips,
-            )
-            groups.extend(counted.groups)
-            for buffer, breakdown in counted.buffers:
-                for level, spread in breakdown.kinds:
-                    key = (buffer, level)
-                    totals[key] = totals.get(key, 0) + spread.total
-        footprint = replace(
-            footprint,
-            groups=tuple(groups),
-            buffers=tuple(
-                (
-                    buffer,
-                    Breakdown(
-                        tuple(
-                            (level, replace(spread, total=totals[(buffer, level)]))
-                            for level, spread in breakdown.kinds
-                        )
-                    ),
+            primitive = []
+            for call, reached in calls:
+                if CallFrameVisitor.callee_frame(call, context.frame) is None:
+                    primitive.extend(reached)
+                else:
+                    record = get_metadata(call, MemoryMetadata)
+                    groups.extend(
+                        (windows * repeats.loop_trips, items)
+                        for windows, items in record.footprint.groups
+                    )
+            if primitive:
+                groups.extend(
+                    footprint_of(
+                        primitive,
+                        windows=-(-repeats.mesh_positions // wave[0]) * repeats.loop_trips,
+                    ).groups
                 )
-                for buffer, breakdown in footprint.buffers
+        footprint = Footprint(tuple(groups))
+    reuse = (
+        ()
+        if memory_level is None or wave is None
+        else reuse_windows(
+            context.root,
+            memory_level=memory_level,
+            wave=wave,
+            ctx=replace(context, topology_level=topology_level),
+            capacity=cache[2],
+            labels=footprint_labels,
+            resolved=tuple(
+                (scope, call, reached)
+                for scope, call, reached in memory_context.call_reached
+                if CallFrameVisitor.callee_frame(call, context.frame) is not None
             ),
         )
+    )
+    errors, advisories = _memory_findings((), footprint, reuse, cache, wave)
     attach(
         function,
         RegionMemoryMetadata(
@@ -855,15 +768,17 @@ def _analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 communication=_account_shares(memory_context.communication, tuple(locals_by_unit)),
             ),
             footprint=footprint,
-            lifetimes=lifetimes if context.root.is_root_definition else (),
             peaks=(),
-            solver_status="feasible",
+            solver_status="not_run",
+            reuse_windows=reuse,
+            errors=errors,
+            advisories=advisories,
         ),
     )
 
 
 def _memory_findings(peaks, footprint, reuse, cache, wave):
-    """Build placement and cache findings once from absolute root conclusions."""
+    """Build placement and cache findings from this definition's conclusions."""
     errors = tuple(
         f"{peak.memory_level} placement peak {format_bytes(peak.peak_bytes)} exceeds "
         f"capacity {format_bytes(peak.capacity_bytes)}"
@@ -905,12 +820,6 @@ def _memory_findings(peaks, footprint, reuse, cache, wave):
             else:
                 advisories += (message,)
     return errors, advisories
-
-
-def analyze_memory(function: Function, context: AnalyzeContext) -> None:
-    """Measure local definitions before aggregating the root call stack."""
-    context.run_definitions(SELECTOR, _analyze_memory)
-    _aggregate_root(function, context)
 
 
 __all__ = [

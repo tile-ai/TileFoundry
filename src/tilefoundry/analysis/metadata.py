@@ -79,17 +79,16 @@ class Spread[V]:
     its semantic structure while ``Spread`` states only its counting domain.
     """
 
-    logical: V
     total: V
     per_unit: tuple[V, ...] = ()
     logical_groups: tuple[tuple[tuple[Var, ...], V], ...] = ()
 
-    def __post_init__(self) -> None:
-        if self.logical_groups:
-            logical = scaled(self.logical, 0)
-            for _formals, value in self.logical_groups:
-                logical = added(logical, value)
-            object.__setattr__(self, "logical", logical)
+    @property
+    def logical(self) -> V:
+        logical = scaled(self.total, 0)
+        for _dependencies, value in self.logical_groups:
+            logical = added(logical, value)
+        return logical
 
     def at(self, index: int) -> V:
         """One topology level's value by position, or ``total`` when absent."""
@@ -124,7 +123,7 @@ def breakdown[V](
             (
                 kind,
                 Spread(
-                    logical=logical.get(kind, zero),
+                    logical_groups=(((), logical.get(kind, zero)),),
                     total=total.get(kind, zero),
                     per_unit=tuple(share.get(kind, zero) for share in per_unit),
                 ),
@@ -191,9 +190,27 @@ class Traffic:
 class Footprint:
     """Unique bytes one wave touches, by source buffer and memory level."""
 
-    buffers: tuple[tuple[str, Breakdown[int]], ...] = ()
-    precision: AnalysisPrecision = AnalysisPrecision.EXACT
     groups: tuple[tuple[int, tuple[ReachedAddresses, ...]], ...] = ()
+
+    @property
+    def reached(self) -> tuple[ReachedAddresses, ...]:
+        from .footprint import merged  # noqa: PLC0415
+
+        return merged(item for _windows, items in self.groups for item in items)
+
+    @property
+    def buffers(self) -> tuple[tuple[str, Breakdown[int]], ...]:
+        from .footprint import counted_buffers  # noqa: PLC0415
+
+        return counted_buffers(self)
+
+    @property
+    def precision(self) -> AnalysisPrecision:
+        from .footprint import _window_item, counted_precision  # noqa: PLC0415
+
+        return counted_precision(
+            _window_item(item) for _windows, items in self.groups for item in items
+        )
 
 
 @dataclass(frozen=True)

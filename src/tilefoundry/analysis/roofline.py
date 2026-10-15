@@ -136,7 +136,6 @@ class RooflineVisitor(ValuationVisitor[None]):
         super().__init__()
         self.facts = facts
 
-
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: AnalyzeContext
     ) -> None:
@@ -157,7 +156,7 @@ class RooflineVisitor(ValuationVisitor[None]):
         attach(expr, _cost_bound(cost, moved, self.facts))
 
 
-def _analyze_roofline(
+def analyze_roofline(
     function: Function,
     context: AnalyzeContext,
 ) -> None:
@@ -178,11 +177,6 @@ def _analyze_roofline(
             "the memory family states for every function it measures"
         )
     attach(function, _cost_bound(total, moved, facts))
-
-
-def analyze_roofline(function: Function, context: AnalyzeContext) -> None:
-    """Derive each definition's local bound once from its recorded work and traffic."""
-    context.run_definitions(SELECTOR, _analyze_roofline)
 
 
 __all__ = ["SELECTOR", "analyze_roofline"]

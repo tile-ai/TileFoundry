@@ -12,11 +12,12 @@ from dataclasses import dataclass, field, replace
 
 import isl
 
-from tilefoundry.ir.core import Call, get_metadata
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core import Call, get_metadata, value_labels
+from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.isl_interop import dim_to_isl_pw_aff
 from tilefoundry.ir.types import DType, Mesh, TensorType, TupleType, Type
 from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import ComposedLayout, flatten
@@ -25,11 +26,19 @@ from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.isl_utils import cardinality
-from tilefoundry.visitor_registry.access_relation import leaves_of
+from tilefoundry.visitor_registry.access_relation import AccessRelation, leaves_of
 from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 from tilefoundry.visitor_registry.contexts import CostContext
 
-from .access import Access, SSAValue, widest_allowed
+from .access import (
+    Access,
+    AliasKind,
+    BufferAlias,
+    SSAValue,
+    loop_parameter,
+    name_loop_parameters,
+    widest_allowed,
+)
 from .facts import MemoryHierarchyFacts
 from .iteration_scope import IterationScope, walk_scopes
 from .loop_domain import induction_name
@@ -56,6 +65,7 @@ class ReachedAddresses:
     must: isl.set | None = None
     may_coordinates: int | None = 0
     values: Mapping[str, object] = field(default_factory=dict)
+    ownership: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (self.dtype is None) != (self.reached is None):
@@ -119,6 +129,7 @@ def _mesh_parameters(
 
 def _involves_parameter(relation: isl.map, name: str) -> bool:
     """Whether a parameter controls a coordinate rather than only its legal range."""
+    relation = _union_loops(relation)
     position = relation.find_dim_by_name(isl.dim_type.PARAM, name)
     return position >= 0 and relation.gist_params(relation.params()).involves_dims(
         isl.dim_type.PARAM, position, 1
@@ -167,6 +178,13 @@ def _restrict_to_wave(
     return relation.intersect_params(context.add_constraint(lower).add_constraint(upper))
 
 
+def _union_loops(relation):
+    for axis in reversed(range(relation.dim(isl.dim_type.PARAM))):
+        if (relation.get_dim_name(isl.dim_type.PARAM, axis) or "").startswith("__tf_loop_"):
+            relation = relation.project_out(isl.dim_type.PARAM, axis, 1)
+    return relation
+
+
 def _at_first_iteration(relation: isl.map, depth: int) -> isl.map:
     """Hold enclosing loop dimensions at their symbolic lexicographic first point."""
     rank = relation.dim(isl.dim_type.IN)
@@ -178,9 +196,11 @@ def _at_first_iteration(relation: isl.map, depth: int) -> isl.map:
 
 def _loop_scopes(scope: IterationScope) -> tuple[IterationScope, ...]:
     """Read loop facts from the common lexical contexts."""
-    return tuple(reversed([
-        ctx.current for ctx in scope.context.ancestors() if isinstance(ctx.owner, LoopRegion)
-    ]))
+    return tuple(
+        reversed(
+            [ctx.current for ctx in scope.context.ancestors() if isinstance(ctx.owner, LoopRegion)]
+        )
+    )
 
 
 def _project_mesh_parameters(reached: isl.set, parameters: tuple[tuple[str, Call], ...]) -> isl.set:
@@ -200,9 +220,10 @@ def _reached_addresses(
     *,
     precision: AnalysisPrecision,
     values: Mapping[str, object] | None = None,
+    ownership: tuple[str, ...] = (),
 ) -> ReachedAddresses:
     """Keep the possible image and the boundary's counting evidence together."""
-    reached = _project_mesh_parameters(relation.range(), mesh_parameters)
+    reached = relation.range()
     must = reached
     may_coordinates = 0
     if access.may_access:
@@ -212,6 +233,7 @@ def _reached_addresses(
             may_coordinates = cardinality(reached)
     return ReachedAddresses(
         target=access.target,
+        ownership=ownership,
         output_index=access.output_index,
         dtype=dtype,
         reached=reached,
@@ -244,7 +266,7 @@ class MovingBoundary:
     mesh_parameters: tuple[tuple[str, Call], ...]
     axis_parameters: tuple[str | None, ...]
     position: tuple[int, tuple[tuple[str, int], ...]] | None
-
+    ownership: tuple[str, ...] = ()
 
     _relations: dict[int, isl.map] = field(default_factory=dict, init=False, repr=False)
     _held: dict[int, isl.set] = field(default_factory=dict, init=False, repr=False)
@@ -255,10 +277,18 @@ class MovingBoundary:
         default_factory=dict, init=False, repr=False
     )
 
+    @property
+    def depth(self):
+        return self.scope.depth
+
+    @property
+    def loop_scopes(self):
+        return _loop_scopes(self.scope)
+
     def _relation(self, window: int) -> isl.map:
         relation = self._relations.get(window)
         if relation is None:
-            relation = _at_first_iteration(self.access.relation, window + 1)
+            relation = _union_loops(_at_first_iteration(self.access.relation, window + 1))
             self._relations[window] = relation
         return relation
 
@@ -289,7 +319,7 @@ class MovingBoundary:
     def _unit_relation(self, window: int) -> isl.map:
         relation = self._unit_relations.get(window)
         if relation is None:
-            relation = _at_first_iteration(self.unit_access.relation, window + 1)
+            relation = _union_loops(_at_first_iteration(self.unit_access.relation, window + 1))
             self._unit_relations[window] = relation
         return relation
 
@@ -297,7 +327,9 @@ class MovingBoundary:
         """Return the device-view wave addresses used by the space test."""
         reached = self._space_wave_reached.get(window)
         if reached is None:
-            relation = _at_first_iteration(self.space_wave_access.relation, window + 1)
+            relation = _union_loops(
+                _at_first_iteration(self.space_wave_access.relation, window + 1)
+            )
             if self.position is not None:
                 relation = _restrict_to_wave(relation, self.position, self.wave_units)
             reached = _project_mesh_parameters(relation.range(), self.mesh_parameters)
@@ -344,11 +376,12 @@ def time_axis(boundary: MovingBoundary) -> int | None:
         if boundary.access.input_index is not None
         else boundary.access.target.expr
     )
+    target = boundary.access.target.expr
+    if id(target) not in boundary.scope.variance and not getattr(target, "is_const", False):
+        value = boundary.call
     for axis, loop_scope in enumerate(boundary.loop_scopes):
         if loop_scope.trips() <= 1 or (
-            id(loop_scope) in boundary.varying
-            if boundary.varying is not None
-            else loop_scope.is_variant(boundary.access.target.expr) or loop_scope.is_variant(value)
+            loop_scope.is_variant(boundary.access.target.expr) or loop_scope.is_variant(value)
         ):
             continue
         if boundary.held(axis - 1).is_subset(boundary.held(axis)):
@@ -528,8 +561,10 @@ def _axis_parameters(scope: IterationScope, mesh: Mesh | None) -> tuple[str | No
 def _wave_mesh(scope: IterationScope, topology_level: str) -> Mesh | None:
     """Find the enclosing mesh, including the definition's checked outer mesh."""
     for ctx in scope.context.ancestors():
-        mesh = ctx.owner.mesh if isinstance(ctx.owner, MeshRegion) else (
-            ctx.current_mesh if ctx.parent is None else None
+        mesh = (
+            ctx.owner.mesh
+            if isinstance(ctx.owner, MeshRegion)
+            else (ctx.current_mesh if ctx.parent is None else None)
         )
         if mesh is not None:
             for component in separate(mesh):
@@ -559,6 +594,13 @@ def _shared_origin(
     return shared_units(mesh, axes, wave) <= 1
 
 
+def _source_origin(scope, target, definitions):
+    """Treat called material producers as private to their executing units."""
+    if isinstance(target, Call) and id(target) not in scope.variance:
+        return definitions.get(id(target), scope)
+    return definitions.get(id(target))
+
+
 def moving_boundaries(
     root: IterationScope,
     *,
@@ -566,8 +608,7 @@ def moving_boundaries(
     wave: tuple[int, int],
     ctx: CostContext,
     labels: Mapping[SSAValue, str],
-    outer_depth: int = 0,
-    origins: Mapping[int, IterationScope] | None = None,
+    resolved=(),
 ) -> tuple[MovingBoundary, ...]:
     """Collect boundaries that move bytes at *memory_level* in one scope walk.
 
@@ -576,11 +617,7 @@ def moving_boundaries(
     whole = replace(ctx, topology_level=None, topologies=())
     wave_units, declared_units = wave
     topology_level = ctx.topology_level or ctx.frame.target.get_facts(TopologyFacts).parallel_level
-    definitions = (
-        origins
-        if origins is not None
-        else {value_id: scope for scope in walk_scopes(root) for value_id in scope.relations}
-    )
+    definitions = {value_id: scope for scope in walk_scopes(root) for value_id in scope.relations}
     found: list[MovingBoundary] = []
     for scope in walk_scopes(root):
         mesh = _wave_mesh(scope, topology_level)
@@ -589,7 +626,7 @@ def moving_boundaries(
             moved = get_metadata(call, MemoryMetadata)
             if moved is None or len(moved.operands) != len(call.args) + 1:
                 continue
-            if outer_depth == 0 and _one_time_fill(scope, moved.operands):
+            if _one_time_fill(scope, moved.operands):
                 continue
             device_recorded = scope.accesses.get("device", {}).get(id(call))
             device_by_boundary = (
@@ -654,7 +691,7 @@ def moving_boundaries(
                         axis_parameters=axis_parameters
                         if wave_stated
                         and _shared_origin(
-                            definitions.get(id(access.target.expr)),
+                            _source_origin(scope, access.target.expr, definitions),
                             topology_level,
                             wave,
                         )
@@ -662,6 +699,53 @@ def moving_boundaries(
                         position=position,
                     )
                 )
+    for scope, call, items in resolved:
+        for item in items:
+            if item.reached is None or item.dtype is None:
+                continue
+            relation = isl.map.from_range(item.reached).insert_dims(isl.dim_type.IN, 0, scope.depth)
+            relation = relation.intersect_domain(scope.domain)
+            for axis, loop in enumerate(_loop_scopes(scope)):
+                parameter = relation.find_dim_by_name(
+                    isl.dim_type.PARAM, loop_parameter(loop.owner.induction_var)
+                )
+                if parameter >= 0:
+                    relation = relation.equate(isl.dim_type.IN, axis, isl.dim_type.PARAM, parameter)
+                    relation = relation.project_out(isl.dim_type.PARAM, parameter, 1)
+            access = Access(None, relation, item.target, precision=item.precision)
+            mesh = _wave_mesh(scope, topology_level)
+            parameters = tuple(
+                (name, value)
+                for name, value in {**scope.domain_params, **item.values}.items()
+                if isinstance(value, Call)
+                and isinstance(value.target, MeshCoord)
+                and _involves_parameter(relation, name)
+            )
+            found.append(
+                MovingBoundary(
+                    scope=scope,
+                    call=call,
+                    access=access,
+                    space_wave_access=access,
+                    unit_access=access,
+                    dtype=item.dtype,
+                    label="/".join((*item.ownership, labels[item.target])),
+                    ownership=item.ownership,
+                    mesh=mesh,
+                    reads=item.output_index is None,
+                    wave_units=wave_units,
+                    wave_stated=True,
+                    mesh_parameters=parameters,
+                    axis_parameters=_axis_parameters(scope, mesh)
+                    if _shared_origin(
+                        _source_origin(scope, item.target.expr, definitions),
+                        topology_level,
+                        wave,
+                    )
+                    else (),
+                    position=None,
+                )
+            )
     return tuple(found)
 
 
@@ -782,7 +866,10 @@ def reached_by(
         )
         if wave_units < declared_units and mesh_parameters and position is None:
             return None
-        relation = _at_first_iteration(access.relation, window + 1)
+        relation, loop_values = name_loop_parameters(
+            access.relation, (loop.owner.induction_var for loop in _loop_scopes(scope))
+        )
+        relation = relation.project_out(isl.dim_type.IN, 0, scope.depth)
         if position is not None:
             relation = _restrict_to_wave(relation, position, wave_units)
         result.append(
@@ -792,7 +879,7 @@ def reached_by(
                 leaves[0].dtype,
                 mesh_parameters,
                 precision=AnalysisPrecision.UNKNOWN if refused else access.precision,
-                values=scope.domain_params,
+                values={**scope.domain_params, **loop_values},
             )
         )
     result.extend(_missing_boundaries(call, accesses, operands, ctx))
@@ -825,116 +912,71 @@ def _by_buffer(
         key = (boundary.label, boundary.access.target.index)
         current = buffers.get(key)
         choose = candidate is not None and (
-            current is None or current.time_scope is None or axes.time < current.time_depth
+            current is None
+            or current.time_scope is None
+            or candidate.depth < current.time_scope.depth
         )
         selected = candidate if choose else current.time_scope if current else None
-        time_key = (
-            (boundary.loop_keys[axes.time] if boundary.loop_keys else (id(candidate),))
-            if choose
-            else current.time_key
-            if current
-            else None
-        )
-        depth = axes.time if choose else current.time_depth if current else 0
         space = tuple(dict.fromkeys((*(current.space if current else ()), *axes.space)))
         buffers[key] = _BufferReuse(
             boundary=boundary if current is None else current.boundary,
             time_scope=selected,
             space=space,
             space_units=max(axes.space_units, current.space_units if current else 1),
-            time_key=time_key,
-            time_depth=depth,
         )
     return buffers
 
 
-def _window_footprints(
-    boundaries: tuple[MovingBoundary, ...],
-    uncounted: tuple[tuple[tuple[tuple[int, ...], ...], ReachedAddresses], ...],
-    buffers: Mapping[tuple[str, int], _BufferReuse],
-    *,
-    memory_level: str,
-) -> dict[tuple[int, ...] | None, Footprint | None]:
-    """Count every moving buffer once in each distinct selected window."""
-    labels = {boundary.access.target: boundary.label for boundary in boundaries}
-    windows = {item.time_key: item.time_scope for item in buffers.values()}
-    footprints: dict[tuple[int, ...] | None, Footprint | None] = {}
-    for key, time_scope in windows.items():
-        reached: list[ReachedAddresses] = []
-        labeled = {}
+def _window_footprints(boundaries, uncounted, buffers, *, memory_level):
+    """Count local moving boundaries in each selected local loop window."""
+    footprints = {}
+    for time_scope in {item.time_scope for item in buffers.values()}:
+        reached = []
         for boundary in boundaries:
             window = (
                 boundary.depth - 1
                 if time_scope is None
                 else next(
-                    (
-                        axis
-                        for axis, loop in enumerate(boundary.loop_scopes)
-                        if (boundary.loop_keys[axis] if boundary.loop_keys else (id(loop),)) == key
-                    ),
+                    (axis for axis, loop in enumerate(boundary.loop_scopes) if loop is time_scope),
                     None,
                 )
             )
             if window is None:
                 continue
             if not boundary.wave_stated:
-                footprints[key] = None
+                footprints[time_scope] = None
                 break
-            labeled.setdefault(boundary.label, []).append(
+            reached.append(
                 _reached_addresses(
                     boundary.access,
                     boundary._wave_relation(window),
                     boundary.dtype,
                     boundary.mesh_parameters,
                     precision=boundary.access.precision,
+                    values={**boundary.scope.domain_params, **dict(boundary.mesh_parameters)},
+                    ownership=boundary.ownership,
                 )
             )
-        if key in footprints:
+        if time_scope in footprints:
             continue
-        for loop_keys, item in uncounted:
-            if time_scope is None or key in loop_keys:
-                reached.append(item)
-        parts = [
-            footprint_of(
-                merged(items),
-                memory_level=memory_level,
-                labels={item.target: label for item in items},
-            )
-            for label, items in labeled.items()
-        ]
-        if reached:
-            parts.append(footprint_of(merged(reached), memory_level=memory_level, labels=labels))
-        footprints[key] = Footprint(
-            tuple(entry for part in parts for entry in part.buffers),
-            _precision_of(parts),
+        reached.extend(
+            item
+            for scope, item in uncounted
+            if time_scope is None or time_scope in _loop_scopes(scope)
         )
+        footprints[time_scope] = Footprint(((1, merged(reached)),))
     return footprints
-
-
-def _evidence_precision(items: Iterable[ReachedAddresses]) -> AnalysisPrecision:
-    precision = AnalysisPrecision.EXACT
-    for item in items:
-        precision = precision.join(item.precision)
-    return precision
-
-
-def _precision_of(footprints: Iterable[Footprint]) -> AnalysisPrecision:
-    precision = AnalysisPrecision.EXACT
-    for footprint in footprints:
-        precision = precision.join(footprint.precision)
-    return precision
 
 
 def _reuse_rows(
     buffers: Mapping[tuple[str, int], _BufferReuse],
-    footprints: Mapping[tuple[int, ...] | None, Footprint | None],
+    footprints: Mapping[IterationScope | None, Footprint | None],
     capacity: int,
 ) -> tuple[ReuseWindow, ...]:
     """Build sorted report rows from selected axes and counted windows."""
     rows: list[ReuseWindow] = []
     for item in buffers.values():
-        key = item.time_key
-        counted = footprints.get(key)
+        counted = footprints.get(item.time_scope)
         if counted is None:
             continue
         amounts = {
@@ -966,9 +1008,9 @@ def _reuse_rows(
 
 def merged(items: Iterable[ReachedAddresses]) -> tuple[ReachedAddresses, ...]:
     """Union addresses by source allocation and output field."""
-    grouped: dict[tuple[SSAValue, int | None], ReachedAddresses] = {}
+    grouped: dict[tuple[SSAValue, tuple[str, ...], int | None], ReachedAddresses] = {}
     for item in items:
-        key = (item.target, item.output_index)
+        key = (item.target, item.ownership, item.output_index)
         previous = grouped.get(key)
         if previous is None:
             grouped[key] = item
@@ -994,66 +1036,293 @@ def merged(items: Iterable[ReachedAddresses]) -> tuple[ReachedAddresses, ...]:
     return tuple(grouped.values())
 
 
-def footprint_of(
-    items: Iterable[ReachedAddresses],
-    *,
-    memory_level: str,
-    labels: Mapping[SSAValue, str],
-    windows: int = 1,
-) -> Footprint:
-    """Count unioned addresses and pack their element widths into bytes."""
-    items = tuple(items)
-    totals: dict[tuple[str, str], int] = {}
+def footprint_of(items, *, memory_level=None, labels=None, windows=1) -> Footprint:
+    """Retain one copy of the reached evidence; numeric views are derived."""
+    return Footprint(((windows, tuple(items)),))
+
+
+def _first_loops(image):
+    names = [
+        image.get_dim_name(isl.dim_type.PARAM, axis)
+        for axis in range(image.dim(isl.dim_type.PARAM))
+        if (image.get_dim_name(isl.dim_type.PARAM, axis) or "").startswith("__tf_loop_")
+    ]
+    first = image.params()
+    for name in names:
+        first = first.move_dims(
+            isl.dim_type.SET,
+            first.dim(isl.dim_type.SET),
+            isl.dim_type.PARAM,
+            first.find_dim_by_name(isl.dim_type.PARAM, name),
+            1,
+        )
+    first = first.lexmin()
+    for name in reversed(names):
+        first = first.move_dims(
+            isl.dim_type.PARAM,
+            first.dim(isl.dim_type.PARAM),
+            isl.dim_type.SET,
+            first.find_dim_by_name(isl.dim_type.SET, name),
+            1,
+        )
+    image = image.intersect_params(first)
+    for name in names:
+        image = image.project_out(
+            isl.dim_type.PARAM, image.find_dim_by_name(isl.dim_type.PARAM, name), 1
+        )
+    return image
+
+
+def _window_item(item):
+    if item.reached is None:
+        return item
+
+    def window(image):
+        if not item.ownership:
+            return _first_loops(image)
+        for axis in reversed(range(image.dim(isl.dim_type.PARAM))):
+            if (image.get_dim_name(isl.dim_type.PARAM, axis) or "").startswith("__tf_loop_"):
+                image = image.project_out(isl.dim_type.PARAM, axis, 1)
+        return image
+
+    image = window(item.reached)
+    return replace(
+        item, reached=image, must=image if item.must.is_equal(item.reached) else window(item.must)
+    )
+
+
+def _count(item):
+    if item.reached is None:
+        return 0, item.precision
+    image = _first_loops(item.reached)
+    image = _project_mesh_parameters(
+        image,
+        tuple(
+            (name, value)
+            for name, value in item.values.items()
+            if isinstance(value, Call) and isinstance(value.target, MeshCoord)
+        ),
+    )
+    bounded = item.precision
+    for axis in reversed(range(image.dim(isl.dim_type.PARAM))):
+        name = image.get_dim_name(isl.dim_type.PARAM, axis)
+        if name is not None and name.startswith("__tf_binding_"):
+            held = leaves_of(item.target.expr.type)[item.target.index]
+            value = widest_allowed(isl.map.from_range(image), name, held)
+            if value is not None:
+                image = image.fix_val(isl.dim_type.PARAM, axis, isl.val(value))
+            image = image.project_out(isl.dim_type.PARAM, axis, 1)
+            bounded = bounded.join(AnalysisPrecision.UPPER_BOUND)
+    amount = cardinality(image.coalesce())
+    if amount is None:
+        return 0, (
+            AnalysisPrecision.UNKNOWN
+            if item.precision is AnalysisPrecision.UNKNOWN
+            else AnalysisPrecision.LOWER_BOUND
+        )
+    if item.may_coordinates is not None and not item.must.is_equal(item.reached):
+        must = cardinality(item.must.coalesce())
+        if must is not None:
+            amount = min(amount, must + item.may_coordinates)
+    return -(-(amount * item.dtype.bit_width) // 8), bounded
+
+
+def counted_precision(items):
     precision = AnalysisPrecision.EXACT
     for item in items:
-        if item.reached is None:
-            precision = precision.join(item.precision)
-            continue
-        image = item.reached
-        bounded = item.precision
-        for axis in reversed(range(image.dim(isl.dim_type.PARAM))):
-            name = image.get_dim_name(isl.dim_type.PARAM, axis)
-            if name is not None and name.startswith("__tf_binding_"):
-                held = leaves_of(item.target.expr.type)[item.target.index]
-                value = widest_allowed(isl.map.from_range(image), name, held)
-                if value is not None:
-                    image = image.fix_val(isl.dim_type.PARAM, axis, isl.val(value))
-                image = image.project_out(isl.dim_type.PARAM, axis, 1)
-                bounded = bounded.join(AnalysisPrecision.UPPER_BOUND)
-        amount = cardinality(image.coalesce())
-        if amount is None:
-            precision = precision.join(
-                AnalysisPrecision.UNKNOWN
-                if item.precision is AnalysisPrecision.UNKNOWN
-                else AnalysisPrecision.LOWER_BOUND
-            )
-            continue
-        if item.may_coordinates is not None:
-            must = cardinality(item.must.coalesce())
-            if must is not None:
-                amount = min(amount, must + item.may_coordinates)
-        packed = -(-(amount * item.dtype.bit_width) // 8)
-        key = (
-            labels[item.target],
-            memory_level,
-        )
-        totals[key] = totals.get(key, 0) + packed
-        precision = precision.join(bounded)
+        precision = precision.join(_count(item)[1])
+    return precision
 
-    buffers = tuple(
-        (
-            name,
-            Breakdown(((level, Spread(size, size * windows, ())),)),
+
+def counted_buffers(footprint):
+    """Union by SSA identity and instance ownership before packing bytes."""
+    items = merged(_window_item(item) for _windows, group in footprint.groups for item in group)
+    expressions = dict.fromkeys(item.target.expr for item in items)
+    labels = dict(zip(expressions, value_labels(expressions), strict=True))
+    totals = {}
+    for windows, group in footprint.groups:
+        for item in merged(_window_item(item) for item in group):
+            key = item.target, item.ownership
+            totals[key] = totals.get(key, 0) + _count(item)[0] * windows
+    logical, counted = {}, {}
+    for item in items:
+        if item.reached is not None:
+            key = item.target, item.ownership
+            logical[key] = logical.get(key, 0) + _count(item)[0]
+            counted[key] = item
+    entries = []
+    for key, item in counted.items():
+        held = leaves_of(item.target.expr.type)[item.target.index]
+        label = labels[item.target.expr]
+        if isinstance(item.target.expr.type, TupleType):
+            label += f"[{item.target.index}]"
+        if item.ownership:
+            label = "/".join((*item.ownership, label))
+        entries.append(
+            (
+                label,
+                Breakdown(
+                    (
+                        (
+                            str(held.storage),
+                            Spread(
+                                total=totals[key],
+                                logical_groups=(((), logical[key]),),
+                            ),
+                        ),
+                    )
+                ),
+            )
         )
-        for (name, level), size in sorted(totals.items())
+    return tuple(sorted(entries, key=lambda entry: entry[0]))
+
+
+def resolve_footprint(footprint, ctx):
+    """Substitute reached coordinates through one leaf call boundary."""
+    if footprint is None:
+        return None
+    from .metadata import BindingValuation, LoopNestValuation  # noqa: PLC0415
+
+    binding = ctx.request_valuation(BindingValuation)
+    loops = ctx.request_valuation(LoopNestValuation)
+    domain = loops.domain()
+    depth = domain.dim(isl.dim_type.SET)
+    groups = []
+    for windows, items in footprint.groups:
+        resolved = []
+        for item in items:
+            if item.reached is None:
+                resolved.append(item)
+                continue
+
+            def project_image(image):
+                for axis in reversed(range(len(item.ownership))):
+                    image = image.set_dim_name(isl.dim_type.SET, axis, f"__tf_instance_{axis}")
+                    image = image.move_dims(
+                        isl.dim_type.PARAM, image.dim(isl.dim_type.PARAM), isl.dim_type.SET, axis, 1
+                    )
+                source = BufferAlias(
+                    item.target,
+                    AccessRelation(isl.map.from_range(image), item.values),
+                    AliasKind.FORWARD,
+                )
+                projected, precision = binding.project(source)
+                relation = projected.relation.relation
+                values = dict(projected.relation.values)
+                relation = relation.project_out(isl.dim_type.IN, 0, depth)
+                for axis in range(len(item.ownership)):
+                    parameter = relation.find_dim_by_name(
+                        isl.dim_type.PARAM, f"__tf_instance_{axis}"
+                    )
+                    relation = relation.move_dims(
+                        isl.dim_type.OUT, axis, isl.dim_type.PARAM, parameter, 1
+                    )
+                image = relation.range()
+                return projected.target, image, values, precision
+
+            target, image, values, precision = project_image(item.reached)
+            must = image if item.must.is_equal(item.reached) else project_image(item.must)[1]
+            resolved.append(
+                replace(
+                    item,
+                    target=target,
+                    reached=image,
+                    must=must,
+                    precision=item.precision.join(precision),
+                    values=values,
+                )
+            )
+        groups.append((windows, tuple(resolved)))
+    return Footprint(tuple(groups))
+
+
+def qualify_instances(footprint, ctx):
+    """Prefix weight address images with the actual slot index, never its label."""
+    if footprint is None:
+        return None
+    target = ctx.call.target
+    slot = target.args[0] if isinstance(target, Call) else target
+    if not isinstance(slot, ModuleList):
+        return footprint
+    index = target.args[1] if isinstance(target, Call) else 0
+    scope = ctx.current
+    coords = {
+        id(loop.owner.induction_var): scope.domain.get_dim_name(isl.dim_type.SET, axis)
+        for axis, loop in enumerate(_loop_scopes(scope))
+    }
+    coords.update(
+        {param: coords[id(root)] for param, root in ctx.loop_aliases.items() if id(root) in coords}
     )
-    return Footprint(
-        buffers=buffers,
-        precision=precision,
-        reached=items,
+    bounded = AnalysisPrecision.EXACT
+    values = {}
+    try:
+        index_map = dim_to_isl_pw_aff(index, values, coords=coords or {-1: "dummy"}).as_map()
+        if not coords:
+            index_map = index_map.project_out(isl.dim_type.IN, 0, 1)
+        index_map = index_map.intersect_domain(scope.domain)
+        unknown = index_map.dim(isl.dim_type.PARAM) > 0
+    except (TypeError, ValueError, NotImplementedError, isl.Error):
+        unknown = True
+    if unknown:
+        count = len(ctx.module.children[slot.key].elements)
+        index_map = isl.map.from_domain(scope.domain).add_dims(isl.dim_type.OUT, 1)
+        index_map = index_map.lower_bound_si(isl.dim_type.OUT, 0, 0).upper_bound_si(
+            isl.dim_type.OUT, 0, count - 1
+        )
+        bounded = AnalysisPrecision.UPPER_BOUND
+    groups = []
+    for windows, items in footprint.groups:
+        qualified = []
+        for item in items:
+            if item.reached is None or not (
+                item.ownership
+                or any(
+                    item.target.expr is formal and formal.is_const
+                    for formal in ctx.callee.function.params
+                )
+            ):
+                qualified.append(item)
+                continue
+            relation = isl.map.from_range(item.reached).insert_dims(isl.dim_type.IN, 0, scope.depth)
+            relation = relation.intersect_domain(scope.domain)
+            for axis, loop in enumerate(_loop_scopes(scope)):
+                parameter = relation.find_dim_by_name(
+                    isl.dim_type.PARAM, loop_parameter(loop.owner.induction_var)
+                )
+                if parameter >= 0:
+                    relation = relation.equate(isl.dim_type.IN, axis, isl.dim_type.PARAM, parameter)
+                    relation = relation.project_out(isl.dim_type.PARAM, parameter, 1)
+            relation = index_map.flat_range_product(relation)
+            relation, _loop_values = name_loop_parameters(
+                relation, (loop.owner.induction_var for loop in _loop_scopes(scope))
+            )
+            relation = relation.project_out(isl.dim_type.IN, 0, scope.depth)
+            image = relation.range()
+            qualified.append(
+                replace(
+                    item,
+                    ownership=(slot.key, *item.ownership),
+                    reached=image,
+                    must=image,
+                    precision=item.precision.join(bounded),
+                )
+            )
+        groups.append((windows, tuple(qualified)))
+    return Footprint(tuple(groups))
+
+
+def reuse_windows(root, *, memory_level, wave, ctx, capacity, labels, resolved=()):
+    boundaries = moving_boundaries(
+        root, memory_level=memory_level, wave=wave, ctx=ctx, labels=labels, resolved=resolved
+    )
+    buffers = _by_buffer(boundaries, wave)
+    footprints = _window_footprints(
+        boundaries,
+        _uncounted_movements(root, memory_level=memory_level, ctx=ctx),
+        buffers,
         memory_level=memory_level,
-        groups=((windows, items),),
     )
+    return _reuse_rows(buffers, footprints, capacity)
 
 
 def wave_of(

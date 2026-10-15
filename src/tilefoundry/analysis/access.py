@@ -78,8 +78,7 @@ class BufferAlias:
 
 
 def aligned_source(
-    source: BufferAlias, rank: int, depth: int,
-    parameters: Mapping[str, object] | None = None
+    source: BufferAlias, rank: int, depth: int, parameters: Mapping[str, object] | None = None
 ) -> isl.map:
     """Align a cached source to the caller's enclosing-loop prefix."""
     relation = source.relation.relation
@@ -104,7 +103,10 @@ def aligned_source(
 
 
 def apply_source(
-    relation: isl.map, source: BufferAlias, rank: int, depth: int,
+    relation: isl.map,
+    source: BufferAlias,
+    rank: int,
+    depth: int,
     parameters: Mapping[str, object] | None = None,
 ) -> isl.map:
     """Compose once, carrying the call's loop coordinates into the source domain."""
@@ -317,6 +319,25 @@ def eliminate_parameters(
     return relation, precision
 
 
+def loop_parameter(value: Var) -> str:
+    """One coordinate name per induction identity, across call boundaries."""
+    return f"__tf_loop_{id(value)}"
+
+
+def name_loop_parameters(relation: isl.map, inductions) -> tuple[isl.map, dict]:
+    values = {}
+    for axis, induction in reversed(tuple(enumerate(inductions))):
+        name = loop_parameter(induction)
+        parameter = relation.find_dim_by_name(isl.dim_type.PARAM, name)
+        if parameter < 0:
+            relation = relation.insert_dims(isl.dim_type.PARAM, 0, 1)
+            relation = relation.set_dim_name(isl.dim_type.PARAM, 0, name)
+            parameter = 0
+        relation = relation.equate(isl.dim_type.IN, axis, isl.dim_type.PARAM, parameter)
+        values[name] = induction
+    return relation, values
+
+
 def bind_parameters(
     relation: isl.map,
     values: Mapping[str, object],
@@ -326,6 +347,7 @@ def bind_parameters(
     held: object,
     *,
     narrow: bool,
+    retained_formals: tuple[Var, ...] = (),
 ) -> tuple[isl.map, AnalysisPrecision]:
     """Substitute formal-dependent coordinate parameters through one call."""
 
@@ -339,6 +361,8 @@ def bind_parameters(
 
     bound = {}
     for name, value in values.items():
+        if name.startswith("__tf_loop_"):
+            continue
         position = relation.find_dim_by_name(isl.dim_type.PARAM, name)
         if position < 0:
             continue
@@ -348,7 +372,13 @@ def bind_parameters(
         relation = relation.set_dim_name(isl.dim_type.PARAM, position, temporary)
         bound[temporary] = BindParameters().visit(value) if isinstance(value, Expr) else value
     return eliminate_parameters(
-        relation, bound, scope, held, narrow=narrow, retained=scope.domain_params
+        relation,
+        bound,
+        scope,
+        held,
+        narrow=narrow,
+        retained=scope.domain_params,
+        formals=retained_formals,
     )
 
 

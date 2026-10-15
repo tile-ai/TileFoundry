@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import ClassVar
 
-from tilefoundry.ir.core import Call, Constant, Expr, Var
+from tilefoundry.ir.core import Call, Constant, Expr, IRMetadata, Var, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
@@ -14,11 +14,11 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.visitor import collect_exprs, expr_children
 from tilefoundry.visitor_registry.access_relation import leaf_span, leaves_of
 from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
-from tilefoundry.visitor_registry.contexts import ValuationContext
 
 from .access import SSAValue
 from .errors import AnalysisError
 from .metadata import TimingValuation, ValueLifetime
+from .visitor import AnalyzeContext
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class RegionInterval:
 
 
 @dataclass(frozen=True)
-class Liveness:
+class Liveness(IRMetadata):
     """Definition-ordered intervals on one function-wide event timeline."""
 
     intervals: tuple[ValueLifetime, ...]
@@ -50,6 +50,33 @@ class Liveness:
     loop_windows: dict[int, tuple[int, int]] = field(default_factory=dict)
     requires: ClassVar[tuple[type, ...]] = (TimingValuation,)
 
+    def resolve(self, ctx) -> Liveness:
+        timing = ctx.request_valuation(TimingValuation)
+        return replace(
+            self,
+            intervals=tuple(
+                replace(
+                    item,
+                    defined_at=timing.event(item.defined_at),
+                    last_used_at=timing.event(item.last_used_at),
+                )
+                for item in self.intervals
+            ),
+            uses=tuple(replace(use, at=timing.event(use.at)) for use in self.uses),
+            regions=tuple(
+                replace(
+                    region,
+                    entered_at=timing.event(region.entered_at),
+                    exited_at=timing.event(region.exited_at),
+                )
+                for region in self.regions
+            ),
+            timeline_end=timing.event(self.timeline_end),
+            loop_windows={
+                key: (timing.event(start), timing.event(end))
+                for key, (start, end) in self.loop_windows.items()
+            },
+        )
 
     def interval_of(self, value: SSAValue) -> ValueLifetime | None:
         """Return *value*'s interval when it belongs to this timeline."""
@@ -57,6 +84,14 @@ class Liveness:
             (item for item in self.intervals if item.value == value),
             None,
         )
+
+
+@dataclass
+class LivenessContext(AnalyzeContext):
+    event_base: int = 0
+
+    def event(self, local: int) -> int:
+        return self.event_base + local
 
 
 def result_copies(expr: Expr) -> int:
@@ -118,7 +153,9 @@ class LivenessVisitor(ValuationVisitor[None]):
         for key in keys:
             state = self.states.get(key)
             if state is None:
-                raise ValueError(f"liveness: {type(key.expr).__name__} is used before its definition")
+                raise ValueError(
+                    f"liveness: {type(key.expr).__name__} is used before its definition"
+                )
             for entry, outside in (loop_entry[:2] for loop_entry in self.loop_entries):
                 if state.defined_at < entry:
                     outside.add(key)
@@ -181,21 +218,21 @@ class LivenessVisitor(ValuationVisitor[None]):
         argument_use = self.next_event()
         for argument in call.args:
             self.use(argument, argument_use)
-        template = context.definitions[id(callee.function)].liveness
+        template = get_metadata(callee.function, Liveness)
         if template is None:
             raise AnalysisError(f"liveness: missing local template for {callee.function.name!r}")
         start = self.next_event()
-        context.call_events[id(call)] = start
-        binding = context.call_context(call, event_base=start)
+        binding = replace(context.for_call(call), event_base=start)
+        template = template.resolve(binding)
         for formal, argument in binding.bindings:
             for use in template.uses:
                 if use.value.expr is formal:
                     self.use(
                         SSAValue(argument, use.value.index),
-                        binding.event(use.at),
+                        use.at,
                         synthetic=use.synthetic,
                     )
-        self.point = start + template.timeline_end
+        self.point = template.timeline_end
         self.define(call, self.next_event())
 
     def visit_MeshRegion(self, region: MeshRegion, ctx=None) -> None:
@@ -264,7 +301,10 @@ def analyze_liveness(
     if function.body is None:
         raise ValueError(f"liveness: function {function.name!r} has no body")
     visitor = LivenessVisitor(function, callee=callee)
-    visitor.visit_function_body(function, context or ValuationContext(owner=function))
+    context = (
+        LivenessContext(**vars(context)) if context is not None else LivenessContext(owner=function)
+    )
+    visitor.visit_function_body(function, context)
     return visitor.finish()
 
 

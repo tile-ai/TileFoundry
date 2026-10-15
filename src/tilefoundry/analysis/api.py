@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from tilefoundry.analysis.access import SSAValue
 from tilefoundry.analysis.check import check_analyses
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import ScopeBuilder
@@ -26,6 +27,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.visitor import function_values
 from tilefoundry.target import Target, UnsupportedCapabilityError
+from tilefoundry.visitor_registry.access_relation import leaves_of
 from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
 
 
@@ -128,14 +130,14 @@ def _build_context(
     *,
     topology_level: str | None = None,
     options: object | None = None,
-) -> AnalyzeContext:
+) -> tuple[AnalyzeContext, ...]:
     """Build one local scope tree per definition in a previously checked program."""
     _check_subject(module, function)
     topologies = module.effective_topologies()
     if topology_level is None:
         topology_level = topologies[0].name if topologies else None
 
-    definitions = {}
+    contexts, returns = [], {}
     frames = tuple(CallFrameVisitor.walk_frames(CallFrame(module, function), postorder=True))
     for frame in frames:
         context = AnalyzeContext(
@@ -144,13 +146,26 @@ def _build_context(
             topologies=frame.topologies,
             topology_level=topology_level,
             options=options,
+            entry=function,
         )
         builder = ScopeBuilder(
-            frame.module, frame.function, ctx=context, is_root=frame.function is function
+            frame.module,
+            frame.function,
+            ctx=context,
+            is_root=frame.function is function,
+            returns=returns,
         )
         context.root = context.current = builder.build()
-        definitions[id(frame.function)] = context
-    return definitions[id(function)]
+        contexts.append(context)
+        body = frame.function.body
+        returns[id(frame.function)] = {
+            view: tuple(
+                (table[SSAValue(body, index)], context.root.precisions[view][SSAValue(body, index)])
+                for index in range(len(leaves_of(body.type)))
+            )
+            for view, table in context.root.sources.items()
+        }
+    return tuple(contexts)
 
 
 def _check_valuations(
@@ -201,15 +216,24 @@ def analyze(
         topologies = module.effective_topologies()
         topology_level = topologies[0].name if topologies else None
     check_analyses(module, function, closure, topology_level=topology_level)
-    context = _build_context(
+    contexts = _build_context(
         module,
         function,
         topology_level=topology_level,
         options=options,
     )
-    module = context.module
-    topology_level = context.topology_level
-    function = context.root.owner
+    from .compute_cost import ComputeCostContext  # noqa: PLC0415
+    from .memory import MemoryContext  # noqa: PLC0415
+    from .performance import PerformanceContext  # noqa: PLC0415
+
+    families = {
+        "compute-cost": ComputeCostContext,
+        "memory": MemoryContext,
+        "performance": PerformanceContext,
+    }
+    context_types = {a.selector: families.get(a.selector, AnalyzeContext) for a in closure}
+    _check_valuations(closure, context_types)
+    context = contexts[-1]
     functions = tuple(frame.function for frame in CallFrameVisitor.walk_frames(context.frame))
 
     order: list[type[IRMetadata]] = []
@@ -217,7 +241,8 @@ def analyze(
     for algorithm in closure:
         before = _metadata_snapshot(functions)
         try:
-            algorithm.run(function, context)
+            for local in contexts:
+                algorithm.run(local.frame.function, local)
         except UnsupportedCapabilityError as error:
             raise AnalysisError(f"{algorithm.selector}: {error}") from None
         after = _metadata_snapshot(functions)
