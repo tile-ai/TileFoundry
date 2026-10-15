@@ -316,7 +316,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
 
     def _carry_initial(self, value):
         for loop in self.locations.get(id(value), self.context).enclosing_loops():
-            for param, initial in zip(loop.params, loop.args):
+            for param, initial in zip(loop.params[:len(loop.yield_values)], loop.args):
                 if param is value:
                     return initial
         return None
