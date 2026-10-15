@@ -193,8 +193,6 @@ class Footprint:
 
     buffers: tuple[tuple[str, Breakdown[int]], ...] = ()
     precision: AnalysisPrecision = AnalysisPrecision.EXACT
-    reached: tuple[ReachedAddresses, ...] = ()
-    memory_level: str = ""
     groups: tuple[tuple[int, tuple[ReachedAddresses, ...]], ...] = ()
 
 

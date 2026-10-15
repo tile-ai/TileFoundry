@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
-from functools import cached_property
 from itertools import combinations
 from typing import Protocol
 
@@ -71,15 +70,6 @@ class AliasKind(IntEnum):
     IN_PLACE = 7
 
 
-@dataclass(frozen=True)
-class Alias:
-    """A local storage relation, independent of whether a tie is accepted."""
-
-    target: AllocationValue
-    relation: AccessRelation
-    kind: AliasKind
-
-
 @dataclass(eq=False)
 class AllocationValue:
     """One SSA result: its source, result index, and own live interval."""
@@ -108,69 +98,12 @@ def leaves(storage: Storage) -> tuple[AllocationValue, ...]:
     return ()
 
 
-@dataclass(eq=False)
-class Buffer:
-    """One address and the exact union of its members' live intervals."""
-
-    members: list[AllocationValue]
-    _lifetime: ValueLifetime | None = None
-
-    @property
-    def lifetime(self) -> ValueLifetime:
-        if self._lifetime is not None:
-            return self._lifetime
-        first = self.members[0].lifetime
-        return replace(
-            first,
-            bytes=max(item.lifetime.bytes for item in self.members),
-            defined_at=min(item.lifetime.defined_at for item in self.members),
-            last_used_at=max(item.lifetime.last_used_at for item in self.members),
-            persistent=any(item.lifetime.persistent for item in self.members),
-        )
-
-    @property
-    def alignment(self) -> int:
-        return max(alignment_of(item.value) for item in self.members)
-
-    @cached_property
-    def live_windows(self) -> tuple[tuple[int, int], ...]:
-        """A compact interval union after the partition is frozen."""
-        result = []
-        for start, end in sorted(
-            (item.lifetime.defined_at, item.lifetime.last_used_at) for item in self.members
-        ):
-            if result and start <= result[-1][1] + 1:
-                result[-1] = result[-1][0], max(end, result[-1][1])
-            else:
-                result.append((start, end))
-        return tuple(result)
-
-    def seal(self):
-        """Cache sizes only after all boundary joins have completed."""
-        self._lifetime = self.lifetime
-
-    def intersects(self, other: Buffer) -> bool:
-        if self.lifetime.persistent or other.lifetime.persistent:
-            return True
-        left, right = iter(self.live_windows), iter(other.live_windows)
-        a, b = next(left, None), next(right, None)
-        while a is not None and b is not None:
-            if max(a[0], b[0]) <= min(a[1], b[1]):
-                return True
-            if a[1] < b[1]:
-                a = next(left, None)
-            else:
-                b = next(right, None)
-        return False
-
-
 @dataclass(frozen=True)
 class AllocationResult:
     """The first physical placement found for one memory level."""
 
     peak_bytes: int
     solver_status: str
-    offsets: dict[Buffer, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -185,35 +118,9 @@ class AllocationModel:
     values: list[AllocationValue] = field(default_factory=list)
     material: set[AllocationValue] = field(default_factory=set)
     models: dict[str, cp_model.CpModel] = field(default_factory=dict)
-    address: dict[Buffer, cp_model.IntVar] = field(default_factory=dict)
     parameters: set[AllocationValue] = field(default_factory=set)
     outputs: set[AllocationValue] = field(default_factory=set)
-    buffers: list[Buffer] = field(default_factory=list)
-    partition: dict[AllocationValue, Buffer] = field(default_factory=dict)
-    accepted: dict[AllocationValue, tuple[Alias, ...]] = field(default_factory=dict)
-    proofs: dict[AllocationValue, set[AllocationValue]] = field(default_factory=dict)
-    uses: dict[AllocationValue, tuple[UseEvent, ...]] = field(default_factory=dict)
     definitions: dict[int, IterationScope] = field(default_factory=dict)
-    reads: dict[AllocationValue, tuple[Access, ...]] = field(default_factory=dict)
-    writes: dict[AllocationValue, Access] = field(default_factory=dict)
-    adopted: dict[AllocationValue, Alias] = field(default_factory=dict)
-    window_producers: dict[
-        tuple[AllocationValue, AllocationValue], tuple[AllocationValue, BufferAlias]
-    ] = field(default_factory=dict)
-    window_candidates: dict[
-        tuple[AllocationValue, AllocationValue],
-        tuple[AllocationValue, AllocationValue, BufferAlias],
-    ] = field(default_factory=dict)
-    carry_loops: dict[tuple[AllocationValue, AllocationValue], LoopRegion] = field(
-        default_factory=dict
-    )
-    returned: tuple[AllocationValue, ...] = ()
-    returns: dict[int, tuple[AllocationValue, ...]] = field(default_factory=dict)
-    call_bindings: dict[int, tuple[tuple[AllocationValue, AllocationValue], ...]] = field(
-        default_factory=dict
-    )
-    call_results: dict[int, tuple[AllocationValue, ...]] = field(default_factory=dict)
-    context: object = None
 
     def addresses(self) -> None:
         """Create exactly one address variable per physical Buffer."""
@@ -487,175 +394,6 @@ def _proved_at(model, left, right, start, landing):
                 if reached.is_equal(written.intersect_domain(access.relation.domain())):
                     proved.add(member)
     return read <= proved
-
-
-def tie_analysis(model: AllocationModel) -> None:
-    """Partition local values before any address variable exists."""
-    for value in model.values:
-        value.aliases = tuple(sorted(value.aliases, key=lambda alias: alias.kind))
-    model.buffers = [Buffer([value]) for value in model.values]
-    model.partition = {buffer.members[0]: buffer for buffer in model.buffers}
-
-    def merge(left, right):
-        if left is right:
-            return
-        right.members.extend(left.members)
-        for value in left.members:
-            model.partition[value] = right
-        model.buffers.remove(left)
-
-    for value in model.values:
-        for alias in value.aliases:
-            if alias.kind <= AliasKind.FORWARD:
-                merge(model.partition[value], model.partition[alias.target])
-    for kind in tuple(AliasKind)[2:]:
-        for value in model.values:
-            for alias in value.aliases:
-                if alias.kind != kind:
-                    continue
-                left, right = model.partition[value], model.partition[alias.target]
-                if kind == AliasKind.WINDOW:
-                    result, destination, _published = model.window_candidates[value, alias.target]
-                    a, b = left.lifetime, right.lifetime
-                    if (
-                        left is right
-                        or model.partition[result] is not model.partition[destination]
-                        or a.persistent
-                        or any(member in model.parameters for member in left.members)
-                        or a.memory_level != b.memory_level
-                        or value.lifetime.bytes > result.lifetime.bytes
-                        or any(
-                            member.lifetime.last_used_at > result.lifetime.defined_at
-                            for member in left.members
-                        )
-                    ):
-                        continue
-                    reads = [use for member in right.members for use in model.uses[member]]
-                    if any(a.defined_at < use.at < result.lifetime.defined_at for use in reads):
-                        continue
-                    landing = _landing(model, value, alias, window=True)
-                    if landing is None:
-                        continue
-                    producer, edge = landing
-                    scope = model.definitions[id(producer.value)]
-                    published = BufferAlias(_published.buffer, edge.relation, _published.index)
-                    if not _visible_at(model, published.buffer, producer) or not all(
-                        _visible_at(model, parameter, producer)
-                        for parameter in published.relation.values.values()
-                    ):
-                        continue
-                    if any(use.at == a.defined_at for use in reads) and not _proved_at(
-                        model, left, right, a.defined_at, landing
-                    ):
-                        continue
-                    model.window_producers[value, alias.target] = producer, published
-                    model.adopted[producer] = edge
-                    merge(left, right)
-                elif left is not right:
-                    a, b = left.lifetime, right.lifetime
-                    end_b, start_a = b.last_used_at, a.defined_at
-                    if kind == AliasKind.CARRY_YIELD:
-                        loop = model.carry_loops[value, alias.target]
-                        entered, backedge = model.liveness.loop_windows[id(loop)]
-                        end_b = max(
-                            (
-                                use.at
-                                for member in right.members
-                                for use in model.uses[member]
-                                if entered < use.at < backedge
-                            ),
-                            default=entered,
-                        )
-                        start_a = min(
-                            (
-                                member.lifetime.defined_at
-                                for member in left.members
-                                if entered < member.lifetime.defined_at < backedge
-                            ),
-                            default=a.defined_at,
-                        )
-                    if (
-                        end_b > start_a
-                        or b.persistent
-                        or any(member in model.parameters for member in right.members)
-                        or a.memory_level != b.memory_level
-                        or a.bytes > b.bytes
-                    ):
-                        continue
-                    landing = _landing(model, value, alias)
-                    if landing is None:
-                        continue
-                    if kind in (AliasKind.IN_PLACE, AliasKind.RETURN_REUSE):
-                        scope = model.definitions[id(landing[0].value)]
-                        positioned = _coordinates(model, landing[0], scope, override=landing)
-                        if positioned is None or not is_zero_offset(positioned[1]):
-                            continue
-                    if end_b == start_a and not _proved_at(model, left, right, start_a, landing):
-                        continue
-                    merge(left, right)
-                model.accepted[value] = (*model.accepted.get(value, ()), alias)
-
-    for value in model.values:
-        for alias in value.aliases:
-            if (
-                alias.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD, AliasKind.INSERT_SLICE)
-                and model.partition[value] is model.partition[alias.target]
-                and alias not in model.accepted.get(value, ())
-            ):
-                model.accepted[value] = (*model.accepted.get(value, ()), alias)
-
-    for index, returned in enumerate(model.returned):
-        unvisited = [returned]
-        seen = set()
-        while unvisited:
-            value = unvisited.pop()
-            if value in seen:
-                continue
-            seen.add(value)
-            unvisited.extend(model.proofs.get(value, ()))
-            for alias in value.aliases:
-                if alias.kind <= AliasKind.FORWARD and is_zero_offset(alias.relation.relation):
-                    unvisited.append(alias.target)
-        start = model.partition[returned].lifetime.defined_at
-        model.returns[index] = tuple(
-            parameter
-            for parameter in model.values
-            if parameter in model.parameters
-            and parameter in seen
-            and model.partition[parameter].lifetime.last_used_at <= start
-        )
-
-    for buffer in model.buffers:
-        buffer.seal()
-
-
-def published_aliases(model: AllocationModel) -> dict[AllocationValue, BufferAlias]:
-    """Publish accepted semantic ties, tracing adopted windows to their storage root."""
-    result = {}
-    for value, accepted in model.accepted.items():
-        selected = next((alias for alias in accepted if alias.kind == AliasKind.INSERT_SLICE), None)
-        selected = selected or next(
-            (
-                alias
-                for alias in accepted
-                if alias.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD)
-            ),
-            None,
-        )
-        if selected is not None:
-            result[value] = BufferAlias(
-                selected.target.value, selected.relation, selected.target.index
-            )
-    for (update, insert), (_result, _destination, published) in model.window_candidates.items():
-        if not any(
-            alias.kind == AliasKind.WINDOW and alias.target is insert
-            for alias in model.accepted.get(update, ())
-        ):
-            continue
-        root, published = model.window_producers[update, insert]
-        if not isinstance(root.value.type, TupleType):
-            result[root] = published
-    return result
 
 
 def covers_result_each_iteration(
@@ -1629,9 +1367,7 @@ def solve_allocation(
 
 
 __all__ = [
-    "Alias",
     "AliasKind",
-    "Buffer",
     "AllocationConstraintVisitor",
     "AllocationModel",
     "AllocationResult",

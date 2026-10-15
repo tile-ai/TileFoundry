@@ -18,15 +18,6 @@ from .metadata import TimingValuation
 
 
 @dataclass(frozen=True)
-class LiveInterval:
-    """One SSA value's definition and greatest use event."""
-
-    value: Expr
-    defined_at: int
-    last_used_at: int
-
-
-@dataclass(frozen=True)
 class UseEvent:
     """One SSA use and whether it exists only to extend structured liveness."""
 
@@ -55,33 +46,6 @@ class Liveness:
     loop_windows: dict[int, tuple[int, int]] = field(default_factory=dict)
     requires: ClassVar[tuple[type, ...]] = (TimingValuation,)
 
-    def resolve(self, ctx: ValuationProvider) -> Liveness:
-        """Translate the local template through the current call stack."""
-        timing = ctx.request_valuation(TimingValuation)
-        return Liveness(
-            tuple(
-                replace(
-                    item,
-                    defined_at=timing.event(item.defined_at),
-                    last_used_at=timing.event(item.last_used_at),
-                )
-                for item in self.intervals
-            ),
-            tuple(replace(use, at=timing.event(use.at)) for use in self.uses),
-            tuple(
-                replace(
-                    region,
-                    entered_at=timing.event(region.entered_at),
-                    exited_at=timing.event(region.exited_at),
-                )
-                for region in self.regions
-            ),
-            timing.event(self.timeline_end),
-            {
-                key: (timing.event(start), timing.event(end))
-                for key, (start, end) in self.loop_windows.items()
-            },
-        )
 
     def interval_of(self, value: Expr) -> LiveInterval | None:
         """Return *value*'s interval when it belongs to this timeline."""
@@ -269,7 +233,6 @@ def analyze_liveness(function: Function, context: AnalyzeContext | None = None) 
 
 
 __all__ = [
-    "LiveInterval",
     "Liveness",
     "RegionInterval",
     "UseEvent",

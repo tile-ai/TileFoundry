@@ -72,7 +72,6 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.layout import flatten, resolve_layout
-from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import (
     i64_const,
@@ -260,45 +259,6 @@ class Names:
     def binding(self, authored: Expr | None, fallback: str = "value") -> str:
         binding = get_metadata(authored, BindingMetadata) if authored is not None else None
         return self.fresh(binding.name if binding is not None else fallback)
-
-
-@dataclass(eq=False)
-class _Region:
-    """Lexical ownership for declarations, captures and enclosing meshes."""
-
-    owner: Expr
-    parent: _Region | None = None
-    outer_mesh: Mesh | None = None
-
-    def enclosing_loops(self) -> tuple[LoopRegion, ...]:
-        owners = []
-        cursor = self
-        while cursor is not None:
-            if isinstance(cursor.owner, LoopRegion):
-                owners.append(cursor.owner)
-            cursor = cursor.parent
-        return tuple(reversed(owners))
-
-    def enclosing_mesh(self) -> Mesh | None:
-        cursor = self
-        while cursor is not None:
-            if isinstance(cursor.owner, MeshRegion):
-                return cursor.owner.mesh
-            if cursor.parent is None:
-                return cursor.outer_mesh
-            cursor = cursor.parent
-        return None
-
-    def execution_mesh(self) -> Mesh | None:
-        meshes = []
-        cursor = self
-        while cursor is not None:
-            if isinstance(cursor.owner, MeshRegion):
-                meshes.append(cursor.owner.mesh)
-            if cursor.parent is None and cursor.outer_mesh is not None:
-                meshes.append(cursor.outer_mesh)
-            cursor = cursor.parent
-        return make_mesh(*reversed(meshes)) if meshes else None
 
 
 def _frame(mesh: Mesh) -> Mesh:

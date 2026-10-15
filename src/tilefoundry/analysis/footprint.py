@@ -12,8 +12,8 @@ from dataclasses import dataclass, field, replace
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr, get_metadata, value_label, value_labels
-from tilefoundry.ir.core.module import Module, ModuleList
+from tilefoundry.ir.core import Call, Expr, get_metadata
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
@@ -25,19 +25,17 @@ from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.isl_utils import cardinality
-from tilefoundry.visitor_registry.access_relation import AccessRelation, leaves_of
+from tilefoundry.visitor_registry.access_relation import leaves_of
 from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 from tilefoundry.visitor_registry.contexts import CostContext
 
-from .access import Access, BufferAlias, widest_allowed
+from .access import Access, widest_allowed
 from .facts import MemoryHierarchyFacts
 from .iteration_scope import IterationScope, walk_scopes
 from .loop_domain import induction_name
 from .metadata import (
-    BindingValuation,
     Breakdown,
     Footprint,
-    LoopNestValuation,
     MemoryMetadata,
     ReuseWindow,
     Spread,
@@ -253,17 +251,7 @@ class MovingBoundary:
     mesh_parameters: tuple[tuple[str, Call], ...]
     axis_parameters: tuple[str | None, ...]
     position: tuple[int, tuple[tuple[str, int], ...]] | None
-    loops: tuple[IterationScope, ...] | None = None
-    loop_keys: tuple[tuple[int, ...], ...] = ()
-    varying: frozenset[int] | None = None
 
-    @property
-    def loop_scopes(self) -> tuple[IterationScope, ...]:
-        return _loop_scopes(self.scope) if self.loops is None else self.loops
-
-    @property
-    def depth(self) -> int:
-        return len(self.loop_scopes)
 
     _relations: dict[int, isl.map] = field(default_factory=dict, init=False, repr=False)
     _held: dict[int, isl.set] = field(default_factory=dict, init=False, repr=False)
@@ -825,8 +813,6 @@ class _BufferReuse:
     time_scope: IterationScope | None
     space: tuple[str, ...]
     space_units: int
-    time_key: tuple[int, ...] | None = None
-    time_depth: int = 0
 
 
 def _by_buffer(
@@ -1083,398 +1069,6 @@ def footprint_of(
         reached=items,
         memory_level=memory_level,
         groups=((windows, items),),
-    )
-
-
-def instance_image(stack):
-    """Map the caller iteration domain to reached module-slot index tuples."""
-    from .visitor import VisitContext  # noqa: PLC0415
-
-    domain = VisitContext(stack).domain()
-    chain = []
-    loops = []
-    for frame_position, frame in enumerate(stack):
-        local_loops = _loop_scopes(frame.scope)
-        begin = len(loops)
-        loops.extend(local_loops)
-        target = frame.call.target
-        slot = (
-            target
-            if isinstance(target, ModuleList)
-            else (
-                target.args[0]
-                if isinstance(target, Call) and isinstance(target.args[0], ModuleList)
-                else None
-            )
-        )
-        if slot is None:
-            continue
-        index = target.args[1] if isinstance(target, Call) else 0
-        index = frame.scope.capture_root(index) if isinstance(index, Expr) else index
-        for outer in reversed(stack[:frame_position]):
-            if any(index is formal for formal, _argument in outer.bindings):
-                index = outer.actual(index).buffer
-        chain.append((slot, index, begin, local_loops))
-    image = isl.map.from_domain(domain).add_dims(isl.dim_type.OUT, len(chain))
-    for axis, (slot, index, begin, local_loops) in enumerate(chain):
-        number = static_dim_value(index)
-        if number is not None:
-            image = image.fix_val(isl.dim_type.OUT, axis, isl.val(number))
-        else:
-            position = next(
-                (
-                    position
-                    for position, scope in enumerate(local_loops)
-                    if scope.owner.induction_var is index
-                ),
-                None,
-            )
-            if position is not None:
-                image = image.equate(isl.dim_type.IN, begin + position, isl.dim_type.OUT, axis)
-        image = image.lower_bound_val(isl.dim_type.OUT, axis, isl.val(0))
-        image = image.upper_bound_val(isl.dim_type.OUT, axis, isl.val(len(slot.elements) - 1))
-    return tuple(slot.key for slot, _index, _begin, _loops in chain), image
-
-
-def root_boundaries(context, *, memory_level, wave):
-    """Project primitive local relations through root visits without joining scope trees."""
-    from .visitor import VisitContext  # noqa: PLC0415
-
-    values = {}
-    for local in (
-        context,
-        *(local for local in context.definitions.values() if local is not context),
-    ):
-        for scope in walk_scopes(local.root):
-            for table in (scope.accesses, scope.outputs):
-                for _call, accesses in table.get("narrow", {}).values():
-                    for access in accesses:
-                        values[id(access.buffer)] = access.buffer
-    labels = dict(zip(values, value_labels(values.values()), strict=True))
-    groups = {}
-    resources = {}
-    origins = {
-        identity: scope
-        for definition in context.definitions.values()
-        for scope in walk_scopes(definition.root)
-        for identity in scope.relations
-    }
-    for local, visit in context.walk_visits():
-        stack = visit.stack if isinstance(visit, VisitContext) else ()
-        local_labels = {
-            (identity, index): label
-            + (f"[{index}]" if isinstance(values[identity].type, TupleType) else "")
-            for identity, label in labels.items()
-            for index in range(len(leaves_of(values[identity].type)))
-        }
-        cost = CostContext(
-            frame=local.frame, topology_level=local.topology_level, topologies=local.topologies
-        )
-        boundaries = moving_boundaries(
-            local.root,
-            memory_level=memory_level,
-            wave=wave,
-            ctx=cost,
-            labels=local_labels,
-            outer_depth=sum(frame.scope.depth for frame in stack),
-            origins=origins,
-        )
-        for boundary in boundaries:
-            loops = []
-            loop_keys = []
-            for depth, frame in enumerate(stack):
-                for scope in _loop_scopes(frame.scope):
-                    loops.append(scope)
-                    loop_keys.append((*tuple(id(outer.call) for outer in stack[:depth]), id(scope)))
-            for scope in _loop_scopes(boundary.scope):
-                loops.append(scope)
-                loop_keys.append((*tuple(id(frame.call) for frame in stack), id(scope)))
-            dependencies = set(boundary.scope.variance.get(id(boundary.access.buffer), ()))
-            if boundary.access.input_index is not None:
-                dependencies.update(
-                    boundary.scope.variance.get(
-                        id(boundary.call.args[boundary.access.input_index]), ()
-                    )
-                )
-            if stack:
-                for formal in local.frame.function.params:
-                    if id(formal) in dependencies:
-                        dependencies.remove(id(formal))
-                        dependencies.update(visit.varies(formal))
-
-            def project(access, view):
-                if not stack:
-                    return access
-                frames = []
-                for frame in stack:
-                    owner = frame.scope
-                    while owner.parent is not None:
-                        owner = owner.parent
-                    caller = context.definitions[id(owner.owner)]
-                    frames.append(replace(frame, sources=caller.sources[view], view=view))
-                projected, precision = VisitContext(tuple(frames)).project(
-                    BufferAlias(
-                        access.buffer,
-                        AccessRelation(
-                            access.relation,
-                            {
-                                name: value
-                                for name, value in boundary.scope.domain_params.items()
-                                if access.relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
-                            },
-                        ),
-                        access.index,
-                    )
-                )
-                relation = projected.relation.relation
-                resource_stack = next(
-                    (
-                        tuple(frames[: position + 1])
-                        for position, frame in enumerate(frames)
-                        if any(projected.buffer is weight for weight in frame.implicit)
-                    ),
-                    None,
-                )
-                if resource_stack is not None:
-                    keys, image = instance_image(resource_stack)
-                    resource_key = keys, id(projected.buffer)
-                    reached = image.range()
-                    if reached.dim(isl.dim_type.PARAM):
-                        reached = reached.project_out(
-                            isl.dim_type.PARAM, 0, reached.dim(isl.dim_type.PARAM)
-                        )
-                    previous = resources.get(resource_key)
-                    resources[resource_key] = (
-                        projected.buffer,
-                        reached if previous is None else previous[1].union(reached),
-                    )
-                    image = image.add_dims(
-                        isl.dim_type.IN, relation.dim(isl.dim_type.IN) - image.dim(isl.dim_type.IN)
-                    )
-                    relation = image.flat_range_product(relation)
-                return replace(
-                    access,
-                    relation=relation,
-                    buffer=projected.buffer,
-                    index=projected.index,
-                    precision=access.precision.join(precision),
-                )
-
-            access = project(boundary.access, "narrow")
-            device = project(boundary.space_wave_access, "device")
-            unit = project(boundary.unit_access, "unit")
-            label = labels.get(id(access.buffer), value_label(access.buffer) or "buffer")
-            resource_stack = next(
-                (
-                    stack[: position + 1]
-                    for position, frame in enumerate(stack)
-                    if any(access.buffer is weight for weight in frame.implicit)
-                ),
-                None,
-            )
-            resource = (
-                (instance_image(resource_stack)[0], id(access.buffer)) if resource_stack else None
-            )
-            if resource is not None:
-                label = ".".join((*resource[0], getattr(access.buffer, "name", label)))
-            if isinstance(access.buffer.type, TupleType):
-                label += f"[{access.index}]"
-            params = dict(boundary.scope.domain_params)
-            for frame in stack:
-                params.update(frame.scope.domain_params)
-            mesh_parameters = tuple(
-                (name, value)
-                for name, value in params.items()
-                if isinstance(value, Call)
-                and isinstance(value.target, MeshCoord)
-                and _involves_parameter(access.relation, name)
-            )
-            position = (
-                _linear_position(mesh_parameters) if wave[0] < wave[1] and mesh_parameters else None
-            )
-            projected = replace(
-                boundary,
-                access=access,
-                space_wave_access=device,
-                unit_access=unit,
-                label=label,
-                loops=tuple(loops),
-                loop_keys=tuple(loop_keys),
-                varying=frozenset(dependencies),
-                mesh_parameters=mesh_parameters,
-                position=position,
-            )
-            key = (*tuple(id(frame.call) for frame in stack), id(boundary.scope))
-            groups.setdefault(key, (local, visit, []))[2].append(projected)
-    return groups, resources
-
-
-def root_footprint(context, *, memory_level, wave):
-    """Union root addresses by buffer, including module-instance coordinate prefixes."""
-    from .visitor import VisitContext  # noqa: PLC0415
-
-    groups, resources = root_boundaries(context, memory_level=memory_level, wave=wave)
-    labeled = {}
-    totals = {}
-    boundaries = []
-    uncounted = []
-    for local, visit in context.walk_visits():
-        stack = visit.stack if isinstance(visit, VisitContext) else ()
-        cost = CostContext(
-            frame=local.frame, topology_level=local.topology_level, topologies=local.topologies
-        )
-        for scope, item in _uncounted_movements(local.root, memory_level=memory_level, ctx=cost):
-            keys = tuple(
-                (*tuple(id(outer.call) for outer in stack[:depth]), id(loop))
-                for depth, frame in enumerate(stack)
-                for loop in _loop_scopes(frame.scope)
-            )
-            keys += tuple(
-                (*tuple(id(frame.call) for frame in stack), id(loop))
-                for loop in _loop_scopes(scope)
-            )
-            uncounted.append((keys, item))
-    for local, visit, group in groups.values():
-        per_label = {}
-        for boundary in group:
-            if not boundary.wave_stated:
-                return None, (), resources
-            item = _reached_addresses(
-                boundary.access,
-                boundary._wave_relation(boundary.depth - 1),
-                boundary.dtype,
-                boundary.mesh_parameters,
-                precision=boundary.access.precision,
-            )
-            labeled.setdefault(boundary.label, []).append(item)
-            per_label.setdefault(boundary.label, []).append(item)
-            boundaries.append(boundary)
-        first = group[0]
-        repeats = first.scope.repeats_of(first.call, local.topology_level)
-        trips = repeats.loop_trips * (
-            visit.repeats().loop_trips if isinstance(visit, VisitContext) else 1
-        )
-        windows = -(-repeats.mesh_positions // wave[0]) * trips
-        for label, items in per_label.items():
-            footprint = footprint_of(
-                merged(items),
-                memory_level=memory_level,
-                labels={(id(item.buffer), item.index): label for item in items},
-                windows=windows,
-            )
-            totals[label] = totals.get(label, 0) + sum(
-                spread.total for _name, held in footprint.buffers for _level, spread in held.kinds
-            )
-    parts = [
-        footprint_of(
-            merged(items),
-            memory_level=memory_level,
-            labels={(id(item.buffer), item.index): label for item in items},
-        )
-        for label, items in labeled.items()
-    ]
-    footprint = Footprint(
-        tuple(
-            (
-                label,
-                replace(
-                    held,
-                    kinds=tuple(
-                        (level, replace(spread, total=totals[label]))
-                        for level, spread in held.kinds
-                    ),
-                ),
-            )
-            for part in parts
-            for label, held in part.buffers
-        ),
-        _precision_of(parts).join(_evidence_precision(item for _keys, item in uncounted)),
-    )
-    cache = cached_level(context.target.get_facts(MemoryHierarchyFacts))
-    buffers = _by_buffer(tuple(boundaries), wave)
-    windows = _window_footprints(
-        tuple(boundaries), tuple(uncounted), buffers, memory_level=memory_level
-    )
-    reuse = () if cache is None else _reuse_rows(buffers, windows, cache[2])
-    return footprint, reuse, resources
-
-
-def resolve_footprint(footprint: Footprint | None, ctx: ValuationProvider) -> Footprint | None:
-    """Bind a local footprint's reached coordinates at its current call site."""
-    if footprint is None:
-        return None
-    binding = ctx.request_valuation(BindingValuation)
-    depth = ctx.request_valuation(LoopNestValuation).domain().dim(isl.dim_type.SET)
-
-    def project(item):
-        if item.reached is None:
-            return item
-
-        def image(addresses):
-            values = {
-                name: value
-                for name, value in item.values.items()
-                if addresses.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
-            }
-            source, precision = binding.project(
-                BufferAlias(
-                    item.buffer, AccessRelation(isl.map.from_range(addresses), values), item.index
-                )
-            )
-            relation = _at_first_iteration(source.relation.relation, depth)
-            return replace(
-                source, relation=AccessRelation(relation, source.relation.values)
-            ), precision
-
-        source, precision = image(item.reached)
-        must = image(item.must)[0].relation.relation.range()
-        return replace(
-            item,
-            buffer=source.buffer,
-            index=source.index,
-            reached=source.relation.relation.range(),
-            must=must,
-            values=source.relation.values,
-            precision=item.precision.join(precision),
-        )
-
-    groups = tuple(
-        (windows, tuple(project(item) for item in items))
-        for windows, items in footprint.groups or ((1, footprint.reached),)
-    )
-    reached = merged(item for _windows, items in groups for item in items)
-    buffers = {id(item.buffer): item.buffer for item in reached}
-    names = dict(zip(buffers, value_labels(buffers.values()), strict=True))
-    labels = {
-        (id(item.buffer), item.index): names[id(item.buffer)]
-        + (f"[{item.index}]" if isinstance(item.buffer.type, TupleType) else "")
-        for item in reached
-    }
-    counted = footprint_of(reached, memory_level=footprint.memory_level, labels=labels)
-    totals = {}
-    for windows, items in groups:
-        part = footprint_of(
-            merged(items), memory_level=footprint.memory_level, labels=labels, windows=windows
-        )
-        for name, held in part.buffers:
-            for level, spread in held.kinds:
-                totals[name, level] = totals.get((name, level), 0) + spread.total
-    return replace(
-        counted,
-        groups=groups,
-        buffers=tuple(
-            (
-                name,
-                replace(
-                    held,
-                    kinds=tuple(
-                        (level, replace(spread, total=totals[name, level]))
-                        for level, spread in held.kinds
-                    ),
-                ),
-            )
-            for name, held in counted.buffers
-        ),
     )
 
 

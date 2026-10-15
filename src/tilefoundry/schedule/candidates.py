@@ -8,13 +8,10 @@ from tilefoundry.analysis.check import check_program
 from tilefoundry.inspection import PatternPrinter, PythonPrinter
 from tilefoundry.ir.core import Call, OpCapability, get_metadata, op_identifier, value_label
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleRefusal, match_instruction
 from tilefoundry.ir.types import StorageKind, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
-from tilefoundry.ir.types.mesh import make_mesh
-from tilefoundry.ir.visitor import collect_exprs, expr_children
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import access_relation_registry
@@ -44,38 +41,7 @@ def candidates(
     module, entry = check_program(module, entry, dims=dims)
     target = module.resolve_target()
     owners = {}
-    visited = set()
 
-    def enter(frame, outer_mesh=None):
-        if id(frame.function) in visited:
-            return
-        visited.add(id(frame.function))
-        seen = set()
-
-        def visit(expr, mesh):
-            if id(expr) in seen:
-                return
-            seen.add(id(expr))
-            if isinstance(expr, (MeshRegion, LoopRegion)):
-                for argument in expr.args:
-                    visit(argument, mesh)
-                inner = mesh
-                if isinstance(expr, MeshRegion):
-                    inner = make_mesh(mesh, expr.mesh) if mesh else expr.mesh
-                visit(expr.body, inner)
-                if isinstance(expr, LoopRegion):
-                    for value in expr.yield_values:
-                        visit(value, inner)
-            else:
-                for child in expr_children(expr):
-                    visit(child, mesh)
-            if isinstance(expr, Call):
-                owners[id(expr)] = frame, mesh
-                callee = CallFrameVisitor.callee_frame(expr, frame)
-                if callee is not None:
-                    enter(callee, mesh)
-
-        visit(frame.function.body, outer_mesh)
 
     enter(CallFrame(module, entry))
     declared = _instructions(target)

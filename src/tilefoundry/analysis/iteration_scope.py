@@ -98,8 +98,6 @@ class IterationScope:
     )
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
     topologies: tuple[Topology, ...] = ()
-    outer_mesh: Mesh | None = None
-    is_root_definition: bool = True
     variance: dict[int, frozenset[int]] = field(default_factory=dict)
 
     def projected_relations(self, call: Call, ctx: TypeInferContext) -> tuple[AccessRelation, ...]:
@@ -301,7 +299,6 @@ class ScopeBuilder(CallFrameVisitor[None]):
         )
         self.unit_ctx = ctx if ctx is not None else self.type_ctx
         self.callees = {} if ctx is None else ctx.definitions
-        self.access_parameters = {}
         self.seeds: dict[int, IterationScope]
         self.variance: dict[int, frozenset[int]]
         self.seen: set[int]
@@ -711,36 +708,6 @@ class ScopeBuilder(CallFrameVisitor[None]):
                 self._record_source(expr, scope, view)
         self._record_variance(expr, operands)
 
-    def summarize_formals(self, root: IterationScope) -> dict[str, tuple[tuple[Access, bool], ...]]:
-        """Union each formal leaf's local accesses once for all callers."""
-        summaries = {}
-        for view in self.views:
-            merged = {}
-            for scope in walk_scopes(root):
-                self.access_parameters.update(scope.domain_params)
-                for table in (scope.accesses, scope.outputs):
-                    for call, accesses in table.get(view, {}).values():
-                        for access in accesses:
-                            if not any(access.buffer is param for param in self.graph.params):
-                                continue
-                            whole = access.input_index is not None and isinstance(
-                                call.args[access.input_index].type, TupleType
-                            )
-                            key = (id(access.buffer), access.index, whole)
-                            relation = isl.map.from_range(access.relation.range())
-                            previous = merged.get(key)
-                            merged[key] = (
-                                replace(access, relation=relation)
-                                if previous is None
-                                else replace(
-                                    previous,
-                                    relation=previous.relation.union(relation),
-                                    precision=previous.precision.join(access.precision),
-                                    may_access=previous.may_access or access.may_access,
-                                )
-                            )
-            summaries[view] = tuple((access, key[2]) for key, access in merged.items())
-        return summaries
 
     def build(self) -> IterationScope:
         self.seeds = {}

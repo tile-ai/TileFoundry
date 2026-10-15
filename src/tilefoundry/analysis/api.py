@@ -122,7 +122,6 @@ def _check_subject(module: Module, function: Function) -> None:
         )
 
 
-
 def _build_context(
     module: Module,
     function: Function,
@@ -151,11 +150,6 @@ def _build_context(
             frame.module, frame.function, ctx=context, is_root=frame.function is function
         )
         context.root = context.current = builder.build()
-        context.sources = builder.sources
-        context.precisions = builder.precisions
-        context.access_summary = builder.summarize_formals(context.root)
-        context.access_parameters = builder.access_parameters
-        context.node_scopes = builder.definitions
         definitions[id(frame.function)] = context
     return definitions[id(function)]
 
