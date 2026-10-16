@@ -381,11 +381,9 @@ class _Binders:
             return
         elif isinstance(value, Call):
             self.uses((value.target, value.args), stmt)
-        elif isinstance(value, Expr):
-            for child in expr_children(value):
-                self.uses(child, stmt)
-        elif isinstance(value, (tuple, list)):
-            for child in value:
+        elif isinstance(value, (Expr, tuple, list)):
+            children = value if isinstance(value, (tuple, list)) else expr_children(value)
+            for child in children:
                 self.uses(child, stmt)
         else:
             raise VerifyError(f"non-IR node {type(value).__name__} in {type(stmt).__name__}")
@@ -500,10 +498,9 @@ def _walk_stmt(stmt, ctx, scope, fn, module_context, binders: _Binders):
     fn_verify = verify_stmt_registry.lookup(type(stmt))
     if fn_verify is None:
         raise VerifyError(f"no verify_stmt registered for {type(stmt).__name__}")
-    for _name, value in _iter_stmt_expr_fields(stmt):
-        binders.uses(value, stmt)
     fn_verify(stmt, ctx)
     for field_name, field_val in _iter_stmt_expr_fields(stmt):
+        binders.uses(field_val, stmt)
         _reject_nested_alloc_tensor(field_val, at_letstmt_value=False)
         _check_embedded_sharding(field_val, scope, fn)
 
