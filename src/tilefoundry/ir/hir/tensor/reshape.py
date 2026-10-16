@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Op
@@ -17,6 +18,7 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.ir.types.substitute import dim_vars_in
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -216,12 +218,16 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
 
 
+def _bound_or_inferred(dim, bindings):
+    if any(name not in bindings for name in dim_vars_in(dim)):
+        return -1
+    return resolve_dim(dim, bindings)
+
+
 @register_eval(Reshape)
 def _eval_reshape(ctx):
 
-    shape = tuple(
-        int(d) if isinstance(d, int) and not isinstance(d, bool) else -1 for d in ctx.op.new_shape
-    )
+    shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in ctx.op.new_shape)
     if shape.count(-1) > 1:
         raise EvalError(
             f"reshape: at most one dynamic axis can be inferred, got new_shape={ctx.op.new_shape!r}"

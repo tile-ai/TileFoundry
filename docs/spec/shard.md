@@ -811,6 +811,13 @@ def local_layout_and_offset(shard, tensor_shape, ids) -> tuple[Layout, int]: ...
 ```
 
 - constraints:
+  - `local_layout` MUST require canonical modes for every logical
+    tensor axis: split modes come first in mesh-axis order, followed by at most
+    one residual mode. Zero-stride Split modes are outside the compactness
+    chain; all remaining non-unit modes MUST have compact adjacent strides
+    (`stride[i] == stride[i+1] * extent[i+1]`). A noncanonical axis MUST
+    raise `ValueError` stating `not canonical (split outer, residual inner); not
+    supported`, rather than return an incorrect local view.
   - a tensor axis is divided by every mesh axis that cuts it, and their extents
     multiply: two axes of one level cut it into a grid, and so do two levels,
     one taking a block of what the other left.
@@ -819,8 +826,12 @@ def local_layout_and_offset(shard, tensor_shape, ids) -> tuple[Layout, int]: ...
     not the level owning them was given an id.
   - an axis nothing cuts is held whole, and so is one cut only by a level whose
     id is unfixed.
-  - an extent its mesh axis does not divide MUST be refused by name: a shard
-    would then not be one slice.
+  - a static extent its mesh axis does not divide MUST be refused by name: a
+    shard would then not be one slice. A non-static axis extent MUST pass through
+    `local_layout` unchanged; a symbolic remainder cannot prove nondivisibility.
+  - `local_layout_and_offset` MUST reject unbound tensor sizes with `ValueError`
+    before projecting, because its offset must be concrete. It MUST reuse the
+    `local_layout` projection and its canonical check.
   - `local_layout` MUST keep the whole tensor's strides: what one instance
     holds is the same rows the same distance apart, begun further in.
   - `local_layout_and_offset` counts its offset in exactly those strides, so a

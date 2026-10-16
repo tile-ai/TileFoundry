@@ -123,8 +123,11 @@ Both use the one `IslParamValues` dictionary, from isl parameter name to IR valu
 - `layout_to_isl_map` ([types §11](./types.md#11-isl-interoperability))
   implements this regroup for a `ShardLayout`. A logical axis whose extent is
   the product of consecutive flattened layout positions maps onto them, so a
-  symbolic extent stays representable; any other regroup goes through the flat
-  index and needs static extents.
+  symbolic extent stays representable. Any other regroup, including a mode
+  merging logical axes, MUST be rejected where the type is stated. Type
+  inference MUST check function parameters and every Call result with the same
+  axis-group rule and report the declaring source location. Canonical
+  `TensorType.umat_tensor` metadata has no physical positions and is exempt.
 - A reader with no topology level addresses logical coordinates. A reader at a
   named topology level addresses the positions one unit of that level holds:
   a position cut by mesh axes at that level or coarser is split into digits,

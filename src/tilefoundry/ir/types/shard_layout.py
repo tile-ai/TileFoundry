@@ -242,11 +242,6 @@ def _extents(shard: ShardLayout) -> tuple[int, ...]:
     return values
 
 
-def _cutting(shard: ShardLayout, tensor_shape: tuple) -> tuple[int | None, ...]:
-    """Per mesh axis, the tensor axis its attr cuts, or ``None`` when none."""
-    return split_target_axes(shard, tuple(tensor_shape))
-
-
 def _strides(shard: ShardLayout, tensor_shape: tuple) -> tuple[int, ...]:
     """Each tensor axis's own stride, read off the factored layout.
 
@@ -274,7 +269,9 @@ def _narrowed(shard: ShardLayout, tensor_shape: tuple, axis: int, dividing: Iter
     extents = _extents(shard)
     allowed = set(dividing)
     held = tensor_shape[axis]
-    for mesh_axis, target in enumerate(_cutting(shard, tensor_shape)):
+    if not isinstance(held, int):
+        return held
+    for mesh_axis, target in enumerate(split_target_axes(shard, tensor_shape)):
         if target != axis or mesh_axis >= len(extents) or mesh_axis not in allowed:
             continue
         count = extents[mesh_axis]
@@ -295,7 +292,7 @@ def _inner(shard: ShardLayout, tensor_shape: tuple, mesh_axis: int, axis: int) -
     """
     extents = _extents(shard)
     product = 1
-    for other, target in enumerate(_cutting(shard, tensor_shape)):
+    for other, target in enumerate(split_target_axes(shard, tensor_shape)):
         if other > mesh_axis and target == axis and other < len(extents):
             product *= extents[other]
     return product
@@ -354,6 +351,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None,
     whole tensor's, as they do on the device: a slice of it is the same rows,
     the same distance apart.
     """
+    _require_canonical_axes(shard, tensor_shape, split_target_axes(shard, tensor_shape))
     dividing = _positions(shard, ids).keys()
     return Layout(
         shape=tuple(
@@ -361,6 +359,26 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None,
         ),
         strides=_strides(shard, tensor_shape),
     )
+
+
+def _require_canonical_axes(shard: ShardLayout, tensor_shape: tuple, cutting: tuple) -> None:
+    corresponding = layout_correspondence(shard.layout.shape, tensor_shape)
+    physical = flatten(resolve_layout(shard.layout))
+    for axis, group in enumerate(corresponding.groups):
+        modes = tuple(position for position in group if corresponding.extents[position] != 1)
+        split = tuple(attr.axis for attr, target in zip(shard.attrs, cutting, strict=True)
+                      if target == axis and attr.axis in modes)
+        compact = tuple(mode for mode in modes if mode not in split or physical.strides[mode] != 0)
+        if (
+            modes[:len(split)] != split
+            or len(modes) - len(split) > 1
+            or any(physical.strides[left] != physical.strides[right] * corresponding.extents[right]
+                   for left, right in zip(compact, compact[1:]))
+        ):
+            raise ValueError(
+                f"local view of axis {axis}: modes {modes} are not canonical "
+                "(split outer, residual inner); not supported"
+            )
 
 
 def local_layout_and_offset(
@@ -373,14 +391,17 @@ def local_layout_and_offset(
     axis. It is counted in the strides ``local_layout`` reports, so a reader
     laid out otherwise would read the wrong elements.
     """
-    cutting = _cutting(shard, tensor_shape)
+    if any(not isinstance(size, int) or isinstance(size, bool) for size in tensor_shape):
+        raise ValueError("local offset requires concrete bound tensor sizes")
+    layout = local_layout(shard, tensor_shape, ids)
+    cutting = split_target_axes(shard, tensor_shape)
     offset = 0
     for mesh_axis, position in _positions(shard, ids).items():
         axis = cutting[mesh_axis] if mesh_axis < len(cutting) else None
         if axis is None:
             continue
         offset += position * _stride(shard, tensor_shape, mesh_axis, axis)
-    return local_layout(shard, tensor_shape, ids), offset
+    return layout, offset
 
 
 __all__ = [

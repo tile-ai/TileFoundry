@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import isl
+import pytest
 
 from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.analysis.api import analyze
@@ -14,6 +15,8 @@ from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TrafficBytes
+
+_N = DimVar("n", 1, 128)
 
 
 @module(
@@ -28,15 +31,21 @@ class _LocalProgram:
             sharded = tf.reshard(source, (8 @ thread.lane,), "rmem")
             return tf.local(sharded)
 
+    @func
+    def symbolic(source: Tensor[(_N,), "f32", ShardLayout(Layout((_N,), (1,)), (Split(0),), Mesh((Topology("thread", 4),), Layout((4,), (1,)))), "rmem"]):
+        return tf.local(source)
 
-def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
-    entry = _LocalProgram.entry_function()
+
+@pytest.mark.parametrize(("name", "shape", "dims"), (("main", (2,), None), ("symbolic", (_N,), {"n": 8})))
+def test_local_analyzes_as_a_zero_traffic_topology_view(name, shape, dims) -> None:
+    entry = next(fn for fn in _LocalProgram.functions if fn.name == name)
     local = next(
         expr
         for expr in collect_exprs(entry.body)
         if isinstance(expr, Call) and isinstance(expr.target, Local)
     )
-    assert local.type.shape == (2,)
+    assert local.type.shape == shape
+    assert tuple(local.type.layout.shape) == shape
     assert isinstance(local.type.layout, Layout)
     relations = operand_relations(local.target, tuple(arg.type for arg in local.args))
     values = (local.args[0].type, local.type)
@@ -50,6 +59,7 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
             *check_program(_LocalProgram, entry, topology_level=topology_level),
             analysis=("compute-cost", "memory"),
             topology_level=topology_level,
+            dims=dims,
         )
         analysed_local = next(
             expr

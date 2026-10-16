@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Op
@@ -7,9 +9,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.shard_layout import ShardLayout, Split
-from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.ir.types.shard_layout import ShardLayout, Split, local_layout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     readnone_relations,
@@ -24,19 +24,8 @@ class Local(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
 
 
-def _local_shape(x_ty: TensorType) -> tuple:
-    """The extents one participant holds: each static Split extent divided by its mesh."""
-    layout = x_ty.layout
-    if not isinstance(layout, ShardLayout):
-        return tuple(x_ty.shape)
-    new_shape = list(x_ty.shape)
-    for mesh_axis, attr in enumerate(layout.attrs):
-        if isinstance(attr, Split):
-            mesh_extent = flatten(layout.mesh.layout).shape[mesh_axis]
-            v = static_dim_value(new_shape[attr.axis])
-            if v is not None:
-                new_shape[attr.axis] = v // mesh_extent
-    return tuple(new_shape)
+def _local_layout(x_ty: TensorType):
+    return local_layout(x_ty.layout, x_ty.shape, (0,) * len(x_ty.layout.mesh.topologies))
 
 
 @register_typeinfer(Local)
@@ -44,12 +33,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     if not isinstance(x_ty.layout, ShardLayout):
         ctx.error(call, "Local() input must have ShardLayout")
-    return TensorType(
-        shape=_local_shape(x_ty),
-        dtype=x_ty.dtype,
-        layout=x_ty.layout.layout,
-        storage=x_ty.storage,
-    )
+    try:
+        layout = _local_layout(x_ty)
+    except ValueError as error:
+        ctx.error(call, str(error))
+    return replace(x_ty, shape=layout.shape, layout=layout)
 
 
 @register_eval(Local)
@@ -64,4 +52,4 @@ def _eval_local(ctx):
     return ctx.args[0]
 
 
-register_access_relation(Local)(readnone_relations(lambda types: _local_shape(types[0])))
+register_access_relation(Local)(readnone_relations(lambda types: _local_layout(types[0]).shape))

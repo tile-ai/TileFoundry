@@ -176,23 +176,6 @@ def _nested(extent: int, *, wrapped: bool) -> TensorType:
             "cta",
             id="split_axis",
         ),
-        pytest.param(
-            make_tensor_type((2, 8), DType.f32),
-            TensorType(
-                shape=(2, 4),
-                dtype=DType.f32,
-                layout=ShardLayout(Layout((8,), (1,)), (ShardSplit(0),), _CTA2_MESH),
-                storage=StorageKind.GMEM,
-            ),
-            Tuple(
-                type=TupleType(fields=(_I64, _I64)),
-                elements=(Constant(type=_I64, value=0), Constant(type=_I64, value=2)),
-            ),
-            "{ [d0, d1] : 0 <= d0 <= 1 and 2 <= d1 <= 5 }",
-            "{ [0, d1] : 2 <= d1 <= 5 }",
-            "cta",
-            id="axes_regrouped_onto_one_position",
-        ),
         *(
             pytest.param(
                 _nested(8, wrapped=wrapped),
@@ -213,8 +196,7 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed(
     """An insert reads its update only inside the window.
 
     Projection cuts the read to the positions each participant was given, and
-    its own iterations follow from that. Two axes regrouped onto one position
-    are cut in logical coordinates; a nested layer cuts once whether held
+    its own iterations follow from that. A nested layer cuts once whether held
     directly or through an offset view.
     """
     call = Call(

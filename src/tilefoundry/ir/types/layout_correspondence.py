@@ -67,21 +67,8 @@ class LayoutCorrespondence:
         from .utils import static_dim_value  # noqa: PLC0415
 
         image = ["0"] * len(self.extents)
-        if self.groups is not None:
-            runs = list(zip(coords, self.groups, strict=True))
-        else:
-            whole = [static_dim_value(extent) for extent in self.shape]
-            if None in whole or any(static_dim_value(extent) is None for extent in self.extents):
-                raise ValueError(
-                    f"shape {self.shape} maps across layout positions {self.extents}, "
-                    "which needs static extents on both sides"
-                )
-            terms = []
-            stride = 1
-            for coord, extent in reversed(list(zip(coords, whole, strict=True))):
-                terms.append(coord if stride == 1 else f"{stride} * {coord}")
-                stride *= extent
-            runs = [(f"({' + '.join(reversed(terms)) or '0'})", range(len(self.extents)))]
+        self.tensor_axes()
+        runs = zip(coords, self.groups, strict=True)
         for coord, group in runs:
             held = [position for position in group if static_dim_value(self.extents[position]) != 1]
             inner = 1

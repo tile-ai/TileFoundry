@@ -1040,6 +1040,8 @@ class Reshape(Op):
 ```
 - constraints:
   - The result shape is `new_shape`; `size(new_shape)` MUST equal `size(x.shape)`.
+  - Evaluation MUST resolve dimensions from the invocation bindings before
+    reshaping. At most one unbound dimension may be inferred by element count.
   - A plain C-order input reshapes to a C-order `Layout` over `new_shape`. An
     input with no assigned layout, or a non-contiguous plain input whose regroup
     cannot be expressed, has a `None` result layout.
@@ -1682,7 +1684,9 @@ class Local(Op):
 - constraints:
   - The result shape contracts each `Split` axis by that mesh axis's extent.
   - `dtype` and `storage` are preserved.
-  - The shard wrapper is stripped, leaving the base `Layout`.
+  - The result uses the corresponding local `Layout`, with its domain matching
+    the contracted result shape. A noncanonical input MUST be rejected at the
+    `Local` call with its source location.
   - Static split sizes divide by mesh extent; symbolic sizes pass through.
   - `Local` only names the current topology position's existing view; it
     materializes no value and moves no bytes.

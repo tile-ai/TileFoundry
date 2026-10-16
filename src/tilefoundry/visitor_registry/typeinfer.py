@@ -19,9 +19,10 @@ from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.types.callable_type import callable_type_for
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.dtype import IntegerDType
+from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
-from tilefoundry.ir.types.utils import types_compatible
+from tilefoundry.ir.types.utils import tensor_types, types_compatible
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.call_frame import ValuationVisitor
 
@@ -65,6 +66,15 @@ def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
     return index
 
 
+def _require_axis_groups(node, type_, ctx):
+    for tensor in tensor_types(type_):
+        if tensor.layout is not None and tensor != TensorType.umat_tensor(tensor.shape, tensor.dtype):
+            try:
+                layout_correspondence(tensor.layout.shape, tensor.shape).tensor_axes()
+            except ValueError as error:
+                ctx.error(node, str(error))
+
+
 class TypeInferVisitor(ValuationVisitor[Type]):
     """Derive one type for each ``Expr`` kind.
 
@@ -98,6 +108,8 @@ class TypeInferVisitor(ValuationVisitor[Type]):
             if not isinstance(results, TypeInferResults):
                 results = TypeInferResults(results)
             result = canonicalize_dims(results.type)
+            if isinstance(expr, Call):
+                _require_axis_groups(expr, result, ctx)
             self._memo[id(expr)] = (expr, result)
             if self._owns_body:
                 expr.type = result
@@ -323,6 +335,8 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         ctx = replace(ctx, owner=fn)
         if ctx.frame is not None and ctx.frame.function is not fn:
             ctx = replace(ctx, frame=replace(ctx.frame, function=fn))
+        for param in fn.params:
+            _require_axis_groups(param, param.annotation, ctx)
         memo = {id(param): (param, param.annotation) for param in fn.params}
         if fn.body is not None:
             TypeInferVisitor(
