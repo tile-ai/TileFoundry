@@ -112,13 +112,13 @@ class CommentPrinter:
             out.append(f"{key.replace('_', '-')}={self.print(value)}")
         if not family:
             return FIELDS.join(out)
-        return FIELDS.join([family, *out]) if out else family
+        return FIELDS.join([family, *out]) if out else ""
 
     def _single(self, family, value, default=_UNSET):
         if default is not _UNSET and value == default:
-            return family
+            return ""
         if default is _UNSET and self._empty_without_default(value):
-            return family
+            return ""
         return f"{family}{FIELD}{self.print(value)}"
 
     def _spread(self, spread, topologies, *, logical=True):
@@ -270,7 +270,7 @@ _PRINTER = CommentPrinter()
 
 def render_comment(record, *, opt_in=frozenset()):
     method = getattr(_PRINTER, f"print_{type(record).__name__}", None)
-    return method(record, opt_in=opt_in) if method else None
+    return (method(record, opt_in=opt_in) or None) if method else None
 
 
 __all__ = [

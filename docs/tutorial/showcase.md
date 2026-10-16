@@ -1077,7 +1077,7 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 #   buffer=cur_pos holds=617.76KB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 # roofline ideal-ns=2037 bound-by=memory
 
-        v25 = tf.slice(k_cache, (0, v24, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", ((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost precision=exact; memory traffic=rmem:r32B/w0@logical,r256B/w0@total,r32B/w0@cta footprint-precision=exact operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
+        v25 = tf.slice(k_cache, (0, v24, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", ((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost precision=exact; memory traffic=rmem:r32B/w0@logical,r256B/w0@total,r32B/w0@cta footprint-precision=exact operands=0:r0/w0;1:r32B/w0;result:r0/w0
         v7 = tf.cache_update(k_cache, cur_pos, write_len, v6)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost precision=exact; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v4:483[1]:128B;v7:484:128B;write_len:4B footprint-precision=upper_bound operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
 ```
 

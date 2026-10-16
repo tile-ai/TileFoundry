@@ -52,7 +52,6 @@ from .compute_cost import accumulate_logical, grouped_breakdown, with_dependenci
 from .errors import AnalysisError
 from .facts import TARGET_MEMORY_OWNER, MemoryHierarchyFacts
 from .footprint import (
-    ReachedAddresses,
     cached_level,
     footprint_of,
     qualify_instances,
@@ -480,7 +479,7 @@ class MemoryContext(AnalyzeContext):
     communication: _TrafficAccounts = field(default_factory=_TrafficAccounts)
     memory_level: str | None = None
     wave: tuple[int, int] | None = None
-    reached_by_scope: dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]] = field(
+    reached_by_scope: dict[IterationScope, list[tuple[Call, Footprint]]] = field(
         default_factory=dict
     )
     footprint_available: bool = False
@@ -498,11 +497,11 @@ def _footprint_inputs(
     wave: tuple[int, int],
     whole: CostContext,
 ) -> tuple[
-    dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]],
+    dict[IterationScope, list[tuple[Call, Footprint]]],
     bool,
 ]:
     """Account for Calls with no recorded boundaries."""
-    refused: dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]] = {}
+    refused: dict[IterationScope, list[tuple[Call, Footprint]]] = {}
     available = True
     wave_units, declared_units = wave
     for scope in walk_scopes(root):
@@ -521,7 +520,7 @@ def _footprint_inputs(
             if reached is None:
                 available = False
             else:
-                refused.setdefault(scope, []).append((call, reached))
+                refused.setdefault(scope, []).append((call, footprint_of(reached)))
 
     return refused, available
 
@@ -568,8 +567,8 @@ class MemoryVisitor(ValuationVisitor[None]):
             ).resolve(ctx)
             moved = replace(moved, footprint=qualify_instances(moved.footprint, ctx))
         if callee is not None and moved.footprint is not None:
-            reached = tuple(item for _windows, items in moved.footprint.groups for item in items)
-            ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, reached))
+            ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, moved.footprint))
+            moved = replace(moved, footprint=None)
         if callee is None and recorded and ctx.wave is not None and ctx.memory_level is not None:
             reached = reached_by(
                 ctx.current,
@@ -583,7 +582,7 @@ class MemoryVisitor(ValuationVisitor[None]):
                 window=ctx.current.depth - 1,
             )
             if reached is not None:
-                ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, reached))
+                ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, footprint_of(reached)))
             else:
                 ctx.footprint_available = False
         attach(expr, moved)
@@ -622,7 +621,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         else None
     )
     memory_level = cache[1] if cache is not None and wave is not None else None
-    refused_reached: dict[IterationScope, list[tuple[Call, tuple[ReachedAddresses, ...]]]] = {}
+    refused_reached: dict[IterationScope, list[tuple[Call, Footprint]]] = {}
     footprint_available = False
     if memory_level is not None and wave is not None:
         (
@@ -649,7 +648,8 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     merged_reached = tuple(
         item
         for calls in memory_context.reached_by_scope.values()
-        for _call, reached in calls
+        for _call, evidence in calls
+        for _windows, reached in evidence.groups
         for item in reached
     )
     labels = {item.target: item.label for item in merged_reached if item.reached is not None}
@@ -694,7 +694,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     if memory_level is not None and wave is not None:
         seen_footprints = set()
         for scope, calls in memory_context.reached_by_scope.items():
-            for call, reached in calls:
+            for call, evidence in calls:
                 if CallFrameVisitor.callee_frame(call, context.frame) is not None:
                     continue
                 if id(call) not in scope.accesses.get("narrow", {}) or id(call) in seen_footprints:
@@ -709,7 +709,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                     replace(
                         moved,
                         footprint=footprint_of(
-                            reached,
+                            evidence.groups[0][1],
                             windows=-(-repeats.mesh_positions // wave[0]),
                         ),
                     ),
@@ -725,14 +725,13 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for scope, calls in memory_context.reached_by_scope.items():
             repeats = scope.repeats_of(calls[0][0], topology_level)
             primitive = []
-            for call, reached in calls:
+            for call, evidence in calls:
                 if CallFrameVisitor.callee_frame(call, context.frame) is None:
-                    primitive.extend(reached)
+                    primitive.extend(evidence.groups[0][1])
                 else:
-                    record = get_metadata(call, MemoryMetadata)
                     groups.extend(
                         (windows * repeats.loop_trips, items)
-                        for windows, items in record.footprint.groups
+                        for windows, items in evidence.groups
                     )
             if primitive:
                 groups.extend(
@@ -753,9 +752,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             capacity=cache[2],
             labels=labels,
             resolved=tuple(
-                (scope, call, reached)
+                (scope, call, tuple(item for _windows, reached in evidence.groups for item in reached))
                 for scope, calls in memory_context.reached_by_scope.items()
-                for call, reached in calls
+                for call, evidence in calls
                 if CallFrameVisitor.callee_frame(call, context.frame) is not None
             ),
         )
