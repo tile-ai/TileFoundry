@@ -518,10 +518,15 @@ class ScopeBuilder(ValuationVisitor[None]):
                     for index, (source, precision) in enumerate(
                         self.returns[id(callee.function)][view]
                     ):
-                        projected, bounded = binding.project(source)
                         value = SSAValue(expr, index)
-                        self.sources[view][value] = projected
-                        self.precisions[view][value] = precision.join(bounded)
+                        if any(source.target.expr is formal for formal in callee.function.params):
+                            projected, bounded = binding.project(source)
+                            self.sources[view][value] = projected
+                            self.precisions[view][value] = precision.join(bounded)
+                        else:
+                            held = leaves_of(binding.local_type_of(expr))[index]
+                            self.sources[view][value] = self._identity_source(value, held, scope)
+                            self.precisions[view][value] = AnalysisPrecision.EXACT
         else:
             for view in self.views:
                 self._record_source(expr, scope, view)

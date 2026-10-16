@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from itertools import combinations
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 import isl
 from ortools.sat.python import cp_model
@@ -15,12 +15,11 @@ from tilefoundry.ir.core import (
     Call,
     Constant,
     Expr,
-    Tuple,
-    Var,
+    IRMetadata,
+    get_metadata,
+    value_labels,
 )
-from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -39,11 +38,21 @@ from tilefoundry.utils.isl_utils import equates
 from tilefoundry.visitor_registry.access_relation import AccessRelation, leaf_span, leaves_of
 from tilefoundry.visitor_registry.call_frame import ValuationVisitor
 
-from .access import Access, AliasKind, BufferAlias, SSAValue, apply_source, eliminate_parameters
+from .access import (
+    Access,
+    AliasKind,
+    BufferAlias,
+    SSAValue,
+    aligned_source,
+    apply_source,
+    eliminate_parameters,
+    restore_loop_dimensions,
+)
 from .errors import AnalysisError
+from .footprint import ReachedAddresses, _count, _union_loops, qualify_instances, resolve_footprint
 from .iteration_scope import IterationScope
-from .liveness import Liveness, result_copies
-from .metadata import ValueLifetime
+from .liveness import Liveness, RegionInterval, result_copies
+from .metadata import BindingValuation, Footprint, LoopNestValuation, TimingValuation, ValueLifetime
 from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
 
@@ -58,7 +67,7 @@ class SolverOptions(Protocol):
 
 @dataclass(eq=False)
 class AllocationValue:
-    """One SSA result's lifetime and storage links."""
+    """One SSA result's own lifetime and accepted storage links."""
 
     lifetime: ValueLifetime
     aliases: tuple[BufferAlias, ...] = ()
@@ -67,124 +76,186 @@ class AllocationValue:
     def value(self) -> SSAValue:
         return self.lifetime.value
 
-    def intersects(self, other: AllocationValue) -> bool:
-        """Whether two closed structured-SSA intervals share an event."""
-        return max(self.lifetime.defined_at, other.lifetime.defined_at) <= min(
-            self.lifetime.last_used_at, other.lifetime.last_used_at
-        )
+    @property
+    def alignment(self) -> int:
+        return alignment_of(self.value.expr)
 
 
 type Storage = AllocationValue | tuple[Storage, ...] | None
 
 
 def leaves(storage: Storage) -> tuple[AllocationValue, ...]:
-    """The allocation results a structured storage may use."""
     if isinstance(storage, AllocationValue):
         return (storage,)
-    if isinstance(storage, tuple):
-        return tuple(value for field in storage for value in leaves(field))
-    return ()
+    return (
+        tuple(value for field in storage for value in leaves(field))
+        if isinstance(storage, tuple)
+        else ()
+    )
 
 
 def storage_like(held: Type, values: Iterator[AllocationValue | None]) -> Storage:
-    """Restore tuple structure around already numbered tensor leaves."""
     if isinstance(held, TupleType):
         return tuple(storage_like(field, values) for field in held.fields)
     return next(values) if isinstance(held, TensorType) else None
 
 
-@dataclass(frozen=True)
-class AllocationResult:
-    """The first physical placement found for one memory level."""
-
-    peak_bytes: int
-    solver_status: str
-
-
-@dataclass(kw_only=True)
-class AllocationModel(AnalyzeContext):
-    """Definition-local values, storage links and placement inputs."""
-
-    liveness: Liveness
-    quantities: dict[SSAValue, tuple[str, int]]
-    persistent: frozenset[SSAValue]
-    values: list[AllocationValue] = field(default_factory=list)
-    by_value: dict[SSAValue, AllocationValue] = field(default_factory=dict)
-    material: set[AllocationValue] = field(default_factory=set)
-    models: dict[str, cp_model.CpModel] = field(default_factory=dict)
-    parameters: set[AllocationValue] = field(default_factory=set)
-    outputs: set[AllocationValue] = field(default_factory=set)
-    definitions: dict[int, IterationScope] = field(default_factory=dict)
-
-    def addresses(self) -> None:
-        """Create exactly one address variable per physical Buffer."""
-        for level in {buffer.lifetime.memory_level for buffer in self.buffers} & {"gmem", "smem"}:
-            self.models[level] = cp_model.CpModel()
-            limit = sum(
-                aligned(buffer.lifetime.bytes, buffer.alignment)
-                for buffer in self.buffers
-                if buffer.lifetime.memory_level == level
-            )
-            for index, buffer in enumerate(self.buffers):
-                if buffer.lifetime.memory_level == level:
-                    self.address[buffer] = self.models[level].new_int_var(
-                        0, limit, f"address_{index}"
-                    )
-
-
 def identity_of(value: AllocationValue) -> AccessRelation:
-    """Identity on one flattened tensor leaf, without loop coordinates."""
-    held = leaves_of(value.value.expr.type)[value.value.index]
+    held = local_type_of(leaves_of(value.value.expr.type)[value.value.index])
     box = shape_to_isl_set(tuple(held.shape), {})
     return AccessRelation(isl.map.identity(box.get_space().map_from_set()).intersect_domain(box))
 
 
-def add_alias(value: AllocationValue, target: AllocationValue, kind: AliasKind, relation=None):
-    """Record a fact or candidate; collection never merges storage."""
-    value.aliases += (
-        BufferAlias(target.value, relation if relation is not None else identity_of(value), kind),
-    )
-
-
-def _edge(model, value, *, storage_path=False):
-    """The implemented storage edge, without conflating Buffer membership with coordinates."""
-    structural = next((alias for alias in value.aliases if alias.kind <= AliasKind.FORWARD), None)
-    if structural is not None:
-        return structural
-    if not storage_path and value in model.adopted:
-        return model.adopted[value]
-    accepted = model.accepted.get(value, ())
-    kinds = (
-        (AliasKind.CARRY_INIT,)
-        if storage_path
-        else (
-            AliasKind.INSERT_SLICE,
-            AliasKind.CARRY_INIT,
-            AliasKind.CARRY_YIELD,
-            AliasKind.RETURN_REUSE,
-            AliasKind.IN_PLACE,
-        )
-    )
+def _edge(value, by_value, *, storage_path=False):
     return next(
         (
             alias
-            for kind in kinds
-            for alias in accepted
-            if alias.kind == kind and alias.target != value.value
+            for alias in value.aliases
+            if alias.target != value.value
+            and alias.target in by_value
+            and (not storage_path or alias.kind <= AliasKind.CARRY_INIT)
         ),
         None,
     )
 
 
+def root(value: AllocationValue, by_value) -> AllocationValue:
+    """Follow accepted value links without modifying or compressing them."""
+    seen = set()
+    while True:
+        if value in seen:
+            raise AnalysisError("allocation: storage links contain a cycle")
+        seen.add(value)
+        edge = _edge(value, by_value)
+        if edge is None:
+            return value
+        value = by_value[edge.target]
+
+
+@dataclass(frozen=True)
+class AllocationSummary(IRMetadata):
+    """Definition facts interpreted at a leaf call, never an execution context."""
+
+    values: tuple[AllocationValue, ...]
+    windows: tuple[ValueLifetime, ...]
+    return_reuse: tuple[tuple[BufferAlias, ...], ...] = ()
+    instances: Footprint | None = None
+    regions: tuple[RegionInterval, ...] = ()
+    requires: ClassVar[tuple[type, ...]] = (BindingValuation, TimingValuation, LoopNestValuation)
+
+    def resolve(self, ctx):
+        by_value = {value.value: value for value in self.values}
+        boundary = {}
+        binding = ctx.request_valuation(BindingValuation)
+        timing = ctx.request_valuation(TimingValuation)
+        for formal, _argument in ctx.bindings:
+            for index in range(len(leaves_of(formal.type))):
+                value = by_value.get(SSAValue(formal, index))
+                if value is not None:
+                    boundary[root(value, by_value)] = binding.actual(formal, index).target
+        returned = ctx.callee.function.body
+        for index in range(len(leaves_of(ctx.call.type))):
+            value = by_value.get(SSAValue(returned, index))
+            if value is not None:
+                boundary.setdefault(root(value, by_value), SSAValue(ctx.call, index))
+        translated = []
+        for window in self.windows:
+            value = by_value.get(window.value)
+            mapped = boundary.get(root(value, by_value)) if value is not None else None
+            translated.append(
+                replace(
+                    window,
+                    value=mapped or window.value,
+                    persistent=window.persistent and mapped is None,
+                    defined_at=timing.event(window.defined_at),
+                    last_used_at=timing.event(window.last_used_at),
+                )
+            )
+        return replace(
+            self,
+            values=tuple(value for value in self.values if root(value, by_value) not in boundary),
+            windows=tuple(translated),
+            instances=resolve_footprint(self.instances, ctx),
+            regions=tuple(
+                replace(
+                    region,
+                    entered_at=timing.event(region.entered_at),
+                    exited_at=timing.event(region.exited_at),
+                )
+                for region in self.regions
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class AllocationResult:
+    peak_bytes: int
+    solver_status: str
+    offsets: dict[AllocationValue, int] = field(default_factory=dict)
+
+
+@dataclass(kw_only=True)
+class AllocationModel(AnalyzeContext):
+    """One definition's collection; imported values are read-only templates."""
+
+    liveness: Liveness
+    quantities: dict[SSAValue, tuple[str, int]]
+    persistent: frozenset[SSAValue]
+    by_value: dict[SSAValue, AllocationValue] = field(default_factory=dict)
+    windows: list[ValueLifetime] = field(default_factory=list)
+    candidates: list[tuple[SSAValue, BufferAlias, LoopRegion | None]] = field(default_factory=list)
+    locations: dict[int, AnalyzeContext] = field(default_factory=dict)
+    instance_groups: list = field(default_factory=list)
+    regions: list[RegionInterval] = field(default_factory=list)
+
+    def occupancy(self, value):
+        """Native lifetime plus translated occupancy, without changing either."""
+        return tuple(window for window in self.windows if window.value == value.value)
+
+    def span(self, values):
+        windows = tuple(window for value in values for window in self.occupancy(value))
+        return min(w.defined_at for w in windows), max(w.last_used_at for w in windows)
+
+    def members(self, value):
+        representative = root(value, self.by_value)
+        return tuple(
+            item for item in self.by_value.values() if root(item, self.by_value) is representative
+        )
+
+    def roots(self):
+        return tuple(dict.fromkeys(root(value, self.by_value) for value in self.by_value.values()))
+
+    def size(self, value):
+        members = self.members(value)
+        size = max(window.bytes for item in members for window in self.occupancy(item))
+        if self.instance_groups and any(item.lifetime.persistent for item in members):
+            keys = {item.value for item in members}
+            totals = defaultdict(int)
+            for reached in Footprint(tuple(self.instance_groups)).reached:
+                if reached.target in keys:
+                    image = _union_loops(reached.reached)
+                    totals[reached.target] += _count(replace(reached, reached=image, must=image))[0]
+            size = max(size, max(totals.values(), default=0))
+        return size
+
+    def is_persistent(self, value):
+        return any(item.lifetime.persistent for item in self.members(value))
+
+
 def _bound_relation(model, relation, scope, held):
-    """Interpret data-coordinate parameters with a common local loop prefix."""
     lifted = relation.relation.insert_dims(isl.dim_type.IN, 0, scope.depth)
     domain = scope.domain.insert_dims(
         isl.dim_type.SET, scope.depth, relation.relation.dim(isl.dim_type.IN)
     )
     lifted = lifted.intersect_domain(domain)
     lifted, precision = eliminate_parameters(
-        lifted, relation.values, scope, held, narrow=True, retained=scope.domain_params
+        lifted,
+        relation.values,
+        scope,
+        held,
+        narrow=True,
+        retained=scope.domain_params,
+        formals=model._binding_formals,
     )
     return lifted if precision is AnalysisPrecision.EXACT else None
 
@@ -201,7 +272,6 @@ def _relation_at(relation, scope):
 
 
 def _unprefix(relation, scope):
-    """Keep local loop values as expression parameters in a published data map."""
     values = dict(scope.domain_params)
     for axis, loop in enumerate(scope.enclosing_loops()):
         name = f"__tf_alias_loop_{axis}"
@@ -212,6 +282,10 @@ def _unprefix(relation, scope):
     relation = relation.move_dims(
         isl.dim_type.PARAM, relation.dim(isl.dim_type.PARAM), isl.dim_type.IN, 0, scope.depth
     )
+    varying = relation.gist_params(relation.params())
+    for axis in reversed(range(relation.dim(isl.dim_type.PARAM))):
+        if not varying.involves_dims(isl.dim_type.PARAM, axis, 1):
+            relation = relation.project_out(isl.dim_type.PARAM, axis, 1)
     return AccessRelation(
         relation,
         {
@@ -223,18 +297,26 @@ def _unprefix(relation, scope):
 
 
 def _coordinates(model, value, scope, *, override=None, storage_path=False, seen=()):
-    """Value coordinates -> implemented storage root, including accepted semantic ties."""
     if value in seen:
         return None
     edge = (
         override[1]
         if override is not None and override[0] is value
-        else _edge(model, value, storage_path=storage_path)
+        else _edge(value, model.by_value, storage_path=storage_path)
     )
     if edge is None:
         relation = _bound_relation(model, identity_of(value), scope, value.value.expr.type)
         return (value, relation) if relation is not None else None
-    relation = _bound_relation(model, edge.relation, scope, edge.target.expr.type)
+    if edge.kind in (AliasKind.VIEW, AliasKind.FORWARD):
+        held = local_type_of(leaves_of(value.value.expr.type)[value.value.index])
+        relation = aligned_source(edge, len(held.shape), scope.depth, scope.domain_params)
+        relation = relation.intersect_domain(
+            scope.domain.insert_dims(
+                isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
+            )
+        )
+    else:
+        relation = _bound_relation(model, edge.relation, scope, edge.target.expr.type)
     source = _coordinates(
         model,
         model.by_value[edge.target],
@@ -245,25 +327,22 @@ def _coordinates(model, value, scope, *, override=None, storage_path=False, seen
     )
     if relation is None or source is None:
         return None
-    root, source_relation = source
-    target_rank = relation.dim(isl.dim_type.OUT)
+    representative, source_relation = source
+    if relation.dim(isl.dim_type.OUT) != source_relation.dim(isl.dim_type.IN) - scope.depth:
+        return None
     composed = apply_source(
         relation,
-        BufferAlias(root.value, _relation_at(source_relation, scope), AliasKind.FORWARD),
-        target_rank,
+        BufferAlias(representative.value, _relation_at(source_relation, scope), AliasKind.FORWARD),
+        relation.dim(isl.dim_type.OUT),
         scope.depth,
         scope.domain_params,
     )
-    return root, composed
+    return representative, composed
 
 
 def _visible_at(model, value, producer):
-    scope = model.definitions[id(producer.value.expr)]
-    visible = set()
-    cursor = scope
-    while cursor is not None:
-        visible.add(cursor)
-        cursor = cursor.parent
+    context = model.locations[id(producer.value.expr)]
+    scope = context.current
     if isinstance(value, (int, Constant, DimVar)):
         return True
     if isinstance(value, Call) and isinstance(value.target, MeshCoord):
@@ -283,39 +362,35 @@ def _visible_at(model, value, producer):
             offset += width
         return True
     interval = model.liveness.interval_of(SSAValue(value))
+    location = model.locations.get(id(value))
     return (
-        model.definitions.get(id(value)) in visible
+        location is not None
+        and any(location.owner is c.owner for c in context.ancestors())
         and interval is not None
         and interval.defined_at < producer.lifetime.defined_at
     )
 
 
 def _landing(model, holder, alias, *, window=False):
-    """Reverse-compose the holder's path: producer coordinates -> candidate target."""
-    root = holder
+    representative = holder
     seen = set()
-    while root not in seen:
-        seen.add(root)
-        edge = _edge(model, root, storage_path=window)
-        if edge is None:
-            break
-        root = model.by_value[edge.target]
-    else:
-        return None
-    if window and root in model.adopted:
-        return None
-    scope = model.definitions[id(root.value.expr)]
+    while (edge := _edge(representative, model.by_value, storage_path=window)) is not None:
+        if representative in seen:
+            return None
+        seen.add(representative)
+        representative = model.by_value[edge.target]
+    scope = model.locations[id(representative.value.expr)].current
     source = _coordinates(model, holder, scope, storage_path=window)
     target = _bound_relation(model, alias.relation, scope, alias.target.expr.type)
     if source is None or target is None:
         return None
-    _root, relation = source
+    _representative, relation = source
     with_loops = relation.insert_dims(isl.dim_type.OUT, 0, scope.depth)
     for axis in range(scope.depth):
         with_loops = with_loops.equate(isl.dim_type.IN, axis, isl.dim_type.OUT, axis)
     landed = with_loops.reverse().apply_range(target).coalesce()
     if window:
-        held = local_type_of(leaves_of(root.value.expr.type)[root.value.index])
+        held = local_type_of(leaves_of(representative.value.expr.type)[representative.value.index])
         expected = scope.domain.flat_product(shape_to_isl_set(tuple(held.shape), {}))
         if not landed.domain().is_equal(expected.intersect_params(landed.params())):
             return None
@@ -326,61 +401,330 @@ def _landing(model, holder, alias, *, window=False):
         or relation.is_translation() != 1
     ):
         return None
-    return root, BufferAlias(alias.target, published, alias.kind)
+    if window and not all(
+        _visible_at(model, value, representative) for value in published.values.values()
+    ):
+        return None
+    return representative, BufferAlias(alias.target, published, alias.kind)
 
 
-def _proved_at(model, left, right, start, landing):
-    """Compare every read with the producer's write at its proposed physical landing."""
+def _mapped_pointwise(model, left, right, start, landing):
+    """Only a covered formal may borrow a callee return proof at equality."""
+    native = {id(value.lifetime) for value in model.by_value.values()}
+    touching = [
+        window
+        for member in right
+        for window in model.occupancy(member)
+        if id(window) not in native and window.last_used_at == start
+    ]
+    covered, proved = set(), set()
+    left_roots = {root(value, model.by_value) for value in left}
+    for context in model.locations.values():
+        if context.callee is None:
+            continue
+        template = get_metadata(context.callee.function, AllocationSummary)
+        if template is None:
+            continue
+        resolved = template.resolve(context)
+        local = {value.value: value for value in template.values}
+        permitted = set()
+        for index, candidates in enumerate(template.return_reuse):
+            output = model.by_value.get(SSAValue(context.call, index))
+            if output is None or root(output, model.by_value) not in left_roots:
+                continue
+            written = _coordinates(model, output, context.current, override=landing)
+            for candidate in candidates:
+                actual, precision = context.project(candidate)
+                member = model.by_value.get(actual.target)
+                read = None if member is None else _coordinates(model, member, context.current)
+                reached = (
+                    None
+                    if read is None
+                    else apply_source(
+                        restore_loop_dimensions(
+                            actual.relation.relation,
+                            (loop.induction_var for loop in context.current.enclosing_loops()),
+                        ),
+                        BufferAlias(
+                            read[0].value, _relation_at(read[1], context.current), AliasKind.FORWARD
+                        ),
+                        actual.relation.relation.dim(isl.dim_type.OUT),
+                        context.current.depth,
+                        context.current.domain_params,
+                    )
+                )
+                if (
+                    precision is not AnalysisPrecision.EXACT
+                    or not is_zero_offset(actual.relation.relation)
+                    or read is None
+                    or written is None
+                    or read[0] is not written[0]
+                    or not reached.is_equal(written[1])
+                ):
+                    continue
+                formal = local.get(candidate.target)
+                if formal is not None:
+                    permitted.add(root(formal, local))
+                    for member in right:
+                        positioned = _coordinates(model, member, context.current)
+                        if (
+                            positioned is not None
+                            and positioned[0] is read[0]
+                            and positioned[1].is_equal(reached)
+                        ):
+                            proved.add(member.value)
+        for original, mapped in zip(template.windows, resolved.windows, strict=True):
+            matches = [n for n, window in enumerate(touching) if window == mapped]
+            if not matches:
+                continue
+            member = local.get(original.value)
+            if member is None or root(member, local) not in permitted:
+                return None
+            covered.update(matches)
+            proved.add(mapped.value)
+    return proved if len(covered) == len(touching) else None
+
+
+def _pointwise(model, left, right, start, landing, use_events):
+    proved = _mapped_pointwise(model, left, right, start, landing)
+    if proved is None:
+        return False
     read = {
-        member for member in right.members if any(use.at == start for use in model.uses[member])
+        member.value
+        for member in right
+        if any(use.at == start for use in use_events.get(member.value, ()))
     }
     if not read:
-        return False
-    proved = set()
-    for producer in left.members:
-        if producer.lifetime.defined_at != start or producer not in model.writes:
+        return True
+    for producer in left:
+        if producer.lifetime.defined_at != start or not isinstance(producer.value.expr, Call):
             continue
-        scope = model.definitions[id(producer.value.expr)]
-        output = model.writes[producer]
+        node = producer.value.expr
+        scope = model.locations[id(node)].current
+        output = scope.outputs.get("narrow", {}).get(id(node))
+        if output is None or not output[1]:
+            continue
         positioned = _coordinates(model, producer, scope, override=landing)
-        if positioned is None or output.precision is not AnalysisPrecision.EXACT:
+        if positioned is None:
             continue
         output_root, output_map = positioned
+        write = output[1][0]
         written = apply_source(
-            output.relation,
-            BufferAlias(
-                output_root.value,
-                _relation_at(output_map, scope),
-                AliasKind.FORWARD,
-            ),
-            output.relation.dim(isl.dim_type.OUT),
+            write.relation,
+            BufferAlias(output_root.value, _relation_at(output_map, scope), AliasKind.FORWARD),
+            write.relation.dim(isl.dim_type.OUT),
             scope.depth,
             scope.domain_params,
         )
-        for member in read:
-            positioned = _coordinates(model, member, scope)
-            if positioned is None:
-                continue
-            input_root, input_map = positioned
-            if input_root is not output_root:
-                continue
-            for access in model.reads.get(producer, ()):
-                if access.target != member.value or access.precision is not AnalysisPrecision.EXACT:
-                    continue
-                reached = apply_source(
-                    access.relation,
+        recorded = scope.accesses.get("narrow", {}).get(id(node))
+        inputs = () if recorded is None else recorded[1]
+        insert = _insert_accesses(node, scope)
+        if insert is not None:
+            written = written.union(
+                apply_source(
+                    insert[0].relation,
                     BufferAlias(
-                        input_root.value,
-                        _relation_at(input_map, scope),
-                        AliasKind.FORWARD,
+                        output_root.value, _relation_at(output_map, scope), AliasKind.FORWARD
                     ),
-                    access.relation.dim(isl.dim_type.OUT),
+                    insert[0].relation.dim(isl.dim_type.OUT),
                     scope.depth,
                     scope.domain_params,
                 )
-                if reached.is_equal(written.intersect_domain(access.relation.domain())):
-                    proved.add(member)
+            )
+        for access in inputs:
+            readers = {
+                value
+                for value in read
+                if value == access.target
+                or any(
+                    alias.target == access.target
+                    and alias.kind in (AliasKind.VIEW, AliasKind.FORWARD)
+                    for alias in model.by_value[value].aliases
+                )
+            }
+            if not readers or access.precision is not AnalysisPrecision.EXACT:
+                continue
+            member = model.by_value[access.target]
+            positioned = _coordinates(model, member, scope)
+            if positioned is None or positioned[0] is not output_root:
+                continue
+            reached = apply_source(
+                access.relation,
+                BufferAlias(
+                    output_root.value, _relation_at(positioned[1], scope), AliasKind.FORWARD
+                ),
+                access.relation.dim(isl.dim_type.OUT),
+                scope.depth,
+                scope.domain_params,
+            )
+            if reached.is_equal(written.intersect_domain(access.relation.domain())):
+                proved.update(readers)
     return read <= proved
+
+
+def _insert_accesses(node, scope):
+    recorded = scope.accesses.get("narrow", {}).get(id(node))
+    if not isinstance(node.target, InsertSlice) or recorded is None:
+        return None
+    accesses = recorded[1]
+    destination = next((access for access in accesses if access.input_index == 0), None)
+    update = next((access for access in accesses if access.input_index == 1), None)
+    return (destination, update) if destination is not None and update is not None else None
+
+
+def tie_analysis(model):
+    """All ties read occupancy; global interference keeps individual windows."""
+    use_events = defaultdict(list)
+    for use in model.liveness.uses:
+        use_events[use.value].append(use)
+    local = {item.value for item in model.liveness.intervals}
+    for holder, alias, loop in sorted(
+        model.candidates,
+        key=lambda item: (item[1].kind, model.by_value[item[0]].lifetime.defined_at),
+    ):
+        value = model.by_value[holder]
+        target = model.by_value.get(alias.target)
+        if target is None or holder not in local:
+            continue
+        a = root(value, model.by_value)
+        b = root(target, model.by_value)
+        if a is b:
+            if alias.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD, AliasKind.INSERT_SLICE):
+                if alias not in value.aliases:
+                    value.aliases += (alias,)
+            continue
+        if a.value not in local:
+            continue
+        left = model.members(a)
+        right = model.members(b)
+        if model.is_persistent(b) or any(
+            item in model.by_value.values()
+            and any(item.value.expr is param for param in model.frame.function.params)
+            for item in right
+        ):
+            continue
+        if a.lifetime.memory_level != b.lifetime.memory_level or model.size(a) > model.size(b):
+            continue
+        start, _ = model.span(left)
+        _, end = model.span(right)
+        window = alias.kind is AliasKind.WINDOW
+        if window:
+            node = next(
+                (
+                    candidate.value.expr
+                    for candidate in model.members(target)
+                    if isinstance(candidate.value.expr, Call)
+                    and isinstance(candidate.value.expr.target, InsertSlice)
+                ),
+                None,
+            )
+            if node is None:
+                continue
+            destination = model.by_value.get(SSAValue(model.capture_root(node.args[0])))
+            if destination is None or root(destination, model.by_value) is not b:
+                continue
+            event = model.liveness.interval_of(SSAValue(node)).defined_at
+            if model.is_persistent(a) or end < 0 or model.span(left)[1] > event:
+                continue
+            if any(
+                start < use.at < event for item in right for use in use_events.get(item.value, ())
+            ):
+                continue
+            end = start
+        elif alias.kind is AliasKind.CARRY_YIELD:
+            phi_event, backedge = model.liveness.loop_windows[id(loop)]
+            if not phi_event < a.lifetime.defined_at < backedge:
+                continue
+            end = max(
+                (
+                    use.at
+                    for item in right
+                    for use in use_events.get(item.value, ())
+                    if phi_event < use.at < backedge
+                ),
+                default=phi_event,
+            )
+            end = max(
+                end,
+                max(
+                    (
+                        min(window.last_used_at, backedge - 1)
+                        for item in right
+                        for window in model.occupancy(item)
+                        if window is not item.lifetime
+                        and phi_event < window.last_used_at
+                        and window.defined_at < backedge
+                    ),
+                    default=phi_event,
+                ),
+            )
+            start = min(
+                window.defined_at
+                for item in left
+                for window in model.occupancy(item)
+                if phi_event < window.defined_at < backedge
+            )
+        if not window and end > start:
+            continue
+        landed = _landing(model, value, alias, window=window)
+        if landed is None:
+            continue
+        physical = _landing(model, value, alias)
+        if physical is None:
+            continue
+        new_root, edge = physical
+        if alias.kind in (AliasKind.IN_PLACE, AliasKind.RETURN_REUSE):
+            scope = model.locations[id(new_root.value.expr)].current
+            positioned = _coordinates(model, new_root, scope, override=physical)
+            if positioned is None or not is_zero_offset(positioned[1]):
+                continue
+        if end == start and not _pointwise(model, left, right, start, physical, use_events):
+            continue
+        new_root.aliases += (edge,)
+        if value is not new_root and alias not in value.aliases:
+            value.aliases += (alias,)
+        if window and landed[0] is not new_root:
+            landed[0].aliases += (landed[1],)
+    for holder, alias, _loop in model.candidates:
+        if alias.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD, AliasKind.INSERT_SLICE):
+            value = model.by_value[holder]
+            target = model.by_value.get(alias.target)
+            if (
+                target is not None
+                and root(value, model.by_value) is root(target, model.by_value)
+                and alias not in value.aliases
+            ):
+                value.aliases += (alias,)
+
+
+def published_aliases(model):
+    result = {}
+    kinds = (AliasKind.INSERT_SLICE, AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD)
+    holders = {(holder, alias.kind) for holder, alias, _loop in model.candidates}
+    for value in model.by_value.values():
+        if id(value.value.expr) not in model.locations:
+            continue
+        for kind in kinds:
+            if (value.value, kind) not in holders:
+                continue
+            alias = next((a for a in value.aliases if a.kind is kind), None)
+            if alias is not None:
+                result[value.value] = alias
+                break
+    for holder, alias, _loop in model.candidates:
+        if alias.kind is not AliasKind.WINDOW:
+            continue
+        value = model.by_value[holder]
+        if not any(edge.kind is AliasKind.WINDOW for edge in value.aliases):
+            continue
+        inserted = alias.target.expr
+        context = model.locations[id(inserted)]
+        destination = SSAValue(context.capture_root(inserted.args[0]))
+        landed = _landing(model, value, replace(alias, target=destination), window=True)
+        if landed is not None:
+            producer, published = landed
+            result.setdefault(producer.value, published)
+    return result
 
 
 def covers_result_each_iteration(
@@ -677,7 +1021,13 @@ def operand_scope(node: Call, ctx: AllocationModel) -> IterationScope:
         )
         relation = relation.intersect_domain(domain)
         relation, precision = eliminate_parameters(
-            relation, boundary.values, scope, held, narrow=True, retained=scope.domain_params
+            relation,
+            boundary.values,
+            scope,
+            held,
+            narrow=True,
+            retained=scope.domain_params,
+            formals=ctx._binding_formals,
         )
         if is_literal_shape(held.shape):
             relation = relation.intersect_range(shape_to_isl_set(tuple(held.shape), {}))
@@ -697,238 +1047,298 @@ def operand_scope(node: Call, ctx: AllocationModel) -> IterationScope:
 
 
 class AllocationConstraintVisitor(ValuationVisitor[Storage]):
-    """Build each SSA value with its own live interval and byte span."""
+    """Collect native values and interpret called templates at leaf Calls."""
 
-    def __init__(self, *, root_function, liveness: Liveness) -> None:
-        super().__init__(root_function=root_function)
-        self.definitions: dict[int, IterationScope] = {}
+    def __init__(self, *, root_function, context):
+        self.locations = {}
+        native = [
+            life.value for life in context.liveness.intervals if life.value in context.quantities
+        ]
+        sources = context.current.sources["narrow"]
+        ordered = sorted(native, key=lambda key: sources[key].target != key)
+        expressions = {id(key.expr): key.expr for key in ordered}
+        self.labels = dict(zip(expressions, value_labels(expressions.values()), strict=True))
+        super().__init__(root_function=root_function, contexts=self.locations)
 
-    def dispatch_visit(self, node: Expr, ctx: AllocationModel) -> Storage:
-        if id(node) not in self._memo:
-            self.definitions[id(node)] = ctx.current
-        return super().dispatch_visit(node, ctx)
+    def add_value(self, lifetime, ctx, aliases=()):
+        value = AllocationValue(lifetime, aliases)
+        ctx.by_value[value.value] = value
+        ctx.windows.append(value.lifetime)
+        return value
 
-    def update_alias(
-        self, node: Call, update: AllocationValue, relation: isl.map, ctx: AllocationModel
-    ) -> BufferAlias | None:
-        """Bind an update's window to values visible at its producer."""
-        if any(
-            relation.get_dim_name(isl.dim_type.PARAM, axis) not in ctx.current.domain_params
-            for axis in range(relation.dim(isl.dim_type.PARAM))
-        ):
-            return None
-        held = _unprefix(relation, ctx.current)
-        values = {name: ctx.current.capture_root(value) for name, value in held.values.items()}
-        destination = ctx.current.capture_root(node.args[0])
-        local = replace(ctx, definitions=self.definitions)
-        if not _visible_at(local, destination, update) or not all(
-            _visible_at(local, value, update) for value in values.values()
-        ):
-            return None
-        return BufferAlias(
-            SSAValue(destination), AccessRelation(held.relation, values), AliasKind.WINDOW
-        )
-
-    def forward(self, node: Expr, ctx: AllocationModel) -> Storage:
-        """Give each forwarded leaf its own lifetime and cached source link."""
-        values = []
-        for index, _leaf in enumerate(leaves_of(node.type)):
-            value = SSAValue(node, index)
-            alias = ctx.current.sources["narrow"][value]
-            root = ctx.by_value.get(alias.target)
-            if root is None:
-                values.append(None)
-                continue
-            lifetime = replace(
-                ctx.liveness.interval_of(value),
-                memory_level=root.lifetime.memory_level,
-                bytes=root.lifetime.bytes,
-            )
-            values.append(self.add_value(lifetime, ctx, (alias,)))
-        return storage_like(node.type, iter(values)) if any(values) else None
-
-    def add_value(
-        self, lifetime: ValueLifetime, ctx: AllocationModel, aliases: tuple[BufferAlias, ...] = ()
-    ) -> AllocationValue:
-        """Register one result and, at addressable levels, its address variable."""
-        result = AllocationValue(lifetime, aliases)
-        ctx.by_value[result.value] = result
-        ctx.values.append(result)
-        return result
-
-    def storage_of(self, node: Expr) -> Storage:
-        """Read completed storage in this definition's traversal."""
-        return self._memo[id(node)][1]
-
-    def visit_function_body(self, fn: Function, ctx: AllocationModel) -> Storage:
-        """Visit function declarations before their body in the one traversal."""
-        for parameter in fn.params:
-            self.visit(parameter, ctx)
-        return super().visit_function_body(fn, ctx)
-
-    def allocate(self, node: Expr, ctx: AllocationModel) -> Storage:
-        """Create material results with exactly their SSA live intervals."""
+    def allocate(self, node, ctx):
         if isinstance(node.type, TupleType) and result_copies(node) > 1:
             raise AnalysisError("allocation: staged tuple results are not supported")
-        slots: list[Storage] = []
+        slots = []
         for index, _leaf in enumerate(leaves_of(node.type)):
-            value = SSAValue(node, index)
-            quantity = ctx.quantities.get(value)
-            if quantity is None:
+            key = SSAValue(node, index)
+            source = ctx.current.sources["narrow"].get(key)
+            forwarding = source is not None and source.target != key
+            target = ctx.by_value.get(source.target) if forwarding else None
+            quantity = ctx.quantities.get(key)
+            if forwarding:
+                if target is None:
+                    slots.append(None)
+                    continue
+                level = target.lifetime.memory_level
+                amount = quantity[1] if quantity is not None else target.lifetime.bytes
+            elif quantity is not None:
+                level, amount = quantity
+            else:
                 slots.append(None)
                 continue
-            level, amount = quantity
             lifetime = replace(
-                ctx.liveness.interval_of(value),
+                ctx.liveness.interval_of(key),
                 memory_level=level,
                 bytes=amount,
-                persistent=value in ctx.persistent,
+                persistent=key in ctx.persistent,
+                binding=self.labels[id(node)]
+                + (f"[{index}]" if isinstance(node.type, TupleType) else ""),
             )
-            result = self.add_value(lifetime, ctx)
-            ctx.material.add(result)
-            slots.append(result)
-        if not slots:
-            return None
-        return storage_like(node.type, iter(slots))
+            slots.append(self.add_value(lifetime, ctx, (source,) if forwarding else ()))
+            if getattr(node, "is_const", False):
+                held = leaves_of(ctx.local_type_of(node))[index]
+                if isinstance(held, TensorType) and is_literal_shape(held.shape):
+                    image = shape_to_isl_set(tuple(held.shape), {})
+                    ctx.instance_groups.append(
+                        (
+                            1,
+                            (
+                                ReachedAddresses(
+                                    key, None, held.dtype, image, AnalysisPrecision.EXACT
+                                ),
+                            ),
+                        )
+                    )
+        return storage_like(node.type, iter(slots)) if slots else None
 
-    def visit_Var(self, node: Var, ctx: AllocationModel) -> Storage:
-        source = ctx.capture_root(node)
-        if source is not node:
-            return self.forward(node, ctx)
+    def visit_Var(self, node, ctx):
         return self.allocate(node, ctx)
 
-    def visit_leaf_Tuple(
-        self, node: Tuple, operands: tuple[Storage, ...], ctx: AllocationModel
-    ) -> Storage:
-        return self.forward(node, ctx)
+    def visit_leaf_Tuple(self, node, operands, ctx):
+        return self.allocate(node, ctx)
 
-    def visit_MeshRegion(self, node: MeshRegion, ctx: AllocationModel) -> Storage:
+    def visit_MeshRegion(self, node, ctx):
         self.visit_operands_outside(node, ctx)
         inner = self.region_context(node, ctx)
-        for parameter in node.params:
-            self.visit(parameter, inner)
+        for param in node.params:
+            self.visit(param, inner)
         self.visit(node.body, inner)
-        return self.forward(node, ctx)
+        return self.allocate(node, ctx)
 
-    def visit_LoopRegion(self, node: LoopRegion, ctx: AllocationModel) -> Storage:
-        initials = tuple(self.visit(argument, ctx) for argument in node.args)
+    def visit_LoopRegion(self, node, ctx):
+        initials = self.visit_operands_outside(node, ctx)
         inner = self.region_context(node, ctx)
         self.visit(node.induction_var, inner)
-        carried = tuple(
-            self.visit(parameter, inner) for parameter in node.params[: len(node.yield_values)]
-        )
-        for parameter in node.params[len(node.yield_values) :]:
-            self.visit(parameter, inner)
+        carried = tuple(self.visit(param, inner) for param in node.params[: len(node.yield_values)])
+        for param in node.params[len(node.yield_values) :]:
+            self.visit(param, inner)
         for result, initial in zip(carried, initials, strict=False):
-            for value, operand in zip(leaves(result), leaves(initial), strict=True):
-                add_alias(value, operand, AliasKind.CARRY_INIT)
+            for value, operand in zip(leaves(result), leaves(initial), strict=False):
+                ctx.candidates.append(
+                    (
+                        value.value,
+                        BufferAlias(operand.value, identity_of(value), AliasKind.CARRY_INIT),
+                        node,
+                    )
+                )
         self.visit(node.body, inner)
         for yielded, phi in zip(node.yield_values, carried, strict=True):
-            for value, operand in zip(leaves(self.visit(yielded, inner)), leaves(phi), strict=True):
-                add_alias(value, operand, AliasKind.CARRY_YIELD)
-                ctx.carry_loops[value, operand] = node
-        return self.forward(node, ctx)
+            for value, operand in zip(
+                leaves(self.visit(yielded, inner)), leaves(phi), strict=False
+            ):
+                ctx.candidates.append(
+                    (
+                        value.value,
+                        BufferAlias(operand.value, identity_of(value), AliasKind.CARRY_YIELD),
+                        node,
+                    )
+                )
+        return self.allocate(node, ctx)
 
-    def source_storage(self, operand: SSAValue, node, ctx):
-        """Locate storage through the same precomposed source table."""
-        if operand in ctx.by_value:
-            return ctx.by_value[operand]
-        for argument in node.args:
-            for index in range(len(leaves_of(argument.type))):
-                value = SSAValue(argument, index)
-                source = ctx.current.sources["narrow"][value]
-                if source.target == operand and is_zero_offset(source.relation.relation):
-                    return ctx.by_value.get(value)
-        return None
-
-    def default_visit_leaf(
-        self, node: Expr, operands: tuple[Storage, ...], ctx: AllocationModel
-    ) -> Storage:
-        """Create values without recording storage-sharing relations."""
+    def default_visit_leaf(self, node, operands, ctx):
         if (
             isinstance(node, Call)
             and isinstance(node.target, TupleGetItem)
             and not (isinstance(node.args[1], Constant) and type(node.args[1].value) is int)
         ):
             return None
+        callee = self.callee_frame(node, ctx.frame) if isinstance(node, Call) else None
+        if callee is not None:
+            return self.call_storage(node, callee, ctx)
         source = ctx.current.sources["narrow"].get(SSAValue(node))
         if source is not None and source.target != SSAValue(node):
-            return self.forward(node, ctx)
+            return self.allocate(node, ctx)
         result = self.allocate(node, ctx)
         if not isinstance(node, Call) or not isinstance(result, AllocationValue):
             return result
-        proof_scope = operand_scope(node, ctx)
-        recorded = proof_scope.accesses.get("narrow", {}).get(id(node))
-        ctx.reads[result] = recorded[1] if recorded else ()
-        output = proof_scope.outputs.get("narrow", {}).get(id(node))
-        if output and output[1]:
-            ctx.writes[result] = output[1][0]
-        insert = None
-        if isinstance(node.target, InsertSlice) and recorded is not None:
-            accesses = recorded[1]
-            destination = next((access for access in accesses if access.input_index == 0), None)
-            update = next((access for access in accesses if access.input_index == 1), None)
-            if destination is not None and update is not None:
-                insert = destination, update
+        proof_scope = ctx.current
+        insert = _insert_accesses(node, proof_scope)
+        local_scope = operand_scope(node, ctx)
+        local_insert = _insert_accesses(node, local_scope)
+        for operand, relation in operand_to_result_relation(node, local_scope, local_insert):
+            if insert is not None and local_insert is not None:
+                if operand == local_insert[0].target and is_zero_offset(relation):
+                    destination = ctx.by_value.get(SSAValue(node.args[0]))
+                    if destination is not None:
+                        ctx.candidates.append(
+                            (
+                                result.value,
+                                BufferAlias(
+                                    destination.value, identity_of(result), AliasKind.INSERT_SLICE
+                                ),
+                                None,
+                            )
+                        )
+                if operand == local_insert[1].target:
+                    update = ctx.by_value.get(SSAValue(node.args[1]))
+                    if update is not None:
+                        ctx.candidates.append(
+                            (
+                                update.value,
+                                BufferAlias(
+                                    result.value, _unprefix(relation, local_scope), AliasKind.WINDOW
+                                ),
+                                None,
+                            )
+                        )
         for operand, relation in operand_to_result_relation(node, proof_scope, insert):
-            source = ctx.by_value.get(operand)
-            if source is None:
+            if not is_zero_offset(relation) or insert is not None:
                 continue
-            if is_zero_offset(relation) and insert is not None and operand == insert[0].target:
-                add_alias(result, source, AliasKind.INSERT_SLICE)
-                output = ctx.writes.get(result)
-                if output is not None:
-                    ctx.writes[result] = replace(
-                        output, relation=output.relation.union(insert[0].relation)
+            target = ctx.by_value.get(operand)
+            if target is not None and not target.lifetime.persistent:
+                ctx.candidates.append(
+                    (
+                        result.value,
+                        BufferAlias(operand, _unprefix(relation, ctx.current), AliasKind.IN_PLACE),
+                        None,
                     )
-            if insert is not None and operand == insert[1].target:
-                published = self.update_alias(node, source, relation, ctx)
-                if published is not None:
-                    destination_storage = leaves(self.storage_of(insert[0].target.expr))
-                    destination = next(
-                        (
-                            item
-                            for item in destination_storage
-                            if item.value.index == insert[0].target.index
+                )
+        return result
+
+    def call_storage(self, node, callee, ctx):
+        template = get_metadata(callee.function, AllocationSummary)
+        if template is None:
+            raise AnalysisError(f"allocation: missing summary for {callee.function.name!r}")
+        original = tuple(value.aliases for value in template.values)
+        result = self.allocate(node, ctx)
+        resolved = template.resolve(ctx)
+        for value in resolved.values:
+            ctx.by_value.setdefault(value.value, value)
+        ctx.windows.extend(window for window in resolved.windows if window.value in ctx.by_value)
+        ctx.regions.extend(resolved.regions)
+        instances = qualify_instances(resolved.instances, ctx)
+        if instances is not None:
+            ctx.instance_groups.extend(instances.groups)
+        for index, candidates in enumerate(template.return_reuse):
+            key = SSAValue(node, index)
+            if key not in ctx.by_value:
+                continue
+            for candidate in candidates:
+                actual, precision = ctx.project(candidate)
+                if precision is not AnalysisPrecision.EXACT or not is_zero_offset(
+                    actual.relation.relation
+                ):
+                    continue
+                ctx.candidates.append(
+                    (
+                        key,
+                        BufferAlias(
+                            actual.target, identity_of(ctx.by_value[key]), AliasKind.RETURN_REUSE
                         ),
                         None,
                     )
-                    if destination is not None:
-                        add_alias(source, result, AliasKind.WINDOW, published.relation)
-                        ctx.window_candidates[source, result] = result, destination, published
-        resolved = ctx.current.accesses.get("narrow", {}).get(id(node))
-        resolved_insert = None
-        if insert is not None and resolved is not None:
-            destination = next((access for access in resolved[1] if access.input_index == 0), None)
-            update = next((access for access in resolved[1] if access.input_index == 1), None)
-            if destination is not None and update is not None:
-                resolved_insert = destination, update
-        for operand, relation in operand_to_result_relation(node, ctx.current, resolved_insert):
-            if not is_zero_offset(relation):
-                continue
-            source = self.source_storage(operand, node, ctx)
-            if source is None:
-                continue
-            ctx.proofs.setdefault(result, set()).add(source)
-            if (
-                insert is None
-                and source.lifetime.last_used_at <= result.lifetime.defined_at
-                and not source.lifetime.persistent
-                and source.lifetime.memory_level == result.lifetime.memory_level
-            ):
-                add_alias(result, source, AliasKind.IN_PLACE)
+                )
+        assert tuple(value.aliases for value in template.values) == original, (
+            "resolving a call mutated callee aliases"
+        )
         return result
 
 
-def build_interference_graph(
-    values: tuple[Buffer, ...], ctx: AllocationModel
-) -> set[tuple[int, int]]:
-    """Pairs whose address ranges must not overlap."""
-    result: set[tuple[int, int]] = set()
-    for left, right in combinations(range(len(values)), 2):
-        if values[left].intersects(values[right]):
-            result.add((left, right))
-    return result
+def collect_allocation(function, context, liveness, quantities, persistent):
+    model = AllocationModel(
+        **vars(context), liveness=liveness, quantities=quantities, persistent=persistent
+    )
+    visitor = AllocationConstraintVisitor(root_function=function, context=model)
+    for param in function.params:
+        visitor.visit(param, model)
+    visitor.visit_function_body(function, model)
+    model.locations.update(visitor.locations)
+    model.regions.extend(liveness.regions)
+    borrowed = tuple(
+        value for value in model.by_value.values() if id(value.value.expr) not in model.locations
+    )
+    aliases = tuple(value.aliases for value in borrowed)
+    tie_analysis(model)
+    assert tuple(value.aliases for value in borrowed) == aliases, (
+        "caller ties mutated callee aliases"
+    )
+    return model
+
+
+def summary_of(model):
+    by_value = model.by_value
+    returned = []
+    body = model.frame.function.body
+    for index in range(len(leaves_of(body.type))):
+        value = by_value.get(SSAValue(body, index))
+        candidates = []
+        source = model.current.sources["narrow"].get(SSAValue(body, index))
+        if (
+            value is not None
+            and source is not None
+            and source.relation.relation.dim(isl.dim_type.IN)
+            == source.relation.relation.dim(isl.dim_type.OUT)
+            and is_zero_offset(source.relation.relation)
+        ):
+            target_root = root(value, by_value)
+            for member in model.members(value):
+                node = member.value.expr
+                if not isinstance(node, Call) or id(node) not in model.locations:
+                    continue
+                scope = model.locations[id(node)].current
+                for operand, relation in operand_to_result_relation(
+                    node, scope, _insert_accesses(node, scope)
+                ):
+                    formal = by_value.get(operand)
+                    if (
+                        formal is None
+                        or not any(operand.expr is param for param in model.frame.function.params)
+                        or not is_zero_offset(relation)
+                    ):
+                        continue
+                    if (
+                        model.span(model.members(formal))[1]
+                        <= model.span(model.members(target_root))[0]
+                    ):
+                        candidates.append(
+                            BufferAlias(operand, _unprefix(relation, scope), AliasKind.RETURN_REUSE)
+                        )
+        returned.append(tuple(candidates))
+    return AllocationSummary(
+        tuple(by_value.values()),
+        tuple(model.windows),
+        tuple(returned),
+        Footprint(tuple(model.instance_groups)),
+        tuple(model.regions),
+    )
+
+
+def build_interference_graph(values, windows, by_value):
+    """Interference uses translated windows, never the local lifetime envelope."""
+    intervals = defaultdict(list)
+    for window in windows:
+        if window.value in by_value:
+            intervals[root(by_value[window.value], by_value)].append(window)
+    return {
+        (i, j)
+        for i, j in combinations(range(len(values)), 2)
+        if any(
+            max(a.defined_at, b.defined_at) <= min(a.last_used_at, b.last_used_at)
+            for a in intervals[values[i]]
+            for b in intervals[values[j]]
+        )
+    }
 
 
 def alignment_of(value: Expr) -> int:
@@ -948,38 +1358,24 @@ def aligned(value: int, alignment: int) -> int:
 
 
 def _first_fit(
-    order: list[set[int]],
-    values: tuple[Buffer, ...],
+    order: list[int],
+    values: tuple[AllocationValue, ...],
     interference: set[tuple[int, int]],
     alignments: tuple[int, ...],
     limit: int,
     pinned: dict[int, int],
     floor: int,
+    sizes,
 ) -> tuple[tuple[int, ...], int] | None:
-    """Place alias components in *order*, each at the lowest address its conflicts leave.
-
-    A component holding a pinned value takes that address; every other one starts
-    at *floor*, aligned to the component, or above. None when the components
-    cannot share a pinned address or one would end past *limit*.
-    """
-    placed: list[tuple[set[int], int, int]] = []
+    """Place each root at its lowest aligned address left free by its conflicts."""
+    placed: list[tuple[int, int, int]] = []
     addresses = [0] * len(values)
     peak = 0
-    for component in order:
-        size = max(values[index].lifetime.bytes for index in component)
-        alignment = max(alignments[index] for index in component)
-
-        def conflicts(other: set[int]) -> bool:
-            return any(
-                tuple(sorted((left, right))) in interference
-                for left in component
-                for right in other
-            )
-
-        blocked = tuple(item for item in placed if conflicts(item[0]))
-        pins = {pinned[index] for index in component if index in pinned}
-        if len(pins) > 1:
-            return None
+    for index in order:
+        size = sizes[values[index]]
+        alignment = alignments[index]
+        blocked = tuple(item for item in placed if tuple(sorted((index, item[0]))) in interference)
+        pins = {pinned[index]} if index in pinned else set()
         lowest = aligned(floor, alignment)
         candidates = sorted(
             pins
@@ -987,8 +1383,8 @@ def _first_fit(
                 lowest,
                 *(
                     aligned(address + held, alignment)
-                    for other, address, held in blocked
-                    if other and aligned(address + held, alignment) >= lowest
+                    for _other, address, held in blocked
+                    if aligned(address + held, alignment) >= lowest
                 ),
             }
         )
@@ -998,55 +1394,56 @@ def _first_fit(
                 for candidate in candidates
                 if all(
                     candidate + size <= other_address or other_address + other_size <= candidate
-                    for other, other_address, other_size in blocked
-                    if other
+                    for _other, other_address, other_size in blocked
                 )
             ),
             None,
         )
         if address is None or address + size > limit:
             return None
-        for index in component:
-            addresses[index] = address
-        placed.append((component, address, size))
+        addresses[index] = address
+        placed.append((index, address, size))
         peak = max(peak, address + size)
     return tuple(addresses), peak
 
 
 def _satisfies(
     addresses: tuple[int, ...],
-    values: tuple[Buffer, ...],
+    values: tuple[AllocationValue, ...],
     interference: set[tuple[int, int]],
     alignments: tuple[int, ...],
     limit: int,
     pinned: dict[int, int],
     floor: int,
+    sizes,
 ) -> bool:
     """Whether a seed meets every constraint the solver states about addresses."""
     for index, (address, item, alignment) in enumerate(
         zip(addresses, values, alignments, strict=True)
     ):
-        if address % alignment or address + item.lifetime.bytes > limit:
+        if address % alignment or address + sizes[item] > limit:
             return False
         if index in pinned and address != pinned[index]:
             return False
         if index not in pinned and address < floor:
             return False
     return all(
-        addresses[left] + values[left].lifetime.bytes <= addresses[right]
-        or addresses[right] + values[right].lifetime.bytes <= addresses[left]
+        addresses[left] + sizes[values[left]] <= addresses[right]
+        or addresses[right] + sizes[values[right]] <= addresses[left]
         for left, right in interference
     )
 
 
 def calculate_starts(
-    values: tuple[Buffer, ...],
+    values: tuple[AllocationValue, ...],
     interference: set[tuple[int, int]],
     alignments: tuple[int, ...],
     limit: int,
     *,
     pinned: dict[int, int] | None = None,
     floor: int = 0,
+    sizes=None,
+    starts=None,
 ) -> tuple[tuple[int, ...], int] | None:
     """A complete aligned seed for independent values, or None.
 
@@ -1058,16 +1455,11 @@ def calculate_starts(
     proves nothing about the model, so it must not bound the search.
     """
     pinned = pinned or {}
-    components = {index: {index} for index in range(len(values))}
-
-    def size(component: set[int]) -> int:
-        return max(values[index].lifetime.bytes for index in component)
-
-    def first(component: set[int]) -> int:
-        return min(values[index].lifetime.defined_at for index in component)
-
-    by_definition = sorted(components.values(), key=lambda c: (first(c), -size(c)))
-    largest_first = sorted(components.values(), key=lambda c: (-size(c), first(c)))
+    sizes = sizes or {v: v.lifetime.bytes for v in values}
+    starts = starts or {v: v.lifetime.defined_at for v in values}
+    indices = range(len(values))
+    by_definition = sorted(indices, key=lambda i: (starts[values[i]], -sizes[values[i]]))
+    largest_first = sorted(indices, key=lambda i: (-sizes[values[i]], starts[values[i]]))
     attempts = (
         (by_definition, {}, 0),
         (by_definition, pinned, floor),
@@ -1076,9 +1468,9 @@ def calculate_starts(
     seeds = [
         seed
         for order, pins, lowest in attempts
-        if (seed := _first_fit(order, values, interference, alignments, limit, pins, lowest))
+        if (seed := _first_fit(order, values, interference, alignments, limit, pins, lowest, sizes))
         is not None
-        and _satisfies(seed[0], values, interference, alignments, limit, pinned, floor)
+        and _satisfies(seed[0], values, interference, alignments, limit, pinned, floor, sizes)
     ]
     return min(seeds, key=lambda seed: seed[1]) if seeds else None
 
@@ -1090,24 +1482,25 @@ def solve_allocation(
 ) -> AllocationResult:
     """Return the first feasible whole-function placement for one level."""
     values = tuple(
-        value for value in context.buffers if value.lifetime.memory_level == memory_level
+        value for value in context.roots() if value.lifetime.memory_level == memory_level
     )
+    sizes = {value: context.size(value) for value in values}
+    persistent = {value for value in values if context.is_persistent(value)}
     if not values:
         return AllocationResult(0, "optimal")
 
     alignments = tuple(item.alignment for item in values)
-    largest = max(item.lifetime.bytes for item in values)
+    largest = max(sizes[item] for item in values)
     limit = sum(
-        aligned(item.lifetime.bytes, alignment)
-        for item, alignment in zip(values, alignments, strict=True)
+        aligned(sizes[item], alignment) for item, alignment in zip(values, alignments, strict=True)
     )
-    model = context.models[memory_level]
+    model = cp_model.CpModel()
     peak = model.new_int_var(largest, limit, f"{memory_level}_peak")
-    addresses = tuple(context.address[item] for item in values)
+    addresses = tuple(model.new_int_var(0, limit, f"address_{i}") for i in range(len(values)))
     for index, (address, item, alignment) in enumerate(
         zip(addresses, values, alignments, strict=True)
     ):
-        model.add(address + item.lifetime.bytes <= peak)
+        model.add(address + sizes[item] <= peak)
         model.add_modulo_equality(0, address, alignment).with_name(f"align_{index}")
 
     persistent_end = 0
@@ -1115,31 +1508,31 @@ def solve_allocation(
     for index, (address, item, alignment) in enumerate(
         zip(addresses, values, alignments, strict=True)
     ):
-        if not item.lifetime.persistent:
+        if item not in persistent:
             continue
         persistent_end = aligned(persistent_end, alignment)
         offset = persistent_end
-        persistent_end += item.lifetime.bytes
+        persistent_end += sizes[item]
         model.add(address == offset)
         pinned[index] = offset
     for address, item in zip(addresses, values, strict=True):
-        if not item.lifetime.persistent:
+        if item not in persistent:
             model.add(address >= persistent_end)
 
-    interference = build_interference_graph(values, context)
+    interference = build_interference_graph(values, context.windows, context.by_value)
     order_choices: dict[tuple[int, int], tuple[cp_model.IntVar, cp_model.IntVar]] = {}
     for left, right in sorted(interference):
-        if values[left].lifetime.persistent or values[right].lifetime.persistent:
+        if values[left] in persistent or values[right] in persistent:
             continue
         left_before = model.new_bool_var(f"before_{left}_{right}")
         right_before = model.new_bool_var(f"before_{right}_{left}")
         order_choices[(left, right)] = (left_before, right_before)
-        model.add(
-            addresses[left] + values[left].lifetime.bytes <= addresses[right]
-        ).only_enforce_if(left_before)
-        model.add(
-            addresses[right] + values[right].lifetime.bytes <= addresses[left]
-        ).only_enforce_if(right_before)
+        model.add(addresses[left] + sizes[values[left]] <= addresses[right]).only_enforce_if(
+            left_before
+        )
+        model.add(addresses[right] + sizes[values[right]] <= addresses[left]).only_enforce_if(
+            right_before
+        )
         model.add_bool_or(left_before, right_before)
 
     seed = calculate_starts(
@@ -1149,6 +1542,8 @@ def solve_allocation(
         limit,
         pinned=pinned,
         floor=persistent_end,
+        sizes=sizes,
+        starts={value: context.span(context.members(value))[0] for value in values},
     )
     if seed is not None:
         address_hints, peak_hint = seed
@@ -1159,8 +1554,8 @@ def solve_allocation(
                 model.add_hint(address, suggested)
                 hinted.add(address.index)
         for (left, right), (left_before, right_before) in order_choices.items():
-            left_end = address_hints[left] + values[left].lifetime.bytes
-            right_end = address_hints[right] + values[right].lifetime.bytes
+            left_end = address_hints[left] + sizes[values[left]]
+            right_end = address_hints[right] + sizes[values[right]]
             model.add_hint(left_before, int(left_end <= address_hints[right]))
             model.add_hint(right_before, int(right_end <= address_hints[left]))
         model.add_hint(peak, peak_hint)
@@ -1176,36 +1571,24 @@ def solve_allocation(
         status_name = solver.status_name(status).lower()
         raise AnalysisError(
             f"allocation: no feasible {memory_level} placement was found "
-            f"({status_name}); {len(values)} Buffers conflict with "
+            f"({status_name}); {len(values)} roots conflict with "
             f"{len(interference)} interference constraints"
         )
     actual_peak = max(
-        solver.value(address) + item.lifetime.bytes
-        for address, item in zip(addresses, values, strict=True)
+        solver.value(address) + sizes[item] for address, item in zip(addresses, values, strict=True)
     )
     for left, right in interference:
         left_offset, right_offset = solver.value(addresses[left]), solver.value(addresses[right])
         if not (
-            left_offset + values[left].lifetime.bytes <= right_offset
-            or right_offset + values[right].lifetime.bytes <= left_offset
+            left_offset + sizes[values[left]] <= right_offset
+            or right_offset + sizes[values[right]] <= left_offset
         ):
             a, b = values[left].lifetime, values[right].lifetime
             raise AnalysisError(
-                f"allocation: overlapping {memory_level} Buffers: {a.binding} [{a.defined_at},{a.last_used_at}] at {left_offset}; {b.binding} [{b.defined_at},{b.last_used_at}] at {right_offset}"
+                f"allocation: overlapping {memory_level} roots: {a.binding} [{a.defined_at},{a.last_used_at}] at {left_offset}; {b.binding} [{b.defined_at},{b.last_used_at}] at {right_offset}"
             )
     return AllocationResult(
         actual_peak,
         "feasible",
         {item: solver.value(address) for item, address in zip(values, addresses, strict=True)},
     )
-
-
-__all__ = [
-    "AliasKind",
-    "AllocationConstraintVisitor",
-    "AllocationModel",
-    "AllocationResult",
-    "AllocationValue",
-    "Storage",
-    "solve_allocation",
-]

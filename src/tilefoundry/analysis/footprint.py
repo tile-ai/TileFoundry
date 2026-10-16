@@ -629,6 +629,7 @@ def moving_boundaries(
     wave_units, declared_units = wave
     topology_level = ctx.topology_level or ctx.frame.target.get_facts(TopologyFacts).parallel_level
     definitions = {value_id: scope for scope in walk_scopes(root) for value_id in scope.relations}
+    definitions.update((id(call), scope) for scope, call, _reached in resolved)
     found: list[MovingBoundary] = []
     for scope in walk_scopes(root):
         mesh = _wave_mesh(scope, topology_level)

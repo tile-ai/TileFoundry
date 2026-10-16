@@ -580,7 +580,12 @@ class BufferAlias:
     `SSAValue` key, with precision in a parallel per-view table. All scopes in
     one definition share those tables; other definitions use independent tables.
     Allocation MUST consume the same structural source records instead of
-    recomputing view or forwarding links. MeshRegion results use their body's source; static tuple projections
+    recomputing view or forwarding links.
+    A retained Call return leaf MUST project the callee's return source only
+    when that source root is a callee formal. Otherwise it is material storage
+    at the caller boundary and MUST use the Call leaf's own identity source.
+    Distinct Call results MUST NOT share a source merely because their callee
+    returns the same internal SSA. MeshRegion results use their body's source; static tuple projections
     select a structural element or a material op's flattened result index;
     loop results use their corresponding carried phi; capture parameters use
     their arguments' sources. Every other source is the value itself and identity.
@@ -632,12 +637,26 @@ the following order and behavior:
 | RETURN_REUSE | Call result -> actual argument | Ordinary tie condition and callee's zero-offset proof | No |
 | IN_PLACE | Result -> operand | Ordinary tie condition and zero-offset proof | No |
 
-Unconditional relations MUST be merged first. Conditional relations MUST be
+Structural source links MUST be installed first. Conditional relations MUST be
 attempted in the table's order, then in value definition order. For an ordinary
-tie with A = Buffer(holder), B = Buffer(target), A already equal to B is accepted.
-Otherwise B MUST end no later than A starts, B MUST be neither persistent nor a
-formal boundary Buffer, both levels MUST agree, and bytes(A) MUST be at most
-bytes(B). Acceptance merges A into B. No address decision may alter this partition.
+tie, A and B are the roots of the holder and target. Equal roots are accepted.
+Otherwise B MUST end no later than A starts, B MUST be neither persistent nor
+rooted at a borrowed formal, both levels MUST agree, and bytes(A) MUST be at
+most bytes(B). Acceptance adds a value link from A to B. Address decisions MUST
+NOT change accepted links.
+
+Every tie MUST read the same occupancy: a value's own lifetime plus translated
+callee windows mapped to that value. Start is the earliest definition and end
+the latest use among those windows; lifetimes themselves MUST NOT be changed.
+Without Calls this occupancy is the value's own lifetime.
+A root's extent MUST be the maximum bytes of every member's occupancy, including
+mapped return-producer windows; its own lifetime.bytes remains the size of its
+projected Type. At equal endpoints,
+a mapped callee window has no caller-local access proof: only members of the
+formal covered by a callee RETURN_REUSE candidate may borrow that proof, checked
+again in actual storage-root coordinates. Other mapped windows MUST end strictly
+before the candidate starts. Global interference MUST compare individual
+windows, never their occupancy envelope.
 
 At equal endpoints, A's first defining operation MUST have a proved zero-offset
 `operand_to_result_relation` for every B member it reads at that event. The
@@ -647,18 +666,23 @@ IN_PLACE candidates MUST be limited to proved zero-offset, non-persistent
 operands at the same level whose own last use is no later than the result's
 definition. Nonzero-offset IN_PLACE and RETURN_REUSE candidates MUST NOT be
 registered. IN_PLACE and RETURN_REUSE MUST use source-resolved
-`operand_to_result_relation`, grouped by `access.buffer`, so the proof is in
+`operand_to_result_relation`, grouped by `Access.target`, so the proof is in
 storage-root coordinates after VIEW/FORWARD composition. A Slice's local
 identity MUST NOT turn a shifted backing-buffer read into zero-offset reuse.
 
 At equal endpoints, and for WINDOW reads at its start, proof MUST compare isl
 relations in B's root coordinates: each operation's read relation MUST equal
 its value's relation at the candidate output landing, restricted to that
-input's iteration domain. Merely belonging to one Buffer is insufficient.
+input's iteration domain. Merely belonging to one storage root is insufficient.
 The proved InsertSlice destination identity includes its forwarded unchanged
 coordinates, not just the update's write-traffic coordinates.
 
 CARRY_YIELD for loop L uses content within one representative body iteration.
+Between different storage roots, A's material producer (including a material
+Call result) MUST be defined inside L's body. A body-local view or forward of
+an outside root does not qualify; a candidate without any body-local member
+definition MUST be rejected. Rejection uses the ordinary backedge copy.
+Completion for candidates already sharing one root is unchanged.
 Its B endpoint is the last use of any B member strictly between L's phi and
 backedge events; inner-loop synthetic uses count. L's own backedge, exit, and
 later uses do not read the old phi content. Its A start is the earliest member
@@ -666,20 +690,20 @@ definition inside L's body. The resulting end(B) MUST be at most start(A), with
 the same zero-offset proof at equality. Liveness intervals themselves MUST
 remain unchanged.
 
-After partitioning, CARRY_INIT, CARRY_YIELD, and INSERT_SLICE candidates whose
-holder and target already share one Buffer MUST be recorded as accepted,
+After accepting links, CARRY_INIT, CARRY_YIELD, and INSERT_SLICE candidates whose
+holder and target already reach one root MUST be recorded as accepted,
 including when another accepted edge established that storage identity. This
-completion MUST NOT merge Buffers or change placement. Publishing retains one
+completion MUST NOT change roots or placement. Publishing retains one
 alias per value, preferring INSERT_SLICE. WINDOW is excluded from this completion.
 
 WINDOW is the exception whose holder precedes its target. It MUST be accepted
 only when the same InsertSlice's result and destination already share B, and
-`update_alias` proves a window visible at the producer. A = Buffer(update)
+the update-to-result relation proves a window visible at the producer. A, the update root,
 MUST differ from B, be neither persistent nor a formal boundary, occupy the same
 level, and have every member's last use no later than the InsertSlice result's
 definition. The update MUST fit in the result. No B member may be used strictly
 between A's start and that definition; at A's start, any B read requires the
-zero-offset proof above. Acceptance merges A into B as a window member. The
+zero-offset proof above. Acceptance links A to B with the window relation. The
 published alias MUST follow VIEW, FORWARD, and accepted CARRY_INIT edges from
 the update to its storage root, reverse-composing those coordinate relations.
 The resulting producer-to-destination map MUST cover the producer's complete
@@ -693,30 +717,31 @@ When CARRY_YIELD and INSERT_SLICE both accept the same value, INSERT_SLICE MUST
 be published; its destination and phi already have identical storage. Rejected
 ties MUST publish no alias; lowering copies the corresponding carry or slice.
 
-A callee Buffer containing a formal or the returned storage root is a boundary
-Buffer and MUST have no local address variable or published offsets. Callee
-formal endpoints and return-buffer starts form a local summary. Read-only
+A callee root containing a formal or the returned storage root is a boundary
+and MUST have no local address variable or published offsets. Read-only
 zero-offset operand proofs, including formal operands and VIEW/FORWARD paths
-to the return root, MAY produce RETURN_REUSE candidates when the formal
-Buffer ends no later than the return Buffer starts. These proofs MUST NOT
-create local IN_PLACE aliases, merge formal storage, or publish metadata.
-At a caller, actual storage extends to the formal Buffer's local endpoint,
-and the call result starts at the return Buffer's local start. The ordinary
-caller tie and equality proof still apply.
+to the return root, MAY produce RETURN_REUSE candidates when formal occupancy
+ends no later than return occupancy starts. These proofs MUST NOT create local
+IN_PLACE aliases, link formal storage to a result, or publish metadata.
 
-Root aggregation MUST connect each callee boundary instance to the actual or
-call-result Buffer and translate intervals through TimingValuation. Non-boundary
-callee Buffers MUST have one address per definition, occupied over the union of
-all translated call intervals. Implicit weights remain boundary storage and MUST
-be placed using the instance-index union. One root global solve MUST replace
-independent per-definition placements. Non-boundary material offsets MUST come
-from that global solution.
+An internal AllocationSummary MUST contain the definition's values, windows,
+return candidates, instance address evidence, and flat RegionInterval facts.
+At a Call leaf its resolve MUST translate windows and region events using
+TimingValuation. Windows rooted at a formal MUST name the actual SSA leaf;
+windows rooted at a return MUST name the Call result leaf. Internal SSA values
+retain their identities and share one address across all translated windows.
+The caller MUST NOT mutate AllocationValue aliases in a callee summary. Own
+windows MUST reference the AllocationValue's lifetime object rather than copy it.
+Implicit weights MUST use the union of instance indices. Only the entry solves
+placement, once, after collecting its Call leaves; non-boundary callee offsets
+MUST be published from that solution. Repeated region windows contribute their
+maximum occupancy without traversing the callee body again.
 
 Capacity is settled against authored definition order, which fixes every
-Buffer member's lifetime before any is measured. Whole-Function `gmem` and `smem`
-peaks use exact polyhedral access relations to place addressable Buffers; the
+linked value's lifetime before any is measured. Whole-Function `gmem` and `smem`
+peaks use exact polyhedral access relations to place addressable roots; the
 Call results report their concrete offsets. A `MeshRegion` peak instead scans
-Buffer occupancy over its entry-to-exit window, counting each Buffer once and
+root occupancy over its entry-to-exit window, counting each root once and
 using the union of live address intervals for addressable levels, but only for
 levels the region holds. In the target's ordered topology hierarchy, the region's
 outermost level MUST be the target-declared owner or an enclosing level; a
@@ -729,7 +754,7 @@ does not infer a holder from its layout or storage name. `rmem` is not
 address-solved: the Function reports the maximum of all stage peaks and a
 whole-Function live-byte scan of values that no `MeshRegion` claims.
 
-At each event, `rmem` counts a Buffer once, using its greatest live member span.
+At each event, `rmem` counts a root once, using its greatest live member span.
 `gmem` and `smem` window occupancy and persistent bytes MUST count the union of
 live physical address intervals. A repeated callee region reports the maximum
 across visits.
@@ -747,8 +772,8 @@ class MemoryLevelPeak:
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `MemoryLevelPeak.memory_level` | Each storage level with at least one lifetime or traffic entry, sorted by name. | No |
-| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible global `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest Buffer occupancy in its inclusive entry-to-exit event window. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
-| `MemoryLevelPeak.persistent_bytes` | Union of persistent address intervals at `gmem`/`smem`; greatest persistent member span per Buffer at other levels. | No |
+| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible global `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest root occupancy in its inclusive entry-to-exit event window. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
+| `MemoryLevelPeak.persistent_bytes` | Union of persistent address intervals at `gmem`/`smem`; greatest persistent member span per root at other levels. | No |
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level. | As above |
 | `RegionMemoryMetadata.solver_status` | `"feasible"` after the whole-Function placement settles, including when there is no addressable value. | No |
@@ -760,7 +785,7 @@ class MemoryLevelPeak:
     `MeshRegion` with an eligible live value. Unsplit tensor values defined in
     the region body or child regions contribute over intersecting lifetimes,
     independently of the region's depth relative to the storage owner. Split
-    values retain owner eligibility and declared-holder selection. Each Buffer
+    values retain owner eligibility and declared-holder selection. Each root
     counts once; target-owned storage (`gmem`) is excluded. A mesh-region
     record carries only its topology names and per-level peaks; whole-Function
     traffic, footprints, reuse windows, lifetimes, errors, and advisories stay
@@ -782,8 +807,8 @@ class MemoryLevelPeak:
     other than the one being analysed MUST fail rather than be assumed. Domains
     holding the same buffers are one question, decided once.
   - Carry, InsertSlice, window, return-reuse and in-place sharing MUST follow
-    the pre-solve Buffer partition and acceptance conditions above. Simultaneously
-    live values in overlapping address intervals MUST belong to the same Buffer;
+    the pre-solve value links and acceptance conditions above. Simultaneously
+    live values in overlapping address intervals MUST belong to the same root;
     otherwise analysis MUST raise `AnalysisError` identifying both bindings,
     intervals, offsets, and level.
   - Every placed offset MUST be aligned to the greater of 16 bytes and the
@@ -803,7 +828,7 @@ class MemoryLevelPeak:
     bound on the search. With no seed it solves the same model, every
     constraint kept, without those hints or that seed-derived upper bound.
   - A seed that hints or bounds the search MUST meet every address constraint
-    the solver states: one address per Buffer, alignment, disjoint
+    the solver states: one address per root, alignment, disjoint
     addresses for interfering values, pinned persistent addresses, and the
     address limit. A seed that does not MUST NOT bound the search; failing to
     construct one proves nothing about the model.

@@ -39,8 +39,13 @@ from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationV
 from tilefoundry.visitor_registry.contexts import Cost, CostContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
+from .access import AliasKind
 from .allocation import (
-    AllocationValue,
+    collect_allocation,
+    published_aliases,
+    root,
+    solve_allocation,
+    summary_of,
 )
 from .compute_cost import accumulate_logical, grouped_breakdown
 from .errors import AnalysisError
@@ -55,15 +60,17 @@ from .footprint import (
     wave_of,
 )
 from .iteration_scope import IterationScope, Repeats, walk_scopes
-from .liveness import analyze_liveness
+from .liveness import analyze_liveness, result_copies
 from .metadata import (
     Breakdown,
     Footprint,
+    MemoryLevelPeak,
     MemoryMetadata,
     RegionMemoryMetadata,
     Spread,
     Traffic,
     TrafficBytes,
+    ValueLifetime,
 )
 from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
@@ -414,13 +421,13 @@ def held_in_region(value_mesh: Mesh, region_mesh: Mesh) -> bool:
 
 
 def values_in_region(
-    values: tuple[AllocationValue, ...],
+    values: tuple[ValueLifetime, ...],
     region: MeshRegion,
     entered_at: int,
     exited_at: int,
     facts: MemoryHierarchyFacts,
     topology_names: tuple[str, ...],
-) -> tuple[AllocationValue, ...]:
+) -> tuple[ValueLifetime, ...]:
     """Resident values whose lifetimes and ownership intersect one mesh region.
 
     Unsharded tensor leaves defined in the window contribute while live,
@@ -433,7 +440,7 @@ def values_in_region(
     outermost_region = min(region_positions)
     result = []
     for item in values:
-        lifetime = item.lifetime
+        lifetime = item
         if (
             not lifetime.persistent and lifetime.last_used_at < entered_at
         ) or lifetime.defined_at > exited_at:
@@ -449,7 +456,7 @@ def values_in_region(
                 f"memory: level {lifetime.memory_level!r} owner {declared.owner!r} "
                 f"is not a declared topology in {topology_names}"
             )
-        held = leaves_of(item.value.expr.type)[item.value.index]
+        held = leaves_of(lifetime.value.expr.type)[lifetime.value.index]
         if isinstance(held, TensorType) and is_unsharded_layout(held.layout):
             if not entered_at < lifetime.defined_at < exited_at:
                 continue
@@ -665,7 +672,44 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for item in reached
     )
     labels = {item.target: item.label for item in merged_reached if item.reached is not None}
-    attach(function, analyze_liveness(function, context, callee=function is not context.entry))
+    liveness = analyze_liveness(function, context, callee=function is not context.entry)
+    attach(function, liveness)
+    quantities = {}
+    persistent = set()
+    placement = CostContext(
+        frame=context.frame, topology_level=topology_level, topologies=topologies
+    )
+    for lifetime in liveness.intervals:
+        key = lifetime.value
+        leaves = leaves_of(placement.local_type_of(key.expr))
+        if not leaves:
+            continue
+        held = leaves[key.index]
+        quantity = next(
+            (
+                (level, amount)
+                for level, amount in bytes_by_storage(held).items()
+                if facts.explicit(level) is not None
+            ),
+            None,
+        )
+        if quantity is not None:
+            level, amount = quantity
+            quantities[key] = level, amount * result_copies(key.expr)
+        if any(key.expr is param for param in function.params):
+            persistent.add(key)
+    allocation = collect_allocation(function, context, liveness, quantities, frozenset(persistent))
+    attach(function, summary_of(allocation))
+    for value in allocation.by_value.values():
+        expr = value.value.expr
+        if id(expr) not in allocation.locations:
+            continue
+        moved = get_metadata(expr, MemoryMetadata)
+        if moved is not None:
+            attach(expr, replace(moved, alias=None, buffer_bytes=None, offsets=()))
+    for key, alias in published_aliases(allocation).items():
+        moved = get_metadata(key.expr, MemoryMetadata) or MemoryMetadata()
+        attach(key.expr, replace(moved, alias=alias))
     if memory_level is not None and wave is not None:
         seen_footprints = set()
         for scope, calls in memory_context.reached_by_scope.items():
@@ -735,7 +779,17 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             ),
         )
     )
-    errors, advisories = _memory_findings((), footprint, reuse, cache, wave)
+    peaks, lifetimes, status = (), (), "not_run"
+    if function is context.entry:
+        peaks, lifetimes, status = _place(allocation, facts, tuple(locals_by_unit))
+        occupied = {peak.memory_level for peak in peaks}
+        peaks += tuple(
+            MemoryLevelPeak(name, 0, 0, facts.explicit(name).capacity_bytes)
+            for name in memory_context.storage.total
+            if name not in occupied and facts.explicit(name) is not None
+        )
+        peaks = tuple(sorted(peaks, key=lambda peak: peak.memory_level))
+    errors, advisories = _memory_findings(peaks, footprint, reuse, cache, wave)
     attach(
         function,
         RegionMemoryMetadata(
@@ -745,13 +799,157 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 communication=_account_shares(memory_context.communication, tuple(locals_by_unit)),
             ),
             footprint=footprint,
-            peaks=(),
-            solver_status="not_run",
+            peaks=peaks,
+            lifetimes=lifetimes,
+            solver_status=status,
             reuse_windows=reuse,
             errors=errors,
             advisories=advisories,
         ),
     )
+
+
+def _resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
+    """Count live root spans, using address unions only for solved arenas."""
+    levels = {}
+    for window in windows:
+        value = model.by_value.get(window.value)
+        if value is not None:
+            levels.setdefault(window.memory_level, []).append((root(value, model.by_value), window))
+    peaks = []
+    for name, items in sorted(levels.items()):
+        events = {
+            point for _value, window in items for point in (window.defined_at, window.last_used_at)
+        }
+        if interval is not None:
+            start, end = interval
+            events = {start, end, *(p for p in events if start <= p <= end)}
+
+        def occupied(point, persistent=False):
+            live = {}
+            for value, window in items:
+                if window.persistent or (
+                    not persistent and window.defined_at <= point <= window.last_used_at
+                ):
+                    size = sizes[value] if window.persistent else window.bytes
+                    live[value] = max(live.get(value, 0), size)
+            if name not in ("gmem", "smem"):
+                return sum(live.values())
+            end = amount = 0
+            for start, stop in sorted(
+                (offsets[value], offsets[value] + size) for value, size in live.items()
+            ):
+                amount += max(0, stop - max(start, end))
+                end = max(end, stop)
+            return amount
+
+        level = facts.explicit(name)
+        peaks.append(
+            MemoryLevelPeak(
+                name,
+                max((occupied(p) for p in events), default=0),
+                occupied(0, True),
+                level.capacity_bytes if level else None,
+            )
+        )
+    return tuple(peaks)
+
+
+def _place(model, facts, topologies):
+    """Solve the entry's flat windows once and publish shared definition addresses."""
+    options = model.options if isinstance(model.options, MemoryOptions) else MemoryOptions()
+    offsets, high_water = {}, {}
+    for name in ("gmem", "smem"):
+        solved = solve_allocation(name, model, options)
+        offsets.update(solved.offsets)
+        high_water[name] = solved.peak_bytes
+    sizes = {value: model.size(value) for value in model.roots()}
+    grouped = {}
+    for value in model.by_value.values():
+        if (
+            value.lifetime.persistent
+            or value.lifetime.memory_level not in high_water
+            or any(alias.kind in (AliasKind.VIEW, AliasKind.FORWARD) for alias in value.aliases)
+        ):
+            continue
+        grouped.setdefault(id(value.value.expr), (value.value.expr, []))[1].append(value)
+    for expr, values in grouped.values():
+        moved = get_metadata(expr, MemoryMetadata) or MemoryMetadata()
+        values.sort(key=lambda value: value.value.index)
+        addresses = tuple(
+            offsets[root(value, model.by_value)]
+            for value in values
+            if not value.lifetime.persistent
+        )
+        copies = result_copies(expr)
+        size = values[0].lifetime.bytes // copies
+        if len(values) == 1 and addresses:
+            addresses = tuple(addresses[0] + copy * size for copy in range(copies))
+        attach(
+            expr,
+            replace(
+                moved,
+                offsets=addresses,
+                buffer_bytes=None if isinstance(expr.type, TupleType) else size,
+            ),
+        )
+    peaks = _resident_peaks(model, model.windows, offsets, facts, sizes)
+    peaks = tuple(
+        replace(peak, peak_bytes=high_water.get(peak.memory_level, peak.peak_bytes))
+        for peak in peaks
+    )
+    regions, claimed = {}, set()
+    rmem_peak = 0
+    names = tuple(level.name for level in model.target.get_facts(TopologyFacts).topologies)
+    for window in model.regions:
+        resident = values_in_region(
+            tuple(model.windows), window.region, window.entered_at, window.exited_at, facts, names
+        )
+        levels = _resident_peaks(
+            model, resident, offsets, facts, sizes, interval=(window.entered_at, window.exited_at)
+        )
+        if not levels:
+            continue
+        region, held = regions.setdefault(id(window.region), (window.region, {}))
+        for level in levels:
+            previous = held.get(level.memory_level)
+            held[level.memory_level] = (
+                level
+                if previous is None
+                else replace(
+                    level,
+                    peak_bytes=max(previous.peak_bytes, level.peak_bytes),
+                    persistent_bytes=max(previous.persistent_bytes, level.persistent_bytes),
+                )
+            )
+            if level.memory_level == "rmem":
+                rmem_peak = max(rmem_peak, level.peak_bytes)
+                claimed.update(id(value) for value in resident if value.memory_level == "rmem")
+    for region, held in regions.values():
+        attach(
+            region,
+            RegionMemoryMetadata(
+                solver_status="feasible", topologies=topologies, peaks=tuple(held.values())
+            ),
+        )
+    if claimed:
+        others = _resident_peaks(
+            model, tuple(w for w in model.windows if id(w) not in claimed), offsets, facts, sizes
+        )
+        other = next((p.peak_bytes for p in others if p.memory_level == "rmem"), 0)
+        peaks = tuple(
+            replace(p, peak_bytes=max(rmem_peak, other)) if p.memory_level == "rmem" else p
+            for p in peaks
+        )
+    lifetimes = []
+    for value in model.by_value.values():
+        if any(alias.kind in (AliasKind.VIEW, AliasKind.FORWARD) for alias in value.aliases):
+            continue
+        if id(value.value.expr) in model.locations:
+            lifetimes.append(value.lifetime)
+        else:
+            lifetimes.extend(window for window in model.windows if window.value == value.value)
+    return peaks, tuple(lifetimes), "feasible"
 
 
 def _memory_findings(peaks, footprint, reuse, cache, wave):
