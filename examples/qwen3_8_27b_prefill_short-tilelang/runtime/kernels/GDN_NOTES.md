@@ -144,7 +144,7 @@ to 8.1e-3 at T=1024 layer 60; not adopted), async final TMA stores in the chunk 
 
 Code: runtime/experiments/gdn_sol.py (`--before` = the previous gdn.py); raw numbers:
 reports/gdn_sol.json. GPU0 (SM 1500 MHz, slower than GPU1), no other compute process
-(waited with a copy of tools/wait_quiet.sh that ignores the long-lived
+(waited with a copy of the run’s GPU-idle helper that ignores the long-lived
 `nvidia-cuda-mps-server` of another user on GPU0; the original script never returns while it
 runs). Per-call time = runtime.benchutil.graph_time_us (20 back-to-back calls per graph),
 before and after alternated in one process, median of 3 rounds. us per call:

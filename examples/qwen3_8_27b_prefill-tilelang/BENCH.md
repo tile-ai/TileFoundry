@@ -1,12 +1,6 @@
 # Qwen3.8-27B prefill on TileFoundry + tilelang: results
 
-> **This file is the agent's own report, kept whole.** `README.md` is the front
-> door; everything below is what the run wrote about its own numbers. Two kinds
-> of path in it do not resolve here: `evidence/` and most of `results/` are the
-> run's working directories, which are kept in the round archive and not
-> shipped. The subset every number in section 1 rests on is in `reports/`, and
-> `tir/` keeps one representative per distinct lowering (`tir/INDEX.md`). The
-> runtime twin is `runtime_model.py` here; the run called it `runtime.py`.
+> GPU measurements below are historical results from the original run. The shipped raw benchmark records are in `reports/`; per-change working logs and superseded runs are archived separately. Current HIR migration and layout changes are recorded in `MIGRATION.md`. The runtime twin is `runtime_model.py`.
 
 Text prefill only: batch 1, no history, prompt 1024 / 4096 / 8192 tokens, stop
 after the first token. bf16 weights, no quantization, no vision, no decode.
@@ -69,7 +63,7 @@ lies in 629.6 - 632.2 ms.
 - **Clock:** the SM clock is read with `nvidia-smi` right after each timed
   replay and recorded in the row; it is not used to correct anything.
 - **Card:** the pinned card for the table; development numbers in
-  `evidence/` come from GPUs 0 and 1 (same model, same 1500 MHz cap), which
+  the development logs come from GPUs 0 and 1 (same model, same 1500 MHz cap), which
   run about 1 % faster than the pinned card at 8192.
 - `python run.py --prompt "..." [--prompt-tokens N]` prints the first token,
   the prefill time and tok/s with the same timing scope (prompts are padded to
@@ -117,7 +111,7 @@ lies in 629.6 - 632.2 ms.
 
 `flops.py` counts 2 n P over every 2-D text weight, plus 2 n^2 d_attn for the
 16 full-attention layers (causal halving included). Re-counted from the
-safetensors headers (`tools/count_flops.py`):
+safetensors headers (the archived FLOP-count probe):
 
 - The `matmul` bucket (24.777 B) includes the **MTP layer** (`mtp.*`, 0.425 B
   2-D parameters), which a prefill that stops at the first token never runs.
@@ -153,11 +147,11 @@ evaluator run gives the same first token as `transformers` (1024, 4096,
 **The runtime twin against model.py** (`tools/check_twin.sh`, `tilefoundry
 check runtime_model.py:Qwen3_8_27BTwin.<function>` with no `--expected`: the
 reference is the evaluator on model.py): the same 18 functions at 1024, 4096
-and 8192, **54 / 54 PASS** for the build of section 1 (`evidence/check_twin_v8/`,
+and 8192, **54 / 54 PASS** for the build of section 1 (the archived check twin v8 record,
 the check transcripts (not shipped)); also 54 / 54 for each earlier build: this
-round before STEP4 rows 43, 41, 39 and 36 (`evidence/check_twin_v7/`, `check_twin_v6/`, `check_twin_v5/`, `check_twin_v4/`), the previous alignment
-round (`evidence/check_twin_v2/`), the one before any (`evidence/check_twin/`),
-and this round's IEEE-exp trial (`evidence/check_twin_v3/`, section 7). Each bound is derived in
+round before STEP4 rows 43, 41, 39 and 36 (the archived check twin v7 record, the archived v6, v5 and v4 checks), the previous alignment
+round (the archived check twin v2 record), the one before any (the archived check twin record),
+and this round's IEEE-exp trial (the archived check twin v3 record, section 7). Each bound is derived in
 the script's header from where the twin rounds or sums in another order: one
 bf16 landing can differ by one step = 2^-7 of the value (rtol 2^-7); residual
 outputs get atol 2^-7 max|acc|; attention atol 2^-7 max|v| (the twin lands the
@@ -177,14 +171,14 @@ stated: measured max |error| 0.03125 against 0.073 at all three lengths (one
 bf16 step at the output's largest magnitude, 4.66; 0.0625 before the first
 alignment round, whose phase 2b ran on tf32), rel_l2 2.01e-3 / 2.01e-3 / 2.04e-3
 against 4.4e-3 (before: 2.23e-3 / 2.09e-3 / 2.11e-3); this round's delta-rule
-kernels give the same output bit for bit (`tools/test_gdn.py`). For comparison, model.py's delta_rule is
+kernels give the same output bit for bit (the archived GDN comparison). For comparison, model.py's delta_rule is
 1.8e-5 from transformers' (f32) one.
 
 **First token against transformers, whole prefill on the twin**
 (transcript not shipped; the build of section 1, same ids as the
 reference; this round's earlier builds and the previous round's give the same
-values, `results/e2e_twin_v{7,6,5,4,3}.txt`; the build before any TIR alignment:
-`results/e2e_twin_final.txt`):
+values, the archived e2e twin v{7,6,5,4,3} record; the build before any TIR alignment:
+the archived e2e twin final record):
 
 | prompt | twin first token | transformers | max abs logit error | rel_l2 | before alignment: max abs / rel_l2 | transformers' top-1 minus top-2 logit |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -208,7 +202,7 @@ largest error measured.
 |---|---|
 | authored HIR | `model.py` (`hf_alias()` maps the checkpoint's names) |
 | scheduled HIR | `scheduled/{norm,embed_final,gemm,gdn_elementwise,gdn,attention}.py`: one Module per (model.py function, length), every model.py function covered |
-| finalized TIR | `tir/*.py`, one file per (kernel function, length), from `tools/finalize_all.sh`: `tilefoundry schedule finalize` for each, run through `tools/finalize_deep.py` (the CLI's own `main` with a deeper Python stack, which the delta rule's `intra_wup` needs); one log per file in `evidence/finalize/` |
+| finalized TIR | `tir/*.py`, 35 representative files for 75 (kernel function, length) jobs (`tir/INDEX.md`), from `tools/finalize_all.sh`: `tilefoundry schedule finalize` for each, run through `tools/finalize_deep.py` (the CLI's own `main` with a deeper Python stack, which the delta rule's `intra_wup` needs); one log per job in `reports/finalize/` |
 | tilelang runtime module | `runtime_model.py` (the twin of `model.py`, `@runtime_module` per HIR Module) + `kernels/` |
 | entry point | `run.py` |
 
@@ -291,7 +285,7 @@ implementation preserves those decisions while supplying instruction encoding
 and synchronization." The previous round listed eight differences. This round removed all of
 them by changing the scheduled HIR, the runtime, or both; one more item
 (output initialization) is the HIR's own form, which the tutorial tells
-a backend it need not execute (below). Evidence: `evidence/STEP4.md` rows
+a backend it need not execute (below). Evidence: the archived STEP4 record rows
 27-43.
 
 | was | now |
@@ -300,11 +294,11 @@ a backend it need not execute (below). Evidence: `evidence/STEP4.md` rows
 | attention, delta_rule: mask row / column numbers computed from thread coordinates | the kernels take the iota table the TIR reads (i32 in both HIRs now: an i64 table cost attention 45 us at 8192 in registers) |
 | attention: V in TileLang's smem arrangement, 4 TMA boxes | V in the TIR's: five 16-key slabs of 4 x 64 columns (descriptor LBO 1024 elements, SBO 8 rows), five TMA copies, the value product as five m64n256k16 RS WGMMAs (P as five (128, 16) fragments) |
 | attention: mask on every block in the TIR, on diagonal blocks in the runtime | the HIR masks only a block the diagonal crosses, under a guard loop of 0 or 1 iterations (`kb >= q0 // 80`) |
-| attention: FA3's intra-warpgroup order in the runtime (S_kb issued ahead of block kb - 1's value product) | the runtime issues in the TIR's per-block order (S_kb, softmax_kb, O corr_kb, P_kb V_kb); only the two warpgroups' turn-taking at the tensor cores remains, which is synchronization. Bit-identical outputs; 1647.5 -> 1657.0 us per call at 8192, 107.6 -> 108.0 at 1024. Stating FA3's order in the HIR instead was tried (STEP4 row 30, `evidence/attention_fa3_hir_try/`): it needs a ring slot loaded in one iteration and read in the next, which the HIR cannot say without copying the tile, and finalize took the slot from the guard loop (always slot 0) |
+| attention: FA3's intra-warpgroup order in the runtime (S_kb issued ahead of block kb - 1's value product) | the runtime issues in the TIR's per-block order (S_kb, softmax_kb, O corr_kb, P_kb V_kb); only the two warpgroups' turn-taking at the tensor cores remains, which is synchronization. Bit-identical outputs; 1647.5 -> 1657.0 us per call at 8192, 107.6 -> 108.0 at 1024. Stating FA3's order in the HIR instead was tried (STEP4 row 30, the archived attention fa3 hir try record): it needs a ring slot loaded in one iteration and read in the next, which the HIR cannot say without copying the tile, and finalize took the slot from the guard loop (always slot 0) |
 | intra_wup: transposed blocks copied into smem scratch in the TIR, read in place by the runtime | the HIR reads them as bitcast views with swapped strides (no copy in the TIR) |
 | intra: V's load and the P / w / u stores issued earlier than the TIR's statements (finalize puts a TMA load next to its first use, output stores at the end) | the runtime issues them where the TIR does and reuses bytes as the TIR does (X_u's second chunk over V's first, X_w's second chunk at xw1s -- since row 43 at its TIR address, over gb and K's first 7 KB --, w staged in V's place, u in its own tile, ost): 3 CTAs per SM kept; bit-identical outputs; 318.9 -> 321.5 us per call at 8192, 45.8 -> 49.3 at 1024. Without the TIR's reuse the TIR's issue points cost 414.7 us (K, V, both staging tiles and P alive together, 2 CTAs per SM) |
-| intra's TIR itself could not be run as placed: three SW128 TMA tiles (ks, qs, vs) at 512 mod 1024 -- two 256-byte f32 rows before them shifted every later offset -- and four padded tiles (asm (64, 64) with row stride 65; maa, mbb, ys (32, 32) with stride 33) reaching past the bytes placement gave them (placement sizes a value by its shape, "logical bytes": `tilefoundry spec analysis`, ValueLifetime), so maa overlapped asm's last row and mbb overlapped maa while both were live | the HIR stages gc and beta as rows of one 1024-byte tile and states the padded shapes ((64, 65), (32, 33)), reading the first 64 / 32 columns; every SW128 tile now starts on a 1024-byte boundary and no tile reaches past its bytes (`tools/tir_placement_check.py` over all 75 TIR files, 467 placed tiles: 0 and 0; before: 27 and 12 in intra_wup). Why the alignment matters, measured on this H200 (`tools/tma_swizzle_probe.cu`, `results/tma_swizzle_probe.txt`): a 64 x 64 bf16 tile loaded by cp.async.bulk.tensor with SWIZZLE_128B at shared offset 512 lands by absolute-address swizzle, 0 of 4096 elements where the relative-swizzle layout `ComposedLayout(Swizzle(3, 4, 3), 0, layout)` of the TIR puts them (at offset 0: 4096 of 4096). The runtime clears the padded tiles as the TIR does (+0.8 us per call at 1024, +5.1 at 8192) |
-| shared-memory addresses: TileLang's | every kernel at the TIR's byte offsets (`python tools/smem_plan.py --check`: 0 differences at 1024, 4096, 8192, `results/smem_plan_check_v3.txt`). GEMM main and tail, attention, prep, final, recur_out: `tl.disable_shared_memory_reuse` gives each buffer its own region in name order, the buffers are named in the TIR's address order (`sm<k>_<tir name>`), and where the TIR reuses an offset the kernel reuses the buffer. intra, whose TIR plan lets tiles of different dtype and size share bytes in turn, overlapping in part: one (584, 64) bf16 allocation (74752 B, the TIR's extent); each bf16 tile a row slice of it at its TIR offset (all multiples of 1024 B = 8 rows, so TileLang's SW128 swizzle of the allocation is each tile's), each f32 tile (gb, asm, maa, mbb, Y, gsm) read and written at its TIR byte address in the same allocation (`kernels/gdn.py` `OFF`, `tf_ld` / `tf_st`), a barrier between a tile's last read and the next tile's first write on its bytes. Bit-identical outputs; 3 CTAs per SM as before; isolated (CUDA events, 5 x 20 calls) 49.8 -> 49.0 us at 1024, 170.6 -> 166.2 at 4096, 327.6 -> 319.6 at 8192 |
+| intra's TIR itself could not be run as placed: three SW128 TMA tiles (ks, qs, vs) at 512 mod 1024 -- two 256-byte f32 rows before them shifted every later offset -- and four padded tiles (asm (64, 64) with row stride 65; maa, mbb, ys (32, 32) with stride 33) reaching past the bytes placement gave them (placement sizes a value by its shape, "logical bytes": `tilefoundry spec analysis`, ValueLifetime), so maa overlapped asm's last row and mbb overlapped maa while both were live | the HIR stages gc and beta as rows of one 1024-byte tile and states the padded shapes ((64, 65), (32, 33)), reading the first 64 / 32 columns; every SW128 tile now starts on a 1024-byte boundary and no tile reaches past its bytes (the archived placement check over all 75 TIR files, 467 placed tiles: 0 and 0; before: 27 and 12 in intra_wup). Why the alignment matters, measured on this H200 (the archived TMA swizzle probe, the archived tma swizzle probe record): a 64 x 64 bf16 tile loaded by cp.async.bulk.tensor with SWIZZLE_128B at shared offset 512 lands by absolute-address swizzle, 0 of 4096 elements where the relative-swizzle layout `ComposedLayout(Swizzle(3, 4, 3), 0, layout)` of the TIR puts them (at offset 0: 4096 of 4096). The runtime clears the padded tiles as the TIR does (+0.8 us per call at 1024, +5.1 at 8192) |
+| shared-memory addresses: TileLang's | every kernel at the TIR's byte offsets (`python tools/smem_plan.py --check`: 0 differences at 1024, 4096, 8192, the archived smem plan check v3 record). GEMM main and tail, attention, prep, final, recur_out: `tl.disable_shared_memory_reuse` gives each buffer its own region in name order, the buffers are named in the TIR's address order (`sm<k>_<tir name>`), and where the TIR reuses an offset the kernel reuses the buffer. intra, whose TIR plan lets tiles of different dtype and size share bytes in turn, overlapping in part: one (584, 64) bf16 allocation (74752 B, the TIR's extent); each bf16 tile a row slice of it at its TIR offset (all multiples of 1024 B = 8 rows, so TileLang's SW128 swizzle of the allocation is each tile's), each f32 tile (gb, asm, maa, mbb, Y, gsm) read and written at its TIR byte address in the same allocation (`kernels/gdn.py` `OFF`, `tf_ld` / `tf_st`), a barrier between a tile's last read and the next tile's first write on its bytes. Bit-identical outputs; 3 CTAs per SM as before; isolated (CUDA events, 5 x 20 calls) 49.8 -> 49.0 us at 1024, 170.6 -> 166.2 at 4096, 327.6 -> 319.6 at 8192 |
 | qkv: three band loops per M group (the TIR held three TMA rings, 496 KB of smem, beyond the 227 KB an SM has) | one band loop per group with q- and k-head guards (one ring, 208 KB, the runtime's); the runtime's epilogue has the same two guards, its tail kernel the TIR's k-only guard |
 | recur_out: the TIR copied the loop-carried bf16 state (`sb = sb_next`) into a 16 KB buffer every chunk, and shared the output tile's offset with `vd`, which the two warpgroups use at the same time | the state's bf16 copy is made at the top of each iteration (no copy, one buffer less); the output tile 2-deep, as the runtime holds it |
 
@@ -338,7 +332,7 @@ SFU's ex2 / rcp approximations); the TIR says Unary EXP and Binary DIV and
 leaves the encoding to the backend, and `check` holds the result to model.py
 (54 / 54, section 6). The IEEE encodings were tried this round: per call at
 8192 gate_up 3980 -> 4127 us, prep 156 -> 220, gated_norm 77 -> 101; the
-whole prefill 644.00 ms on the pinned card (`results/bench-v4-ieee-exp-gpu2.json`),
+whole prefill 644.00 ms on the pinned card (the archived bench-v4-ieee-exp-gpu2.json record),
 slower than SGLang. `T.reduce` as a warp butterfly
 plus a workspace slot per warp is the runtime's reduce (`tilefoundry spec
 runtime 2.6.6`: the tier follows from the layouts, a mesh crossing warps
@@ -352,7 +346,7 @@ tool's memory analysis; some carry two kinds of errors:
   256.5 KB): the sum of the register tensors the TIR keeps live; it
   materializes, e.g., final's 32 x 5120 f32 product before the reduction that
   consumes it. ptxas allocates the registers of the compiled kernel; every
-  runtime kernel compiles without spills (`results/ptxas_v9.txt`: registers
+  runtime kernel compiles without spills (the archived ptxas v9 record: registers
   per thread and spill bytes per kernel and length).
 - *l2 reuse window ... exceeding capacity*: the cache model's estimate of
   the data a loop re-reads (e.g. the GEMMs' band loop); a performance note on
@@ -360,39 +354,22 @@ tool's memory analysis; some carry two kinds of errors:
   row 15).
 No smem placement error remains (qkv's 496 KB was the only one).
 
-**What scheduled lowering accepted on this build** (each found by
-`schedule candidates` / `finalize` refusing something; the HIR was changed to
-fit, and the runtime followed):
-one tensor result per lowered function; no lowering for `Arange`,
-`FullLike`, `RepeatInterleave`, `Softplus`, `Silu`, `RMSNorm` (written out
-in their arithmetic); a binary op's sharded inputs must be on one mesh (a
-gamma split over threads only cannot multiply x split over CTAs and threads;
-mesh-coordinate slicing, as above, avoids that); operands of a binary op never
-promote and an integer literal is i64 (`tf.cast(0, "i32")` is refused at
-lowering as an unscheduled cast; an i32 zero is `tf.zeros(..., "rmem")`);
-`Reduce` wants its source with explicit strides; bool tensors cannot be
-copied; loop bounds may depend on mesh coordinates, but a bound must be a
-bounded form: a loop variable or `kb * BN` alone is refused ("no bounded
-span"), `(cta.x * 0 + kb) % N` is accepted, and a step must be a literal;
-WGMMA operand arrangements per `schedule facts` (repeat modes leading, the
-MN-major chunk stride above); a transpose of a sub-mesh register tensor fails
-TIR verification, and `tf.transpose` of an smem tile is copied into smem
-scratch, while a `tf.bitcast` view with swapped strides (offset included) is
-read in place; the delta rule's long update chain needs a deeper Python stack
-than the CLI's (`tools/finalize_deep.py`). finalize orders statements itself:
-it places a TMA load next to its first use and output stores at the end,
-whatever the HIR's order. Finalize takes seconds to tens of minutes (the
-memory analysis over isl relations; attention the longest); it grew past an
-hour whenever one function kept several TMA rings live together (qkv's band
-loops inside the group loop) or held qkv's epilogue over 3 M groups; qkv now
-has one band loop per group with guards, and 8192's `whole` is split into
-`whole` (groups 0-1) and `whole_b` (group 2), device calls of one launch.
+**Regenerating with current TileFoundry.** The scheduled HIR uses explicit
+copy destinations and preserves the authored loop, instruction and ring shapes.
+`Arange` and `FullLike` lower directly. Return views and in-place updates use
+the allocation summary's exact addresses; writable return chains use the output
+parameter, while read-only views of inputs keep the input parameter. Dynamic
+inner staged loops use a shared counter; constant bounds retain mixed-radix stage
+selection. The example migration and every fragment-layout permutation are in
+`MIGRATION.md`. `tools/finalize_deep.py` supplies the larger Python stack needed
+by the delta rule's long update chain. Some long analyses can still spend over
+300 seconds in ISL counting, as on the upstream baseline.
 
 ## 8. Segmentation and fusion: the plan and why
 
-Evidence first, plan second (`evidence/STEP3.md`: step 2 per-length analysis,
+Evidence first, plan second (the archived STEP3 record: step 2 per-length analysis,
 where `analyze` and the hand count disagree and which is wrong, and the step-3
-log; `evidence/STEP4.md`: every kernel change with its numbers).
+log; the archived STEP4 record: every kernel change with its numbers).
 
 **Fusion: one set of kernel boundaries for all three lengths** (each change
 removes traffic that grows with the prompt and trades against nothing):
@@ -472,7 +449,7 @@ What the numbers say:
 2. **The boundary is not a length.** 2560 gains more than 2048, 1536 less
    than both, 3072 nothing. What decides is the tail wave of each GEMM,
    T mod 132 for T = (n / 128)(N / 256) tiles. A wave model with one rate
-   measured elsewhere (`tools/segment_model.py`: t(K) per tile from gate_up at
+   measured elsewhere (the archived segmentation probe: t(K) per tile from gate_up at
    4096; tail = one wave of t(K) / s plus the 6.6 us sum kernel) predicts the
    saving per length:
 
@@ -530,7 +507,7 @@ applies; full rows in STEP4):
 
 ## 9. Where the time goes (final, pinned card, nsys, one prefill)
 
-`results/nsys/v10_gpu2.table.txt` (the build of section 1, CUDA graph traced
+the archived v10 gpu2.table record (the build of section 1, CUDA graph traced
 per node; nsys adds 2-4 % to the wall time; the build before STEP4 rows 41
 and 43: `v9_gpu2.table.txt`, intra 16.67 ms at 8192; the previous round's
 build: `final_gpu2.table.txt`):
@@ -561,12 +538,12 @@ us of it is the v_new GEMM's sync chain, 0.42 us the bf16 copy of the state).
 
 - Order kept: model.py checked against `transformers` first; `analyze` at
   each length; the cut decided from that evidence; then schedules and
-  kernels, one logged change at a time (`evidence/STEP3.md`, `STEP4.md`).
+  kernels, one logged change at a time (the archived STEP3 record, `STEP4.md`).
   Step 2 redone on the final model.py per length, beside the hand count and
-  the measured kernels: `evidence/analyze/v1/VS_MEASURED.md` (STEP3, second
+  the measured kernels: the archived VS MEASURED record (STEP3, second
   part). Rerun this round (`tools/analyze_all.sh model.py v2`, `--compute-cost
   --memory --roofline --performance --dim seq_len=N`, 14 functions x 3
-  lengths, `results/analyze_v2.log`): `evidence/analyze/v2/TABLE.md` is
+  lengths, the archived analyze v2 record): the archived TABLE record is
   identical to v1's -- e.g. the whole prefill's roofline sum 95.2 / 417.8 /
   942.0 ms, of it compute-bound 50.4 / 201.7 / 403.3 ms, and the per-function
   disagreements with the hand count (STEP3, "Where `analyze` says memory and
@@ -587,7 +564,7 @@ us of it is the v_new GEMM's sync chain, 0.42 us the bf16 copy of the state).
   | delta rule: intra_g + intra_wup (packed w / u / P), f32 phase 2b | 42.8 -> 42.8 us | 166.9 -> 171.0 | 316.5 -> 326.3 |
   | whole prefill (bench, pinned card) | 80.46 -> 80.48 ms | 307.62 -> 310.05 | 629.61 -> 632.16 |
 
-  (per-call kernel times from `results/nsys/final_gpu2.table.txt` vs
+  (per-call kernel times from the archived final gpu2.table record vs
   `v6_gpu2.table.txt`; nsys runs vary by about 1 % at 4096.)
 - This round removed the remaining differences between runtime and TIR
   (section 7; STEP4 rows 27-43). Per call, nsys on the pinned card,
@@ -614,6 +591,6 @@ us of it is the v_new GEMM's sync chain, 0.42 us the bf16 copy of the state).
 - TileLang 0.1.15 findings, confirmed / refuted notes and new facts:
   the round archive.
 - Reproduce: `tools/check_hir.sh`, `tools/check_twin.sh N "0 3"`,
-  `tools/finalize_all.sh`, `tools/smem_plan.py --check`, `tools/ptxas_report.py`,
+  `tools/finalize_all.sh`, `tools/smem_plan.py --check`, the archived ptxas report,
   `tools/e2e_twin.py --lens 1024,4096,8192 --graph`,
   `CUDA_VISIBLE_DEVICES=2 tools/gpurun.sh python tools/bench.py`.

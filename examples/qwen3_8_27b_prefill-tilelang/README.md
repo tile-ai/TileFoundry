@@ -22,7 +22,7 @@ to remove — the floor is `FLOP / peak`, and the whole result is how close to i
 the GEMMs get.
 
 The full argument for every number is in [`BENCH.md`](BENCH.md), which is the
-run's own report kept whole. This file is the front door.
+run's benchmark report, with current regeneration instructions. This file is the front door.
 
 ---
 
@@ -228,12 +228,28 @@ makes the two columns comparable.
 | `reports/` | JSON only: the eight benchmark runs every number in `BENCH.md` section 1 rests on, the two segmentation studies behind section 6, and the SGLang baseline's raw numbers. Everything in `tools/` writes here |
 
 **What is deliberately not here.** This directory keeps the artifacts and the
-report, not the run's working record. The per-change log (`evidence/STEP3.md`,
+report, not the run's working record. The per-change log (the archived STEP3 record,
 `STEP4.md`), the per-function `analyze` reports, the `check` transcripts, the
 nsys traces, the placement ladders and the per-kernel probes stay in the round
-archive. `BENCH.md` and a few source comments still cite them by name — the
-comments are left as the run wrote them rather than edited to hide the
-citation.
+archive. The benchmark tables retain the original measurements; references to unavailable working files have been removed.
+
+## Regenerating HIR and analysis
+
+Use this checkout's TileFoundry CLI. For tools that import TileLang, use the existing TileLang environment without modifying it; expose this checkout through `PYTHONPATH`:
+
+```bash
+export TILEFOUNDRY="$(command -v tilefoundry)"
+export PYTHONPATH="$PWD/../../src${PYTHONPATH:+:$PYTHONPATH}"
+export TILELANG_PYTHON=/path/to/tilelang-env/bin/python
+```
+
+```bash
+JOBS=16 bash tools/finalize_all.sh
+python tools/scheduled_index.py --table
+bash tools/analyze_all.sh model.py current "1024 4096 8192"
+```
+
+`tir/INDEX.md` defines the 35 representative groups for the 75 finalize jobs. Different extents are compared after its integer normalization; rows marked byte for byte require exact equality.
 
 ## 4. Running it
 

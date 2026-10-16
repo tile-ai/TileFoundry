@@ -19,3 +19,35 @@ Generated schedules follow the four tools/gen_scheduled templates. Fragment perm
 ## Plain Bitcast inventory (D69)
 
 All 85 affected instances at 53 source sites match the program intent under row-major correspondence: 66 transposes and 19 identities. The independent NumPy mapping comparison found no compensating colex layouts, so all authored Bitcast layouts are retained.
+
+## Analysis digest refresh
+
+The definition selectors retain the root's H200 target and CTA/thread topologies. The current report nests entry records under `functions`; the digest reads the entry and counts retained callees only at their call sites. The regeneration uses `tools/tfdeep.py` for the deeper analysis traversal. GPU measurements remain those of the original run.
+
+| Prompt length | Previous composed roofline (ms) | Current composed roofline (ms) |
+|---|---:|---:|
+| 128 | 17.248 | 17.244 |
+| 256 | 23.936 | 23.926 |
+| 512 | 39.009 | 38.989 |
+| 1024 | 70.035 | 69.994 |
+
+The historical v0 digest is retained; BENCH uses the current digest. The four changed GDN roofline records and their traffic/FLOP totals exactly match aaa8054d on the same authored source: these digest changes come from the upstream analysis update (D53), rather than changed examples or GPU measurements. The full record attribution is consolidated in the final verification ledger (D67).
+
+## Targeted finalize retry
+
+Only rows that previously failed were retried here. Full artifact regeneration, normalized group comparisons and address audits run in the final gate (D67).
+
+| Selector/file | Finalize |
+|---|---|
+| `scheduled/attention/attn_prep_T1024.py` | PASS |
+| `scheduled/attention/attn_prep_T128.py` | PASS |
+| `scheduled/attention/attn_prep_T256.py` | PASS |
+| `scheduled/attention/attn_prep_T512.py` | PASS |
+| `scheduled/gdn/gdn_chunk_T1024.py` | PASS |
+| `scheduled/gdn/gdn_chunk_T128.py` | PASS |
+| `scheduled/gdn/gdn_chunk_T256.py` | PASS |
+| `scheduled/gdn/gdn_chunk_T512.py` | PASS |
+| `scheduled/gdn/gdn_prep_T1024.py` | PASS |
+| `scheduled/gdn/gdn_prep_T128.py` | PASS |
+| `scheduled/gdn/gdn_prep_T256.py` | PASS |
+| `scheduled/gdn/gdn_prep_T512.py` | PASS |

@@ -31,7 +31,7 @@ one implementation fewer only saves compile time and 0.21 GB of static buffers.
 The evidence is the cross-plan matrix in [`BENCH.md`](BENCH.md) section 7.
 
 The full argument for every number is in [`BENCH.md`](BENCH.md), which is the
-run's own report kept whole. This file is the front door.
+run's benchmark report, with current regeneration instructions. This file is the front door.
 
 ---
 
@@ -219,11 +219,11 @@ them.** Section 6 says exactly what that means.
 | `scheduled/` | the scheduled HIR, **64 files**: one per (function, length), under `gemm/`, `gdn/`, `attention/`, `small/` |
 | `tir/` | the finalized TIR, **64 files**, one per scheduled file, all distinct — the four implementation sets, written out |
 | `run.py` | the entry point: a prompt in, the first token and the milliseconds out |
-| `bench/` | the measurement itself: `alternate.py` (the driver that runs both sides on one card, alternating), `mine_worker.py`, `sglang_worker.py`, `SGLANG_NOTES.md` (how SGLang was pinned down) and `results/` — one file, every timed iteration of the run in the table, with the SM clock and the card's process list beside each call |
+| `bench/` | the measurement itself: `alternate.py` (the driver that runs both sides on one card, alternating), `mine_worker.py`, `sglang_worker.py`, `SGLANG_NOTES.md` (how SGLang was pinned down) and the archived results record — one file, every timed iteration of the run in the table, with the SM clock and the card's process list beside each call |
 | `tools/` | seventeen scripts, and only what is needed to run it, check it, reproduce the numbers and regenerate the artifacts: `prepare_ckpt.py`, `hf_reference.py`, `check_hir.sh`, `check_layers.py`, `first_token.py`, `flops_ledger.py`, `bound_table.py`, `bench_table.py`, `chain_table.py`, `analyze_all.sh`, `analyze_summary.py`, `final_pipeline.sh`, `tfdeep.py` (the `tilefoundry` CLI on a 1 GiB stack: a 64-layer selection recurses deeper than CPython allows), and the four `gen_scheduled*.py` that write `scheduled/` |
 | `BENCH.md` | **the run's own report**: the table, the protocol, the FLOP ledger, the correctness argument, the four-artifact chain, and the three decisions with their evidence |
 | `FLOPS.md` | the FLOP and byte ledger, counted from the safetensors headers, with every formula written beside its number |
-| `reports/` | one file per claim and no more: the FLOP ledger (`flops.json`), the per-kernel bound table, the segmentation matrix, the two fusion studies, the warp-specialization timings and their bitwise comparison, the `analyze` digest (`analyze/v0/SUMMARY.md`: every selection at every length with the bound it was given), the four per-kernel profiles, and the `check` transcripts |
+| `reports/` | one file per claim and no more: the FLOP ledger (`flops.json`), the per-kernel bound table, the segmentation matrix, the two fusion studies, the warp-specialization timings and their bitwise comparison, the `analyze` digest (`analyze/current/SUMMARY.md`: every selection at every length with the bound it was given), the four per-kernel profiles, and the `check` transcripts |
 | `negative_control/` | `model_packed_proj.py`: `model.py` with one change, the packing that reproduced a real disagreement with the reference library (`BENCH.md` section 6) |
 
 **What is deliberately not here.** This directory keeps the artifacts, the
@@ -236,12 +236,29 @@ per-case files whose results `BENCH.md` quotes inline, and every superseded run
 stay in the round archive. `prompts/prompt.txt` is cut to the first 1100 tokens
 — the ids of all four lengths are unchanged by that, and the rest was never
 read.
-`BENCH.md` cites some of them by name; the citations are left as the run wrote
-them rather than edited to hide what is not shipped.
+The benchmark tables retain the original measurements; references to unavailable working files have been removed.
 
 Machine paths were replaced: the published checkpoint is `$QWEN38_CKPT` in the
-scripts and in the documents, and the round's own directory is `<round>` in
-`bench/final_run.log`. Nothing else was edited.
+scripts and in the documents, and machine-local working directories are omitted.
+
+## Regenerating HIR and analysis
+
+Use this checkout's TileFoundry CLI. For tools that import TileLang, use the existing TileLang environment without modifying it; expose this checkout through `PYTHONPATH`:
+
+```bash
+export TILEFOUNDRY="$(command -v tilefoundry)"
+export PYTHONPATH="$PWD/../../src${PYTHONPATH:+:$PYTHONPATH}"
+export TILELANG_PYTHON=/path/to/tilelang-env/bin/python
+```
+
+```bash
+for tool in gen_scheduled gen_scheduled_small gen_scheduled_attention gen_scheduled_gdn; do
+    "$TILELANG_PYTHON" "tools/$tool.py"
+done
+bash tools/analyze_all.sh current
+python tools/analyze_summary.py current
+"$TILELANG_PYTHON" tools/chain_table.py
+```
 
 ## 4. Running it
 
@@ -282,9 +299,9 @@ bf16 landings, applied as `rel_l2 <= rtol` and `cosine >= 1 - rtol²/2` — plus
 | what | covers | result |
 |---|---|---|
 | `model.py` vs `transformers`, whole prefill path, all five outputs | that the authored HIR is the model | **PASS at 128 / 256 / 512 / 1024** |
-| `model.py` vs `transformers`, per layer, teacher-forced | the same, layer by layer | **512 / 512 PASS**, worst rel_l2 0.0016 (`reports/check/hir_vs_hf_layers_summary.json`) |
+| `model.py` vs `transformers`, per layer, teacher-forced | the same, layer by layer | **512 / 512 PASS**, worst rel_l2 0.0016 (`reports/check/layers_summary.json`) |
 | the twin vs `transformers`, whole prefill path | that the kernels compute what the HIR says, composed over 64 layers | **PASS at all four lengths**, logits rel_l2 0.0265 / 0.0214 / 0.0084 / 0.0128 |
-| the twin vs the evaluator running `model.py`, per layer | the same without `transformers` in the way | **512 / 512 PASS**, worst rel_l2 0.0026 (`reports/check/twin_vs_hir_layers_summary.json`) |
+| the twin vs the evaluator running `model.py`, per layer | the same without `transformers` in the way | **512 / 512 PASS**, worst rel_l2 0.0026 (`reports/check/layers_summary.json`) |
 | first token, twin vs `transformers` | the thing a prefill is for | **552 / 65 / 6816 / 735, identical**; max abs logit error 0.3125 / 0.3516 / 0.125 / 0.25 |
 
 One real difference was found this way and fixed in the implementation rather
@@ -301,7 +318,7 @@ kept.
 ```bash
 export SGLANG_PYTHON=/path/to/sglang-venv/bin/python     # sglang 0.5.21, its own torch
 python bench/alternate.py --gpu 1 --lengths 128 256 512 1024 --rounds 6 --warmup 3 --iters 10
-python tools/bench_table.py bench/results/<stamp>.json
+python tools/bench_table.py "$BENCH_RESULT_JSON"
 ```
 
 Both sides on one card, in one session, alternating round by round; the timed

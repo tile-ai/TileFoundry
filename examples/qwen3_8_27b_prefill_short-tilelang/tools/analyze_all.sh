@@ -12,10 +12,12 @@ SRC=${2:-model.py}
 for T in 128 256 512 1024; do
   D=reports/analyze/$V/T$T
   mkdir -p $D
-  for SEL in layer0 layer3 embed final_norm lm_head; do
-    "${TILEFOUNDRY:-tilefoundry}" analyze $SRC:Qwen3_8_27B.$SEL $D/$SEL.txt \
+  for PART in layer0:Qwen3_8DeltaNetLayer.layer layer3:Qwen3_8AttentionLayer.layer embed:Qwen3_8_27B.embed final_norm:Qwen3_8_27B.final_norm lm_head:Qwen3_8_27B.lm_head; do
+    NAME=${PART%%:*}
+    SEL=${PART#*:}
+    "${PYTHON:-python}" tools/tfdeep.py analyze $SRC:$SEL $D/$NAME.txt \
       --compute-cost --memory --roofline --performance --dim seq_len=$T &
-    "${TILEFOUNDRY:-tilefoundry}" analyze $SRC:Qwen3_8_27B.$SEL $D/$SEL.json \
+    "${PYTHON:-python}" tools/tfdeep.py analyze $SRC:$SEL $D/$NAME.json \
       --compute-cost --memory --roofline --performance --dim seq_len=$T --json &
   done
 done

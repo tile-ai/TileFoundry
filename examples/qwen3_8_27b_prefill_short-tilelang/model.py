@@ -71,7 +71,8 @@ _TW = T + _WINDOW
 
 
 
-@module(entry="layer")
+@module(entry="layer", target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 132), Topology("thread", 384)))
 class Qwen3_8DeltaNetLayer:
     """`Qwen3_5DecoderLayer` with a `Qwen3_5GatedDeltaNet` token mixer.
 
@@ -273,7 +274,8 @@ class Qwen3_8DeltaNetLayer:
         return attended + swiglu(post, w_gate, w_up, w_down), window, state
 
 
-@module(entry="layer")
+@module(entry="layer", target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 132), Topology("thread", 384)))
 class Qwen3_8AttentionLayer:
     """`Qwen3_5DecoderLayer` with a gated `Qwen3_5Attention` token mixer."""
 
