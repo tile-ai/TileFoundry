@@ -1173,7 +1173,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
         placed = relation.apply_range(_layout_addresses(tuple(target.type.shape), layout))
         try:
             affine = as_multi_aff(placed).get_at(0)
-            if any(affine.get_div(div).get_coefficient_val(isl.dim_type.IN, axis).sgn()
+            if any(affine.get_domain_local_space().get_div(div).get_coefficient_val(isl.dim_type.IN, axis).sgn()
                    for div in range(affine.dim(isl.dim_type.DIV))
                    for axis in range(len(desired.shape))):
                 raise ValueError("address contains coordinate-dependent divisions")

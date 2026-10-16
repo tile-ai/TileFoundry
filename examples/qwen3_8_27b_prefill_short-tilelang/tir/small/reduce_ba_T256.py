@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=SCHED_REDUCE_BA_T256 function=reduce_ba topology=cta wave=132/256
 # selection requested=memory executed=memory
-# memory traffic=gmem:r3.19KB/w48.38KB@logical,r816.00KB/w12.09MB@total,r3.19KB/w48.38KB@cta,r224B/w48.19KB@thread;rmem:r3.60KB/w3.56KB@logical,r922.00KB/w912.00KB@total,r3.60KB/w3.56KB@cta,r78B/w38B@thread footprint=p:3.00KB;v10:31:192B footprint-precision=lower_bound peak=gmem:864.19KB;rmem:3.38KB persistent=gmem:768.00KB
+# memory traffic=gmem:r3.19KB/w48.38KB@logical,r816.00KB/w12.09MB@total,r3.19KB/w48.38KB@cta,r224B/w48.19KB@thread;rmem:r3.60KB/w3.56KB@logical,r922.00KB/w912.00KB@total,r3.60KB/w3.56KB@cta,r78B/w38B@thread footprint=p:396.00KB;v10:31:24.75KB;v8:30:192B footprint-precision=exact peak=gmem:816.19KB;rmem:3.38KB persistent=gmem:768.00KB
 
 from __future__ import annotations
 
@@ -13,60 +13,33 @@ def reduce_ba(
     p: Tensor[(8, 256, 96), "f32"], scratch: Tensor[(96,), "bf16"], out: Tensor[(256, 96), "bf16"]
 ):
     with Mesh((Topology("cta", 256),), layout=(256,), names=("d0",)) as cta:
-        T.fill(out, 0.0)
-        value_1 = T.tensor_view(T.ptr_of(scratch[0:0 + 96]), layout=(1, 96), shape=(1, 96))
-        c = T.alloc_tensor(tensor_type=Tensor[(1, 96), "bf16", ((1, 1, 96), (0, 0, 1)), "rmem"])
-        total = T.alloc_tensor(
-            tensor_type=Tensor[(1, 96), "f32", ((1, 1, 96), (0, 0, 1)), "rmem"]
-        )
-        value_2 = T.alloc_tensor(tensor_type=Tensor[(8, 96), "f32", ((8, 96), (1, 0)), "rmem"])
         with Mesh((Topology("thread", 96),), layout=(96,), names=("d0",)) as scope:
-            tile = T.tensor_view(
-                T.ptr_of(p[0:0 + 8, cta.d0:cta.d0 + 1, 0:0 + 96]),
-                layout=((8, 1, 96), (24576, 96, 1)),
-                shape=(8, 1, 96),
+            T.fill(out, 0.0)
+            value_1 = T.alloc_tensor(
+                tensor_type=Tensor[(8, 96), "f32", ((8, 96 @ scope.d0), (1, 0)), "rmem"]
             )
-            tile_1 = T.tensor_view(
-                T.ptr_of(tile[0:0 + 8, 0:0 + 1, 0:0 + 96]),
+            value_2 = T.tensor_view(
+                T.ptr_of(p[0:0 + 1, cta.d0:cta.d0 + 1, 0:0 + 1]),
                 layout=((8, 96), (24576, 1)),
                 shape=(8, 96),
             )
-            with scope as threads:
-                dst_frame = T.tensor_view(
-                    T.ptr_of(value_2[0:0 + 8, 0:0 + 96]),
-                    layout=((8, 96 @ threads.d0), (1, 0)),
-                    shape=(8, 96),
-                )
-                T.copy(tile_1, dst_frame)
-                src_frame = T.tensor_view(
-                    T.ptr_of(value_2[0:0 + 8, 0:0 + 96]),
-                    layout=((8, 96 @ threads.d0), (1, 0)),
-                    shape=(8, 96),
-                )
-                dst_frame_1 = T.tensor_view(
-                    T.ptr_of(total[0:0 + 1, 0:0 + 96]),
-                    layout=((1, 1, 96 @ threads.d0), (0, 0, 1)),
-                    shape=(1, 96),
-                )
-                T.reduce(src_frame, dst_frame_1, axes=(0,), keepdim=True, kind=ReduceKind.SUM)
-                src_frame_1 = T.tensor_view(
-                    T.ptr_of(total[0:0 + 1, 0:0 + 96]),
-                    layout=((1, 1, 96 @ threads.d0), (0, 0, 1)),
-                    shape=(1, 96),
-                )
-                dst_frame_2 = T.tensor_view(
-                    T.ptr_of(c[0:0 + 1, 0:0 + 96]),
-                    layout=((1, 1, 96 @ threads.d0), (0, 0, 1)),
-                    shape=(1, 96),
-                )
-                T.cast(src_frame_1, dst_frame_2, dtype="bf16")
-                src_frame_2 = T.tensor_view(
-                    T.ptr_of(c[0:0 + 1, 0:0 + 96]),
-                    layout=((1, 1, 96 @ threads.d0), (0, 0, 1)),
-                    shape=(1, 96),
-                )
-                T.copy(src_frame_2, value_1)
-            window = T.tensor_view(
-                T.ptr_of(out[cta.d0:cta.d0 + 1, 0:0 + 96]), layout=(1, 96), shape=(1, 96)
+            value_3 = T.tensor_view(
+                T.ptr_of(value_1), layout=((8, 96 @ scope.d0), (1, 0)), shape=(8, 96)
             )
-            T.copy(value_1, window)
+            T.copy(value_2, value_3)
+            total = T.alloc_tensor(
+                tensor_type=Tensor[(1, 96), "f32", ((1, 1, 96 @ scope.d0), (0, 0, 1)), "rmem"]
+            )
+            T.reduce(value_3, total, axes=(0,), keepdim=True, kind=ReduceKind.SUM)
+            c = T.alloc_tensor(
+                tensor_type=Tensor[(1, 96), "bf16", ((1, 1, 96 @ scope.d0), (0, 0, 1)), "rmem"]
+            )
+            T.cast(total, c, dtype="bf16")
+            value_4 = T.tensor_view(T.ptr_of(scratch[0:0 + 96]), layout=(1, 96), shape=(1, 96))
+            value_5 = T.tensor_view(T.ptr_of(value_4), layout=(1, 96), shape=(1, 96))
+            T.copy(c, value_5)
+            value_6 = T.tensor_view(T.ptr_of(out), layout=(256, 96), shape=(256, 96))
+            window = T.tensor_view(
+                T.ptr_of(value_6[cta.d0:cta.d0 + 1, 0:0 + 96]), layout=(1, 96), shape=(1, 96)
+            )
+            T.copy(value_5, window)

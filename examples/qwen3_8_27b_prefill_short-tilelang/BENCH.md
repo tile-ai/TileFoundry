@@ -315,16 +315,16 @@ Full table (`tools/chain_table.py`):
 | `Qwen3_8AttentionLayer.gated_attention`: x @ [w_q|w_k|w_v]^T | `scheduled/gemm/att_in_T256.py` | `tir/gemm/att_in_T256.py` | `gemm_kernel(..., 'store')` 128x224x64_s4_t256_sw8 | 256 |
 | `Qwen3_8AttentionLayer.gated_attention`: x @ [w_q|w_k|w_v]^T | `scheduled/gemm/att_in_T512.py` | `tir/gemm/att_in_T512.py` | `gemm_kernel(..., 'store')` 128x224x64_s4_t256_sw8 | 512 |
 | `Qwen3_8AttentionLayer.gated_attention`: x @ [w_q|w_k|w_v]^T | `scheduled/gemm/att_in_T1024.py` | `tir/gemm/att_in_T1024.py` | `gemm_kernel(..., 'store')` 128x224x64_s4_t256_sw8 | 1024 |
-| `*.swiglu`: silu(x @ w_gate^T) * (x @ w_up^T) | `scheduled/gemm/gate_up_T128.py` | `tir/gemm/gate_up_T128.py` | `gemm_kernel(..., 'swiglu2')` 128x96x64_s4_t256_sw0 | 128 |
-| `*.swiglu`: silu(x @ w_gate^T) * (x @ w_up^T) | `scheduled/gemm/gate_up_T256.py` | `tir/gemm/gate_up_T256.py` | `gemm_kernel(..., 'swiglu2')` 128x96x64_s4_t256_sw8 | 256 |
-| `*.swiglu`: silu(x @ w_gate^T) * (x @ w_up^T) | `scheduled/gemm/gate_up_T512.py` | `tir/gemm/gate_up_T512.py` | `gemm_kernel(..., 'swiglu2')` 128x96x128_s2_t256_sw8 | 512 |
-| `*.swiglu`: silu(x @ w_gate^T) * (x @ w_up^T) | `scheduled/gemm/gate_up_T1024.py` | `tir/gemm/gate_up_T1024.py` | `gemm_kernel(..., 'swiglu2')` 128x128x128_s2_t256_sw8 | 1024 |
-| `*.layer`: hidden + mixer @ w_out^T / w_o^T | `scheduled/gemm/o_proj_T128.py` | `tir/gemm/o_proj_T128.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x128x64_s6_t256_sw0_sk2 | 128 |
-| `*.layer`: hidden + mixer @ w_out^T / w_o^T | `scheduled/gemm/o_proj_T256.py` | `tir/gemm/o_proj_T256.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x160x64_s4_t256_sw8_sk2 | 256 |
+| `*.swiglu`: silu(x @ w_gate^T) * (x @ w_up^T) | `scheduled/gemm/gate_up_T128.py` | `tir/gemm/gate_up_T128.py` | `gemm_kernel(..., 'swiglu2')` 128x144x128_s2_t256_sw0 | 128 |
+| `*.swiglu`: silu(x @ w_gate^T) * (x @ w_up^T) | `scheduled/gemm/gate_up_T256.py` | `tir/gemm/gate_up_T256.py` | `gemm_kernel(..., 'swiglu2')` 128x144x64_s4_t256_sw8 | 256 |
+| `*.swiglu`: silu(x @ w_gate^T) * (x @ w_up^T) | `scheduled/gemm/gate_up_T512.py` | `tir/gemm/gate_up_T512.py` | `gemm_kernel(..., 'swiglu2')` 128x176x64_s3_t256_sw8 | 512 |
+| `*.swiglu`: silu(x @ w_gate^T) * (x @ w_up^T) | `scheduled/gemm/gate_up_T1024.py` | `tir/gemm/gate_up_T1024.py` | `gemm_kernel(..., 'swiglu2')` 128x176x64_s3_t256_sw8 | 1024 |
+| `*.layer`: hidden + mixer @ w_out^T / w_o^T | `scheduled/gemm/o_proj_T128.py` | `tir/gemm/o_proj_T128.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x80x64_s8_t256_sw0_sk2 | 128 |
+| `*.layer`: hidden + mixer @ w_out^T / w_o^T | `scheduled/gemm/o_proj_T256.py` | `tir/gemm/o_proj_T256.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x80x64_s6_t256_sw8 | 256 |
 | `*.layer`: hidden + mixer @ w_out^T / w_o^T | `scheduled/gemm/o_proj_T512.py` | `tir/gemm/o_proj_T512.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x160x64_s4_t256_sw8 | 512 |
 | `*.layer`: hidden + mixer @ w_out^T / w_o^T | `scheduled/gemm/o_proj_T1024.py` | `tir/gemm/o_proj_T1024.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x160x64_s4_t256_sw8 | 1024 |
-| `*.layer`: attended + act @ w_down^T | `scheduled/gemm/down_T128.py` | `tir/gemm/down_T128.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x128x64_s6_t256_sw0_sk2 | 128 |
-| `*.layer`: attended + act @ w_down^T | `scheduled/gemm/down_T256.py` | `tir/gemm/down_T256.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x160x64_s3_t256_sw8_sk2 | 256 |
+| `*.layer`: attended + act @ w_down^T | `scheduled/gemm/down_T128.py` | `tir/gemm/down_T128.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x80x64_s8_t256_sw0_sk2 | 128 |
+| `*.layer`: attended + act @ w_down^T | `scheduled/gemm/down_T256.py` | `tir/gemm/down_T256.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x160x64_s4_t256_sw8_sk2 | 256 |
 | `*.layer`: attended + act @ w_down^T | `scheduled/gemm/down_T512.py` | `tir/gemm/down_T512.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x160x64_s4_t256_sw8 | 512 |
 | `*.layer`: attended + act @ w_down^T | `scheduled/gemm/down_T1024.py` | `tir/gemm/down_T1024.py` | `gemm_kernel(..., 'residual' or 'splitk')` 128x160x64_s4_t256_sw8 | 1024 |
 | `*.layer`: tf.rms_norm(h, 1 + gamma_in / gamma_post) | `scheduled/small/rmsnorm_T128.py` | `tir/small/rmsnorm_T128.py` | `small.rmsnorm_kernel(T, 5120, plan.norm_rows)` | 128 |
@@ -339,38 +339,6 @@ Full table (`tools/chain_table.py`):
 | `*.layer`: residual add finishing a split-K o_proj/down | `scheduled/small/reduce_sk2_T256.py` | `tir/small/reduce_sk2_T256.py` | `gemm.splitk_reduce_kernel(T, 5120, 2, True)` | 256 |
 | `Qwen3_8_27B.final_norm` (last row only) | `scheduled/small/rmsnorm_last.py` | `tir/small/rmsnorm_last.py` | `small.rmsnorm_kernel(1, 5120, 1)` | all |
 | `Qwen3_8_27B.lm_head` | `scheduled/small/lm_head.py` | `tir/small/lm_head.py` | `small.gemv_kernel(248320, 5120, 16, 256)` | all |
-| `Qwen3_8AttentionLayer.gated_attention`: rms_norm q/k + partial_rope, v | `scheduled/attention/attn_prep_T128.py` | `tir/attention/attn_prep_T128.py` | `attention.make_prep(128)` | 128 |
-| `Qwen3_8AttentionLayer.gated_attention`: rms_norm q/k + partial_rope, v | `scheduled/attention/attn_prep_T256.py` | `tir/attention/attn_prep_T256.py` | `attention.make_prep(256)` | 256 |
-| `Qwen3_8AttentionLayer.gated_attention`: rms_norm q/k + partial_rope, v | `scheduled/attention/attn_prep_T512.py` | `tir/attention/attn_prep_T512.py` | `attention.make_prep(512)` | 512 |
-| `Qwen3_8AttentionLayer.gated_attention`: rms_norm q/k + partial_rope, v | `scheduled/attention/attn_prep_T1024.py` | `tir/attention/attn_prep_T1024.py` | `attention.make_prep(1024)` | 1024 |
-| `Qwen3_8AttentionLayer.attend` + output gate of `gated_attention` | `scheduled/attention/attn_core_T128.py` | `tir/attention/attn_core_T128.py` | `attention.make_core(128, 1, "early", DSPLIT=2)` | 128 |
-| `Qwen3_8AttentionLayer.attend` + output gate of `gated_attention` | `scheduled/attention/attn_core_T256.py` | `tir/attention/attn_core_T256.py` | `attention.make_core(256, 1, "early", DSPLIT=1)` | 256 |
-| `Qwen3_8AttentionLayer.attend` + output gate of `gated_attention` | `scheduled/attention/attn_core_T512.py` | `tir/attention/attn_core_T512.py` | `attention.make_core(512, 1, "late", DSPLIT=1)` | 512 |
-| `Qwen3_8AttentionLayer.attend` + output gate of `gated_attention` | `scheduled/attention/attn_core_T1024.py` | `tir/attention/attn_core_T1024.py` | `attention.make_core(1024, 2, "late", DSPLIT=1)` | 1024 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: causal_conv + silu, l2_normalise q/k, g, beta, conv window | `scheduled/gdn/gdn_prep_T128.py` | `tir/gdn/gdn_prep_T128.py` | `gdn.make_prep(128, 16640)` | 128 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: causal_conv + silu, l2_normalise q/k, g, beta, conv window | `scheduled/gdn/gdn_prep_T256.py` | `tir/gdn/gdn_prep_T256.py` | `gdn.make_prep(256, 16640)` | 256 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: causal_conv + silu, l2_normalise q/k, g, beta, conv window | `scheduled/gdn/gdn_prep_T512.py` | `tir/gdn/gdn_prep_T512.py` | `gdn.make_prep(512, 16640)` | 512 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: causal_conv + silu, l2_normalise q/k, g, beta, conv window | `scheduled/gdn/gdn_prep_T1024.py` | `tir/gdn/gdn_prep_T1024.py` | `gdn.make_prep(1024, 16640)` | 1024 |
-| `Qwen3_8DeltaNetLayer.delta_rule`: per-chunk WY quantities (U^T, W hi/lo, P, decay factors) | `scheduled/gdn/gdn_chunk_T128.py` | `tir/gdn/gdn_chunk_T128.py` | `gdn.make_chunk(128)` | 128 |
-| `Qwen3_8DeltaNetLayer.delta_rule`: per-chunk WY quantities (U^T, W hi/lo, P, decay factors) | `scheduled/gdn/gdn_chunk_T256.py` | `tir/gdn/gdn_chunk_T256.py` | `gdn.make_chunk(256)` | 256 |
-| `Qwen3_8DeltaNetLayer.delta_rule`: per-chunk WY quantities (U^T, W hi/lo, P, decay factors) | `scheduled/gdn/gdn_chunk_T512.py` | `tir/gdn/gdn_chunk_T512.py` | `gdn.make_chunk(512)` | 512 |
-| `Qwen3_8DeltaNetLayer.delta_rule`: per-chunk WY quantities (U^T, W hi/lo, P, decay factors) | `scheduled/gdn/gdn_chunk_T1024.py` | `tir/gdn/gdn_chunk_T1024.py` | `gdn.make_chunk(1024)` | 1024 |
-| `Qwen3_8DeltaNetLayer.delta_rule`: pass over chunks, bf16 read-out, final state (plain scan) | `scheduled/gdn/gdn_scan_T128.py` | `tir/gdn/gdn_scan_T128.py` | `gdn.make_scan(128, 16, 16640, gated=False)` | 128 |
-| `Qwen3_8DeltaNetLayer.delta_rule`: pass over chunks, bf16 read-out, final state (plain scan) | `scheduled/gdn/gdn_scan_T256.py` | `tir/gdn/gdn_scan_T256.py` | `gdn.make_scan(256, 16, 16640, gated=False)` | 256 |
-| `Qwen3_8DeltaNetLayer.delta_rule`: pass over chunks, bf16 read-out, final state (plain scan) | `scheduled/gdn/gdn_scan_T512.py` | `tir/gdn/gdn_scan_T512.py` | `gdn.make_scan(512, 16, 16640, gated=False)` | 512 |
-| `Qwen3_8DeltaNetLayer.delta_rule`: pass over chunks, bf16 read-out, final state (plain scan) | `scheduled/gdn/gdn_scan_T1024.py` | `tir/gdn/gdn_scan_T1024.py` | `gdn.make_scan(1024, 16, 16640, gated=False)` | 1024 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: gated RMSNorm (`Qwen3_5RMSNormGated`) | `scheduled/gdn/gdn_norm_T128.py` | `tir/gdn/gdn_norm_T128.py` | `gdn.make_gated_norm(128, 16640)` | 128 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: gated RMSNorm (`Qwen3_5RMSNormGated`) | `scheduled/gdn/gdn_norm_T256.py` | `tir/gdn/gdn_norm_T256.py` | `gdn.make_gated_norm(256, 16640)` | 256 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: gated RMSNorm (`Qwen3_5RMSNormGated`) | `scheduled/gdn/gdn_norm_T512.py` | `tir/gdn/gdn_norm_T512.py` | `gdn.make_gated_norm(512, 16640)` | 512 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: gated RMSNorm (`Qwen3_5RMSNormGated`) | `scheduled/gdn/gdn_norm_T1024.py` | `tir/gdn/gdn_norm_T1024.py` | `gdn.make_gated_norm(1024, 16640)` | 1024 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: x @ [w_b|w_a]^T, K split in f32 slices | `scheduled/gemm/gdn_ba_T128.py` | `tir/gemm/gdn_ba_T128.py` | `gemm.ba_splitk_kernel(128, 5120, 8, BN=16)` | 128 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: b|a = bf16(sum of the slices) | `scheduled/small/reduce_ba_T128.py` | `tir/small/reduce_ba_T128.py` | `gemm.ba_reduce_kernel(128, 8, 16640, 16384)` | 128 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: x @ [w_b|w_a]^T, K split in f32 slices | `scheduled/gemm/gdn_ba_T256.py` | `tir/gemm/gdn_ba_T256.py` | `gemm.ba_splitk_kernel(256, 5120, 8, BN=16)` | 256 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: b|a = bf16(sum of the slices) | `scheduled/small/reduce_ba_T256.py` | `tir/small/reduce_ba_T256.py` | `gemm.ba_reduce_kernel(256, 8, 16640, 16384)` | 256 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: x @ [w_b|w_a]^T, K split in f32 slices | `scheduled/gemm/gdn_ba_T512.py` | `tir/gemm/gdn_ba_T512.py` | `gemm.ba_splitk_kernel(512, 5120, 8, BN=32)` | 512 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: b|a = bf16(sum of the slices) | `scheduled/small/reduce_ba_T512.py` | `tir/small/reduce_ba_T512.py` | `gemm.ba_reduce_kernel(512, 8, 16640, 16384)` | 512 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: x @ [w_b|w_a]^T, K split in f32 slices | `scheduled/gemm/gdn_ba_T1024.py` | `tir/gemm/gdn_ba_T1024.py` | `gemm.ba_splitk_kernel(1024, 5120, 4, BN=32)` | 1024 |
-| `Qwen3_8DeltaNetLayer.gated_delta_net`: b|a = bf16(sum of the slices) | `scheduled/small/reduce_ba_T1024.py` | `tir/small/reduce_ba_T1024.py` | `gemm.ba_reduce_kernel(1024, 4, 16640, 16384)` | 1024 |
 
 ## 11. Where the time goes, and the gap to the lower bound
 

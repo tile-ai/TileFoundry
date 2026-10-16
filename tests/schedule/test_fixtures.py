@@ -18,7 +18,9 @@ from functools import partial
 from itertools import combinations
 from math import prod
 from pathlib import Path
+from types import SimpleNamespace
 
+import isl
 import pytest
 import torch
 
@@ -109,6 +111,7 @@ from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.schedule import finalize
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
+    AccessRelation,
     access_relation_registry,
     identity_relations,
     relations_of,
@@ -2229,6 +2232,26 @@ class ModularWindow:
                 return out
 ''')
     verify_module(import_dsl(as_script(finalize(module))))
+
+
+@pytest.mark.parametrize("coordinate_division", [False, True])
+def test_view_strides_distinguish_coordinate_and_parameter_divisions(coordinate_division):
+    source = Var("x", type=TensorType((64,), DType.f32, Layout((64,), (1,)), StorageKind.GMEM))
+    desired = replace(source.type, shape=(8,), layout=Layout((8,), (1,)))
+    relation = AccessRelation(isl.map("{ [i] -> [floor(i/2)] : 0 <= i < 8 }"))
+    if not coordinate_division:
+        tile = Var("tile", type=TensorType.umat_scalar(DType.i64))
+        relation = AccessRelation(
+            isl.map("[tile] -> { [i] -> [i + floor(tile/4)] : 0 <= i < 8 }"), {"tile": tile}
+        )
+    lowering = SimpleNamespace(_dim=lambda value: value)
+    address = SimpleNamespace(relation=relation)
+    if coordinate_division:
+        with pytest.raises(lowering_module.LoweringError, match="coordinate-dependent divisions"):
+            lowering_module.Lowering._address_view(lowering, source, address, desired)
+    else:
+        view = lowering_module.Lowering._address_view(lowering, source, address, desired)
+        assert view.type.layout == Layout((8,), (1,))
 
 
 def test_lowering_rejects_addressable_result_without_offsets(

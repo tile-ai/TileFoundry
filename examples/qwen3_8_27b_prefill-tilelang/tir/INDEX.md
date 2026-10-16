@@ -6,11 +6,13 @@ programs**. The other 40 are the same lowering with other extents, so this
 directory keeps one representative of each and this table says where every one
 of the 75 went. Regenerate the full set with `tools/finalize_all.sh`.
 
-Two files count as the same program here when they are equal after their two
-generated header comments (`# analysis`, `# memory traffic`) are dropped and
-every integer is blanked. What that leaves is the loop structure, the mesh, the
-pipeline and the operand layouts; what it blanks is the tensor shapes, the mesh
-extent and the traffic figures.
+Two files count as the same program after removing all generated comment lines
+(including analysis, selection, memory, buffer, reuse and error comments), blanking
+integer literals, and treating `ConstTensor` as `Tensor` only for read-only input
+parameters. Read-only inputs are checked against instruction memory effects through
+their views. Parameter ownership annotations do not change the lowered body. Every
+other text difference denotes a different program. Rows explicitly described as
+byte for byte require byte equality without normalization.
 
 **The redundancy is the segmentation result, read off the files.**
 
@@ -103,3 +105,16 @@ exactly where, and the only place where, the lowered code changes.
 | `rmsnorm_1024.py` | **kept** |
 | `rmsnorm_4096.py` | `rmsnorm_1024.py` with other extents |
 | `rmsnorm_8192.py` | `rmsnorm_1024.py` with other extents |
+
+## Current regeneration status
+
+69 of 75 jobs completed. D70 comparison preserved all 35 groups; 31 complete groups were regenerated. The byte-for-byte o_proj/out_proj 8192 pair matched. The following groups retain their committed representative: **not regenerated: upstream timeout**.
+
+| Representative | Status |
+|---|---|
+| `down_pieces_1024.py` | not regenerated: upstream timeout |
+| `gate_up_pieces_1024.py` | not regenerated: upstream timeout |
+| `qkv_pieces_8192.py` | not regenerated: upstream timeout |
+| `qkv_whole_4096.py` | not regenerated: upstream timeout |
+
+Blocked jobs: `gate_up_pieces_1024.py`, `o_proj_pieces_1024.py`, `out_proj_pieces_1024.py`, `qkv_pieces_8192.py`, `qkv_whole_4096.py`, `qkv_whole_8192.py`.
