@@ -1198,10 +1198,19 @@ class Lowering(ValuationVisitor[Expr | _View]):
                 if strides is not None and not affine.dim(isl.dim_type.PARAM):
                     candidate = replace(layout, offset=int(affine.get_constant_val().num_si()),
                                         outer=Layout(tuple(desired.shape), strides))
-                elif isinstance(candidate.outer, Layout) and candidate.outer.strides is None:
+                elif strides is None:
+                    linear = relation.apply_range(_layout_addresses(tuple(target.type.shape), Layout(
+                        tuple(target.type.shape), compact_row_major(tuple(target.type.shape))
+                    )))
+                    linear = as_multi_aff(linear).get_at(0)
+                    steps = tuple(int(linear.get_coefficient_val(isl.dim_type.IN, axis).num_si())
+                                  for axis in range(len(desired.shape)))
+                    offset = as_multi_aff(origin.apply_range(_layout_addresses(
+                        tuple(target.type.shape), layout
+                    ))).get_at(0).get_constant_val().num_si()
                     candidate = replace(layout, outer=composition(layout.outer, Layout(
-                        tuple(desired.shape), compact_row_major(tuple(desired.shape))
-                    ), major="row"))
+                        tuple(desired.shape), steps
+                    ), major="row"), offset=int(offset))
                 declared = _layout_addresses(tuple(desired.shape), candidate).intersect_domain(relation.domain())
                 if candidate.inner != layout.inner or not declared.is_equal(placed):
                     raise LoweringError(f"composed view does not preserve exact address {relation}")

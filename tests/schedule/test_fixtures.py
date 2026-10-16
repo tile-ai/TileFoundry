@@ -2179,11 +2179,12 @@ class ComposedReshape:
     ) for value in views)
 
 
-@pytest.mark.parametrize("width,shape,strides", [
-    (256, (16, 8, 16, 16), (512, 64, (8192, 16), 1)),
-    (32, (16, 8, 2, 16), (512, 64, 16, 1)),
+@pytest.mark.parametrize("width,start,shape,modes,strides,offset", [
+    (256, 0, (16, 8, 16, 16), (16, 8, (4, 4), 16), (512, 64, (8192, 16), 1), 0),
+    (32, 0, (16, 8, 2, 16), (16, 8, 2, 16), (512, 64, 16, 1), 0),
+    (128, 128, (16, 8, 8, 16), (16, 8, (2, 4), 16), (512, 64, (8192, 16), 1), 16384),
 ])
-def test_composed_reshape_retains_non_affine_outer_modes(width, shape, strides):
+def test_composed_reshape_retains_non_affine_outer_modes(width, start, shape, modes, strides, offset):
     module = import_dsl('''
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
@@ -2196,16 +2197,15 @@ class ComposedReshape:
             with Mesh(("thread",), layout=(1,), names=("t",)) as thread:
                 layout = ComposedLayout(Swizzle(3,4,3), 0, Layout((128,(4,64)), (64,(8192,1))))
                 shared = tf.schedule((x, tf.empty(Tensor[(128,256), "bf16", layout, "smem"])), op=T.copy())
-                reshaped = tf.reshape(shared[:,:WIDTH], SHAPE)
+                reshaped = tf.reshape(shared[:,START:START+WIDTH], SHAPE)
                 return tf.schedule((reshaped, tf.empty(Tensor[SHAPE, "bf16", "rmem"])), op=T.copy())
-'''.replace('WIDTH', str(width)).replace('SHAPE', repr(shape)))
+'''.replace('WIDTH', str(width)).replace('START', str(start)).replace('SHAPE', repr(shape)))
     lowered = finalize(module)
     verify_module(import_dsl(as_script(lowered)))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     expected = ComposedLayout(
-        Swizzle(3, 4, 3), 0,
-        Layout((16, 8, (4, 4), 16) if width == 256 else shape, strides)
+        Swizzle(3, 4, 3), offset, Layout(modes, strides)
     )
     assert any(isinstance(value, Call) and isinstance(value.target, TensorView)
                and value.type.layout == expected for value in visitor.bindings.values())
