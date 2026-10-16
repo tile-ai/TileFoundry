@@ -8,9 +8,12 @@ from enum import IntEnum
 
 import isl
 
-from tilefoundry.ir.core import Call, Constant, Expr, Var, binding_name
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var, binding_name
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp, instruction_schema
 from tilefoundry.ir.hir.sharding.local import Local
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import IslParamValues, dim_to_isl_pw_aff, shape_to_isl_set
 from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.utils import is_literal_shape, local_type_of, static_dim_value
@@ -41,6 +44,29 @@ class SSAValue:
 
     def __hash__(self):
         return hash((id(self.expr), self.index))
+
+
+def forwarded_leaves(expr, ctx):
+    """Select direct operand leaves for structural forwarding, before source lookup."""
+    if isinstance(expr, Tuple):
+        values = expr.elements
+    elif isinstance(expr, LoopRegion):
+        values = expr.params[: len(expr.yield_values)] or (expr.body,)
+    elif isinstance(expr, MeshRegion):
+        values = (expr.body,)
+    elif isinstance(expr, Var) and (argument := ctx.capture_root(expr)) is not expr:
+        values = (argument,)
+    elif (
+        isinstance(expr, Call)
+        and isinstance(expr.target, TupleGetItem)
+        and isinstance(expr.args[1], Constant)
+        and type(expr.args[1].value) is int
+    ):
+        begin, count = leaf_span(expr.args[0].type, expr.args[1].value)
+        return tuple(SSAValue(expr.args[0], i) for i in range(begin, begin + count))
+    else:
+        return None
+    return tuple(SSAValue(item, i) for item in values for i in range(len(leaves_of(item.type))))
 
 
 class AliasKind(IntEnum):

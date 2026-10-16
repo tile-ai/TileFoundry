@@ -35,7 +35,13 @@ from tilefoundry.ir.types.utils import (
     tensor_types,
 )
 from tilefoundry.utils.isl_utils import equates
-from tilefoundry.visitor_registry.access_relation import AccessRelation, leaf_span, leaves_of
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelation,
+    identity_access,
+    leaf_span,
+    leaves_of,
+)
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.call_frame import ValuationVisitor
 
 from .access import (
@@ -46,6 +52,7 @@ from .access import (
     aligned_source,
     apply_source,
     eliminate_parameters,
+    forwarded_leaves,
     restore_loop_dimensions,
 )
 from .errors import AnalysisError
@@ -146,13 +153,12 @@ class AllocationSummary(IRMetadata):
     def resolve(self, ctx):
         by_value = {value.value: value for value in self.values}
         boundary = {}
-        binding = ctx.request_valuation(BindingValuation)
         timing = ctx.request_valuation(TimingValuation)
         for formal, _argument in ctx.bindings:
             for index in range(len(leaves_of(formal.type))):
                 value = by_value.get(SSAValue(formal, index))
                 if value is not None:
-                    boundary[root(value, by_value)] = binding.actual(formal, index).target
+                    boundary[root(value, by_value)] = ctx.storage_actual(formal, index).target
         returned = ctx.callee.function.body
         for index in range(len(leaves_of(ctx.call.type))):
             value = by_value.get(SSAValue(returned, index))
@@ -207,6 +213,16 @@ class AllocationModel(AnalyzeContext):
     locations: dict[int, AnalyzeContext] = field(default_factory=dict)
     instance_groups: list = field(default_factory=list)
     regions: list[RegionInterval] = field(default_factory=list)
+    return_proofs: dict[SSAValue, list[tuple[BufferAlias, frozenset[int]]]] = field(
+        default_factory=dict
+    )
+
+    def storage_actual(self, formal, index=0):
+        argument = next(argument for param, argument in self.bindings if param is formal)
+        held = local_type_of(leaves_of(argument.type)[index])
+        return BufferAlias(
+            SSAValue(argument, index), identity_access(len(held.shape)), AliasKind.FORWARD
+        )
 
     def occupancy(self, value):
         """Native lifetime plus translated occupancy, without changing either."""
@@ -271,6 +287,35 @@ def _relation_at(relation, scope):
     )
 
 
+def _storage_source(value, operand, ctx):
+    """Express a data source in its direct actual operand's coordinates."""
+    scope = ctx.current
+    source = scope.sources["narrow"][value]
+    actual = scope.sources["narrow"][operand]
+    maps = []
+    for item, key in ((source, value), (actual, operand)):
+        rank = len(local_type_of(leaves_of(key.expr.type)[key.index]).shape)
+        relation = aligned_source(item, rank, scope.depth, scope.domain_params)
+        relation = relation.insert_dims(isl.dim_type.OUT, 0, scope.depth)
+        for axis in range(scope.depth):
+            relation = relation.equate(isl.dim_type.IN, axis, isl.dim_type.OUT, axis)
+        maps.append(relation)
+    relation = maps[0].apply_range(maps[1].reverse()).project_out(isl.dim_type.OUT, 0, scope.depth)
+    values = {**source.relation.values, **actual.relation.values, **scope.domain_params}
+    return BufferAlias(
+        operand,
+        AccessRelation(
+            relation,
+            {
+                name: value
+                for name, value in values.items()
+                if relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
+            },
+        ),
+        source.kind,
+    )
+
+
 def _unprefix(relation, scope):
     values = dict(scope.domain_params)
     for axis, loop in enumerate(scope.enclosing_loops()):
@@ -330,14 +375,7 @@ def _coordinates(model, value, scope, *, override=None, storage_path=False, seen
     representative, source_relation = source
     if relation.dim(isl.dim_type.OUT) != source_relation.dim(isl.dim_type.IN) - scope.depth:
         return None
-    composed = apply_source(
-        relation,
-        BufferAlias(representative.value, _relation_at(source_relation, scope), AliasKind.FORWARD),
-        relation.dim(isl.dim_type.OUT),
-        scope.depth,
-        scope.domain_params,
-    )
-    return representative, composed
+    return representative, _in_root(relation, source, scope)
 
 
 def _visible_at(model, value, producer):
@@ -408,81 +446,57 @@ def _landing(model, holder, alias, *, window=False):
     return representative, BufferAlias(alias.target, published, alias.kind)
 
 
+def _in_root(relation, positioned, scope):
+    representative, coordinates = positioned
+    return apply_source(
+        relation,
+        BufferAlias(representative.value, _relation_at(coordinates, scope), AliasKind.FORWARD),
+        relation.dim(isl.dim_type.OUT),
+        scope.depth,
+        scope.domain_params,
+    )
+
+
 def _mapped_pointwise(model, left, right, start, landing):
-    """Only a covered formal may borrow a callee return proof at equality."""
-    native = {id(value.lifetime) for value in model.by_value.values()}
-    touching = [
-        window
+    """Only pre-covered mapped windows may borrow a callee return proof."""
+    touching = {
+        id(window)
         for member in right
         for window in model.occupancy(member)
-        if id(window) not in native and window.last_used_at == start
-    ]
+        if window is not member.lifetime and window.last_used_at == start
+    }
     covered, proved = set(), set()
-    left_roots = {root(value, model.by_value) for value in left}
-    for context in model.locations.values():
-        if context.callee is None:
+    for output in left:
+        candidates = model.return_proofs.get(output.value, ())
+        if not candidates:
             continue
-        template = get_metadata(context.callee.function, AllocationSummary)
-        if template is None:
-            continue
-        resolved = template.resolve(context)
-        local = {value.value: value for value in template.values}
-        permitted = set()
-        for index, candidates in enumerate(template.return_reuse):
-            output = model.by_value.get(SSAValue(context.call, index))
-            if output is None or root(output, model.by_value) not in left_roots:
+        context = model.locations[id(output.value.expr)]
+        written = _coordinates(model, output, context.current, override=landing)
+        for actual, windows in candidates:
+            member = model.by_value.get(actual.target)
+            read = None if member is None else _coordinates(model, member, context.current)
+            if read is None or written is None or read[0] is not written[0]:
                 continue
-            written = _coordinates(model, output, context.current, override=landing)
-            for candidate in candidates:
-                actual, precision = context.project(candidate)
-                member = model.by_value.get(actual.target)
-                read = None if member is None else _coordinates(model, member, context.current)
-                reached = (
-                    None
-                    if read is None
-                    else apply_source(
-                        restore_loop_dimensions(
-                            actual.relation.relation,
-                            (loop.induction_var for loop in context.current.enclosing_loops()),
-                        ),
-                        BufferAlias(
-                            read[0].value, _relation_at(read[1], context.current), AliasKind.FORWARD
-                        ),
-                        actual.relation.relation.dim(isl.dim_type.OUT),
-                        context.current.depth,
-                        context.current.domain_params,
-                    )
-                )
+            reached = _in_root(
+                restore_loop_dimensions(
+                    actual.relation.relation,
+                    (loop.induction_var for loop in context.current.enclosing_loops()),
+                ),
+                read,
+                context.current,
+            )
+            if not reached.is_equal(written[1]):
+                continue
+            covered.update(touching & windows)
+            for member in right:
+                positioned = _coordinates(model, member, context.current)
                 if (
-                    precision is not AnalysisPrecision.EXACT
-                    or not is_zero_offset(actual.relation.relation)
-                    or read is None
-                    or written is None
-                    or read[0] is not written[0]
-                    or not reached.is_equal(written[1])
+                    positioned is not None
+                    and positioned[0] is read[0]
+                    and positioned[1].is_equal(reached)
                 ):
-                    continue
-                formal = local.get(candidate.target)
-                if formal is not None:
-                    permitted.add(root(formal, local))
-                    for member in right:
-                        positioned = _coordinates(model, member, context.current)
-                        if (
-                            positioned is not None
-                            and positioned[0] is read[0]
-                            and positioned[1].is_equal(reached)
-                        ):
-                            proved.add(member.value)
-        for original, mapped in zip(template.windows, resolved.windows, strict=True):
-            matches = [n for n, window in enumerate(touching) if window == mapped]
-            if not matches:
-                continue
-            member = local.get(original.value)
-            if member is None or root(member, local) not in permitted:
-                return None
-            covered.update(matches)
-            proved.add(mapped.value)
-    return proved if len(covered) == len(touching) else None
+                    proved.add(member.value)
+    return proved if touching <= covered else None
 
 
 def _pointwise(model, left, right, start, landing, use_events):
@@ -500,7 +514,7 @@ def _pointwise(model, left, right, start, landing, use_events):
         if producer.lifetime.defined_at != start or not isinstance(producer.value.expr, Call):
             continue
         node = producer.value.expr
-        scope = model.locations[id(node)].current
+        scope = _proof_scope(node, model.locations[id(node)])
         output = scope.outputs.get("narrow", {}).get(id(node))
         if output is None or not output[1]:
             continue
@@ -509,37 +523,20 @@ def _pointwise(model, left, right, start, landing, use_events):
             continue
         output_root, output_map = positioned
         write = output[1][0]
-        written = apply_source(
-            write.relation,
-            BufferAlias(output_root.value, _relation_at(output_map, scope), AliasKind.FORWARD),
-            write.relation.dim(isl.dim_type.OUT),
-            scope.depth,
-            scope.domain_params,
-        )
+        written = _in_root(write.relation, positioned, scope)
         recorded = scope.accesses.get("narrow", {}).get(id(node))
         inputs = () if recorded is None else recorded[1]
         insert = _insert_accesses(node, scope)
         if insert is not None:
-            written = written.union(
-                apply_source(
-                    insert[0].relation,
-                    BufferAlias(
-                        output_root.value, _relation_at(output_map, scope), AliasKind.FORWARD
-                    ),
-                    insert[0].relation.dim(isl.dim_type.OUT),
-                    scope.depth,
-                    scope.domain_params,
-                )
-            )
+            written = written.union(_in_root(insert[0].relation, positioned, scope))
         for access in inputs:
             readers = {
                 value
                 for value in read
                 if value == access.target
-                or any(
-                    alias.target == access.target
-                    and alias.kind in (AliasKind.VIEW, AliasKind.FORWARD)
-                    for alias in model.by_value[value].aliases
+                or (
+                    (source := model.current.sources["narrow"].get(value)) is not None
+                    and source.target == access.target
                 )
             }
             if not readers or access.precision is not AnalysisPrecision.EXACT:
@@ -548,15 +545,7 @@ def _pointwise(model, left, right, start, landing, use_events):
             positioned = _coordinates(model, member, scope)
             if positioned is None or positioned[0] is not output_root:
                 continue
-            reached = apply_source(
-                access.relation,
-                BufferAlias(
-                    output_root.value, _relation_at(positioned[1], scope), AliasKind.FORWARD
-                ),
-                access.relation.dim(isl.dim_type.OUT),
-                scope.depth,
-                scope.domain_params,
-            )
+            reached = _in_root(access.relation, positioned, scope)
             if reached.is_equal(written.intersect_domain(access.relation.domain())):
                 proved.update(readers)
     return read <= proved
@@ -572,12 +561,28 @@ def _insert_accesses(node, scope):
     return (destination, update) if destination is not None and update is not None else None
 
 
+def _proof_scope(node, ctx):
+    recorded = ctx.current.accesses.get("narrow", {}).get(id(node))
+    if recorded is not None and any(
+        access.target not in ctx.by_value
+        and access.input_index is not None
+        and any(
+            SSAValue(node.args[access.input_index], index) in ctx.by_value
+            for index in range(len(leaves_of(node.args[access.input_index].type)))
+        )
+        for access in recorded[1]
+    ):
+        return operand_scope(node, ctx)
+    return ctx.current
+
+
 def tie_analysis(model):
     """All ties read occupancy; global interference keeps individual windows."""
     use_events = defaultdict(list)
     for use in model.liveness.uses:
         use_events[use.value].append(use)
     local = {item.value for item in model.liveness.intervals}
+    values = set(model.by_value.values())
     for holder, alias, loop in sorted(
         model.candidates,
         key=lambda item: (item[1].kind, model.by_value[item[0]].lifetime.defined_at),
@@ -589,16 +594,13 @@ def tie_analysis(model):
         a = root(value, model.by_value)
         b = root(target, model.by_value)
         if a is b:
-            if alias.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD, AliasKind.INSERT_SLICE):
-                if alias not in value.aliases:
-                    value.aliases += (alias,)
             continue
         if a.value not in local:
             continue
         left = model.members(a)
         right = model.members(b)
         if model.is_persistent(b) or any(
-            item in model.by_value.values()
+            item in values
             and any(item.value.expr is param for param in model.frame.function.params)
             for item in right
         ):
@@ -1066,13 +1068,36 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
         ctx.windows.append(value.lifetime)
         return value
 
-    def allocate(self, node, ctx):
+    def allocate(self, node, ctx, sources=None):
         if isinstance(node.type, TupleType) and result_copies(node) > 1:
             raise AnalysisError("allocation: staged tuple results are not supported")
         slots = []
-        for index, _leaf in enumerate(leaves_of(node.type)):
+        operands = forwarded_leaves(node, ctx)
+        view = aliased_operand(node) if isinstance(node, Call) else None
+        for index, leaf in enumerate(leaves_of(node.type)):
             key = SSAValue(node, index)
-            source = ctx.current.sources["narrow"].get(key)
+            cached = ctx.current.sources["narrow"].get(key)
+            if sources is not None:
+                source = sources.get(key)
+            elif operands is not None:
+                source = BufferAlias(
+                    operands[index],
+                    identity_access(len(leaf.shape) if isinstance(leaf, TensorType) else 1),
+                    AliasKind.FORWARD,
+                )
+            elif view is not None and cached is not None and cached.target != key:
+                operand = SSAValue(node.args[view])
+                data = ctx.by_value.get(cached.target)
+                actual = ctx.by_value.get(operand)
+                source = (
+                    cached
+                    if data is not None
+                    and actual is not None
+                    and root(data, ctx.by_value) is root(actual, ctx.by_value)
+                    else _storage_source(key, operand, ctx)
+                )
+            else:
+                source = cached
             forwarding = source is not None and source.target != key
             target = ctx.by_value.get(source.target) if forwarding else None
             quantity = ctx.quantities.get(key)
@@ -1172,7 +1197,7 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
         result = self.allocate(node, ctx)
         if not isinstance(node, Call) or not isinstance(result, AllocationValue):
             return result
-        proof_scope = ctx.current
+        proof_scope = _proof_scope(node, ctx)
         insert = _insert_accesses(node, proof_scope)
         local_scope = operand_scope(node, ctx)
         local_insert = _insert_accesses(node, local_scope)
@@ -1221,7 +1246,19 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
         if template is None:
             raise AnalysisError(f"allocation: missing summary for {callee.function.name!r}")
         original = tuple(value.aliases for value in template.values)
-        result = self.allocate(node, ctx)
+        local = {value.value: value for value in template.values}
+        sources = {}
+        for index in range(len(leaves_of(node.type))):
+            returned = local.get(SSAValue(callee.function.body, index))
+            if returned is not None and any(
+                root(returned, local).value.expr is formal for formal in callee.function.params
+            ):
+                formal = root(returned, local).value
+                actual = ctx.storage_actual(formal.expr, formal.index)
+                sources[SSAValue(node, index)] = _storage_source(
+                    SSAValue(node, index), actual.target, ctx
+                )
+        result = self.allocate(node, ctx, sources)
         resolved = template.resolve(ctx)
         for value in resolved.values:
             ctx.by_value.setdefault(value.value, value)
@@ -1235,11 +1272,20 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
             if key not in ctx.by_value:
                 continue
             for candidate in candidates:
-                actual, precision = ctx.project(candidate)
+                actual, precision = ctx._project(candidate, ctx.storage_actual)
                 if precision is not AnalysisPrecision.EXACT or not is_zero_offset(
                     actual.relation.relation
                 ):
                     continue
+                formal = local.get(candidate.target)
+                covered = frozenset(
+                    id(mapped)
+                    for original, mapped in zip(template.windows, resolved.windows, strict=True)
+                    if formal is not None
+                    and (member := local.get(original.value)) is not None
+                    and root(member, local) is root(formal, local)
+                )
+                ctx.return_proofs.setdefault(key, []).append((actual, covered))
                 ctx.candidates.append(
                     (
                         key,

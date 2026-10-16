@@ -8,12 +8,11 @@ from functools import cached_property
 
 import isl
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, get_metadata
+from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.types import Mesh, TensorType, Topology
 from tilefoundry.ir.types.dim import DimSub, simplify_dim
@@ -24,7 +23,6 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
     access_relation_registry,
     identity_access,
-    leaf_span,
     leaves_of,
     projected,
     relations_of,
@@ -43,6 +41,7 @@ from .access import (
     apply_source,
     buffer_alias,
     eliminate_parameters,
+    forwarded_leaves,
     resolve_access,
 )
 from .errors import AnalysisError
@@ -331,26 +330,8 @@ class ScopeBuilder(ValuationVisitor[None]):
         """Cache each leaf's fully composed source before any access reads it."""
         table, precisions = self.sources[view], self.precisions[view]
         ctx = self._view_context(view, scope)
-        if isinstance(expr, Tuple):
-            operands = tuple(
-                SSAValue(item, index)
-                for item in expr.elements
-                for index in range(len(leaves_of(item.type)))
-            )
+        if (operands := forwarded_leaves(expr, ctx)) is not None:
             self._forward(expr, operands, scope, view)
-            return
-        if (
-            isinstance(expr, Call)
-            and isinstance(expr.target, TupleGetItem)
-            and (isinstance(expr.args[1], Constant) and type(expr.args[1].value) is int)
-        ):
-            begin, count = leaf_span(expr.args[0].type, expr.args[1].value)
-            self._forward(
-                expr,
-                tuple(SSAValue(expr.args[0], i) for i in range(begin, begin + count)),
-                scope,
-                view,
-            )
             return
         if alias is not None and view == "unit":
             alias = replace(alias, relation=renaming_relation(expr, ctx, local_relations))
@@ -491,23 +472,15 @@ class ScopeBuilder(ValuationVisitor[None]):
             self._memo[id(param)] = (param, None)
             self.definitions[id(param)] = child
             for view in self.views:
-                operands = tuple(
-                    SSAValue(argument, i) for i in range(len(leaves_of(argument.type)))
-                )
-                self._forward(param, operands, child, view)
+                self._forward(param, forwarded_leaves(param, inner), child, view)
         return inner
 
     def default_visit_leaf(self, expr, operands, ctx):
         scope = ctx.current
         if isinstance(expr, (LoopRegion, MeshRegion)):
             scope = scope.parent
-            params = expr.params[: len(expr.yield_values)] if isinstance(expr, LoopRegion) else ()
-            inputs = params or (expr.body,)
-            values = tuple(
-                SSAValue(item, i) for item in inputs for i in range(len(leaves_of(item.type)))
-            )
             for view in self.views:
-                self._forward(expr, values, scope, view)
+                self._forward(expr, forwarded_leaves(expr, ctx), scope, view)
         elif isinstance(expr, Call):
             callee = self.callee_frame(expr, ctx.frame)
             if callee is None:
@@ -519,14 +492,9 @@ class ScopeBuilder(ValuationVisitor[None]):
                         self.returns[id(callee.function)][view]
                     ):
                         value = SSAValue(expr, index)
-                        if any(source.target.expr is formal for formal in callee.function.params):
-                            projected, bounded = binding.project(source)
-                            self.sources[view][value] = projected
-                            self.precisions[view][value] = precision.join(bounded)
-                        else:
-                            held = leaves_of(binding.local_type_of(expr))[index]
-                            self.sources[view][value] = self._identity_source(value, held, scope)
-                            self.precisions[view][value] = AnalysisPrecision.EXACT
+                        projected, bounded = binding.project(source)
+                        self.sources[view][value] = projected
+                        self.precisions[view][value] = precision.join(bounded)
         else:
             for view in self.views:
                 self._record_source(expr, scope, view)

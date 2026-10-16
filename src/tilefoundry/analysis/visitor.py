@@ -63,7 +63,11 @@ class AnalyzeContext(
     def for_region(self, region):
         return replace(
             super().for_region(region),
-            current=next(child for child in self.current.children if child.owner is region),
+            current=(
+                next(child for child in self.current.children if child.owner is region)
+                if self.current is not None
+                else None
+            ),
         )
 
     @property
@@ -96,6 +100,9 @@ class AnalyzeContext(
         return () if self.frame.function is self.entry else self.frame.function.params
 
     def project(self, source: BufferAlias) -> tuple[BufferAlias, AnalysisPrecision]:
+        return self._project(source, self.actual)
+
+    def _project(self, source, actual_of):
         depth = self.current.depth
         relation = source.relation.relation.insert_dims(isl.dim_type.IN, 0, depth)
         relation = relation.intersect_domain(
@@ -119,7 +126,7 @@ class AnalyzeContext(
         target = source.target
         kind = source.kind
         if any(target.expr is formal for formal, _actual in self.bindings):
-            actual = self.actual(target.expr, target.index)
+            actual = actual_of(target.expr, target.index)
             rank = len(held.shape) if isinstance(held, TensorType) else 1
             relation = apply_source(relation, actual, rank, depth, self.current.domain_params)
             argument = next(argument for formal, argument in self.bindings if formal is target.expr)

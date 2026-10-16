@@ -579,13 +579,14 @@ class BufferAlias:
     source. The table MUST store the fully composed `BufferAlias` under an
     `SSAValue` key, with precision in a parallel per-view table. All scopes in
     one definition share those tables; other definitions use independent tables.
-    Allocation MUST consume the same structural source records instead of
-    recomputing view or forwarding links.
-    A retained Call return leaf MUST project the callee's return source only
-    when that source root is a callee formal. Otherwise it is material storage
-    at the caller boundary and MUST use the Call leaf's own identity source.
-    Distinct Call results MUST NOT share a source merely because their callee
-    returns the same internal SSA. MeshRegion results use their body's source; static tuple projections
+    A retained Call return leaf MUST project the callee's return source.
+    Source identity describes data for footprint and traffic, independently of
+    allocation ownership. Allocation gives each Call result its own storage
+    root unless the callee summary returns a formal root, which forwards to the
+    actual leaf. Allocation and source collection MUST share the direct operand
+    leaf selection for structural forwarding; allocation MUST preserve Call
+    storage boundaries when using those operands and cached view relations.
+    MeshRegion results use their body's source; static tuple projections
     select a structural element or a material op's flattened result index;
     loop results use their corresponding carried phi; capture parameters use
     their arguments' sources. Every other source is the value itself and identity.

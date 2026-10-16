@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
@@ -942,13 +943,16 @@ def _place(model, facts, topologies):
             for p in peaks
         )
     lifetimes = []
+    windows = defaultdict(list)
+    for window in model.windows:
+        windows[window.value].append(window)
     for value in model.by_value.values():
         if any(alias.kind in (AliasKind.VIEW, AliasKind.FORWARD) for alias in value.aliases):
             continue
         if id(value.value.expr) in model.locations:
             lifetimes.append(value.lifetime)
         else:
-            lifetimes.extend(window for window in model.windows if window.value == value.value)
+            lifetimes.extend(windows[value.value])
     return peaks, tuple(lifetimes), "feasible"
 
 
