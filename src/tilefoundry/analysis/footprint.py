@@ -7,13 +7,13 @@ level.
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 
 import isl
 
 from tilefoundry.ir.core import Call, get_metadata, value_label
+from tilefoundry.ir.core.metadata import unique_labels
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
@@ -269,7 +269,7 @@ class MovingBoundary:
     space_wave_access: Access
     unit_access: Access
     dtype: DType
-    label: str
+    base_label: str
     mesh: Mesh | None
     reads: bool
     wave_units: int
@@ -693,7 +693,7 @@ def moving_boundaries(
                         space_wave_access=space_wave_access,
                         unit_access=unit_access,
                         dtype=leaves[0].dtype,
-                        label=label,
+                        base_label=label,
                         mesh=mesh,
                         reads=movement.read > 0,
                         wave_units=wave_units,
@@ -736,7 +736,7 @@ def moving_boundaries(
                     space_wave_access=access,
                     unit_access=access,
                     dtype=item.dtype,
-                    label="/".join((*item.ownership, labels[item.target])),
+                    base_label=item.label,
                     ownership=item.ownership,
                     mesh=mesh,
                     reads=item.output_index is None,
@@ -828,6 +828,7 @@ def reached_by(
     declared_units: int,
     operands: tuple[TrafficBytes, ...],
     ctx: CostContext,
+    capture_names: Mapping,
     window: int,
 ) -> tuple[ReachedAddresses, ...] | None:
     """Return one Call's cache-backed addresses, or ``None`` for no stated wave."""
@@ -890,8 +891,7 @@ def reached_by(
             )
         )
     result.extend(_missing_boundaries(call, accesses, operands, ctx))
-    labels = footprint_labels(result, scope)
-    return tuple(replace(item, label=labels[item.target]) for item in result)
+    return tuple(replace(item, label=source_label(item.target, capture_names)) for item in result)
 
 
 @dataclass
@@ -906,9 +906,9 @@ class _BufferReuse:
 
 def _by_buffer(
     boundaries: tuple[MovingBoundary, ...], wave: tuple[int, int]
-) -> dict[tuple[str, int], _BufferReuse]:
+) -> dict[tuple[SSAValue, tuple[str, ...]], _BufferReuse]:
     """Select the outermost time axis and union space axes per buffer."""
-    buffers: dict[tuple[str, int], _BufferReuse] = {}
+    buffers: dict[tuple[SSAValue, tuple[str, ...]], _BufferReuse] = {}
     for boundary in boundaries:
         if not boundary.reads:
             continue
@@ -917,7 +917,7 @@ def _by_buffer(
             continue
         loops = boundary.loop_scopes
         candidate = loops[axes.time] if axes.time is not None else None
-        key = (boundary.label, boundary.access.target.index)
+        key = boundary.access.target, boundary.ownership
         current = buffers.get(key)
         choose = candidate is not None and (
             current is None
@@ -963,7 +963,7 @@ def _window_footprints(boundaries, uncounted, buffers, *, memory_level):
                     precision=boundary.access.precision,
                     values={**boundary.scope.domain_params, **dict(boundary.mesh_parameters)},
                     ownership=boundary.ownership,
-                    label=boundary.label.removeprefix("/".join((*boundary.ownership, ""))),
+                    label=boundary.base_label,
                 )
             )
         if time_scope in footprints:
@@ -978,7 +978,7 @@ def _window_footprints(boundaries, uncounted, buffers, *, memory_level):
 
 
 def _reuse_rows(
-    buffers: Mapping[tuple[str, int], _BufferReuse],
+    buffers: Mapping[tuple[SSAValue, tuple[str, ...]], _BufferReuse],
     footprints: Mapping[IterationScope | None, Footprint | None],
     capacity: int,
 ) -> tuple[ReuseWindow, ...]:
@@ -992,14 +992,16 @@ def _reuse_rows(
             name: sum(spread.logical for _level, spread in breakdown.kinds)
             for name, breakdown in counted.buffers
         }
+        labels = footprint_labels(counted.reached)
+        label = "/".join((*item.boundary.ownership, labels[item.boundary.access.target]))
         holds = sum(amounts.values())
         repeats = (1 if item.time_scope is None else item.time_scope.trips()) * item.space_units
-        reuse = max(0, repeats - 1) * amounts.get(item.boundary.label, 0)
+        reuse = max(0, repeats - 1) * amounts.get(label, 0)
         if reuse == 0:
             continue
         rows.append(
             ReuseWindow(
-                buffer=item.boundary.label,
+                buffer=label,
                 time=(
                     induction_name(item.time_scope.owner)
                     if item.time_scope is not None and isinstance(item.time_scope.owner, LoopRegion)
@@ -1127,44 +1129,22 @@ def counted_precision(items):
     return precision
 
 
-def footprint_labels(items, scope=None):
-    """Capture names at collection; disambiguate stored names when rendering.
+def source_label(target: SSAValue, capture_names: Mapping) -> str:
+    """Choose the declared name, first capture name, or existing value label."""
+    root = target.expr
+    named = root if getattr(root, "name", None) else capture_names.get(root, root)
+    return value_label(named) or ""
 
-    Declared roots keep their names. Other roots use their first capturing
-    parameter in program order, falling back to the existing SSA value label.
-    Stored labels include a tuple leaf suffix, but never instance ownership.
-    """
+
+def footprint_labels(items):
+    """Disambiguate source bases together, then format flattened tensor leaves."""
     items = tuple(items)
-    captured = {}
-    if scope is not None:
-        while scope.parent is not None:
-            scope = scope.parent
-        for local in walk_scopes(scope):
-            for param, _argument in local.captures:
-                captured.setdefault(local.capture_root(param), param)
     roots = {}
     for item in items:
-        root = item.target.expr
-        suffix = f"[{item.target.index}]" if isinstance(root.type, TupleType) else ""
-        if scope is not None:
-            named = root if getattr(root, "name", None) else captured.get(root, root)
-            roots.setdefault(root, value_label(named) or f"<value {len(roots)}>")
-        else:
-            roots.setdefault(
-                root,
-                item.label.removesuffix(suffix)
-                if item.label
-                else value_label(root) or f"<value {len(roots)}>",
-            )
-    if scope is None:
-        repeated = Counter(roots.values())
-        seen = Counter()
-        for root, label in roots.items():
-            seen[label] += 1
-            if repeated[label] > 1 and seen[label] > 1:
-                roots[root] = f"{label}_{seen[label]}"
+        roots.setdefault(item.target.expr, item.label)
+    labels = dict(zip(roots, unique_labels(list(roots.values())), strict=True))
     return {
-        item.target: roots[item.target.expr]
+        item.target: labels[item.target.expr]
         + (f"[{item.target.index}]" if isinstance(item.target.expr.type, TupleType) else "")
         for item in items
     }
@@ -1269,9 +1249,7 @@ def resolve_footprint(footprint, ctx):
                 values=values,
             )
             if target != item.target:
-                projected = replace(
-                    projected, label=footprint_labels((projected,), ctx.current)[target]
-                )
+                projected = replace(projected, label=source_label(target, ctx.root.capture_names))
             resolved.append(projected)
         groups.append((windows, tuple(resolved)))
     return Footprint(tuple(groups))

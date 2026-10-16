@@ -1682,8 +1682,8 @@ loop multiplicities to either work or traffic. Renderers MUST show only `logical
 
 Footprint evidence retains local reached sets, their `AccessRelation.values`
 expressions, and groups of reached sets with local window multiplicities.
-Each reached set retains its source display label under the capture-name rule
-above. Resolve recomputes it when the target maps to caller SSA; callee-internal
+Each reached set retains its source base name under the capture-name rule
+above. Rendering disambiguates these names before adding leaf and ownership text. Resolve recomputes it when the target maps to caller SSA; callee-internal
 targets retain their definition-local labels.
 Loop coordinates MUST remain bounded parameters, named by induction identity,
 with values referring to their induction Vars. Resolve substitutes formals and

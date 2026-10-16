@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 
 import isl
 
@@ -100,6 +101,15 @@ class IterationScope:
     )
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
     variance: dict[int, frozenset[int]] = field(default_factory=dict)
+
+    @cached_property
+    def capture_names(self):
+        """The first authored capture name for each source in this definition."""
+        names = {}
+        for scope in walk_scopes(self):
+            for param, _argument in scope.captures:
+                names.setdefault(scope.capture_root(param), param)
+        return names
 
     @property
     def captures(self):

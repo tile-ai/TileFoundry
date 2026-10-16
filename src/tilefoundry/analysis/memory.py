@@ -48,7 +48,6 @@ from .facts import TARGET_MEMORY_OWNER, MemoryHierarchyFacts
 from .footprint import (
     ReachedAddresses,
     cached_level,
-    footprint_labels,
     footprint_of,
     qualify_instances,
     reached_by,
@@ -509,6 +508,7 @@ def _footprint_inputs(
                 declared_units=declared_units,
                 operands=(),
                 ctx=whole,
+                capture_names=root.capture_names,
                 window=scope.depth - 1,
             )
             if reached is None:
@@ -582,6 +582,7 @@ class MemoryVisitor(ValuationVisitor[None]):
                 declared_units=ctx.wave[1],
                 operands=moved.operands,
                 ctx=replace(ctx, topology_level=None),
+                capture_names=ctx.root.capture_names,
                 window=ctx.current.depth - 1,
             )
             if reached is not None:
@@ -663,7 +664,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for _call, reached in calls
         for item in reached
     )
-    labels = footprint_labels(merged_reached)
+    labels = {item.target: item.label for item in merged_reached if item.reached is not None}
     attach(function, analyze_liveness(function, context, callee=function is not context.entry))
     if memory_level is not None and wave is not None:
         seen_footprints = set()
