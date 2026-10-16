@@ -21,13 +21,14 @@ from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import (
 )
 from tilefoundry.ir.core import Call, Constant, Tuple
 from tilefoundry.ir.core.kinds import ReduceKind
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.tir.memory.ptr_of import PtrOf
 from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types import ComposedLayout
-from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
+from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub, DimVar
 from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten, resolve_layout
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
@@ -40,7 +41,7 @@ from tilefoundry.ir.types.shard_layout import (
 from tilefoundry.ir.types.shard_layout import ShardLayout as SL
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.swizzle_layout import get_swizzle_portion
-from tilefoundry.ir.types.utils import shape_numel_upper_bound, upper_bound
+from tilefoundry.ir.types.utils import shape_numel_upper_bound, static_dim_value, upper_bound
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen
@@ -309,7 +310,7 @@ def render_shard_layout_value(var_name: str, sl: SL, dynamic_extents=None, stora
     return preamble, value_expr
 
 
-_COORD_OPERATORS = {DimAdd: "+", DimSub: "-", DimMul: "*"}
+_COORD_OPERATORS = {DimAdd: "+", DimSub: "-", DimMul: "*", DimFloorDiv: "/", DimMod: "%"}
 
 
 class _CoordinateVisitor(ExprVisitor[str]):
@@ -321,7 +322,17 @@ class _CoordinateVisitor(ExprVisitor[str]):
         if operator is not None:
             lhs, rhs = (self.visit(arg, ctx) for arg in expr.args)
             return f"({lhs} {operator} {rhs})"
-        return self._leaf(expr, ctx)
+        if isinstance(expr.target, MeshCoord):
+            axis = static_dim_value(expr.args[0])
+            if axis is None:
+                raise NotImplementedError("CUDA MeshCoord requires a static axis")
+            mesh = _scope_mesh_value(expr.target.mesh, ctx)
+            if mesh is None:
+                raise ValueError("CUDA MeshCoord requires its enclosing mesh binding")
+            return f"cute::get<{axis}>(cute::flatten(tilefoundry::mesh_coords({mesh}, tilefoundry::program_ids())))"
+        raise NotImplementedError(
+            f"local_tile coordinate: Call target {type(expr.target).__name__!r} is not supported"
+        )
 
     def _leaf(self, expr, ctx: CudaCodegenContext) -> str:
         name = ctx.name_for(expr)
@@ -361,17 +372,13 @@ def _pointer_ref(pointer, ctx: CudaCodegenContext) -> tuple[str, object | None]:
     if isinstance(pointer, Call) and isinstance(pointer.target, PtrOf):
         source = pointer.args[0]
         if isinstance(source, Call) and isinstance(source.target, Slice):
-            from tilefoundry.codegen.cuda.tir.stmts.scalar_expr import (  # noqa: PLC0415
-                render_scalar_expr,
-            )
-
             base = source.args[0]
             layout = resolve_layout(base.type.layout, base.type.shape)
             if not isinstance(layout, Layout):
                 raise NotImplementedError("CUDA pointer slices require a plain source layout")
             origin = source.args[1]
             starts = origin.elements if isinstance(origin, Tuple) else (origin,)
-            coords = ", ".join(render_scalar_expr(start, ctx) for start in starts)
+            coords = ", ".join(_coord_ref(start, ctx) for start in starts)
             offset = f"{_plain_layout_value(layout)}(cute::make_coord({coords}))"
             pointer, root = _pointer_ref(Call(PtrOf(), (base,), type=pointer.type), ctx)
             return f"({pointer} + {offset})", root

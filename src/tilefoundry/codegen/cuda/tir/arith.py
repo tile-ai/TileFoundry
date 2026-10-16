@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.tir.arith import Binary, BinaryKind, Unary, UnaryKind
+from tilefoundry.ir.tir.cast import Cast
 from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_local_shape
 from tilefoundry.ir.types.utils import (
     shape_has_dim_var,
@@ -214,5 +215,31 @@ def _emit_unary(call, ctx: CudaCodegenContext) -> None:
     ctx.emit(f"auto tilefoundry_elementwise_dst = cute::make_tensor({dst_n}.data(), tilefoundry_elementwise_n);")
     ctx.emit(f"auto tilefoundry_elementwise_src = cute::make_tensor({src_n}.data(), tilefoundry_elementwise_n);")
     ctx.emit(f"tilefoundry::ops::elementwise(tilefoundry_elementwise_dst, {tag}{{}}, tilefoundry_elementwise_src);")
+    ctx.dedent()
+    ctx.emit("}")
+
+
+@register_codegen(CudaTarget, Role.EMIT, Cast)
+def _emit_cast(call, ctx: CudaCodegenContext) -> None:
+    """Effect-form Cast: the store into the destination converts, so the
+    elementwise functor is the identity, as for ``UnaryKind.CAST``."""
+    src, dst = call.args
+    src_n = _tensor_expr(src, ctx)
+    dst_n = _tensor_expr(dst, ctx)
+    n = _dyn_clip(dst, (src,), ctx)
+    if n is None:
+        ctx.emit(
+            f"tilefoundry::ops::elementwise({dst_n}, tilefoundry::primitive::identity_op{{}}, {src_n});"
+        )
+        return
+    ctx.emit("{")
+    ctx.indent()
+    ctx.emit(f"auto tilefoundry_elementwise_n = cute::make_layout({n});")
+    ctx.emit(f"auto tilefoundry_elementwise_dst = cute::make_tensor({dst_n}.data(), tilefoundry_elementwise_n);")
+    ctx.emit(f"auto tilefoundry_elementwise_src = cute::make_tensor({src_n}.data(), tilefoundry_elementwise_n);")
+    ctx.emit(
+        "tilefoundry::ops::elementwise(tilefoundry_elementwise_dst, "
+        "tilefoundry::primitive::identity_op{}, tilefoundry_elementwise_src);"
+    )
     ctx.dedent()
     ctx.emit("}")
