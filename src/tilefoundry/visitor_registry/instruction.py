@@ -332,6 +332,39 @@ def _pattern_refusal(matcher: PatternMatcher, op, parameter=None) -> ScheduleRef
     return ScheduleRefusal(PatternPrinter().refusal_reason(refusal, parameter), path=path, op=op)
 
 
+def admit_fields(op, operands, mesh, matcher):
+    """Admit attributes, execution mesh and operand fields before tile projection."""
+    for param in type(op)._op_schema.signature:
+        if param.kind != "attribute" or param.name == "execution_mesh":
+            continue
+        value = getattr(op, param.name)
+        if param.name == "atom" and isinstance(value, type) and value in param.pattern.declarations:
+            continue
+        if value is None and param.optional:
+            continue
+        if (
+            isinstance(param.annotation, type)
+            and issubclass(param.annotation, Enum)
+            and not isinstance(value, param.annotation)
+        ):
+            raise ScheduleRefusal(
+                f"{param.name} must be {param.annotation.__name__}, got {type(value).__name__}",
+                op=op,
+            )
+        if param.annotation is int and not isinstance(value, int):
+            raise ScheduleRefusal(f"{param.name} must be int, got {type(value).__name__}", op=op)
+        if param.pattern is not None and not matcher.match(param.pattern, value):
+            raise _pattern_refusal(matcher, op, param.name)
+    if not matcher.match(declared_execution_mesh(op), mesh):
+        raise _pattern_refusal(matcher, op, "mesh")
+    for param, type_ in zip(call_params(op, len(operands)), operands, strict=True):
+        pattern = _operand_pattern(param, op, matcher.bindings)
+        if isinstance(pattern, TensorPattern):
+            pattern = replace(pattern, shape=None, layout=None)
+        if pattern is not None and not matcher.match(pattern, type_):
+            raise _pattern_refusal(matcher, op, param.name)
+
+
 def check_call(op, operands, mesh, *, frame, repeat=None, order=None):
     """Match whole fields, project atom tiles, then check one closed declaration.
 
@@ -361,33 +394,7 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None):
     )
     atom = getattr(op, "atom", None)
     matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
-    for param in type(op)._op_schema.signature:
-        if param.kind != "attribute" or param.name == "execution_mesh":
-            continue
-        value = getattr(op, param.name)
-        if value is None and param.optional:
-            continue
-        if (
-            isinstance(param.annotation, type)
-            and issubclass(param.annotation, Enum)
-            and not isinstance(value, param.annotation)
-        ):
-            raise ScheduleRefusal(
-                f"{param.name} must be {param.annotation.__name__}, got {type(value).__name__}",
-                op=op,
-            )
-        if param.annotation is int and not isinstance(value, int):
-            raise ScheduleRefusal(f"{param.name} must be int, got {type(value).__name__}", op=op)
-        if param.pattern is not None and not matcher.match(param.pattern, value):
-            raise _pattern_refusal(matcher, op, param.name)
-    if not matcher.match(declared_execution_mesh(op), mesh):
-        raise _pattern_refusal(matcher, op, "mesh")
-    for param, type_ in zip(params, whole, strict=True):
-        pattern = _operand_pattern(param, op, matcher.bindings)
-        if isinstance(pattern, TensorPattern):
-            pattern = replace(pattern, shape=None, layout=None)
-        if pattern is not None and not matcher.match(pattern, type_):
-            raise _pattern_refusal(matcher, op, param.name)
+    admit_fields(op, whole, mesh, matcher)
     try:
         tiles = project(op, whole, mesh, bindings=matcher.bindings, repeat=repeat, order=order)
     except ScheduleRefusal:

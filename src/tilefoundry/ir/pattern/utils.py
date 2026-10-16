@@ -247,6 +247,20 @@ def declared_shape(pattern: TensorPattern | None, bindings: dict) -> tuple | Non
     return shape if isinstance(shape, tuple) and all(type(dim) is int for dim in shape) else None
 
 
+def declared_symbol_axes(
+    params: tuple, op, bindings: dict, name: str
+) -> tuple[tuple[int, int], ...]:
+    """Operand axes whose declared extent is the symbol named *name*."""
+    axes = []
+    for index, param in enumerate(params):
+        pattern = param.pattern.read_on(op) if hasattr(param.pattern, "read_on") else param.pattern
+        pattern = selected_pattern(pattern, bindings)
+        for axis, dim in enumerate(getattr(pattern, "shape", None) or ()):
+            if getattr(dim, "name", None) == name:
+                axes.append((index, axis))
+    return tuple(axes)
+
+
 def locate_dim_var(params: tuple, name: str) -> tuple[int, int] | None:
     """Return the first parameter/axis carrying a ``DimVar`` named *name*."""
     for index, param in enumerate(params):

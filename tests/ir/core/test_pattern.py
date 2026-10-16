@@ -2,6 +2,7 @@
 
 import pytest
 
+from tilefoundry.inspection import PatternPrinter
 from tilefoundry.ir.pattern import (
     AndPattern,
     RangePattern,
@@ -69,3 +70,18 @@ def test_range_pattern_contract() -> None:
         RangePattern("S", lo=1)
     with pytest.raises(ValueError, match="lo <= hi"):
         RangePattern("S", 5, 4)
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        (lambda a, b, c: a % (8 * b) == 0, "a % (8 * b) == 0"),
+        (lambda a, b, c: a * (b + c) == 0, "a * (b + c) == 0"),
+        (lambda a, b, c: a - (b - c) == 0, "a - (b - c) == 0"),
+        (lambda a, b, c: a // (b * c) == 0, "a // (b * c) == 0"),
+        (lambda a, b, c: (a < b) & (b < c), "(a < b) & (b < c)"),
+    ],
+)
+def test_pattern_rules_preserve_expression_grouping(expression, expected):
+    a, b, c = (WildcardPattern(name) for name in ("a", "b", "c"))
+    assert PatternPrinter().rules(expression(a, b, c)) == (expected,)

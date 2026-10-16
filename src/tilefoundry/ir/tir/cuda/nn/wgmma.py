@@ -70,50 +70,64 @@ def _mma_k_elements(element_bytes: int) -> int:
     return 32 // element_bytes
 
 
-def _a_mn_major_smem_pattern(element_bytes: int) -> ComposedLayoutPattern:
+def _smem_fields(b_operand):
+    return (bb, Wb, rb, lb, sb, pb, gb, n_extent) if b_operand else (b, W, r, l, s, p, 8, 64)
+
+
+def _smem_layout(shape, strides, b_operand):
+    return LayoutPattern(shape[::-1], strides[::-1]) if b_operand else LayoutPattern(shape, strides)
+
+
+def _a_mn_major_smem_pattern(element_bytes: int, b_operand=False) -> ComposedLayoutPattern:
+    sw, w, rows, leading, stride, _, _, extent = _smem_fields(b_operand)
     return ComposedLayoutPattern(
-        SwizzlePattern(b, 4, 3),
+        SwizzlePattern(sw, 4, 3),
         0,
-        LayoutPattern(((r, W), (2, 8)), ((l, 1), (s, W))),
+        _smem_layout(((rows, w), (2, 8)), ((leading, 1), (stride, w)), b_operand),
         predicates=(
-            W == _swizzle_row_elements(b, element_bytes),
-            r * W == 64,
-            l == 16 * W,
-            s == 8 * W,
+            w == _swizzle_row_elements(sw, element_bytes),
+            rows * w == extent,
+            leading % (8 * w) == 0,
+            stride % (8 * w) == 0,
         ),
     )
 
 
-def _a_k_major_whole_smem_pattern(element_bytes: int) -> ComposedLayoutPattern:
+def _a_k_major_whole_smem_pattern(element_bytes: int, b_operand=False) -> ComposedLayoutPattern:
+    """SW32 has rows == 1: its fixed LBO lies inside the contiguous w mode."""
+    sw, w, rows, leading, stride, _, groups, extent = _smem_fields(b_operand)
     return ComposedLayoutPattern(
-        SwizzlePattern(b, 4, 3),
+        SwizzlePattern(sw, 4, 3),
         0,
-        LayoutPattern(((8, 8), (r, W)), ((l, W), (s, 1))),
+        _smem_layout(((groups, 8), (rows, w)), ((leading, w), (stride, 1)), b_operand),
         predicates=(
-            W == _swizzle_row_elements(b, element_bytes),
-            b <= 1,
-            r * W == _mma_k_elements(element_bytes),
-            l == 16 * W,
-            s == 8 * W,
+            w == _swizzle_row_elements(sw, element_bytes),
+            sw <= 1,
+            rows * w == _mma_k_elements(element_bytes),
+            *((8 * groups == extent,) if b_operand else ()),
+            leading % (8 * w) == 0,
+            stride % (8 * w) == 0,
         ),
     )
 
 
-def _a_k_major_sliced_smem_pattern(element_bytes: int) -> ComposedLayoutPattern:
+def _a_k_major_sliced_smem_pattern(element_bytes: int, b_operand=False) -> ComposedLayoutPattern:
+    sw, w, _, leading, _, offset, groups, extent = _smem_fields(b_operand)
     k_elements = _mma_k_elements(element_bytes)
     return ComposedLayoutPattern(
-        SwizzlePattern(b, 4, 3),
-        p,
-        LayoutPattern(((8, 8), k_elements), ((l, W), 1)),
+        SwizzlePattern(sw, 4, 3),
+        offset,
+        _smem_layout(((groups, 8), k_elements), ((leading, w), 1), b_operand),
         predicates=(
-            W == _swizzle_row_elements(b, element_bytes),
-            b >= 2,
-            l == 8 * W,
-            p % k_elements == 0,
-            0 <= p,
-            p < W,
+            w == _swizzle_row_elements(sw, element_bytes),
+            sw >= 2,
+            *((8 * groups == extent,) if b_operand else ()),
+            leading % (8 * w) == 0,
+            offset % k_elements == 0,
+            0 <= offset,
+            offset < w,
         ),
-        issues_per_row=lambda captures: (1, captures["W"] // k_elements),
+        issues_per_row=lambda captures: (int(not b_operand), captures[w.name] // k_elements),
     )
 
 
@@ -126,60 +140,15 @@ def _a_register_fragment_pattern(element_bytes: int) -> LayoutPattern:
 
 
 def _b_mn_major_smem_pattern(element_bytes: int) -> ComposedLayoutPattern:
-    return ComposedLayoutPattern(
-        SwizzlePattern(bb, 4, 3),
-        0,
-        LayoutPattern(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1))),
-        predicates=(
-            Wb == _swizzle_row_elements(bb, element_bytes),
-            rb * Wb == n_extent,
-            lb == 16 * Wb,
-            sb == 8 * Wb,
-        ),
-    )
+    return _a_mn_major_smem_pattern(element_bytes, True)
 
 
 def _b_k_major_whole_smem_pattern(element_bytes: int) -> ComposedLayoutPattern:
-    """``_a_k_major_whole_smem_pattern`` on B's ``(K, N)`` axes.
-
-    The N axis holds ``n / 8`` core-matrix groups where A's M axis holds eight.
-    """
-    return ComposedLayoutPattern(
-        SwizzlePattern(bb, 4, 3),
-        0,
-        LayoutPattern(((rb, Wb), (gb, 8)), ((sb, 1), (lb, Wb))),
-        predicates=(
-            Wb == _swizzle_row_elements(bb, element_bytes),
-            bb <= 1,
-            rb * Wb == _mma_k_elements(element_bytes),
-            8 * gb == n_extent,
-            lb == 16 * Wb,
-            sb == 8 * Wb,
-        ),
-    )
+    return _a_k_major_whole_smem_pattern(element_bytes, True)
 
 
 def _b_k_major_sliced_smem_pattern(element_bytes: int) -> ComposedLayoutPattern:
-    """``_a_k_major_sliced_smem_pattern`` on B's ``(K, N)`` axes.
-
-    The N axis holds ``n / 8`` core-matrix groups where A's M axis holds eight.
-    """
-    k_elements = _mma_k_elements(element_bytes)
-    return ComposedLayoutPattern(
-        SwizzlePattern(bb, 4, 3),
-        pb,
-        LayoutPattern((k_elements, (gb, 8)), (1, (lb, Wb))),
-        predicates=(
-            Wb == _swizzle_row_elements(bb, element_bytes),
-            bb >= 2,
-            8 * gb == n_extent,
-            lb == 8 * Wb,
-            pb % k_elements == 0,
-            0 <= pb,
-            pb < Wb,
-        ),
-        issues_per_row=lambda captures: (0, captures["Wb"] // k_elements),
-    )
+    return _a_k_major_sliced_smem_pattern(element_bytes, True)
 
 
 fragment = LayoutPattern((4, 2, 8, c, 4, 2), (16, 8, 1, 512, 128, 64))

@@ -13,9 +13,11 @@ from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
+    PatternMatcher,
     is_ranked_tensor,
 )
 from tilefoundry.ir.pattern.utils import (
+    declared_symbol_axes,
     variants,
 )
 from tilefoundry.ir.types import TensorType
@@ -40,6 +42,7 @@ from tilefoundry.visitor_registry.contexts import (
 from tilefoundry.visitor_registry.cost_utils import operation_cost
 from tilefoundry.visitor_registry.instruction import (
     ScheduleRefusal,
+    admit_fields,
     check_call,
     operand_relations,
     project,
@@ -226,17 +229,36 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
         (extent for type_ in operand_types for extent in type_.shape if type(extent) is int),
         default=1,
     )
-    states = variants(
-        atom.parameters,
+    integers = tuple(param for param in atom.parameters if param.annotation is int)
+    partial = variants(
+        tuple(param for param in atom.parameters if param.annotation is not int),
         vary_defaulted=True,
-        values=lambda param: tuple(range(1, largest + 1)) if param.annotation is int else None,
     )
-    integers = tuple(param.name for param in atom.parameters if param.annotation is int)
-    states = sorted(
-        states, key=lambda state: tuple(state.get(name, 0) for name in integers), reverse=True
-    )
-    accepted = []
+    states = []
     refusal = None
+    for seed in partial:
+        matcher = PatternMatcher(seed)
+        try:
+            admit_fields(op, operand_types, mesh, matcher)
+        except ScheduleRefusal as error:
+            refusal = refusal or error
+            continue
+        held = [seed]
+        for param in integers:
+            axes = declared_symbol_axes(params, op, matcher.bindings, param.name)
+            held = [
+                {**state, param.name: value}
+                for state in held
+                for value in range(1, largest + 1)
+                if all(operand_types[index].shape[axis] % value == 0 for index, axis in axes)
+                and (probe := PatternMatcher(state)).match(param.pattern, value)
+                and probe.solve()
+            ]
+        states.extend(held)
+    states.sort(key=lambda state: tuple(state[p.name] for p in integers), reverse=True)
+    if states:
+        refusal = None
+    accepted = []
     for state in states:
         instance = op_type(**{**attributes, "atom": atom(**state)})
         try:

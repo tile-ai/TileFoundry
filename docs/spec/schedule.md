@@ -73,13 +73,18 @@ schema order. An atom class in `attributes` leaves its parameters open; an
 atom instance requests that exact instruction. The execution mesh matches first,
 then the shared input scope check verifies each operand holder and storage.
 ScheduleOp skips that check in the outer type-inference visitor; every explicit
-schedule reaches it through this matcher. Open matching then reads dtype
-and storage form, then enumerates tile extents admitted by the parameter
-patterns, divisibility, and tile projection.
-For each projectable extent it separately matches layout major, solves the
-bindings, constructs an instance, and performs the closed instruction checks.
-A rejected extent does not stop other extents from matching. If none match,
-the refusal comes from the largest projectable extent.
+schedule reaches it through this matcher. Open matching first enumerates non-integer
+atom attributes and admits their attribute patterns, execution mesh and operand
+fields (including dtype and storage), without requiring shape or layout matches.
+It then enumerates integer parameters admitted by their patterns. If a parameter
+names a symbol in declared operand shapes, its values MUST divide every corresponding
+operand axis extent; a parameter absent from those shapes retains the full range
+from one to the largest operand extent. Integer tuples are tried largest first.
+Each concrete instruction then passes the shared closed check, including tile
+projection and layout matching. A rejected extent does not stop other extents
+from matching. If all non-integer bindings fail field admission, the refusal
+names that field without an unrelated integer extent. Otherwise the first failed
+closed check supplies the refusal if no extent is accepted.
 `frame` is required and reaches the verifier unchanged, including its target
 capability checks. Explicit schedule inference uses this same matcher with
 the authored instruction attributes, frame, repeat, and order.

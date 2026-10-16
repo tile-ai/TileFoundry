@@ -324,31 +324,29 @@ def verify_prim_function(
 ) -> None:
     """Per [tir §1.3](docs/spec/tir.md#13-primfunction)'s rule list."""
     _check_param_homogeneity(fn)
-    if fn.variants:
-        for variant in fn.variants:
-            if len(variant.specializations) != 1 or not isinstance(
-                variant.specializations[0], RangePattern
-            ):
-                raise VerifyError(
-                    f"PrimFunction {fn.name!r}: each variant must have one RangePattern"
-                )
-            pat = variant.specializations[0]
-            if locate_dim_var(fn.params, pat.dim_var) is None:
-                raise VerifyError(
-                    f"PrimFunction {fn.name!r}: specialization subject {pat.dim_var!r} "
-                    "cannot be derived from parameters"
-                )
+    module_context = module_fns if isinstance(module_fns, Module) else tuple(module_fns)
+    for variant in fn.variants:
+        if len(variant.specializations) != 1 or not isinstance(
+            variant.specializations[0], RangePattern
+        ):
+            raise VerifyError(
+                f"PrimFunction {fn.name!r}: each variant must have one RangePattern"
+            )
+        pat = variant.specializations[0]
+        if locate_dim_var(fn.params, pat.dim_var) is None:
+            raise VerifyError(
+                f"PrimFunction {fn.name!r}: specialization subject {pat.dim_var!r} "
+                "cannot be derived from parameters"
+            )
+        verify_prim_function(variant, module_fns=module_context)
     ctx = VerifyContext()
     scope: list[Mesh] = []
 
-    module_context = module_fns if isinstance(module_fns, Module) else tuple(module_fns)
     if isinstance(module_fns, Module):
         ctx.frame = next((frame for frame in list_call_paths(module_fns).values()
                           if fn is frame.function or any(fn is v for v in frame.function.variants)), None)
 
     _walk_stmt(fn.body, ctx, scope, fn, module_context, _Binders(fn.params))
-    for variant in fn.variants:
-        verify_prim_function(variant, module_fns=module_context)
 
 
 def _check_param_homogeneity(fn: PrimFunction) -> None:

@@ -80,7 +80,8 @@ class PatternPrinter:
             for name, value in path:
                 written = (
                     self._subject_value(value)
-                    if isinstance(value, float) else getattr(value, "name", str(value))
+                    if isinstance(value, float)
+                    else getattr(value, "name", str(value))
                 )
                 values = merged.setdefault(name, [])
                 if written not in values:
@@ -129,7 +130,9 @@ class PatternPrinter:
         parameters = tuple(getattr(op_type, "parameters", ())) or collect_param_defs(op_type)
         parameters_by_name = {param.name: param for param in parameters}
         if parameters:
-            sections.append(("parameters", tuple((param.name, param.pattern) for param in parameters)))
+            sections.append(
+                ("parameters", tuple((param.name, param.pattern) for param in parameters))
+            )
         roles = tuple(
             (name, getattr(op_type, name))
             for name in ("C", "A", "B")
@@ -178,7 +181,9 @@ class PatternPrinter:
         return rendered
 
     def _declared(self, pattern, name: str) -> str:
-        if not any(cls.__name__ in ("SwitchPattern", "TensorPattern") for cls in type(pattern).__mro__):
+        if not any(
+            cls.__name__ in ("SwitchPattern", "TensorPattern") for cls in type(pattern).__mro__
+        ):
             return self.described(pattern, name)
         alternatives = tuple(
             (bindings, alternative, self.rules(alternative, name))
@@ -272,9 +277,7 @@ class PatternPrinter:
         return self.written(modes)
 
     def _written_bindings(self, bindings) -> str:
-        return ", ".join(
-            f"{name}={getattr(value, 'name', str(value))}" for name, value in bindings
-        )
+        return ", ".join(f"{name}={getattr(value, 'name', str(value))}" for name, value in bindings)
 
     def _written_alternatives(self, items, name: str = _UNNAMED) -> str:
         held = tuple(
@@ -290,9 +293,7 @@ class PatternPrinter:
         for label, written in held:
             first, *rest = written.splitlines() or ("",)
             lines.append(first if not width else f"{label.ljust(width)}  {first}")
-            lines.extend(
-                line if not width else f"{' ' * (width + 2)}{line}" for line in rest
-            )
+            lines.extend(line if not width else f"{' ' * (width + 2)}{line}" for line in rest)
         return "\n".join(lines)
 
     def _rules_of(self, values, name: str = _UNNAMED) -> tuple[str, ...]:
@@ -390,9 +391,7 @@ class PatternPrinter:
         if pattern.shape is None and pattern.strides is None:
             return "layout"
         shape = name if pattern.shape is None else self._written_grouped(tuple(pattern.shape))
-        strides = (
-            name if pattern.strides is None else self._written_grouped(tuple(pattern.strides))
-        )
+        strides = name if pattern.strides is None else self._written_grouped(tuple(pattern.strides))
         return f"Layout({shape}, {strides})"
 
     def rules_LayoutPattern(self, pattern, name) -> tuple[str, ...]:
@@ -463,9 +462,7 @@ class PatternPrinter:
             *(pattern.shape or ()),
         )
         layout_rules = (
-            ()
-            if pattern.layout is None
-            else self._partitioned_alternatives(pattern.layout)[1]
+            () if pattern.layout is None else self._partitioned_alternatives(pattern.layout)[1]
         )
         return (
             *self._rules_of(values),
@@ -478,10 +475,7 @@ class PatternPrinter:
             if isinstance(pattern.attrs, tuple)
             else self.written(pattern.attrs)
         )
-        return (
-            f"ShardLayout({self.written(pattern.layout)}, {attrs}, "
-            f"{self.written(pattern.mesh)})"
-        )
+        return f"ShardLayout({self.written(pattern.layout)}, {attrs}, {self.written(pattern.mesh)})"
 
     def rules_ShardLayoutPattern(self, pattern, name) -> tuple[str, ...]:
         return self._rules_of((pattern.layout, pattern.attrs, pattern.mesh))
@@ -562,7 +556,7 @@ class PatternPrinter:
             *self._rules_of(pattern.steps),
         )
 
-    def _written_expression(self, value) -> str:
+    def _written_expression(self, value, parent=0) -> str:
         if isinstance(value, float):
             return self._subject_value(value)
         name = type(value).__name__
@@ -588,19 +582,12 @@ class PatternPrinter:
                 "and": "&",
                 "or": "|",
             }[value.op]
-            return (
-                f"{self._written_expression(value.args[0])} {symbol} "
-                f"{self._written_expression(value.args[1])}"
-            )
+            return self._written_binary(value, symbol, parent)
         if name == "Term":
             if value.op == "constant":
                 return self._written_expression(value.args[0])
             if value.op in {"variable", "bits"}:
-                return (
-                    value.args[0]
-                    if value.op == "variable"
-                    else f"Bits({value.args[0]!r})"
-                )
+                return value.args[0] if value.op == "variable" else f"Bits({value.args[0]!r})"
             if value.op == "bound":
                 return f"x{value.args[0]}"
             if value.op == "element":
@@ -614,11 +601,30 @@ class PatternPrinter:
                 "floordiv": "//",
                 "mod": "%",
             }[value.op]
-            return (
-                f"{self._written_expression(value.args[0])} {symbol} "
-                f"{self._written_expression(value.args[1])}"
-            )
+            return self._written_binary(value, symbol, parent)
         return repr(value)
+
+    def _written_binary(self, value, symbol, parent):
+        precedence = {
+            "==": 1,
+            "!=": 1,
+            "<": 1,
+            "<=": 1,
+            ">": 1,
+            ">=": 1,
+            "|": 2,
+            "&": 3,
+            "+": 4,
+            "-": 4,
+            "*": 5,
+            "//": 5,
+            "%": 5,
+        }[symbol]
+        text = (
+            f"{self._written_expression(value.args[0], precedence + (precedence == 1))} {symbol} "
+            f"{self._written_expression(value.args[1], precedence + 1)}"
+        )
+        return f"({text})" if precedence < parent else text
 
     def alternatives_Pattern(self, pattern, bindings) -> tuple:
         return ((bindings, pattern),)
@@ -636,7 +642,8 @@ class PatternPrinter:
         known = dict(bindings)
         if pattern.param in known:
             branch = next(
-                (branch for value, branch in pattern.branches if value == known[pattern.param]), None
+                (branch for value, branch in pattern.branches if value == known[pattern.param]),
+                None,
             )
             return () if branch is None else self.alternatives(branch, bindings)
         return tuple(
