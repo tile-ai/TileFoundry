@@ -41,7 +41,7 @@ def embed(M: int):
                     for i in range(RE):
                         m = cta.b * RE + i
                         tok = token_ids[m]
-                        row = tf.schedule((t4[tok:tok + 1, :, :, :],), op=T.copy(rmem_layout=(1, KV, TV @ th.t, VEC)))
+                        row = tf.schedule((t4[tok:tok + 1, :, :, :], tf.empty(Tensor[(1, 5, 256, 4), "bf16", (1, KV, TV @ th.t, VEC), "rmem"])), op=T.copy())
                         out = tf.insert_slice(out, row, (m, 0, 0, 0))
                     return out
 
@@ -66,22 +66,21 @@ def final(M: int):
                 with Mesh(("thread",), layout=(TV,), names=("t",)) as th:
                     r = last[0]
                     h4 = tf.reshape(hidden, (M, KV, TV, VEC))
-                    x = tf.schedule((h4[r:r + 1, :, :, :],), op=T.copy(rmem_layout=(1, KV, TV @ th.t, VEC)))
-                    g = tf.schedule((tf.reshape(gamma_final, (1, KV, TV, VEC)),), op=T.copy(rmem_layout=(1, KV, TV @ th.t, VEC)))
+                    x = tf.schedule((h4[r:r + 1, :, :, :], tf.empty(Tensor[(1, 5, 256, 4), "bf16", (1, KV, TV @ th.t, VEC), "rmem"])), op=T.copy())
+                    g = tf.schedule((tf.reshape(gamma_final, (1, KV, TV, VEC)), tf.empty(Tensor[(1, 5, 256, 4), "bf16", (1, KV, TV @ th.t, VEC), "rmem"])), op=T.copy())
                     x32 = tf.cast(x, "f32")
-                    sq = tf.schedule((tf.square(x32),), op=T.copy(rmem_layout=((1, KV, TV @ th.t, VEC), (0, VEC, 0, 1))))
-                    ms = tf.schedule((tf.reduce(sq, (1, 2, 3), True, ReduceKind.MEAN),), op=T.copy(rmem_layout=(1, 1, 1, 1)))
+                    sq = tf.schedule((tf.square(x32), tf.empty(Tensor[(1, 5, 256, 4), "f32", ((1, KV, TV @ th.t, VEC), (0, VEC, 0, 1)), "rmem"])), op=T.copy())
+                    ms = tf.schedule((tf.reduce(sq, (1, 2, 3), True, ReduceKind.MEAN), tf.empty(Tensor[(1, 1, 1, 1), "f32", (1, 1, 1, 1), "rmem"])), op=T.copy())
                     xn = tf.cast(x32 * tf.rsqrt(ms + EPS) * (tf.cast(g, "f32") + 1.0), "bf16")
-                    xs = tf.schedule((xn,), op=T.copy(smem_layout=Layout((1, KV, TV, VEC), (H, TV * VEC, VEC, 1))))
+                    xs = tf.schedule((xn, tf.empty(Tensor[(1, 5, 256, 4), "bf16", Layout((1, KV, TV, VEC), (H, TV * VEC, VEC, 1)), "smem"])), op=T.copy())
                 # 2. the head rows: warp w, rows 32 b + 4 w + q; lane l, vectors l + 32 p
                 with Mesh(("thread",), layout=(NW, LANES), names=("w", "l")) as th2:
                     n0 = cta.b * RB
                     w5 = tf.reshape(w_head, (V // RW, RW, PV, LANES, WV))
-                    wr = tf.schedule((w5[n0 // RW:n0 // RW + NW, :, :, :, :],), op=T.copy(rmem_layout=(NW @ th2.w, RW, PV, LANES @ th2.l, WV)))
-                    xv = tf.schedule((tf.reshape(xs, (1, 1, PV, LANES, WV)),), op=T.copy(rmem_layout=(1, 1, PV, LANES @ th2.l, WV)))
-                    prod = tf.schedule((tf.cast(wr, "f32") * tf.cast(xv, "f32"),),
-                                       op=T.copy(rmem_layout=((NW @ th2.w, RW, PV, LANES @ th2.l, WV), (0, PV * WV, WV, 0, 1))))
-                    acc = tf.schedule((tf.reduce(prod, (2, 3, 4), True, ReduceKind.SUM),), op=T.copy(rmem_layout=(NW @ th2.w, RW, 1, 1, 1)))
+                    wr = tf.schedule((w5[n0 // RW:n0 // RW + NW, :, :, :, :], tf.empty(Tensor[(8, 4, 20, 32, 8), "bf16", (NW @ th2.w, RW, PV, LANES @ th2.l, WV), "rmem"])), op=T.copy())
+                    xv = tf.schedule((tf.reshape(xs, (1, 1, PV, LANES, WV)), tf.empty(Tensor[(1, 1, 20, 32, 8), "bf16", (1, 1, PV, LANES @ th2.l, WV), "rmem"])), op=T.copy())
+                    prod = tf.schedule((tf.cast(wr, "f32") * tf.cast(xv, "f32"), tf.empty(Tensor[(8, 4, 20, 32, 8), "f32", ((NW @ th2.w, RW, PV, LANES @ th2.l, WV), (0, PV * WV, WV, 0, 1)), "rmem"])), op=T.copy())
+                    acc = tf.schedule((tf.reduce(prod, (2, 3, 4), True, ReduceKind.SUM), tf.empty(Tensor[(8, 4, 1, 1, 1), "f32", (NW @ th2.w, RW, 1, 1, 1), "rmem"])), op=T.copy())
                     logit = tf.cast(acc, "bf16")
                     out = tf.zeros(Tensor[(V // RW, RW, 1, 1, 1), "bf16"])
                     return tf.insert_slice(out, logit, (n0 // RW, 0, 0, 0, 0))

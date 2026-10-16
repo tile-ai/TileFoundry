@@ -22,8 +22,8 @@ class SCHED_REDUCE_BA_T1024:
     @func
     def reduce_ba(p: Tensor[(S, M, N), "f32"]) -> Tensor[(M, N), "bf16"]:
         with Mesh(("cta",), layout=(M,), names=("row",)) as cta:
-            out = tf.zeros(Tensor[(M, N), "bf16"])
             with Mesh(("thread",), layout=(N,), names=("n",)) as th:
+                out = tf.zeros(Tensor[(M, N), "bf16"])
                 pp = tf.schedule((tf.reshape(p[:, cta.row:cta.row + 1, :], new_shape=(S, N)), tf.empty(Tensor[(S, N), "f32", ((S, N @ th.n), (1, 0)), "rmem"])), op=T.copy())
                 total = tf.reduce(pp, axes=(0,), keepdim=True, kind="sum")
                 c = tf.cast(total, dtype="bf16")

@@ -60,8 +60,8 @@ class SCHED_{name.upper()}:
     @func
     def rmsnorm(x: Tensor[(M, H), "bf16"], gamma: Tensor[(H,), "bf16"]) -> Tensor[(M, H), "bf16"]:
         with Mesh(("cta",), layout=(M // ROWS,), names=("blk",)) as cta:
-            out = tf.zeros(Tensor[(M, H), "bf16"])
             with Mesh(("thread",), layout=(ROWS, 32), names=("w", "lane")) as th:
+                out = tf.zeros(Tensor[(M, H), "bf16"])
                 xr = tf.schedule((x[cta.blk * ROWS:cta.blk * ROWS + ROWS, :], tf.empty(Tensor[(ROWS, H), "bf16", ((ROWS @ th.w, NCH, 32 @ th.lane, 4), (0, 4, 0, 1)), "rmem"])), op=T.copy())
                 gr = tf.schedule((tf.reshape(gamma, new_shape=(1, H)), tf.empty(Tensor[(1, H), "bf16", ((1, NCH, 32 @ th.lane, 4), (0, 4, 0, 1)), "rmem"])), op=T.copy())
                 xf = tf.cast(xr, dtype="f32")
@@ -90,9 +90,9 @@ class SCHED_REDUCE_SK_T{M}:
     @func
     def reduce_sk(p: Tensor[(S, M * N), "f32"], r: Tensor[(M * N,), "bf16"]) -> Tensor[(M * N,), "bf16"]:
         with Mesh(("cta",), layout=(TILES,), names=("tile",)) as cta:
-            out = tf.zeros(Tensor[(M * N,), "bf16"])
             base = cta.tile * SPAN
             with Mesh(("thread",), layout=(BLOCK,), names=("t",)) as th:
+                out = tf.zeros(Tensor[(M * N,), "bf16"])
                 pp = tf.schedule((p[:, base:base + SPAN], tf.empty(Tensor[(S, SPAN), "f32", ((S, BLOCK @ th.t, PER), (PER, 0, 1)), "rmem"])), op=T.copy())
                 rr = tf.schedule((r[base:base + SPAN], tf.empty(Tensor[(SPAN,), "bf16", ((BLOCK @ th.t, PER), (0, 1)), "rmem"])), op=T.copy())
                 total = tf.reduce(pp, axes=(0,), keepdim=False, kind="sum")
@@ -125,8 +125,8 @@ class SCHED_REDUCE_BA_T{M}:
     @func
     def reduce_ba(p: Tensor[(S, M, N), "f32"]) -> Tensor[(M, N), "bf16"]:
         with Mesh(("cta",), layout=(M,), names=("row",)) as cta:
-            out = tf.zeros(Tensor[(M, N), "bf16"])
             with Mesh(("thread",), layout=(N,), names=("n",)) as th:
+                out = tf.zeros(Tensor[(M, N), "bf16"])
                 pp = tf.schedule((tf.reshape(p[:, cta.row:cta.row + 1, :], new_shape=(S, N)), tf.empty(Tensor[(S, N), "f32", ((S, N @ th.n), (1, 0)), "rmem"])), op=T.copy())
                 total = tf.reduce(pp, axes=(0,), keepdim=True, kind="sum")
                 c = tf.cast(total, dtype="bf16")
@@ -154,9 +154,9 @@ class SCHED_LM_HEAD:
     @func
     def lm_head(x: Tensor[(1, K), "bf16"], w: Tensor[(N, K), "bf16"]) -> Tensor[(1, N), "bf16"]:
         with Mesh(("cta",), layout=(N // ROWS,), names=("blk",)) as cta:
-            out = tf.zeros(Tensor[(1, N), "bf16"])
             n = cta.blk * ROWS
             with Mesh(("thread",), layout=(WARPS, 32), names=("warp", "lane")) as th:
+                out = tf.zeros(Tensor[(1, N), "bf16"])
                 wt = tf.schedule((w[n:n + ROWS, :], tf.empty(Tensor[(ROWS, K), "bf16", ((WARPS @ th.warp, RPW, CHUNKS, 32 @ th.lane, VEC), (0, CHUNKS * VEC, VEC, 0, 1)), "rmem"])), op=T.copy())
                 xt = tf.schedule((x, tf.empty(Tensor[(1, K), "bf16", ((1, CHUNKS, 32 @ th.lane, VEC), (0, VEC, 0, 1)), "rmem"])), op=T.copy())
                 prod = tf.cast(wt, dtype="f32") * tf.cast(xt, dtype="f32")
@@ -182,8 +182,8 @@ class SCHED_EMBED_T{M}:
     @func
     def embed(ids: Tensor[(M,), "i64"], table: Tensor[(V, H), "bf16"]) -> Tensor[(M, H), "bf16"]:
         with Mesh(("cta",), layout=(M,), names=("row",)) as cta:
-            out = tf.zeros(Tensor[(M, H), "bf16"])
             with Mesh(("thread",), layout=(TH,), names=("t",)) as th:
+                out = tf.zeros(Tensor[(M, H), "bf16"])
                 one = ids[cta.row:cta.row + 1]
                 row = tf.schedule((table, tf.empty(Tensor[(1, H), "bf16", (1, H), "smem"]), one), op=T.copy_async(fill=0.0))
                 ro = tf.schedule((row, tf.empty(Tensor[(1, H), "bf16", (1, H)])), op=T.copy())

@@ -129,7 +129,8 @@ class SCHED_GDN_PREP_T{T}:
                  a_log: Tensor[(48,), "bf16"], dt_bias: Tensor[(48,), "bf16"],
                  rowidx: Tensor[(NB * (BT + 3),), "i64"]) -> Tensor[(T_ + 3, PACK), "f32"]:
         with Mesh(("cta",), layout=(NB, 80), names=("rb", "hd")) as cta:
-            out = tf.zeros(Tensor[(T_ + 3, PACK), "f32"])
+            with Mesh(("thread",), layout=(W * 32,), names=("t",)) as init:
+                out = tf.zeros(Tensor[(T_ + 3, PACK), "f32"])
 {BODY}
             return out
 '''
@@ -220,24 +221,24 @@ def f32_tile(rows, cols):
 
 def frag(c, n):
     """wgmma accumulator of a (64, n) tile on one warpgroup."""
-    return f"((8 @ {c}.lane8, 2, 4 @ {c}.warp, 2, 4 @ {c}.lane4, {n // 8}), (1, 8, 16, 64, 128, 512))"
+    return f"((4 @ {c}.warp, 2, 8 @ {c}.lane8, {n // 8}, 4 @ {c}.lane4, 2), (16, 8, 1, 512, 128, 64))"
 
 
 def frag_n2(c, n):
     """(64, n) accumulator over two warpgroups, warpgroup g owning columns [g*n/2, (g+1)*n/2)."""
     h = n // 2
-    return f"((2 @ {c}.group, 8 @ {c}.lane8, 2, 4 @ {c}.warp, 2, 4 @ {c}.lane4, {h // 8}), ({64 * h}, 1, 8, 16, 64, 128, 512))"
+    return f"((4 @ {c}.warp, 2, 8 @ {c}.lane8, 2 @ {c}.group, {h // 8}, 4 @ {c}.lane4, 2), (16, 8, 1, {64 * h}, 512, 128, 64))"
 
 
 def rowv_n2(c):
     """(64, 1): one value per accumulator row of frag_n2, replicated along the columns."""
-    return f"((1, 8 @ {c}.lane8, 2, 4 @ {c}.warp, 1, 1, 1), (0, 1, 8, 16, 0, 0, 0))"
+    return f"((4 @ {c}.warp, 2, 8 @ {c}.lane8, 1, 1, 1, 1), (16, 8, 1, 0, 0, 0, 0))"
 
 
 def colv_n2(c, n):
     """(1, n): one value per accumulator column of frag_n2, replicated along the rows."""
     h = n // 2
-    return f"((2 @ {c}.group, 1, 1, 1, 2, 4 @ {c}.lane4, {h // 8}), ({64 * h}, 0, 0, 0, 64, 128, 512))"
+    return f"((1, 2 @ {c}.group, {h // 8}, 4 @ {c}.lane4, 2, 1, 1), (0, {64 * h}, 512, 128, 64, 0, 0))"
 
 
 # --------------------------------------------------------------------------------------
@@ -460,7 +461,7 @@ def chunk_source(T):
         add(i20, f'{nm} = tf.schedule(({val}, tf.empty(Tensor[(C, C), "bf16", {LAY_ROW64}, "smem"])), op=T.copy())')
     # 8. U^T and W (wgmma), W hi/lo, staging
     wgs(i16)
-    add(i20, f'UT = tf.schedule((tf.zeros(Tensor[(D, C), "f32", ((2, 2 @ cw.group, 8 @ cw.lane8, 2, 4 @ cw.warp, 2, 4 @ cw.lane4, 4), (2048, 4096, 1, 8, 16, 64, 128, 512)), "rmem"]), tf.bitcast(vs, {VIEW_T_MN}), tf.bitcast(Mbh, {VIEW_64T_N2})), op=T.tiled_mma(atom=u_mma), repeat=(2, 2, 4))')
+    add(i20, f'UT = tf.schedule((tf.zeros(Tensor[(D, C), "f32", ((2, 4 @ cw.warp, 2, 8 @ cw.lane8, 2 @ cw.group, 4, 4 @ cw.lane4, 2), (2048, 16, 8, 1, 4096, 512, 128, 64)), "rmem"]), tf.bitcast(vs, {VIEW_T_MN}), tf.bitcast(Mbh, {VIEW_64T_N2})), op=T.tiled_mma(atom=u_mma), repeat=(2, 2, 4))')
     add(i20, f'UT = tf.schedule((UT, tf.bitcast(vs, {VIEW_T_MN}), tf.bitcast(Mbl, {VIEW_64T_N2})), op=T.tiled_mma(atom=u_mma), repeat=(2, 2, 4))')
     add(i20, f'WF = tf.schedule((tf.zeros(Tensor[(C, D), "f32", {frag_n2("cw", 128)}, "rmem"]), Mgh, tf.bitcast(ks, {VIEW_MN_N2})), op=T.tiled_mma(atom=w_mma), repeat=(1, 2, 4))')
     add(i20, f'WF = tf.schedule((WF, Mgl, tf.bitcast(ks, {VIEW_MN_N2})), op=T.tiled_mma(atom=w_mma), repeat=(1, 2, 4))')
@@ -559,12 +560,12 @@ class SCHED_GDN_SCAN_T{T}:
 
 def afrag(c, ktiles):
     """bf16 wgmma A operand in registers for a (64, 16*ktiles) tile: the k-tile mode first."""
-    return f"(({ktiles}, 8 @ {c}.lane8, 2, 4 @ {c}.warp, 2, 4 @ {c}.lane4, 2), (1024, 1, 8, 16, 64, 128, 512))"
+    return f"((4 @ {c}.warp, 2, 8 @ {c}.lane8, {ktiles}, 2, 4 @ {c}.lane4, 2), (16, 8, 1, 1024, 512, 128, 64))"
 
 
 def colv1(c, n):
     """(1, n): one value per accumulator column of frag(c, n), replicated along the rows."""
-    return f"((1, 1, 1, 2, 4 @ {c}.lane4, {n // 8}), (0, 0, 0, 64, 128, 512))"
+    return f"((1, {n // 8}, 4 @ {c}.lane4, 2, 1, 1), (0, 512, 128, 64, 0, 0))"
 
 
 SCAN_VIEW_KT = "Layout(((2, 4, 16), (8, 8)), ((4096, 16, 1), (512, 64))) | Swizzle(3, 4, 3)"     # (128, 64): B K-major view of a (64, 128) tile
@@ -573,7 +574,7 @@ SCAN_VIEW_MN = VIEW_MN_N2   # (64, 128): B MN-major, two n = 64 atoms (one per 6
 
 def frag_2n(c, n):
     """(64, 2n) accumulator on one warpgroup issued as two n-wide atoms (the N tile mode first)."""
-    return f"((2, 8 @ {c}.lane8, 2, 4 @ {c}.warp, 2, 4 @ {c}.lane4, {n // 8}), ({64 * n}, 1, 8, 16, 64, 128, 512))"
+    return f"((4 @ {c}.warp, 2, 8 @ {c}.lane8, 2, {n // 8}, 4 @ {c}.lane4, 2), (16, 8, 1, {64 * n}, 512, 128, 64))"
 
 
 def scan_source(T):
@@ -693,9 +694,9 @@ class SCHED_GDN_NORM_T{T}:
     def gdn_norm(o: Tensor[(T_, HV, D), "bf16"], proj: Tensor[(T_, PROJ), "bf16"],
                  gamma: Tensor[(D,), "bf16"]) -> Tensor[(T_, HV, D), "bf16"]:
         with Mesh(("cta",), layout=(T_, 6), names=("t", "hb")) as cta:
-            out = tf.zeros(Tensor[(T_, HV, D), "bf16"])
             h0 = cta.hb * RPC
             with Mesh(("thread",), layout=(4, 2, 16), names=("warp", "half", "ln")) as th:
+                out = tf.zeros(Tensor[(T_, HV, D), "bf16"])
                 ot = tf.schedule((tf.reshape(o[cta.t:cta.t + 1, h0:h0 + RPC, :], new_shape=(RPC, D)), tf.empty(Tensor[(RPC, D), "bf16", ((4 @ th.warp, 2 @ th.half, 16 @ th.ln, 8), (0, 0, 0, 1)), "rmem"])), op=T.copy())
                 zt = tf.schedule((tf.reshape(proj[cta.t:cta.t + 1, Z_OFF + h0 * D:Z_OFF + h0 * D + RPC * D], new_shape=(RPC, D)), tf.empty(Tensor[(RPC, D), "bf16", ((4 @ th.warp, 2 @ th.half, 16 @ th.ln, 8), (0, 0, 0, 1)), "rmem"])), op=T.copy())
                 gm = tf.cast(tf.schedule((tf.reshape(gamma, new_shape=(1, D)), tf.empty(Tensor[(1, D), "bf16", ((1, 16 @ th.ln, 8), (0, 0, 1)), "rmem"])), op=T.copy()), dtype="f32")

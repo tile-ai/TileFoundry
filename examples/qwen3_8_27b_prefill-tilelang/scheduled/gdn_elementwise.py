@@ -71,30 +71,20 @@ def prep(M: int):
                         # the 3 rows before the block (zero for the first block), then its 64 rows, in smem
                         hs = (m0 + M - (KS - 1)) % M   # the first block reads rows M-3.., masked below
                         keep = tf.cast((cta.bt + NBT - 1) // NBT, "bf16")   # 0 for the first block, else 1
-                        hist = tf.schedule((tf.reshape(q2[hs:hs + KS - 1, ch0:ch0 + DK], (KS - 1, LN, VEC)),),
-                                           op=T.copy(rmem_layout=(KS - 1, LN @ th.g, VEC)))
+                        hist = tf.schedule((tf.reshape(q2[hs:hs + KS - 1, ch0:ch0 + DK], (KS - 1, LN, VEC)), tf.empty(Tensor[(3, 16, 8), "bf16", (KS - 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
                         slab = tf.zeros(Tensor[(BT + KS - 1, LN, VEC), "bf16", Layout((BT + KS - 1, LN, VEC), (DK, VEC, 1)), "smem"])
                         slab = tf.insert_slice(slab, hist * keep, (0, 0, 0))
-                        body = tf.schedule((tf.reshape(q2[m0:m0 + BT, ch0:ch0 + DK], (BT, LN, VEC)),),
-                                           op=T.copy(smem_layout=Layout((BT, LN, VEC), (DK, VEC, 1))))
+                        body = tf.schedule((tf.reshape(q2[m0:m0 + BT, ch0:ch0 + DK], (BT, LN, VEC)), tf.empty(Tensor[(64, 16, 8), "bf16", Layout((BT, LN, VEC), (DK, VEC, 1)), "smem"])), op=T.copy())
                         slab = tf.insert_slice(slab, body, (KS - 1, 0, 0))
                         # tap 3 - s multiplies row t - s; f32 sum in model.py's order
-                        x0 = tf.schedule((tf.reshape(slab[3:3 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w0 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 3:4], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
-                        x1 = tf.schedule((tf.reshape(slab[2:2 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w1 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 2:3], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
-                        x2 = tf.schedule((tf.reshape(slab[1:1 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w2_ = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 1:2], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
-                        x3 = tf.schedule((tf.reshape(slab[0:0 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w3 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 0:1], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
+                        x0 = tf.schedule((tf.reshape(slab[3:3 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w0 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 3:4], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        x1 = tf.schedule((tf.reshape(slab[2:2 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w1 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 2:3], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        x2 = tf.schedule((tf.reshape(slab[1:1 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w2_ = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 1:2], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        x3 = tf.schedule((tf.reshape(slab[0:0 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w3 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 0:1], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
                         acc = tf.cast(x0, "f32") * tf.cast(w0, "f32")
                         acc = acc + tf.cast(x1, "f32") * tf.cast(w1, "f32")
                         acc = acc + tf.cast(x2, "f32") * tf.cast(w2_, "f32")
@@ -102,9 +92,8 @@ def prep(M: int):
                         xb = tf.cast(tf.cast(acc, "bf16"), "f32")
                         y = tf.cast(xb / (tf.exp(-xb) + 1.0), "bf16")
                         y32 = tf.cast(y, "f32")
-                        sq = tf.schedule((tf.cast(tf.cast(y32 * y32, "bf16"), "f32"),),
-                                         op=T.copy(rmem_layout=((BT // SR @ th.s, SR, LN @ th.g, VEC), (0, VEC, 0, 1))))
-                        ss = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.SUM),), op=T.copy(rmem_layout=(BT // SR @ th.s, SR, 1, 1)))
+                        sq = tf.schedule((tf.cast(tf.cast(y32 * y32, "bf16"), "f32"), tf.empty(Tensor[(8, 8, 16, 8), "f32", ((BT // SR @ th.s, SR, LN @ th.g, VEC), (0, VEC, 0, 1)), "rmem"])), op=T.copy())
+                        ss = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.SUM), tf.empty(Tensor[(8, 8, 1, 1), "f32", (BT // SR @ th.s, SR, 1, 1), "rmem"])), op=T.copy())
                         sc = tf.cast(tf.cast(ss, "bf16"), "f32")
                         sc = tf.cast(tf.cast(sc + L2_EPS, "bf16"), "f32")
                         sc = tf.cast(tf.cast(tf.rsqrt(sc), "bf16"), "f32")
@@ -125,30 +114,20 @@ def prep(M: int):
                         # the 3 rows before the block (zero for the first block), then its 64 rows, in smem
                         hs = (m0 + M - (KS - 1)) % M   # the first block reads rows M-3.., masked below
                         keep = tf.cast((cta.bt + NBT - 1) // NBT, "bf16")   # 0 for the first block, else 1
-                        hist = tf.schedule((tf.reshape(q2[hs:hs + KS - 1, ch0:ch0 + DK], (KS - 1, LN, VEC)),),
-                                           op=T.copy(rmem_layout=(KS - 1, LN @ th.g, VEC)))
+                        hist = tf.schedule((tf.reshape(q2[hs:hs + KS - 1, ch0:ch0 + DK], (KS - 1, LN, VEC)), tf.empty(Tensor[(3, 16, 8), "bf16", (KS - 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
                         slab = tf.zeros(Tensor[(BT + KS - 1, LN, VEC), "bf16", Layout((BT + KS - 1, LN, VEC), (DK, VEC, 1)), "smem"])
                         slab = tf.insert_slice(slab, hist * keep, (0, 0, 0))
-                        body = tf.schedule((tf.reshape(q2[m0:m0 + BT, ch0:ch0 + DK], (BT, LN, VEC)),),
-                                           op=T.copy(smem_layout=Layout((BT, LN, VEC), (DK, VEC, 1))))
+                        body = tf.schedule((tf.reshape(q2[m0:m0 + BT, ch0:ch0 + DK], (BT, LN, VEC)), tf.empty(Tensor[(64, 16, 8), "bf16", Layout((BT, LN, VEC), (DK, VEC, 1)), "smem"])), op=T.copy())
                         slab = tf.insert_slice(slab, body, (KS - 1, 0, 0))
                         # tap 3 - s multiplies row t - s; f32 sum in model.py's order
-                        x0 = tf.schedule((tf.reshape(slab[3:3 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w0 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 3:4], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
-                        x1 = tf.schedule((tf.reshape(slab[2:2 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w1 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 2:3], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
-                        x2 = tf.schedule((tf.reshape(slab[1:1 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w2_ = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 1:2], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
-                        x3 = tf.schedule((tf.reshape(slab[0:0 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w3 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 0:1], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
+                        x0 = tf.schedule((tf.reshape(slab[3:3 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w0 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 3:4], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        x1 = tf.schedule((tf.reshape(slab[2:2 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w1 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 2:3], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        x2 = tf.schedule((tf.reshape(slab[1:1 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w2_ = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 1:2], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        x3 = tf.schedule((tf.reshape(slab[0:0 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w3 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 0:1], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
                         acc = tf.cast(x0, "f32") * tf.cast(w0, "f32")
                         acc = acc + tf.cast(x1, "f32") * tf.cast(w1, "f32")
                         acc = acc + tf.cast(x2, "f32") * tf.cast(w2_, "f32")
@@ -156,9 +135,8 @@ def prep(M: int):
                         xb = tf.cast(tf.cast(acc, "bf16"), "f32")
                         y = tf.cast(xb / (tf.exp(-xb) + 1.0), "bf16")
                         y32 = tf.cast(y, "f32")
-                        sq = tf.schedule((tf.cast(tf.cast(y32 * y32, "bf16"), "f32"),),
-                                         op=T.copy(rmem_layout=((BT // SR @ th.s, SR, LN @ th.g, VEC), (0, VEC, 0, 1))))
-                        ss = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.SUM),), op=T.copy(rmem_layout=(BT // SR @ th.s, SR, 1, 1)))
+                        sq = tf.schedule((tf.cast(tf.cast(y32 * y32, "bf16"), "f32"), tf.empty(Tensor[(8, 8, 16, 8), "f32", ((BT // SR @ th.s, SR, LN @ th.g, VEC), (0, VEC, 0, 1)), "rmem"])), op=T.copy())
+                        ss = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.SUM), tf.empty(Tensor[(8, 8, 1, 1), "f32", (BT // SR @ th.s, SR, 1, 1), "rmem"])), op=T.copy())
                         sc = tf.cast(tf.cast(ss, "bf16"), "f32")
                         sc = tf.cast(tf.cast(sc + L2_EPS, "bf16"), "f32")
                         sc = tf.cast(tf.cast(tf.rsqrt(sc), "bf16"), "f32")
@@ -179,30 +157,20 @@ def prep(M: int):
                         # the 3 rows before the block (zero for the first block), then its 64 rows, in smem
                         hs = (m0 + M - (KS - 1)) % M   # the first block reads rows M-3.., masked below
                         keep = tf.cast((cta.bt + NBT - 1) // NBT, "bf16")   # 0 for the first block, else 1
-                        hist = tf.schedule((tf.reshape(q2[hs:hs + KS - 1, ch0:ch0 + DK], (KS - 1, LN, VEC)),),
-                                           op=T.copy(rmem_layout=(KS - 1, LN @ th.g, VEC)))
+                        hist = tf.schedule((tf.reshape(q2[hs:hs + KS - 1, ch0:ch0 + DK], (KS - 1, LN, VEC)), tf.empty(Tensor[(3, 16, 8), "bf16", (KS - 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
                         slab = tf.zeros(Tensor[(BT + KS - 1, LN, VEC), "bf16", Layout((BT + KS - 1, LN, VEC), (DK, VEC, 1)), "smem"])
                         slab = tf.insert_slice(slab, hist * keep, (0, 0, 0))
-                        body = tf.schedule((tf.reshape(q2[m0:m0 + BT, ch0:ch0 + DK], (BT, LN, VEC)),),
-                                           op=T.copy(smem_layout=Layout((BT, LN, VEC), (DK, VEC, 1))))
+                        body = tf.schedule((tf.reshape(q2[m0:m0 + BT, ch0:ch0 + DK], (BT, LN, VEC)), tf.empty(Tensor[(64, 16, 8), "bf16", Layout((BT, LN, VEC), (DK, VEC, 1)), "smem"])), op=T.copy())
                         slab = tf.insert_slice(slab, body, (KS - 1, 0, 0))
                         # tap 3 - s multiplies row t - s; f32 sum in model.py's order
-                        x0 = tf.schedule((tf.reshape(slab[3:3 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w0 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 3:4], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
-                        x1 = tf.schedule((tf.reshape(slab[2:2 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w1 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 2:3], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
-                        x2 = tf.schedule((tf.reshape(slab[1:1 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w2_ = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 1:2], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
-                        x3 = tf.schedule((tf.reshape(slab[0:0 + BT, :, :], (BT // SR, SR, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, VEC)))
-                        w3 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 0:1], (1, 1, LN, VEC)),),
-                                            op=T.copy(rmem_layout=(1, 1, LN @ th.g, VEC)))
+                        x0 = tf.schedule((tf.reshape(slab[3:3 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w0 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 3:4], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        x1 = tf.schedule((tf.reshape(slab[2:2 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w1 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 2:3], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        x2 = tf.schedule((tf.reshape(slab[1:1 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w2_ = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 1:2], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        x3 = tf.schedule((tf.reshape(slab[0:0 + BT, :, :], (BT // SR, SR, LN, VEC)), tf.empty(Tensor[(8, 8, 16, 8), "bf16", (BT // SR @ th.s, SR, LN @ th.g, VEC), "rmem"])), op=T.copy())
+                        w3 = tf.schedule((tf.reshape(w2[ch0:ch0 + DK, 0:1], (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.g, VEC), "rmem"])), op=T.copy())
                         acc = tf.cast(x0, "f32") * tf.cast(w0, "f32")
                         acc = acc + tf.cast(x1, "f32") * tf.cast(w1, "f32")
                         acc = acc + tf.cast(x2, "f32") * tf.cast(w2_, "f32")
@@ -220,7 +188,7 @@ def prep(M: int):
                     out = tf.zeros(Tensor[(M // SR, SR, LN, HV // LN), "bf16"])
                     for _ in range(cta.cb, 1, NB):
                         r0 = cta.bt * (BT // SR)
-                        bb = tf.cast(tf.schedule((b3[r0:r0 + BT // SR, :, :, :],), op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, HV // LN))), "f32")
+                        bb = tf.cast(tf.schedule((b3[r0:r0 + BT // SR, :, :, :], tf.empty(Tensor[(8, 8, 16, 3), "bf16", (BT // SR @ th.s, SR, LN @ th.g, HV // LN), "rmem"])), op=T.copy()), "f32")
                         out = tf.insert_slice(out, tf.cast(1.0 / (tf.exp(-bb) + 1.0), "bf16"), (r0, 0, 0, 0))
                     return out
 
@@ -233,9 +201,9 @@ def prep(M: int):
                     out = tf.zeros(Tensor[(M // SR, SR, LN, HV // LN), "f32"])
                     for _ in range(cta.cb, 1, NB):
                         r0 = cta.bt * (BT // SR)
-                        aa = tf.cast(tf.schedule((a3[r0:r0 + BT // SR, :, :, :],), op=T.copy(rmem_layout=(BT // SR @ th.s, SR, LN @ th.g, HV // LN))), "f32")
-                        al = tf.cast(tf.schedule((tf.reshape(a_log, (1, 1, LN, HV // LN)),), op=T.copy(rmem_layout=(1, 1, LN @ th.g, HV // LN))), "f32")
-                        db = tf.cast(tf.schedule((tf.reshape(dt_bias, (1, 1, LN, HV // LN)),), op=T.copy(rmem_layout=(1, 1, LN @ th.g, HV // LN))), "f32")
+                        aa = tf.cast(tf.schedule((a3[r0:r0 + BT // SR, :, :, :], tf.empty(Tensor[(8, 8, 16, 3), "bf16", (BT // SR @ th.s, SR, LN @ th.g, HV // LN), "rmem"])), op=T.copy()), "f32")
+                        al = tf.cast(tf.schedule((tf.reshape(a_log, (1, 1, LN, HV // LN)), tf.empty(Tensor[(1, 1, 16, 3), "bf16", (1, 1, LN @ th.g, HV // LN), "rmem"])), op=T.copy()), "f32")
+                        db = tf.cast(tf.schedule((tf.reshape(dt_bias, (1, 1, LN, HV // LN)), tf.empty(Tensor[(1, 1, 16, 3), "bf16", (1, 1, LN @ th.g, HV // LN), "rmem"])), op=T.copy()), "f32")
                         x = aa + db
                         u = tf.exp(x)
                         v1 = u + 1.0
@@ -277,13 +245,12 @@ def gated_norm(M: int):
                     h0 = (cta.b % HB) * RB
                     c4 = tf.reshape(core, (M, HV, LN, VEC))
                     z4 = tf.reshape(z, (M, HV, LN, VEC))
-                    x = tf.schedule((c4[m:m + 1, h0:h0 + RB, :, :],), op=T.copy(rmem_layout=(1, RB @ th.row, LN @ th.lane, VEC)))
-                    zz = tf.schedule((z4[m:m + 1, h0:h0 + RB, :, :],), op=T.copy(rmem_layout=(1, RB @ th.row, LN @ th.lane, VEC)))
-                    g = tf.schedule((tf.reshape(gamma_gdn, (1, 1, LN, VEC)),), op=T.copy(rmem_layout=(1, 1, LN @ th.lane, VEC)))
+                    x = tf.schedule((c4[m:m + 1, h0:h0 + RB, :, :], tf.empty(Tensor[(1, 16, 16, 8), "bf16", (1, RB @ th.row, LN @ th.lane, VEC), "rmem"])), op=T.copy())
+                    zz = tf.schedule((z4[m:m + 1, h0:h0 + RB, :, :], tf.empty(Tensor[(1, 16, 16, 8), "bf16", (1, RB @ th.row, LN @ th.lane, VEC), "rmem"])), op=T.copy())
+                    g = tf.schedule((tf.reshape(gamma_gdn, (1, 1, LN, VEC)), tf.empty(Tensor[(1, 1, 16, 8), "bf16", (1, 1, LN @ th.lane, VEC), "rmem"])), op=T.copy())
                     x32 = tf.cast(x, "f32")
-                    sq = tf.schedule((tf.square(x32),), op=T.copy(rmem_layout=((1, RB @ th.row, LN @ th.lane, VEC), (0, 0, 0, 1))))
-                    ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN),),
-                                     op=T.copy(rmem_layout=(1, RB @ th.row, 1, 1)))
+                    sq = tf.schedule((tf.square(x32), tf.empty(Tensor[(1, 16, 16, 8), "f32", ((1, RB @ th.row, LN @ th.lane, VEC), (0, 0, 0, 1)), "rmem"])), op=T.copy())
+                    ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN), tf.empty(Tensor[(1, 16, 1, 1), "f32", (1, RB @ th.row, 1, 1), "rmem"])), op=T.copy())
                     n = tf.cast(x32 * tf.rsqrt(ms + EPS), "bf16")
                     nw = tf.cast(tf.cast(n, "f32") * tf.cast(g, "f32"), "bf16")
                     z32 = tf.cast(zz, "f32")

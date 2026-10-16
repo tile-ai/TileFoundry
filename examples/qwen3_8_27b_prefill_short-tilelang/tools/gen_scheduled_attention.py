@@ -55,8 +55,8 @@ class SCHED_ATTN_PREP_T{T}:
     def attn_prep(qkv: Tensor[(T_, 14336), "bf16"], gamma_q: Tensor[(D,), "bf16"], gamma_k: Tensor[(D,), "bf16"],
                   cos: Tensor[(T_, ROT), "bf16"], sin: Tensor[(T_, ROT), "bf16"]):
         with Mesh(("cta",), layout=(T_,), names=("t",)) as cta:
-            out = tf.zeros(Tensor[(T_, 32, D), "bf16"])
             with Mesh(("thread",), layout=(32, 32), names=("warp", "lane")) as th:
+                out = tf.zeros(Tensor[(T_, 32, D), "bf16"])
 {BODY}
             return out
 '''
@@ -167,12 +167,12 @@ def lay_v(dv):
 
 def frag(n, c):
     """wgmma accumulator fragment of a (64, n) tile on one warpgroup."""
-    return f"((8 @ {c}.lane8, 2, 4 @ {c}.warp, 2, 4 @ {c}.lane4, {n // 8}), (1, 8, 16, 64, 128, 512))"
+    return f"((4 @ {c}.warp, 2, 8 @ {c}.lane8, {n // 8}, 4 @ {c}.lane4, 2), (16, 8, 1, 512, 128, 64))"
 
 
 def pfrag(c):
     """The (64, 64) P tile as the RS A operand: the 4 k16 tiles lead."""
-    return f"((4, 8 @ {c}.lane8, 2, 4 @ {c}.warp, 2, 4 @ {c}.lane4, 2), (1024, 1, 8, 16, 64, 128, 512))"
+    return f"((4 @ {c}.warp, 2, 8 @ {c}.lane8, 4, 2, 4 @ {c}.lane4, 2), (16, 8, 1, 1024, 512, 128, 64))"
 
 
 def core_source(T):
@@ -286,6 +286,8 @@ def core_source(T):
 
 def main():
     sdir, tdir = ROOT / "scheduled/attention", ROOT / "tir/attention"
+    sdir.mkdir(parents=True, exist_ok=True)
+    tdir.mkdir(parents=True, exist_ok=True)
     fails = 0
     for T in [int(a) for a in sys.argv[1:]] or (128, 256, 512, 1024):
         for name, src in ((f"attn_prep_T{T}", prep_source(T)), (f"attn_core_T{T}", core_source(T))):

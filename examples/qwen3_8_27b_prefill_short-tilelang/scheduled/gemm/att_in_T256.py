@@ -36,7 +36,7 @@ class SCHED_ATT_IN_T256:
                 m = cta.bm * BM
                 n = cta.bn * BN
                 with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
-                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 28), (14336, 1, 8, 16, 64, 128, 512)), "rmem"])
+                    acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 28, 4 @ _compute.lane4, 2), (14336, 16, 8, 1, 512, 128, 64)), "rmem"])
                 for k in tf.tile(0, K, BK):
                     with threads[0, :32] as _loader:
                         lhs_ring = tf.empty(Tensor[(BM, BK), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)

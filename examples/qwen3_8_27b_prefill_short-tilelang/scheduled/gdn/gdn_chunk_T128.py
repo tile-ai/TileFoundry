@@ -121,8 +121,8 @@ class SCHED_GDN_CHUNK_T128:
                     bb = tf.schedule((beta[t0:t0 + C, cta.h:cta.h + 1], tf.empty(Tensor[(C, 1), "bf16", ((64 @ wb.r, 1), (0, 0)), "rmem"])), op=T.copy())
                     Bs = tf.schedule((tf.cast(bb, dtype="f32"), tf.empty(Tensor[(C, 1), "f32", Layout((C, 1), (1, 1)), "smem"])), op=T.copy())
                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as cw:
-                    KK = tf.schedule((tf.zeros(Tensor[(C, C), "f32", ((2 @ cw.group, 8 @ cw.lane8, 2, 4 @ cw.warp, 2, 4 @ cw.lane4, 4), (2048, 1, 8, 16, 64, 128, 512)), "rmem"]), ks, tf.bitcast(ks, Layout(((2, 4, 16), (2, 4, 8)), ((4096, 16, 1), (2048, 512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=s_mma), repeat=(1, 2, 8))
-                    QK = tf.schedule((tf.zeros(Tensor[(C, C), "f32", ((2 @ cw.group, 8 @ cw.lane8, 2, 4 @ cw.warp, 2, 4 @ cw.lane4, 4), (2048, 1, 8, 16, 64, 128, 512)), "rmem"]), qs, tf.bitcast(ks, Layout(((2, 4, 16), (2, 4, 8)), ((4096, 16, 1), (2048, 512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=s_mma), repeat=(1, 2, 8))
+                    KK = tf.schedule((tf.zeros(Tensor[(C, C), "f32", ((4 @ cw.warp, 2, 8 @ cw.lane8, 2 @ cw.group, 4, 4 @ cw.lane4, 2), (16, 8, 1, 2048, 512, 128, 64)), "rmem"]), ks, tf.bitcast(ks, Layout(((2, 4, 16), (2, 4, 8)), ((4096, 16, 1), (2048, 512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=s_mma), repeat=(1, 2, 8))
+                    QK = tf.schedule((tf.zeros(Tensor[(C, C), "f32", ((4 @ cw.warp, 2, 8 @ cw.lane8, 2 @ cw.group, 4, 4 @ cw.lane4, 2), (16, 8, 1, 2048, 512, 128, 64)), "rmem"]), qs, tf.bitcast(ks, Layout(((2, 4, 16), (2, 4, 8)), ((4096, 16, 1), (2048, 512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=s_mma), repeat=(1, 2, 8))
                 with Mesh(threads[0, 0:64], layout=(64,), names=("r",)) as m64:
                     gi = tf.schedule((tf.reshape(Gs, new_shape=(1, C)), tf.empty(Tensor[(1, C), "f32", ((1, 64 @ m64.r), (0, 0)), "rmem"])), op=T.copy())
                     bi = tf.schedule((tf.reshape(Bs, new_shape=(1, C)), tf.empty(Tensor[(1, C), "f32", ((1, 64 @ m64.r), (0, 0)), "rmem"])), op=T.copy())
@@ -134,13 +134,13 @@ class SCHED_GDN_CHUNK_T128:
                     Fs = tf.insert_slice(Fs, eg * SCALE, (1, 0))
                     Fs = tf.insert_slice(Fs, tf.zeros(Tensor[(1, C), "f32", ((1, 64 @ m64.r), (0, 0)), "rmem"]) + tf.exp2(g63), (2, 0))
                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as cw:
-                    Gi = tf.schedule((Gs, tf.empty(Tensor[(C, 1), "f32", ((1, 8 @ cw.lane8, 2, 4 @ cw.warp, 1, 1, 1), (0, 1, 8, 16, 0, 0, 0)), "rmem"])), op=T.copy())
-                    Gj = tf.schedule((tf.reshape(Gs, new_shape=(1, C)), tf.empty(Tensor[(1, C), "f32", ((2 @ cw.group, 1, 1, 1, 2, 4 @ cw.lane4, 4), (2048, 0, 0, 0, 64, 128, 512)), "rmem"])), op=T.copy())
-                    Bi = tf.schedule((Bs, tf.empty(Tensor[(C, 1), "f32", ((1, 8 @ cw.lane8, 2, 4 @ cw.warp, 1, 1, 1), (0, 1, 8, 16, 0, 0, 0)), "rmem"])), op=T.copy())
-                    lower_f = tf.schedule((tf.reshape(tri[0:1, :, :], new_shape=(C, C)), tf.empty(Tensor[(C, C), "f32", ((2 @ cw.group, 8 @ cw.lane8, 2, 4 @ cw.warp, 2, 4 @ cw.lane4, 4), (2048, 1, 8, 16, 64, 128, 512)), "rmem"])), op=T.copy())
-                    strict_f = tf.schedule((tf.reshape(tri[1:2, :, :], new_shape=(C, C)), tf.empty(Tensor[(C, C), "f32", ((2 @ cw.group, 8 @ cw.lane8, 2, 4 @ cw.warp, 2, 4 @ cw.lane4, 4), (2048, 1, 8, 16, 64, 128, 512)), "rmem"])), op=T.copy())
-                    dec = tf.exp2(tf.min(tf.zeros(Tensor[(C, C), "f32", ((2 @ cw.group, 8 @ cw.lane8, 2, 4 @ cw.warp, 2, 4 @ cw.lane4, 4), (2048, 1, 8, 16, 64, 128, 512)), "rmem"]) + Gi - Gj, 0.0))
-                    Afr = (tf.zeros(Tensor[(C, C), "f32", ((2 @ cw.group, 8 @ cw.lane8, 2, 4 @ cw.warp, 2, 4 @ cw.lane4, 4), (2048, 1, 8, 16, 64, 128, 512)), "rmem"]) + Bi) * dec * KK * strict_f
+                    Gi = tf.schedule((Gs, tf.empty(Tensor[(C, 1), "f32", ((4 @ cw.warp, 2, 8 @ cw.lane8, 1, 1, 1, 1), (16, 8, 1, 0, 0, 0, 0)), "rmem"])), op=T.copy())
+                    Gj = tf.schedule((tf.reshape(Gs, new_shape=(1, C)), tf.empty(Tensor[(1, C), "f32", ((1, 2 @ cw.group, 4, 4 @ cw.lane4, 2, 1, 1), (0, 2048, 512, 128, 64, 0, 0)), "rmem"])), op=T.copy())
+                    Bi = tf.schedule((Bs, tf.empty(Tensor[(C, 1), "f32", ((4 @ cw.warp, 2, 8 @ cw.lane8, 1, 1, 1, 1), (16, 8, 1, 0, 0, 0, 0)), "rmem"])), op=T.copy())
+                    lower_f = tf.schedule((tf.reshape(tri[0:1, :, :], new_shape=(C, C)), tf.empty(Tensor[(C, C), "f32", ((4 @ cw.warp, 2, 8 @ cw.lane8, 2 @ cw.group, 4, 4 @ cw.lane4, 2), (16, 8, 1, 2048, 512, 128, 64)), "rmem"])), op=T.copy())
+                    strict_f = tf.schedule((tf.reshape(tri[1:2, :, :], new_shape=(C, C)), tf.empty(Tensor[(C, C), "f32", ((4 @ cw.warp, 2, 8 @ cw.lane8, 2 @ cw.group, 4, 4 @ cw.lane4, 2), (16, 8, 1, 2048, 512, 128, 64)), "rmem"])), op=T.copy())
+                    dec = tf.exp2(tf.min(tf.zeros(Tensor[(C, C), "f32", ((4 @ cw.warp, 2, 8 @ cw.lane8, 2 @ cw.group, 4, 4 @ cw.lane4, 2), (16, 8, 1, 2048, 512, 128, 64)), "rmem"]) + Gi - Gj, 0.0))
+                    Afr = (tf.zeros(Tensor[(C, C), "f32", ((4 @ cw.warp, 2, 8 @ cw.lane8, 2 @ cw.group, 4, 4 @ cw.lane4, 2), (16, 8, 1, 2048, 512, 128, 64)), "rmem"]) + Bi) * dec * KK * strict_f
                     Pfr = tf.cast(tf.cast(QK * dec * SCALE * lower_f, dtype="bf16"), dtype="f32")
                     As = tf.schedule((Afr, tf.empty(Tensor[(C, C), "f32", Layout((C, C), (68, 1)), "smem"])), op=T.copy())
                     Pst = tf.schedule((Pfr, tf.empty(Tensor[(C, C), "f32", Layout(((8, 8), (2, 32)), ((256, 32), (2048, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
@@ -216,9 +216,9 @@ class SCHED_GDN_CHUNK_T128:
                     Mgh = tf.schedule((mgh, tf.empty(Tensor[(C, C), "bf16", Layout(((8, 8), (4, 16)), ((512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                     Mgl = tf.schedule((tf.cast(mg - tf.cast(mgh, dtype="f32"), dtype="bf16"), tf.empty(Tensor[(C, C), "bf16", Layout(((8, 8), (4, 16)), ((512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as cw:
-                    UT = tf.schedule((tf.zeros(Tensor[(D, C), "f32", ((2, 2 @ cw.group, 8 @ cw.lane8, 2, 4 @ cw.warp, 2, 4 @ cw.lane4, 4), (2048, 4096, 1, 8, 16, 64, 128, 512)), "rmem"]), tf.bitcast(vs, Layout(((2, 1, 64), (4, 2, 8)), ((4096, 1024, 1), (1024, 512, 64))) | Swizzle(3, 4, 3)), tf.bitcast(Mbh, Layout(((4, 16), (2, 4, 8)), ((16, 1), (2048, 512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=u_mma), repeat=(2, 2, 4))
+                    UT = tf.schedule((tf.zeros(Tensor[(D, C), "f32", ((2, 4 @ cw.warp, 2, 8 @ cw.lane8, 2 @ cw.group, 4, 4 @ cw.lane4, 2), (2048, 16, 8, 1, 4096, 512, 128, 64)), "rmem"]), tf.bitcast(vs, Layout(((2, 1, 64), (4, 2, 8)), ((4096, 1024, 1), (1024, 512, 64))) | Swizzle(3, 4, 3)), tf.bitcast(Mbh, Layout(((4, 16), (2, 4, 8)), ((16, 1), (2048, 512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=u_mma), repeat=(2, 2, 4))
                     UT = tf.schedule((UT, tf.bitcast(vs, Layout(((2, 1, 64), (4, 2, 8)), ((4096, 1024, 1), (1024, 512, 64))) | Swizzle(3, 4, 3)), tf.bitcast(Mbl, Layout(((4, 16), (2, 4, 8)), ((16, 1), (2048, 512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=u_mma), repeat=(2, 2, 4))
-                    WF = tf.schedule((tf.zeros(Tensor[(C, D), "f32", ((2 @ cw.group, 8 @ cw.lane8, 2, 4 @ cw.warp, 2, 4 @ cw.lane4, 8), (4096, 1, 8, 16, 64, 128, 512)), "rmem"]), Mgh, tf.bitcast(ks, Layout(((4, 2, 8), (2, 1, 64)), ((1024, 512, 64), (4096, 1024, 1))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=w_mma), repeat=(1, 2, 4))
+                    WF = tf.schedule((tf.zeros(Tensor[(C, D), "f32", ((4 @ cw.warp, 2, 8 @ cw.lane8, 2 @ cw.group, 8, 4 @ cw.lane4, 2), (16, 8, 1, 4096, 512, 128, 64)), "rmem"]), Mgh, tf.bitcast(ks, Layout(((4, 2, 8), (2, 1, 64)), ((1024, 512, 64), (4096, 1024, 1))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=w_mma), repeat=(1, 2, 4))
                     WF = tf.schedule((WF, Mgl, tf.bitcast(ks, Layout(((4, 2, 8), (2, 1, 64)), ((1024, 512, 64), (4096, 1024, 1))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=w_mma), repeat=(1, 2, 4))
                     UTs = tf.schedule((UT, tf.empty(Tensor[(D, C), "f32", Layout(((16, 8), (2, 32)), ((256, 32), (4096, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                     wh = tf.cast(WF, dtype="bf16")

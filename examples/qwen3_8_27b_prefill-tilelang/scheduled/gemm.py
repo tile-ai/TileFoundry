@@ -115,8 +115,8 @@ def residual(fname: str, M: int, K: int):
                                     for kk in range(KPP):
                                         k = (pc * KPP + kk) * BK
                                         with threads[2, :32] as _loader:
-                                            lhs = tf.schedule((a[m:m + BM, k:k + BK],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                            rhs = tf.schedule((w[n:n + BN, k:k + BK],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                            lhs = tf.schedule((a[m:m + BM, k:k + BK], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                            rhs = tf.schedule((w[n:n + BN, k:k + BK], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                         with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                             acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                               op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
@@ -143,18 +143,18 @@ def residual(fname: str, M: int, K: int):
                                     acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                 for k in tf.tile(K, BK):
                                     with threads[2, :32] as _loader:
-                                        lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                        rhs = tf.schedule((w[n:n + BN, k],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                        lhs = tf.schedule((a[m:m + BM, k], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                        rhs = tf.schedule((w[n:n + BN, k], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                         acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                           op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
                                 with threads[0, :32] as _rload:
-                                    res = tf.schedule((r[m:m + BM, n:n + BN],), op=T.copy_async_tensor(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                    res = tf.schedule((r[m:m + BM, n:n + BN], tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy_async_tensor())
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    y = tf.schedule((res,), op=T.copy(rmem_layout=((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)))) + tf.cast(acc, "bf16")
-                                    staged = tf.schedule((y,), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                    y = tf.schedule((res, tf.empty(Tensor[(128, 256), "bf16", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])), op=T.copy()) + tf.cast(acc, "bf16")
+                                    staged = tf.schedule((y, tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                                 with threads[0, :32] as _storer:
-                                    tile = tf.schedule((staged,), op=T.copy_async_tensor())
+                                    tile = tf.schedule((staged, tf.empty(Tensor[(128, 256), "bf16", (128, 256)])), op=T.copy_async_tensor())
                                     out = tf.insert_slice(out, tile, (m, n))
                     for bn in range(BLAST):
                         for mi in range((cta.persistent - (G0 * NB + bn) * GROUP) % CTAS, GROUP, CTAS):
@@ -164,18 +164,18 @@ def residual(fname: str, M: int, K: int):
                                 acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                             for k in tf.tile(K, BK):
                                 with threads[2, :32] as _loader:
-                                    lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                    rhs = tf.schedule((w[n:n + BN, k],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                    lhs = tf.schedule((a[m:m + BM, k], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                    rhs = tf.schedule((w[n:n + BN, k], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                     acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                       op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
                             with threads[0, :32] as _rload:
-                                res = tf.schedule((r[m:m + BM, n:n + BN],), op=T.copy_async_tensor(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                res = tf.schedule((r[m:m + BM, n:n + BN], tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy_async_tensor())
                             with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                y = tf.schedule((res,), op=T.copy(rmem_layout=((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)))) + tf.cast(acc, "bf16")
-                                staged = tf.schedule((y,), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                y = tf.schedule((res, tf.empty(Tensor[(128, 256), "bf16", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])), op=T.copy()) + tf.cast(acc, "bf16")
+                                staged = tf.schedule((y, tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                             with threads[0, :32] as _storer:
-                                tile = tf.schedule((staged,), op=T.copy_async_tensor())
+                                tile = tf.schedule((staged, tf.empty(Tensor[(128, 256), "bf16", (128, 256)])), op=T.copy_async_tensor())
                                 out = tf.insert_slice(out, tile, (m, n))
                     return out
 
@@ -203,12 +203,12 @@ def residual(fname: str, M: int, K: int):
                     with Mesh(threads[0:2, :], layout=(RT, TC), names=("row", "col")) as th:
                         r = tf.reshape(hidden, (M, H))
                         t = cta.tb * GROUP + cta.mi
-                        acc = tf.schedule((ws[t * S * BM + cta.cy * RT:t * S * BM + cta.cy * RT + RT, :],), op=T.copy(rmem_layout=(RT @ th.row, BN // (4 * TC), TC @ th.col, 4)))
+                        acc = tf.schedule((ws[t * S * BM + cta.cy * RT:t * S * BM + cta.cy * RT + RT, :], tf.empty(Tensor[(32, 256), "f32", (RT @ th.row, BN // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy())
                         for j in range(1, S):
-                            acc = acc + tf.schedule((ws[(t * S + j) * BM + cta.cy * RT:(t * S + j) * BM + cta.cy * RT + RT, :],), op=T.copy(rmem_layout=(RT @ th.row, BN // (4 * TC), TC @ th.col, 4)))
+                            acc = acc + tf.schedule((ws[(t * S + j) * BM + cta.cy * RT:(t * S + j) * BM + cta.cy * RT + RT, :], tf.empty(Tensor[(32, 256), "f32", (RT @ th.row, BN // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy())
                         m = (G0 * GROUP + cta.mi) * BM + cta.cy * RT
                         n = (B0 + cta.tb) * BN
-                        y = tf.schedule((r[m:m + RT, n:n + BN],), op=T.copy(rmem_layout=(RT @ th.row, BN // (4 * TC), TC @ th.col, 4))) + tf.cast(acc, "bf16")
+                        y = tf.schedule((r[m:m + RT, n:n + BN], tf.empty(Tensor[(32, 256), "bf16", (RT @ th.row, BN // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy()) + tf.cast(acc, "bf16")
                         return tf.insert_slice(out, y, (m, n))
 
         @func
@@ -265,8 +265,8 @@ def gate_up(M: int):
                                     for kk in range(KPP):
                                         k = (pc * KPP + kk) * BK
                                         with threads[2, :32] as _loader:
-                                            lhs = tf.schedule((a[m:m + BM, k:k + BK],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                            rhs = tf.schedule((w[n:n + BN, k:k + BK],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                            lhs = tf.schedule((a[m:m + BM, k:k + BK], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                            rhs = tf.schedule((w[n:n + BN, k:k + BK], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                         with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                             acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                               op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
@@ -291,20 +291,20 @@ def gate_up(M: int):
                                     acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                 for k in tf.tile(K, BK):
                                     with threads[2, :32] as _loader:
-                                        lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                        rhs = tf.schedule((w[n:n + BN, k],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                        lhs = tf.schedule((a[m:m + BM, k], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                        rhs = tf.schedule((w[n:n + BN, k], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                         acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                           op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    cs = tf.schedule((tf.cast(acc, "bf16"),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                    cs = tf.schedule((tf.cast(acc, "bf16"), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                                 with Mesh(threads[0:2, :], layout=(16, 16), names=("r", "c")) as e:
-                                    g32 = tf.cast(tf.schedule((cs[:, 0:128],), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 8))), "f32")
-                                    u = tf.schedule((cs[:, 128:256],), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 8)))
+                                    g32 = tf.cast(tf.schedule((cs[:, 0:128], tf.empty(Tensor[(128, 128), "bf16", (16 @ e.r, 8, 16 @ e.c, 8), "rmem"])), op=T.copy()), "f32")
+                                    u = tf.schedule((cs[:, 128:256], tf.empty(Tensor[(128, 128), "bf16", (16 @ e.r, 8, 16 @ e.c, 8), "rmem"])), op=T.copy())
                                     act = tf.cast(g32 / (1.0 + tf.exp(-g32)), "bf16") * u
-                                    staged = tf.schedule((act,), op=T.copy(smem_layout=Layout((128, (2, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                    staged = tf.schedule((act, tf.empty(Tensor[(128, 128), "bf16", Layout((128, (2, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                                 with threads[0, :32] as _storer:
-                                    tile = tf.schedule((staged,), op=T.copy_async_tensor())
+                                    tile = tf.schedule((staged, tf.empty(Tensor[(128, 128), "bf16", (128, 128)])), op=T.copy_async_tensor())
                                     out = tf.insert_slice(out, tile, (m, bn * 128))
                     for bn in range(BLAST):
                         for mi in range((cta.persistent - (G0 * NB + bn) * GROUP) % CTAS, GROUP, CTAS):
@@ -314,20 +314,20 @@ def gate_up(M: int):
                                 acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                             for k in tf.tile(K, BK):
                                 with threads[2, :32] as _loader:
-                                    lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                    rhs = tf.schedule((w[n:n + BN, k],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                    lhs = tf.schedule((a[m:m + BM, k], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                    rhs = tf.schedule((w[n:n + BN, k], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                     acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                       op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
                             with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                cs = tf.schedule((tf.cast(acc, "bf16"),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                cs = tf.schedule((tf.cast(acc, "bf16"), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                             with Mesh(threads[0:2, :], layout=(16, 16), names=("r", "c")) as e:
-                                g32 = tf.cast(tf.schedule((cs[:, 0:128],), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 8))), "f32")
-                                u = tf.schedule((cs[:, 128:256],), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 8)))
+                                g32 = tf.cast(tf.schedule((cs[:, 0:128], tf.empty(Tensor[(128, 128), "bf16", (16 @ e.r, 8, 16 @ e.c, 8), "rmem"])), op=T.copy()), "f32")
+                                u = tf.schedule((cs[:, 128:256], tf.empty(Tensor[(128, 128), "bf16", (16 @ e.r, 8, 16 @ e.c, 8), "rmem"])), op=T.copy())
                                 act = tf.cast(g32 / (1.0 + tf.exp(-g32)), "bf16") * u
-                                staged = tf.schedule((act,), op=T.copy(smem_layout=Layout((128, (2, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                staged = tf.schedule((act, tf.empty(Tensor[(128, 128), "bf16", Layout((128, (2, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                             with threads[0, :32] as _storer:
-                                tile = tf.schedule((staged,), op=T.copy_async_tensor())
+                                tile = tf.schedule((staged, tf.empty(Tensor[(128, 128), "bf16", (128, 128)])), op=T.copy_async_tensor())
                                 out = tf.insert_slice(out, tile, (m, bn * 128))
                     return out
 
@@ -355,11 +355,11 @@ def gate_up(M: int):
                     with Mesh(threads[0:2, :], layout=(RT, TC), names=("row", "col")) as th:
                         t = cta.tb * GROUP + cta.mi
                         r0 = t * S * BM + cta.cy * RT
-                        acc_g = tf.schedule((ws[r0:r0 + RT, 0:128],), op=T.copy(rmem_layout=(RT @ th.row, 128 // (4 * TC), TC @ th.col, 4)))
-                        acc_u = tf.schedule((ws[r0:r0 + RT, 128:256],), op=T.copy(rmem_layout=(RT @ th.row, 128 // (4 * TC), TC @ th.col, 4)))
+                        acc_g = tf.schedule((ws[r0:r0 + RT, 0:128], tf.empty(Tensor[(32, 128), "f32", (RT @ th.row, 128 // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy())
+                        acc_u = tf.schedule((ws[r0:r0 + RT, 128:256], tf.empty(Tensor[(32, 128), "f32", (RT @ th.row, 128 // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy())
                         for j in range(1, S):
-                            acc_g = acc_g + tf.schedule((ws[r0 + j * BM:r0 + j * BM + RT, 0:128],), op=T.copy(rmem_layout=(RT @ th.row, 128 // (4 * TC), TC @ th.col, 4)))
-                            acc_u = acc_u + tf.schedule((ws[r0 + j * BM:r0 + j * BM + RT, 128:256],), op=T.copy(rmem_layout=(RT @ th.row, 128 // (4 * TC), TC @ th.col, 4)))
+                            acc_g = acc_g + tf.schedule((ws[r0 + j * BM:r0 + j * BM + RT, 0:128], tf.empty(Tensor[(32, 128), "f32", (RT @ th.row, 128 // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy())
+                            acc_u = acc_u + tf.schedule((ws[r0 + j * BM:r0 + j * BM + RT, 128:256], tf.empty(Tensor[(32, 128), "f32", (RT @ th.row, 128 // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy())
                         g32 = tf.cast(tf.cast(acc_g, "bf16"), "f32")
                         act = tf.cast(g32 / (1.0 + tf.exp(-g32)), "bf16") * tf.cast(acc_u, "bf16")
                         m = (G0 * GROUP + cta.mi) * BM + cta.cy * RT
@@ -415,15 +415,15 @@ def in_proj(M: int):
                                     acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                 for k in tf.tile(K, BK):
                                     with threads[2, :32] as _loader:
-                                        lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                        rhs = tf.schedule((w[n:n + BN, k],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                        lhs = tf.schedule((a[m:m + BM, k], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                        rhs = tf.schedule((w[n:n + BN, k], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                         acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                           op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    staged = tf.schedule((tf.cast(acc, "bf16"),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                    staged = tf.schedule((tf.cast(acc, "bf16"), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                                 with threads[0, :32] as _storer:
-                                    tile = tf.schedule((staged,), op=T.copy_async_tensor())
+                                    tile = tf.schedule((staged, tf.empty(Tensor[(128, 256), "bf16", (128, 256)])), op=T.copy_async_tensor())
                                     out = tf.insert_slice(out, tile, (m, n))
                     return out
 
@@ -494,8 +494,8 @@ def qkv(M: int):
                                     for kk in range(KPP):
                                         k = (pc * KPP + kk) * BK
                                         with threads[2, :32] as _loader:
-                                            lhs = tf.schedule((a[m:m + BM, k:k + BK],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                            rhs = tf.schedule((w[n:n + BN, k:k + BK],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                            lhs = tf.schedule((a[m:m + BM, k:k + BK], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                            rhs = tf.schedule((w[n:n + BN, k:k + BK], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                         with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                             acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                               op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
@@ -521,28 +521,28 @@ def qkv(M: int):
                                     acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                 for k in tf.tile(K, BK):
                                     with threads[2, :32] as _loader:
-                                        lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                        rhs = tf.schedule((w[n:n + BN, k],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                        lhs = tf.schedule((a[m:m + BM, k], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                        rhs = tf.schedule((w[n:n + BN, k], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                         acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                           op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    cs = tf.schedule((tf.cast(acc, "bf16"),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                    cs = tf.schedule((tf.cast(acc, "bf16"), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                                 for _q in range((cta.persistent * 0 + bn) % NB, NQG, 1048576):   # once while bn is a q|gate block
                                     for _h in range((cta.persistent * 0 + bn) % 2, 1, 2):   # once for a q head (bn even); a gate head is stored as it lands
                                         with Mesh(threads[0:2, :], layout=(16, 16), names=("r", "c")) as e:
-                                            x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 16))), "f32")
-                                            sq = tf.schedule((x32 * x32,), op=T.copy(rmem_layout=((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1))))
-                                            ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN),), op=T.copy(rmem_layout=(16 @ e.r, 8, 1, 1)))
-                                            gw = tf.cast(tf.schedule((tf.reshape(gamma_q, (1, 1, 16, 16)),), op=T.copy(rmem_layout=(1, 1, 16 @ e.c, 16))), "f32") + 1.0
+                                            x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)), tf.empty(Tensor[(16, 8, 16, 16), "bf16", (16 @ e.r, 8, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32")
+                                            sq = tf.schedule((x32 * x32, tf.empty(Tensor[(16, 8, 16, 16), "f32", ((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1)), "rmem"])), op=T.copy())
+                                            ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN), tf.empty(Tensor[(16, 8, 1, 1), "f32", (16 @ e.r, 8, 1, 1), "rmem"])), op=T.copy())
+                                            gw = tf.cast(tf.schedule((tf.reshape(gamma_q, (1, 1, 16, 16)), tf.empty(Tensor[(1, 1, 16, 16), "bf16", (1, 1, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32") + 1.0
                                             nrm = tf.cast(x32 * tf.rsqrt(ms + EPS) * gw, "bf16")
-                                            cs = tf.schedule((tf.reshape(nrm, (BM, BN)),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
-                                            lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
+                                            cs = tf.schedule((tf.reshape(nrm, (BM, BN)), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
+                                            lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
                                             rlo = tf.cast(tf.cast(tf.cast(lo * cl, "bf16"), "f32") + tf.cast(tf.cast(-hi * sl, "bf16"), "f32"), "bf16")
                                             rhi = tf.cast(tf.cast(tf.cast(hi * ch, "bf16"), "f32") + tf.cast(tf.cast(lo * sh, "bf16"), "f32"), "bf16")
                                             cs = tf.insert_slice(cs, tf.reshape(rlo, (BM, HALF)), (0, 0))
@@ -550,24 +550,24 @@ def qkv(M: int):
                                 for _k0 in range(NQG - 1, (cta.persistent * 0 + bn) % NB, 1048576):   # once from the first k block ...
                                     for _k1 in range((cta.persistent * 0 + bn) % NB, NQG + NKH, 1048576):   # ... to the last: a k head (v heads are stored as they land)
                                         with Mesh(threads[0:2, :], layout=(16, 16), names=("r", "c")) as e:
-                                            x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 16))), "f32")
-                                            sq = tf.schedule((x32 * x32,), op=T.copy(rmem_layout=((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1))))
-                                            ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN),), op=T.copy(rmem_layout=(16 @ e.r, 8, 1, 1)))
-                                            gw = tf.cast(tf.schedule((tf.reshape(gamma_k, (1, 1, 16, 16)),), op=T.copy(rmem_layout=(1, 1, 16 @ e.c, 16))), "f32") + 1.0
+                                            x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)), tf.empty(Tensor[(16, 8, 16, 16), "bf16", (16 @ e.r, 8, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32")
+                                            sq = tf.schedule((x32 * x32, tf.empty(Tensor[(16, 8, 16, 16), "f32", ((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1)), "rmem"])), op=T.copy())
+                                            ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN), tf.empty(Tensor[(16, 8, 1, 1), "f32", (16 @ e.r, 8, 1, 1), "rmem"])), op=T.copy())
+                                            gw = tf.cast(tf.schedule((tf.reshape(gamma_k, (1, 1, 16, 16)), tf.empty(Tensor[(1, 1, 16, 16), "bf16", (1, 1, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32") + 1.0
                                             nrm = tf.cast(x32 * tf.rsqrt(ms + EPS) * gw, "bf16")
-                                            cs = tf.schedule((tf.reshape(nrm, (BM, BN)),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
-                                            lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
+                                            cs = tf.schedule((tf.reshape(nrm, (BM, BN)), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
+                                            lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
                                             rlo = tf.cast(tf.cast(tf.cast(lo * cl, "bf16"), "f32") + tf.cast(tf.cast(-hi * sl, "bf16"), "f32"), "bf16")
                                             rhi = tf.cast(tf.cast(tf.cast(hi * ch, "bf16"), "f32") + tf.cast(tf.cast(lo * sh, "bf16"), "f32"), "bf16")
                                             cs = tf.insert_slice(cs, tf.reshape(rlo, (BM, HALF)), (0, 0))
                                             cs = tf.insert_slice(cs, tf.reshape(rhi, (BM, HALF)), (0, HALF))
                                 with threads[0, :32] as _storer:
-                                    tile = tf.schedule((cs,), op=T.copy_async_tensor())
+                                    tile = tf.schedule((cs, tf.empty(Tensor[(128, 256), "bf16", (128, 256)])), op=T.copy_async_tensor())
                                     out = tf.insert_slice(out, tile, (m, n))
                     return out
 
@@ -593,28 +593,28 @@ def qkv(M: int):
                                         acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                     for k in tf.tile(K, BK):
                                         with threads[2, :32] as _loader:
-                                            lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                            rhs = tf.schedule((w[n:n + BN, k],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                            lhs = tf.schedule((a[m:m + BM, k], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                            rhs = tf.schedule((w[n:n + BN, k], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                         with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                             acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                               op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
                                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                        cs = tf.schedule((tf.cast(acc, "bf16"),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                        cs = tf.schedule((tf.cast(acc, "bf16"), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                                     for _q in range((cta.persistent * 0 + bn) % NB, NQG, 1048576):   # once while bn is a q|gate block
                                         for _h in range((cta.persistent * 0 + bn) % 2, 1, 2):   # once for a q head (bn even); a gate head is stored as it lands
                                             with Mesh(threads[0:2, :], layout=(16, 16), names=("r", "c")) as e:
-                                                x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 16))), "f32")
-                                                sq = tf.schedule((x32 * x32,), op=T.copy(rmem_layout=((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1))))
-                                                ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN),), op=T.copy(rmem_layout=(16 @ e.r, 8, 1, 1)))
-                                                gw = tf.cast(tf.schedule((tf.reshape(gamma_q, (1, 1, 16, 16)),), op=T.copy(rmem_layout=(1, 1, 16 @ e.c, 16))), "f32") + 1.0
+                                                x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)), tf.empty(Tensor[(16, 8, 16, 16), "bf16", (16 @ e.r, 8, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32")
+                                                sq = tf.schedule((x32 * x32, tf.empty(Tensor[(16, 8, 16, 16), "f32", ((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1)), "rmem"])), op=T.copy())
+                                                ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN), tf.empty(Tensor[(16, 8, 1, 1), "f32", (16 @ e.r, 8, 1, 1), "rmem"])), op=T.copy())
+                                                gw = tf.cast(tf.schedule((tf.reshape(gamma_q, (1, 1, 16, 16)), tf.empty(Tensor[(1, 1, 16, 16), "bf16", (1, 1, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32") + 1.0
                                                 nrm = tf.cast(x32 * tf.rsqrt(ms + EPS) * gw, "bf16")
-                                                cs = tf.schedule((tf.reshape(nrm, (BM, BN)),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
-                                                lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                                hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                                cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                                ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                                sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                                sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
+                                                cs = tf.schedule((tf.reshape(nrm, (BM, BN)), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
+                                                lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                                hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                                cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                                ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                                sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                                sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
                                                 rlo = tf.cast(tf.cast(tf.cast(lo * cl, "bf16"), "f32") + tf.cast(tf.cast(-hi * sl, "bf16"), "f32"), "bf16")
                                                 rhi = tf.cast(tf.cast(tf.cast(hi * ch, "bf16"), "f32") + tf.cast(tf.cast(lo * sh, "bf16"), "f32"), "bf16")
                                                 cs = tf.insert_slice(cs, tf.reshape(rlo, (BM, HALF)), (0, 0))
@@ -622,24 +622,24 @@ def qkv(M: int):
                                     for _k0 in range(NQG - 1, (cta.persistent * 0 + bn) % NB, 1048576):   # once from the first k block ...
                                         for _k1 in range((cta.persistent * 0 + bn) % NB, NQG + NKH, 1048576):   # ... to the last: a k head (v heads are stored as they land)
                                             with Mesh(threads[0:2, :], layout=(16, 16), names=("r", "c")) as e:
-                                                x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 16))), "f32")
-                                                sq = tf.schedule((x32 * x32,), op=T.copy(rmem_layout=((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1))))
-                                                ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN),), op=T.copy(rmem_layout=(16 @ e.r, 8, 1, 1)))
-                                                gw = tf.cast(tf.schedule((tf.reshape(gamma_k, (1, 1, 16, 16)),), op=T.copy(rmem_layout=(1, 1, 16 @ e.c, 16))), "f32") + 1.0
+                                                x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)), tf.empty(Tensor[(16, 8, 16, 16), "bf16", (16 @ e.r, 8, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32")
+                                                sq = tf.schedule((x32 * x32, tf.empty(Tensor[(16, 8, 16, 16), "f32", ((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1)), "rmem"])), op=T.copy())
+                                                ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN), tf.empty(Tensor[(16, 8, 1, 1), "f32", (16 @ e.r, 8, 1, 1), "rmem"])), op=T.copy())
+                                                gw = tf.cast(tf.schedule((tf.reshape(gamma_k, (1, 1, 16, 16)), tf.empty(Tensor[(1, 1, 16, 16), "bf16", (1, 1, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32") + 1.0
                                                 nrm = tf.cast(x32 * tf.rsqrt(ms + EPS) * gw, "bf16")
-                                                cs = tf.schedule((tf.reshape(nrm, (BM, BN)),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
-                                                lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                                hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                                cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                                ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                                sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                                sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
+                                                cs = tf.schedule((tf.reshape(nrm, (BM, BN)), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
+                                                lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                                hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                                cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                                ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                                sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                                sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
                                                 rlo = tf.cast(tf.cast(tf.cast(lo * cl, "bf16"), "f32") + tf.cast(tf.cast(-hi * sl, "bf16"), "f32"), "bf16")
                                                 rhi = tf.cast(tf.cast(tf.cast(hi * ch, "bf16"), "f32") + tf.cast(tf.cast(lo * sh, "bf16"), "f32"), "bf16")
                                                 cs = tf.insert_slice(cs, tf.reshape(rlo, (BM, HALF)), (0, 0))
                                                 cs = tf.insert_slice(cs, tf.reshape(rhi, (BM, HALF)), (0, HALF))
                                     with threads[0, :32] as _storer:
-                                        tile = tf.schedule((cs,), op=T.copy_async_tensor())
+                                        tile = tf.schedule((cs, tf.empty(Tensor[(128, 256), "bf16", (128, 256)])), op=T.copy_async_tensor())
                                         out = tf.insert_slice(out, tile, (m, n))
                         return out
 
@@ -663,28 +663,28 @@ def qkv(M: int):
                                     acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ c.group, 4 @ c.warp, 2, 8 @ c.lane8, 32, 4 @ c.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
                                 for k in tf.tile(K, BK):
                                     with threads[2, :32] as _loader:
-                                        lhs = tf.schedule((a[m:m + BM, k],), op=T.copy_async_tensor(smem_layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
-                                        rhs = tf.schedule((w[n:n + BN, k],), op=T.copy_async_tensor(smem_layout=Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)), buffers=STAGES)
+                                        lhs = tf.schedule((a[m:m + BM, k], tf.empty(Tensor[(128, 64), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
+                                        rhs = tf.schedule((w[n:n + BN, k], tf.empty(Tensor[(256, 64), "bf16", Layout(((4, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)), op=T.copy_async_tensor())
                                     with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
                                         acc = tf.schedule((acc, lhs, tf.bitcast(rhs, layout=Layout(((4, 16), (32, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))),
                                                           op=T.tiled_mma(atom=wgmma), repeat=(2, 1, 4))
                                 with Mesh(threads[0:2, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as c:
-                                    cs = tf.schedule((tf.cast(acc, "bf16"),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
+                                    cs = tf.schedule((tf.cast(acc, "bf16"), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
                                 for _q in range((cta.persistent * 0 + bn) % NB, NQG, 1048576):   # once while bn is a q|gate block
                                     for _h in range((cta.persistent * 0 + bn) % 2, 1, 2):   # once for a q head (bn even); a gate head is stored as it lands
                                         with Mesh(threads[0:2, :], layout=(16, 16), names=("r", "c")) as e:
-                                            x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 16))), "f32")
-                                            sq = tf.schedule((x32 * x32,), op=T.copy(rmem_layout=((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1))))
-                                            ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN),), op=T.copy(rmem_layout=(16 @ e.r, 8, 1, 1)))
-                                            gw = tf.cast(tf.schedule((tf.reshape(gamma_q, (1, 1, 16, 16)),), op=T.copy(rmem_layout=(1, 1, 16 @ e.c, 16))), "f32") + 1.0
+                                            x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)), tf.empty(Tensor[(16, 8, 16, 16), "bf16", (16 @ e.r, 8, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32")
+                                            sq = tf.schedule((x32 * x32, tf.empty(Tensor[(16, 8, 16, 16), "f32", ((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1)), "rmem"])), op=T.copy())
+                                            ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN), tf.empty(Tensor[(16, 8, 1, 1), "f32", (16 @ e.r, 8, 1, 1), "rmem"])), op=T.copy())
+                                            gw = tf.cast(tf.schedule((tf.reshape(gamma_q, (1, 1, 16, 16)), tf.empty(Tensor[(1, 1, 16, 16), "bf16", (1, 1, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32") + 1.0
                                             nrm = tf.cast(x32 * tf.rsqrt(ms + EPS) * gw, "bf16")
-                                            cs = tf.schedule((tf.reshape(nrm, (BM, BN)),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
-                                            lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
+                                            cs = tf.schedule((tf.reshape(nrm, (BM, BN)), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
+                                            lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
                                             rlo = tf.cast(tf.cast(tf.cast(lo * cl, "bf16"), "f32") + tf.cast(tf.cast(-hi * sl, "bf16"), "f32"), "bf16")
                                             rhi = tf.cast(tf.cast(tf.cast(hi * ch, "bf16"), "f32") + tf.cast(tf.cast(lo * sh, "bf16"), "f32"), "bf16")
                                             cs = tf.insert_slice(cs, tf.reshape(rlo, (BM, HALF)), (0, 0))
@@ -692,24 +692,24 @@ def qkv(M: int):
                                 for _k0 in range(NQG - 1, (cta.persistent * 0 + bn) % NB, 1048576):   # once from the first k block ...
                                     for _k1 in range((cta.persistent * 0 + bn) % NB, NQG + NKH, 1048576):   # ... to the last: a k head (v heads are stored as they land)
                                         with Mesh(threads[0:2, :], layout=(16, 16), names=("r", "c")) as e:
-                                            x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 16))), "f32")
-                                            sq = tf.schedule((x32 * x32,), op=T.copy(rmem_layout=((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1))))
-                                            ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN),), op=T.copy(rmem_layout=(16 @ e.r, 8, 1, 1)))
-                                            gw = tf.cast(tf.schedule((tf.reshape(gamma_k, (1, 1, 16, 16)),), op=T.copy(rmem_layout=(1, 1, 16 @ e.c, 16))), "f32") + 1.0
+                                            x32 = tf.cast(tf.schedule((tf.reshape(cs, (16, 8, 16, 16)), tf.empty(Tensor[(16, 8, 16, 16), "bf16", (16 @ e.r, 8, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32")
+                                            sq = tf.schedule((x32 * x32, tf.empty(Tensor[(16, 8, 16, 16), "f32", ((16 @ e.r, 8, 16 @ e.c, 16), (0, 16, 0, 1)), "rmem"])), op=T.copy())
+                                            ms = tf.schedule((tf.reduce(sq, (2, 3), True, ReduceKind.MEAN), tf.empty(Tensor[(16, 8, 1, 1), "f32", (16 @ e.r, 8, 1, 1), "rmem"])), op=T.copy())
+                                            gw = tf.cast(tf.schedule((tf.reshape(gamma_k, (1, 1, 16, 16)), tf.empty(Tensor[(1, 1, 16, 16), "bf16", (1, 1, 16 @ e.c, 16), "rmem"])), op=T.copy()), "f32") + 1.0
                                             nrm = tf.cast(x32 * tf.rsqrt(ms + EPS) * gw, "bf16")
-                                            cs = tf.schedule((tf.reshape(nrm, (BM, BN)),), op=T.copy(smem_layout=Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)))
-                                            lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
-                                            sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)),), op=T.copy(rmem_layout=(16 @ e.r, 8, 16 @ e.c, 2))), "f32")
+                                            cs = tf.schedule((tf.reshape(nrm, (BM, BN)), tf.empty(Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])), op=T.copy())
+                                            lo = tf.cast(tf.schedule((tf.reshape(cs[:, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            hi = tf.cast(tf.schedule((tf.reshape(cs[:, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, 0:HALF], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
+                                            sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + BM, HALF:ROT], (16, 8, 16, 2)), tf.empty(Tensor[(16, 8, 16, 2), "bf16", (16 @ e.r, 8, 16 @ e.c, 2), "rmem"])), op=T.copy()), "f32")
                                             rlo = tf.cast(tf.cast(tf.cast(lo * cl, "bf16"), "f32") + tf.cast(tf.cast(-hi * sl, "bf16"), "f32"), "bf16")
                                             rhi = tf.cast(tf.cast(tf.cast(hi * ch, "bf16"), "f32") + tf.cast(tf.cast(lo * sh, "bf16"), "f32"), "bf16")
                                             cs = tf.insert_slice(cs, tf.reshape(rlo, (BM, HALF)), (0, 0))
                                             cs = tf.insert_slice(cs, tf.reshape(rhi, (BM, HALF)), (0, HALF))
                                 with threads[0, :32] as _storer:
-                                    tile = tf.schedule((cs,), op=T.copy_async_tensor())
+                                    tile = tf.schedule((cs, tf.empty(Tensor[(128, 256), "bf16", (128, 256)])), op=T.copy_async_tensor())
                                     out = tf.insert_slice(out, tile, (m, n))
                         return out
 
@@ -754,30 +754,30 @@ def qkv(M: int):
                 with Mesh(("thread",), layout=(3, 128), names=("warpgroup", "participant")) as threads:
                     with Mesh(threads[0:2, :], layout=(RT, TC), names=("row", "col")) as th:
                         t = cta.tb * GROUP + cta.mi
-                        acc = tf.schedule((tf.reshape(ws[t * S * BM + cta.cy * RT:t * S * BM + cta.cy * RT + RT, :], (RT, BN // (4 * TC), TC, 4)),), op=T.copy(rmem_layout=(RT @ th.row, BN // (4 * TC), TC @ th.col, 4)))
+                        acc = tf.schedule((tf.reshape(ws[t * S * BM + cta.cy * RT:t * S * BM + cta.cy * RT + RT, :], (RT, BN // (4 * TC), TC, 4)), tf.empty(Tensor[(RT, BN // (4 * TC), TC, 4), "f32", (RT @ th.row, BN // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy())
                         for j in range(1, S):
-                            acc = acc + tf.schedule((tf.reshape(ws[(t * S + j) * BM + cta.cy * RT:(t * S + j) * BM + cta.cy * RT + RT, :], (RT, BN // (4 * TC), TC, 4)),), op=T.copy(rmem_layout=(RT @ th.row, BN // (4 * TC), TC @ th.col, 4)))
+                            acc = acc + tf.schedule((tf.reshape(ws[(t * S + j) * BM + cta.cy * RT:(t * S + j) * BM + cta.cy * RT + RT, :], (RT, BN // (4 * TC), TC, 4)), tf.empty(Tensor[(RT, BN // (4 * TC), TC, 4), "f32", (RT @ th.row, BN // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy())
                         m = (G0 * GROUP + cta.mi) * BM + cta.cy * RT
                         bn = B0 + cta.tb
                         cs = tf.cast(acc, "bf16")
                         for _h in range((cta.tb + NBT - TBK0) % NBT, NKT, NBT):   # once for a k-head band
                             x32 = tf.cast(cs, "f32")
-                            sq = tf.schedule((x32 * x32,), op=T.copy(rmem_layout=((RT @ th.row, BN // (4 * TC), TC @ th.col, 4), (0, 4, 0, 1))))
-                            ms = tf.schedule((tf.reduce(sq, (1, 2, 3), True, ReduceKind.MEAN),), op=T.copy(rmem_layout=(RT @ th.row, 1, 1, 1)))
-                            gw = tf.cast(tf.schedule((tf.reshape(gamma_k, (1, BN // (4 * TC), TC, 4)),), op=T.copy(rmem_layout=(1, BN // (4 * TC), TC @ th.col, 4))), "f32") + 1.0
+                            sq = tf.schedule((x32 * x32, tf.empty(Tensor[(RT, BN // (4 * TC), TC, 4), "f32", ((RT @ th.row, BN // (4 * TC), TC @ th.col, 4), (0, 4, 0, 1)), "rmem"])), op=T.copy())
+                            ms = tf.schedule((tf.reduce(sq, (1, 2, 3), True, ReduceKind.MEAN), tf.empty(Tensor[(RT, 1, 1, 1), "f32", (RT @ th.row, 1, 1, 1), "rmem"])), op=T.copy())
+                            gw = tf.cast(tf.schedule((tf.reshape(gamma_k, (1, BN // (4 * TC), TC, 4)), tf.empty(Tensor[(1, BN // (4 * TC), TC, 4), "bf16", (1, BN // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy()), "f32") + 1.0
                             nrm = tf.cast(x32 * tf.rsqrt(ms + EPS) * gw, "bf16")
-                            ns = tf.schedule((tf.reshape(nrm, (RT, BN)),), op=T.copy(smem_layout=Layout((RT, BN), (BN, 1))))
-                            lo = tf.cast(tf.schedule((tf.reshape(ns[:, 0:HALF], (RT, HALF // (4 * TC), TC, 4)),), op=T.copy(rmem_layout=(RT @ th.row, HALF // (4 * TC), TC @ th.col, 4))), "f32")
-                            hi = tf.cast(tf.schedule((tf.reshape(ns[:, HALF:ROT], (RT, HALF // (4 * TC), TC, 4)),), op=T.copy(rmem_layout=(RT @ th.row, HALF // (4 * TC), TC @ th.col, 4))), "f32")
-                            cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + RT, 0:HALF], (RT, HALF // (4 * TC), TC, 4)),), op=T.copy(rmem_layout=(RT @ th.row, HALF // (4 * TC), TC @ th.col, 4))), "f32")
-                            ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + RT, HALF:ROT], (RT, HALF // (4 * TC), TC, 4)),), op=T.copy(rmem_layout=(RT @ th.row, HALF // (4 * TC), TC @ th.col, 4))), "f32")
-                            sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + RT, 0:HALF], (RT, HALF // (4 * TC), TC, 4)),), op=T.copy(rmem_layout=(RT @ th.row, HALF // (4 * TC), TC @ th.col, 4))), "f32")
-                            sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + RT, HALF:ROT], (RT, HALF // (4 * TC), TC, 4)),), op=T.copy(rmem_layout=(RT @ th.row, HALF // (4 * TC), TC @ th.col, 4))), "f32")
+                            ns = tf.schedule((tf.reshape(nrm, (RT, BN)), tf.empty(Tensor[(RT, BN), "bf16", Layout((RT, BN), (BN, 1)), "smem"])), op=T.copy())
+                            lo = tf.cast(tf.schedule((tf.reshape(ns[:, 0:HALF], (RT, HALF // (4 * TC), TC, 4)), tf.empty(Tensor[(RT, HALF // (4 * TC), TC, 4), "bf16", (RT @ th.row, HALF // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy()), "f32")
+                            hi = tf.cast(tf.schedule((tf.reshape(ns[:, HALF:ROT], (RT, HALF // (4 * TC), TC, 4)), tf.empty(Tensor[(RT, HALF // (4 * TC), TC, 4), "bf16", (RT @ th.row, HALF // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy()), "f32")
+                            cl = tf.cast(tf.schedule((tf.reshape(cos[m:m + RT, 0:HALF], (RT, HALF // (4 * TC), TC, 4)), tf.empty(Tensor[(RT, HALF // (4 * TC), TC, 4), "bf16", (RT @ th.row, HALF // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy()), "f32")
+                            ch = tf.cast(tf.schedule((tf.reshape(cos[m:m + RT, HALF:ROT], (RT, HALF // (4 * TC), TC, 4)), tf.empty(Tensor[(RT, HALF // (4 * TC), TC, 4), "bf16", (RT @ th.row, HALF // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy()), "f32")
+                            sl = tf.cast(tf.schedule((tf.reshape(sin[m:m + RT, 0:HALF], (RT, HALF // (4 * TC), TC, 4)), tf.empty(Tensor[(RT, HALF // (4 * TC), TC, 4), "bf16", (RT @ th.row, HALF // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy()), "f32")
+                            sh = tf.cast(tf.schedule((tf.reshape(sin[m:m + RT, HALF:ROT], (RT, HALF // (4 * TC), TC, 4)), tf.empty(Tensor[(RT, HALF // (4 * TC), TC, 4), "bf16", (RT @ th.row, HALF // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy()), "f32")
                             rlo = tf.cast(tf.cast(tf.cast(lo * cl, "bf16"), "f32") + tf.cast(tf.cast(-hi * sl, "bf16"), "f32"), "bf16")
                             rhi = tf.cast(tf.cast(tf.cast(hi * ch, "bf16"), "f32") + tf.cast(tf.cast(lo * sh, "bf16"), "f32"), "bf16")
                             ns = tf.insert_slice(ns, tf.reshape(rlo, (RT, HALF)), (0, 0))
                             ns = tf.insert_slice(ns, tf.reshape(rhi, (RT, HALF)), (0, HALF))
-                            cs = tf.schedule((tf.reshape(ns, (RT, BN // (4 * TC), TC, 4)),), op=T.copy(rmem_layout=(RT @ th.row, BN // (4 * TC), TC @ th.col, 4)))
+                            cs = tf.schedule((tf.reshape(ns, (RT, BN // (4 * TC), TC, 4)), tf.empty(Tensor[(RT, BN // (4 * TC), TC, 4), "bf16", (RT @ th.row, BN // (4 * TC), TC @ th.col, 4), "rmem"])), op=T.copy())
                         return tf.insert_slice(out, tf.reshape(cs, (RT, BN)), (m, bn * BN))
 
         @func

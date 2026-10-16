@@ -15,8 +15,8 @@ class SCHED_EMBED_T256:
     @func
     def embed(ids: Tensor[(M,), "i64"], table: Tensor[(V, H), "bf16"]) -> Tensor[(M, H), "bf16"]:
         with Mesh(("cta",), layout=(M,), names=("row",)) as cta:
-            out = tf.zeros(Tensor[(M, H), "bf16"])
             with Mesh(("thread",), layout=(TH,), names=("t",)) as th:
+                out = tf.zeros(Tensor[(M, H), "bf16"])
                 one = ids[cta.row:cta.row + 1]
                 row = tf.schedule((table, tf.empty(Tensor[(1, H), "bf16", (1, H), "smem"]), one), op=T.copy_async(fill=0.0))
                 ro = tf.schedule((row, tf.empty(Tensor[(1, H), "bf16", (1, H)])), op=T.copy())

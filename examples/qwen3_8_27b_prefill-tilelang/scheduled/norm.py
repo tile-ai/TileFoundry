@@ -35,12 +35,11 @@ def rmsnorm(M: int):
                 with Mesh(("thread",), layout=(TV,), names=("t",)) as th:
                     x4 = tf.reshape(hidden, (M, KV, TV, VEC))
                     m = cta.rb * R
-                    x = tf.schedule((x4[m:m + R, :, :, :],), op=T.copy(rmem_layout=(R, KV, TV @ th.t, VEC)))
-                    g = tf.schedule((tf.reshape(gamma, (1, KV, TV, VEC)),), op=T.copy(rmem_layout=(1, KV, TV @ th.t, VEC)))
+                    x = tf.schedule((x4[m:m + R, :, :, :], tf.empty(Tensor[(2, 5, 256, 4), "bf16", (R, KV, TV @ th.t, VEC), "rmem"])), op=T.copy())
+                    g = tf.schedule((tf.reshape(gamma, (1, KV, TV, VEC)), tf.empty(Tensor[(1, 5, 256, 4), "bf16", (1, KV, TV @ th.t, VEC), "rmem"])), op=T.copy())
                     x32 = tf.cast(x, "f32")
-                    sq = tf.schedule((tf.square(x32),), op=T.copy(rmem_layout=((R, KV, TV @ th.t, VEC), (KV * VEC, VEC, 0, 1))))
-                    ms = tf.schedule((tf.reduce(sq, (1, 2, 3), True, ReduceKind.MEAN),),
-                                     op=T.copy(rmem_layout=(R, 1, 1, 1)))
+                    sq = tf.schedule((tf.square(x32), tf.empty(Tensor[(2, 5, 256, 4), "f32", ((R, KV, TV @ th.t, VEC), (KV * VEC, VEC, 0, 1)), "rmem"])), op=T.copy())
+                    ms = tf.schedule((tf.reduce(sq, (1, 2, 3), True, ReduceKind.MEAN), tf.empty(Tensor[(2, 1, 1, 1), "f32", (R, 1, 1, 1), "rmem"])), op=T.copy())
                     y = tf.cast(x32 * tf.rsqrt(ms + EPS) * (tf.cast(g, "f32") + 1.0), "bf16")
                     return tf.insert_slice(tf.zeros(Tensor[(M, KV, TV, VEC), "bf16"]), y, (m, 0, 0, 0))
 

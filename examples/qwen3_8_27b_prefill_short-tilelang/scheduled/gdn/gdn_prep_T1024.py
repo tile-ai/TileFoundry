@@ -86,7 +86,8 @@ class SCHED_GDN_PREP_T1024:
                  a_log: Tensor[(48,), "bf16"], dt_bias: Tensor[(48,), "bf16"],
                  rowidx: Tensor[(NB * (BT + 3),), "i64"]) -> Tensor[(T_ + 3, PACK), "f32"]:
         with Mesh(("cta",), layout=(NB, 80), names=("rb", "hd")) as cta:
-            out = tf.zeros(Tensor[(T_ + 3, PACK), "f32"])
+            with Mesh(("thread",), layout=(W * 32,), names=("t",)) as init:
+                out = tf.zeros(Tensor[(T_ + 3, PACK), "f32"])
             with Mesh(cta[:, 0:32], layout=(NB, 32), names=("rb", "hd")) as cq:
                 c0 = (cq.hd + 0) * 128
                 with Mesh(("thread",), layout=(W, 32), names=("warp", "lane")) as th:

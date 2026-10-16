@@ -17,9 +17,9 @@ class SCHED_REDUCE_SK_T256:
     @func
     def reduce_sk(p: Tensor[(S, M * N), "f32"], r: Tensor[(M * N,), "bf16"]) -> Tensor[(M * N,), "bf16"]:
         with Mesh(("cta",), layout=(TILES,), names=("tile",)) as cta:
-            out = tf.zeros(Tensor[(M * N,), "bf16"])
             base = cta.tile * SPAN
             with Mesh(("thread",), layout=(BLOCK,), names=("t",)) as th:
+                out = tf.zeros(Tensor[(M * N,), "bf16"])
                 pp = tf.schedule((p[:, base:base + SPAN], tf.empty(Tensor[(S, SPAN), "f32", ((S, BLOCK @ th.t, PER), (PER, 0, 1)), "rmem"])), op=T.copy())
                 rr = tf.schedule((r[base:base + SPAN], tf.empty(Tensor[(SPAN,), "bf16", ((BLOCK @ th.t, PER), (0, 1)), "rmem"])), op=T.copy())
                 total = tf.reduce(pp, axes=(0,), keepdim=False, kind="sum")

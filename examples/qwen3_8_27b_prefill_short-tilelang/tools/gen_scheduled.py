@@ -75,8 +75,7 @@ GN = N // BN
 
 
 def acc_layout(BN):
-    return (f"((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, {BN // 8}), "
-            f"({BN * 64}, 1, 8, 16, 64, 128, 512))")
+    return f"((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, {BN // 8}, 4 @ _compute.lane4, 2), ({BN * 64}, 16, 8, 1, 512, 128, 64))"
 
 
 def ring(rows, bk=64):

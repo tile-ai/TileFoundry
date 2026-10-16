@@ -58,8 +58,8 @@ class SCHED_GATE_UP_T1024:
                     m = (u % GM) * BM
                     n = (u // GM) * BN
                     with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
-                        acc_g = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 22), (11264, 1, 8, 16, 64, 128, 512)), "rmem"])
-                        acc_u = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp, 2, 4 @ _compute.lane4, 22), (11264, 1, 8, 16, 64, 128, 512)), "rmem"])
+                        acc_g = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 22, 4 @ _compute.lane4, 2), (11264, 16, 8, 1, 512, 128, 64)), "rmem"])
+                        acc_u = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 22, 4 @ _compute.lane4, 2), (11264, 16, 8, 1, 512, 128, 64)), "rmem"])
                     for k in tf.tile(0, K, BK):
                         with threads[0, :32] as _loader:
                             lhs_ring = tf.empty(Tensor[(BM, BK), "bf16", Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=STAGES)

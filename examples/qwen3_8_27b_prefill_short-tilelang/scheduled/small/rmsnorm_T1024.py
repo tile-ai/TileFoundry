@@ -23,8 +23,8 @@ class SCHED_RMSNORM_T1024:
     @func
     def rmsnorm(x: Tensor[(M, H), "bf16"], gamma: Tensor[(H,), "bf16"]) -> Tensor[(M, H), "bf16"]:
         with Mesh(("cta",), layout=(M // ROWS,), names=("blk",)) as cta:
-            out = tf.zeros(Tensor[(M, H), "bf16"])
             with Mesh(("thread",), layout=(ROWS, 32), names=("w", "lane")) as th:
+                out = tf.zeros(Tensor[(M, H), "bf16"])
                 xr = tf.schedule((x[cta.blk * ROWS:cta.blk * ROWS + ROWS, :], tf.empty(Tensor[(ROWS, H), "bf16", ((ROWS @ th.w, NCH, 32 @ th.lane, 4), (0, 4, 0, 1)), "rmem"])), op=T.copy())
                 gr = tf.schedule((tf.reshape(gamma, new_shape=(1, H)), tf.empty(Tensor[(1, H), "bf16", ((1, NCH, 32 @ th.lane, 4), (0, 4, 0, 1)), "rmem"])), op=T.copy())
                 xf = tf.cast(xr, dtype="f32")

@@ -14,7 +14,7 @@ for T in 128 256 512 1024; do
   mkdir -p $D
   for SEL in layer0 layer3 embed final_norm lm_head; do
     "${TILEFOUNDRY:-tilefoundry}" analyze $SRC:Qwen3_8_27B.$SEL $D/$SEL.txt \
-      --compute-cost --memory --roofline --performance --operands --dim seq_len=$T &
+      --compute-cost --memory --roofline --performance --dim seq_len=$T &
     "${TILEFOUNDRY:-tilefoundry}" analyze $SRC:Qwen3_8_27B.$SEL $D/$SEL.json \
       --compute-cost --memory --roofline --performance --dim seq_len=$T --json &
   done

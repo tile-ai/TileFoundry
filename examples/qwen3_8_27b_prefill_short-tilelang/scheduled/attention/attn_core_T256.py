@@ -65,11 +65,11 @@ class SCHED_ATTN_CORE_T256:
                     sig = tf.cast(1.0 / (tf.exp2(tf.cast(gr, dtype="f32") * NLOG2E) + 1.0), dtype="bf16")
                     gs = tf.schedule((sig, tf.empty(Tensor[(TM, DV), "bf16", (TM, DV), "smem"])), op=T.copy())
                 with Mesh(threads[1:2, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _c0:
-                    O0 = tf.zeros(Tensor[(TM, DV), "f32", ((8 @ _c0.lane8, 2, 4 @ _c0.warp, 2, 4 @ _c0.lane4, 32), (1, 8, 16, 64, 128, 512)), "rmem"])
-                    S0_0 = tf.zeros(Tensor[(TM, BN), "f32", ((8 @ _c0.lane8, 2, 4 @ _c0.warp, 2, 4 @ _c0.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"])
+                    O0 = tf.zeros(Tensor[(TM, DV), "f32", ((4 @ _c0.warp, 2, 8 @ _c0.lane8, 32, 4 @ _c0.lane4, 2), (16, 8, 1, 512, 128, 64)), "rmem"])
+                    S0_0 = tf.zeros(Tensor[(TM, BN), "f32", ((4 @ _c0.warp, 2, 8 @ _c0.lane8, 8, 4 @ _c0.lane4, 2), (16, 8, 1, 512, 128, 64)), "rmem"])
                     m0 = tf.reduce(S0_0, axes=(-1,), keepdim=True, kind="max") + NEG
                     l0 = tf.reduce(S0_0, axes=(-1,), keepdim=True, kind="sum")
-                    dmask0 = tf.schedule((diag, tf.empty(Tensor[(TM, BN), "f32", ((8 @ _c0.lane8, 2, 4 @ _c0.warp, 2, 4 @ _c0.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"])), op=T.copy())
+                    dmask0 = tf.schedule((diag, tf.empty(Tensor[(TM, BN), "f32", ((4 @ _c0.warp, 2, 8 @ _c0.lane8, 8, 4 @ _c0.lane4, 2), (16, 8, 1, 512, 128, 64)), "rmem"])), op=T.copy())
                 for j in range(NB - 1 - cta.blk):
                     with threads[0, :32] as _kl:
                         k_ring = tf.empty(Tensor[(BN, D), "bf16", Layout(((8, 8), (4, 4, 16)), ((512, 64), (4096, 16, 1))) | Swizzle(3, 4, 3), "smem"], buffers=ST)
@@ -78,12 +78,12 @@ class SCHED_ATTN_CORE_T256:
                         v_ring = tf.empty(Tensor[(BN, DV), "bf16", Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), "smem"], buffers=ST)
                         vt = tf.schedule((tf.reshape(v[j * BN:j * BN + BN, g:g + 1, :], new_shape=(BN, DV)), v_ring), op=T.copy_async_tensor())
                     with Mesh(threads[1:2, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _c0:
-                        S0 = tf.schedule((tf.zeros(Tensor[(TM, BN), "f32", ((8 @ _c0.lane8, 2, 4 @ _c0.warp, 2, 4 @ _c0.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"]), qt0, tf.bitcast(kt, Layout(((4, 4, 16), (8, 8)), ((4096, 16, 1), (512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=s_mma), repeat=(1, 1, 16))
+                        S0 = tf.schedule((tf.zeros(Tensor[(TM, BN), "f32", ((4 @ _c0.warp, 2, 8 @ _c0.lane8, 8, 4 @ _c0.lane4, 2), (16, 8, 1, 512, 128, 64)), "rmem"]), qt0, tf.bitcast(kt, Layout(((4, 4, 16), (8, 8)), ((4096, 16, 1), (512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=s_mma), repeat=(1, 1, 16))
                         m_new0 = tf.max(m0, tf.reduce(S0, axes=(-1,), keepdim=True, kind="max"))
                         alpha0 = tf.exp2((m0 - m_new0) * C)
                         P0 = tf.exp2(S0 * C - m_new0 * C)
                         l0 = l0 * alpha0 + tf.reduce(P0, axes=(-1,), keepdim=True, kind="sum")
-                        Pb0 = tf.schedule((tf.cast(P0, dtype="bf16"), tf.empty(Tensor[(TM, BN), "bf16", ((4, 8 @ _c0.lane8, 2, 4 @ _c0.warp, 2, 4 @ _c0.lane4, 2), (1024, 1, 8, 16, 64, 128, 512)), "rmem"])), op=T.copy())
+                        Pb0 = tf.schedule((tf.cast(P0, dtype="bf16"), tf.empty(Tensor[(TM, BN), "bf16", ((4 @ _c0.warp, 2, 8 @ _c0.lane8, 4, 2, 4 @ _c0.lane4, 2), (16, 8, 1, 1024, 512, 128, 64)), "rmem"])), op=T.copy())
                         O0 = tf.schedule((O0 * alpha0, Pb0, vt), op=T.tiled_mma(atom=o_mma), repeat=(1, 1, 4))
                         m0 = m_new0
                 with threads[0, :32] as _kl:
@@ -93,18 +93,18 @@ class SCHED_ATTN_CORE_T256:
                     v_ring = tf.empty(Tensor[(BN, DV), "bf16", Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), "smem"], buffers=ST)
                     vt = tf.schedule((tf.reshape(v[bx * BN:bx * BN + BN, g:g + 1, :], new_shape=(BN, DV)), v_ring), op=T.copy_async_tensor())
                 with Mesh(threads[1:2, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _c0:
-                    S0 = tf.schedule((tf.zeros(Tensor[(TM, BN), "f32", ((8 @ _c0.lane8, 2, 4 @ _c0.warp, 2, 4 @ _c0.lane4, 8), (1, 8, 16, 64, 128, 512)), "rmem"]), qt0, tf.bitcast(kt, Layout(((4, 4, 16), (8, 8)), ((4096, 16, 1), (512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=s_mma), repeat=(1, 1, 16))
+                    S0 = tf.schedule((tf.zeros(Tensor[(TM, BN), "f32", ((4 @ _c0.warp, 2, 8 @ _c0.lane8, 8, 4 @ _c0.lane4, 2), (16, 8, 1, 512, 128, 64)), "rmem"]), qt0, tf.bitcast(kt, Layout(((4, 4, 16), (8, 8)), ((4096, 16, 1), (512, 64))) | Swizzle(3, 4, 3))), op=T.tiled_mma(atom=s_mma), repeat=(1, 1, 16))
                     S0 = S0 + dmask0
                     m_new0 = tf.max(m0, tf.reduce(S0, axes=(-1,), keepdim=True, kind="max"))
                     alpha0 = tf.exp2((m0 - m_new0) * C)
                     P0 = tf.exp2(S0 * C - m_new0 * C)
                     l0 = l0 * alpha0 + tf.reduce(P0, axes=(-1,), keepdim=True, kind="sum")
-                    Pb0 = tf.schedule((tf.cast(P0, dtype="bf16"), tf.empty(Tensor[(TM, BN), "bf16", ((4, 8 @ _c0.lane8, 2, 4 @ _c0.warp, 2, 4 @ _c0.lane4, 2), (1024, 1, 8, 16, 64, 128, 512)), "rmem"])), op=T.copy())
+                    Pb0 = tf.schedule((tf.cast(P0, dtype="bf16"), tf.empty(Tensor[(TM, BN), "bf16", ((4 @ _c0.warp, 2, 8 @ _c0.lane8, 4, 2, 4 @ _c0.lane4, 2), (16, 8, 1, 1024, 512, 128, 64)), "rmem"])), op=T.copy())
                     O0 = tf.schedule((O0 * alpha0, Pb0, vt), op=T.tiled_mma(atom=o_mma), repeat=(1, 1, 4))
                     m0 = m_new0
                 with Mesh(threads[1:2, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _c0:
                     ob0 = tf.cast(O0 * (1.0 / l0), dtype="bf16")
-                    gr0 = tf.schedule((gs, tf.empty(Tensor[(TM, DV), "bf16", ((8 @ _c0.lane8, 2, 4 @ _c0.warp, 2, 4 @ _c0.lane4, 32), (1, 8, 16, 64, 128, 512)), "rmem"])), op=T.copy())
+                    gr0 = tf.schedule((gs, tf.empty(Tensor[(TM, DV), "bf16", ((4 @ _c0.warp, 2, 8 @ _c0.lane8, 32, 4 @ _c0.lane4, 2), (16, 8, 1, 512, 128, 64)), "rmem"])), op=T.copy())
                     y0 = tf.cast(tf.cast(ob0, dtype="f32") * tf.cast(gr0, dtype="f32"), dtype="bf16")
                     staged0 = tf.schedule((y0, tf.empty(Tensor[(TM, DV), "bf16", (TM, DV), "smem"])), op=T.copy())
                 with threads[0, :32] as _st:

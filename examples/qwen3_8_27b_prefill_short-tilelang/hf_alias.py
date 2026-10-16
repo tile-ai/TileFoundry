@@ -40,7 +40,7 @@ def hf_alias(config: dict) -> dict[str, str]:
         **_LAYER_LEAF,
     }
     for index in range(config["num_hidden_layers"]):
-        alias[f"layer{index}"] = f"model.language_model.layers.{index}"
+        alias[f"layers.{index}"] = f"model.language_model.layers.{index}"
     return alias
 
 

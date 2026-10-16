@@ -36,8 +36,8 @@ class SCHED_ATTN_PREP_T128:
     def attn_prep(qkv: Tensor[(T_, 14336), "bf16"], gamma_q: Tensor[(D,), "bf16"], gamma_k: Tensor[(D,), "bf16"],
                   cos: Tensor[(T_, ROT), "bf16"], sin: Tensor[(T_, ROT), "bf16"]):
         with Mesh(("cta",), layout=(T_,), names=("t",)) as cta:
-            out = tf.zeros(Tensor[(T_, 32, D), "bf16"])
             with Mesh(("thread",), layout=(32, 32), names=("warp", "lane")) as th:
+                out = tf.zeros(Tensor[(T_, 32, D), "bf16"])
                 srcq = tf.reshape(qkv[cta.t:cta.t + 1, 0:QW], new_shape=(24, 512))[:, 0:D]
                 with Mesh(th[0:24, :], layout=(24, 32), names=("head", "lane")) as mq:
                     x = tf.schedule((srcq, tf.empty(Tensor[(24, D), "bf16", ((24 @ mq.head, 2, 32 @ mq.lane, 4), (0, 4, 0, 1)), "rmem"])), op=T.copy())

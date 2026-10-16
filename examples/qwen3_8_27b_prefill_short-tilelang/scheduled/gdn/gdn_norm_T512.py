@@ -52,9 +52,9 @@ class SCHED_GDN_NORM_T512:
     def gdn_norm(o: Tensor[(T_, HV, D), "bf16"], proj: Tensor[(T_, PROJ), "bf16"],
                  gamma: Tensor[(D,), "bf16"]) -> Tensor[(T_, HV, D), "bf16"]:
         with Mesh(("cta",), layout=(T_, 6), names=("t", "hb")) as cta:
-            out = tf.zeros(Tensor[(T_, HV, D), "bf16"])
             h0 = cta.hb * RPC
             with Mesh(("thread",), layout=(4, 2, 16), names=("warp", "half", "ln")) as th:
+                out = tf.zeros(Tensor[(T_, HV, D), "bf16"])
                 ot = tf.schedule((tf.reshape(o[cta.t:cta.t + 1, h0:h0 + RPC, :], new_shape=(RPC, D)), tf.empty(Tensor[(RPC, D), "bf16", ((4 @ th.warp, 2 @ th.half, 16 @ th.ln, 8), (0, 0, 0, 1)), "rmem"])), op=T.copy())
                 zt = tf.schedule((tf.reshape(proj[cta.t:cta.t + 1, Z_OFF + h0 * D:Z_OFF + h0 * D + RPC * D], new_shape=(RPC, D)), tf.empty(Tensor[(RPC, D), "bf16", ((4 @ th.warp, 2 @ th.half, 16 @ th.ln, 8), (0, 0, 0, 1)), "rmem"])), op=T.copy())
                 gm = tf.cast(tf.schedule((tf.reshape(gamma, new_shape=(1, D)), tf.empty(Tensor[(1, D), "bf16", ((1, 16 @ th.ln, 8), (0, 0, 1)), "rmem"])), op=T.copy()), dtype="f32")
