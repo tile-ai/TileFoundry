@@ -250,6 +250,15 @@ mesh-context          ::= ('Mesh' | primary '.' 'Mesh') '(' (expression | ('layo
                             ')'
                           | expression
 with                  ::= 'with' mesh-context ('as' identifier)? ':' block
+slice-endpoint-binary ::= index-endpoint dim-op index-endpoint
+mesh-coordinate       ::= identifier '.' string-literal
+index-endpoint        ::= literal
+                          | primary
+                          | slice-endpoint-binary
+                          | mesh-coordinate
+                          | runtime-expression
+                          | expression
+ceildiv-expression    ::= ceildiv '(' index-endpoint ',' index-endpoint ')'
 variadic-inputs       ::= '[' (runtime-expression (',' runtime-expression)*)? ']'
                           | '(' (runtime-expression (',' runtime-expression)*)? ')'
                           | listcomp
@@ -260,14 +269,6 @@ op-value              ::= primary '(' ((expression | keyword-name '=' expression
 op-call               ::= (primary | expression '[' expression ']') '(' ((expression | keyword-name
                           '=' expression) (',' (expression | keyword-name '=' expression))*)? ')'
 launch                ::= callee '(' ')'
-slice-endpoint-binary ::= index-endpoint dim-op index-endpoint
-mesh-coordinate       ::= identifier '.' string-literal
-index-endpoint        ::= literal
-                          | primary
-                          | slice-endpoint-binary
-                          | mesh-coordinate
-                          | runtime-expression
-                          | expression
 index-slice           ::= (index-endpoint)? ':' (index-endpoint)? (':' index-endpoint)?
 subscript-index       ::= '(' ((index-slice | index-endpoint) (',' (index-slice |
                             index-endpoint))*)? ')'
@@ -286,7 +287,8 @@ constant              ::= boolean-literal
 unary-expression      ::= unary-op runtime-expression
 name                  ::= identifier
 tuple-expression      ::= '(' (runtime-expression (',' runtime-expression)*)? ')'
-runtime-expression    ::= op-call
+runtime-expression    ::= ceildiv-expression
+                          | op-call
                           | launch
                           | subscript-expression
                           | matmul-expression

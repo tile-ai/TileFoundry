@@ -1251,7 +1251,7 @@ FIXTURES = (
     ),
     FixtureCase(
         "finalize refuses a layout crossing logical axes where it is declared",
-        ("schedule", "finalize", "tests/fixtures/schedule/hir/refused/layout_crossing_axes.py", "{out}"),
+        ("schedule", "finalize", "tests/fixtures/diagnostics/layout_crossing_axes.py", "{out}"),
         _check_crossing_axes_refusal,
         code=1,
     ),

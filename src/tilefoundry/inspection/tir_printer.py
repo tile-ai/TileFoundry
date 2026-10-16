@@ -91,7 +91,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
         return self.context.binding_name(expr)
 
     def visit_Constant(self, expr: Constant, ctx=None) -> str:
-        return self.print(expr.value, ctx)
+        return self.print(expr.value, ctx if ctx is not None else self.context)
 
     def visit_Tuple(self, expr: Tuple, ctx=None) -> str:
         if not expr.elements:

@@ -45,7 +45,7 @@ from tilefoundry.ir.types import (
     Swizzle,
     TensorType,
 )
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim import DimVar, ceildiv
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout import size as layout_size
 from tilefoundry.ir.types.layout_algebra import composition
@@ -2153,6 +2153,36 @@ class StaticCallConstructionRule:
             raise ParseError.from_node(match.node, context, str(error)) from error
 
 
+class CeildivExpressionPattern(ElementPattern):
+    element_name = "ceildiv_expression"
+    syntax = LazyPattern(
+        lambda: AstNodePattern(
+            ast.Call,
+            FieldPattern("func", PredicatePattern(
+                "ceildiv", CeildivExpressionPattern.is_ceildiv,
+            )),
+            FieldPattern("args", SequencePattern(
+                ChildPattern("left", IndexEndpointPattern(), "slice_endpoint"),
+                ChildPattern("right", IndexEndpointPattern(), "slice_endpoint"),
+            )),
+            FieldPattern("keywords", SequencePattern()),
+        )
+    )
+
+    @staticmethod
+    def is_ceildiv(node, context):
+        try:
+            return isinstance(node, (ast.Name, ast.Attribute)) and _resolve_reference(node, context) is ceildiv
+        except ParseError:
+            return False
+
+    @staticmethod
+    def construct(match, children, context):
+        return ceildiv(children["left"], children["right"])
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
 class StaticCallPattern(ElementPattern):
     element_name = "call"
     syntax = LazyPattern(
@@ -3748,6 +3778,7 @@ class ExpressionPattern(ElementPattern):
     element_name = "runtime_expression"
     syntax = LazyPattern(
         lambda: ChoicePattern(
+            CeildivExpressionPattern(),
             CallPattern(),
             LaunchPattern(),
             SubscriptExpressionPattern(),

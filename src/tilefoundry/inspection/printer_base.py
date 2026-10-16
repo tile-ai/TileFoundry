@@ -515,7 +515,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             if math.isinf(value):
                 return "-1e999" if value < 0 else "1e999"
             if math.isnan(value):
-                return "(1e999 - 1e999)"
+                return ctx.use(PythonExpr(("import math",), "math.nan")) if ctx is not None else "math.nan"
         if isinstance(value, str):
             return json.dumps(value)
         if value is None or isinstance(value, (int, float, bool)):

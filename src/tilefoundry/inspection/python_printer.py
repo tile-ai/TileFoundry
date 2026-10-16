@@ -98,14 +98,14 @@ class HirPrinter(PythonPrinter):
         self._child_entries = child_entries
         self._moved_window = moved_window
 
-    def tuple_reference(self, elements) -> str:
+    def tuple_reference(self, elements, ctx=None) -> str:
         inner = ", ".join(
-            self.print(element.value) if isinstance(element, Constant) else self.reference(element)
+            self.print(element.value, ctx) if isinstance(element, Constant) else self.reference(element, ctx)
             for element in elements
         )
         return f"({inner}{',' if len(elements) == 1 else ''})"
 
-    def reference(self, expr: Expr) -> str:
+    def reference(self, expr: Expr, ctx=None) -> str:
         """Return the binding that denotes one value in the current definition."""
         if isinstance(expr, ModuleList):
             return expr.key
@@ -116,9 +116,9 @@ class HirPrinter(PythonPrinter):
         ):
             return self._tuple_get_item_text(expr)
         if isinstance(expr, Tuple):
-            return self.tuple_reference(expr.elements)
+            return self.tuple_reference(expr.elements, ctx)
         if id(expr) in self._param_alias:
-            return self.reference(self._param_alias[id(expr)])
+            return self.reference(self._param_alias[id(expr)], ctx)
         projection = _region_projection(expr)
         if isinstance(projection, LoopRegion):
             return self._names[id(projection.params[_projection_index(expr)])]
@@ -128,9 +128,9 @@ class HirPrinter(PythonPrinter):
             )
             return carried[0] if len(carried) == 1 else "(" + ", ".join(carried) + ")"
         if isinstance(projection, MeshRegion):
-            return self.reference(projection.body.elements[_projection_index(expr)])
+            return self.reference(projection.body.elements[_projection_index(expr)], ctx)
         if isinstance(expr, MeshRegion):
-            return self.reference(expr.body)
+            return self.reference(expr.body, ctx)
         return self._names[id(expr)]
 
     def _tuple_get_item_text(self, expr: Call, ctx=None) -> str:
@@ -205,7 +205,7 @@ class HirPrinter(PythonPrinter):
         schema = getattr(type(target), "_op_schema", None)
         inputs = tuple(param for param in schema.signature if param.kind == "input") if schema else ()
         arguments = (
-            [self.tuple_reference(expr.args)]
+            [self.tuple_reference(expr.args, ctx)]
             if len(inputs) == 1 and variadic_item_annotation(inputs[0]) is not None
             else [self.reference(arg) for arg in expr.args]
         )
@@ -940,7 +940,7 @@ def _emit_def(
             printed.add(key)
             _emit_expr(region.body, level)
             if terminal:
-                lines.append(f"{level}return {printer.reference(region.body)}")
+                lines.append(f"{level}return {printer.reference(region.body, ctx)}")
             return
         mesh_text = printer.mesh_context(region.mesh, ctx)
         mesh_name = ctx.scope_name(region.mesh)
@@ -956,7 +956,7 @@ def _emit_def(
                 return
             _emit_expr(region.body, inner)
             if terminal:
-                lines.append(f"{inner}return {printer.reference(region.body)}")
+                lines.append(f"{inner}return {printer.reference(region.body, ctx)}")
         finally:
             ctx.pop_mesh()
 
@@ -1009,7 +1009,7 @@ def _emit_def(
 
     if not isinstance(fn.body, MeshRegion):
         if isinstance(fn.body, Tuple):
-            lines.append(f"{indent}return {printer.tuple_reference(fn.body.elements)}")
+            lines.append(f"{indent}return {printer.tuple_reference(fn.body.elements, ctx)}")
         elif isinstance(fn.body, LoopRegion):
             values = tuple(
                 _names[id(carry)] for carry in fn.body.params[: len(fn.body.yield_values)]

@@ -68,7 +68,7 @@ def _add_source_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "source",
         metavar="SOURCE",
-        help="model.py[:Module[.child_module...][.function]]",
+        help="model.py[:Module[.function]]",
     )
 
 
