@@ -617,7 +617,7 @@ class BufferAlias:
     including capture parameters and region results, MUST have no
     `AllocationValue` (storage is `None`) and MUST NOT participate in in-place reuse.
 
-##### `MemoryLevelPeak`
+##### `AllocationValue`
 
 Allocation collects `AllocationValue(lifetime, aliases)` records.
 `AllocationValue.value` is a property returning `lifetime.value`; it MUST NOT
@@ -737,6 +737,8 @@ Implicit weights MUST use the union of instance indices. Only the entry solves
 placement, once, after collecting its Call leaves; non-boundary callee offsets
 MUST be published from that solution. Repeated region windows contribute their
 maximum occupancy without traversing the callee body again.
+
+##### `MemoryLevelPeak`
 
 Capacity is settled against authored definition order, which fixes every
 linked value's lifetime before any is measured. Whole-Function `gmem` and `smem`
@@ -1691,7 +1693,7 @@ or aggregation. Fresh analysis calls may replace previously attached records.
 | Record | Required Valuations | Local form and resolution |
 |---|---|---|
 | `ComputeCostMetadata` | None | One-execution local counts; resolving a Call does not multiply caller loops. |
-| `MemoryMetadata` | Binding, LoopNest | One-execution traffic is unchanged by resolve; reached coordinates project through Binding. A retained Call carries its callee's summary. |
+| `MemoryMetadata` | Binding, LoopNest | One-execution traffic is unchanged by resolve; reached coordinates project through Binding. A retained Call carries its callee's traffic, with no footprint because it has no boundary of its own. Its resolved reached-address evidence remains internal to the memory family for Function accumulation. |
 | `RegionMemoryMetadata` | None | One execution of this definition; the entry is the final definition, using the same accumulation as callees. |
 | `Liveness` (internal) | Timing | Definition-local `ValueLifetime`, use and region events, timeline end, and loop windows; resolve only translates events. |
 | `AllocationSummary` (internal) | Binding, Timing, LoopNest | Values and occupancy windows, return candidates, instances, and flat region intervals; resolve maps formal/return boundaries and shifts events without mutating callee values. |
