@@ -215,3 +215,7 @@ Total src net: **+272**. The positive total is reported under D37; it is retaine
 - Upstream count_val jobs not regenerated: `OutProj1024.pieces`, `QKV4096.whole`, `QKV8192.pieces`, `QKV8192.whole`, `OProj1024.pieces`, `GateUp1024.pieces`. Earlier baseline 300-second timeouts also included all three Attention lengths; those completed in this regeneration.
 - The window.py shard-window path can still lose unit modes for genuinely sharded operands (D47).
 - Device-level gmem Reshard comparisons still enumerate elements and units in Python (D39).
+
+## Full verification follow-up
+
+The single full source run reported 4228 passed, 12 skipped and two stale-golden mismatches. D61 regenerated views coalesce only compact modes: sparse_decode `(4,16):(16,1)` becomes `64:1` and `(8,8):(512,64)` becomes `64:64`; wide_lbo `(2,8):(512,64)` becomes `16:64`. These are exact equal addresses with unchanged instructions, copies, loops and stages. The two goldens were updated and checked with focused finalize tests.

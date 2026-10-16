@@ -83,7 +83,7 @@ def gemm(
                         )
                         value_7 = T.tensor_view(
                             T.ptr_of(value_3_2),
-                            layout=Layout(((2, 8), (2, 64)), ((512, 64), (2048, 1))) | Swizzle(3, 4, 3),
+                            layout=Layout((16, (2, 64)), (64, (2048, 1))) | Swizzle(3, 4, 3),
                             shape=(16, 128),
                         )
                         rhs_view = T.tensor_view(

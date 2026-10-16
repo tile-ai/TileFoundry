@@ -144,7 +144,7 @@ def gemm(
                             )
                             value_10 = T.tensor_view(
                                 T.ptr_of(ks_3),
-                                layout=Layout(((4, 16), (8, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3),
+                                layout=((64, 64), (1, 64)) | Swizzle(3, 4, 3),
                                 shape=(64, 64),
                             )
                             rhs_view = T.tensor_view(
