@@ -25,40 +25,48 @@ LAYERS=${2:-"0 3"}
 R=${QWEN38_REFDATA:?set QWEN38_REFDATA (see paths.py)}/n$N
 OUT=reports/check_hir/v1/n$N
 mkdir -p "$OUT"
-TF=${TILEFOUNDRY:-tilefoundry}
+PY=${PYTHON:-python}
 
-run() { # selector dir predicates...
-  local sel=$1 dir=$2; shift 2
+run() { # Module.function weight_scope dir predicates...
+  local sel=$1 scope=$2 dir=$3; shift 3
+  local label=${scope:+$scope.}$sel
   local ins
   ins=$(ls "$dir"/in*.pt | sort -V | paste -sd, -)
   echo "=== $sel  (seq_len=$N)"
-  $TF check "model.py:Qwen3_8_27B.$sel" --inputs "files:$ins" --weights ckpt:$QWEN38_REFDATA/ckpt \
-    --expected "$dir/expected.pt" --dim "seq_len=$N" "$@" | tee "$OUT/$sel.txt" | grep -E "^  output|    |^PASS|^FAIL"
+  "$PY" ../check_scoped.py "model.py:$sel" --weight-scope "$scope" --inputs "files:$ins" --weights ckpt:$QWEN38_REFDATA/ckpt \
+    --expected "$dir/expected.pt" --dim "seq_len=$N" "$@" | tee "$OUT/$label.txt" | grep -E "^  output|    |^PASS|^FAIL"
 }
 eq() { local a=(); for o in "$@"; do a+=(--out "$o" --fn equal); done; echo "${a[@]}"; }
 
-run embed "$R/embed" $(eq output)
-run final "$R/final" $(eq output)
+run Qwen3_8_27B.embed "" "$R/embed" $(eq output)
+run Qwen3_8_27B.final "" "$R/final" $(eq output)
 for L in $LAYERS; do
   D=$R/v1/layer$L
-  run "layer$L.input_norm" "$D/input_norm" $(eq output)
-  run "layer$L.post_norm" "$D/post_norm" $(eq output)
-  run "layer$L.mlp.gate_up" "$D/gate_up" $(eq output)
-  run "layer$L.mlp.down" "$D/down" $(eq output)
   if [ -d "$D/in_proj" ]; then
-    run "layer$L.mixer.in_proj" "$D/in_proj" $(eq 'output[0]' 'output[1]' 'output[2]' 'output[3]')
-    run "layer$L.mixer.prep" "$D/prep" \
+    LAYER=LinearAttentionLayer
+    MIXER=GatedDeltaNet
+  else
+    LAYER=FullAttentionLayer
+    MIXER=Attention
+  fi
+  run "$LAYER.input_norm" "layers.$L" "$D/input_norm" $(eq output)
+  run "$LAYER.post_norm" "layers.$L" "$D/post_norm" $(eq output)
+  run MLP.gate_up "layers.$L.mlp" "$D/gate_up" $(eq output)
+  run MLP.down "layers.$L.mlp" "$D/down" $(eq output)
+  if [ -d "$D/in_proj" ]; then
+    run "$MIXER.in_proj" "layers.$L.mixer" "$D/in_proj" $(eq 'output[0]' 'output[1]' 'output[2]' 'output[3]')
+    run "$MIXER.prep" "layers.$L.mixer" "$D/prep" \
       --out 'output[0]' --fn allclose --rtol 7.8125e-3 --atol 1e-5 --fn rel_l2 --max 3.39e-3 \
       --out 'output[1]' --fn allclose --rtol 7.8125e-3 --atol 1e-5 --fn rel_l2 --max 3.39e-3 \
       --out 'output[2]' --fn allclose --rtol 7.8125e-3 --atol 1e-5 --fn rel_l2 --max 2.77e-3 \
       $(eq 'output[3]' 'output[4]')
-    run "layer$L.mixer.delta_rule" "$D/delta_rule" --out output --fn allclose --rtol 7.8125e-3 --atol 1e-5 --fn rel_l2 --max 1.96e-3
-    run "layer$L.mixer.gated_norm" "$D/gated_norm" $(eq output)
-    run "layer$L.mixer.out_proj" "$D/out_proj" $(eq output)
+    run "$MIXER.delta_rule" "layers.$L.mixer" "$D/delta_rule" --out output --fn allclose --rtol 7.8125e-3 --atol 1e-5 --fn rel_l2 --max 1.96e-3
+    run "$MIXER.gated_norm" "layers.$L.mixer" "$D/gated_norm" $(eq output)
+    run "$MIXER.out_proj" "layers.$L.mixer" "$D/out_proj" $(eq output)
   else
-    run "layer$L.mixer.qkv" "$D/qkv" $(eq 'output[0]' 'output[1]' 'output[2]' 'output[3]')
+    run "$MIXER.qkv" "layers.$L.mixer" "$D/qkv" $(eq 'output[0]' 'output[1]' 'output[2]' 'output[3]')
     VMAX=$(python -c "import torch;print(float(torch.load('$D/attention/in2.pt').float().abs().max())*2**-8)")
-    run "layer$L.mixer.attention" "$D/attention" --out output --fn allclose --rtol 7.8125e-3 --atol "$VMAX" --fn rel_l2 --max 2.77e-3
-    run "layer$L.mixer.o_proj" "$D/o_proj" $(eq output)
+    run "$MIXER.attention" "layers.$L.mixer" "$D/attention" --out output --fn allclose --rtol 7.8125e-3 --atol "$VMAX" --fn rel_l2 --max 2.77e-3
+    run "$MIXER.o_proj" "layers.$L.mixer" "$D/o_proj" $(eq output)
   fi
 done

@@ -4,7 +4,8 @@
 For layer i and length T, the layer's input is the hidden state transformers fed
 that layer (reference/T{T}/layers/layer{i}_hidden.pt), and the expected outputs are
 what transformers' layer returned and wrote into its cache. One layer is one
-`check` invocation (selection `<source>:<root>.layer{i}`), so the verdict is check's.
+check request (selection `<source>:<definition>.layer`), bound to weights
+under `layers.{i}`. The comparison is the public check API's verdict.
 
 Bounds: only check --help's own rule, the same as the whole-prefill check
 (tools/check_hir.sh): count the serial f32->bf16 landings of the longest chain and take
@@ -19,13 +20,12 @@ one bf16 ulp at the peak for the hidden output and K; those runs are archived un
 reports/check/archive/.)
 
 usage: check_layers.py SOURCE ROOT T [T ...] [--jobs N] [--tag NAME] [--vs-hir]
+  ROOT: Qwen3_8_27B or Qwen3_8_27BTwin; each layer selects its definition.
   SOURCE: model.py (authored HIR vs transformers) or runtime/twin.py (the twin vs
   transformers, or with --vs-hir the twin vs the evaluator running model.py)
 """
 import argparse
 import json
-import os
-import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -35,9 +35,7 @@ import torch
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: the `tilefoundry` CLI: $TILEFOUNDRY, or whatever is on PATH (this example is not
-#: installed and does not carry a virtualenv of its own).
-TILEFOUNDRY = os.environ.get("TILEFOUNDRY") or shutil.which("tilefoundry") or "tilefoundry"
+CHECK_SCOPED = ROOT.parent / "check_scoped.py"
 RTOL = 0.009
 COS = 0.99996
 
@@ -47,7 +45,12 @@ def command(source, root, T, i, kind, out_json, vs_hir=False):
     hidden = f"{R}/layers/layer{i}_hidden.pt"
     inputs = hidden if kind == "linear_attention" else f"{hidden},{R}/cos.pt,{R}/sin.pt"
     n_out = len(torch.load(ROOT / f"{R}/layers/layer{i}_expected.pt"))
-    cmd = [TILEFOUNDRY, "check", f"{source}:{root}.layer{i}",
+    if root.endswith("Twin"):
+        definition = "DeltaNetLayerTwin" if kind == "linear_attention" else "AttentionLayerTwin"
+    else:
+        definition = "Qwen3_8DeltaNetLayer" if kind == "linear_attention" else "Qwen3_8AttentionLayer"
+    cmd = [sys.executable, str(CHECK_SCOPED), f"{source}:{definition}.layer",
+           "--weight-scope", f"layers.{i}", "--instance-name", f"layer{i}",
            "--inputs", f"files:{inputs}", "--weights", "ckpt:ckpt",
            "--dim", f"seq_len={T}", "--json", out_json]
     if not vs_hir:
