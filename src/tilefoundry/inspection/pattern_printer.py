@@ -16,9 +16,9 @@ from tilefoundry.ir.types.dim import DimFloorDiv, DimMul, DimVar, is_dim_op_call
 _UNNAMED = "_"
 _ARRANGEMENT = "every arrangement"
 _BINARY_OPERATORS = {
-    **{op: (symbol, precedence) for (op, symbol), precedence in dict.fromkeys(
-        (("eq", "=="), ("ne", "!="), ("lt", "<"), ("le", "<="), ("gt", ">"), ("ge", ">=")), 1,
-    ).items()},
+    **{op: (symbol, 1) for op, symbol in (
+        ("eq", "=="), ("ne", "!="), ("lt", "<"), ("le", "<="), ("gt", ">"), ("ge", ">="),
+    )},
     "and": ("&", 3),
     "or": ("|", 2),
     "add": ("+", 4),
