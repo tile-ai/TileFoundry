@@ -8,10 +8,12 @@ from tilefoundry.ir.hir.math.unary import Unary as HirUnary
 from tilefoundry.ir.hir.nn.relu import ReLU as HirReLU
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor._view_layout import derive_view_layout
+from tilefoundry.ir.hir.tensor.arange import Arange as HirArange
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
 from tilefoundry.ir.hir.tensor.reduce import Reduce as HirReduce
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.where import Where as HirWhere
+from tilefoundry.ir.tir.arange import Arange as TirArange
 from tilefoundry.ir.tir.arith import Binary as TirBinary
 from tilefoundry.ir.tir.arith import Unary as TirUnary
 from tilefoundry.ir.tir.cast import Cast as TirCast
@@ -26,6 +28,7 @@ from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.visitor_registry.access_relation import relations_of
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
+from ..instruction import ScheduleRefusal
 from . import register_candidates
 
 
@@ -71,3 +74,10 @@ def _transpose_operands(call, instruction):
     if layout is None:
         raise ValueError("cannot transpose source layout")
     return {}, (replace(call.type, layout=layout), call.type)
+
+
+@register_candidates(HirArange, (TirArange,))
+def _arange_operands(call, instruction):
+    if not isinstance(call.target.start, int):
+        raise ScheduleRefusal(f"Arange start must be a static integer, got {call.target.start!r}")
+    return {"start": call.target.start, "step": call.target.step}, (call.type,)

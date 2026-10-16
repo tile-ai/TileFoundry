@@ -7,10 +7,11 @@ The checked rule set is defined by
 from __future__ import annotations
 
 import dataclasses
+from contextlib import contextmanager
 from typing import Iterable
 
 from tilefoundry.inspection.tir_printer import TirPrinter
-from tilefoundry.ir.core import Expr, Var, VerifyError
+from tilefoundry.ir.core import Expr, Op, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.module import Module, ModuleList, resolve_symbol
 from tilefoundry.ir.hir.function import Function
@@ -345,8 +346,9 @@ def verify_prim_function(
         ctx.frame = next((frame for frame in list_call_paths(module_fns).values()
                           if fn is frame.function or any(fn is v for v in frame.function.variants)), None)
 
-    bound_var_ids: set[int] = {id(p) for p in fn.params}
-    _walk_stmt(fn.body, ctx, scope, fn, module_context, bound_var_ids)
+    _walk_stmt(fn.body, ctx, scope, fn, module_context, _Binders(fn.params))
+    for variant in fn.variants:
+        verify_prim_function(variant, module_fns=module_context)
 
 
 def _check_param_homogeneity(fn: PrimFunction) -> None:
@@ -368,20 +370,52 @@ def _check_param_homogeneity(fn: PrimFunction) -> None:
         )
 
 
-def _walk_stmt(stmt, ctx, scope, fn, module_context, bound_var_ids: set[int]):
+class _Binders:
+    def __init__(self, params):
+        self.visible = {id(param) for param in params}
+        self.ever_bound = set(self.visible)
+
+    def uses(self, value, stmt):
+        if isinstance(value, Var):
+            if id(value) not in self.visible:
+                raise VerifyError(f"{value.name} is used outside the scope that binds it")
+        elif isinstance(value, (Op, PrimFunction, SymbolRef, ModuleList)):
+            return
+        elif isinstance(value, Call):
+            self.uses((value.target, value.args), stmt)
+        elif isinstance(value, Expr):
+            for child in expr_children(value):
+                self.uses(child, stmt)
+        elif isinstance(value, (tuple, list)):
+            for child in value:
+                self.uses(child, stmt)
+        else:
+            raise VerifyError(f"non-IR node {type(value).__name__} in {type(stmt).__name__}")
+
+    @contextmanager
+    def bind(self, var, stmt):
+        if id(var) in self.ever_bound:
+            raise VerifyError(
+                f"{type(stmt).__name__} binding {var.name!r}: "
+                f"{spec_ref_render(_PRIM_FUNCTION)} var must be a fresh Var; this Var "
+                "is already bound in an outer scope"
+            )
+        self.ever_bound.add(id(var))
+        self.visible.add(id(var))
+        try:
+            yield
+        finally:
+            self.visible.remove(id(var))
+
+
+def _walk_stmt(stmt, ctx, scope, fn, module_context, binders: _Binders):
     match stmt:
         case Sequential():
             for s in stmt.body:
-                _walk_stmt(s, ctx, scope, fn, module_context, bound_var_ids)
+                _walk_stmt(s, ctx, scope, fn, module_context, binders)
             return
         case LetStmt():
-            if id(stmt.var) in bound_var_ids:
-                raise VerifyError(
-                    f"LetStmt binding {stmt.var.name!r}: "
-                    f"{spec_ref_render(_PRIM_FUNCTION)} var must be a fresh Var; this Var "
-                    f"is already bound in an outer scope"
-                )
-
+            binders.uses(stmt.value, stmt)
             value_ty = ctx.type_of(stmt.value)
             if stmt.var.type != value_ty:
                 raise VerifyError(
@@ -392,10 +426,11 @@ def _walk_stmt(stmt, ctx, scope, fn, module_context, bound_var_ids: set[int]):
             _reject_nested_alloc_tensor(stmt.value, at_letstmt_value=True)
             _check_embedded_sharding(stmt.value, scope, fn)
 
-            bound_var_ids.add(id(stmt.var))
-            _walk_stmt(stmt.body, ctx, scope, fn, module_context, bound_var_ids)
+            with binders.bind(stmt.var, stmt):
+                _walk_stmt(stmt.body, ctx, scope, fn, module_context, binders)
             return
         case For():
+            binders.uses((stmt.start, stmt.stop, stmt.step), stmt)
             _check_rank0_int(ctx, stmt, stmt.start, "For.start")
             _check_rank0_int(ctx, stmt, stmt.stop, "For.stop")
             _check_rank0_int(ctx, stmt, stmt.step, "For.step")
@@ -414,25 +449,32 @@ def _walk_stmt(stmt, ctx, scope, fn, module_context, bound_var_ids: set[int]):
                 and iv_ty.dtype in (DType.i32, DType.i64)
             ):
                 raise VerifyError("For.induction_var must be rank-0 integer")
-            _walk_stmt(stmt.body, ctx, scope, fn, module_context, bound_var_ids)
+            with binders.bind(stmt.induction_var, stmt):
+                _walk_stmt(stmt.body, ctx, scope, fn, module_context, binders)
             return
         case While():
+            binders.uses(stmt.cond, stmt)
             _check_rank0_bool(ctx, stmt, stmt.cond)
-            _walk_stmt(stmt.body, ctx, scope, fn, module_context, bound_var_ids)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_context, binders)
             return
         case If():
+            binders.uses(stmt.cond, stmt)
             _check_rank0_bool(ctx, stmt, stmt.cond)
-            _walk_stmt(stmt.then_body, ctx, scope, fn, module_context, bound_var_ids)
-            _walk_stmt(stmt.else_body, ctx, scope, fn, module_context, bound_var_ids)
+            _walk_stmt(stmt.then_body, ctx, scope, fn, module_context, binders)
+            _walk_stmt(stmt.else_body, ctx, scope, fn, module_context, binders)
             return
         case MeshScope():
             scope.append(stmt.mesh)
-            _walk_stmt(stmt.body, ctx, scope, fn, module_context, bound_var_ids)
+            with binders.bind(stmt.binding, stmt):
+                _walk_stmt(stmt.body, ctx, scope, fn, module_context, binders)
             scope.pop()
             return
         case Return():
+            for _name, value in _iter_stmt_expr_fields(stmt):
+                binders.uses(value, stmt)
             return
         case Evaluate():
+            binders.uses((stmt.callable, stmt.args), stmt)
             if isinstance(stmt.callable, Launch):
                 _verify_launch(stmt, fn, module_context, ctx)
             elif isinstance(stmt.callable, SymbolRef):
@@ -460,6 +502,8 @@ def _walk_stmt(stmt, ctx, scope, fn, module_context, bound_var_ids: set[int]):
     fn_verify = verify_stmt_registry.lookup(type(stmt))
     if fn_verify is None:
         raise VerifyError(f"no verify_stmt registered for {type(stmt).__name__}")
+    for _name, value in _iter_stmt_expr_fields(stmt):
+        binders.uses(value, stmt)
     fn_verify(stmt, ctx)
     for field_name, field_val in _iter_stmt_expr_fields(stmt):
         _reject_nested_alloc_tensor(field_val, at_letstmt_value=False)
@@ -471,7 +515,7 @@ def _iter_stmt_expr_fields(stmt):
         return
     for f in dataclasses.fields(stmt):
         val = getattr(stmt, f.name)
-        if isinstance(val, Expr):
+        if f.type in (Expr, "Expr") or isinstance(val, Expr):
             yield f.name, val
 
 

@@ -63,6 +63,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp, operand_relations
+from tilefoundry.ir.hir.tensor.arange import Arange as HirArange
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
 from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.hir.tensor.reshape import Reshape
@@ -78,6 +79,7 @@ from tilefoundry.ir.pattern import (
     thread_execution_mesh,
 )
 from tilefoundry.ir.tir import PrimFunction
+from tilefoundry.ir.tir.arange import Arange as TirArange
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.cuda.memory.copy_async_tensor import CopyAsyncTensor
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
@@ -95,6 +97,7 @@ from tilefoundry.ir.types import (
     TensorType,
     Topology,
 )
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout_algebra import cosize
 from tilefoundry.ir.types.mesh import levels, make_mesh, starts
@@ -108,8 +111,9 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
+from tilefoundry.visitor_registry.candidates import candidate_operands
 from tilefoundry.visitor_registry.contexts import TypeInferContext, VerifyContext
-from tilefoundry.visitor_registry.instruction import check_call
+from tilefoundry.visitor_registry.instruction import ScheduleRefusal, check_call
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
 
@@ -139,7 +143,6 @@ CANDIDATES_REFUSED = {
     "scalar_ceildiv_gate": "source has no unscheduled candidate site",
     "register_index_window": "source has no unscheduled candidate site",
     "register_index_window_offset": "source has no unscheduled candidate site",
-    "register_arange": "source has no unscheduled candidate site",
     "wgmma_b_mn_major_wide_lbo": "source has no unscheduled candidate site",
     "cta_submesh_thread_scope": "source has no unscheduled candidate site",
     "loop_variable_rebound": "source has no unscheduled candidate site",
@@ -171,6 +174,7 @@ WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts
 _H200_FACTS_TEXT = """\
 target nvidia.h200_sxm
 instructions
+  T.arange             all targets
   T.binary             all targets
   T.cast               all targets
   T.clamp              all targets
@@ -187,6 +191,7 @@ instructions
 _H200_FACTS_JSON = {
     "target": "nvidia.h200_sxm",
     "instructions": [
+        {"id": "T.arange", "capability": None},
         {"id": "T.binary", "capability": None},
         {"id": "T.cast", "capability": None},
         {"id": "T.clamp", "capability": None},
@@ -204,6 +209,7 @@ _H200_FACTS_JSON = {
 _TARGET_NEUTRAL_FACTS = """\
 target {target}
 instructions
+  T.arange  all targets
   T.binary  all targets
   T.cast    all targets
   T.clamp   all targets
@@ -942,6 +948,24 @@ def _evaluate_call(
         return_type=result_type,
     )
     return evaluate(function, *(data for _type, data in typed_inputs))
+
+
+@pytest.mark.parametrize("dtype", (DType.i32, DType.i64))
+def test_schedule_arange_evaluates_static_coordinates(dtype) -> None:
+    type_ = TensorType((8,), dtype, Layout((8,), (1,)), StorageKind.RMEM)
+    torch_dtype = to_torch_dtype(dtype)
+    result = _evaluate_call(
+        ScheduleOp(op=TirArange(start=3, step=2)),
+        ((type_, torch.empty(8, dtype=torch_dtype)),), type_,
+    )
+    assert torch.equal(result, torch.tensor([3, 5, 7, 9, 11, 13, 15, 17], dtype=torch_dtype))
+
+
+def test_arange_candidates_refuse_a_symbolic_start() -> None:
+    type_ = TensorType((8,), DType.i32, Layout((8,), (1,)), StorageKind.RMEM)
+    call = Call(target=HirArange(type=type_, start=DimVar("start", 0, 8)), args=(), type=type_)
+    with pytest.raises(ScheduleRefusal, match="start must be a static integer"):
+        candidate_operands(call, TirArange)
 
 
 def test_schedule_copy_evaluates_to_the_source_value() -> None:
@@ -1757,7 +1781,7 @@ def test_schedule_candidates_omit_selected_schedule_calls(
     assert "tf.reshard" not in ops
     assert any(
         op
-        in {"tf.binary", "tf.cast", "tf.clamp", "tf.relu", "tf.reduce", "tf.unary", "tf.transpose"}
+        in {"tf.arange", "tf.binary", "tf.cast", "tf.clamp", "tf.relu", "tf.reduce", "tf.unary", "tf.transpose"}
         for op in ops
     )
     if source.stem == "wgmma_cast_between_schedules":

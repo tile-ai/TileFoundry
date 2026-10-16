@@ -312,15 +312,20 @@ class ConvertHIRToTIR(ModulePass):
     `LoweringError` naming its position and type.
     Before lowering, return storage is traced through mesh results, tied loop
     carries, tied insert destinations, captures, and static tuple selections. A leaf
-    ending at an unclaimed single-buffer `Zeros`, `Empty`, or caller-declared
-    retained-call result of the output parameter's exact type places that
+    ending at an unclaimed single-buffer `Zeros`, `FullLike`, `Empty`, or
+    caller-declared retained-call result of the output parameter's exact type places that
     storage at the output parameter,
     regardless of storage kind. Repeated storage roots and leaves without
-    such a root raise `LoweringError`. Other `gmem` zeros use scratch.
-    Every zero fill is emitted in the zero's current scope; `Empty` emits no
-    fill. A lowered leaf that is not its output parameter raises
+    such a root raise `LoweringError`. Other `gmem` fills use scratch.
+    `Zeros` and `FullLike` share fill lowering, including output windows; the
+    scalar constant uses the destination dtype and the requested value. Each
+    fill is emitted in its producer's scope; `Empty` emits no fill. A lowered
+    leaf that is not its output parameter raises
     `LoweringError`. Lowering does not add output copies. Carry entry and
     backedge copies execute the analyzed storage decisions.
+    Slice starts MUST materialize on-demand Call results as TIR scalar operands,
+    including Calls nested in dimension expressions. The materialized binding
+    MUST be visible where the slice key is emitted.
     A region result must not reference variables bound inside the region,
     including variables in a view's base or start coordinates.
   - Any construct without a complete lowering MUST raise `LoweringError`; the

@@ -42,6 +42,8 @@ from tilefoundry.ir.hir.schedule import ScheduleOp, instruction_schema, operand_
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.hir.tensor.empty import Empty
+from tilefoundry.ir.hir.tensor.full_like import FullLike
+from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
@@ -395,7 +397,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
             if (
                 isinstance(root, Call)
                 and (
-                    isinstance(root.target, (Zeros, Empty))
+                    isinstance(root.target, (Zeros, FullLike, Empty))
                     or self.callee_frame(root, self.context.frame) is not None
                 )
                 and getattr(root.target, "buffers", 1) == 1
@@ -804,6 +806,8 @@ class Lowering(ValuationVisitor[Expr | _View]):
             return simplify_dim(dim_op, tuple(self._dim(arg) for arg in value.args))
         if isinstance(value, Call) and is_dim_op_call(value):
             return Call(value.target, tuple(self._dim(arg) for arg in value.args), type=value.type)
+        if isinstance(value, Call):
+            return self._operand(self.visit(value))
         if isinstance(value, Expr):
             return self._known(value)
         raise LoweringError(f"dimension {value!r} is not lowerable")
@@ -970,18 +974,24 @@ class Lowering(ValuationVisitor[Expr | _View]):
                 self._alias_value(producer, value)
 
     def visit_Zeros(self, call: Call) -> Expr | _View:
+        return self._lower_fill(call, 0.0)
+
+    def visit_FullLike(self, call: Call) -> Expr | _View:
+        return self._lower_fill(call, call.target.value)
+
+    def _lower_fill(self, call: Call, value) -> Expr | _View:
         alias = self.output_windows.get(id(call))
         if alias is not None:
             window = self._output_window(alias, call.type)
             self.logical[id(window)] = call.type
-            self._emit_fill(window, call.type)
+            self._emit_fill(window, call.type, value)
             return window
         result = self.output_storage.get(id(call))
         if result is None:
             result = self._declare_result(call, 1)
         else:
             self.logical[id(result)] = call.type
-        self._emit_fill(result, call.type)
+        self._emit_fill(result, call.type, value)
         return result
 
     def _window_start(self, value: Expr) -> Expr:
@@ -990,7 +1000,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
             if operation is not None:
                 return simplify_dim(operation, tuple(self._window_start(arg) for arg in value.args))
         return (
-            self.visit(value)
+            self._operand(self.visit(value))
             if isinstance(value, Call) and not is_dim_op_call(value)
             else self._dim(value)
         )
@@ -1508,13 +1518,13 @@ class Lowering(ValuationVisitor[Expr | _View]):
         layout = type_.layout
         return participant_layout(layout).mesh if isinstance(layout, ShardLayout) else None
 
-    def _emit_fill(self, target, logical_type: TensorType) -> None:
+    def _emit_fill(self, target, logical_type: TensorType, value) -> None:
         mesh = self._holder_mesh(logical_type)
         frame = None if mesh is None else self._physical_frame(mesh)
-        zero = Constant(0.0, type=TensorType.scalar(logical_type.dtype))
+        scalar = Constant(value, type=TensorType.scalar(logical_type.dtype))
         with self._issue_scope(frame):
             written = self._operand(target)
-            self.ctx.add(Evaluate(Fill(), (written, zero)))
+            self.ctx.add(Evaluate(Fill(), (written, scalar)))
 
     def _emit_copy(
         self,

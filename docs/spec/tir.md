@@ -175,6 +175,12 @@ parameters; omitting it means one output.
 - **Fresh `Var` identity**. The same `Var` object MUST NOT be bound
   by more than one `LetStmt` / `For` / `MeshScope` across the
   function. Parameters seed the bound set.
+- **Lexical uses**. A `Var` MUST be visible in the scope that binds it. Let
+  values and loop bounds are checked before their binders enter scope; branch,
+  loop, and mesh bindings do not escape. Every variant uses its own parameters.
+  Expression fields, including intrinsic statements and Return, MUST contain
+  IR nodes; lowering recipes are rejected. Op, PrimFunction, and SymbolRef
+  callables are permitted.
 - **`LetStmt` typing**. `LetStmt.var.type` MUST equal the typeinfer
   of `LetStmt.value`.
 - **`AllocTensor` placement**. `Call(AllocTensor, ...)` MAY only
@@ -850,6 +856,16 @@ on the executing thread mesh. `cond` MUST have bool dtype; the data branches
 and destination MUST have the same dtype. All three inputs use right-aligned
 broadcasting, and `dst` MUST have their broadcast shape. HIR Where lowers to
 this effect-form instruction. This stage provides no CUDA emitter for it.
+
+##### Arange
+
+`T.arange(dst, start=0, step=1)` writes `start + i * step` into coordinate
+`i` of a one-dimensional `i32` or `i64` register destination. It is a
+WRITE-effect instruction available on every target. `start` and `step` are
+static integers; a symbolic HIR start MUST be refused during candidate
+admission with a reason naming `start`. Its schedule evaluator returns the
+same typed sequence. It uses the ordinary registered-op parser and printer.
+This stage provides no CUDA emitter for it.
 
 ##### Unary
 ```python
