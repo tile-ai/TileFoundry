@@ -502,8 +502,12 @@ are monotonic across the whole Function, including nested and sibling regions.
 | `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
 
 - constraints:
-  - A caller-owned parameter MUST NOT be reused. Donation is a contract with
-    the caller, not a conclusion this family may draw.
+  - Optional reuse MUST NOT place an ordinary result in a caller-owned
+    parameter buffer. Donation is a contract with the caller, not a conclusion
+    this family may draw. Semantic same-address relations, including registered
+    views, InsertSlice destinations, and retained-call formal-to-actual bindings,
+    are address constraints rather than optional donation. Each SSA value remains
+    a distinct value with its own interval, even when addresses are equal.
 
 ##### `BufferAlias`
 
@@ -531,8 +535,10 @@ class BufferAlias:
     They MUST have their own AllocationValue intervals and require the operand's
     address through constraints. Static tuple projections are visitor structural rules, like
     `Tuple`, `MeshRegion`, and `LoopRegion`, rather than registered views.
-    Every other result, including `Transpose` or a result that overwrites
-    a destination, MUST allocate its own. Analysis MUST use operation semantics
+    An InsertSlice result MUST use its destination's address, including a
+    parameter destination, unless the old value has a later ordinary use.
+    Every other ordinary result, including `Transpose`, MUST allocate its own.
+    Analysis MUST use operation semantics
     for this distinction rather than infer aliasing from layouts.
   - Reshard MUST alias its source iff storage is unchanged, the shape is
     literal, and every logical element retains its complete set of storage
@@ -557,6 +563,12 @@ class BufferAlias:
     Failure to prove that declaration MUST raise `AnalysisError`. `Transpose`
     is not registered: it writes a new value, retains its access permutation,
     and receives its own allocation under the ordinary conflict rules.
+  - Retained calls MUST translate every callee value in a formal parameter's
+    address group into the corresponding actual argument's group. A call result
+    returning a parameter or its view MUST use that actual's address and relation,
+    unless the old actual has a later ordinary use. This is independent of
+    optional reuse of fresh results. InsertSlice and call-result aliases MUST
+    publish `MemoryMetadata.alias` without independent bytes or offsets.
   - Allocation MUST return storage for each SSA value and record adopted
     InsertSlice update windows and carried-phi ties in `MemoryMetadata.alias`.
     An update window MUST be adopted only together with the InsertSlice's

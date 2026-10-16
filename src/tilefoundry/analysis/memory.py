@@ -849,7 +849,8 @@ def _place(model, facts, topologies):
         if (
             value.lifetime.persistent
             or value.lifetime.memory_level not in high_water
-            or any(alias.kind in (AliasKind.VIEW, AliasKind.FORWARD) for alias in value.aliases)
+            or any(alias.kind in (AliasKind.VIEW, AliasKind.FORWARD, AliasKind.INSERT_SLICE)
+                   for alias in value.aliases)
         ):
             continue
         grouped.setdefault(id(value.value.expr), (value.value.expr, []))[1].append(value)

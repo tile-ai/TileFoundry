@@ -135,8 +135,8 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 16384,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
-    "data_started_window.DataStart.probe[static]": {"gmem": 4_384, "rmem": 16, "smem": 256},
-    "data_started_window.MeshStart.probe[static]": {"gmem": 4_384, "rmem": 8, "smem": 256},
+    "data_started_window.DataStart.probe[static]": {"gmem": 3_360, "rmem": 16, "smem": 256},
+    "data_started_window.MeshStart.probe[static]": {"gmem": 3_360, "rmem": 8, "smem": 256},
     "derived_prefill.DerivedPrefill.prefill[prefill_n=64,topology_only=128]": {
         "gmem": 288,
     },

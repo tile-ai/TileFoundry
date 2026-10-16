@@ -140,6 +140,25 @@ def root(value: AllocationValue, by_value, *, storage_path=False) -> AllocationV
         value = by_value[edge.target]
 
 
+def address_alias(value, by_value):
+    """Compose accepted address links without merging SSA values or lifetimes."""
+    alias = BufferAlias(value.value, identity_of(value), AliasKind.FORWARD)
+    seen = set()
+    while alias.target in by_value:
+        current = by_value[alias.target]
+        edge = _edge(current, by_value)
+        if edge is None:
+            return alias
+        if current in seen:
+            raise AnalysisError("allocation: storage links contain a cycle")
+        seen.add(current)
+        held = local_type_of(leaves_of(current.value.expr.type)[current.value.index])
+        values = {**alias.relation.values, **edge.relation.values}
+        relation = apply_source(alias.relation.relation, edge, len(held.shape), 0, values)
+        alias = BufferAlias(edge.target, AccessRelation(relation, values), alias.kind)
+    return alias
+
+
 @dataclass(frozen=True)
 class AllocationSummary(IRMetadata):
     """Definition facts interpreted at a leaf call, never an execution context."""
@@ -585,9 +604,15 @@ def tie_analysis(model):
             continue
         left = model.members(a)
         right = model.members(b)
-        if model.is_persistent(b) or any(
+        semantic = alias.kind in (AliasKind.INSERT_SLICE, AliasKind.FORWARD)
+        if not semantic and (model.is_persistent(b) or any(
             any(item.value.expr is param for param in model.frame.function.params)
             for item in right
+        )):
+            continue
+        if semantic and any(
+            not use.synthetic and use.at > value.lifetime.defined_at
+            for item in right for use in use_events.get(item.value, ())
         ):
             continue
         if a.lifetime.memory_level != b.lifetime.memory_level or model.size(a) > model.size(b):
@@ -651,7 +676,7 @@ def tie_analysis(model):
                 for window in model.occupancy(item)
                 if phi_event < window.defined_at < backedge
             )
-        if not window and end > start:
+        if not window and not semantic and end > start:
             continue
         landed = _landing(model, value, alias, window=window)
         physical = landed if not window or landed is None else _landing(model, value, alias)
@@ -663,7 +688,7 @@ def tie_analysis(model):
             positioned = _coordinates(model, new_root, scope, override=physical)
             if positioned is None or not is_zero_offset(positioned[1]):
                 continue
-        if end == start and not _pointwise(model, left, right, start, physical, use_events):
+        if not semantic and end == start and not _pointwise(model, left, right, start, physical, use_events):
             continue
         new_root.aliases += (edge,)
         if value is not new_root and alias not in value.aliases:
@@ -688,6 +713,13 @@ def published_aliases(model):
     holders = {(holder, alias.kind) for holder, alias, _loop in model.candidates}
     for value in model.by_value.values():
         if id(value.value.expr) not in model.locations:
+            continue
+        if any(alias.kind is AliasKind.INSERT_SLICE for alias in value.aliases) or (
+            isinstance(value.value.expr, Call)
+            and model.locations[id(value.value.expr)].callee is not None
+            and any(alias.kind is AliasKind.FORWARD for alias in value.aliases)
+        ):
+            result[value.value] = address_alias(value, model.by_value)
             continue
         for kind in kinds:
             if (value.value, kind) not in holders:
@@ -1223,12 +1255,11 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
             if returned is not None and any(
                 root(returned, local).value.expr is formal for formal in callee.function.params
             ):
-                formal = root(returned, local).value
-                actual = ctx.storage_actual(formal.expr, formal.index)
-                sources[SSAValue(node, index)] = _storage_source(
-                    SSAValue(node, index), actual.target, ctx
-                )
-        result = self.allocate(node, ctx, sources)
+                source, precision = ctx.project(address_alias(returned, local), actual_of=ctx.storage_actual)
+                if precision is AnalysisPrecision.EXACT:
+                    sources[SSAValue(node, index)] = source
+        result = self.allocate(node, ctx, {})
+        ctx.candidates.extend((key, alias, None) for key, alias in sources.items())
         resolved = template.resolve(ctx)
         for value in resolved.values:
             ctx.by_value.setdefault(value.value, value)
