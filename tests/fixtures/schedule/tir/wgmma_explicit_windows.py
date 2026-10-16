@@ -43,10 +43,10 @@ def gemm(
                             "rmem",
                         ]
                     )
-                    with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_2:
+                    with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                         T.fill(acc, 0.0)
                     for k in range(0, 32, 16):
-                        with scope[:1, :32] as scope_4:
+                        with scope[:1, :32] as scope_2:
                             tile = T.tensor_view(
                                 T.ptr_of(a[m:m + 64, k:k + 16]),
                                 layout=((64, 16), (32, 1)),
@@ -87,12 +87,12 @@ def gemm(
                                             rhs_view,
                                             atom=T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K),
                                         )
-                    with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
+                    with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_4:
                         tile_out = T.alloc_tensor(
                             tensor_type=Tensor[
                                 (64, 32),
                                 "bf16",
-                                ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 4, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
+                                ((4 @ scope_4.d0, 2, 8 @ scope_4.d1, 4, 4 @ scope_4.d2, 2), (16, 8, 1, 512, 128, 64)),
                                 "rmem",
                             ]
                         )

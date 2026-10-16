@@ -35,21 +35,21 @@ def gemm(x: Tensor[(4, 8), "f32"], out: Tensor[(8, 4), "f32"]):
                 "rmem",
             ]
         )
-        with Mesh((Topology("thread", 32),), layout=(4, 8), names=("d0", "d1")) as scope_2:
+        with Mesh((Topology("thread", 32),), layout=(4, 8), names=("d0", "d1")) as scope:
             T.copy(x, value)
             tile = T.tensor_view(
                 T.ptr_of(value[0:0 + 4, 0:0 + 8]),
-                layout=((4 @ scope_2.d0, 8 @ scope_2.d1), (8, 1)),
+                layout=((4 @ scope.d0, 8 @ scope.d1), (8, 1)),
                 shape=(4, 8),
             )
             tile_1 = T.tensor_view(
                 T.ptr_of(tile[0:0 + 4, 0:0 + 8]),
-                layout=((4 @ scope_2.d0, 8 @ scope_2.d1), (8, 1)),
+                layout=((4 @ scope.d0, 8 @ scope.d1), (8, 1)),
                 shape=(4, 8),
             )
             tile_2 = T.tensor_view(
                 T.ptr_of(tile_1[0:0 + 4, 0:0 + 8]),
-                layout=((8 @ scope_2.d1, 4 @ scope_2.d0), (1, 8)),
+                layout=((8 @ scope.d1, 4 @ scope.d0), (1, 8)),
                 shape=(8, 4),
             )
             T.copy(tile_2, transposed)
@@ -88,7 +88,7 @@ def gemm(x: Tensor[(4, 8), "f32"], out: Tensor[(8, 4), "f32"]):
                 shape=(8, 4),
             )
             T.copy(tile_5, moved)
-        with Mesh((Topology("thread", 32),), layout=(8, 4), names=("d0", "d1")) as scope:
+        with Mesh((Topology("thread", 32),), layout=(8, 4), names=("d0", "d1")) as scope_2:
             T.fill(out, 0.0)
             result = T.alloc_tensor(
                 tensor_type=Tensor[

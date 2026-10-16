@@ -373,13 +373,6 @@ class Lowering(ValuationVisitor[Expr | _View]):
     def run(self) -> PrimFunction:
         if self.function.body is None:
             raise LoweringError(f"{self.function.name!r} has no body to lower")
-        self.scope_names = {
-            id(region.owner): self.names.fresh(
-                "cta" if region.owner is self.function.body else "scope"
-            )
-            for key, region in self.locations.items()
-            if key == id(region.owner) and isinstance(region.owner, MeshRegion)
-        }
         roots = []
         seen = set()
         for path, type_ in self._return_leaves(self.function.return_type):
@@ -728,7 +721,9 @@ class Lowering(ValuationVisitor[Expr | _View]):
     def visit_MeshRegion(self, region: MeshRegion, ctx):
         self._bind_region_args(region)
         frame = self._physical_frame(region.mesh)
-        binding = Var(self.scope_names[id(region)], type=_BINDING)
+        binding = Var(
+            self.names.fresh("cta" if region is self.function.body else "scope"), type=_BINDING
+        )
         with self.ctx.mesh_scope(frame, binding, region) as scope:
             result = self.visit(region.body, self.region_context(region, ctx))
             self._check_escape(result, scope, region)

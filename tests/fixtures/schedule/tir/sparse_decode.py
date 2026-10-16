@@ -15,7 +15,7 @@ def gemm(
 ):
     with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
         with Mesh((Topology("thread", 256),), layout=(2, 128), names=("d0", "d1")) as scope:
-            with scope[:1, :32] as scope_2:
+            with scope[:1, :32] as scope_1:
                 qs = T.tensor_view(
                     8192,
                     dtype="bf16",
@@ -33,7 +33,7 @@ def gemm(
                 )
                 T.fill(ks, 0.0)
                 for r in range(0, 64, 1):
-                    with scope_2 as scope_3:
+                    with scope_1 as scope_2:
                         tile = T.tensor_view(
                             T.ptr_of(kv[0:0 + 1, 0:0 + 256, 0:0 + 1, 0:0 + 64]),
                             layout=(256, 64),
@@ -80,12 +80,12 @@ def gemm(
                         )
                         T.copy_async(tile_4, window_1)
             T.fill(out, 0.0)
-            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_3:
                 o = T.alloc_tensor(
                     tensor_type=Tensor[
                         (64, 64),
                         "f32",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 8, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 8, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )
@@ -94,7 +94,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 64),
                         "bf16",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 4, 2, 4 @ scope_1.d2, 2), (16, 8, 1, 1024, 512, 128, 64)),
+                        ((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 4, 2, 4 @ scope_3.d2, 2), (16, 8, 1, 1024, 512, 128, 64)),
                         "rmem",
                     ]
                 )
@@ -118,7 +118,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 64),
                         "f32",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 8, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 8, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )
@@ -218,7 +218,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 64),
                         "f32",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 8, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 8, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )
@@ -235,7 +235,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 1),
                         "f32",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 1, 1, 1), (16, 8, 1, 0, 0, 0)),
+                        ((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 1, 1, 1), (16, 8, 1, 0, 0, 0)),
                         "rmem",
                     ]
                 )
@@ -244,7 +244,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 64),
                         "f32",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 8, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 8, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )
@@ -253,7 +253,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 64),
                         "f32",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 8, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 8, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )
@@ -262,7 +262,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 1),
                         "f32",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 1, 1, 1), (16, 8, 1, 0, 0, 0)),
+                        ((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 1, 1, 1), (16, 8, 1, 0, 0, 0)),
                         "rmem",
                     ]
                 )
@@ -271,7 +271,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 64),
                         "f32",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 8, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 8, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )
@@ -280,14 +280,14 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 64),
                         "bf16",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 8, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 8, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )
                 T.cast(value_3, p_1, dtype="bf16")
                 tile_9 = T.tensor_view(
                     T.ptr_of(p_1[0:0 + 64, 0:0 + 64]),
-                    layout=((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 8, 2, 4 @ scope_1.d2), (16, 8, 1, 512, 64, 128)),
+                    layout=((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 8, 2, 4 @ scope_3.d2), (16, 8, 1, 512, 64, 128)),
                     shape=(64, 64),
                 )
                 T.copy(tile_9, pr_dst)
@@ -296,7 +296,7 @@ def gemm(
                         for o_k_1 in range(0, 64, 16):
                             lhs_view_4 = T.tensor_view(
                                 T.ptr_of(pr_dst[o_m_1:o_m_1 + 64, o_k_1:o_k_1 + 16]),
-                                layout=((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 2, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
+                                layout=((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 2, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                                 shape=(64, 16),
                             )
                             ks_4 = T.tensor_view(
@@ -331,13 +331,13 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 64),
                         "bf16",
-                        ((8 @ scope_1.d1, 4 @ scope_1.d0, 2, 8, 4 @ scope_1.d2, 2), (1, 16, 8, 512, 128, 64)),
+                        ((8 @ scope_3.d1, 4 @ scope_3.d0, 2, 8, 4 @ scope_3.d2, 2), (1, 16, 8, 512, 128, 64)),
                         "rmem",
                     ]
                 )
                 tile_12 = T.tensor_view(
                     T.ptr_of(o[0:0 + 64, 0:0 + 64]),
-                    layout=((8 @ scope_1.d1, 4 @ scope_1.d0, 2, 8, 4 @ scope_1.d2, 2), (1, 16, 8, 512, 128, 64)),
+                    layout=((8 @ scope_3.d1, 4 @ scope_3.d0, 2, 8, 4 @ scope_3.d2, 2), (1, 16, 8, 512, 128, 64)),
                     shape=(64, 64),
                 )
                 T.cast(tile_12, result, dtype="bf16")

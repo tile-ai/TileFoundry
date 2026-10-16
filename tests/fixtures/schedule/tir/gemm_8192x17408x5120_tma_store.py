@@ -48,10 +48,10 @@ def gemm(
                     )
                     with Mesh(
                         scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                    ) as scope_3:
+                    ) as scope_1:
                         T.fill(acc, 0.0)
                     for k in range(0, 5120, 64):
-                        with scope[:1, :32] as scope_5:
+                        with scope[:1, :32] as scope_2:
                             tile = T.tensor_view(
                                 T.ptr_of(a[m:m + 128, k:k + 64]),
                                 layout=((128, 64), (5120, 1)),
@@ -72,7 +72,7 @@ def gemm(
                             )
                         with Mesh(
                             scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                        ) as scope_4:
+                        ) as scope_3:
                             for o_m in range(0, 128, 128):
                                 for o_n in range(0, 256, 256):
                                     for o_k in range(0, 64, 64):
@@ -142,12 +142,12 @@ def gemm(
                                         )
                     with Mesh(
                         scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                    ) as scope_2:
+                    ) as scope_4:
                         tile_out = T.alloc_tensor(
                             tensor_type=Tensor[
                                 (128, 256),
                                 "bf16",
-                                ((2 @ scope_2.d0, 4 @ scope_2.d1, 2, 8 @ scope_2.d2, 32, 4 @ scope_2.d3, 2), (16384, 16, 8, 1, 512, 128, 64)),
+                                ((2 @ scope_4.d0, 4 @ scope_4.d1, 2, 8 @ scope_4.d2, 32, 4 @ scope_4.d3, 2), (16384, 16, 8, 1, 512, 128, 64)),
                                 "rmem",
                             ]
                         )
@@ -160,7 +160,7 @@ def gemm(
                             shape=(128, 256),
                         )
                         T.copy(tile_out, staged_dst)
-                    with scope[:1, :32] as scope_1:
+                    with scope[:1, :32] as scope_5:
                         staged_dst_2 = T.tensor_view(
                             147456,
                             dtype="bf16",

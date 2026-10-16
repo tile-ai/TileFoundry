@@ -424,10 +424,10 @@ def gemm(
                 )
                 with Mesh(
                     scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                ) as scope_3:
+                ) as scope_1:
                     T.fill(acc, 0.0)
                 for k in range(0, 5120, 64):
-                    with scope[:1, :32] as scope_5:
+                    with scope[:1, :32] as scope_2:
                         tile = T.tensor_view(
                             T.ptr_of(a[(((task // (68 * 16)) * 16) + (task % 16)) * 128:(((task // (68 * 16)) * 16) + (task % 16)) * 128 + 128, k:k + 64]),
                             layout=((128, 64), (5120, 1)),
@@ -448,7 +448,7 @@ def gemm(
                         )
                     with Mesh(
                         scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                    ) as scope_4:
+                    ) as scope_3:
                         for o_m in range(0, 128, 128):
                             for o_n in range(0, 256, 256):
                                 for o_k in range(0, 64, 64):

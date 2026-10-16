@@ -30,7 +30,7 @@ def gemm(
                     "rmem",
                 ]
             )
-            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_2:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                 T.fill(acc, 0.0)
             lhs_ring_stages = (
                 T.tensor_view(4096, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 16)), ((256, 32), (16, 1))) | Swizzle(2, 4, 3), shape=(64, 32)),
@@ -41,7 +41,7 @@ def gemm(
                 T.tensor_view(2048, dtype="bf16", storage="smem", layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))), shape=(32, 32)),
             )
             for k in range(0, 64, 32):
-                with scope[:1, :32] as scope_4:
+                with scope[:1, :32] as scope_2:
                     tile = T.tensor_view(
                         T.ptr_of(a[0:0 + 64, k:k + 32]),
                         layout=((64, 32), (64, 1)),
@@ -89,12 +89,12 @@ def gemm(
                                     atom=T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN),
                                 )
             T.fill(out, 0.0)
-            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_4:
                 result = T.alloc_tensor(
                     tensor_type=Tensor[
                         (64, 32),
                         "bf16",
-                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 4, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_4.d0, 2, 8 @ scope_4.d1, 4, 4 @ scope_4.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )
