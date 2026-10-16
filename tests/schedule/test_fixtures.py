@@ -139,6 +139,7 @@ FINALIZE_REFUSED = {
     "duplicate_output_storage": "return leaf (2,) shares storage with another output",
 }
 CANDIDATES_REFUSED = {
+    "wgmma_b_mn_major_grouped_n64": "source has no unscheduled candidate site",
     "reshard_views": "source has no unscheduled candidate site",
     "scalar_ceildiv_gate": "source has no unscheduled candidate site",
     "register_index_window": "source has no unscheduled candidate site",
@@ -250,6 +251,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "wgmma_b_mn_major_grouped_n64": 6144,
     "wgmma_b_mn_major_wide_lbo": 10240,
     "register_index_window": 0,
     "register_index_window_offset": 0,
@@ -298,6 +300,9 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "wgmma_b_mn_major_grouped_n64": {
+        "thread@0:256#0": _RmemExpectation(32768, "two 64x64 f32 accumulator groups; MMA aliases acc"),
+    },
     "wgmma_b_mn_major_wide_lbo": {
         "thread@0:128#0": _RmemExpectation(32768, "64x128 f32 accumulator and MMA result alias"),
     },

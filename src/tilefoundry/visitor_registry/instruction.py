@@ -28,6 +28,7 @@ from tilefoundry.ir.types.shard_layout import (
 from tilefoundry.ir.types.utils import (
     _participant_frame,
     participant_layout,
+    strip_broadcast_layout,
     tile_inner_type,
     tile_view_layout,
 )
@@ -241,7 +242,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
         )
         try:
             inner = tile_inner_type(
-                type_,
+                replace(type_, layout=strip_broadcast_layout(type_.layout)),
                 shape,
                 counts=counts,
                 participant=participant,
