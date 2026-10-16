@@ -1,4 +1,4 @@
-"""Reject a staged ring whose inner HIR loop depends on its executing thread."""
+"""Keep a continuous staged ordinal when the inner loop depends on its thread."""
 
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget

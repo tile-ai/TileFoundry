@@ -138,7 +138,6 @@ PLAIN_REFUSED = {
     ),
 }
 FINALIZE_REFUSED = {
-    "staged_dynamic_inner": "staged selection needs a constant trip count for 'j'",
     "duplicate_output_storage": "return leaf (2,) shares storage with another output",
 }
 CANDIDATES_REFUSED = {

@@ -249,8 +249,12 @@ class ConvertHIRToTIR(ModulePass):
     addresses are byte offsets, and every analyzed offset becomes one concrete
     buffer view. Multiple offsets form a staged tuple declared outside the
     outermost enclosing HIR loop. Selection uses the linear iteration ordinal
-    from outermost to innermost, modulo the number of buffers; inner loop trip
-    counts must be constant. Instruction-generated loops do not enter this index.
+    from outermost to innermost, modulo the number of buffers, when inner loop
+    trip counts are constant. Otherwise selection uses a rank-0 integer register
+    counter modulo the number of buffers. It is initialized to zero before the
+    outermost staged loop and incremented after all uses in each completed
+    innermost staged iteration; all uses in one iteration see the same slot.
+    Instruction-generated loops do not enter this index.
     An adopted update window is written at its producer. `InsertSlice` skips
     copying only when the update's alias names that HIR destination, resolved
     through region captures.

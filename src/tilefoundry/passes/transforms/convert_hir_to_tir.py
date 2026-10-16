@@ -46,6 +46,7 @@ from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import isl_to_dim
+from tilefoundry.ir.tir.arith import Binary as TirBinary
 from tilefoundry.ir.tir.async_copy import CopyAsync, is_indexed_copy
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -336,6 +337,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
         self.names = Names(self.authored)
         self.logical: dict[int, TensorType] = {}
         self.staged: dict[int, tuple[Var, tuple[LoopRegion, ...]]] = {}
+        self.stage_counters = {}
         self.frames: list[Mesh] = []
         self.outputs: list[tuple[tuple[int, ...], Var]] = []
         self.output_storage: dict[SSAValue, Var] = {}
@@ -657,6 +659,20 @@ class Lowering(ValuationVisitor[Expr | _View]):
 
     def _stage(self, expr: Call) -> Expr:
         stages, loops = self.staged[id(expr)]
+        if any(static_dim_value(bound) is None
+               for loop in loops[1:] for bound in (loop.start, loop.extent, loop.step)):
+            key = tuple(id(loop) for loop in loops)
+            if key not in self.stage_counters:
+                counter = Var(self.names.fresh("stage_counter"), type=_BINDING)
+                one = Var(self.names.fresh("stage_one"), type=_BINDING)
+                with self.ctx.declaration_scope(self._staging_owner(expr)):
+                    for value, number in ((counter, 0), (one, 1)):
+                        self.ctx.bind(value, Call(AllocTensor(tensor_type=_BINDING), (), type=_BINDING))
+                        self.ctx.add(Evaluate(Fill(), (value, Constant(number, type=_BINDING))))
+                self.stage_counters[key] = (counter, one)
+            counter, _one = self.stage_counters[key]
+            index = simplify_dim(DimMod, (counter, len(stages.type.fields)))
+            return Call(TupleGetItem(), (stages, index), type=stages.type.fields[0])
         index = i64_const(0)
         for depth, loop in enumerate(loops):
             known = self._memo.get(id(loop.induction_var))
@@ -672,11 +688,6 @@ class Lowering(ValuationVisitor[Expr | _View]):
                     f"{loop.induction_var.name!r}"
                 )
             if depth:
-                if start is None or stop is None:
-                    raise LoweringError(
-                        f"{_label(expr)} staged selection needs a constant trip count for "
-                        f"{loop.induction_var.name!r}"
-                    )
                 trips = max(0, (stop - start + step - 1) // step)
                 index = simplify_dim(DimMul, (index, trips))
             moved = (
@@ -783,6 +794,9 @@ class Lowering(ValuationVisitor[Expr | _View]):
             ):
                 if not self._same_address(source, param):
                     self._emit_copy(value, carried)
+            for key, (counter, one) in self.stage_counters.items():
+                if key[-1] == id(loop):
+                    self.ctx.add(Evaluate(TirBinary(kind=BinaryKind.ADD), (counter, one, counter)))
         result = (
             init[0]
             if len(init) == 1
