@@ -78,7 +78,7 @@ atom attributes and admits their attribute patterns, execution mesh and operand
 fields (including dtype and storage), without requiring shape or layout matches.
 It then enumerates integer parameters admitted by their patterns. If a parameter
 names a symbol in declared operand shapes, its values MUST divide every corresponding
-operand axis extent; a parameter absent from those shapes retains the full range
+concrete operand axis extent; a parameter absent from those shapes retains the full range
 from one to the largest operand extent. Integer tuples are tried largest first.
 Each concrete instruction then passes the shared closed check, including tile
 projection and layout matching. A rejected extent does not stop other extents

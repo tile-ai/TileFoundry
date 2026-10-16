@@ -250,7 +250,10 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
                 {**state, param.name: value}
                 for state in held
                 for value in range(1, largest + 1)
-                if all(operand_types[index].shape[axis] % value == 0 for index, axis in axes)
+                if all(
+                    type(extent := operand_types[index].shape[axis]) is not int or extent % value == 0
+                    for index, axis in axes
+                )
                 and (probe := PatternMatcher(state)).match(param.pattern, value)
                 and probe.solve()
             ]
