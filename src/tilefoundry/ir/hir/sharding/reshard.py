@@ -13,6 +13,7 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Broadcast, TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
 from tilefoundry.ir.types.layout import Layout, LayoutBase, resolve_layout
+from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
@@ -203,7 +204,8 @@ def _same_locations(source: TensorType, result: TensorType) -> bool:
         ):
             before = getattr(source.layout, "layout", source.layout)
             after = getattr(result.layout, "layout", result.layout)
-            if before == after:
+            if before == after or (isinstance(before, Layout) and isinstance(after, Layout)
+                                   and coalesce(before, major="row") == coalesce(after, major="row")):
                 return True
         return locations(source, result) == locations(result, source)
     except ValueError:

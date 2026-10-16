@@ -18,6 +18,7 @@ from tests.ops.ir.typeinfer_utils import (
 )
 from tilefoundry.dsl.storage import gmem, rmem
 from tilefoundry.ir.hir.sharding.reshard import Reshard, _same_locations
+from tilefoundry.ir.hir.tensor import bitcast
 from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Topology, make_tensor_type
 from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
 from tilefoundry.ir.types.shard_layout import Split
@@ -144,3 +145,15 @@ def test_compact_and_factored_plain_layouts_share_locations(storage):
     factored = make_tensor_type((64,), layout=Layout(((8, 8),), ((8, 1),)), storage=storage)
     assert _same_locations(compact, factored)
     assert _same_locations(factored, compact)
+
+
+def test_large_gmem_factorization_does_not_enumerate_replicas(monkeypatch):
+    monkeypatch.setattr(bitcast, "_address_points", lambda *_: pytest.fail("enumerated compact gmem"))
+    compact = make_tensor_type((1, 2048, 8192), layout=Layout((1, 2048, 8192), (16777216, 8192, 1)),
+                               storage=StorageKind.GMEM)
+    mesh = Mesh((Topology("cta", 128),), Layout((128,), (1,)), ("tile",))
+    sharded = make_tensor_type(compact.shape, storage=StorageKind.GMEM, layout=ShardLayout(
+        Layout((1, 2048, 128, 64), (16777216, 8192, 64, 1)), (Split(2),), mesh
+    ))
+    assert _same_locations(compact, sharded)
+    assert _same_locations(sharded, compact)

@@ -2247,7 +2247,7 @@ def test_view_strides_distinguish_coordinate_and_parameter_divisions(coordinate_
     lowering = SimpleNamespace(_dim=lambda value: value)
     address = SimpleNamespace(relation=relation)
     if coordinate_division:
-        with pytest.raises(lowering_module.LoweringError, match="coordinate-dependent divisions"):
+        with pytest.raises(lowering_module.LoweringError, match="non-affine address"):
             lowering_module.Lowering._address_view(lowering, source, address, desired)
     else:
         view = lowering_module.Lowering._address_view(lowering, source, address, desired)

@@ -190,7 +190,7 @@ Positive lines add required behavior; simplifications share A/B Wgmma patterns, 
 | `src/tilefoundry/inspection/tir_printer.py` | +0 | Reuse TIR print context for constants |
 | `src/tilefoundry/ir/hir/schedule.py` | +25 | D19 sparse candidate admission and concrete pruning |
 | `src/tilefoundry/ir/hir/sharding/local.py` | -12 | Reuse the true local-layout projection |
-| `src/tilefoundry/ir/hir/sharding/reshard.py` | +4 | D38/D39 storage-instance equality |
+| `src/tilefoundry/ir/hir/sharding/reshard.py` | +6 | D38/D39 storage-instance equality |
 | `src/tilefoundry/ir/hir/tensor/bitcast.py` | +10 | Shared enumeration and row-major correspondence (D62) |
 | `src/tilefoundry/ir/hir/tensor/reshape.py` | +6 | Preserve view layout for unit removal |
 | `src/tilefoundry/ir/pattern/utils.py` | +14 | D19 field admission reused by call checking |
@@ -199,7 +199,7 @@ Positive lines add required behavior; simplifications share A/B Wgmma patterns, 
 | `src/tilefoundry/ir/types/layout_correspondence.py` | -13 | Delete the crossing-axis coordinate fallback |
 | `src/tilefoundry/ir/types/shard_layout.py` | +21 | Canonical split order / residual checks, symbolic pass-through |
 | `src/tilefoundry/parser/pattern_nodes.py` | +31 | Value-role ceildiv grammar using existing Dim nodes |
-| `src/tilefoundry/passes/transforms/convert_hir_to_tir.py` | -11 | Summary-driven views/output writes, typed fills, dynamic stage counter; delete structural root tracing |
+| `src/tilefoundry/passes/transforms/convert_hir_to_tir.py` | -2 | Summary-driven views/output writes, typed fills, dynamic stage counter; delete structural root tracing |
 | `src/tilefoundry/utils/isl_utils.py` | +2 | Exact single-piece affine extraction support |
 | `src/tilefoundry/visitor_registry/candidates/common.py` | +10 | Arange candidate callback |
 | `src/tilefoundry/visitor_registry/contexts.py` | +0 | Keep shared candidate context annotation correct |
@@ -208,7 +208,7 @@ Positive lines add required behavior; simplifications share A/B Wgmma patterns, 
 | `src/tilefoundry/visitor_registry/typeinfer.py` | +14 | Uniform axis-group validation |
 | `src/tilefoundry/visitor_registry/verify.py` | +39 | Lexical binder-scope traversal including variants |
 
-Total src net: **+272**. The positive total is reported under D37; it is retained to preserve the required fixes.
+Total src net: **+283**. The positive total is reported under D37; it is retained to preserve the required fixes.
 
 ## Remaining risks
 
@@ -219,3 +219,7 @@ Total src net: **+272**. The positive total is reported under D37; it is retaine
 ## Full verification follow-up
 
 The single full source run reported 4228 passed, 12 skipped and two stale-golden mismatches. D61 regenerated views coalesce only compact modes: sparse_decode `(4,16):(16,1)` becomes `64:1` and `(8,8):(512,64)` becomes `64:64`; wide_lbo `(2,8):(512,64)` becomes `16:64`. These are exact equal addresses with unchanged instructions, copies, loops and stages. The two goldens were updated and checked with focused finalize tests.
+
+Installed verification initially reported 156 passed and five failures: two stale tutorial outputs (D26/D31), and three placed-MLP analysis timeouts. The tutorials were regenerated. The gmem no-device fast path now compares row-major coalesced plain layouts, preserving the same complete address function without enumerating millions of replicated elements. Composed offsets retain their existing comparison and device-level storage still uses the instance-aware path. A large factored-layout regression and 14 focused source checks pass. Plain lowering also proves its full declared address map plus origin equals the Summary map, including nested divisions; parameter-only division origins pass and inexact strides refuse. These installed failures are rechecked with a focused installed run, without repeating the full suites.
+
+Changed tutorial output goldens: `docs/tutorial/schedule.md`, `docs/tutorial/schedule.ipynb`, `docs/tutorial/showcase.md`, `docs/tutorial/showcase.ipynb` (D26/D31 current reports and candidate headers).
