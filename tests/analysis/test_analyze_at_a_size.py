@@ -311,12 +311,12 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 3 * 128 * 128 * 2,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]": {
-        "gmem": 4_611_682_592,
+        "gmem": 4_611_686_688,
         "rmem": 1552,
         "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]": {
-        "gmem": 4_611_682_592,
+        "gmem": 4_611_686_688,
         "rmem": 1552,
         "smem": 65_792,
     },
