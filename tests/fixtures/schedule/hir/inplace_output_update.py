@@ -18,4 +18,5 @@ class InplaceOutputUpdate:
 
     @func
     def gemm(out: Tensor[(2, 4), "f32"], x: Tensor[(1, 4), "f32"]):
-        return update(out, x)  # noqa: F821 -- class-body binding
+        with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
+            return update(out, x)  # noqa: F821 -- class-body binding
