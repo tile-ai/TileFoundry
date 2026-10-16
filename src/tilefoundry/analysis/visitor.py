@@ -139,7 +139,7 @@ class AnalyzeContext(
         relation, loop_values = name_loop_parameters(relation, (loop[0] for loop in self.loops))
         values.update(loop_values)
         values = referenced_values(relation, values)
-        return BufferAlias(target, AccessRelation(relation, values), kind), precision
+        return replace(source, target=target, relation=AccessRelation(relation, values), kind=kind), precision
 
     def varies(self, formal: Var) -> frozenset[int]:
         for parameter, argument in self.bindings:

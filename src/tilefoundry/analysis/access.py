@@ -96,11 +96,12 @@ class Access:
 
 @dataclass(frozen=True)
 class BufferAlias:
-    """A result's coordinates in one SSA result's storage."""
+    """A result's storage coordinates; ``writes`` marks mutations in the composed callee chain."""
 
     target: SSAValue
     relation: AccessRelation
     kind: AliasKind
+    writes: bool = False
 
 
 def referenced_values(relation, values):

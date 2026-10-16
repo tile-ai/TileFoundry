@@ -156,7 +156,10 @@ def address_alias(value, by_value, *, alias=None):
         held = local_type_of(leaves_of(current.value.expr.type)[current.value.index])
         values = {**alias.relation.values, **edge.relation.values}
         relation = apply_source(alias.relation.relation, edge, len(held.shape), 0, values)
-        alias = BufferAlias(edge.target, AccessRelation(relation, values), alias.kind)
+        alias = replace(
+            alias, target=edge.target, relation=AccessRelation(relation, values),
+            writes=alias.writes or edge.writes or edge.kind is AliasKind.INSERT_SLICE,
+        )
     return alias
 
 
@@ -450,7 +453,7 @@ def _landing(model, holder, alias, *, window=False):
         _visible_at(model, value, representative) for value in published.values.values()
     ):
         return None
-    return representative, BufferAlias(alias.target, published, alias.kind)
+    return representative, replace(alias, relation=published)
 
 
 def _in_root(relation, positioned, scope):
@@ -615,7 +618,7 @@ def tie_analysis(model):
             for item in right
         )):
             continue
-        if semantic and any(
+        if (alias.kind is AliasKind.INSERT_SLICE or alias.writes) and any(
             not use.synthetic and use.at > value.lifetime.defined_at
             for item in right for use in use_events.get(item.value, ())
         ):

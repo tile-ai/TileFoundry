@@ -39,7 +39,8 @@ def test_union_coverage_does_not_prove_complete_writes_per_iteration() -> None:
 
 
 @pytest.mark.parametrize("later_use", [None, "callee", "caller"])
-def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_use):
+@pytest.mark.parametrize("nested", [False, True])
+def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_use, nested):
     source = (Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py").read_text()
     if later_use == "callee":
         source = source.replace(
@@ -48,6 +49,14 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_u
         )
     elif later_use == "caller":
         source = source.replace("return update(out, x)", "return update(out, x), out")
+    if nested:
+        source = source.replace(
+            "    @func\n    def gemm",
+            "    @func\n    def relay(out: Tensor[(2, 4), \"f32\"], x: Tensor[(1, 4), \"f32\"]):\n"
+            "        return update(out, x)\n\n    @func\n    def gemm",
+        )
+        source = source.replace("return update(out, x), out", "return relay(out, x), out")
+        source = source.replace("return update(out, x)  #", "return relay(out, x)  #")
     path = tmp_path / "update.py"
     path.write_text(source)
     module = load_authored_ir(str(path))
@@ -55,6 +64,9 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_u
     call = next(value for value in collect_exprs(result.function.body)
                 if isinstance(value, Call) and isinstance(value.target, Function))
     callee = call.target
+    if nested:
+        callee = next(value.target for value in collect_exprs(callee.body)
+                      if isinstance(value, Call) and isinstance(value.target, Function))
     insert = next(value for value in collect_exprs(callee.body)
                   if isinstance(value, Call) and isinstance(value.target, InsertSlice))
     inserted = get_metadata(insert, MemoryMetadata)
@@ -129,3 +141,24 @@ class SequentialCarries:
         assert memory.alias.target.expr is insert.args[0]
         assert memory.buffer_bytes is None and memory.offsets == ()
     verify_module(finalize(module))
+
+
+@pytest.mark.parametrize("returned", ["out", "out[1:2, :]"])
+def test_read_only_call_return_keeps_storage_despite_later_actual_use(tmp_path, returned):
+    source = (Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py").read_text()
+    source = source.replace("return tf.insert_slice(out, row, (1, 0))", f"return {returned}")
+    source = source.replace("return update(out, x)", "return update(out, x), out")
+    path = tmp_path / "readonly.py"
+    path.write_text(source)
+    module = load_authored_ir(str(path))
+    result = analyze(*check_program(module, module.entry_function()), analysis="memory")
+    call = next(value for value in collect_exprs(result.function.body)
+                if isinstance(value, Call) and isinstance(value.target, Function))
+    memory = get_metadata(call, MemoryMetadata)
+    assert memory.alias is not None
+    assert memory.alias.target.expr is result.function.params[0]
+    expected = isl.map("{ [i, j] -> [i, j] : 0 <= i < 2 and 0 <= j < 4 }") if returned == "out" else isl.map(
+        "{ [i, j] -> [i + 1, j] : i = 0 and 0 <= j < 4 }"
+    )
+    assert memory.alias.relation.relation.is_equal(expected)
+    assert memory.buffer_bytes is None and memory.offsets == ()

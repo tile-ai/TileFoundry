@@ -566,9 +566,12 @@ class BufferAlias:
   - Retained calls MUST translate every callee value in a formal parameter's
     address group into the corresponding actual argument's group. A call result
     returning a parameter or its view MUST use that actual's address and relation,
-    unless the old actual has a later ordinary use. This is independent of
-    optional reuse of fresh results. InsertSlice and call-result aliases MUST
-    publish `MemoryMetadata.alias` without independent bytes or offsets.
+    unless the composed callee chain writes into the formal (directly through
+    InsertSlice or through a retained call) and the old actual has a later ordinary
+    use. Read-only parameter and view returns MUST alias despite later reads of
+    the actual. This is independent of optional reuse of fresh results. InsertSlice
+    and call-result aliases MUST publish `MemoryMetadata.alias` without independent
+    bytes or offsets.
   - Allocation MUST return storage for each SSA value and record adopted
     InsertSlice update windows and carried-phi ties in `MemoryMetadata.alias`.
     An update window MUST be adopted only together with the InsertSlice's
