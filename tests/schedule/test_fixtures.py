@@ -2211,6 +2211,26 @@ class ComposedReshape:
                and value.type.layout == expected for value in visitor.bindings.values())
 
 
+def test_address_origin_can_divide_a_runtime_loop_index():
+    module = import_dsl('''
+from tilefoundry.dsl import *
+from tilefoundry.target import CudaTarget
+@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 1), Topology("thread", 1)))
+class ModularWindow:
+    @func
+    def gemm(x: Tensor[(64,), "f32"]):
+        with Mesh(("cta",), layout=(1,), names=("b",)) as cta:
+            with Mesh(("thread",), layout=(1,), names=("t",)) as thread:
+                out = tf.zeros(Tensor[(8,), "f32", "rmem"])
+                for u in range(cta.b, 8, 1):
+                    start = (u % 4) * 8
+                    out = tf.schedule((x[start:start+8], tf.empty(Tensor[(8,), "f32", "rmem"])), op=T.copy())
+                return out
+''')
+    verify_module(import_dsl(as_script(finalize(module))))
+
+
 def test_lowering_rejects_addressable_result_without_offsets(
     monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
