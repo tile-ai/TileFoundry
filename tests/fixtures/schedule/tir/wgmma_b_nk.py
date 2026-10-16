@@ -26,6 +26,7 @@ def gemm(
                 ]
             )
             T.fill(acc, 0.0)
+            value = T.tensor_view(T.ptr_of(a), layout=(64, 16), shape=(64, 16))
             lhs_dst = T.tensor_view(
                 512,
                 dtype="bf16",
@@ -33,9 +34,17 @@ def gemm(
                 layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                 shape=(64, 16),
             )
-            T.copy(a, lhs_dst)
+            value_1 = T.tensor_view(
+                T.ptr_of(lhs_dst),
+                layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                shape=(64, 16),
+            )
+            T.copy(value, value_1)
+            value_2 = T.tensor_view(T.ptr_of(weight), layout=(16, 16), shape=(16, 16))
             tile = T.tensor_view(
-                T.ptr_of(weight[0:0 + 16, 0:0 + 16]), layout=((16, 16), (1, 16)), shape=(16, 16)
+                T.ptr_of(value_2[0:0 + 16, 0:0 + 16]),
+                layout=((16, 16), (1, 16)),
+                shape=(16, 16),
             )
             rhs_kn_1 = T.tensor_view(
                 T.ptr_of(scratch[0:0 + 256]), layout=(16, 16), shape=(16, 16)
@@ -48,7 +57,12 @@ def gemm(
                 layout=Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))),
                 shape=(16, 16),
             )
-            T.copy(rhs_kn_1, rhs_dst)
+            value_3 = T.tensor_view(
+                T.ptr_of(rhs_dst),
+                layout=Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))),
+                shape=(16, 16),
+            )
+            T.copy(rhs_kn_1, value_3)
             for o_m in range(0, 64, 64):
                 for o_n in range(0, 16, 16):
                     for o_k in range(0, 16, 16):
@@ -59,8 +73,13 @@ def gemm(
                             layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                             shape=(64, 16),
                         )
+                        value_4 = T.tensor_view(
+                            T.ptr_of(lhs_dst_2),
+                            layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                            shape=(64, 16),
+                        )
                         lhs_view = T.tensor_view(
-                            T.ptr_of(lhs_dst_2[0:0 + 64, 0:0 + 16]),
+                            T.ptr_of(value_4[0:0 + 64, 0:0 + 16]),
                             layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                             shape=(64, 16),
                         )
@@ -71,8 +90,13 @@ def gemm(
                             layout=Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))),
                             shape=(16, 16),
                         )
+                        value_5 = T.tensor_view(
+                            T.ptr_of(rhs_dst_2),
+                            layout=Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))),
+                            shape=(16, 16),
+                        )
                         rhs_view = T.tensor_view(
-                            T.ptr_of(rhs_dst_2[0:0 + 16, 0:0 + 16]),
+                            T.ptr_of(value_5[0:0 + 16, 0:0 + 16]),
                             layout=Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))) @ {B()},
                             shape=(16, 16),
                         )
@@ -82,7 +106,13 @@ def gemm(
                             rhs_view,
                             atom=T.cuda.sm90.Wgmma(n=16, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K),
                         )
-            window = T.tensor_view(
-                T.ptr_of(out[0:0 + 64, 0:0 + 16]), layout=(64, 16), shape=(64, 16)
+            value_6 = T.tensor_view(
+                T.ptr_of(acc),
+                layout=((4 @ scope.d0, 2, 8 @ scope.d1, 2, 4 @ scope.d2, 2), (16, 8, 1, 512, 128, 64)),
+                shape=(64, 16),
             )
-            T.copy(acc, window)
+            value_7 = T.tensor_view(T.ptr_of(out), layout=(64, 16), shape=(64, 16))
+            window = T.tensor_view(
+                T.ptr_of(value_7[0:0 + 64, 0:0 + 16]), layout=(64, 16), shape=(64, 16)
+            )
+            T.copy(value_6, window)

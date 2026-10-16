@@ -15,7 +15,10 @@ def gemm(
     with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
         with Mesh((Topology("thread", 1),), layout=(1,), names=("d0",)) as scope:
             value = T.alloc_tensor(tensor_type=Tensor[(1,), "i64", (1,), "rmem"])
-            T.copy(starts, value)
-            tile = T.tensor_view(T.ptr_of(value[0:0 + 1]), layout=(), shape=())
-            tile_1 = T.tensor_view(T.ptr_of(x[tile:tile + 8]), layout=(8,), shape=(8,))
-            T.copy(tile_1, out)
+            value_1 = T.tensor_view(T.ptr_of(starts), layout=(1,), shape=(1,))
+            value_2 = T.tensor_view(T.ptr_of(value), layout=(1,), shape=(1,))
+            T.copy(value_1, value_2)
+            value_3 = T.tensor_view(T.ptr_of(value), layout=(), shape=())
+            value_4 = T.tensor_view(T.ptr_of(x[value_3:value_3 + 1]), layout=(8,), shape=(8,))
+            value_5 = T.tensor_view(T.ptr_of(out), layout=(8,), shape=(8,))
+            T.copy(value_4, value_5)

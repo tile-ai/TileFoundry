@@ -21,5 +21,10 @@ def gemm(x: Tensor[(4, 32), "f32"], out: Tensor[(4, 32), "f32"]):
                         (4, 32), "f32", (4 @ scope_1.d0, 32 @ scope_1.d1), "rmem"
                     ]
                 )
-                T.copy(x, value)
-                T.copy(value, out)
+                value_1 = T.tensor_view(T.ptr_of(x), layout=(4, 32), shape=(4, 32))
+                value_2 = T.tensor_view(
+                    T.ptr_of(value), layout=(4 @ scope_1.d0, 32 @ scope_1.d1), shape=(4, 32)
+                )
+                T.copy(value_1, value_2)
+                value_3 = T.tensor_view(T.ptr_of(out), layout=(4, 32), shape=(4, 32))
+                T.copy(value_2, value_3)

@@ -17,21 +17,24 @@ def gemm(x: Tensor[(4, 4), "f32"], out: Tensor[(4, 4), "f32"]):
             out_1 = T.alloc_tensor(tensor_type=Tensor[(4, 4), "f32", "rmem"])
             T.fill(out_1, 0.0)
             for m in range(0, 2, 1):
-                window = T.tensor_view(
-                    T.ptr_of(out_1[2 * m:2 * m + 2, 0:0 + 4]), layout=(2, 4), shape=(2, 4)
+                value = T.tensor_view(
+                    T.ptr_of(out_1[2 * m:2 * m + 1, 0:0 + 1]), layout=(2, 4), shape=(2, 4)
                 )
-                T.fill(window, 0.0)
+                T.fill(value, 0.0)
                 for k in range(0, 3, 1):
-                    value = T.alloc_tensor(tensor_type=Tensor[(2, 4), "f32", "rmem"])
-                    tile = T.tensor_view(
-                        T.ptr_of(x[2 * m:2 * m + 2, 0:0 + 4]), layout=(2, 4), shape=(2, 4)
+                    value_1 = T.alloc_tensor(tensor_type=Tensor[(2, 4), "f32", "rmem"])
+                    value_2 = T.tensor_view(
+                        T.ptr_of(x[2 * m:2 * m + 1, 0:0 + 1]), layout=(2, 4), shape=(2, 4)
                     )
-                    T.copy(tile, value)
-                    window_1 = T.tensor_view(
-                        T.ptr_of(out_1[2 * m:2 * m + 2, 0:0 + 4]), layout=(2, 4), shape=(2, 4)
+                    value_3 = T.tensor_view(T.ptr_of(value_1), layout=(2, 4), shape=(2, 4))
+                    T.copy(value_2, value_3)
+                    value_4 = T.tensor_view(
+                        T.ptr_of(out_1[2 * m:2 * m + 1, 0:0 + 1]), layout=(2, 4), shape=(2, 4)
                     )
-                    T.binary(window_1, value, window_1, kind=BinaryKind.ADD)
-            window_2 = T.tensor_view(
-                T.ptr_of(out[0:0 + 4, 0:0 + 4]), layout=(4, 4), shape=(4, 4)
+                    T.binary(value_4, value_3, value_4, kind=BinaryKind.ADD)
+            value_5 = T.tensor_view(T.ptr_of(out_1), layout=(4, 4), shape=(4, 4))
+            value_6 = T.tensor_view(T.ptr_of(out), layout=(4, 4), shape=(4, 4))
+            window = T.tensor_view(
+                T.ptr_of(value_6[0:0 + 4, 0:0 + 4]), layout=(4, 4), shape=(4, 4)
             )
-            T.copy(out_1, window_2)
+            T.copy(value_5, window)

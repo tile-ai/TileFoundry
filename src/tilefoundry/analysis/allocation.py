@@ -40,6 +40,7 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_access,
     leaf_span,
     leaves_of,
+    relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.call_frame import ValuationVisitor
@@ -51,6 +52,7 @@ from .access import (
     SSAValue,
     aligned_source,
     apply_source,
+    buffer_alias,
     eliminate_parameters,
     forwarded_leaves,
     referenced_values,
@@ -140,7 +142,7 @@ def root(value: AllocationValue, by_value, *, storage_path=False) -> AllocationV
         value = by_value[edge.target]
 
 
-def address_alias(value, by_value, *, alias=None):
+def address_alias(value, by_value, *, alias=None, precisions=None):
     """Compose accepted address links without merging SSA values or lifetimes."""
     structural = alias is not None
     alias = alias or BufferAlias(value.value, identity_of(value), AliasKind.FORWARD)
@@ -150,6 +152,10 @@ def address_alias(value, by_value, *, alias=None):
         edge = _edge(current, by_value)
         if edge is None or (structural and edge.kind not in (AliasKind.VIEW, AliasKind.FORWARD)):
             return alias
+        if precisions is not None:
+            precision = precisions.get(current.value, AnalysisPrecision.UNKNOWN)
+            if precision is not AnalysisPrecision.EXACT:
+                raise AnalysisError(f"non-EXACT address for {current.lifetime.binding}: {edge.relation.relation}")
         if current in seen:
             raise AnalysisError("allocation: storage links contain a cycle")
         seen.add(current)
@@ -172,7 +178,16 @@ class AllocationSummary(IRMetadata):
     in_place: tuple[tuple[int, BufferAlias], ...] = ()
     instances: Footprint | None = None
     regions: tuple[RegionInterval, ...] = ()
+    views: dict[SSAValue, BufferAlias] = field(default_factory=dict)
+    view_precisions: dict[SSAValue, AnalysisPrecision] = field(default_factory=dict)
     requires: ClassVar[tuple[type, ...]] = (BindingValuation, TimingValuation, LoopNestValuation)
+
+    def executable_values(self):
+        return {value.value: replace(value, aliases=tuple(
+            self.views.get(value.value, alias)
+            if value.value in self.views and alias.kind is self.views[value.value].kind else alias
+            for alias in value.aliases
+        )) for value in self.values}
 
     def resolve(self, ctx):
         by_value = {value.value: value for value in self.values}
@@ -220,6 +235,8 @@ class AllocationResult:
 @dataclass(kw_only=True)
 class AllocationModel(AnalyzeContext):
     """One definition's collection; imported values are read-only templates."""
+
+    address_decisions: list[tuple[SSAValue, BufferAlias, SSAValue]] = field(default_factory=list)
 
     liveness: Liveness
     quantities: dict[SSAValue, tuple[str, int]]
@@ -699,6 +716,7 @@ def tie_analysis(model):
         if not semantic and end == start and not _pointwise(model, left, right, start, physical, use_events):
             continue
         new_root.aliases += (edge,)
+        model.address_decisions.append((holder, alias, new_root.value))
         if value is not new_root and alias not in value.aliases:
             value.aliases += (alias,)
         if window and landed[0] is not new_root:
@@ -1320,6 +1338,67 @@ def collect_allocation(function, context, liveness, quantities, persistent):
     return model
 
 
+def executable_views(model):
+    """Keep runtime address proofs independent of domain-landed estimation.
+
+    Replay accepted decisions only; unavailable proofs retain UNKNOWN precision.
+    """
+    views, precisions = {}, {}
+    for value in model.by_value.values():
+        key = value.value
+        context = model.locations.get(id(key.expr))
+        if context is None:
+            continue
+        alias = _edge(value, model.by_value)
+        if alias is None or alias.kind not in (AliasKind.VIEW, AliasKind.FORWARD):
+            continue
+        exact, precision = None, AnalysisPrecision.EXACT
+        if alias.kind is AliasKind.VIEW:
+            exact = buffer_alias(key.expr, context, relations_of(key.expr, context))
+            if exact is not None:
+                relation, values = exact.relation.relation, {}
+                for name, runtime in exact.relation.values.items():
+                    unique = f"__tf_address_{id(key.expr)}_{name}"
+                    relation = relation.set_dim_name(
+                        isl.dim_type.PARAM, relation.find_dim_by_name(isl.dim_type.PARAM, name), unique
+                    )
+                    values[unique] = runtime
+                exact = replace(exact, relation=AccessRelation(relation, values))
+        elif (operands := forwarded_leaves(key.expr, context)) is not None:
+            exact = BufferAlias(operands[key.index], identity_access(
+                len(leaves_of(key.expr.type)[key.index].shape)
+            ), AliasKind.FORWARD)
+        elif context.callee is not None:
+            callee = get_metadata(context.callee.function, AllocationSummary)
+            local = callee.executable_values()
+            returned = local[SSAValue(context.callee.function.body, key.index)]
+            try:
+                source = address_alias(returned, local, precisions=callee.view_precisions)
+            except AnalysisError:
+                precision = AnalysisPrecision.UNKNOWN
+            else:
+                exact, precision = context.project(source, actual_of=context.storage_actual)
+        views[key] = exact or alias
+        precisions[key] = precision if exact is not None else AnalysisPrecision.UNKNOWN
+    decided = {(holder, decision.kind) for holder, decision, _root in model.address_decisions}
+    executable = {key: replace(value, aliases=(views[key],)
+                              if key in views and (key, views[key].kind) not in decided else ())
+                  for key, value in model.by_value.items()}
+    for holder, decision, representative in model.address_decisions:
+        if holder in views and views[holder].kind is decision.kind:
+            decision = views[holder]
+        source = address_alias(executable[holder], executable, precisions=precisions)
+        assert source.target == representative
+        values = {**source.relation.values, **decision.relation.values}
+        held = local_type_of(leaves_of(holder.expr.type)[holder.index])
+        relation = apply_source(source.relation.relation.reverse(), decision, len(held.shape), 0, values)
+        proof = replace(decision, relation=AccessRelation(relation, values))
+        views[representative] = proof
+        precisions[representative] = AnalysisPrecision.EXACT
+        executable[representative] = replace(executable[representative], aliases=(proof,))
+    return views, precisions
+
+
 def summary_of(model):
     by_value = model.by_value
     capabilities = []
@@ -1363,6 +1442,7 @@ def summary_of(model):
         tuple(capabilities),
         Footprint(tuple(model.instance_groups)),
         tuple(model.regions),
+        *executable_views(model),
     )
 
 

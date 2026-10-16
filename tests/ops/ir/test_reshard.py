@@ -17,7 +17,7 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.dsl.storage import gmem, rmem
-from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.sharding.reshard import Reshard, _same_locations
 from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Topology, make_tensor_type
 from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
 from tilefoundry.ir.types.shard_layout import Split
@@ -136,3 +136,11 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_reshard_typeinfer(case):
     run_typeinfer_case(case)
+
+
+@pytest.mark.parametrize("storage", [StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM])
+def test_compact_and_factored_plain_layouts_share_locations(storage):
+    compact = make_tensor_type((64,), layout=Layout((64,), (1,)), storage=storage)
+    factored = make_tensor_type((64,), layout=Layout(((8, 8),), ((8, 1),)), storage=storage)
+    assert _same_locations(compact, factored)
+    assert _same_locations(factored, compact)

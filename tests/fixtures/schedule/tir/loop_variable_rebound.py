@@ -14,15 +14,14 @@ def gemm(x: Tensor[(2, 4), "f32"], out: Tensor[(2, 4), "f32", (2, 4), "rmem"]):
     with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
         with Mesh((Topology("thread", 1),), layout=(1,), names=("d0",)) as scope:
             T.fill(out, 0.0)
-            window = T.tensor_view(T.ptr_of(out[0:0 + 2, 0:0 + 4]), layout=(2, 4), shape=(2, 4))
-            T.copy(x, window)
+            value = T.tensor_view(T.ptr_of(x), layout=(2, 4), shape=(2, 4))
+            value_1 = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
+            T.copy(value, value_1)
             for u in range(0, 2, 1):
-                value = T.alloc_tensor(tensor_type=Tensor[(2, 4), "f32", (2, 4), "rmem"])
-                T.copy(x, value)
-                window_1 = T.tensor_view(
-                    T.ptr_of(out[0:0 + 2, 0:0 + 4]), layout=(2, 4), shape=(2, 4)
-                )
-                tile = T.tensor_view(
-                    T.ptr_of(window_1[0:0 + 2, 0:0 + 4]), layout=(2, 4), shape=(2, 4)
-                )
-                T.binary(tile, value, window_1, kind=BinaryKind.ADD)
+                value_2 = T.alloc_tensor(tensor_type=Tensor[(2, 4), "f32", (2, 4), "rmem"])
+                value_3 = T.tensor_view(T.ptr_of(x), layout=(2, 4), shape=(2, 4))
+                value_4 = T.tensor_view(T.ptr_of(value_2), layout=(2, 4), shape=(2, 4))
+                T.copy(value_3, value_4)
+                value_5 = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
+                value_6 = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
+                T.binary(value_5, value_4, value_6, kind=BinaryKind.ADD)

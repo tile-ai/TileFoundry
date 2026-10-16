@@ -61,21 +61,23 @@ def _address_points(layout, count: int, logical_shape: tuple):
     """
     layout = resolve_layout(layout, logical_shape)
     shard = shard_layout_of(layout)
-    if shard is None:
-        for coordinate in range(count):
-            address = apply(layout, coordinate)
-            yield coordinate, (), address, address
-        return
-    shift = layout.offset if isinstance(layout, ComposedLayout) else 0
-    layout = shard
+    base = shard.layout if shard is not None else layout
     whole = {}
-    corresponding = layout_correspondence(layout.layout.shape, logical_shape)
+    corresponding = layout_correspondence(base.shape, logical_shape)
     logical_layout = resolve_layout(None, logical_shape)
     steps = compact_col_major(corresponding.extents)
     for coordinate in range(count):
         digits = corresponding.digits(apply(logical_layout, coordinate))
         mode_index = crd2idx(digits, corresponding.extents, steps)
-        whole[apply(layout.layout, mode_index)] = coordinate
+        address = apply(base, mode_index)
+        if shard is None:
+            yield coordinate, (), address, address
+        else:
+            whole[address] = coordinate
+    if shard is None:
+        return
+    shift = layout.offset if isinstance(layout, ComposedLayout) else 0
+    layout = shard
     if len(whole) != count:
         raise ValueError(f"rmem layout address function is not injective: {layout!r}")
     arrangements = levels(layout.mesh)

@@ -12,11 +12,6 @@ from tilefoundry.target import CudaTarget
 def gemm(x: Tensor[(8,), "f32"], out: Tensor[(8,), "f32", (8,), "rmem"]):
     with Mesh((Topology("cta", 2),), layout=(2,), names=("d0",)) as cta:
         with Mesh((Topology("thread", 1),), layout=(1,), names=("d0",)) as scope:
-            tile = T.tensor_view(
-                T.ptr_of(x[0:0 + 8]), layout=((2 @ cta.d0, 4), (4, 1)), shape=(8,)
-            )
-            tile_1 = T.tensor_view(
-                T.ptr_of(tile[0:0 + 8]), layout=((2 @ cta.d0, 4), (4, 1)), shape=(8,)
-            )
-            tile_2 = T.tensor_view(T.ptr_of(tile_1[0:0 + 8]), layout=(8,), shape=(8,))
-            T.copy(tile_2, out)
+            value = T.tensor_view(T.ptr_of(x), layout=(8,), shape=(8,))
+            value_1 = T.tensor_view(T.ptr_of(out), layout=(8,), shape=(8,))
+            T.copy(value, value_1)

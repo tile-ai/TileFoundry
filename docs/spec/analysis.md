@@ -595,6 +595,19 @@ class BufferAlias:
     source. The table MUST store the fully composed `BufferAlias` under an
     `SSAValue` key, with precision in a parallel per-view table. All scopes in
     one definition share those tables; other definitions use independent tables.
+    AllocationSummary MUST separately retain executable VIEW/FORWARD address
+    proofs and their precision. A registered view's executable proof is its
+    direct-operand `buffer_alias` relation, including runtime parameter values;
+    a folded `narrow` source upper bound MUST NOT stand in for that address.
+    Every ACCEPTED address decision that lowering composes MUST likewise retain
+    its direct proof, independently of the estimator's domain-landed link. This
+    includes InsertSlice destination identity, carry entry/backedge ties, window
+    adoption and addressable in-place reuse. An empty execution domain does not
+    erase an accepted address decision. Rejected candidates MUST NOT supply
+    executable proofs. Lowering retains zero-trip loops.
+    Lowering MUST compose only EXACT executable relations and refuse any other
+    precision, naming the value and relation. Estimation, optional reuse, address
+    placement and reports continue to use the analysis source tables above.
     A retained Call return leaf MUST project the callee's return source.
     Source identity describes data for footprint and traffic, independently of
     allocation ownership. Allocation gives each Call result its own storage

@@ -17,17 +17,21 @@ def gemm(
         with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
             T.fill(out, 0.0)
             for r in range(0, 2, 1):
-                source = T.tensor_view(T.ptr_of(x), layout=(4, 4), shape=(4, 4))
+                value = T.tensor_view(T.ptr_of(x), layout=(4, 4), shape=(4, 4))
+                source = T.tensor_view(T.ptr_of(value), layout=(4, 4), shape=(4, 4))
                 row_dst = T.tensor_view(
                     16, dtype="bf16", storage="smem", layout=(1, 4), shape=(1, 4)
                 )
-                tile = T.tensor_view(T.ptr_of(idx[r:r + 1]), layout=(1,), shape=(1,))
-                T.copy_async(source, row_dst, tile, fill=0)
+                value_1 = T.tensor_view(T.ptr_of(row_dst), layout=(1, 4), shape=(1, 4))
+                value_2 = T.tensor_view(T.ptr_of(idx[r:r + 1]), layout=((1,), (0,)), shape=(1,))
+                T.copy_async(source, value_1, value_2, fill=0)
                 with scope[:] as scope_1:
                     row_dst_2 = T.tensor_view(
                         16, dtype="bf16", storage="smem", layout=(1, 4), shape=(1, 4)
                     )
+                    value_3 = T.tensor_view(T.ptr_of(row_dst_2), layout=(1, 4), shape=(1, 4))
+                    value_4 = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
                     window = T.tensor_view(
-                        T.ptr_of(out[r:r + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
+                        T.ptr_of(value_4[r:r + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
                     )
-                    T.copy(row_dst_2, window)
+                    T.copy(value_3, window)

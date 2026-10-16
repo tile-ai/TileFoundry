@@ -26,6 +26,7 @@ def gemm(
                 ]
             )
             T.fill(acc, 0.0)
+            value_1 = T.tensor_view(T.ptr_of(a), layout=(64, 16), shape=(64, 16))
             value = T.tensor_view(
                 8192,
                 dtype="f16",
@@ -33,49 +34,60 @@ def gemm(
                 layout=Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3),
                 shape=(64, 16),
             )
-            T.copy(a, value)
-            value_1 = T.tensor_view(
+            value_2 = T.tensor_view(
+                T.ptr_of(value),
+                layout=Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3),
+                shape=(64, 16),
+            )
+            T.copy(value_1, value_2)
+            value_4 = T.tensor_view(T.ptr_of(v), layout=(32, 128), shape=(32, 128))
+            value_3 = T.tensor_view(
                 0,
                 dtype="f16",
                 storage="smem",
                 layout=Layout((32, (2, 64)), (64, (2048, 1))) | Swizzle(3, 4, 3),
                 shape=(32, 128),
             )
-            T.copy(v, value_1)
+            value_5 = T.tensor_view(
+                T.ptr_of(value_3),
+                layout=Layout((32, (2, 64)), (64, (2048, 1))) | Swizzle(3, 4, 3),
+                shape=(32, 128),
+            )
+            T.copy(value_4, value_5)
             for o_m in range(0, 64, 64):
                 for o_n in range(0, 128, 128):
                     for o_k in range(0, 16, 16):
-                        value_2 = T.tensor_view(
+                        value_10 = T.tensor_view(
                             8192,
                             dtype="f16",
                             storage="smem",
                             layout=Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3),
                             shape=(64, 16),
                         )
+                        value_6 = T.tensor_view(
+                            T.ptr_of(value_10),
+                            layout=Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3),
+                            shape=(64, 16),
+                        )
                         lhs_view = T.tensor_view(
-                            T.ptr_of(value_2[0:0 + 64, 0:0 + 16]),
+                            T.ptr_of(value_6[0:0 + 64, 0:0 + 16]),
                             layout=(Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3)) @ {B()},
                             shape=(64, 16),
                         )
-                        value_1_2 = T.tensor_view(
+                        value_3_2 = T.tensor_view(
                             0,
                             dtype="f16",
                             storage="smem",
                             layout=Layout((32, (2, 64)), (64, (2048, 1))) | Swizzle(3, 4, 3),
                             shape=(32, 128),
                         )
-                        tile = T.tensor_view(
-                            T.ptr_of(value_1_2[0:0 + 16, 0:0 + 128]),
-                            layout=Layout((16, (2, 64)), (64, (2048, 1))) | Swizzle(3, 4, 3),
-                            shape=(16, 128),
-                        )
-                        tile_1 = T.tensor_view(
-                            T.ptr_of(tile[0:0 + 16, 0:0 + 128]),
+                        value_7 = T.tensor_view(
+                            T.ptr_of(value_3_2),
                             layout=Layout(((2, 8), (2, 64)), ((512, 64), (2048, 1))) | Swizzle(3, 4, 3),
                             shape=(16, 128),
                         )
                         rhs_view = T.tensor_view(
-                            T.ptr_of(tile_1[0:0 + 16, 0:0 + 128]),
+                            T.ptr_of(value_7[0:0 + 16, 0:0 + 128]),
                             layout=(Layout(((2, 8), (2, 64)), ((512, 64), (2048, 1))) | Swizzle(3, 4, 3)) @ {B()},
                             shape=(16, 128),
                         )
@@ -85,7 +97,13 @@ def gemm(
                             rhs_view,
                             atom=T.cuda.sm90.Wgmma(n=128, dtype="f16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN),
                         )
-            window = T.tensor_view(
-                T.ptr_of(out[0:0 + 64, 0:0 + 128]), layout=(64, 128), shape=(64, 128)
+            value_8 = T.tensor_view(
+                T.ptr_of(acc),
+                layout=((4 @ scope.d0, 2, 8 @ scope.d1, 16, 4 @ scope.d2, 2), (16, 8, 1, 512, 128, 64)),
+                shape=(64, 128),
             )
-            T.copy(acc, window)
+            value_9 = T.tensor_view(T.ptr_of(out), layout=(64, 128), shape=(64, 128))
+            window = T.tensor_view(
+                T.ptr_of(value_9[0:0 + 64, 0:0 + 128]), layout=(64, 128), shape=(64, 128)
+            )
+            T.copy(value_8, window)

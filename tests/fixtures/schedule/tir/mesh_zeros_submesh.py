@@ -16,4 +16,6 @@ def gemm(x: Tensor[(32,), "f32"], out: Tensor[(32,), "f32"]):
                 tile = T.tensor_view(0, dtype="f32", storage="smem", layout=(32,), shape=(32,))
                 T.fill(tile, 0.0)
             tile_2 = T.tensor_view(0, dtype="f32", storage="smem", layout=(32,), shape=(32,))
-            T.copy(tile_2, out)
+            value = T.tensor_view(T.ptr_of(tile_2), layout=(32,), shape=(32,))
+            value_1 = T.tensor_view(T.ptr_of(out), layout=(32,), shape=(32,))
+            T.copy(value, value_1)

@@ -42,18 +42,28 @@ def gemm(
             )
             for k in range(0, 64, 32):
                 with scope[:1, :32] as scope_2:
-                    tile = T.tensor_view(
-                        T.ptr_of(a[0:0 + 64, k:k + 32]),
+                    value = T.tensor_view(
+                        T.ptr_of(a[0:0 + 1, k:k + 1]),
                         layout=((64, 32), (64, 1)),
                         shape=(64, 32),
                     )
-                    T.copy_async_tensor(tile, lhs_ring_stages[(k // 32) % 2])
-                    tile_1 = T.tensor_view(
-                        T.ptr_of(b[k:k + 32, 0:0 + 32]),
+                    value_1 = T.tensor_view(
+                        T.ptr_of(lhs_ring_stages[(k // 32) % 2]),
+                        layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))),
+                        shape=(64, 32),
+                    )
+                    T.copy_async_tensor(value, value_1)
+                    value_2 = T.tensor_view(
+                        T.ptr_of(b[k:k + 1, 0:0 + 1]),
                         layout=((32, 32), (1, 64)),
                         shape=(32, 32),
                     )
-                    T.copy_async_tensor(tile_1, rhs_ring_stages[(k // 32) % 2])
+                    value_3 = T.tensor_view(
+                        T.ptr_of(rhs_ring_stages[(k // 32) % 2]),
+                        layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))),
+                        shape=(32, 32),
+                    )
+                    T.copy_async_tensor(value_2, value_3)
                 with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_3:
                     frag_dst = T.alloc_tensor(
                         tensor_type=Tensor[
@@ -63,18 +73,43 @@ def gemm(
                             "rmem",
                         ]
                     )
-                    T.copy(lhs_ring_stages[(k // 32) % 2], frag_dst)
+                    value_4 = T.tensor_view(
+                        T.ptr_of(lhs_ring_stages[(k // 32) % 2]),
+                        layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))),
+                        shape=(64, 32),
+                    )
+                    value_5 = T.tensor_view(
+                        T.ptr_of(frag_dst),
+                        layout=((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 2, 4 @ scope_3.d2, 4), (16, 8, 1, 1024, 256, 64)),
+                        shape=(64, 32),
+                    )
+                    T.copy(value_4, value_5)
                     for o_m in range(0, 64, 64):
                         for o_n in range(0, 32, 32):
                             for o_k in range(0, 32, 32):
+                                value_6 = T.tensor_view(
+                                    T.ptr_of(acc),
+                                    layout=((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 4, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
+                                    shape=(64, 32),
+                                )
+                                value_7 = T.tensor_view(
+                                    T.ptr_of(frag_dst),
+                                    layout=((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 2, 4 @ scope_3.d2, 4), (16, 8, 1, 1024, 256, 64)),
+                                    shape=(64, 32),
+                                )
+                                value_8 = T.tensor_view(
+                                    T.ptr_of(rhs_ring_stages[(k // 32) % 2]),
+                                    layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))),
+                                    shape=(32, 32),
+                                )
                                 rhs_view = T.tensor_view(
-                                    T.ptr_of(rhs_ring_stages[(k // 32) % 2][0:0 + 32, 0:0 + 32]),
+                                    T.ptr_of(value_8[0:0 + 32, 0:0 + 32]),
                                     layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))) @ {B()},
                                     shape=(32, 32),
                                 )
                                 T.tiled_mma(
-                                    acc,
-                                    frag_dst,
+                                    value_6,
+                                    value_7,
                                     rhs_view,
                                     atom=T.cuda.sm90.Wgmma(n=32, dtype="fp8e4m3", form=T.cuda.sm90.Form.RS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K),
                                 )
@@ -88,8 +123,14 @@ def gemm(
                         "rmem",
                     ]
                 )
-                T.cast(acc, result, dtype="bf16")
+                value_9 = T.tensor_view(
+                    T.ptr_of(acc),
+                    layout=((4 @ scope_4.d0, 2, 8 @ scope_4.d1, 4, 4 @ scope_4.d2, 2), (16, 8, 1, 512, 128, 64)),
+                    shape=(64, 32),
+                )
+                T.cast(value_9, result, dtype="bf16")
+                value_10 = T.tensor_view(T.ptr_of(out), layout=(64, 32), shape=(64, 32))
                 window = T.tensor_view(
-                    T.ptr_of(out[0:0 + 64, 0:0 + 32]), layout=(64, 32), shape=(64, 32)
+                    T.ptr_of(value_10[0:0 + 64, 0:0 + 32]), layout=(64, 32), shape=(64, 32)
                 )
                 T.copy(result, window)

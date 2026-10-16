@@ -17,12 +17,18 @@ class ScheduledScale:
                 T.fill(out, 0.0)
                 scaled_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
                 value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-                T.copy(x, value_dst)
+                value = T.tensor_view(T.ptr_of(x), layout=(32,), shape=(32,))
+                value_1 = T.tensor_view(T.ptr_of(value_dst), layout=(32,), shape=(32,))
+                T.copy(value, value_1)
                 weight_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-                T.copy(w, weight_dst)
-                T.binary(value_dst, weight_dst, scaled_dst, kind=BinaryKind.MUL)
-                window = T.tensor_view(T.ptr_of(out[0:0 + 32]), layout=(32,), shape=(32,))
-                T.copy(scaled_dst, window)
+                value_2 = T.tensor_view(T.ptr_of(w), layout=(32,), shape=(32,))
+                value_3 = T.tensor_view(T.ptr_of(weight_dst), layout=(32,), shape=(32,))
+                T.copy(value_2, value_3)
+                value_4 = T.tensor_view(T.ptr_of(scaled_dst), layout=(32,), shape=(32,))
+                T.binary(value_1, value_3, value_4, kind=BinaryKind.MUL)
+                value_5 = T.tensor_view(T.ptr_of(out), layout=(32,), shape=(32,))
+                window = T.tensor_view(T.ptr_of(value_5[0:0 + 32]), layout=(32,), shape=(32,))
+                T.copy(value_4, window)
 
 @module(
     entry="gemm",
@@ -39,9 +45,12 @@ class ModuleInstances:
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
                 T.fill(out, 0.0)
                 value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-                T.copy(x, value_dst)
-                window = T.tensor_view(T.ptr_of(out[0:0 + 32]), layout=(32,), shape=(32,))
-                T.copy(value_dst, window)
+                value = T.tensor_view(T.ptr_of(x), layout=(32,), shape=(32,))
+                value_1 = T.tensor_view(T.ptr_of(value_dst), layout=(32,), shape=(32,))
+                T.copy(value, value_1)
+                value_2 = T.tensor_view(T.ptr_of(out), layout=(32,), shape=(32,))
+                window = T.tensor_view(T.ptr_of(value_2[0:0 + 32]), layout=(32,), shape=(32,))
+                T.copy(value_1, window)
 
     # analysis target=nvidia.h200_sxm module=ModuleInstances function=gemm topology=cta wave=1/1
     # selection requested=memory executed=memory
@@ -52,25 +61,32 @@ class ModuleInstances:
     ):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
+                value = T.tensor_view(T.ptr_of(x), layout=(32,), shape=(32,))
                 out_1_1 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
-                T.copy(x, out_1_1)
+                value_1 = T.tensor_view(T.ptr_of(out_1_1), layout=(32,), shape=(32,))
+                T.copy(value, value_1)
             for i in range(0, 3, 1):
                 out_1_2 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
+                value_2 = T.tensor_view(T.ptr_of(out_1_2), layout=(32,), shape=(32,))
                 updated_1 = T.tensor_view(T.ptr_of(scratch_1[0:0 + 32]), layout=(32,), shape=(32,))
-                layers[i](out_1_2, updated_1)
+                layers[i](value_2, updated_1)
                 with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope_1:
                     updated_2 = T.tensor_view(
                         T.ptr_of(scratch_1[0:0 + 32]), layout=(32,), shape=(32,)
                     )
+                    value_3 = T.tensor_view(T.ptr_of(updated_2), layout=(32,), shape=(32,))
                     out_1_3 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
-                    T.copy(updated_2, out_1_3)
+                    value_4 = T.tensor_view(T.ptr_of(out_1_3), layout=(32,), shape=(32,))
+                    T.copy(value_3, value_4)
             out_1_4 = T.tensor_view(T.ptr_of(scratch[0:0 + 32]), layout=(32,), shape=(32,))
-            value_1 = T.tensor_view(T.ptr_of(scratch_2[0:0 + 32]), layout=(32,), shape=(32,))
-            mm(out_1_4, value_1)
+            value_6 = T.tensor_view(T.ptr_of(out_1_4), layout=(32,), shape=(32,))
+            value_5_1 = T.tensor_view(T.ptr_of(scratch_2[0:0 + 32]), layout=(32,), shape=(32,))
+            mm(value_6, value_5_1)
             x_1_1 = T.tensor_view(T.ptr_of(scratch_3[0:0 + 32]), layout=(32,), shape=(32,))
-            mm(value_1, x_1_1)
+            mm(value_5_1, x_1_1)
             x_2_1 = T.tensor_view(T.ptr_of(scratch_4[0:0 + 32]), layout=(32,), shape=(32,))
             layers[0](x_1_1, x_2_1)
-            helper(x_2_1, w, out)
+            value_7 = T.tensor_view(T.ptr_of(w), layout=(32,), shape=(32,))
+            helper(x_2_1, value_7, out)
 
 del ScheduledScale

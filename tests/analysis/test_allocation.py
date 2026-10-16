@@ -72,9 +72,13 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_u
                   if isinstance(value, Call) and isinstance(value.target, InsertSlice))
     inserted = get_metadata(insert, MemoryMetadata)
     called = get_metadata(call, MemoryMetadata)
+    proofs = get_metadata(callee, AllocationSummary).views
     if later_use == "callee":
         assert inserted.alias is None
+        assert SSAValue(insert) not in proofs
     else:
+        assert proofs[SSAValue(insert)].target.expr is insert.args[0]
+        assert proofs[SSAValue(insert)].relation.relation.is_identity()
         assert inserted.alias.target.expr is callee.params[0]
         assert inserted.alias.relation.relation.is_identity()
         assert inserted.buffer_bytes is None and inserted.offsets == ()

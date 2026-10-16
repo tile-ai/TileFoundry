@@ -1,8 +1,8 @@
 """Sparse decode with one natural-order key tile shared by QK and PV.
 
-The loader's row loop carries both shared tiles. WGMMA's grouped operands
-renumber dimensions, heads and keys: masks follow QK's key numbering, P's
-bitcast follows V's numbering, and O's bitcast restores natural head numbering.
+The loader's row loop carries both shared tiles. WGMMA's factored operands
+retain row-major logical numbering: P is copied directly to the RS fragment,
+and Q, K, V and the mask keep natural head and key numbering.
 The register copy into the RS fragment requires redistribution; this fixture
 checks TIR and evaluation, not the missing cross-thread shuffle codegen.
 """
@@ -114,11 +114,6 @@ class SparseDecode:
                     p = tf.exp(s - peak)
                     denom = tf.reduce(p, axes=(1,), keepdim=True, kind=ReduceKind.SUM)
                     p = tf.cast(p / denom, "bf16")
-                    pv = tf.bitcast(
-                        p,
-                        ((4 @ m.warp, 2, 8 @ m.lane8, 8, 2, 4 @ m.lane4),
-                         (16, 8, 1, 512, 64, 128)),
-                    )
                     pr_dst = tf.empty(
                         Tensor[
                             (64, 64), "bf16",
@@ -131,17 +126,10 @@ class SparseDecode:
                         ],
                     )
                     pr = tf.schedule(
-                        (pv, pr_dst),
+                        (p, pr_dst),
                         op=T.copy(),
                     )
-                    ks_view = tf.reshard(
-                        ks,
-                        ComposedLayout(
-                            Swizzle(3, 4, 3), 0, Layout(((8, 8), (8, 8)), ((64, 512), (1, 8)))
-                        ),
-                        "smem",
-                    )
-                    v = tf.bitcast(ks_view, V_GROUPED)
+                    v = tf.bitcast(ks, V_GROUPED)
                     o = tf.zeros(Tensor[
                         (64, 64), "f32",
                         ((4 @ m.warp, 2, 8 @ m.lane8, 8, 4 @ m.lane4, 2,),
@@ -159,11 +147,6 @@ class SparseDecode:
                             )
                         ),
                     )
-                    out = tf.bitcast(
-                        o,
-                        ((8 @ m.lane8, 4 @ m.warp, 2, 8, 4 @ m.lane4, 2),
-                         (1, 16, 8, 512, 128, 64)),
-                    )
-                    result = tf.cast(out, "bf16")
+                    result = tf.cast(o, "bf16")
                     result = tf.insert_slice(output, result, (0, 0))
         return result

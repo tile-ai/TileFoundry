@@ -36,23 +36,20 @@ def gemm(x: Tensor[(4, 8), "f32"], out: Tensor[(8, 4), "f32"]):
             ]
         )
         with Mesh((Topology("thread", 32),), layout=(4, 8), names=("d0", "d1")) as scope:
-            T.copy(x, value)
+            value_1 = T.tensor_view(T.ptr_of(x), layout=(4, 8), shape=(4, 8))
+            value_2 = T.tensor_view(
+                T.ptr_of(value), layout=((4 @ scope.d0, 8 @ scope.d1), (8, 1)), shape=(4, 8)
+            )
+            T.copy(value_1, value_2)
+            value_3 = T.tensor_view(
+                T.ptr_of(value), layout=((4 @ scope.d0, 8 @ scope.d1), (8, 1)), shape=(4, 8)
+            )
             tile = T.tensor_view(
-                T.ptr_of(value[0:0 + 4, 0:0 + 8]),
-                layout=((4 @ scope.d0, 8 @ scope.d1), (8, 1)),
-                shape=(4, 8),
-            )
-            tile_1 = T.tensor_view(
-                T.ptr_of(tile[0:0 + 4, 0:0 + 8]),
-                layout=((4 @ scope.d0, 8 @ scope.d1), (8, 1)),
-                shape=(4, 8),
-            )
-            tile_2 = T.tensor_view(
-                T.ptr_of(tile_1[0:0 + 4, 0:0 + 8]),
+                T.ptr_of(value_3[0:0 + 4, 0:0 + 8]),
                 layout=((8 @ scope.d1, 4 @ scope.d0), (1, 8)),
                 shape=(8, 4),
             )
-            T.copy(tile_2, transposed)
+            T.copy(tile, transposed)
         moved = T.alloc_tensor(
             tensor_type=Tensor[
                 (8, 4),
@@ -71,23 +68,19 @@ def gemm(x: Tensor[(4, 8), "f32"], out: Tensor[(8, 4), "f32"]):
                     (4, 8), "f32", ((4 @ scope_1.d0, 8 @ scope_1.d1), (8, 1)), "rmem"
                 ]
             )
-            tile_3 = T.tensor_view(
-                T.ptr_of(value[0:0 + 4, 0:0 + 8]),
-                layout=((4 @ scope_1.d0, 8 @ scope_1.d1), (8, 1)),
-                shape=(4, 8),
+            value_4 = T.tensor_view(
+                T.ptr_of(value), layout=((4 @ scope_1.d0, 8 @ scope_1.d1), (8, 1)), shape=(4, 8)
             )
-            tile_4 = T.tensor_view(
-                T.ptr_of(tile_3[0:0 + 4, 0:0 + 8]),
-                layout=((4 @ scope_1.d0, 8 @ scope_1.d1), (8, 1)),
-                shape=(4, 8),
+            value_5 = T.tensor_view(
+                T.ptr_of(value), layout=((4 @ scope_1.d0, 8 @ scope_1.d1), (8, 1)), shape=(4, 8)
             )
-            T.binary(tile_3, tile_4, mixed, kind=BinaryKind.ADD)
-            tile_5 = T.tensor_view(
+            T.binary(value_4, value_5, mixed, kind=BinaryKind.ADD)
+            tile_1 = T.tensor_view(
                 T.ptr_of(mixed[0:0 + 4, 0:0 + 8]),
                 layout=((8 @ scope_1.d1, 4 @ scope_1.d0), (1, 8)),
                 shape=(8, 4),
             )
-            T.copy(tile_5, moved)
+            T.copy(tile_1, moved)
         with Mesh((Topology("thread", 32),), layout=(8, 4), names=("d0", "d1")) as scope_2:
             T.fill(out, 0.0)
             result = T.alloc_tensor(
@@ -103,11 +96,22 @@ def gemm(x: Tensor[(4, 8), "f32"], out: Tensor[(8, 4), "f32"]):
                 ]
             )
             with Mesh((Topology("thread", 32),), layout=(4, 8), names=("d0", "d1")) as threads:
-                T.binary(transposed, moved, result, kind=BinaryKind.ADD)
+                value_6 = T.tensor_view(
+                    T.ptr_of(transposed),
+                    layout=((8 @ threads.d1, 4 @ threads.d0), (4, 1)),
+                    shape=(8, 4),
+                )
+                value_7 = T.tensor_view(
+                    T.ptr_of(moved),
+                    layout=((8 @ threads.d1, 4 @ threads.d0), (4, 1)),
+                    shape=(8, 4),
+                )
+                T.binary(value_6, value_7, result, kind=BinaryKind.ADD)
             with Mesh(
                 (Topology("thread", 32),), layout=(4, 8), names=("d0", "d1")
             ) as threads_1:
+                value_8 = T.tensor_view(T.ptr_of(out), layout=(8, 4), shape=(8, 4))
                 window = T.tensor_view(
-                    T.ptr_of(out[0:0 + 8, 0:0 + 4]), layout=(8, 4), shape=(8, 4)
+                    T.ptr_of(value_8[0:0 + 8, 0:0 + 4]), layout=(8, 4), shape=(8, 4)
                 )
                 T.copy(result, window)
