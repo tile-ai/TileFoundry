@@ -73,6 +73,7 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.layout import flatten, resolve_layout
+from tilefoundry.ir.types.layout_algebra import composition
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import compact_row_major
@@ -1194,6 +1195,13 @@ class Lowering(ValuationVisitor[Expr | _View]):
             if isinstance(candidate, ComposedLayout) or whole:
                 if not isinstance(candidate, ComposedLayout):
                     candidate = replace(layout, outer=Layout(tuple(desired.shape), strides))
+                if strides is not None and not affine.dim(isl.dim_type.PARAM):
+                    candidate = replace(layout, offset=int(affine.get_constant_val().num_si()),
+                                        outer=Layout(tuple(desired.shape), strides))
+                elif isinstance(candidate.outer, Layout) and candidate.outer.strides is None:
+                    candidate = replace(layout, outer=composition(layout.outer, Layout(
+                        tuple(desired.shape), compact_row_major(tuple(desired.shape))
+                    ), major="row"))
                 declared = _layout_addresses(tuple(desired.shape), candidate).intersect_domain(relation.domain())
                 if candidate.inner != layout.inner or not declared.is_equal(placed):
                     raise LoweringError(f"composed view does not preserve exact address {relation}")
