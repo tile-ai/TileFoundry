@@ -21,6 +21,7 @@ from .access import (
     apply_source,
     bind_parameters,
     name_loop_parameters,
+    referenced_values,
 )
 from .errors import AnalysisError
 from .metadata import (
@@ -137,11 +138,7 @@ class AnalyzeContext(
                 kind = AliasKind.VIEW
         relation, loop_values = name_loop_parameters(relation, (loop[0] for loop in self.loops))
         values.update(loop_values)
-        values = {
-            name: value
-            for name, value in values.items()
-            if relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
-        }
+        values = referenced_values(relation, values)
         return BufferAlias(target, AccessRelation(relation, values), kind), precision
 
     def varies(self, formal: Var) -> frozenset[int]:

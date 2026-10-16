@@ -65,11 +65,9 @@ class TypeInferContext:
         inner = self.with_captures(region.captures())
         if isinstance(region, LoopRegion):
             loop = (region.induction_var, region.start, region.extent, region.step)
-            inner = replace(inner, loops=(*self.loops, loop))
-        else:
-            mesh = make_mesh(self.current_mesh, region.mesh) if self.current_mesh else region.mesh
-            inner = replace(inner, current_mesh=mesh)
-        return replace(inner, owner=region, parent=self)
+            return replace(inner, loops=(*self.loops, loop), owner=region, parent=self)
+        mesh = make_mesh(self.current_mesh, region.mesh) if self.current_mesh else region.mesh
+        return replace(inner, current_mesh=mesh, owner=region, parent=self)
 
     def for_call(self, call):
         """Interpret a call in its caller's frame."""

@@ -243,11 +243,7 @@ def selected_types(
     owned: set[type[IRMetadata]] = set()
     for analysis in analyses:
         owned.update(target.get_analyzer(analysis).produces)
-    order: list[type[IRMetadata]] = []
-    for metadata_type in metadata_types:
-        if metadata_type in owned and metadata_type not in order:
-            order.append(metadata_type)
-    return tuple(order)
+    return tuple(dict.fromkeys(item for item in metadata_types if item in owned))
 
 
 def report_data(

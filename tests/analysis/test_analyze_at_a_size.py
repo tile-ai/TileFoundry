@@ -680,7 +680,7 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
             if isinstance(call.target, RMSNorm)
         ]
         assert len(rms_scopes) == 4
-        assert all(not scope.enclosing_loops() for scope in rms_scopes)
+        assert all(not scope.context.enclosing_loops() for scope in rms_scopes)
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]":
         cache_writes = [
             access

@@ -397,10 +397,7 @@ class PerformanceSummaryMetadata(IRMetadata):
     waves: int
     requires: ClassVar[tuple[type, ...]] = (TimingValuation, LoopNestValuation)
 
-    def resolve(self, ctx: ValuationProvider) -> PerformanceSummaryMetadata:
-        timing = ctx.request_valuation(TimingValuation)
-        ctx.request_valuation(LoopNestValuation)
-        return replace(self, timeline=timing.timeline(self.timeline))
+    resolve = PerformanceMetadata.resolve
 
 
 __all__ = [

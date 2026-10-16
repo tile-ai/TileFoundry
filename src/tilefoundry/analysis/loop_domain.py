@@ -57,7 +57,7 @@ def iteration_domain(
     """Build the accumulated authored iteration domain for one scope owner."""
     if isinstance(owner, Function):
         return isl.set("{ [] }"), {}
-    loops = (*(() if parent is None else parent.enclosing_loops()), owner)
+    loops = (*(() if parent is None else parent.context.enclosing_loops()), owner)
     names = [f"p{index}" for index in range(len(loops))]
     coords = {id(loop.induction_var): name for loop, name in zip(loops, names)}
     if parent is not None:

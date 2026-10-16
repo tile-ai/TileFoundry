@@ -38,6 +38,13 @@ class RegionInterval:
     entered_at: int
     exited_at: int
 
+    def shifted(self, timing):
+        return replace(
+            self,
+            entered_at=timing.event(self.entered_at),
+            exited_at=timing.event(self.exited_at),
+        )
+
 
 @dataclass(frozen=True)
 class Liveness(IRMetadata):
@@ -63,14 +70,7 @@ class Liveness(IRMetadata):
                 for item in self.intervals
             ),
             uses=tuple(replace(use, at=timing.event(use.at)) for use in self.uses),
-            regions=tuple(
-                replace(
-                    region,
-                    entered_at=timing.event(region.entered_at),
-                    exited_at=timing.event(region.exited_at),
-                )
-                for region in self.regions
-            ),
+            regions=tuple(region.shifted(timing) for region in self.regions),
             timeline_end=timing.event(self.timeline_end),
             loop_windows={
                 key: (timing.event(start), timing.event(end))

@@ -110,15 +110,16 @@ def _cost_bound(
     """
     reached = moved.traffic.storage.of(facts.bandwidth_level)
     crossed = reached.total if reached is not None else TrafficBytes()
+    buffers = () if moved.footprint is None else moved.footprint.buffers
     if moved.footprint is not None and all(
         level == facts.bandwidth_level
-        for _buffer, breakdown in moved.footprint.buffers
+        for _buffer, breakdown in buffers
         for level, _spread in breakdown.kinds
     ):
         crossed = TrafficBytes(
             read=sum(
                 spread.total
-                for _buffer, breakdown in moved.footprint.buffers
+                for _buffer, breakdown in buffers
                 for _level, spread in breakdown.kinds
             )
         )

@@ -475,10 +475,16 @@ class Lowering(ValuationVisitor[Expr | _View]):
                 if path
                 else None
             )
+        memory = get_metadata(value, MemoryMetadata)
+        if aliases and memory is not None and memory.alias is not None:
+            return self._return_storage(
+                memory.alias.target.expr,
+                (*self._alias_path(memory.alias.target), *path),
+                aliases=aliases,
+            )
         if isinstance(value, Var):
             initial = self._carry_initial(value)
             if initial is not None:
-                memory = get_metadata(value, MemoryMetadata)
                 if (
                     memory is not None
                     and memory.alias is not None
@@ -495,13 +501,6 @@ class Lowering(ValuationVisitor[Expr | _View]):
                 else None
             )
         if isinstance(value, Call):
-            memory = get_metadata(value, MemoryMetadata)
-            if aliases and memory is not None and memory.alias is not None:
-                return self._return_storage(
-                    memory.alias.target.expr,
-                    (*self._alias_path(memory.alias.target), *path),
-                    aliases=aliases,
-                )
             if isinstance(value.target, TupleGetItem):
                 index = static_dim_value(value.args[1])
                 if index is not None:
@@ -527,16 +526,6 @@ class Lowering(ValuationVisitor[Expr | _View]):
                 if not isinstance(type_, TensorType) or type_.storage is not StorageKind.RMEM:
                     continue
                 root = self._return_storage(scope.owner, path)
-                while root is not None:
-                    memory = get_metadata(root, MemoryMetadata)
-                    if memory is None or memory.alias is None:
-                        break
-                    base = self._return_storage(
-                        memory.alias.target.expr, self._alias_path(memory.alias.target)
-                    )
-                    if base is None or base is root:
-                        break
-                    root = base
                 if root is None:
                     continue
                 previous = locations.get(id(root), self.locations.get(id(root)))

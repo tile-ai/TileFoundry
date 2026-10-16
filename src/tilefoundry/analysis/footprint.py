@@ -37,6 +37,7 @@ from .access import (
     BufferAlias,
     SSAValue,
     name_loop_parameters,
+    referenced_values,
     restore_loop_dimensions,
     widest_allowed,
 )
@@ -117,12 +118,12 @@ def _static_axes(mesh: Mesh) -> "tuple[int, tuple[int, ...], tuple[int, ...]] | 
 
 
 def _mesh_parameters(
-    scope: IterationScope, relation: isl.map | None = None
+    scope: IterationScope, relation: isl.map | None = None, *, values=None
 ) -> tuple[tuple[str, Call], ...]:
     """Mesh coordinates involved in this boundary, excluding unrelated retained facts."""
     return tuple(
         (name, value)
-        for name, value in scope.domain_params.items()
+        for name, value in (scope.domain_params if values is None else values).items()
         if isinstance(value, Call)
         and isinstance(value.target, MeshCoord)
         and (relation is None or _involves_parameter(relation, name))
@@ -251,11 +252,7 @@ def _reached_addresses(
         precision=precision,
         must=must,
         may_coordinates=may_coordinates,
-        values={
-            name: value
-            for name, value in (values or {}).items()
-            if reached.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
-        },
+        values=referenced_values(reached, values or {}),
     )
 
 
@@ -281,7 +278,6 @@ class MovingBoundary:
 
     _relations: dict[int, isl.map] = field(default_factory=dict, init=False, repr=False)
     _held: dict[int, isl.set] = field(default_factory=dict, init=False, repr=False)
-    _reached: dict[int, isl.set] = field(default_factory=dict, init=False, repr=False)
     _space_wave_reached: dict[int, isl.set] = field(default_factory=dict, init=False, repr=False)
     _unit_relations: dict[int, isl.map] = field(default_factory=dict, init=False, repr=False)
     _unit_reached: dict[tuple[int, str | None], isl.set | None] = field(
@@ -316,16 +312,6 @@ class MovingBoundary:
             held = self._relation(window).range()
             self._held[window] = held
         return held
-
-    def reached(self, window: int) -> isl.set:
-        """Return wave-unioned addresses at *window*, computing them once."""
-        reached = self._reached.get(window)
-        if reached is None:
-            reached = _project_mesh_parameters(
-                self._wave_relation(window).range(), self.mesh_parameters
-            )
-            self._reached[window] = reached
-        return reached
 
     def _unit_relation(self, window: int) -> isl.map:
         relation = self._unit_relations.get(window)
@@ -590,26 +576,20 @@ def _one_time_fill(scope: IterationScope, operands: tuple[TrafficBytes, ...]) ->
     return scope.depth == 0 and all(item.read == 0 for item in operands)
 
 
-def _shared_origin(
-    scope: IterationScope | None, topology_level: str, wave: tuple[int, int]
-) -> bool:
+def _shared_origin(scope, target, definitions, topology_level, wave) -> bool:
     """A material definition made by multiple wave units is not shared data.
 
     Registered storage-sharing edges have already resolved the origin, so a
     view of an enclosing definition does not become fresh within this mesh.
     """
-    mesh = None if scope is None else _wave_mesh(scope, topology_level)
+    origin = definitions.get(
+        id(target), scope if isinstance(target, Call) and id(target) not in scope.variance else None
+    )
+    mesh = None if origin is None else _wave_mesh(origin, topology_level)
     if mesh is None:
         return True
     axes = tuple(range(len(flatten(flatten(mesh.layout).shape))))
     return shared_units(mesh, axes, wave) <= 1
-
-
-def _source_origin(scope, target, definitions):
-    """Treat called material producers as private to their executing units."""
-    if isinstance(target, Call) and id(target) not in scope.variance:
-        return definitions.get(id(target), scope)
-    return definitions.get(id(target))
 
 
 def moving_boundaries(
@@ -701,11 +681,7 @@ def moving_boundaries(
                         mesh_parameters=mesh_parameters,
                         axis_parameters=axis_parameters
                         if wave_stated
-                        and _shared_origin(
-                            _source_origin(scope, access.target.expr, definitions),
-                            topology_level,
-                            wave,
-                        )
+                        and _shared_origin(scope, access.target.expr, definitions, topology_level, wave)
                         else (),
                         position=position,
                     )
@@ -721,12 +697,8 @@ def moving_boundaries(
             )
             access = Access(None, relation, item.target, precision=item.precision)
             mesh = _wave_mesh(scope, topology_level)
-            parameters = tuple(
-                (name, value)
-                for name, value in {**scope.domain_params, **item.values}.items()
-                if isinstance(value, Call)
-                and isinstance(value.target, MeshCoord)
-                and _involves_parameter(relation, name)
+            parameters = _mesh_parameters(
+                scope, relation, values={**scope.domain_params, **item.values}
             )
             found.append(
                 MovingBoundary(
@@ -744,11 +716,7 @@ def moving_boundaries(
                     wave_stated=True,
                     mesh_parameters=parameters,
                     axis_parameters=_axis_parameters(scope, mesh)
-                    if _shared_origin(
-                        _source_origin(scope, item.target.expr, definitions),
-                        topology_level,
-                        wave,
-                    )
+                    if _shared_origin(scope, item.target.expr, definitions, topology_level, wave)
                     else (),
                     position=None,
                 )
@@ -935,7 +903,7 @@ def _by_buffer(
     return buffers
 
 
-def _window_footprints(boundaries, uncounted, buffers, *, memory_level):
+def _window_footprints(boundaries, uncounted, buffers):
     """Count local moving boundaries in each selected local loop window."""
     footprints = {}
     for time_scope in {item.time_scope for item in buffers.values()}:
@@ -983,16 +951,23 @@ def _reuse_rows(
     capacity: int,
 ) -> tuple[ReuseWindow, ...]:
     """Build sorted report rows from selected axes and counted windows."""
+    prepared = {
+        scope: (
+            {
+                name: sum(spread.logical for _level, spread in held.kinds)
+                for name, held in counted.buffers
+            },
+            footprint_labels(counted.reached),
+            counted.precision,
+        )
+        for scope, counted in footprints.items()
+        if counted is not None
+    }
     rows: list[ReuseWindow] = []
     for item in buffers.values():
-        counted = footprints.get(item.time_scope)
-        if counted is None:
+        if item.time_scope not in prepared:
             continue
-        amounts = {
-            name: sum(spread.logical for _level, spread in breakdown.kinds)
-            for name, breakdown in counted.buffers
-        }
-        labels = footprint_labels(counted.reached)
+        amounts, labels, precision = prepared[item.time_scope]
         label = "/".join((*item.boundary.ownership, labels[item.boundary.access.target]))
         holds = sum(amounts.values())
         repeats = (1 if item.time_scope is None else item.time_scope.trips()) * item.space_units
@@ -1011,7 +986,7 @@ def _reuse_rows(
                 holds_bytes=holds,
                 reuse_bytes=reuse,
                 fits=holds < capacity,
-                precision=counted.precision,
+                precision=precision,
             )
         )
     return tuple(sorted(rows, key=lambda row: row.reuse_bytes, reverse=True))
@@ -1335,7 +1310,6 @@ def reuse_windows(root, *, memory_level, wave, ctx, capacity, labels, resolved=(
         boundaries,
         _uncounted_movements(root, memory_level=memory_level, ctx=ctx),
         buffers,
-        memory_level=memory_level,
     )
     return _reuse_rows(buffers, footprints, capacity)
 

@@ -103,6 +103,15 @@ class BufferAlias:
     kind: AliasKind
 
 
+def referenced_values(relation, values):
+    """Keep parameter evidence in its supplied order."""
+    return {
+        name: value
+        for name, value in values.items()
+        if relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
+    }
+
+
 def aligned_source(
     source: BufferAlias, rank: int, depth: int, parameters: Mapping[str, object] | None = None
 ) -> isl.map:
@@ -220,15 +229,6 @@ class _RegionBindingResolver(ExprCloner):
     def __init__(self, *, narrow: bool) -> None:
         super().__init__()
         self.narrow = narrow
-        self._scope_memos: dict[IterationScope, dict[int, tuple[Expr, Expr]]] = {}
-
-    def dispatch_visit(self, value: Expr, scope: "IterationScope") -> Expr:
-        memo = self._memo
-        self._memo = self._scope_memos.setdefault(scope, {})
-        try:
-            return super().dispatch_visit(value, scope)
-        finally:
-            self._memo = memo
 
     def visit_Call(self, value: Call, scope: "IterationScope") -> Expr:
         if isinstance(value.target, Local):
@@ -240,7 +240,7 @@ class _RegionBindingResolver(ExprCloner):
         return self.default_visit(value, scope)
 
     def visit_Var(self, value: Var, scope: "IterationScope") -> Expr:
-        root = scope.capture_root(value)
+        root = scope.context.capture_root(value)
         return value if root is value else self.visit(root, scope)
 
 
@@ -251,7 +251,6 @@ def _parameter_term(
     scope: "IterationScope",
     held: object,
     *,
-    narrow: bool,
     retained: dict[str, object] | None = None,
 ) -> tuple[isl.pw_aff | None, AnalysisPrecision]:
     """What one parameter equals, over the enclosing induction variables.
@@ -265,14 +264,13 @@ def _parameter_term(
     if number is not None:
         return isl.pw_aff(f"{{ [{number}] }}"), AnalysisPrecision.EXACT
     try:
-        resolved = _RegionBindingResolver(narrow=narrow).visit(value, scope)
         coords = {
-            id(loop.induction_var): f"__tf_in_{i}" for i, loop in enumerate(scope.enclosing_loops())
+            id(loop.induction_var): f"__tf_in_{i}" for i, loop in enumerate(scope.context.enclosing_loops())
         }
         values: IslParamValues = {
-            param: scope.capture_root(parameter) for param, parameter in scope.domain_params.items()
+            param: scope.context.capture_root(parameter) for param, parameter in scope.domain_params.items()
         }
-        term = dim_to_isl_pw_aff(resolved, values, coords=coords).intersect_params(
+        term = dim_to_isl_pw_aff(value, values, coords=coords).intersect_params(
             scope.domain.params()
         )
     except (TypeError, ValueError, NotImplementedError, isl.Error):
@@ -330,7 +328,7 @@ def eliminate_parameters(
                 retained[target] = resolved
             continue
         term, resolved_precision = _parameter_term(
-            value, relation, name, scope, held, narrow=narrow, retained=retained
+            resolved, relation, name, scope, held, retained=retained
         )
         if keep_possible and resolved_precision is not AnalysisPrecision.EXACT:
             term = None

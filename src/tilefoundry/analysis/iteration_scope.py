@@ -42,6 +42,7 @@ from .access import (
     buffer_alias,
     eliminate_parameters,
     forwarded_leaves,
+    referenced_values,
     resolve_access,
 )
 from .errors import AnalysisError
@@ -107,7 +108,7 @@ class IterationScope:
         names = {}
         for scope in walk_scopes(self):
             for param, _argument in scope.captures:
-                names.setdefault(scope.capture_root(param), param)
+                names.setdefault(scope.context.capture_root(param), param)
         return names
 
     @property
@@ -136,25 +137,13 @@ class IterationScope:
         holder.projections[key] = (call, local)
         return local
 
-    def capture_root(self, value: Expr) -> Expr:
-        return self.context.capture_root(value)
-
     def is_variant(self, value: Expr) -> bool:
         """Whether *value* depends on this loop's induction or carry values."""
         if not isinstance(self.owner, LoopRegion):
             return False
         return id(self) in self.variance.get(id(value), frozenset())
 
-    def enclosing_loops(self) -> tuple[LoopRegion, ...]:
-        return self.context.enclosing_loops()
-
-    def enclosing_mesh(self) -> Mesh | None:
-        return self.context.enclosing_mesh()
-
-    def execution_mesh(self) -> Mesh | None:
-        return self.context.current_mesh
-
-    def mesh_positions(self, unit: str | None, stop=None) -> int:
+    def mesh_positions(self, unit: str | None) -> int:
         mesh = self.context.current_mesh
         return (
             1
@@ -175,7 +164,7 @@ class IterationScope:
                     varying *= trips
                 precision = precision.join(cursor.trips_precision)
             cursor = cursor.parent
-        return Repeats(varying, loops, self.mesh_positions(unit, stop=stop), precision)
+        return Repeats(varying, loops, self.mesh_positions(unit), precision)
 
     def _counted(self) -> tuple[int, AnalysisPrecision]:
         """This scope's iteration count relative to its parent, and how exact it is.
@@ -265,7 +254,6 @@ class ScopeBuilder(ValuationVisitor[None]):
         self.precisions: dict[str, dict[SSAValue, AnalysisPrecision]] = {
             view: {} for view in self.views
         }
-        self.definitions: dict[int, IterationScope] = {}
         self.type_ctx = (
             AnalyzeContext(frame=frame, topologies=frame.topologies)
             if ctx is None
@@ -309,11 +297,7 @@ class ScopeBuilder(ValuationVisitor[None]):
         relation = relation.intersect_domain(
             scope.domain.insert_dims(isl.dim_type.SET, scope.depth, rank)
         )
-        values = {
-            name: value
-            for name, value in scope.domain_params.items()
-            if relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
-        }
+        values = referenced_values(relation, scope.domain_params)
         return BufferAlias(value, AccessRelation(relation, values), AliasKind.FORWARD)
 
     def _forward(self, expr, operands, scope, view):
@@ -350,7 +334,7 @@ class ScopeBuilder(ValuationVisitor[None]):
                 scope,
                 ctx.local_type_of(alias.target.expr)
                 if view == "unit"
-                else scope.capture_root(alias.target.expr).type,
+                else scope.context.capture_root(alias.target.expr).type,
                 narrow=view == "narrow",
                 retained=retained,
                 formals=() if self.is_root else self.graph.params,
@@ -437,10 +421,6 @@ class ScopeBuilder(ValuationVisitor[None]):
             changing.add(id(loop))
         self.variance[id(expr)] = frozenset(changing)
 
-    def dispatch_visit(self, expr, ctx):
-        self.definitions[id(expr)] = ctx.current
-        return super().dispatch_visit(expr, ctx)
-
     def region_context(self, expr, ctx):
         scope = ctx.current
         domain, parameters = (
@@ -470,7 +450,6 @@ class ScopeBuilder(ValuationVisitor[None]):
         for param, argument in expr.captures():
             self._record_variance(param, (argument,))
             self._memo[id(param)] = (param, None)
-            self.definitions[id(param)] = child
             for view in self.views:
                 self._forward(param, forwarded_leaves(param, inner), child, view)
         return inner

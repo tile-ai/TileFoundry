@@ -53,6 +53,7 @@ from .access import (
     apply_source,
     eliminate_parameters,
     forwarded_leaves,
+    referenced_values,
     restore_loop_dimensions,
 )
 from .errors import AnalysisError
@@ -126,14 +127,14 @@ def _edge(value, by_value, *, storage_path=False):
     )
 
 
-def root(value: AllocationValue, by_value) -> AllocationValue:
+def root(value: AllocationValue, by_value, *, storage_path=False) -> AllocationValue:
     """Follow accepted value links without modifying or compressing them."""
     seen = set()
     while True:
         if value in seen:
             raise AnalysisError("allocation: storage links contain a cycle")
         seen.add(value)
-        edge = _edge(value, by_value)
+        edge = _edge(value, by_value, storage_path=storage_path)
         if edge is None:
             return value
         value = by_value[edge.target]
@@ -182,14 +183,7 @@ class AllocationSummary(IRMetadata):
             values=tuple(value for value in self.values if root(value, by_value) not in boundary),
             windows=tuple(translated),
             instances=resolve_footprint(self.instances, ctx),
-            regions=tuple(
-                replace(
-                    region,
-                    entered_at=timing.event(region.entered_at),
-                    exited_at=timing.event(region.exited_at),
-                )
-                for region in self.regions
-            ),
+            regions=tuple(region.shifted(timing) for region in self.regions),
         )
 
 
@@ -258,32 +252,32 @@ class AllocationModel(AnalyzeContext):
         return any(item.lifetime.persistent for item in self.members(value))
 
 
-def _bound_relation(model, relation, scope, held):
+def _scope_relation(relation, scope, held, formals):
     lifted = relation.relation.insert_dims(isl.dim_type.IN, 0, scope.depth)
     domain = scope.domain.insert_dims(
         isl.dim_type.SET, scope.depth, relation.relation.dim(isl.dim_type.IN)
     )
     lifted = lifted.intersect_domain(domain)
-    lifted, precision = eliminate_parameters(
+    return eliminate_parameters(
         lifted,
         relation.values,
         scope,
         held,
         narrow=True,
         retained=scope.domain_params,
-        formals=model._binding_formals,
+        formals=formals,
     )
+
+
+def _bound_relation(model, relation, scope, held):
+    lifted, precision = _scope_relation(relation, scope, held, model._binding_formals)
     return lifted if precision is AnalysisPrecision.EXACT else None
 
 
 def _relation_at(relation, scope):
     return AccessRelation(
         relation,
-        {
-            name: value
-            for name, value in scope.domain_params.items()
-            if relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
-        },
+        referenced_values(relation, scope.domain_params),
     )
 
 
@@ -306,11 +300,7 @@ def _storage_source(value, operand, ctx):
         operand,
         AccessRelation(
             relation,
-            {
-                name: value
-                for name, value in values.items()
-                if relation.find_dim_by_name(isl.dim_type.PARAM, name) >= 0
-            },
+            referenced_values(relation, values),
         ),
         source.kind,
     )
@@ -318,7 +308,7 @@ def _storage_source(value, operand, ctx):
 
 def _unprefix(relation, scope):
     values = dict(scope.domain_params)
-    for axis, loop in enumerate(scope.enclosing_loops()):
+    for axis, loop in enumerate(scope.context.enclosing_loops()):
         name = f"__tf_alias_loop_{axis}"
         while name in values:
             name += "_"
@@ -384,7 +374,7 @@ def _visible_at(model, value, producer):
     if isinstance(value, (int, Constant, DimVar)):
         return True
     if isinstance(value, Call) and isinstance(value.target, MeshCoord):
-        mesh = scope.execution_mesh()
+        mesh = scope.context.current_mesh
         if mesh is None:
             return False
         available = {getattr(held, "name", held) for held in mesh.topologies}
@@ -410,13 +400,10 @@ def _visible_at(model, value, producer):
 
 
 def _landing(model, holder, alias, *, window=False):
-    representative = holder
-    seen = set()
-    while (edge := _edge(representative, model.by_value, storage_path=window)) is not None:
-        if representative in seen:
-            return None
-        seen.add(representative)
-        representative = model.by_value[edge.target]
+    try:
+        representative = root(holder, model.by_value, storage_path=window)
+    except AnalysisError:
+        return None
     scope = model.locations[id(representative.value.expr)].current
     source = _coordinates(model, holder, scope, storage_path=window)
     target = _bound_relation(model, alias.relation, scope, alias.target.expr.type)
@@ -480,7 +467,7 @@ def _mapped_pointwise(model, left, right, start, landing):
             reached = _in_root(
                 restore_loop_dimensions(
                     actual.relation.relation,
-                    (loop.induction_var for loop in context.current.enclosing_loops()),
+                    (loop.induction_var for loop in context.current.context.enclosing_loops()),
                 ),
                 read,
                 context.current,
@@ -582,7 +569,6 @@ def tie_analysis(model):
     for use in model.liveness.uses:
         use_events[use.value].append(use)
     local = {item.value for item in model.liveness.intervals}
-    values = set(model.by_value.values())
     for holder, alias, loop in sorted(
         model.candidates,
         key=lambda item: (item[1].kind, model.by_value[item[0]].lifetime.defined_at),
@@ -600,8 +586,7 @@ def tie_analysis(model):
         left = model.members(a)
         right = model.members(b)
         if model.is_persistent(b) or any(
-            item in values
-            and any(item.value.expr is param for param in model.frame.function.params)
+            any(item.value.expr is param for param in model.frame.function.params)
             for item in right
         ):
             continue
@@ -669,10 +654,8 @@ def tie_analysis(model):
         if not window and end > start:
             continue
         landed = _landing(model, value, alias, window=window)
-        if landed is None:
-            continue
-        physical = _landing(model, value, alias)
-        if physical is None:
+        physical = landed if not window or landed is None else _landing(model, value, alias)
+        if physical is None or landed is None:
             continue
         new_root, edge = physical
         if alias.kind in (AliasKind.IN_PLACE, AliasKind.RETURN_REUSE):
@@ -1017,20 +1000,7 @@ def operand_scope(node: Call, ctx: AllocationModel) -> IterationScope:
             held = held.fields[output_index]
         if not isinstance(held, TensorType):
             continue
-        relation = boundary.relation.insert_dims(isl.dim_type.IN, 0, scope.depth)
-        domain = scope.domain.insert_dims(
-            isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
-        )
-        relation = relation.intersect_domain(domain)
-        relation, precision = eliminate_parameters(
-            relation,
-            boundary.values,
-            scope,
-            held,
-            narrow=True,
-            retained=scope.domain_params,
-            formals=ctx._binding_formals,
-        )
+        relation, precision = _scope_relation(boundary, scope, held, ctx._binding_formals)
         if is_literal_shape(held.shape):
             relation = relation.intersect_range(shape_to_isl_set(tuple(held.shape), {}))
         access = Access(
@@ -1594,11 +1564,8 @@ def solve_allocation(
     if seed is not None:
         address_hints, peak_hint = seed
         model.add(peak <= peak_hint)
-        hinted = set()
         for address, suggested in zip(addresses, address_hints, strict=True):
-            if address.index not in hinted:
-                model.add_hint(address, suggested)
-                hinted.add(address.index)
+            model.add_hint(address, suggested)
         for (left, right), (left_before, right_before) in order_choices.items():
             left_end = address_hints[left] + sizes[values[left]]
             right_end = address_hints[right] + sizes[values[right]]

@@ -223,6 +223,17 @@ def accumulate_logical(into, name, spread, ctx):
     return precision
 
 
+def with_dependencies(held, dependencies):
+    """State a primitive's logical groups using its operand dependencies."""
+    return replace(
+        held,
+        kinds=tuple(
+            (name, replace(spread, logical_groups=((dependencies, spread.logical),)))
+            for name, spread in held.kinds
+        ),
+    )
+
+
 def grouped_breakdown(held, groups):
     """Publish a definition's logical groups beside its local numeric view."""
     return replace(
@@ -276,8 +287,7 @@ def _accumulate(
 class ComputeCostContext(AnalyzeContext):
     flop_groups: dict = field(default_factory=dict)
     other_groups: dict = field(default_factory=dict)
-    locals_by_unit: dict[str, CostContext] = field(default_factory=dict)
-    whole: CostContext | None = None
+    units: tuple[str, ...] = ()
     flops: dict[str, int] = field(default_factory=dict)
     other_ops: dict[str, int] = field(default_factory=dict)
     by_unit: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
@@ -292,31 +302,24 @@ class ComputeCostVisitor(ValuationVisitor[None]):
     ) -> None:
         if not isinstance(expr, Call):
             return
-        if not ctx.locals_by_unit or ctx.whole is None:
+        if not ctx.units:
             raise AnalysisError("compute-cost: visitor context is missing its cost context")
         repeats = ctx.current.repeats_of(expr, ctx.topology_level)
         callee = CallFrameVisitor.callee_frame(expr, ctx.frame)
         if callee is None:
             record = _call_cost_record(
                 expr,
-                {unit: replace(ctx, topology_level=unit) for unit in ctx.locals_by_unit},
+                {unit: replace(ctx, topology_level=unit) for unit in ctx.units},
                 repeats.mesh_positions,
                 replace(ctx, topology_level=None),
                 ctx.topology_level,
             )
             dependencies = ctx.dependencies(expr)
 
-            def grouped(held):
-                return replace(
-                    held,
-                    kinds=tuple(
-                        (name, replace(spread, logical_groups=((dependencies, spread.logical),)))
-                        for name, spread in held.kinds
-                    ),
-                )
-
             record = replace(
-                record, flops=grouped(record.flops), other_ops=grouped(record.other_ops)
+                record,
+                flops=with_dependencies(record.flops, dependencies),
+                other_ops=with_dependencies(record.other_ops, dependencies)
             )
         else:
             record = get_metadata(callee.function, ComputeCostMetadata).resolve(ctx)
@@ -329,17 +332,9 @@ def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
     """Attach one-trip work per Call and multiplicity-aware totals per Function."""
     topology_level = context.topology_level
     topologies = context.topologies
-    frame = context.frame
     units = tuple(topology.name for topology in topologies) or (topology_level,)
-    locals_by_unit = {
-        unit: CostContext(frame=frame, topology_level=unit, topologies=topologies)
-        for unit in units
-        if unit is not None
-    }
     cost_context = ComputeCostContext(
-        **vars(context),
-        locals_by_unit=locals_by_unit,
-        whole=CostContext(frame=frame, current_mesh=context.root.execution_mesh()),
+        **vars(context), units=tuple(dict.fromkeys(unit for unit in units if unit is not None))
     )
     ComputeCostVisitor().visit(function.body, cost_context)
     attach(function, _summary(cost_context))

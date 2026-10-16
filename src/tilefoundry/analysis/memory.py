@@ -48,7 +48,7 @@ from .allocation import (
     solve_allocation,
     summary_of,
 )
-from .compute_cost import accumulate_logical, grouped_breakdown
+from .compute_cost import accumulate_logical, grouped_breakdown, with_dependencies
 from .errors import AnalysisError
 from .facts import TARGET_MEMORY_OWNER, MemoryHierarchyFacts
 from .footprint import (
@@ -475,8 +475,7 @@ def values_in_region(
 class MemoryContext(AnalyzeContext):
     """State carried through the memory-family expression walk."""
 
-    whole: CostContext | None = None
-    locals_by_unit: dict[str, CostContext] = field(default_factory=dict)
+    units: tuple[str, ...] = ()
     storage: _TrafficAccounts = field(default_factory=_TrafficAccounts)
     communication: _TrafficAccounts = field(default_factory=_TrafficAccounts)
     memory_level: str | None = None
@@ -536,7 +535,7 @@ class MemoryVisitor(ValuationVisitor[None]):
         if not isinstance(expr, Call):
             return
         recorded = id(expr) in ctx.current.accesses["narrow"]
-        if ctx.whole is None or not ctx.locals_by_unit:
+        if not ctx.units:
             raise AnalysisError("memory: visitor context is missing cost contexts")
         callee = CallFrameVisitor.callee_frame(expr, ctx.frame)
         if callee is None:
@@ -544,7 +543,7 @@ class MemoryVisitor(ValuationVisitor[None]):
                 call_traffic(
                     expr,
                     replace(ctx, topology_level=None),
-                    {unit: replace(ctx, topology_level=unit) for unit in ctx.locals_by_unit},
+                    {unit: replace(ctx, topology_level=unit) for unit in ctx.units},
                     ctx.current,
                     ctx.topology_level,
                 )
@@ -553,19 +552,11 @@ class MemoryVisitor(ValuationVisitor[None]):
             )
             dependencies = ctx.dependencies(expr)
 
-            def grouped(held):
-                return replace(
-                    held,
-                    kinds=tuple(
-                        (name, replace(spread, logical_groups=((dependencies, spread.logical),)))
-                        for name, spread in held.kinds
-                    ),
-                )
-
             moved = replace(
                 moved,
                 traffic=Traffic(
-                    grouped(moved.traffic.storage), grouped(moved.traffic.communication)
+                    with_dependencies(moved.traffic.storage, dependencies),
+                    with_dependencies(moved.traffic.communication, dependencies)
                 ),
             )
         else:
@@ -577,10 +568,8 @@ class MemoryVisitor(ValuationVisitor[None]):
             ).resolve(ctx)
             moved = replace(moved, footprint=qualify_instances(moved.footprint, ctx))
         if callee is not None and moved.footprint is not None:
-            footprint = moved.footprint
-            if footprint is not None:
-                reached = tuple(item for _windows, items in footprint.groups for item in items)
-                ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, reached))
+            reached = tuple(item for _windows, items in moved.footprint.groups for item in items)
+            ctx.reached_by_scope.setdefault(ctx.current, []).append((expr, reached))
         if callee is None and recorded and ctx.wave is not None and ctx.memory_level is not None:
             reached = reached_by(
                 ctx.current,
@@ -625,7 +614,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 f"target topology in {owner_topologies}"
             )
     topologies = context.topologies
-    whole = CostContext(frame=context.frame, current_mesh=context.root.execution_mesh())
+    whole = CostContext(frame=context.frame, current_mesh=context.root.context.current_mesh)
     cache = cached_level(facts)
     wave = (
         wave_of(module, context.target, topology_level, topologies=topologies)
@@ -648,18 +637,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     units = tuple(topology.name for topology in topologies) or (
         (topology_level,) if topology_level else ()
     )
-    locals_by_unit = {
-        unit: CostContext(
-            frame=context.frame,
-            topology_level=unit,
-            topologies=topologies,
-        )
-        for unit in units
-    }
     memory_context = MemoryContext(
         **vars(context),
-        whole=whole,
-        locals_by_unit=locals_by_unit,
+        units=tuple(dict.fromkeys(units)),
         memory_level=memory_level,
         wave=wave,
         reached_by_scope=refused_reached,
@@ -782,7 +762,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     )
     peaks, lifetimes, status = (), (), "not_run"
     if function is context.entry:
-        peaks, lifetimes, status = _place(allocation, facts, tuple(locals_by_unit))
+        peaks, lifetimes, status = _place(allocation, facts, memory_context.units)
         occupied = {peak.memory_level for peak in peaks}
         peaks += tuple(
             MemoryLevelPeak(name, 0, 0, facts.explicit(name).capacity_bytes)
@@ -794,10 +774,10 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     attach(
         function,
         RegionMemoryMetadata(
-            topologies=tuple(locals_by_unit),
+            topologies=memory_context.units,
             traffic=Traffic(
-                storage=_account_shares(memory_context.storage, tuple(locals_by_unit)),
-                communication=_account_shares(memory_context.communication, tuple(locals_by_unit)),
+                storage=_account_shares(memory_context.storage, memory_context.units),
+                communication=_account_shares(memory_context.communication, memory_context.units),
             ),
             footprint=footprint,
             peaks=peaks,
