@@ -27,7 +27,7 @@ def gemm(
             )
             T.fill(acc, 0.0)
             value = T.tensor_view(
-                0,
+                8192,
                 dtype="f16",
                 storage="smem",
                 layout=Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3),
@@ -35,7 +35,7 @@ def gemm(
             )
             T.copy(a, value)
             value_1 = T.tensor_view(
-                2048,
+                0,
                 dtype="f16",
                 storage="smem",
                 layout=Layout((32, (2, 64)), (64, (2048, 1))) | Swizzle(3, 4, 3),
@@ -46,7 +46,7 @@ def gemm(
                 for o_n in range(0, 128, 128):
                     for o_k in range(0, 16, 16):
                         value_2 = T.tensor_view(
-                            0,
+                            8192,
                             dtype="f16",
                             storage="smem",
                             layout=Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3),
@@ -58,7 +58,7 @@ def gemm(
                             shape=(64, 16),
                         )
                         value_1_2 = T.tensor_view(
-                            2048,
+                            0,
                             dtype="f16",
                             storage="smem",
                             layout=Layout((32, (2, 64)), (64, (2048, 1))) | Swizzle(3, 4, 3),

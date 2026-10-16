@@ -140,14 +140,15 @@ def root(value: AllocationValue, by_value, *, storage_path=False) -> AllocationV
         value = by_value[edge.target]
 
 
-def address_alias(value, by_value):
+def address_alias(value, by_value, *, alias=None):
     """Compose accepted address links without merging SSA values or lifetimes."""
-    alias = BufferAlias(value.value, identity_of(value), AliasKind.FORWARD)
+    structural = alias is not None
+    alias = alias or BufferAlias(value.value, identity_of(value), AliasKind.FORWARD)
     seen = set()
     while alias.target in by_value:
         current = by_value[alias.target]
         edge = _edge(current, by_value)
-        if edge is None:
+        if edge is None or (structural and edge.kind not in (AliasKind.VIEW, AliasKind.FORWARD)):
             return alias
         if current in seen:
             raise AnalysisError("allocation: storage links contain a cycle")
@@ -590,7 +591,11 @@ def tie_analysis(model):
     local = {item.value for item in model.liveness.intervals}
     for holder, alias, loop in sorted(
         model.candidates,
-        key=lambda item: (item[1].kind, model.by_value[item[0]].lifetime.defined_at),
+        key=lambda item: (
+            item[1].kind not in (AliasKind.INSERT_SLICE, AliasKind.FORWARD),
+            item[1].kind,
+            model.by_value[item[0]].lifetime.defined_at,
+        ),
     ):
         value = model.by_value[holder]
         target = model.by_value.get(alias.target)
@@ -709,24 +714,23 @@ def tie_analysis(model):
 
 def published_aliases(model):
     result = {}
-    kinds = (AliasKind.INSERT_SLICE, AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD)
+    kinds = (AliasKind.INSERT_SLICE, AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD, AliasKind.FORWARD)
     holders = {(holder, alias.kind) for holder, alias, _loop in model.candidates}
     for value in model.by_value.values():
         if id(value.value.expr) not in model.locations:
             continue
-        if any(alias.kind is AliasKind.INSERT_SLICE for alias in value.aliases) or (
-            isinstance(value.value.expr, Call)
-            and model.locations[id(value.value.expr)].callee is not None
-            and any(alias.kind is AliasKind.FORWARD for alias in value.aliases)
-        ):
-            result[value.value] = address_alias(value, model.by_value)
-            continue
         for kind in kinds:
-            if (value.value, kind) not in holders:
+            if kind is AliasKind.FORWARD:
+                if not isinstance(value.value.expr, Call) or model.locations[id(value.value.expr)].callee is None:
+                    continue
+            elif (value.value, kind) not in holders:
                 continue
             alias = next((a for a in value.aliases if a.kind is kind), None)
             if alias is not None:
-                result[value.value] = alias
+                result[value.value] = (
+                    address_alias(value, model.by_value, alias=alias)
+                    if kind in (AliasKind.INSERT_SLICE, AliasKind.FORWARD) else alias
+                )
                 break
     for holder, alias, _loop in model.candidates:
         if alias.kind is not AliasKind.WINDOW:
@@ -1199,24 +1203,18 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
         result = self.allocate(node, ctx)
         if not isinstance(node, Call) or not isinstance(result, AllocationValue):
             return result
+        if isinstance(node.target, InsertSlice):
+            destination = ctx.by_value.get(SSAValue(node.args[0]))
+            if destination is not None:
+                ctx.candidates.append((result.value, BufferAlias(
+                    destination.value, identity_of(result), AliasKind.INSERT_SLICE
+                ), None))
         proof_scope = _proof_scope(node, ctx)
         insert = _insert_accesses(node, proof_scope)
         local_scope = operand_scope(node, ctx)
         local_insert = _insert_accesses(node, local_scope)
         for operand, relation in operand_to_result_relation(node, local_scope, local_insert):
             if insert is not None and local_insert is not None:
-                if operand == local_insert[0].target and is_zero_offset(relation):
-                    destination = ctx.by_value.get(SSAValue(node.args[0]))
-                    if destination is not None:
-                        ctx.candidates.append(
-                            (
-                                result.value,
-                                BufferAlias(
-                                    destination.value, identity_of(result), AliasKind.INSERT_SLICE
-                                ),
-                                None,
-                            )
-                        )
                 if operand == local_insert[1].target:
                     update = ctx.by_value.get(SSAValue(node.args[1]))
                     if update is not None:

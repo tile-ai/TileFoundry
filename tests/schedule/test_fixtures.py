@@ -320,12 +320,12 @@ RMEM_EXPECTED = {
         "cta@0:1#0": _RmemExpectation(32, "parent envelope of the register output"),
     },
     "register_full_like": {
-        "thread@0:1#0": _RmemExpectation(33, "8 f32 register values and a predicate"),
-        "cta@0:1#0": _RmemExpectation(33, "parent envelope of Where and its predicate"),
+        "thread@0:1#0": _RmemExpectation(65, "two independent 8-element f32 buffers and a predicate"),
+        "cta@0:1#0": _RmemExpectation(65, "parent envelope of the independent buffers and predicate"),
     },
     "register_arange": {
-        "thread@0:1#0": _RmemExpectation(32, "8 i32 indices and the output share storage"),
-        "cta@0:1#0": _RmemExpectation(32, "parent envelope of the indices"),
+        "thread@0:1#0": _RmemExpectation(64, "independent 8-element i32 indices and output buffers"),
+        "cta@0:1#0": _RmemExpectation(64, "parent envelope of the two independent buffers"),
     },
     "reshard_views": {
         "thread@0:1#0": _RmemExpectation(32, "8 f32 register output elements"),
@@ -339,8 +339,8 @@ RMEM_EXPECTED = {
         "thread@0:128#0": _RmemExpectation(512, "4x32 f32 register tile"),
     },
     "loop_variable_rebound": {
-        "thread@0:1#0": _RmemExpectation(32, "2x4 f32 output and loop accumulator share storage"),
-        "cta@0:1#0": _RmemExpectation(32, "parent envelope of the loop accumulator"),
+        "thread@0:1#0": _RmemExpectation(64, "two independent live 2x4 f32 buffers"),
+        "cta@0:1#0": _RmemExpectation(64, "parent envelope of the independent loop buffers"),
     },
     "submesh_slice_in_sibling": {},
     "duplicate_output_storage": {},

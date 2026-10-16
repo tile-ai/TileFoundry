@@ -56,10 +56,9 @@ def test_local_analyzes_as_a_zero_traffic_topology_view(name, shape, dims) -> No
 
     for topology_level in ("cta", "thread"):
         result = analyze(
-            *check_program(_LocalProgram, entry, topology_level=topology_level),
+            *check_program(_LocalProgram, entry, topology_level=topology_level, dims=dims),
             analysis=("compute-cost", "memory"),
             topology_level=topology_level,
-            dims=dims,
         )
         analysed_local = next(
             expr

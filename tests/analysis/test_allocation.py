@@ -16,6 +16,7 @@ from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.passes.transforms.convert_hir_to_tir import Lowering, LoweringError
 from tilefoundry.schedule import finalize
+from tilefoundry.visitor_registry.verify import verify_module
 
 
 def test_union_coverage_does_not_prove_complete_writes_per_iteration() -> None:
@@ -94,3 +95,37 @@ def test_retained_update_translates_an_actual_window(tmp_path):
     expected = isl.map("{ [i, j] -> [i + 1, j] : 0 <= i < 2 and 0 <= j < 4 }")
     assert memory.alias.relation.relation.is_equal(expected)
     assert memory.buffer_bytes is None and memory.offsets == ()
+
+
+def test_insert_slice_keeps_its_address_through_sequential_carry_loops(tmp_path):
+    source = """from tilefoundry.dsl import *
+from tilefoundry.target import CudaTarget
+@module(entry='gemm', target=CudaTarget('nvidia.h200_sxm'),
+        topologies=(Topology('cta', 1), Topology('thread', 1)))
+class SequentialCarries:
+    @func
+    def gemm(x: Tensor[(2, 4), 'f32'], y: Tensor[(2, 4), 'f32'], z: Tensor[(2, 4), 'f32']):
+        with Mesh(('cta',), layout=(1,), names=('block',)) as _cta:
+            with Mesh(('thread',), layout=(1,), names=('lane',)) as _thread:
+                out = tf.zeros(Tensor[(6, 4), 'f32'])
+                for j in range(2):
+                    out = tf.insert_slice(out, x[j:j + 1, :], (j, 0))
+                for j in range(2):
+                    out = tf.insert_slice(out, y[j:j + 1, :], (2 + j, 0))
+                    out = tf.insert_slice(out, z[j:j + 1, :], (4 + j, 0))
+                return out
+"""
+    path = tmp_path / "sequential.py"
+    path.write_text(source)
+    module = load_authored_ir(str(path))
+    result = analyze(*check_program(module, module.entry_function()), analysis="memory")
+    inserts = [value for value in collect_exprs(result.function.body)
+               if isinstance(value, Call) and isinstance(value.target, InsertSlice)]
+    assert len(inserts) == 3
+    for insert in inserts:
+        memory = get_metadata(insert, MemoryMetadata)
+        assert memory.alias is not None
+        assert memory.alias.relation.relation.is_identity()
+        assert memory.alias.target.expr is insert.args[0]
+        assert memory.buffer_bytes is None and memory.offsets == ()
+    verify_module(finalize(module))

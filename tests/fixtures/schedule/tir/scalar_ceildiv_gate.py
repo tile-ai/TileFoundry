@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=ScalarCeildivGate function=gemm topology=cta wave=4/4
 # selection requested=memory executed=memory
-# memory traffic=gmem:r32B/w0@logical,r128B/w0@total,r32B/w0@cta,r32B/w0@thread;rmem:r8B/w32B@logical,r32B/w128B@total,r8B/w32B@cta,r8B/w32B@thread footprint=x:32B footprint-precision=exact peak=gmem:256B;rmem:32B persistent=gmem:256B
+# memory traffic=gmem:r32B/w0@logical,r128B/w0@total,r32B/w0@cta,r32B/w0@thread;rmem:r8B/w32B@logical,r32B/w128B@total,r8B/w32B@cta,r8B/w32B@thread footprint=x:40B footprint-precision=exact peak=gmem:256B;rmem:32B persistent=gmem:256B
 
 from __future__ import annotations
 

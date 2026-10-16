@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=RegisterArange function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=rmem:r32B/w32B@logical,r32B/w32B@total,r32B/w32B@cta,r32B/w32B@thread footprint-precision=exact peak=gmem:32B;rmem:32B persistent=gmem:32B
+# memory traffic=rmem:r32B/w32B@logical,r32B/w32B@total,r32B/w32B@cta,r32B/w32B@thread footprint-precision=exact peak=gmem:32B;rmem:64B persistent=gmem:32B
 
 from __future__ import annotations
 

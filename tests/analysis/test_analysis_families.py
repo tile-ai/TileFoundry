@@ -53,8 +53,8 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _ROUNDING_M = 14_593
@@ -75,7 +75,7 @@ def test_invariant_gemm_operands_repeat_in_total_traffic() -> None:
 
 
 def test_cross_device_reshard_retains_its_buffer_and_communication() -> None:
-    result = analyze(TransposeShard, TransposeShard.entry_function(), analysis="memory")
+    result = analyze(*check_program(TransposeShard, TransposeShard.entry_function()), analysis="memory")
     (reshard,) = (expr for expr in collect_exprs(result.function.body)
                   if isinstance(expr, Call) and isinstance(expr.target, Reshard))
     assert aliased_operand(reshard) is None

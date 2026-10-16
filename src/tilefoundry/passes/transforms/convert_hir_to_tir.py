@@ -43,7 +43,6 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.hir.tensor.empty import Empty
 from tilefoundry.ir.hir.tensor.full_like import FullLike
-from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
@@ -1394,7 +1393,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
         if isinstance(desired.layout, ShardLayout):
             holder = self._holder_mesh(desired)
             frame = next((
-                scope.frame for scope in reversed(self.ctx.scopes)
+                scope.frame for scope in reversed(self.ctx.blocks)
                 if scope.frame is not None and scope.frame.topologies == holder.topologies
             ), None)
             if frame is None:
