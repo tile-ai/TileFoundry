@@ -78,8 +78,7 @@ class AliasKind(IntEnum):
     CARRY_YIELD = 3
     INSERT_SLICE = 4
     WINDOW = 5
-    RETURN_REUSE = 6
-    IN_PLACE = 7
+    IN_PLACE = 6
 
 
 @dataclass(frozen=True)

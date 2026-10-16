@@ -169,7 +169,7 @@ class AllocationSummary(IRMetadata):
 
     values: tuple[AllocationValue, ...]
     windows: tuple[ValueLifetime, ...]
-    return_reuse: tuple[tuple[BufferAlias, ...], ...] = ()
+    in_place: tuple[tuple[int, BufferAlias], ...] = ()
     instances: Footprint | None = None
     regions: tuple[RegionInterval, ...] = ()
     requires: ClassVar[tuple[type, ...]] = (BindingValuation, TimingValuation, LoopNestValuation)
@@ -230,9 +230,6 @@ class AllocationModel(AnalyzeContext):
     locations: dict[int, AnalyzeContext] = field(default_factory=dict)
     instance_groups: list = field(default_factory=list)
     regions: list[RegionInterval] = field(default_factory=list)
-    return_proofs: dict[SSAValue, list[tuple[BufferAlias, frozenset[int]]]] = field(
-        default_factory=dict
-    )
 
     def storage_actual(self, formal, index=0):
         argument = next(argument for param, argument in self.bindings if param is formal)
@@ -468,21 +465,24 @@ def _in_root(relation, positioned, scope):
 
 
 def _mapped_pointwise(model, left, right, start, landing):
-    """Only pre-covered mapped windows may borrow a callee return proof."""
+    """Only capability-covered mapped windows may borrow an in-place proof."""
     touching = {
-        id(window)
+        window
         for member in right
         for window in model.occupancy(member)
         if window is not member.lifetime and window.last_used_at == start
     }
     covered, proved = set(), set()
     for output in left:
-        candidates = model.return_proofs.get(output.value, ())
-        if not candidates:
+        if not isinstance(output.value.expr, Call):
             continue
         context = model.locations[id(output.value.expr)]
+        if context.callee is None:
+            continue
         written = _coordinates(model, output, context.current, override=landing)
-        for actual, windows in candidates:
+        for key, actual, windows in in_place_operands(output.value.expr, context):
+            if key != output.value:
+                continue
             member = model.by_value.get(actual.target)
             read = None if member is None else _coordinates(model, member, context.current)
             if read is None or written is None or read[0] is not written[0]:
@@ -691,7 +691,7 @@ def tie_analysis(model):
         if physical is None or landed is None:
             continue
         new_root, edge = physical
-        if alias.kind in (AliasKind.IN_PLACE, AliasKind.RETURN_REUSE):
+        if alias.kind is AliasKind.IN_PLACE:
             scope = model.locations[id(new_root.value.expr)].current
             positioned = _coordinates(model, new_root, scope, override=physical)
             if positioned is None or not is_zero_offset(positioned[1]):
@@ -1057,6 +1057,33 @@ def operand_scope(node: Call, ctx: AllocationModel) -> IterationScope:
     )
 
 
+def in_place_operands(node, ctx):
+    """Exact zero-offset capabilities, before caller lifetime and placement checks."""
+    if ctx.callee is None:
+        scope = _proof_scope(node, ctx)
+        if _insert_accesses(node, scope) is None:
+            for operand, relation in operand_to_result_relation(node, scope, None):
+                if is_zero_offset(relation):
+                    yield SSAValue(node), BufferAlias(
+                        operand, _unprefix(relation, scope), AliasKind.IN_PLACE
+                    ), frozenset()
+        return
+    template = get_metadata(ctx.callee.function, AllocationSummary)
+    local = {value.value: value for value in template.values}
+    resolved = template.resolve(ctx) if template.in_place else None
+    for index, capability in template.in_place:
+        actual, precision = ctx.project(capability, actual_of=ctx.storage_actual)
+        if precision is not AnalysisPrecision.EXACT or not is_zero_offset(actual.relation.relation):
+            continue
+        formal = local[capability.target]
+        windows = frozenset(
+            mapped for original, mapped in zip(template.windows, resolved.windows, strict=True)
+            if (member := local.get(original.value)) is not None
+            and root(member, local) is root(formal, local)
+        )
+        yield SSAValue(node, index), actual, windows
+
+
 class AllocationConstraintVisitor(ValuationVisitor[Storage]):
     """Collect native values and interpret called templates at leaf Calls."""
 
@@ -1199,7 +1226,9 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
             return None
         callee = self.callee_frame(node, ctx.frame) if isinstance(node, Call) else None
         if callee is not None:
-            return self.call_storage(node, callee, ctx)
+            result = self.call_storage(node, callee, ctx)
+            self.in_place(node, ctx)
+            return result
         source = ctx.current.sources["narrow"].get(SSAValue(node))
         if source is not None and source.target != SSAValue(node):
             return self.allocate(node, ctx)
@@ -1212,12 +1241,10 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
                 ctx.candidates.append((result.value, BufferAlias(
                     destination.value, identity_of(result), AliasKind.INSERT_SLICE
                 ), None))
-        proof_scope = _proof_scope(node, ctx)
-        insert = _insert_accesses(node, proof_scope)
         local_scope = operand_scope(node, ctx)
         local_insert = _insert_accesses(node, local_scope)
         for operand, relation in operand_to_result_relation(node, local_scope, local_insert):
-            if insert is not None and local_insert is not None:
+            if local_insert is not None:
                 if operand == local_insert[1].target:
                     update = ctx.by_value.get(SSAValue(node.args[1]))
                     if update is not None:
@@ -1230,19 +1257,16 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
                                 None,
                             )
                         )
-        for operand, relation in operand_to_result_relation(node, proof_scope, insert):
-            if not is_zero_offset(relation) or insert is not None:
-                continue
-            target = ctx.by_value.get(operand)
-            if target is not None and not target.lifetime.persistent:
-                ctx.candidates.append(
-                    (
-                        result.value,
-                        BufferAlias(operand, _unprefix(relation, ctx.current), AliasKind.IN_PLACE),
-                        None,
-                    )
-                )
+        self.in_place(node, ctx)
         return result
+
+    def in_place(self, node, ctx):
+        for key, operand, _windows in in_place_operands(node, ctx):
+            value, target = ctx.by_value.get(key), ctx.by_value.get(operand.target)
+            if value is not None and target is not None and not target.lifetime.persistent:
+                ctx.candidates.append((key, replace(
+                    operand, relation=identity_of(value), kind=AliasKind.IN_PLACE
+                ), None))
 
     def call_storage(self, node, callee, ctx):
         template = get_metadata(callee.function, AllocationSummary)
@@ -1269,34 +1293,6 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
         instances = qualify_instances(resolved.instances, ctx)
         if instances is not None:
             ctx.instance_groups.extend(instances.groups)
-        for index, candidates in enumerate(template.return_reuse):
-            key = SSAValue(node, index)
-            if key not in ctx.by_value:
-                continue
-            for candidate in candidates:
-                actual, precision = ctx.project(candidate, actual_of=ctx.storage_actual)
-                if precision is not AnalysisPrecision.EXACT or not is_zero_offset(
-                    actual.relation.relation
-                ):
-                    continue
-                formal = local.get(candidate.target)
-                covered = frozenset(
-                    id(mapped)
-                    for original, mapped in zip(template.windows, resolved.windows, strict=True)
-                    if formal is not None
-                    and (member := local.get(original.value)) is not None
-                    and root(member, local) is root(formal, local)
-                )
-                ctx.return_proofs.setdefault(key, []).append((actual, covered))
-                ctx.candidates.append(
-                    (
-                        key,
-                        BufferAlias(
-                            actual.target, identity_of(ctx.by_value[key]), AliasKind.RETURN_REUSE
-                        ),
-                        None,
-                    )
-                )
         assert tuple(value.aliases for value in template.values) == original, (
             "resolving a call mutated callee aliases"
         )
@@ -1326,11 +1322,10 @@ def collect_allocation(function, context, liveness, quantities, persistent):
 
 def summary_of(model):
     by_value = model.by_value
-    returned = []
+    capabilities = []
     body = model.frame.function.body
     for index in range(len(leaves_of(body.type))):
         value = by_value.get(SSAValue(body, index))
-        candidates = []
         source = model.current.sources["narrow"].get(SSAValue(body, index))
         if (
             value is not None
@@ -1359,14 +1354,13 @@ def summary_of(model):
                         model.span(model.members(formal))[1]
                         <= model.span(model.members(target_root))[0]
                     ):
-                        candidates.append(
-                            BufferAlias(operand, _unprefix(relation, scope), AliasKind.RETURN_REUSE)
-                        )
-        returned.append(tuple(candidates))
+                        capabilities.append((index, BufferAlias(
+                            operand, _unprefix(relation, scope), AliasKind.IN_PLACE
+                        )))
     return AllocationSummary(
         tuple(by_value.values()),
         tuple(model.windows),
-        tuple(returned),
+        tuple(capabilities),
         Footprint(tuple(model.instance_groups)),
         tuple(model.regions),
     )

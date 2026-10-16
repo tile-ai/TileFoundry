@@ -7,7 +7,8 @@ import isl
 import pytest
 
 from tilefoundry.analysis import MemoryMetadata, analyze
-from tilefoundry.analysis.allocation import covers_result
+from tilefoundry.analysis.access import SSAValue
+from tilefoundry.analysis.allocation import AllocationSummary, covers_result, root
 from tilefoundry.analysis.check import check_program
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Call, get_metadata
@@ -162,3 +163,38 @@ def test_read_only_call_return_keeps_storage_despite_later_actual_use(tmp_path, 
     )
     assert memory.alias.relation.relation.is_equal(expected)
     assert memory.buffer_bytes is None and memory.offsets == ()
+
+
+@pytest.mark.parametrize("later_use", [False, True])
+def test_retained_elementwise_return_overwrites_only_a_dead_actual(tmp_path, later_use):
+    source = """from tilefoundry.dsl import *
+from tilefoundry.target import CudaTarget
+@module(entry='gemm', target=CudaTarget('nvidia.h200_sxm'),
+        topologies=(Topology('cta', 1), Topology('thread', 1)))
+class FreshReturn:
+    @func
+    def doubled(x: Tensor[(2, 4), 'f32']):
+        return x + x
+    @func
+    def gemm():
+        with Mesh(('cta',), layout=(1,), names=('block',)) as _cta:
+            a = tf.zeros(Tensor[(2, 4), 'f32'])
+            return doubled(a)
+"""
+    if later_use:
+        source = source.replace("return doubled(a)", "return doubled(a), a")
+    path = tmp_path / "fresh.py"
+    path.write_text(source)
+    module = load_authored_ir(str(path))
+    result = analyze(*check_program(module, module.entry_function()), analysis="memory")
+    call = next(value for value in collect_exprs(result.function.body)
+                if isinstance(value, Call) and isinstance(value.target, Function))
+    actual = get_metadata(call.args[0], MemoryMetadata)
+    returned = get_metadata(call, MemoryMetadata)
+    assert actual.offsets and returned.offsets
+    assert (returned.offsets == actual.offsets) is (not later_use)
+    assert returned.buffer_bytes == actual.buffer_bytes == 32
+    summary = get_metadata(result.function, AllocationSummary)
+    values = {value.value: value for value in summary.values}
+    assert (root(values[SSAValue(call)], values) is
+            root(values[SSAValue(call.args[0])], values)) is (not later_use)

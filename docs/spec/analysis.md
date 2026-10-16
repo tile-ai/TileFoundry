@@ -651,7 +651,6 @@ the following order and behavior:
 | CARRY_YIELD | Yield -> phi | Loop-body condition below | Yes |
 | INSERT_SLICE | Result -> destination | Ordinary tie condition | Yes |
 | WINDOW | Update -> result | Window condition below | On the update's storage root |
-| RETURN_REUSE | Call result -> actual argument | Ordinary tie condition and callee's zero-offset proof | No |
 | IN_PLACE | Result -> operand | Ordinary tie condition and zero-offset proof | No |
 
 Structural source links MUST be installed first. Conditional relations MUST be
@@ -670,7 +669,7 @@ A root's extent MUST be the maximum bytes of every member's occupancy, including
 mapped return-producer windows; its own lifetime.bytes remains the size of its
 projected Type. At equal endpoints,
 a mapped callee window has no caller-local access proof: only members of the
-formal covered by a callee RETURN_REUSE candidate may borrow that proof, checked
+formal covered by a callee IN_PLACE capability may borrow that proof, checked
 again in actual storage-root coordinates. Other mapped windows MUST end strictly
 before the candidate starts. Global interference MUST compare individual
 windows, never their occupancy envelope.
@@ -681,8 +680,8 @@ InsertSlice destination identity branch is a valid proof. A matmul reading its
 carry is not pointwise and MUST NOT acquire a carry-yield tie on that evidence.
 IN_PLACE candidates MUST be limited to proved zero-offset, non-persistent
 operands at the same level whose own last use is no later than the result's
-definition. Nonzero-offset IN_PLACE and RETURN_REUSE candidates MUST NOT be
-registered. IN_PLACE and RETURN_REUSE MUST use source-resolved
+definition. Nonzero-offset IN_PLACE candidates MUST NOT be registered.
+IN_PLACE MUST use source-resolved
 `operand_to_result_relation`, grouped by `Access.target`, so the proof is in
 storage-root coordinates after VIEW/FORWARD composition. A Slice's local
 identity MUST NOT turn a shifted backing-buffer read into zero-offset reuse.
@@ -737,12 +736,15 @@ ties MUST publish no alias; lowering copies the corresponding carry or slice.
 A callee root containing a formal or the returned storage root is a boundary
 and MUST have no local address variable or published offsets. Read-only
 zero-offset operand proofs, including formal operands and VIEW/FORWARD paths
-to the return root, MAY produce RETURN_REUSE candidates when formal occupancy
-ends no later than return occupancy starts. These proofs MUST NOT create local
+to the return root, MAY declare an IN_PLACE capability (output index, formal
+input leaf and coordinate relation) when formal occupancy ends no later than
+output occupancy starts. The call site MUST register and judge these capabilities
+with the same IN_PLACE rules as ordinary operations; a later use of the actual
+MUST prevent reuse. These proofs MUST NOT create local
 IN_PLACE aliases, link formal storage to a result, or publish metadata.
 
 An internal AllocationSummary MUST contain the definition's values, windows,
-return candidates, instance address evidence, and flat RegionInterval facts.
+IN_PLACE capabilities, instance address evidence, and flat RegionInterval facts.
 At a Call leaf its resolve MUST translate windows and region events using
 TimingValuation. Windows rooted at a formal MUST name the actual SSA leaf;
 windows rooted at a return MUST name the Call result leaf. Internal SSA values
@@ -825,7 +827,7 @@ class MemoryLevelPeak:
     MUST NOT make a program unplaceable, and a level owned per unit of a topology
     other than the one being analysed MUST fail rather than be assumed. Domains
     holding the same buffers are one question, decided once.
-  - Carry, InsertSlice, window, return-reuse and in-place sharing MUST follow
+  - Carry, InsertSlice, window and in-place sharing MUST follow
     the pre-solve value links and acceptance conditions above. Simultaneously
     live values in overlapping address intervals MUST belong to the same root;
     otherwise analysis MUST raise `AnalysisError` identifying both bindings,
