@@ -339,6 +339,7 @@ class Lowering(ValuationVisitor[Expr | _View]):
         self.frames: list[Mesh] = []
         self.outputs: list[tuple[tuple[int, ...], Var]] = []
         self.output_storage: dict[SSAValue, Var] = {}
+        self.output_values = {}
         self.scratch: list[Var] = []
         self.ctx = LoweringContext(self.function)
         summary = get_metadata(self.function, AllocationSummary)
@@ -391,11 +392,25 @@ class Lowering(ValuationVisitor[Expr | _View]):
             if address.target in seen:
                 raise LoweringError(f"return leaf {path!r} shares storage with another output")
             seen.add(address.target)
-            roots.append((path, type_, address))
-        for path, type_, address in roots:
+            roots.append((path, type_, key, address))
+        for path, type_, key, address in roots:
             output_type = replace(type_, storage=StorageKind.GMEM) if type_.storage is StorageKind.UMAT else type_
             output = Var(self.names.fresh("out"), type=output_type)
             self.outputs.append((path, output))
+            value = self.addresses[key]
+            returning = True
+            while True:
+                retained = (isinstance(value.value.expr, Call)
+                            and self.callee_frame(value.value.expr, self.context.frame) is not None)
+                if self._address(value.value.expr, value.value.index).writes or (returning and retained):
+                    self.output_values[value.value] = (output, address)
+                edge = _edge(value, self.addresses)
+                if edge is None:
+                    break
+                returning = returning and not retained and not edge.writes and edge.kind in (
+                    AliasKind.VIEW, AliasKind.FORWARD
+                )
+                value = self.addresses[edge.target]
             held = leaves_of(address.target.expr.type)[address.target.index]
             if address.relation.relation.is_identity() and held == type_:
                 self.output_storage[address.target] = output
@@ -455,6 +470,23 @@ class Lowering(ValuationVisitor[Expr | _View]):
         if known is not None:
             return known
         address = self._address(key.expr, key.index)
+        value = self.addresses[key]
+        while True:
+            if value.value in self.output_values:
+                output, returned = self.output_values[value.value]
+                relation = address.relation.relation.apply_range(returned.relation.relation.reverse())
+                relative = replace(address, relation=AccessRelation(
+                    relation, {**address.relation.values, **returned.relation.values}
+                ))
+                desired = leaves_of(key.expr.type)[key.index]
+                result = self._address_view(output, relative, desired)
+                self.logical[id(result)] = desired
+                self.tensors[key] = result
+                return result
+            edge = _edge(value, self.addresses)
+            if edge is None:
+                break
+            value = self.addresses[edge.target]
         base = self.storage.get(address.target)
         if base is None:
             source = address.target.expr

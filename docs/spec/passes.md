@@ -329,9 +329,15 @@ class ConvertHIRToTIR(ModulePass):
     storage without a producer-kind whitelist or a structural HIR storage trace.
     Repeated output storage roots and leaves without a proved address raise
     `LoweringError`. Retained-call arguments and destinations MUST be Tensor or
-    TensorView objects over the caller's analyzed storage. If a callee writes
-    into a formal but the caller cannot place its result on that actual's
-    storage, lowering MUST retain the `cannot be placed on its output` refusal.
+    TensorView objects over the caller's analyzed storage, except that a returned
+    call result uses the caller's output parameter. Along a return address chain,
+    objects produced by writes and their VIEW/FORWARD results MUST be views of
+    that return leaf's output parameter. Input objects and read-only views taken
+    directly from them MUST retain the input parameter. A read-only return emits
+    no write or copy; overlap between input and output remains the caller's job.
+    If a callee writes into a formal but the caller cannot place its result on
+    that actual's storage, lowering MUST retain the `cannot be placed on its output`
+    refusal.
     Each external output's address is the caller's responsibility; host entry,
     automatic runtime outputs and the codegen signature add no alias contract.
     `Zeros` and `FullLike` share fill lowering; the scalar constant uses the

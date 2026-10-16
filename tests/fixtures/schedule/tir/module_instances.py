@@ -87,6 +87,7 @@ class ModuleInstances:
             x_2_1 = T.tensor_view(T.ptr_of(scratch_4[0:0 + 32]), layout=(32,), shape=(32,))
             layers[0](x_1_1, x_2_1)
             value_7 = T.tensor_view(T.ptr_of(w), layout=(32,), shape=(32,))
-            helper(x_2_1, value_7, out)
+            value_8 = T.tensor_view(T.ptr_of(out), layout=(32,), shape=(32,))
+            helper(x_2_1, value_7, value_8)
 
 del ScheduledScale

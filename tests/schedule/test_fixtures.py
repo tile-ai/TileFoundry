@@ -2356,7 +2356,7 @@ def test_lowering_retains_all_four_instance_and_local_call_shapes():
             CppEmitter(context=CudaCodegenContext(target=lowered.target)).visit_Evaluate(call)
 
 
-def _returned_view(storage):
+def _returned_view(storage, chain=False):
     type_ = TensorType((32,), DType.f32, Layout((32,), (1,)), storage)
     param = Var("x", type=type_)
     function = Function.build(name="run", params=(param,), body=param, return_type=type_)
@@ -2364,6 +2364,8 @@ def _returned_view(storage):
     slot = ModuleList(leaf)
     activation = replace(param)
     call = Call(slot, (activation,), type=type_)
+    if chain:
+        call = Call(slot, (call,), type=type_)
     root = Function.build(name="root", params=(activation,), body=call, return_type=type_)
     return Module("ViewCaller", (root,), "root", children={"child": slot},
                   target=CudaTarget("nvidia.h200_sxm"),
@@ -2371,22 +2373,40 @@ def _returned_view(storage):
 
 
 @pytest.mark.parametrize("storage", [StorageKind.GMEM, StorageKind.SMEM])
-def test_a_returned_view_passes_its_analyzed_storage_to_the_callee(storage):
-    lowered = finalize(_returned_view(storage))
+@pytest.mark.parametrize("chain", [False, True])
+def test_a_returned_view_passes_its_analyzed_storage_to_the_callee(storage, chain):
+    lowered = finalize(_returned_view(storage, chain))
     verify_module(lowered)
     function = lowered.entry_function()
     visitor = _RetainedStatements()
     visitor.visit(function.body)
-    assert len(visitor.calls) == 1
-    call = visitor.calls[0]
+    assert len(visitor.calls) == (2 if chain else 1)
+    for prior in visitor.calls[:-1]:
+        assert visitor.storage(prior.args[0]) is function.params[0]
+        assert visitor.storage(prior.args[-1]) is function.params[0]
+    call = visitor.calls[-1]
     assert call.args[0] is not call.args[-1]
     assert visitor.storage(call.args[0]) is function.params[0]
-    assert visitor.storage(call.args[-1]) is function.params[0]
+    assert visitor.storage(call.args[-1]) is function.params[-1]
     assert not any(isinstance(op, Copy) for op in visitor.operations)
+    callee = _RetainedStatements()
+    callee.visit(lowered.children[call.callable.key].elements[0].entry_function().body)
+    assert not callee.operations
 
 
-def test_inplace_output_passes_distinct_views_without_a_whole_copy():
+@pytest.mark.parametrize("read_old", [False, True])
+@pytest.mark.parametrize("reshape", [False, True])
+def test_inplace_output_passes_distinct_views_without_a_whole_copy(tmp_path, read_old, reshape):
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py"
+    if read_old or reshape:
+        text = source.read_text()
+        if read_old:
+            text = text.replace("(x, tf.empty", "(out[0:1, :], tf.empty")
+        if reshape:
+            text = text.replace("return update(out, x)", "return tf.reshape(update(out, x), (4, 2))")
+        rewritten = tmp_path / source.name
+        rewritten.write_text(text)
+        source = rewritten
     lowered = finalize(_module_in(source))
     verify_module(lowered)
     function = lowered.entry_function()
@@ -2396,11 +2416,41 @@ def test_inplace_output_passes_distinct_views_without_a_whole_copy():
     call = visitor.calls[0]
     assert call.args[0] is not call.args[-1]
     assert visitor.storage(call.args[0]) is function.params[0]
-    assert visitor.storage(call.args[-1]) is function.params[0]
+    assert visitor.storage(call.args[-1]) is function.params[-1]
     callee = _RetainedStatements()
     callee.visit(call.callable.body)
-    assert not any(isinstance(stmt.callable, Copy) and stmt.args[0].type.shape == (2, 4)
-                   for stmt in callee.statements)
+    copies = [stmt for stmt in callee.statements if isinstance(stmt.callable, Copy)]
+    assert len(copies) == 2
+    assert callee.storage(copies[0].args[0]) is call.callable.params[0 if read_old else 1]
+    assert callee.storage(copies[-1].args[-1]) is call.callable.params[-1]
+    assert not any(stmt.args[0].type.shape == (2, 4) for stmt in copies)
+
+
+def test_read_only_call_before_an_update_keeps_the_input_storage(tmp_path):
+    source = Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py"
+    text = source.read_text().replace(
+        "    @func\n    def update",
+        '    @func\n    def identity(out: Tensor[(2, 4), "f32"]):\n'
+        '        return out\n\n    @func\n    def update',
+    ).replace(
+        "row = tf.schedule((x,", "old = identity(out)\n                row = tf.schedule((old[0:1, :],"
+    ).replace("return tf.insert_slice(out,", "return tf.insert_slice(old,")
+    path = tmp_path / source.name
+    path.write_text(text)
+    lowered = finalize(_module_in(path))
+    verify_module(lowered)
+    visitor = _RetainedStatements()
+    visitor.visit(lowered.entry_function().body)
+    update = visitor.calls[0].callable
+    body = _RetainedStatements()
+    body.visit(update.body)
+    assert len(body.calls) == 1
+    identity = body.calls[0]
+    assert body.storage(identity.args[0]) is update.params[0]
+    assert body.storage(identity.args[-1]) is update.params[0]
+    copies = [stmt for stmt in body.statements if isinstance(stmt.callable, Copy)]
+    assert body.storage(copies[0].args[0]) is update.params[0]
+    assert body.storage(copies[-1].args[-1]) is update.params[-1]
 
 
 @pytest.mark.parametrize("wrong,refused", [

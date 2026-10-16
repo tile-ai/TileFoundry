@@ -18,7 +18,7 @@ class InplaceOutputUpdate:
                 value_1 = T.tensor_view(T.ptr_of(x), layout=(1, 4), shape=(1, 4))
                 value_2 = T.tensor_view(T.ptr_of(value), layout=(1, 4), shape=(1, 4))
                 T.copy(value_1, value_2)
-                value_3 = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
+                value_3 = T.tensor_view(T.ptr_of(out_1), layout=(2, 4), shape=(2, 4))
                 window = T.tensor_view(
                     T.ptr_of(value_3[1:1 + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
                 )
@@ -32,5 +32,5 @@ class InplaceOutputUpdate:
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             value = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
             value_1 = T.tensor_view(T.ptr_of(x), layout=(1, 4), shape=(1, 4))
-            value_2 = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
+            value_2 = T.tensor_view(T.ptr_of(out_1), layout=(2, 4), shape=(2, 4))
             update(value, value_1, value_2)

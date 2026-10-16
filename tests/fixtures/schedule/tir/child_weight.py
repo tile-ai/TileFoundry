@@ -38,6 +38,7 @@ class ChildWeight:
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
                 value = T.tensor_view(T.ptr_of(x), layout=(32,), shape=(32,))
-                scaled(value, out)
+                value_1 = T.tensor_view(T.ptr_of(out), layout=(32,), shape=(32,))
+                scaled(value, value_1)
 
 del Child
