@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=WGMMA_A_K_MAJOR function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r10.00KB/w12.00KB@logical,r10.00KB/w12.00KB@total,r10.00KB/w12.00KB@cta,r10.00KB/w8.03KB@thread;rmem:r28.08KB/w28.00KB@logical,r28.08KB/w28.00KB@total,r28.08KB/w28.00KB@cta,r304B/w224B@thread;smem:r6.00KB/w6.00KB@logical,r6.00KB/w6.00KB@total,r6.00KB/w6.00KB@cta,r640B/w6.00KB@thread footprint=at:2.00KB;v2:43:4.00KB;b:1.00KB;v13:78:4.00KB footprint-precision=exact peak=gmem:10.00KB;rmem:8.00KB;smem:6.00KB persistent=gmem:6.00KB
+# memory traffic=gmem:r10.00KB/w12.00KB@logical,r10.00KB/w12.00KB@total,r10.00KB/w12.00KB@cta,r10.00KB/w8.03KB@thread;rmem:r28.08KB/w28.00KB@logical,r28.08KB/w28.00KB@total,r28.08KB/w28.00KB@cta,r304B/w224B@thread;smem:r6.00KB/w6.00KB@logical,r6.00KB/w6.00KB@total,r6.00KB/w6.00KB@cta,r640B/w6.00KB@thread footprint=at:2.00KB;b:1.00KB;v13:78:4.00KB;v2:43:4.00KB footprint-precision=exact peak=gmem:10.00KB;rmem:8.00KB;smem:6.00KB persistent=gmem:6.00KB
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def gemm(
                     "rmem",
                 ]
             )
-            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_2:
                 T.fill(acc, 0.0)
             lhs_ring_stages = (
                 T.tensor_view(2048, dtype="fp8e4m3", storage="smem", layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))), shape=(64, 32)),
@@ -41,7 +41,7 @@ def gemm(
                 T.tensor_view(1024, dtype="fp8e4m3", storage="smem", layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))), shape=(32, 32)),
             )
             for k in range(0, 64, 32):
-                with scope[:1, :32] as scope_2:
+                with scope[:1, :32] as scope_4:
                     tile = T.tensor_view(
                         T.ptr_of(at[k:k + 32, 0:0 + 64]), layout=(32, 64), shape=(32, 64)
                     )
@@ -82,12 +82,12 @@ def gemm(
                                     atom=T.cuda.sm90.Wgmma(n=32, dtype="fp8e4m3", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K),
                                 )
             T.fill(out, 0.0)
-            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_4:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                 result = T.alloc_tensor(
                     tensor_type=Tensor[
                         (64, 32),
                         "bf16",
-                        ((4 @ scope_4.d0, 2, 8 @ scope_4.d1, 4, 4 @ scope_4.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 4, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )

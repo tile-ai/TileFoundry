@@ -52,6 +52,7 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _ROUNDING_M = 14_593
@@ -194,33 +195,36 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
 
     cross_scope = results["cross_scope"]
     timed = []
-    context = _build_context(cross_scope.module, cross_scope.function)
-    for local in context.definitions.values():
-        for call in _calls(local.frame.function):
-            record = get_metadata(call, PerformanceMetadata)
-            if record is not None:
-                local.call_times[id(call)] = record.timeline.start_ns
-    for local, visit in context.walk_visits():
-        for call in _calls(local.frame.function):
-            record = get_metadata(call, PerformanceMetadata)
+    context = _build_context(cross_scope.module, cross_scope.function)[-1]
+    for call in _calls(cross_scope.function):
+        frame = CallFrameVisitor.callee_frame(call, context.frame)
+        occurrence = get_metadata(call, PerformanceMetadata)
+        if frame is None or occurrence is None:
+            continue
+        for primitive in _calls(frame.function):
+            record = get_metadata(primitive, PerformanceMetadata)
             if record is None:
                 continue
-            resolved = record.resolve(visit)
-            for iteration in range(resolved.timeline.trips):
-                offset = iteration * resolved.timeline.stride_ns
-                timed.append(
-                    (
-                        call,
-                        replace(
-                            resolved,
-                            timeline=replace(
-                                resolved.timeline,
-                                start_ns=resolved.timeline.start_ns + offset,
-                                end_ns=resolved.timeline.end_ns + offset,
-                            ),
-                        ),
+            resolved = record.resolve(context.for_call(call))
+            for invocation in range(occurrence.timeline.trips):
+                for iteration in range(resolved.timeline.trips):
+                    offset = (
+                        invocation * occurrence.timeline.stride_ns
+                        + iteration * resolved.timeline.stride_ns
                     )
-                )
+                    timed.append(
+                        (
+                            primitive,
+                            replace(
+                                resolved,
+                                timeline=replace(
+                                    resolved.timeline,
+                                    start_ns=resolved.timeline.start_ns + offset,
+                                    end_ns=resolved.timeline.end_ns + offset,
+                                ),
+                            ),
+                        )
+                    )
     scalar_indices = tuple(
         (call, record)
         for call, record in timed
@@ -475,7 +479,12 @@ def test_local_pricing_requires_compute_rates_and_uses_available_memory_rates() 
         local_duration_ns(
             replace(
                 work,
-                flops=Breakdown((*work.flops.kinds, ("f9e9m9", Spread(8, 8, (8,))))),
+                flops=Breakdown(
+                    (
+                        *work.flops.kinds,
+                        ("f9e9m9", Spread(total=8, per_unit=(8,), logical_groups=(((), 8),))),
+                    )
+                ),
             ),
             throughput,
             services,
@@ -490,17 +499,17 @@ def test_local_pricing_requires_compute_rates_and_uses_available_memory_rates() 
                     (
                         throughput.bandwidth_level,
                         Spread(
-                            TrafficBytes(read=4096),
-                            TrafficBytes(read=4096),
-                            (TrafficBytes(read=4096),),
+                            total=TrafficBytes(read=4096),
+                            per_unit=(TrafficBytes(read=4096),),
+                            logical_groups=(((), TrafficBytes(read=4096)),),
                         ),
                     ),
                     (
                         "smem",
                         Spread(
-                            TrafficBytes(read=8192),
-                            TrafficBytes(read=8192),
-                            (TrafficBytes(read=8192),),
+                            total=TrafficBytes(read=8192),
+                            per_unit=(TrafficBytes(read=8192),),
+                            logical_groups=(((), TrafficBytes(read=8192)),),
                         ),
                     ),
                 )

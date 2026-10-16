@@ -24,9 +24,10 @@ import torch
 
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 from tests._source import import_dsl
+from tilefoundry.analysis.access import SSAValue
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.liveness import analyze_liveness, result_copies
+from tilefoundry.analysis.liveness import Liveness, result_copies
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -669,7 +670,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
     if analysis == "memory":
         placement = get_metadata(result.function, RegionMemoryMetadata)
         assert placement is not None
-        liveness = analyze_liveness(result.function)
+        liveness = get_metadata(result.function, Liveness)
         regions = tuple(window.region for window in liveness.regions)
         region_records = tuple(
             record
@@ -728,15 +729,15 @@ def test_scheduled_hir_program_has_analysis_metadata(
             region_rmem_peaks, default=0
         )
 
-        intervals = {id(item.value): item for item in liveness.intervals}
+        intervals = {item.value: item for item in liveness.intervals}
         loop_bounds = tuple(
             (
-                intervals[id(loop.induction_var)].defined_at,
+                intervals[SSAValue(loop.induction_var)].defined_at,
                 max(
                     use.at
                     for use in liveness.uses
-                    if any(use.value is yielded for yielded in loop.yield_values)
-                    and use.at < intervals[id(loop)].defined_at
+                    if any(use.value.expr is yielded for yielded in loop.yield_values)
+                    and use.at < intervals[SSAValue(loop)].defined_at
                 ),
             )
             for loop in collect_exprs(result.function.body)
@@ -745,7 +746,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
 
         outside_uses = 0
         for use in liveness.uses:
-            interval = intervals[id(use.value)]
+            interval = intervals[use.value]
             for phi, backedge in loop_bounds:
                 if not use.synthetic and phi < use.at < backedge and interval.defined_at < phi:
                     outside_uses += 1

@@ -154,11 +154,11 @@ class AllocationSummary(IRMetadata):
         by_value = {value.value: value for value in self.values}
         boundary = {}
         timing = ctx.request_valuation(TimingValuation)
-        for formal, _argument in ctx.bindings:
+        for formal, argument in ctx.bindings:
             for index in range(len(leaves_of(formal.type))):
                 value = by_value.get(SSAValue(formal, index))
                 if value is not None:
-                    boundary[root(value, by_value)] = ctx.storage_actual(formal, index).target
+                    boundary[root(value, by_value)] = SSAValue(argument, index)
         returned = ctx.callee.function.body
         for index in range(len(leaves_of(ctx.call.type))):
             value = by_value.get(SSAValue(returned, index))
@@ -1106,7 +1106,7 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
                     slots.append(None)
                     continue
                 level = target.lifetime.memory_level
-                amount = quantity[1] if quantity is not None else target.lifetime.bytes
+                amount = target.lifetime.bytes
             elif quantity is not None:
                 level, amount = quantity
             else:
@@ -1272,7 +1272,7 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
             if key not in ctx.by_value:
                 continue
             for candidate in candidates:
-                actual, precision = ctx._project(candidate, ctx.storage_actual)
+                actual, precision = ctx.project(candidate, actual_of=ctx.storage_actual)
                 if precision is not AnalysisPrecision.EXACT or not is_zero_offset(
                     actual.relation.relation
                 ):

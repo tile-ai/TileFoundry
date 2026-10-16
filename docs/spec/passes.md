@@ -239,7 +239,8 @@ class ConvertHIRToTIR(ModulePass):
 ```
 
 - constraints:
-  - The pass runs `analyze(..., analysis=("memory",))` over the authored entry
+  - The pass derives the entry with `check_program`, runs
+    `analyze(..., analysis=("memory",))` on that checked result,
     and lowers the checked Module and its retained calls. The authored function is
     retained separately so `BindingMetadata`, keyed by `SourceSpanMetadata`,
     remains the source of user-facing names after analysis has assigned its own
@@ -266,7 +267,7 @@ class ConvertHIRToTIR(ModulePass):
     lowering MUST copy yield to phi. A tied InsertSlice returns destination
     storage; an untied one MUST copy destination to result before writing the
     update window. An update without an adopted WINDOW alias MUST be copied
-    into the result window. Allocation's peak-estimation buffers do not imply
+    into the result window. Allocation's peak-estimation storage links do not imply
     that lowering shares registers; only published aliases state that sharing.
   - Schedule type inference, candidate admission, finalization, and TIR effect
     verification MUST use the same `check_call` implementation. It checks the

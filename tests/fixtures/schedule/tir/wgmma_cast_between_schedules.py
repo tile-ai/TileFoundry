@@ -30,7 +30,7 @@ def gemm(
                     "rmem",
                 ]
             )
-            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_2:
                 T.fill(acc, 0.0)
             lhs_ring_stages = (
                 T.tensor_view(2048, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
@@ -41,17 +41,17 @@ def gemm(
                 T.tensor_view(1024, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
             )
             for k in range(0, 32, 16):
-                with Mesh((Topology("thread", 256),), layout=(32,), names=("d0",)) as scope_2:
+                with Mesh((Topology("thread", 256),), layout=(32,), names=("d0",)) as scope_4:
                     tile = T.tensor_view(
                         T.ptr_of(a[0:0 + 64, k:k + 16]),
                         layout=((64, 16), (32, 1)),
                         shape=(64, 16),
                     )
                     T.copy_async_tensor(tile, lhs_ring_stages[(k // 16) % 2])
-                with Mesh((Topology("thread", 256),), layout=(32,), names=("d0",)) as scope_3:
+                with Mesh((Topology("thread", 256),), layout=(32,), names=("d0",)) as scope_5:
                     b_tile_dst = T.alloc_tensor(
                         tensor_type=Tensor[
-                            (16, 32), "f32", ((16, 32 @ scope_3.d0), (1, 16)), "rmem"
+                            (16, 32), "f32", ((16, 32 @ scope_5.d0), (1, 16)), "rmem"
                         ]
                     )
                     tile_1 = T.tensor_view(
@@ -60,12 +60,12 @@ def gemm(
                     T.copy(tile_1, b_tile_dst)
                     b = T.alloc_tensor(
                         tensor_type=Tensor[
-                            (16, 32), "bf16", ((16, 32 @ scope_3.d0), (1, 16)), "rmem"
+                            (16, 32), "bf16", ((16, 32 @ scope_5.d0), (1, 16)), "rmem"
                         ]
                     )
                     T.cast(b_tile_dst, b, dtype="bf16")
                     T.copy(b, rhs_ring_stages[(k // 16) % 2])
-                with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_4:
+                with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_3:
                     for o_m in range(0, 64, 64):
                         for o_n in range(0, 32, 32):
                             for o_k in range(0, 16, 16):
@@ -102,12 +102,12 @@ def gemm(
                     "rmem",
                 ]
             )
-            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_5:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                 bias_r_dst = T.alloc_tensor(
                     tensor_type=Tensor[
                         (64, 32),
                         "f32",
-                        ((4 @ scope_5.d0, 2, 8 @ scope_5.d1, 4, 4 @ scope_5.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 4, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )
@@ -116,7 +116,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 32),
                         "f32",
-                        ((4 @ scope_5.d0, 2, 8 @ scope_5.d1, 4, 4 @ scope_5.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 4, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )
@@ -126,7 +126,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 1),
                         "f32",
-                        ((8 @ scope_5.d1, 2, 4 @ scope_5.d0, 1, 1, 1), (8, 4, 1, 0, 0, 0)),
+                        ((8 @ scope_1.d1, 2, 4 @ scope_1.d0, 1, 1, 1), (8, 4, 1, 0, 0, 0)),
                         "rmem",
                     ]
                 )
@@ -135,7 +135,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 1),
                         "f32",
-                        ((4 @ scope_5.d0, 2, 8 @ scope_5.d1, 1, 1, 1), (16, 8, 1, 0, 0, 0)),
+                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 1, 1, 1), (16, 8, 1, 0, 0, 0)),
                         "rmem",
                     ]
                 )
@@ -144,7 +144,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 1),
                         "f32",
-                        ((4 @ scope_5.d0, 8 @ scope_5.d1, 2, 1), (16, 2, 1, 1)),
+                        ((4 @ scope_1.d0, 8 @ scope_1.d1, 2, 1), (16, 2, 1, 1)),
                         "rmem",
                     ]
                 )
@@ -153,7 +153,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 1),
                         "bf16",
-                        ((4 @ scope_5.d0, 8 @ scope_5.d1, 2, 1), (16, 2, 1, 1)),
+                        ((4 @ scope_1.d0, 8 @ scope_1.d1, 2, 1), (16, 2, 1, 1)),
                         "rmem",
                     ]
                 )

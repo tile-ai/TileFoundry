@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=MeshCaptureOutside function=gemm topology=cta wave=2/2
 # selection requested=memory executed=memory
-# memory traffic=gmem:r256B/w256B@logical,r384B/w384B@total,r256B/w256B@cta,r256B/w256B@thread footprint=x:128B;v0:13:128B;v2:16:128B footprint-precision=exact peak=gmem:384B persistent=gmem:128B
+# memory traffic=gmem:r256B/w256B@logical,r384B/w384B@total,r256B/w256B@cta,r256B/w256B@thread footprint=v0:13:128B;v2:16:128B;x:128B footprint-precision=exact peak=gmem:384B persistent=gmem:128B
 #   buffer=x holds=384B time=none space=cta.block reuse=128B fits=yes precision=exact
 
 from __future__ import annotations

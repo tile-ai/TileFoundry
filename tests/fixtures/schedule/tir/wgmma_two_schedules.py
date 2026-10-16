@@ -30,7 +30,7 @@ def gemm(
                     "rmem",
                 ]
             )
-            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_2:
                 T.fill(acc, 0.0)
             lhs_ring_stages = (
                 T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
@@ -49,7 +49,7 @@ def gemm(
                 T.tensor_view(11264, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
             )
             for k in range(0, 32, 16):
-                with scope[:1, :32] as scope_2:
+                with scope[:1, :32] as scope_5:
                     tile = T.tensor_view(
                         T.ptr_of(a[0:0 + 64, k:k + 16]),
                         layout=((64, 16), (32, 1)),
@@ -60,7 +60,7 @@ def gemm(
                         T.ptr_of(b[k:k + 16, 0:0 + 32]), layout=(16, 32), shape=(16, 32)
                     )
                     T.copy_async_tensor(tile_1, rhs_ring_stages[(k // 16) % 2])
-                with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_3:
+                with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_4:
                     for o_m in range(0, 64, 64):
                         for o_n in range(0, 32, 32):
                             for o_k in range(0, 16, 16):
@@ -80,7 +80,7 @@ def gemm(
                                     rhs_view,
                                     atom=T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN),
                                 )
-                with scope[:1, :32] as scope_4:
+                with scope[:1, :32] as scope_6:
                     tile_2 = T.tensor_view(
                         T.ptr_of(c[0:0 + 64, k:k + 16]),
                         layout=((64, 16), (32, 1)),
@@ -91,7 +91,7 @@ def gemm(
                         T.ptr_of(d[k:k + 16, 0:0 + 32]), layout=(16, 32), shape=(16, 32)
                     )
                     T.copy_async_tensor(tile_3, rhs_2_ring_stages[(k // 16) % 2])
-                with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_5:
+                with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_3:
                     for o_m_1 in range(0, 64, 64):
                         for o_n_1 in range(0, 32, 32):
                             for o_k_1 in range(0, 16, 16):
@@ -112,12 +112,12 @@ def gemm(
                                     atom=T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN),
                                 )
             T.fill(out, 0.0)
-            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_6:
+            with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                 result = T.alloc_tensor(
                     tensor_type=Tensor[
                         (64, 32),
                         "bf16",
-                        ((4 @ scope_6.d0, 2, 8 @ scope_6.d1, 4, 4 @ scope_6.d2, 2), (16, 8, 1, 512, 128, 64)),
+                        ((4 @ scope_1.d0, 2, 8 @ scope_1.d1, 4, 4 @ scope_1.d2, 2), (16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )

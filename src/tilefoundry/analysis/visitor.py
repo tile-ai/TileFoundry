@@ -99,10 +99,8 @@ class AnalyzeContext(
     def _binding_formals(self):
         return () if self.frame.function is self.entry else self.frame.function.params
 
-    def project(self, source: BufferAlias) -> tuple[BufferAlias, AnalysisPrecision]:
-        return self._project(source, self.actual)
-
-    def _project(self, source, actual_of):
+    def project(self, source: BufferAlias, actual_of=None) -> tuple[BufferAlias, AnalysisPrecision]:
+        actual_of = self.actual if actual_of is None else actual_of
         depth = self.current.depth
         relation = source.relation.relation.insert_dims(isl.dim_type.IN, 0, depth)
         relation = relation.intersect_domain(

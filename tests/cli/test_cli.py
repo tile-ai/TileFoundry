@@ -790,8 +790,8 @@ def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> No
         f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']} precision=exact",
         "# memory traffic=gmem:r120.00KB/w90.00KB@logical,"
         "r7.79MB/w3.93MB@total,r62.75KB/w32.75KB@cta "
-        "footprint=v2:29:30.00KB;v2:37:30.00KB;v2:42:30.00KB;"
-        "v0:27:256B;v1:28:256B;v0:35:2.50KB;v1:36:2.50KB "
+        "footprint=v0:27:256B;v0:35:2.50KB;v1:28:256B;v1:36:2.50KB;"
+        "v2:29:30.00KB;v2:37:30.00KB;v2:42:30.00KB "
         "footprint-precision=exact peak=gmem:92.50KB persistent=gmem:30.00KB",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "

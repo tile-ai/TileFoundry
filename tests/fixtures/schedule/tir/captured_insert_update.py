@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=CapturedInsertUpdate function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r32B/w0@logical,r32B/w0@total,r32B/w0@cta,r32B/w0@thread;rmem:r48B/w0@logical,r48B/w0@total,r48B/w0@cta,r48B/w0@thread;smem:r16B/w48B@logical,r16B/w48B@total,r16B/w48B@cta,r16B/w48B@thread footprint=x:8B;idx:8B footprint-precision=exact peak=gmem:48B;rmem:0;smem:24B persistent=gmem:48B
+# memory traffic=gmem:r32B/w0@logical,r32B/w0@total,r32B/w0@cta,r32B/w0@thread;rmem:r48B/w0@logical,r48B/w0@total,r48B/w0@cta,r48B/w0@thread;smem:r16B/w48B@logical,r16B/w48B@total,r16B/w48B@cta,r16B/w48B@thread footprint=idx:8B;x:8B footprint-precision=exact peak=gmem:48B;rmem:0;smem:24B persistent=gmem:48B
 #   buffer=x holds=16B time=r space=none reuse=8B fits=yes precision=exact
 
 from __future__ import annotations

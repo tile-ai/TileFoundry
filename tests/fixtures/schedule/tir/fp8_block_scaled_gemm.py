@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=FP8_BLOCK_SCALED_GEMM function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r130.02KB/w64.00KB@logical,r130.02KB/w64.00KB@total,r130.02KB/w64.00KB@cta,r128.05KB/w32.12KB@thread;rmem:r1.35MB/w1.16MB@logical,r1.35MB/w1.35MB@total,r1.35MB/w1.35MB@cta,r5.17KB/w4.92KB@thread;smem:r128.00KB/w128.00KB@logical,r128.00KB/w128.00KB@total,r128.00KB/w128.00KB@cta,r17.00KB/w128.00KB@thread footprint=a:16.00KB;b:16.00KB;a_scale:512B;b_scale:4B;v24:110:32.00KB footprint-precision=exact peak=gmem:162.02KB;rmem:128.50KB;smem:64.00KB persistent=gmem:130.02KB
+# memory traffic=gmem:r130.02KB/w64.00KB@logical,r130.02KB/w64.00KB@total,r130.02KB/w64.00KB@cta,r128.05KB/w32.12KB@thread;rmem:r1.35MB/w1.16MB@logical,r1.35MB/w1.35MB@total,r1.35MB/w1.35MB@cta,r5.17KB/w4.92KB@thread;smem:r128.00KB/w128.00KB@logical,r128.00KB/w128.00KB@total,r128.00KB/w128.00KB@cta,r17.00KB/w128.00KB@thread footprint=a:16.00KB;a_scale:512B;b:16.00KB;b_scale:4B;v24:110:32.00KB footprint-precision=exact peak=gmem:162.02KB;rmem:128.50KB;smem:64.00KB persistent=gmem:130.02KB
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def gemm(
             )
             with Mesh(
                 scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-            ) as scope_1:
+            ) as scope_2:
                 T.fill(acc, 0.0)
             lhs_ring_stages = (
                 T.tensor_view(32768, dtype="fp8e4m3", storage="smem", layout=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3), shape=(128, 128)),
@@ -43,7 +43,7 @@ def gemm(
                 T.tensor_view(16384, dtype="fp8e4m3", storage="smem", layout=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3), shape=(128, 128)),
             )
             for kb in range(0, 4, 1):
-                with scope[:1, :32] as scope_2:
+                with scope[:1, :32] as scope_4:
                     tile = T.tensor_view(
                         T.ptr_of(a[0:0 + 128, kb * 128:kb * 128 + 128]),
                         layout=((128, 128), (512, 1)),
@@ -178,12 +178,12 @@ def gemm(
             T.fill(out, 0.0)
             with Mesh(
                 scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-            ) as scope_4:
+            ) as scope_1:
                 result = T.alloc_tensor(
                     tensor_type=Tensor[
                         (128, 128),
                         "bf16",
-                        ((2 @ scope_4.d0, 4 @ scope_4.d1, 2, 8 @ scope_4.d2, 16, 4 @ scope_4.d3, 2), (8192, 16, 8, 1, 512, 128, 64)),
+                        ((2 @ scope_1.d0, 4 @ scope_1.d1, 2, 8 @ scope_1.d2, 16, 4 @ scope_1.d3, 2), (8192, 16, 8, 1, 512, 128, 64)),
                         "rmem",
                     ]
                 )

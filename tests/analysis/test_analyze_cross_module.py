@@ -427,8 +427,7 @@ class _WriteGuardTarget(Target):
 
 def test_an_analyzer_cannot_write_records_on_a_shared_derived_callee():
     def write_on_definition(_function, context):
-        attach_metadata(next(local.frame.function.body for local in context.definitions.values()
-                             if local.frame.function is not _function), MemoryMetadata())
+        attach_metadata(_function.body, MemoryMetadata())
 
     target = _WriteGuardTarget(Analyzer("bad", write_on_definition, produces=(ComputeCostMetadata,)))
     root = replace(CrossModule, target=target, topologies=None)

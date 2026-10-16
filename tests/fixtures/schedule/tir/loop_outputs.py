@@ -1,6 +1,6 @@
 # analysis target=nvidia.h200_sxm module=LoopOutputs function=gemm topology=cta wave=1/1
 # selection requested=memory executed=memory
-# memory traffic=gmem:r96B/w128B@logical,r96B/w144B@total,r96B/w144B@cta,r96B/w144B@thread;rmem:r128B/w0@logical,r128B/w0@total,r128B/w0@cta,r128B/w0@thread;smem:r32B/w32B@logical,r32B/w32B@total,r32B/w32B@cta,r32B/w32B@thread footprint=x:16B;v5:24:16B;direct:16B;v13:32:16B;v4:23:8B;v7:27:16B;v11:30:24B;scratch:16B footprint-precision=exact peak=gmem:64B;rmem:0;smem:8B persistent=gmem:16B
+# memory traffic=gmem:r96B/w128B@logical,r96B/w144B@total,r96B/w144B@cta,r96B/w144B@thread;rmem:r128B/w0@logical,r128B/w0@total,r128B/w0@cta,r128B/w0@thread;smem:r32B/w32B@logical,r32B/w32B@total,r32B/w32B@cta,r32B/w32B@thread footprint=direct:16B;scratch:16B;v11:30:24B;v13:32:16B;v4:23:8B;v5:24:16B;v7:27:16B;x:16B footprint-precision=exact peak=gmem:64B;rmem:0;smem:8B persistent=gmem:16B
 
 from __future__ import annotations
 

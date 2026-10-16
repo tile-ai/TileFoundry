@@ -629,8 +629,8 @@ the following order and behavior:
 
 | Kind | Holder -> target | Acceptance | Published in `MemoryMetadata.alias` |
 |---|---|---|---|
-| VIEW | Source path through a registered view -> source root | Unconditional cached, proved composition | No |
-| FORWARD | Source path without a view -> source root | Unconditional cached source | No |
+| VIEW | View result -> storage source | Unconditional proved cached relation, preserving Call storage boundaries | No |
+| FORWARD | Structural result -> selected operand | Unconditional shared leaf selection | No |
 | CARRY_INIT | Phi -> initial | Ordinary tie condition | Yes |
 | CARRY_YIELD | Yield -> phi | Loop-body condition below | Yes |
 | INSERT_SLICE | Result -> destination | Ordinary tie condition | Yes |
@@ -1657,7 +1657,7 @@ Metadata declares `requires` as a tuple of Valuation Protocol types and exposes
 | `TimingValuation` | `event(local)`, `timeline(local)` | Shift local liveness events and performance intervals into caller coordinates. |
 | `LoopNestValuation` | `repeats()`, `domain()` | Surrounding loop multiplicities, precision, and caller iteration domain. |
 | `VarianceValuation` | `varies(formal)`, `trips(formals)` | The loops and formals on which an actual argument depends; `trips` returns the union's trip product and joined precision, or `(1, EXACT)` for no formals. |
-| `BindingValuation` | `actual(formal, index=0)`, `result()`, `project(source)` | Caller source for a flattened formal tensor leaf and the call result's storage. Whole-tuple boundaries retain their definition-local identity source. `project` substitutes scalar formals, composes formal buffers with actuals, and prefixes the caller domain, returning `(BufferAlias, AnalysisPrecision)` with the joined substitution precision. |
+| `BindingValuation` | `actual(formal, index=0)`, `result()`, `project(source, actual_of=None)` | Caller source for a flattened formal tensor leaf and the call result's storage. Whole-tuple boundaries retain their definition-local identity source. `project` substitutes scalar formals, composes formal buffers with actuals, and prefixes the caller domain, returning `(BufferAlias, AnalysisPrecision)` with the joined substitution precision. An optional `actual_of` selects direct storage operands for allocation without changing data-source tables. |
 | `InstanceValuation` | `path()` | Module instance path, including slot indices. |
 
 Analysis families use their own contexts as valuation providers through
@@ -1694,6 +1694,7 @@ or aggregation. Fresh analysis calls may replace previously attached records.
 | `MemoryMetadata` | Binding, LoopNest | One-execution traffic is unchanged by resolve; reached coordinates project through Binding. A retained Call carries its callee's summary. |
 | `RegionMemoryMetadata` | None | One execution of this definition; the entry is the final definition, using the same accumulation as callees. |
 | `Liveness` (internal) | Timing | Definition-local `ValueLifetime`, use and region events, timeline end, and loop windows; resolve only translates events. |
+| `AllocationSummary` (internal) | Binding, Timing, LoopNest | Values and occupancy windows, return candidates, instances, and flat region intervals; resolve maps formal/return boundaries and shifts events without mutating callee values. |
 | `RooflineMetadata` | None | Computed once from each definition's local compute and memory records. |
 | `PerformanceMetadata`, `PerformanceSummaryMetadata` | Timing, LoopNest | Definition-local intervals; resolve shifts their origin into the caller timeline. |
 
@@ -1739,6 +1740,8 @@ callee template's event span and records actual leaf uses at the translated
 formal-use events, preserving synthetic flags. Resolve only shifts the local
 template; it stores neither child templates nor a second timeline origin.
 Allocation may resolve the callee template at a Call to obtain internal windows.
+Standalone liveness for a function without Calls MUST work without a scope
+tree. It MUST NOT use an attached Liveness record as an implicit result cache.
 
 Implicit weights MUST be counted by `(slot key chain, weight)` and the union of
 reached instance-index tuples. Caller induction variables map from the loop

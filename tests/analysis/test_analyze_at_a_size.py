@@ -33,14 +33,15 @@ from tilefoundry.analysis import (
     RegionMemoryMetadata,
     analyze,
 )
-from tilefoundry.analysis.access import Access
-from tilefoundry.analysis.allocation import aligned
+from tilefoundry.analysis.access import Access, SSAValue
+from tilefoundry.analysis.allocation import AllocationSummary, aligned
+from tilefoundry.analysis.allocation import root as storage_root
 from tilefoundry.analysis.api import _build_context
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
-from tilefoundry.analysis.liveness import analyze_liveness
+from tilefoundry.analysis.liveness import Liveness
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
@@ -669,7 +670,7 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
     )
     _assert_reported(case, json.loads(render_json(report)))
     context = _build_context(result.module, result.function, topology_level=result.level)
-    scopes = tuple(scope for local in context.definitions.values() for scope in walk_scopes(local.root))
+    scopes = tuple(scope for local in context for scope in walk_scopes(local.root))
     assert_internal_contract(result, scopes)
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
         rms_scopes = [
@@ -697,8 +698,8 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
             for expr in collect_exprs(result.function.body)
             if isinstance(expr, Call) and isinstance(expr.target, Reshape)
         )
-        liveness = analyze_liveness(result.function)
-        assert liveness.interval_of(reshaped).last_used_at == 19
+        liveness = get_metadata(result.function, Liveness)
+        assert liveness.interval_of(SSAValue(reshaped)).last_used_at == 19
         assert get_metadata(reshaped, MemoryMetadata).buffer_bytes is None
         assert not get_metadata(reshaped, MemoryMetadata).offsets
     expected_schedule = EXPECTED_PERSISTENT_SCHEDULES.get(case.id)
@@ -751,6 +752,23 @@ def test_dynamic_tuple_selection_keeps_all_possible_storage_resident() -> None:
     assert get_metadata(selected, MemoryMetadata).buffer_bytes is None
     assert not get_metadata(selected, MemoryMetadata).offsets
     assert get_metadata(consumer, MemoryMetadata).alias is None
+    summary = get_metadata(result.function, AllocationSummary)
+    by_value = {value.value: value for value in summary.values}
+    assert SSAValue(selected) not in by_value
+    liveness = get_metadata(result.function, Liveness)
+    for index in range(len(selected.args[0].elements)):
+        assert (
+            liveness.interval_of(SSAValue(selected.args[0], index)).last_used_at
+            == liveness.timeline_end
+        )
+    for region in consumer.args:
+        assert by_value.get(SSAValue(region)) is None
+        assert all(by_value.get(SSAValue(param)) is None for param in region.params)
+    allocated = by_value[SSAValue(consumer)]
+    assert all(
+        storage_root(allocated, by_value) is not storage_root(by_value[SSAValue(leaf)], by_value)
+        for leaf in (first, second)
+    )
 
 
 @pytest.mark.parametrize("family", FAMILIES)

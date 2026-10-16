@@ -54,7 +54,9 @@ class BindingValuation(Protocol):
 
     def result(self) -> BufferAlias: ...
 
-    def project(self, source: BufferAlias) -> tuple[BufferAlias, AnalysisPrecision]: ...
+    def project(
+        self, source: BufferAlias, actual_of=None
+    ) -> tuple[BufferAlias, AnalysisPrecision]: ...
 
 
 @runtime_checkable

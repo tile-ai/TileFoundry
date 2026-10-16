@@ -141,7 +141,7 @@ sed -n '/^from __future__/q;p' persistent.txt
 # analysis target=nvidia.h200_sxm module=PERSISTENT function=gemm topology=cta wave=132/132
 # selection requested=compute-cost,memory,performance executed=compute-cost,memory,roofline,performance
 # compute-cost flops=bf16:21476933632@logical,2834955239424@total,21476933632@cta,21476933632@thread;f32:167772160@logical,22145925120@total,167772160@cta,167772160@thread other-ops=integer:65@logical,16896@total,128@cta,128@thread precision=upper_bound
-# memory traffic=gmem:r86.50MB/w280.00MB@logical,r31.45GB/w36.09GB@total,r244.00MB/w280.00MB@cta,r244.00MB/w280.00MB@thread;rmem:r1.26GB/w1.25GB@logical,r166.57GB/w166.55GB@total,r1.26GB/w1.26GB@cta,r1.26GB/w1.26GB@thread;smem:r240.00MB/w82.50MB@logical,r30.94GB/w30.94GB@total,r240.00MB/w240.00MB@cta,r240.00MB/w240.00MB@thread footprint=v20:36:128.00KB;v21:37:8.25MB;a:32.00KB;b:2.12MB footprint-precision=exact peak=gmem:522.00MB;rmem:256.00KB;smem:48.00KB persistent=gmem:250.00MB
+# memory traffic=gmem:r86.50MB/w280.00MB@logical,r31.45GB/w36.09GB@total,r244.00MB/w280.00MB@cta,r244.00MB/w280.00MB@thread;rmem:r1.26GB/w1.25GB@logical,r166.57GB/w166.55GB@total,r1.26GB/w1.26GB@cta,r1.26GB/w1.26GB@thread;smem:r240.00MB/w82.50MB@logical,r30.94GB/w30.94GB@total,r240.00MB/w240.00MB@cta,r240.00MB/w240.00MB@thread footprint=a:32.00KB;b:2.12MB;v20:36:128.00KB;v21:37:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:256.00KB;smem:48.00KB persistent=gmem:250.00MB
 # performance root=PERSISTENT::gemm predicted-ns=18317269 waves=1
 ```
 
@@ -424,10 +424,10 @@ def gemm(
                 )
                 with Mesh(
                     scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                ) as scope_1:
+                ) as scope_3:
                     T.fill(acc, 0.0)
                 for k in range(0, 5120, 64):
-                    with scope[:1, :32] as scope_2:
+                    with scope[:1, :32] as scope_5:
                         tile = T.tensor_view(
                             T.ptr_of(a[(((task // (68 * 16)) * 16) + (task % 16)) * 128:(((task // (68 * 16)) * 16) + (task % 16)) * 128 + 128, k:k + 64]),
                             layout=((128, 64), (5120, 1)),
@@ -448,7 +448,7 @@ def gemm(
                         )
                     with Mesh(
                         scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
-                    ) as scope_3:
+                    ) as scope_4:
                         for o_m in range(0, 128, 128):
                             for o_n in range(0, 256, 256):
                                 for o_k in range(0, 64, 64):
