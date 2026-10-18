@@ -19,7 +19,7 @@ from tests.fixtures.placed.symbolic_offset import (
     _LiteralStoreOffset,
     _SymbolicStoreOffset,
 )
-from tests.fixtures.placed.tp_all_to_all import HELD_BYTES, SENT_BYTES, TransposeShard
+from tests.fixtures.placed.tp_all_to_all import HELD_BYTES, TransposeShard
 from tests.models.access_footprint.model import TiledQKVProjection
 from tilefoundry.analysis import (
     Breakdown,
@@ -74,16 +74,15 @@ def test_invariant_gemm_operands_repeat_in_total_traffic() -> None:
     assert gmem.total == TrafficBytes(read=18_824_036_352, write=2_214_592_512)
 
 
-def test_cross_device_reshard_retains_its_buffer_and_communication() -> None:
+def test_reshard_compares_address_boxes_without_participant_ownership() -> None:
     result = analyze(*check_program(TransposeShard, TransposeShard.entry_function()), analysis="memory")
     (reshard,) = (expr for expr in collect_exprs(result.function.body)
                   if isinstance(expr, Call) and isinstance(expr.target, Reshard))
-    assert aliased_operand(reshard) is None
+    assert aliased_operand(reshard) == 0
     record = get_metadata(reshard, MemoryMetadata)
-    assert record.buffer_bytes == HELD_BYTES
-    sent = record.traffic.communication.of("gpu")
-    assert sent.per_unit == (TrafficBytes(read=SENT_BYTES, write=SENT_BYTES), TrafficBytes())
-    assert get_metadata(result.function, RegionMemoryMetadata).peak_for("gmem").peak_bytes == 2 * HELD_BYTES
+    assert record.buffer_bytes is None and not record.offsets
+    assert record.traffic.communication.of("gpu") is None
+    assert get_metadata(result.function, RegionMemoryMetadata).peak_for("gmem").peak_bytes == HELD_BYTES
 
 
 _ROUNDING_N = 11_489

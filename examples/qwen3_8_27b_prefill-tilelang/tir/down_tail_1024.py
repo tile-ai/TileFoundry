@@ -12,93 +12,150 @@ from tilefoundry.target import CudaTarget
 def tail(
     out: Tensor[(1024, 5120), "bf16"], ws: Tensor[(16384, 256), "f32"], hidden: Tensor[(1, 1024, 5120), "bf16"], out_1: Tensor[(1024, 5120), "bf16"]
 ):
-    with Mesh((Topology("cta", 128),), layout=(4, 8, 4), names=("d0", "d1", "d2")) as cta:
-        with Mesh((Topology("thread", 384),), layout=(3, 128), names=("d0", "d1")) as scope:
+    with Mesh((Topology("cta", 128),), layout=(4, 8, 4), names=("tb", "mi", "cy")) as cta:
+        with Mesh(
+            (Topology("thread", 384),), layout=(3, 128), names=("warpgroup", "participant")
+        ) as scope:
             with Mesh(
-                (Topology("thread", 384),), layout=(32, 8), names=("d0", "d1")
+                (Topology("thread", 384),), layout=(32, 8), names=("row", "col")
             ) as scope_1:
                 value = T.alloc_tensor(
                     tensor_type=Tensor[
-                        (32, 256), "bf16", (32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4), "rmem"
+                        (32, 256), "bf16", (32 @ scope_1.row, 8, 8 @ scope_1.col, 4), "rmem"
                     ]
                 )
                 value_1 = T.tensor_view(
-                    T.ptr_of(hidden[0:0 + 1, (((0 * 8) + cta.d1) * 128) + (cta.d2 * 32):(((0 * 8) + cta.d1) * 128) + (cta.d2 * 32) + 1, (16 + cta.d0) * 256:(16 + cta.d0) * 256 + 1]),
+                    T.ptr_of(hidden), layout=(1, 1024, 5120), shape=(1, 1024, 5120)
+                )
+                value_2 = T.tensor_view(
+                    T.ptr_of(value_1), layout=(1024, 5120), shape=(1024, 5120)
+                )
+                value_3 = T.tensor_view(
+                    T.ptr_of(value_2[(((0 * 8) + cta.mi) * 128) + (cta.cy * 32):(((0 * 8) + cta.mi) * 128) + (cta.cy * 32) + 1, (16 + cta.tb) * 256:(16 + cta.tb) * 256 + 1]),
                     layout=((32, 256), (5120, 1)),
                     shape=(32, 256),
                 )
-                value_2 = T.tensor_view(
+                value_4 = T.tensor_view(
                     T.ptr_of(value),
-                    layout=(32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4),
+                    layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
                     shape=(32, 256),
                 )
-                T.copy(value_1, value_2)
-                value_3 = T.alloc_tensor(
+                dst_view = T.tensor_view(
+                    T.ptr_of(value_4[0:0 + 32, 0:0 + 256]),
+                    layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
+                    shape=(32, 256),
+                )
+                T.copy(value_3, dst_view)
+                value_5 = T.alloc_tensor(
                     tensor_type=Tensor[
-                        (32, 256), "f32", (32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4), "rmem"
+                        (32, 256), "f32", (32 @ scope_1.row, 8, 8 @ scope_1.col, 4), "rmem"
                     ]
                 )
-                value_4 = T.tensor_view(
-                    T.ptr_of(ws[((((cta.d0 * 8) + cta.d1) * 4) * 128) + (cta.d2 * 32):((((cta.d0 * 8) + cta.d1) * 4) * 128) + (cta.d2 * 32) + 1, 0:0 + 1]),
+                value_6 = T.tensor_view(T.ptr_of(ws), layout=(16384, 256), shape=(16384, 256))
+                value_7 = T.tensor_view(
+                    T.ptr_of(value_6[((((cta.tb * 8) + cta.mi) * 4) * 128) + (cta.cy * 32):((((cta.tb * 8) + cta.mi) * 4) * 128) + (cta.cy * 32) + 1, 0:0 + 1]),
                     layout=(32, 256),
                     shape=(32, 256),
                 )
-                value_5 = T.tensor_view(
-                    T.ptr_of(value_3),
-                    layout=(32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4),
+                value_8 = T.tensor_view(
+                    T.ptr_of(value_5),
+                    layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
                     shape=(32, 256),
                 )
-                T.copy(value_4, value_5)
+                dst_view_1 = T.tensor_view(
+                    T.ptr_of(value_8[0:0 + 32, 0:0 + 256]),
+                    layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
+                    shape=(32, 256),
+                )
+                T.copy(value_7, dst_view_1)
                 for j in range(1, 4, 1):
-                    value_6 = T.alloc_tensor(
+                    value_9 = T.alloc_tensor(
                         tensor_type=Tensor[
-                            (32, 256), "f32", (32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4), "rmem"
+                            (32, 256), "f32", (32 @ scope_1.row, 8, 8 @ scope_1.col, 4), "rmem"
                         ]
                     )
-                    value_7 = T.tensor_view(
-                        T.ptr_of(ws[(((((cta.d0 * 8) + cta.d1) * 4) + j) * 128) + (cta.d2 * 32):(((((cta.d0 * 8) + cta.d1) * 4) + j) * 128) + (cta.d2 * 32) + 1, 0:0 + 1]),
+                    value_10 = T.tensor_view(
+                        T.ptr_of(ws), layout=(16384, 256), shape=(16384, 256)
+                    )
+                    value_11 = T.tensor_view(
+                        T.ptr_of(value_10[(((((cta.tb * 8) + cta.mi) * 4) + j) * 128) + (cta.cy * 32):(((((cta.tb * 8) + cta.mi) * 4) + j) * 128) + (cta.cy * 32) + 1, 0:0 + 1]),
                         layout=(32, 256),
                         shape=(32, 256),
                     )
-                    value_8 = T.tensor_view(
-                        T.ptr_of(value_6),
-                        layout=(32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4),
+                    value_12 = T.tensor_view(
+                        T.ptr_of(value_9),
+                        layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
                         shape=(32, 256),
                     )
-                    T.copy(value_7, value_8)
-                    value_9 = T.tensor_view(
-                        T.ptr_of(value_3),
-                        layout=(32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4),
+                    dst_view_2 = T.tensor_view(
+                        T.ptr_of(value_12[0:0 + 32, 0:0 + 256]),
+                        layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
                         shape=(32, 256),
                     )
-                    value_10 = T.tensor_view(
-                        T.ptr_of(value_3),
-                        layout=(32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4),
+                    T.copy(value_11, dst_view_2)
+                    value_13 = T.tensor_view(
+                        T.ptr_of(value_5),
+                        layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
                         shape=(32, 256),
                     )
-                    T.binary(value_9, value_8, value_10, kind=BinaryKind.ADD)
-                value_11 = T.alloc_tensor(
+                    value_14 = T.tensor_view(
+                        T.ptr_of(value_13),
+                        layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
+                        shape=(32, 256),
+                    )
+                    lhs_view = T.tensor_view(
+                        T.ptr_of(value_14[0:0 + 32, 0:0 + 256]),
+                        layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
+                        shape=(32, 256),
+                    )
+                    rhs_view = T.tensor_view(
+                        T.ptr_of(value_12[0:0 + 32, 0:0 + 256]),
+                        layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
+                        shape=(32, 256),
+                    )
+                    value_15 = T.tensor_view(
+                        T.ptr_of(value_14),
+                        layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
+                        shape=(32, 256),
+                    )
+                    T.binary(lhs_view, rhs_view, value_15, kind=BinaryKind.ADD)
+                value_16 = T.alloc_tensor(
                     tensor_type=Tensor[
-                        (32, 256), "bf16", (32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4), "rmem"
+                        (32, 256), "bf16", (32 @ scope_1.row, 8, 8 @ scope_1.col, 4), "rmem"
                     ]
                 )
-                value_12 = T.tensor_view(
-                    T.ptr_of(value_3),
-                    layout=(32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4),
+                value_17 = T.tensor_view(
+                    T.ptr_of(value_8),
+                    layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
                     shape=(32, 256),
                 )
-                T.cast(value_12, value_11, dtype="bf16")
+                value_18 = T.tensor_view(
+                    T.ptr_of(value_17),
+                    layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
+                    shape=(32, 256),
+                )
+                src_view = T.tensor_view(
+                    T.ptr_of(value_18[0:0 + 32, 0:0 + 256]),
+                    layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
+                    shape=(32, 256),
+                )
+                T.cast(src_view, value_16, dtype="bf16")
                 y = T.alloc_tensor(
                     tensor_type=Tensor[
-                        (32, 256), "bf16", (32 @ scope_1.d0, 8, 8 @ scope_1.d1, 4), "rmem"
+                        (32, 256), "bf16", (32 @ scope_1.row, 8, 8 @ scope_1.col, 4), "rmem"
                     ]
                 )
-                T.binary(value_2, value_11, y, kind=BinaryKind.ADD)
-                value_13 = T.tensor_view(
+                lhs_view_1 = T.tensor_view(
+                    T.ptr_of(value_4[0:0 + 32, 0:0 + 256]),
+                    layout=(32 @ scope_1.row, 8, 8 @ scope_1.col, 4),
+                    shape=(32, 256),
+                )
+                T.binary(lhs_view_1, value_16, y, kind=BinaryKind.ADD)
+                value_19 = T.tensor_view(
                     T.ptr_of(out_1), layout=(1024, 5120), shape=(1024, 5120)
                 )
                 window = T.tensor_view(
-                    T.ptr_of(value_13[(((0 * 8) + cta.d1) * 128) + (cta.d2 * 32):(((0 * 8) + cta.d1) * 128) + (cta.d2 * 32) + 32, (16 + cta.d0) * 256:(16 + cta.d0) * 256 + 256]),
+                    T.ptr_of(value_19[(((0 * 8) + cta.mi) * 128) + (cta.cy * 32):(((0 * 8) + cta.mi) * 128) + (cta.cy * 32) + 32, (16 + cta.tb) * 256:(16 + cta.tb) * 256 + 256]),
                     layout=((32, 256), (5120, 1)),
                     shape=(32, 256),
                 )

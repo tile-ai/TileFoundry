@@ -328,7 +328,6 @@ counts one slice per index as an upper bound.
 | `MemoryMetadata.operands` | One occurrence's movement in order `(*call.args, call)`. | No |
 | `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` tensor result, including a carried phi. `None` for tuple results or results that are not address-placed. | No |
 | `MemoryMetadata.offsets` | The byte offset of each physical result slot: each copy of a staged tensor in copy order, or each tuple `AllocationValue` in flattened result-index order. An `rmem` result has no reported offsets. Staged tuple results MUST raise `AnalysisError`. | No |
-| `MemoryMetadata.alias` | See [`BufferAlias`](#bufferalias). Only lowering reads it; it MUST NOT appear in analysis reports. | No |
 | `RegionMemoryMetadata.topologies` | The same effective Module topology levels. | No |
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
 
@@ -522,7 +521,7 @@ class BufferAlias:
 |---|---|---|
 | `BufferAlias.target` | A registered view: the operand `aliased_operand` names. An adopted InsertSlice update window: the destination resolved through region captures. A carried-phi tie: the initial or phi value; an accepted InsertSlice result tie: its destination. | No |
 | `BufferAlias.relation` | A registered view: `renaming_relation`. An update window: the proven operand-to-result relation with parameters resolved to values visible at the producer. A tie: identity. | No |
-| `BufferAlias.kind` | VIEW when source composition passes through a registered view, otherwise FORWARD; allocation candidates and accepted ties use the kinds below. | No |
+| `BufferAlias.kind` | One `AliasKind` member for each structural link or accepted tie. | No |
 
 - constraints:
   - An op registered with `@register_buffer_alias(Op)` returns the viewed
@@ -570,14 +569,14 @@ class BufferAlias:
     InsertSlice or through a retained call) and the old actual has a later ordinary
     use. Read-only parameter and view returns MUST alias despite later reads of
     the actual. This is independent of optional reuse of fresh results. InsertSlice
-    and call-result aliases MUST publish `MemoryMetadata.alias` without independent
-    bytes or offsets.
+    and call-result aliases MUST remain accepted links in the allocation summary
+    without independent bytes or offsets.
   - Allocation MUST return storage for each SSA value and record adopted
-    InsertSlice update windows and carried-phi ties in `MemoryMetadata.alias`.
+    InsertSlice update windows and carried-phi ties in `AllocationValue.aliases`.
     An update window MUST be adopted only together with the InsertSlice's
     destination alias. A material tuple op's leaf MAY reuse the destination's
-    window in analysis, but its producer MUST NOT receive `MemoryMetadata.alias`:
-    lowering does not support material tuple results. An update window's buffer
+    window in analysis; accepted links retain their SSA leaf identities. Lowering continues
+    to reject unsupported material tuple results. An update window's buffer
     MUST be the destination resolved through
     region captures; its relation MUST map producer coordinates to destination
     coordinates. The destination and SSA parameters MUST be defined in the
@@ -595,19 +594,21 @@ class BufferAlias:
     source. The table MUST store the fully composed `BufferAlias` under an
     `SSAValue` key, with precision in a parallel per-view table. All scopes in
     one definition share those tables; other definitions use independent tables.
-    AllocationSummary MUST separately retain executable VIEW/FORWARD address
-    proofs and their precision. A registered view's executable proof is its
-    direct-operand `buffer_alias` relation, including runtime parameter values;
-    a folded `narrow` source upper bound MUST NOT stand in for that address.
-    Every ACCEPTED address decision that lowering composes MUST likewise retain
-    its direct proof, independently of the estimator's domain-landed link. This
-    includes InsertSlice destination identity, carry entry/backedge ties, window
-    adoption and addressable in-place reuse. An empty execution domain does not
-    erase an accepted address decision. Rejected candidates MUST NOT supply
-    executable proofs. Lowering retains zero-trip loops.
-    Lowering MUST compose only EXACT executable relations and refuse any other
-    precision, naming the value and relation. Estimation, optional reuse, address
-    placement and reports continue to use the analysis source tables above.
+    AllocationSummary MUST expose the accepted `AllocationValue.aliases` and
+    `address_decisions` unchanged. Each address decision retains its holder,
+    accepted link, and storage representative in acceptance order. Analysis MUST
+    NOT rebuild executable relations, bind loop prefixes for lowering, choose
+    external output positions, or publish derived per-leaf aliases.
+    ConvertHIRToTIR's StoragePlan interprets these raw decisions. It asks
+    registered view ops for their direct-operand relation and InsertSlice for
+    its window offsets, independently of the estimator's cached source table.
+    An empty execution domain does not erase an accepted window or carry tie.
+    Storage partners and optional reuse remain analysis decisions; a new
+    executable address is a nested view of its partner, not a composed root map.
+    Duplicate outputs and unsupported retained returns preserve lowering's
+    refusal text; analysis reports remain available. Lowering retains zero-trip
+    loops. Estimation, optional reuse, placement and reports continue to use the
+    source tables above.
     A retained Call return leaf MUST project the callee's return source.
     Source identity describes data for footprint and traffic, independently of
     allocation ownership. Allocation gives each Call result its own storage
@@ -656,15 +657,19 @@ ties form value links; there is no separate partition or merged Buffer object.
 An allocation root is found by following accepted links. The kind determines
 the following order and behavior:
 
-| Kind | Holder -> target | Acceptance | Published in `MemoryMetadata.alias` |
-|---|---|---|---|
-| VIEW | View result -> storage source | Unconditional proved cached relation, preserving Call storage boundaries | No |
-| FORWARD | Structural result -> selected operand | Unconditional shared leaf selection | No |
-| CARRY_INIT | Phi -> initial | Ordinary tie condition | Yes |
-| CARRY_YIELD | Yield -> phi | Loop-body condition below | Yes |
-| INSERT_SLICE | Result -> destination | Ordinary tie condition | Yes |
-| WINDOW | Update -> result | Window condition below | On the update's storage root |
-| IN_PLACE | Result -> operand | Ordinary tie condition and zero-offset proof | No |
+`AliasKind` is an `IntEnum`: VIEW=0, FORWARD=1, CARRY_INIT=2,
+CARRY_YIELD=3, INSERT_SLICE=4, WINDOW=5, IN_PLACE=6. Links retain single
+members in this order; multiple accepted ties remain separate links.
+
+| Kind | Holder -> target | Acceptance |
+|---|---|---|
+| VIEW | View result -> storage source | Unconditional proved cached relation, preserving Call storage boundaries |
+| FORWARD | Structural result -> selected operand | Unconditional shared leaf selection |
+| CARRY_INIT | Phi -> initial | Ordinary tie condition |
+| CARRY_YIELD | Yield -> phi | Loop-body condition below |
+| INSERT_SLICE | Result -> destination | Ordinary tie condition |
+| WINDOW | Update -> result | Window condition below |
+| IN_PLACE | Result -> operand | Ordinary tie condition and zero-offset proof |
 
 Structural source links MUST be installed first. Conditional relations MUST be
 attempted in the table's order, then in value definition order. For an ordinary
@@ -722,8 +727,8 @@ remain unchanged.
 After accepting links, CARRY_INIT, CARRY_YIELD, and INSERT_SLICE candidates whose
 holder and target already reach one root MUST be recorded as accepted,
 including when another accepted edge established that storage identity. This
-completion MUST NOT change roots or placement. Publishing retains one
-alias per value, preferring INSERT_SLICE. WINDOW is excluded from this completion.
+completion MUST NOT change roots or placement. Both links remain in the
+summary, with their distinct partners and kinds. WINDOW is excluded from this completion.
 
 WINDOW is the exception whose holder precedes its target. It MUST be accepted
 only when the same InsertSlice's result and destination already share B, and
@@ -732,19 +737,18 @@ MUST differ from B, be neither persistent nor a formal boundary, occupy the same
 level, and have every member's last use no later than the InsertSlice result's
 definition. The update MUST fit in the result. No B member may be used strictly
 between A's start and that definition; at A's start, any B read requires the
-zero-offset proof above. Acceptance links A to B with the window relation. The
-published alias MUST follow VIEW, FORWARD, and accepted CARRY_INIT edges from
+zero-offset proof above. Acceptance links A to B with the window relation. Window
+acceptance MUST follow VIEW, FORWARD, and accepted CARRY_INIT edges from
 the update to its storage root, reverse-composing those coordinate relations.
 The resulting producer-to-destination map MUST cover the producer's complete
 coordinate box and use only parameters visible at that producer; otherwise
 the WINDOW MUST be rejected. The map MUST be a same-rank translation supported
 by lowering: destination axis k equals producer axis k plus a producer-visible
 start. Rank-changing maps and non-translations MUST be rejected, leaving an
-independent update for lowering to copy at InsertSlice. A tuple producer MUST
-NOT receive the alias.
-When CARRY_YIELD and INSERT_SLICE both accept the same value, INSERT_SLICE MUST
-be published; its destination and phi already have identical storage. Rejected
-ties MUST publish no alias; lowering copies the corresponding carry or slice.
+independent update for lowering to copy at InsertSlice. Tuple links remain
+indexed by flat leaf. When CARRY_YIELD and INSERT_SLICE both accept one value,
+both links MUST remain in the summary. Rejected ties MUST contribute no accepted
+link; lowering copies the corresponding carry or slice.
 
 A callee root containing a formal or the returned storage root is a boundary
 and MUST have no local address variable or published offsets. Read-only
@@ -1863,6 +1867,11 @@ widening; the two modules do not define a second affine graph representation.
     parameter is already fixed to one integer point. An empty parameter context
     MUST count as zero; a non-empty context with an unbounded parameter MUST
     report unknown. An unbounded set dimension MUST also report unknown.
+    Named `union` parameters instead reduce by set union before maximizing over
+    the other parameters. Small union boxes MUST fix each fiber before projecting
+    those parameters, then union and coalesce the images. An oversized or
+    unbounded union box MUST fall back to existential projection and counting;
+    it MUST NOT approximate the reached set.
   - `IterationScope.trips()` MUST count a loop off its bounds, not its domain:
     `max(1, ceil(max(stop - start) / step))`, refusing an unbounded span.
     `trips_precision` is `EXACT` where that span reaches one value and

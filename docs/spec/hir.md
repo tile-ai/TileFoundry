@@ -1621,14 +1621,22 @@ class Reshard(Op):
   - The output preserves the input logical `TensorType.shape`.
   - Supplied `layout` is a `LayoutBase` (`Layout` / `ComposedLayout` / `ShardLayout`).
   - Memory analysis and lowering MUST treat a Reshard as a view iff storage
-    is unchanged, the shape is literal, and every logical element retains its
-    complete set of storage instances and addresses, including Broadcast
-    replicas. Gmem has one instance per device, smem one per device and CTA,
-    and rmem one per thread.
-    A plain end has a copy on every instance of the other end's mesh;
-    two sharded ends retain their own mesh selections.
+    is unchanged, the shape is literal, and both structural address boxes agree.
+    A box records each zero-stride Split's mesh axis, logical tensor axis,
+    position within that axis, and extent. Its physical address layout is the
+    coalesced layout after removing these independent modes; swizzle and offset
+    are preserved. No element or participant enumeration is required.
     The result MUST reuse the source buffer, lower to a view, and require no
-    instruction candidate.
+    instruction candidate. Broadcast and nonzero-stride Split ownership do not
+    change a shared address, including a device ownership change with the same
+    physical box. This alias decision does not estimate redistribution traffic.
+    Zero-stride Split changes require a copy.
+
+    | Storage | Broadcast ↔ Split | Repartition | Transpose |
+    |---|---|---|---|
+    | gmem | view | view | copy |
+    | rmem with independent Split modes | copy | copy | copy |
+
   - Every other Reshard MUST retain its independent buffer and instruction
     selection requirements.
   - Destination storage is concrete, not unmaterialized.

@@ -1,0 +1,100 @@
+[
+  {
+    "function": "f0:gemm",
+    "leaves": [
+      {
+        "leaf": "f0:gemm/x[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 2>[0]",
+        "present": true,
+        "partner": "f0:gemm/<value 4>[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/x_2[0]",
+        "present": true,
+        "partner": "f0:gemm/x[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 4>[0]",
+        "present": true,
+        "partner": "f0:gemm/v6:16[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/x_3[0]",
+        "present": true,
+        "partner": "f0:gemm/x[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v6:16[0]",
+        "present": true,
+        "partner": "f0:gemm/v5:16[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v4:16[0]",
+        "present": true,
+        "partner": "f0:gemm/x_3[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v0:15[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v5:16[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      }
+    ]
+  }
+]

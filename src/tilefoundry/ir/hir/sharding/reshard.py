@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from functools import cache
 from math import prod
 
 from tilefoundry.evaluator.registry import register_eval
@@ -10,10 +9,11 @@ from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import Broadcast, TensorType
+from tilefoundry.ir.types import ComposedLayout, TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
-from tilefoundry.ir.types.layout import Layout, LayoutBase, resolve_layout
+from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten, resolve_layout
 from tilefoundry.ir.types.layout_algebra import coalesce
+from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
@@ -175,51 +175,43 @@ class Reshard(Op):
     storage = ParamDef(kind="attribute", default=None)
 
 
-@cache
-def _same_locations(source: TensorType, result: TensorType) -> bool:
-    """Every element must retain its complete set of storage instances and addresses."""
-    from tilefoundry.ir.hir.tensor.bitcast import _address_points  # noqa: PLC0415
-    from tilefoundry.ir.types.int_tuple import flatten  # noqa: PLC0415
-
-    def locations(type_, other):
-        shard = shard_layout_of(type_.layout)
-        mesh = shard.mesh if shard is not None else getattr(shard_layout_of(other.layout), "mesh", None)
-        layout = type_.layout
-        if shard is None and mesh is not None:
-            layout = ShardLayout(layout, (Broadcast(),) * len(flatten(mesh.layout.shape)), mesh)
-        ignored = {StorageKind.GMEM: ("cta", "thread"), StorageKind.SMEM: ("thread",)}.get(type_.storage, ())
-        points = [set() for _ in range(prod(type_.shape))]
-        for logical, unit, full, local in _address_points(layout, len(points), type_.shape):
-            instance = tuple(pair for pair in unit if pair[0] not in ignored)
-            points[logical].add((instance, local if type_.storage is StorageKind.RMEM else full))
-        return points
-
-    try:
-        if source.layout == result.layout:
-            return True
-        if source.storage is StorageKind.GMEM and all(
-            topology.name in ("cta", "thread")
-            for type_ in (source, result)
-            for topology in getattr(getattr(shard_layout_of(type_.layout), "mesh", None), "topologies", ())
-        ):
-            before = getattr(source.layout, "layout", source.layout)
-            after = getattr(result.layout, "layout", result.layout)
-            if before == after or (isinstance(before, Layout) and isinstance(after, Layout)
-                                   and coalesce(before, major="row") == coalesce(after, major="row")):
-                return True
-        return locations(source, result) == locations(result, source)
-    except ValueError:
-        return False
-
-
 @register_buffer_alias(Reshard)
 def _buffer_alias(call: Call) -> int | None:
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage or not is_literal_shape(result.shape):
         return None
-    source = replace(source, layout=resolve_layout(source.layout, source.shape))
-    result = replace(result, layout=resolve_layout(result.layout, result.shape))
-    return 0 if _same_locations(source, result) else None
+    boxes = []
+    for held in (source, result):
+        layout = resolve_layout(held.layout, held.shape)
+        shard = shard_layout_of(layout)
+        physical = shard.layout if shard is not None else layout
+        if shard is not None and isinstance(layout, ComposedLayout):
+            physical = replace(layout, outer=physical)
+        flat = flatten(physical)
+        correspondence = layout_correspondence(flat.shape, held.shape)
+        axes = correspondence.tensor_axes()
+        independent, splits = set(), []
+        if shard is not None:
+            for mesh_axis, attr in enumerate(shard.attrs):
+                if isinstance(attr, Split) and flat.strides[attr.axis] == 0:
+                    position = attr.axis
+                    group = correspondence.groups[axes[position]]
+                    suffix = prod(flat.shape[index] for index in group if index > position)
+                    splits.append((mesh_axis, axes[position], suffix, flat.shape[position]))
+                    independent.add(position)
+        kept = tuple(
+            (extent, step)
+            for index, (extent, step) in enumerate(zip(flat.shape, flat.strides, strict=True))
+            if index not in independent
+        )
+        shape, strides = zip(*kept) if kept else ((1,), (0,))
+        address = coalesce(Layout(tuple(shape), tuple(strides)), major="row")
+        if isinstance(physical, ComposedLayout) and (
+            physical.inner is not None or physical.offset != 0
+        ):
+            address = replace(physical, outer=address)
+        boxes.append((tuple(splits), address))
+    return 0 if boxes[0] == boxes[1] else None
 
 
 @register_access_relation(Reshard)

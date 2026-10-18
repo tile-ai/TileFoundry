@@ -1,0 +1,212 @@
+[
+  {
+    "function": "f0:gemm",
+    "leaves": [
+      {
+        "leaf": "f0:gemm/a[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 3>[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/a_2[0]",
+        "present": true,
+        "partner": "f0:gemm/a[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v_2[0]",
+        "present": true,
+        "partner": "f0:gemm/v[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 6>[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/a_3[0]",
+        "present": true,
+        "partner": "f0:gemm/a[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v_3[0]",
+        "present": true,
+        "partner": "f0:gemm/v[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v9:24[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "INSERT_SLICE",
+          "INSERT_SLICE"
+        ],
+        "tied": [
+          {
+            "kind": "INSERT_SLICE",
+            "partner": "f0:gemm/v0:15[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v0:15[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          10240
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v8:20[0]",
+        "present": true,
+        "partner": "f0:gemm/v1:18[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [
+          {
+            "kind": "WINDOW",
+            "partner": "f0:gemm/v9:24[0]",
+            "value": false
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v1:18[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v3:16[0]",
+        "present": true,
+        "partner": "f0:gemm/v2:16[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v2:16[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          8192
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v7:21[0]",
+        "present": true,
+        "partner": "f0:gemm/v6:21[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v6:21[0]",
+        "present": true,
+        "partner": "f0:gemm/v5:17[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v5:17[0]",
+        "present": true,
+        "partner": "f0:gemm/v4:17[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v4:17[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          0
+        ],
+        "refusal": null
+      }
+    ]
+  }
+]

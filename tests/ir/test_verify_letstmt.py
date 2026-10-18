@@ -18,7 +18,7 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import For, If, LetStmt, MeshScope, Return, Sequential
 from tilefoundry.ir.types import DType, Layout, Mesh, TensorType, Topology, make_tensor_type
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.passes.transforms.convert_hir_to_tir import _View
+from tilefoundry.passes.transforms.convert_hir_to_tir import View
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
 
@@ -115,7 +115,7 @@ def test_verify_rejects_a_non_ir_node():
     """Lowering recipes must be materialized before entering TIR expression fields."""
     tensor = make_tensor_type((4,), storage="rmem")
     source = Var(type=tensor, name="source")
-    recipe = _View(base=source, starts=(), sizes=(4,), desired=tensor)
+    recipe = View(base=source, starts=(), sizes=(4,), type=tensor)
     function = PrimFunction(
         name="recipe",
         params=(source,),
@@ -127,7 +127,7 @@ def test_verify_rejects_a_non_ir_node():
             ),
         )),
     )
-    with pytest.raises(VerifyError, match="non-IR node _View"):
+    with pytest.raises(VerifyError, match="non-IR node View"):
         verify_prim_function(function)
 
 

@@ -1,0 +1,541 @@
+[
+  {
+    "function": "f0:gemm",
+    "leaves": [
+      {
+        "leaf": "f0:gemm/x[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/w[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 3>[0]",
+        "present": true,
+        "partner": "f0:gemm/v9:58[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/w_2[0]",
+        "present": true,
+        "partner": "f0:gemm/w[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/x_2[0]",
+        "present": true,
+        "partner": "f0:gemm/x[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v9:58[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          896
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v8:57[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          768
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v7:56[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          896
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v6:56[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          768
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 11>[0]",
+        "present": true,
+        "partner": "f0:gemm/state[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/state[0]",
+        "present": true,
+        "partner": "f0:gemm/<value 14>[0]",
+        "kind": [
+          "CARRY_INIT",
+          "CARRY_INIT"
+        ],
+        "tied": [
+          {
+            "kind": "CARRY_INIT",
+            "partner": "f0:gemm/<value 14>[0]",
+            "value": true
+          }
+        ],
+        "offsets": [
+          896
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 14>[0]",
+        "present": true,
+        "partner": "f0:gemm/v2:51[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/x_3[0]",
+        "present": true,
+        "partner": "f0:gemm/x[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v2:51[0]",
+        "present": true,
+        "partner": "f0:gemm/v1:50[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v1:50[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          896
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 18>[0]",
+        "present": true,
+        "partner": "f0:gemm/v5:55[0]",
+        "kind": [
+          "FORWARD",
+          "CARRY_YIELD"
+        ],
+        "tied": [
+          {
+            "kind": "CARRY_YIELD",
+            "partner": "f0:gemm/state[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/state_2[0]",
+        "present": true,
+        "partner": "f0:gemm/state[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/updated[0]",
+        "present": true,
+        "partner": "f0:gemm/v4:53[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v4:53[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          768
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v5:55[0]",
+        "present": true,
+        "partner": "f0:gemm/state_2[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      }
+    ]
+  },
+  {
+    "function": "f1:run",
+    "leaves": [
+      {
+        "leaf": "f1:run/x[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/w[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/<value 3>[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/w_2[0]",
+        "present": true,
+        "partner": "f1:run/w[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/x_2[0]",
+        "present": true,
+        "partner": "f1:run/x[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/<value 6>[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/w_3[0]",
+        "present": true,
+        "partner": "f1:run/w[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/x_3[0]",
+        "present": true,
+        "partner": "f1:run/x[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/v7:25[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "INSERT_SLICE",
+          "INSERT_SLICE"
+        ],
+        "tied": [
+          {
+            "kind": "INSERT_SLICE",
+            "partner": "f1:run/v0:24[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/v0:24[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/v6:23[0]",
+        "present": true,
+        "partner": "f1:run/v5:22[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [
+          {
+            "kind": "WINDOW",
+            "partner": "f1:run/v7:25[0]",
+            "value": false
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/v2:19[0]",
+        "present": true,
+        "partner": "f1:run/v1:18[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/v1:18[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/v4:21[0]",
+        "present": true,
+        "partner": "f1:run/v3:20[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/v3:20[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f1:run/v5:22[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      }
+    ]
+  },
+  {
+    "function": "f2:helper",
+    "leaves": [
+      {
+        "leaf": "f2:helper/x[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f2:helper/w[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f2:helper/<value 3>[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f2:helper/x_2[0]",
+        "present": true,
+        "partner": "f2:helper/x[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f2:helper/<value 5>[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f2:helper/x_3[0]",
+        "present": true,
+        "partner": "f2:helper/x[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f2:helper/v3:44[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "INSERT_SLICE",
+          "INSERT_SLICE"
+        ],
+        "tied": [
+          {
+            "kind": "INSERT_SLICE",
+            "partner": "f2:helper/v0:43[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f2:helper/v0:43[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f2:helper/v2:42[0]",
+        "present": true,
+        "partner": "f2:helper/v1:41[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [
+          {
+            "kind": "WINDOW",
+            "partner": "f2:helper/v3:44[0]",
+            "value": false
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f2:helper/v1:41[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      }
+    ]
+  }
+]

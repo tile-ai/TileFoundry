@@ -12,8 +12,8 @@ from tilefoundry.target import CudaTarget
 def gemm(
     x: Tensor[(32,), "f32"], lhs: Tensor[(1,), "f32"], out: Tensor[(32,), "f32", (32,), "rmem"]
 ):
-    with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
-        with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
+    with Mesh((Topology("cta", 1),), layout=(1,), names=("block",)) as cta:
+        with Mesh((Topology("thread", 32),), layout=(32,), names=("lane",)) as scope:
             left_dst = T.alloc_tensor(tensor_type=Tensor[(1,), "f32", (1,), "rmem"])
             value = T.tensor_view(T.ptr_of(lhs), layout=(1,), shape=(1,))
             value_1 = T.tensor_view(T.ptr_of(left_dst), layout=(1,), shape=(1,))
@@ -36,4 +36,5 @@ def gemm(
             T.fill(scalar_2, 0.5)
             T.binary(offset, scalar_2, scaled, kind=BinaryKind.MUL)
             value_5 = T.tensor_view(T.ptr_of(out), layout=(32,), shape=(32,))
-            T.binary(value_1, scaled, value_5, kind=BinaryKind.MUL)
+            value_6 = T.tensor_view(T.ptr_of(value_5), layout=(32,), shape=(32,))
+            T.binary(value_1, scaled, value_6, kind=BinaryKind.MUL)

@@ -16,44 +16,67 @@ from tilefoundry.target import CudaTarget
 def final(
     hidden: Tensor[(1, 1024, 5120), "bf16"], last: Tensor[(1,), "i64"], gamma_final: ConstTensor[(5120,), "bf16"], w_head: ConstTensor[(248320, 5120), "bf16"], out: Tensor[(62080, 4, 1, 1, 1), "bf16"]
 ):
-    with Mesh((Topology("cta", 7760),), layout=(7760,), names=("d0",)) as cta:
-        with Mesh((Topology("thread", 256),), layout=(256,), names=("d0",)) as scope:
+    with Mesh((Topology("cta", 7760),), layout=(7760,), names=("b",)) as cta:
+        with Mesh((Topology("thread", 256),), layout=(256,), names=("t",)) as scope:
             value_1 = T.alloc_tensor(
-                tensor_type=Tensor[(1, 5, 256, 4), "bf16", (1, 5, 256 @ scope.d0, 4), "rmem"]
+                tensor_type=Tensor[(1, 5, 256, 4), "bf16", (1, 5, 256 @ scope.t, 4), "rmem"]
             )
-            value_2 = T.tensor_view(T.ptr_of(last), layout=(), shape=())
-            value_3 = T.tensor_view(
-                T.ptr_of(hidden[0:0 + 1, value_2:value_2 + 1, 0:0 + 1]),
+            value_2 = T.tensor_view(T.ptr_of(last), layout=(1,), shape=(1,))
+            value_3 = T.tensor_view(T.ptr_of(value_2), layout=(1,), shape=(1,))
+            value_4 = T.tensor_view(T.ptr_of(value_3), layout=(), shape=())
+            value_5 = T.tensor_view(
+                T.ptr_of(hidden), layout=(1, 1024, 5120), shape=(1, 1024, 5120)
+            )
+            value_6 = T.tensor_view(
+                T.ptr_of(value_5), layout=(1024, 5, 256, 4), shape=(1024, 5, 256, 4)
+            )
+            value_7 = T.tensor_view(
+                T.ptr_of(value_6[value_4:value_4 + 1, 0:0 + 1, 0:0 + 1, 0:0 + 1]),
                 layout=((1, 5, 256, 4), (0, 1024, 4, 1)),
                 shape=(1, 5, 256, 4),
             )
-            value_4 = T.tensor_view(
-                T.ptr_of(value_1), layout=(1, 5, 256 @ scope.d0, 4), shape=(1, 5, 256, 4)
-            )
-            T.copy(value_3, value_4)
-            x32 = T.alloc_tensor(
-                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.d0, 4), "rmem"]
-            )
-            T.cast(value_4, x32, dtype="f32")
-            value_5 = T.alloc_tensor(
-                tensor_type=Tensor[(1, 1, 1, 1), "f32", (1, 1, 1, 1), "rmem"]
-            )
-            value_6 = T.alloc_tensor(
-                tensor_type=Tensor[
-                    (1, 5, 256, 4), "f32", ((1, 5, 256 @ scope.d0, 4), (0, 4, 0, 1)), "rmem"
-                ]
-            )
-            value_7 = T.alloc_tensor(
-                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.d0, 4), "rmem"]
-            )
-            T.unary(x32, value_7, kind=UnaryKind.SQUARE)
             value_8 = T.tensor_view(
-                T.ptr_of(value_6),
-                layout=((1, 5, 256 @ scope.d0, 4), (0, 4, 0, 1)),
+                T.ptr_of(value_1), layout=(1, 5, 256 @ scope.t, 4), shape=(1, 5, 256, 4)
+            )
+            dst_view = T.tensor_view(
+                T.ptr_of(value_8[0:0 + 1, 0:0 + 5, 0:0 + 256, 0:0 + 4]),
+                layout=(1, 5, 256 @ scope.t, 4),
                 shape=(1, 5, 256, 4),
             )
-            T.copy(value_7, value_8)
+            T.copy(value_7, dst_view)
+            x32 = T.alloc_tensor(
+                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.t, 4), "rmem"]
+            )
+            src_view = T.tensor_view(
+                T.ptr_of(value_8[0:0 + 1, 0:0 + 5, 0:0 + 256, 0:0 + 4]),
+                layout=(1, 5, 256 @ scope.t, 4),
+                shape=(1, 5, 256, 4),
+            )
+            T.cast(src_view, x32, dtype="f32")
             value_9 = T.alloc_tensor(
+                tensor_type=Tensor[(1, 1, 1, 1), "f32", (1, 1, 1, 1), "rmem"]
+            )
+            value_10 = T.alloc_tensor(
+                tensor_type=Tensor[
+                    (1, 5, 256, 4), "f32", ((1, 5, 256 @ scope.t, 4), (0, 4, 0, 1)), "rmem"
+                ]
+            )
+            value_11 = T.alloc_tensor(
+                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.t, 4), "rmem"]
+            )
+            T.unary(x32, value_11, kind=UnaryKind.SQUARE)
+            value_12 = T.tensor_view(
+                T.ptr_of(value_10),
+                layout=((1, 5, 256 @ scope.t, 4), (0, 4, 0, 1)),
+                shape=(1, 5, 256, 4),
+            )
+            dst_view_1 = T.tensor_view(
+                T.ptr_of(value_12[0:0 + 1, 0:0 + 5, 0:0 + 256, 0:0 + 4]),
+                layout=((1, 5, 256 @ scope.t, 4), (0, 4, 0, 1)),
+                shape=(1, 5, 256, 4),
+            )
+            T.copy(value_11, dst_view_1)
+            value_13 = T.alloc_tensor(
                 tensor_type=Tensor[
                     (1, 1, 1, 1),
                     "f32",
@@ -61,165 +84,228 @@ def final(
                     "rmem",
                 ]
             )
-            T.reduce(value_8, value_9, axes=(1, 2, 3), keepdim=True, kind=ReduceKind.MEAN)
-            value_10 = T.tensor_view(T.ptr_of(value_5), layout=(1, 1, 1, 1), shape=(1, 1, 1, 1))
-            T.copy(value_9, value_10)
-            value_11 = T.alloc_tensor(
+            src_view_1 = T.tensor_view(
+                T.ptr_of(value_12[0:0 + 1, 0:0 + 5, 0:0 + 256, 0:0 + 4]),
+                layout=((1, 5, 256 @ scope.t, 4), (0, 4, 0, 1)),
+                shape=(1, 5, 256, 4),
+            )
+            T.reduce(src_view_1, value_13, axes=(1, 2, 3), keepdim=True, kind=ReduceKind.MEAN)
+            value_14 = T.tensor_view(T.ptr_of(value_9), layout=(1, 1, 1, 1), shape=(1, 1, 1, 1))
+            T.copy(value_13, value_14)
+            value_15 = T.alloc_tensor(
                 tensor_type=Tensor[(1, 1, 1, 1), "f32", (1, 1, 1, 1), "rmem"]
             )
             scalar = T.alloc_tensor(tensor_type=Tensor[(), "f32", "rmem"])
             T.fill(scalar, 1e-06)
-            T.binary(value_10, scalar, value_11, kind=BinaryKind.ADD)
-            value_12 = T.alloc_tensor(
+            T.binary(value_14, scalar, value_15, kind=BinaryKind.ADD)
+            value_16 = T.alloc_tensor(
                 tensor_type=Tensor[(1, 1, 1, 1), "f32", (1, 1, 1, 1), "rmem"]
             )
-            T.unary(value_11, value_12, kind=UnaryKind.RSQRT)
-            value_13 = T.alloc_tensor(
-                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.d0, 4), "rmem"]
+            T.unary(value_15, value_16, kind=UnaryKind.RSQRT)
+            value_17 = T.alloc_tensor(
+                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.t, 4), "rmem"]
             )
-            T.binary(x32, value_12, value_13, kind=BinaryKind.MUL)
-            value_14 = T.alloc_tensor(
-                tensor_type=Tensor[(1, 5, 256, 4), "bf16", (1, 5, 256 @ scope.d0, 4), "rmem"]
+            T.binary(x32, value_16, value_17, kind=BinaryKind.MUL)
+            value_18 = T.alloc_tensor(
+                tensor_type=Tensor[(1, 5, 256, 4), "bf16", (1, 5, 256 @ scope.t, 4), "rmem"]
             )
-            value_15 = T.tensor_view(
-                T.ptr_of(gamma_final),
+            value_19 = T.tensor_view(T.ptr_of(gamma_final), layout=(5120,), shape=(5120,))
+            value_20 = T.tensor_view(
+                T.ptr_of(value_19),
                 layout=((1, 5, 256, 4), (0, 1024, 4, 1)),
                 shape=(1, 5, 256, 4),
             )
-            value_16 = T.tensor_view(
-                T.ptr_of(value_14), layout=(1, 5, 256 @ scope.d0, 4), shape=(1, 5, 256, 4)
+            value_21 = T.tensor_view(
+                T.ptr_of(value_18), layout=(1, 5, 256 @ scope.t, 4), shape=(1, 5, 256, 4)
             )
-            T.copy(value_15, value_16)
-            value_17 = T.alloc_tensor(
-                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.d0, 4), "rmem"]
+            dst_view_2 = T.tensor_view(
+                T.ptr_of(value_21[0:0 + 1, 0:0 + 5, 0:0 + 256, 0:0 + 4]),
+                layout=(1, 5, 256 @ scope.t, 4),
+                shape=(1, 5, 256, 4),
             )
-            T.cast(value_16, value_17, dtype="f32")
-            value_18 = T.alloc_tensor(
-                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.d0, 4), "rmem"]
+            T.copy(value_20, dst_view_2)
+            value_22 = T.alloc_tensor(
+                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.t, 4), "rmem"]
+            )
+            src_view_2 = T.tensor_view(
+                T.ptr_of(value_21[0:0 + 1, 0:0 + 5, 0:0 + 256, 0:0 + 4]),
+                layout=(1, 5, 256 @ scope.t, 4),
+                shape=(1, 5, 256, 4),
+            )
+            T.cast(src_view_2, value_22, dtype="f32")
+            value_23 = T.alloc_tensor(
+                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.t, 4), "rmem"]
             )
             scalar_1 = T.alloc_tensor(tensor_type=Tensor[(), "f32", "rmem"])
             T.fill(scalar_1, 1.0)
-            T.binary(value_17, scalar_1, value_18, kind=BinaryKind.ADD)
-            value_19 = T.alloc_tensor(
-                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.d0, 4), "rmem"]
+            T.binary(value_22, scalar_1, value_23, kind=BinaryKind.ADD)
+            value_24 = T.alloc_tensor(
+                tensor_type=Tensor[(1, 5, 256, 4), "f32", (1, 5, 256 @ scope.t, 4), "rmem"]
             )
-            T.binary(value_13, value_18, value_19, kind=BinaryKind.MUL)
+            T.binary(value_17, value_23, value_24, kind=BinaryKind.MUL)
             xn = T.alloc_tensor(
-                tensor_type=Tensor[(1, 5, 256, 4), "bf16", (1, 5, 256 @ scope.d0, 4), "rmem"]
+                tensor_type=Tensor[(1, 5, 256, 4), "bf16", (1, 5, 256 @ scope.t, 4), "rmem"]
             )
-            T.cast(value_19, xn, dtype="bf16")
+            T.cast(value_24, xn, dtype="bf16")
             value = T.tensor_view(
                 0, dtype="bf16", storage="smem", layout=(1, 5, 256, 4), shape=(1, 5, 256, 4)
             )
-            value_20 = T.tensor_view(
+            value_25 = T.tensor_view(
                 T.ptr_of(value), layout=(1, 5, 256, 4), shape=(1, 5, 256, 4)
             )
-            T.copy(xn, value_20)
-        with Mesh((Topology("thread", 256),), layout=(8, 32), names=("d0", "d1")) as scope_1:
-            T.fill(out, 0.0)
-            value_21 = T.alloc_tensor(
-                tensor_type=Tensor[(8, 4, 1, 1, 1), "f32", (8 @ scope_1.d0, 4, 1, 1, 1), "rmem"]
+            T.copy(xn, value_25)
+        with Mesh((Topology("thread", 256),), layout=(8, 32), names=("w", "l")) as scope_1:
+            value_26 = T.tensor_view(
+                T.ptr_of(out), layout=(62080, 4, 1, 1, 1), shape=(62080, 4, 1, 1, 1)
             )
-            value_22 = T.alloc_tensor(
+            T.fill(value_26, 0.0)
+            value_27 = T.alloc_tensor(
+                tensor_type=Tensor[(8, 4, 1, 1, 1), "f32", (8 @ scope_1.w, 4, 1, 1, 1), "rmem"]
+            )
+            value_28 = T.alloc_tensor(
                 tensor_type=Tensor[
                     (8, 4, 20, 32, 8),
                     "f32",
-                    ((8 @ scope_1.d0, 4, 20, 32 @ scope_1.d1, 8), (0, 160, 8, 0, 1)),
+                    ((8 @ scope_1.w, 4, 20, 32 @ scope_1.l, 8), (0, 160, 8, 0, 1)),
                     "rmem",
                 ]
             )
-            value_23 = T.alloc_tensor(
+            value_29 = T.alloc_tensor(
                 tensor_type=Tensor[
-                    (8, 4, 20, 32, 8),
-                    "bf16",
-                    (8 @ scope_1.d0, 4, 20, 32 @ scope_1.d1, 8),
-                    "rmem",
+                    (8, 4, 20, 32, 8), "bf16", (8 @ scope_1.w, 4, 20, 32 @ scope_1.l, 8), "rmem"
                 ]
             )
-            value_24 = T.tensor_view(
-                T.ptr_of(w_head[4 * ((cta.d0 * 32) // 4):4 * ((cta.d0 * 32) // 4) + 1, 0:0 + 1]),
+            value_30 = T.tensor_view(
+                T.ptr_of(w_head), layout=(248320, 5120), shape=(248320, 5120)
+            )
+            value_31 = T.tensor_view(
+                T.ptr_of(value_30), layout=(62080, 4, 20, 32, 8), shape=(62080, 4, 20, 32, 8)
+            )
+            value_32 = T.tensor_view(
+                T.ptr_of(value_31[(cta.b * 32) // 4:(cta.b * 32) // 4 + 1, 0:0 + 1, 0:0 + 1, 0:0 + 1, 0:0 + 1]),
                 layout=(8, 4, 20, 32, 8),
                 shape=(8, 4, 20, 32, 8),
             )
-            value_25 = T.tensor_view(
-                T.ptr_of(value_23),
-                layout=(8 @ scope_1.d0, 4, 20, 32 @ scope_1.d1, 8),
+            value_33 = T.tensor_view(
+                T.ptr_of(value_29),
+                layout=(8 @ scope_1.w, 4, 20, 32 @ scope_1.l, 8),
                 shape=(8, 4, 20, 32, 8),
             )
-            T.copy(value_24, value_25)
-            value_26 = T.alloc_tensor(
+            dst_view_3 = T.tensor_view(
+                T.ptr_of(value_33[0:0 + 8, 0:0 + 4, 0:0 + 20, 0:0 + 32, 0:0 + 8]),
+                layout=(8 @ scope_1.w, 4, 20, 32 @ scope_1.l, 8),
+                shape=(8, 4, 20, 32, 8),
+            )
+            T.copy(value_32, dst_view_3)
+            value_34 = T.alloc_tensor(
                 tensor_type=Tensor[
-                    (8, 4, 20, 32, 8),
-                    "f32",
-                    (8 @ scope_1.d0, 4, 20, 32 @ scope_1.d1, 8),
-                    "rmem",
+                    (8, 4, 20, 32, 8), "f32", (8 @ scope_1.w, 4, 20, 32 @ scope_1.l, 8), "rmem"
                 ]
             )
-            T.cast(value_25, value_26, dtype="f32")
-            value_27 = T.alloc_tensor(
+            src_view_3 = T.tensor_view(
+                T.ptr_of(value_33[0:0 + 8, 0:0 + 4, 0:0 + 20, 0:0 + 32, 0:0 + 8]),
+                layout=(8 @ scope_1.w, 4, 20, 32 @ scope_1.l, 8),
+                shape=(8, 4, 20, 32, 8),
+            )
+            T.cast(src_view_3, value_34, dtype="f32")
+            value_35 = T.alloc_tensor(
                 tensor_type=Tensor[
-                    (1, 1, 20, 32, 8), "bf16", (1, 1, 20, 32 @ scope_1.d1, 8), "rmem"
+                    (1, 1, 20, 32, 8), "bf16", (1, 1, 20, 32 @ scope_1.l, 8), "rmem"
                 ]
             )
-            value_36 = T.tensor_view(
+            value_47 = T.tensor_view(
                 0, dtype="bf16", storage="smem", layout=(1, 5, 256, 4), shape=(1, 5, 256, 4)
             )
-            value_28 = T.tensor_view(
-                T.ptr_of(value_36),
+            value_36 = T.tensor_view(
+                T.ptr_of(value_47), layout=(1, 5, 256, 4), shape=(1, 5, 256, 4)
+            )
+            value_37 = T.tensor_view(
+                T.ptr_of(value_36), layout=(1, 5, 256, 4), shape=(1, 5, 256, 4)
+            )
+            value_38 = T.tensor_view(
+                T.ptr_of(value_37), layout=(1, 5, 256, 4), shape=(1, 5, 256, 4)
+            )
+            value_39 = T.tensor_view(
+                T.ptr_of(value_38),
                 layout=((1, 1, 20, 32, 8), (0, 0, 256, 8, 1)),
                 shape=(1, 1, 20, 32, 8),
             )
-            value_29 = T.tensor_view(
-                T.ptr_of(value_27),
-                layout=(1, 1, 20, 32 @ scope_1.d1, 8),
+            value_40 = T.tensor_view(
+                T.ptr_of(value_35),
+                layout=(1, 1, 20, 32 @ scope_1.l, 8),
                 shape=(1, 1, 20, 32, 8),
             )
-            T.copy(value_28, value_29)
-            value_30 = T.alloc_tensor(
+            dst_view_4 = T.tensor_view(
+                T.ptr_of(value_40[0:0 + 1, 0:0 + 1, 0:0 + 20, 0:0 + 32, 0:0 + 8]),
+                layout=(1, 1, 20, 32 @ scope_1.l, 8),
+                shape=(1, 1, 20, 32, 8),
+            )
+            T.copy(value_39, dst_view_4)
+            value_41 = T.alloc_tensor(
                 tensor_type=Tensor[
-                    (1, 1, 20, 32, 8), "f32", (1, 1, 20, 32 @ scope_1.d1, 8), "rmem"
+                    (1, 1, 20, 32, 8), "f32", (1, 1, 20, 32 @ scope_1.l, 8), "rmem"
                 ]
             )
-            T.cast(value_29, value_30, dtype="f32")
-            value_31 = T.alloc_tensor(
+            src_view_4 = T.tensor_view(
+                T.ptr_of(value_40[0:0 + 1, 0:0 + 1, 0:0 + 20, 0:0 + 32, 0:0 + 8]),
+                layout=(1, 1, 20, 32 @ scope_1.l, 8),
+                shape=(1, 1, 20, 32, 8),
+            )
+            T.cast(src_view_4, value_41, dtype="f32")
+            value_42 = T.alloc_tensor(
                 tensor_type=Tensor[
-                    (8, 4, 20, 32, 8),
-                    "f32",
-                    (8 @ scope_1.d0, 4, 20, 32 @ scope_1.d1, 8),
-                    "rmem",
+                    (8, 4, 20, 32, 8), "f32", (8 @ scope_1.w, 4, 20, 32 @ scope_1.l, 8), "rmem"
                 ]
             )
-            T.binary(value_26, value_30, value_31, kind=BinaryKind.MUL)
-            value_32 = T.tensor_view(
-                T.ptr_of(value_22),
-                layout=((8 @ scope_1.d0, 4, 20, 32 @ scope_1.d1, 8), (0, 160, 8, 0, 1)),
+            T.binary(value_34, value_41, value_42, kind=BinaryKind.MUL)
+            value_43 = T.tensor_view(
+                T.ptr_of(value_28),
+                layout=((8 @ scope_1.w, 4, 20, 32 @ scope_1.l, 8), (0, 160, 8, 0, 1)),
                 shape=(8, 4, 20, 32, 8),
             )
-            T.copy(value_31, value_32)
-            value_33 = T.alloc_tensor(
+            dst_view_5 = T.tensor_view(
+                T.ptr_of(value_43[0:0 + 8, 0:0 + 4, 0:0 + 20, 0:0 + 32, 0:0 + 8]),
+                layout=((8 @ scope_1.w, 4, 20, 32 @ scope_1.l, 8), (0, 160, 8, 0, 1)),
+                shape=(8, 4, 20, 32, 8),
+            )
+            T.copy(value_42, dst_view_5)
+            value_44 = T.alloc_tensor(
                 tensor_type=Tensor[
                     (8, 4, 1, 1, 1),
                     "f32",
-                    ((8 @ scope_1.d0, 4, 1, 1, 1, 1, 1), (4, 1, 0, 0, 0, 0, 0)),
+                    ((8 @ scope_1.w, 4, 1, 1, 1, 1, 1), (4, 1, 0, 0, 0, 0, 0)),
                     "rmem",
                 ]
             )
-            T.reduce(value_32, value_33, axes=(2, 3, 4), keepdim=True, kind=ReduceKind.SUM)
-            value_34 = T.tensor_view(
-                T.ptr_of(value_21), layout=(8 @ scope_1.d0, 4, 1, 1, 1), shape=(8, 4, 1, 1, 1)
+            src_view_5 = T.tensor_view(
+                T.ptr_of(value_43[0:0 + 8, 0:0 + 4, 0:0 + 20, 0:0 + 32, 0:0 + 8]),
+                layout=((8 @ scope_1.w, 4, 20, 32 @ scope_1.l, 8), (0, 160, 8, 0, 1)),
+                shape=(8, 4, 20, 32, 8),
             )
-            T.copy(value_33, value_34)
+            T.reduce(src_view_5, value_44, axes=(2, 3, 4), keepdim=True, kind=ReduceKind.SUM)
+            value_45 = T.tensor_view(
+                T.ptr_of(value_27), layout=(8 @ scope_1.w, 4, 1, 1, 1), shape=(8, 4, 1, 1, 1)
+            )
+            dst_view_6 = T.tensor_view(
+                T.ptr_of(value_45[0:0 + 8, 0:0 + 4, 0:0 + 1, 0:0 + 1, 0:0 + 1]),
+                layout=(8 @ scope_1.w, 4, 1, 1, 1),
+                shape=(8, 4, 1, 1, 1),
+            )
+            T.copy(value_44, dst_view_6)
             logit = T.alloc_tensor(
-                tensor_type=Tensor[
-                    (8, 4, 1, 1, 1), "bf16", (8 @ scope_1.d0, 4, 1, 1, 1), "rmem"
-                ]
+                tensor_type=Tensor[(8, 4, 1, 1, 1), "bf16", (8 @ scope_1.w, 4, 1, 1, 1), "rmem"]
             )
-            T.cast(value_34, logit, dtype="bf16")
-            value_35 = T.tensor_view(
+            src_view_6 = T.tensor_view(
+                T.ptr_of(value_45[0:0 + 8, 0:0 + 4, 0:0 + 1, 0:0 + 1, 0:0 + 1]),
+                layout=(8 @ scope_1.w, 4, 1, 1, 1),
+                shape=(8, 4, 1, 1, 1),
+            )
+            T.cast(src_view_6, logit, dtype="bf16")
+            value_46 = T.tensor_view(
                 T.ptr_of(out), layout=(62080, 4, 1, 1, 1), shape=(62080, 4, 1, 1, 1)
             )
             window = T.tensor_view(
-                T.ptr_of(value_35[(cta.d0 * 32) // 4:(cta.d0 * 32) // 4 + 8, 0:0 + 4, 0:0 + 1, 0:0 + 1, 0:0 + 1]),
+                T.ptr_of(value_46[(cta.b * 32) // 4:(cta.b * 32) // 4 + 8, 0:0 + 4, 0:0 + 1, 0:0 + 1, 0:0 + 1]),
                 layout=(8, 4, 1, 1, 1),
                 shape=(8, 4, 1, 1, 1),
             )

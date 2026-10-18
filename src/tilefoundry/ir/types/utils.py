@@ -602,7 +602,7 @@ def _nested_layout_shape(
             shard, selected_topology_level=selected_topology_level, topologies=topologies
         )
     if isinstance(layout, (Layout, ComposedLayout)):
-        return tuple(layout.shape)
+        return tuple(flatten(layout).shape)
     raise ValueError(
         f"local_type_of: unresolved layout {layout!r}; local projection requires a resolved Layout"
     )

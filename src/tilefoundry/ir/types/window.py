@@ -125,7 +125,7 @@ def shard_window_layout(source, logical_shape, starts, sizes, strides, *, loops=
                 if remaining == 1:
                     if position in split and extent != 1:
                         raise ValueError(refusal)
-                    if position in split:
+                    if position in split or extent == 1:
                         kept.append((position, extent, steps[position]))
                 elif remaining >= extent and remaining % extent == 0:
                     kept.append((position, extent, steps[position]))

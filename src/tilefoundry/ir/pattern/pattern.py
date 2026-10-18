@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from tilefoundry.ir.types import ComposedLayout, Layout, Swizzle
 from tilefoundry.ir.types.layout import flatten
@@ -20,6 +20,7 @@ class Pattern:
     def match(self, subject, captures=None) -> Match | None:
         held = PatternMatcher(dict(captures or {}))
         return Match(dict(held.bindings)) if held.match(self, subject) and held.solve() else None
+
 
 @dataclass(frozen=True)
 class WildcardPattern(Pattern):
@@ -84,6 +85,7 @@ class WildcardPattern(Pattern):
     def __ge__(self, other):
         return self._term() >= other
 
+
 @dataclass(frozen=True)
 class StarPattern(Pattern):
     """Match zero or more modes, applying one pattern to every mode."""
@@ -94,6 +96,7 @@ class StarPattern(Pattern):
         if not isinstance(self.pattern, Pattern):
             raise TypeError("StarPattern pattern must be a Pattern")
 
+
 @dataclass(frozen=True, init=False)
 class OrPattern(Pattern):
     patterns: tuple
@@ -101,6 +104,7 @@ class OrPattern(Pattern):
     def __init__(self, *patterns, predicates=()):
         object.__setattr__(self, "predicates", tuple(predicates))
         object.__setattr__(self, "patterns", tuple(patterns))
+
 
 @dataclass(frozen=True)
 class AndPattern(Pattern):
@@ -114,6 +118,7 @@ class SequencePattern(Pattern):
     def __init__(self, *patterns, predicates=()):
         object.__setattr__(self, "predicates", tuple(predicates))
         object.__setattr__(self, "patterns", tuple(patterns))
+
 
 @dataclass(frozen=True)
 class RangePattern(Pattern):
@@ -139,6 +144,7 @@ class RangePattern(Pattern):
         if self.dim_var and (self.lo is None or self.hi is None):
             raise ValueError("a named RangePattern must state both lo and hi")
 
+
 @dataclass(frozen=True, init=False)
 class SwitchPattern(Pattern):
     param: str
@@ -149,6 +155,7 @@ class SwitchPattern(Pattern):
         object.__setattr__(self, "param", param)
         object.__setattr__(self, "branches", tuple(dict(branches).items()))
 
+
 def _mode_path(path: tuple[int, ...]) -> str:
     return "root" + "".join(f"[{index}]" for index in path)
 
@@ -158,9 +165,7 @@ def _star_paths(value, path=()) -> tuple[tuple[int, ...], ...]:
         return (path,)
     if isinstance(value, tuple):
         return tuple(
-            found
-            for index, item in enumerate(value)
-            for found in _star_paths(item, (*path, index))
+            found for index, item in enumerate(value) for found in _star_paths(item, (*path, index))
         )
     return ()
 
@@ -169,8 +174,7 @@ def _validate_mode_frame(shape, strides, path=()) -> None:
     if isinstance(shape, tuple) or isinstance(strides, tuple):
         if not isinstance(shape, tuple) or not isinstance(strides, tuple):
             raise ValueError(
-                "LayoutPattern shape and strides must nest alike at "
-                f"{_mode_path(path)}"
+                f"LayoutPattern shape and strides must nest alike at {_mode_path(path)}"
             )
         shape_stars = tuple(
             index for index, item in enumerate(shape) if isinstance(item, StarPattern)
@@ -186,16 +190,14 @@ def _validate_mode_frame(shape, strides, path=()) -> None:
             )
         if len(shape) != len(strides):
             raise ValueError(
-                "LayoutPattern shape and strides must have the same arity at "
-                f"{_mode_path(path)}"
+                f"LayoutPattern shape and strides must have the same arity at {_mode_path(path)}"
             )
         for index, (extent, stride) in enumerate(zip(shape, strides)):
             _validate_mode_frame(extent, stride, (*path, index))
         return
     if isinstance(shape, StarPattern) != isinstance(strides, StarPattern):
         raise ValueError(
-            "LayoutPattern shape and strides must place StarPattern together at "
-            f"{_mode_path(path)}"
+            f"LayoutPattern shape and strides must place StarPattern together at {_mode_path(path)}"
         )
 
 
@@ -316,11 +318,6 @@ class ComposedLayoutPattern(Pattern):
     inner: object = None
     offset: object = None
     outer: object = None
-    issues_per_row: Callable[[dict], tuple[int, int] | None] | None = field(
-        default=None,
-        compare=False,
-        repr=False,
-    )
 
     def fixed(self):
         held = []
@@ -367,6 +364,7 @@ class MeshPattern(Pattern):
 
         require_per_mode(self.layout)
 
+
 @dataclass(frozen=True)
 class TensorPattern(Pattern):
     """Match a ``TensorType`` of any rank, constrained by its stated fields."""
@@ -376,6 +374,7 @@ class TensorPattern(Pattern):
     storage: Any = None
     layout: Pattern | None = None
 
+
 @dataclass(frozen=True)
 class ShardLayoutPattern(Pattern):
     """Match a sharded layout's layout, shard attrs, and mesh frame."""
@@ -383,6 +382,7 @@ class ShardLayoutPattern(Pattern):
     layout: object
     attrs: tuple
     mesh: MeshPattern
+
 
 __all__ = [
     "AndPattern",

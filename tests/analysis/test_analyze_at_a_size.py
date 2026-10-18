@@ -347,7 +347,7 @@ EXPECTED_MEMORY_PEAKS = {
     "square_cuda.Model.main[static]": {"gmem": 676, "rmem": 4},
     "tiny_tp_decoder.DecoderLayer.decode[static]": {"gmem": 48, "rmem": 32},
     "tiny_tp_decoder.DecoderLayer.project[static]": {"gmem": 96},
-    "tp_all_to_all.TransposeShard.transpose_shard[static]": {"gmem": 256},
+    "tp_all_to_all.TransposeShard.transpose_shard[static]": {"gmem": 128},
     "weighted_twin.Weighted.scaled[static]": {"gmem": 1_348, "rmem": 8},
 }
 EXPECTED_PERSISTENT_SCHEDULES = {
@@ -754,9 +754,9 @@ def test_dynamic_tuple_selection_keeps_all_possible_storage_resident() -> None:
     assert all(lifetimes[value_label(leaf)].last_used_at < output.defined_at for leaf in (first, second))
     assert get_metadata(selected, MemoryMetadata).buffer_bytes is None
     assert not get_metadata(selected, MemoryMetadata).offsets
-    assert get_metadata(consumer, MemoryMetadata).alias is None
     summary = get_metadata(result.function, AllocationSummary)
     by_value = {value.value: value for value in summary.values}
+    assert not by_value[SSAValue(consumer)].aliases
     assert SSAValue(selected) not in by_value
     liveness = get_metadata(result.function, Liveness)
     for index in range(len(selected.args[0].elements)):

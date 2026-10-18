@@ -259,12 +259,12 @@ class ConvertHIRToTIR(ModulePass):
     copying only when the update's alias names that HIR destination, resolved
     through region captures.
     A loop-carried entry alias must name its slot's initial value; any other
-    entry alias raises `LoweringError`. A published alias identifies its
+    entry alias raises `LoweringError`. A accepted semantic alias identifies its
     destination as `BufferAlias.target: SSAValue`. Lowering MUST select the
     flattened target leaf, including nested tuple paths, before binding storage.
-    Lowering MUST execute published ties at
+    Lowering MUST execute accepted ties at
     every storage level: a tied carry reuses its initial storage; otherwise it
-    copies the initial into independent phi storage before the loop. A published
+    copies the initial into independent phi storage before the loop. An accepted
     yield-to-phi alias binds the producer output to phi storage, including rmem.
     The backedge needs no copy when the yield has that tie or its tied
     InsertSlice destination resolves through captures to the phi; otherwise
@@ -272,15 +272,17 @@ class ConvertHIRToTIR(ModulePass):
     storage; an untied one MUST copy destination to result before writing the
     update window. An update without an adopted WINDOW alias MUST be copied
     into the result window. Allocation's peak-estimation storage links do not imply
-    that lowering shares registers; only published aliases state that sharing.
-  - Schedule type inference, candidate admission, finalization, and TIR effect
-    verification MUST use the same `check_call` implementation. It checks the
-    declared execution mesh, operand reachability, projected atom patterns,
-    `between` relations, and any registered leaf verifier. Lowering consumes
-    its projection rather than maintaining a second instruction geometry rule.
+    that lowering shares registers; only accepted semantic aliases state that sharing.
+  - Schedule type inference and candidate admission MUST share one geometric
+    projection implementation with lowering. It infers `repeat`, `order`,
+    local issue shapes and `bind`. Type inference and candidates additionally
+    call `check_call` to check the declared execution mesh, operand reachability,
+    projected atom patterns, `between` relations and registered leaf verifiers.
+    Lowering only consumes the projection; it does not repeat admission checks.
     An unscheduled HIR operation MUST have exactly one registered candidate;
-    its operand hook supplies any explicit source view (including Transpose),
-    and that candidate is admitted through `check_call`.
+    its operand hook supplies any explicit source view (including Transpose).
+  - One `LoweringContext` carries read-only `StoragePlan` and `IssuePlan`
+    answers, `Names`, and a `TirBuilder`. Only the builder writes TIR.
   - HIR mesh and loop regions become `MeshScope` and `For`; register allocations
     become `AllocTensor`; scheduled and ordinary value operations become
     effect-form TIR calls. Views follow their storage root, so a parameter view
@@ -296,36 +298,45 @@ class ConvertHIRToTIR(ModulePass):
     Every HIR `MeshRegion` becomes one `MeshScope`, with its arguments evaluated
     outside it. Non-atom instructions without an operand-declared mesh use
     the current scope, retaining unit axes. An instruction issued on the enclosing
-    scope's physical frame
-    is emitted directly; another frame opens a nested `MeshScope`. Frames compare
-    after removing trivial composed-layout wrappers, preserving unit axes.
+    scope's mesh is emitted directly; another declared mesh opens a nested
+    `MeshScope`. Meshes compare after resolving layouts, preserving unit axes.
+    IR and type mesh names are retained; lowering MUST NOT rebuild mesh frames.
     Adjacent scopes are not merged. A view is bound in each consuming scope,
     never at its definition; its sharding refers to that scope's mesh.
     Storage declarations follow their HIR definition's scope and position.
     Constant-address `smem` and scratch-backed `gmem` views are materialized in
     each consuming scope. Each tensor SSA leaf MUST have its own Tensor or
     TensorView object, even when several values have the same address. Lowering
-    MUST read addresses from the AllocationSummary SSAValue table, its accepted
-    address links and the roots' placements; it MUST NOT read MemoryMetadata.alias.
-    Every composed executable address relation MUST be EXACT and retain its
-    runtime parameter values, including accepted carry, window and in-place ties.
-    Any other precision raises LoweringError naming the SSA value and relation; an estimation upper bound is not an executable address.
-    Lowering composes the exact relation with the root's physical layout and
-    extracts the origin and strides from one affine access, retaining the
-    logical shape. An image bounding box is not a view layout. A non-affine
-    access retains a root ComposedLayout's composition; without that root
-    composition it raises LoweringError naming the relation.
+    MUST obtain storage answers from StoragePlan, the sole reader of analysis
+    storage metadata in this pass. The context reads `MemoryMetadata.offsets`,
+    accepted links in AllocationSummary.values, and the unchanged
+    AllocationSummary.address_decisions. It chooses direct storage partners,
+    output positions and refusals; analysis publishes no derived aliases.
+    Each view is formed on its partner's tensor using the registered op's own
+    result-to-operand relation. Adopted update windows use InsertSlice's offsets
+    at the storage representative; identity forwards need no inverse relation.
+    Moving a decision through its structural chain, or placing a written
+    producer on an output reached through a view, requires identity coordinates.
+    A nonidentity step raises `LoweringError` naming the value and relation;
+    lowering MUST NOT silently discard the required inverse relation.
+    Copy decisions query accepted kind and partner together: INSERT_SLICE for
+    destination copies, WINDOW for update copies, CARRY_INIT for entry copies,
+    and CARRY_YIELD for backedge copies. Multiple ties remain distinct.
+    Nested view text may differ from a flattened root view, but the physical
+    address mapping MUST remain the same. The context derives origin and strides
+    from the partner's physical layout; an image bounding box is not a layout.
+    A non-affine access retains a partner ComposedLayout's composition; without
+    that composition it raises LoweringError naming the relation. Existing
+    refusals, including duplicate output storage, retain their text.
     Only `gmem` and `smem` have physical address placements. Optional `rmem`
     IN_PLACE sharing is a live-byte peak estimate: each result retains its own
     typed AllocTensor. Semantic views, forwards, InsertSlice destinations and
     carry ties share register storage. Placed `smem` views MUST state their dtype
     explicitly at the analyzed byte offset; TensorView does not reinterpret a
     typed pointer's dtype. Loop coordinates in those relations MUST bind to their
-    own induction values.
+    own induction values in the visit context.
     Shared register storage is declared at the outermost definition among its
-    users, retaining the HIR tensor type with a physical-frame mesh. Each
-    instruction MUST call the shared admission check once, before declaring
-    storage, and use that projection for both storage handling and emission.
+    users, retaining the HIR tensor type and declared mesh.
     Staged storage retains its placement outside the outermost HIR loop.
     Each return-type leaf becomes a new external output parameter with that
     leaf's type; `umat` becomes `gmem`, retaining its layout. A non-tensor leaf

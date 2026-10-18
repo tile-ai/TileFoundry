@@ -213,14 +213,6 @@ def _operands(record: MemoryMetadata, expr: object) -> list[dict[str, object]] |
 expr_field(MemoryMetadata, "operands", _operands)
 
 
-def _not_reported(_record: MemoryMetadata, _expr: object) -> None:
-    """BufferAlias contains Expr and ISL map values used only by lowering."""
-    return None
-
-
-expr_field(MemoryMetadata, "alias", _not_reported)
-
-
 def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str, object]:
     """Every selected record on *expr*, keyed by the family that owns it."""
     result: dict[str, object] = {}

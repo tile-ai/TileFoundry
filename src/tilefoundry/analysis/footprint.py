@@ -197,6 +197,8 @@ def _union_loops(relation):
 
 def _at_first_iteration(relation: isl.map, depth: int) -> isl.map:
     """Hold enclosing loop dimensions at their symbolic lexicographic first point."""
+    if depth == 0:
+        return relation
     rank = relation.dim(isl.dim_type.IN)
     own_rank = rank - depth
     loops = relation.domain().project_out(isl.dim_type.SET, depth, own_rank)
@@ -239,9 +241,9 @@ def _reached_addresses(
     may_coordinates = 0
     if access.may_access:
         must = isl.set.empty(reached.get_space())
-        may_coordinates = cardinality(relation.domain())
+        may_coordinates = cardinality(relation.domain(), union=tuple(name for name, _value in mesh_parameters))
         if may_coordinates is None:
-            may_coordinates = cardinality(reached)
+            may_coordinates = cardinality(reached, union=tuple(name for name, _value in mesh_parameters))
     return ReachedAddresses(
         target=access.target,
         label=label,
@@ -1029,6 +1031,8 @@ def footprint_of(items, *, windows=1) -> Footprint:
 
 def _first_loops(image):
     names = tuple(name for _axis, name in _loop_parameters(image))
+    if not names:
+        return image
     first = image.params()
     for name in names:
         first = first.move_dims(
@@ -1065,14 +1069,8 @@ def _count(item):
     if item.reached is None:
         return 0, item.precision
     image = _first_loops(item.reached)
-    image = _project_mesh_parameters(
-        image,
-        tuple(
-            (name, value)
-            for name, value in item.values.items()
-            if isinstance(value, Call) and isinstance(value.target, MeshCoord)
-        ),
-    )
+    mesh_params = tuple(name for name, value in item.values.items()
+                        if isinstance(value, Call) and isinstance(value.target, MeshCoord))
     bounded = item.precision
     for axis in reversed(range(image.dim(isl.dim_type.PARAM))):
         name = image.get_dim_name(isl.dim_type.PARAM, axis)
@@ -1083,7 +1081,7 @@ def _count(item):
                 image = image.fix_val(isl.dim_type.PARAM, axis, isl.val(value))
             image = image.project_out(isl.dim_type.PARAM, axis, 1)
             bounded = bounded.join(AnalysisPrecision.UPPER_BOUND)
-    amount = cardinality(image.coalesce())
+    amount = cardinality(image, union=mesh_params)
     if amount is None:
         return 0, (
             AnalysisPrecision.UNKNOWN
@@ -1091,7 +1089,7 @@ def _count(item):
             else AnalysisPrecision.LOWER_BOUND
         )
     if item.may_coordinates is not None and not item.must.is_equal(item.reached):
-        must = cardinality(item.must.coalesce())
+        must = cardinality(item.must, union=mesh_params)
         if must is not None:
             amount = min(amount, must + item.may_coordinates)
     return -(-(amount * item.dtype.bit_width) // 8), bounded

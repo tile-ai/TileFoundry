@@ -43,7 +43,6 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 from .access import AliasKind
 from .allocation import (
     collect_allocation,
-    published_aliases,
     root,
     solve_allocation,
     summary_of,
@@ -687,10 +686,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             continue
         moved = get_metadata(expr, MemoryMetadata)
         if moved is not None:
-            attach(expr, replace(moved, alias=None, buffer_bytes=None, offsets=()))
-    for key, alias in published_aliases(allocation).items():
-        moved = get_metadata(key.expr, MemoryMetadata) or MemoryMetadata()
-        attach(key.expr, replace(moved, alias=alias))
+            attach(expr, replace(moved, buffer_bytes=None, offsets=()))
     if memory_level is not None and wave is not None:
         seen_footprints = set()
         for scope, calls in memory_context.reached_by_scope.items():

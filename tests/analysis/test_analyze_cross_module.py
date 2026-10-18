@@ -540,4 +540,4 @@ def test_repeated_callee_placement_compares_alias_even_at_the_same_offset():
         if isinstance(node, Call) and isinstance(node.target, Empty)
     ]
     assert len(buffers) == 2
-    assert all(len(record.offsets) == 1 and record.alias is None for record in buffers)
+    assert all(len(record.offsets) == 1 for record in buffers)

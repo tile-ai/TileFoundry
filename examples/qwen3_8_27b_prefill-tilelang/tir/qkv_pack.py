@@ -13,50 +13,74 @@ from tilefoundry.target import CudaTarget
 def pack(
     w_q: ConstTensor[(12288, 5120), "bf16"], w_k: ConstTensor[(1024, 5120), "bf16"], w_v: ConstTensor[(1024, 5120), "bf16"], out: Tensor[(14336, 5120), "bf16"]
 ):
-    with Mesh((Topology("cta", 132),), layout=(132,), names=("d0",)) as cta:
-        with Mesh((Topology("thread", 384),), layout=(384,), names=("d0",)) as scope:
-            T.fill(out, 0.0)
-            for j in range(cta.d0, 96, 132):
-                value = T.tensor_view(
-                    T.ptr_of(w_q[j * 128:j * 128 + 1, 0:0 + 1]),
-                    layout=(128, 5120),
-                    shape=(128, 5120),
-                )
+    with Mesh((Topology("cta", 132),), layout=(132,), names=("persistent",)) as cta:
+        with Mesh((Topology("thread", 384),), layout=(384,), names=("t",)) as scope:
+            value = T.tensor_view(T.ptr_of(out), layout=(14336, 5120), shape=(14336, 5120))
+            T.fill(value, 0.0)
+            for j in range(cta.persistent, 96, 132):
                 value_1 = T.tensor_view(
-                    T.ptr_of(out), layout=(14336, 5120), shape=(14336, 5120)
+                    T.ptr_of(w_q), layout=(12288, 5120), shape=(12288, 5120)
                 )
-                window = T.tensor_view(
-                    T.ptr_of(value_1[j * 128:j * 128 + 128, 0:0 + 5120]),
-                    layout=(128, 5120),
-                    shape=(128, 5120),
-                )
-                T.copy(value, window)
-            for j_2 in range(cta.d0, 8, 132):
                 value_2 = T.tensor_view(
-                    T.ptr_of(w_k[j_2 * 128:j_2 * 128 + 1, 0:0 + 1]),
+                    T.ptr_of(value_1[j * 128:j * 128 + 1, 0:0 + 1]),
                     layout=(128, 5120),
                     shape=(128, 5120),
                 )
                 value_3 = T.tensor_view(
                     T.ptr_of(out), layout=(14336, 5120), shape=(14336, 5120)
                 )
-                window_1 = T.tensor_view(
-                    T.ptr_of(value_3[((24 * 2) * 256) + (j_2 * 128):((24 * 2) * 256) + (j_2 * 128) + 128, 0:0 + 5120]),
-                    layout=(128, 5120),
-                    shape=(128, 5120),
-                )
-                T.copy(value_2, window_1)
                 value_4 = T.tensor_view(
-                    T.ptr_of(w_v[j_2 * 128:j_2 * 128 + 1, 0:0 + 1]),
-                    layout=(128, 5120),
-                    shape=(128, 5120),
+                    T.ptr_of(value_3), layout=(14336, 5120), shape=(14336, 5120)
                 )
                 value_5 = T.tensor_view(
-                    T.ptr_of(out), layout=(14336, 5120), shape=(14336, 5120)
+                    T.ptr_of(value_4), layout=(14336, 5120), shape=(14336, 5120)
                 )
-                window_2 = T.tensor_view(
-                    T.ptr_of(value_5[(((24 * 2) * 256) + (4 * 256)) + (j_2 * 128):(((24 * 2) * 256) + (4 * 256)) + (j_2 * 128) + 128, 0:0 + 5120]),
+                window = T.tensor_view(
+                    T.ptr_of(value_5[j * 128:j * 128 + 128, 0:0 + 5120]),
                     layout=(128, 5120),
                     shape=(128, 5120),
                 )
-                T.copy(value_4, window_2)
+                T.copy(value_2, window)
+            for j_2 in range(cta.persistent, 8, 132):
+                value_6 = T.tensor_view(T.ptr_of(w_k), layout=(1024, 5120), shape=(1024, 5120))
+                value_7 = T.tensor_view(
+                    T.ptr_of(value_6[j_2 * 128:j_2 * 128 + 1, 0:0 + 1]),
+                    layout=(128, 5120),
+                    shape=(128, 5120),
+                )
+                value_8 = T.tensor_view(
+                    T.ptr_of(out), layout=(14336, 5120), shape=(14336, 5120)
+                )
+                value_9 = T.tensor_view(
+                    T.ptr_of(value_8), layout=(14336, 5120), shape=(14336, 5120)
+                )
+                value_10 = T.tensor_view(
+                    T.ptr_of(value_9), layout=(14336, 5120), shape=(14336, 5120)
+                )
+                value_11 = T.tensor_view(
+                    T.ptr_of(value_10), layout=(14336, 5120), shape=(14336, 5120)
+                )
+                value_12 = T.tensor_view(
+                    T.ptr_of(value_11), layout=(14336, 5120), shape=(14336, 5120)
+                )
+                window_1 = T.tensor_view(
+                    T.ptr_of(value_12[((24 * 2) * 256) + (j_2 * 128):((24 * 2) * 256) + (j_2 * 128) + 128, 0:0 + 5120]),
+                    layout=(128, 5120),
+                    shape=(128, 5120),
+                )
+                T.copy(value_7, window_1)
+                value_13 = T.tensor_view(T.ptr_of(w_v), layout=(1024, 5120), shape=(1024, 5120))
+                value_14 = T.tensor_view(
+                    T.ptr_of(value_13[j_2 * 128:j_2 * 128 + 1, 0:0 + 1]),
+                    layout=(128, 5120),
+                    shape=(128, 5120),
+                )
+                value_15 = T.tensor_view(
+                    T.ptr_of(value_12), layout=(14336, 5120), shape=(14336, 5120)
+                )
+                window_2 = T.tensor_view(
+                    T.ptr_of(value_15[(((24 * 2) * 256) + (4 * 256)) + (j_2 * 128):(((24 * 2) * 256) + (4 * 256)) + (j_2 * 128) + 128, 0:0 + 5120]),
+                    layout=(128, 5120),
+                    shape=(128, 5120),
+                )
+                T.copy(value_14, window_2)

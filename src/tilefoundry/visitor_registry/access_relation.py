@@ -876,6 +876,30 @@ def leaves_of(type_: "Type") -> tuple:
     return (type_,) if isinstance(type_, TensorType) else ()
 
 
+def iteration_geometry(relations) -> tuple[tuple[int, ...], tuple[str, ...]]:
+    """Static extents and authored axis names of one relation domain."""
+    domain = iteration_universe(relations)
+    if domain is None:
+        raise ValueError("access relations state no iteration space")
+    extents, names = [], []
+    for axis in range(domain.tuple_dim()):
+        low, high = domain.dim_min_val(axis), domain.dim_max_val(axis)
+        if not (low.is_int() and high.is_int() and low.get_num_si() == 0):
+            raise ValueError(f"iteration axis {axis} is not a zero-based static extent")
+        extents.append(high.get_num_si() + 1)
+        names.append(domain.get_dim_name(isl.dim_type.SET, axis) or str(axis))
+    return tuple(extents), tuple(names)
+
+
+def leaf_paths(type_: "Type", path: tuple[int, ...] = ()):
+    """Yield each nested leaf's tuple path and type, including non-tensor leaves."""
+    if isinstance(type_, TupleType):
+        for index, field in enumerate(type_.fields):
+            yield from leaf_paths(field, (*path, index))
+    else:
+        yield path, type_
+
+
 def leaf_span(type_: "Type", field: int) -> "tuple[int, int]":
     """Where one field of a value begins among its flat leaves, and how many.
 

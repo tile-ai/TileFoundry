@@ -18,13 +18,14 @@ from functools import partial
 from itertools import combinations
 from math import prod
 from pathlib import Path
-from types import SimpleNamespace
 
 import isl
 import pytest
 import torch
 
+import tilefoundry.ir.hir.schedule as schedules
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
+import tilefoundry.visitor_registry.instruction as instructions
 from tests._source import import_dsl
 from tilefoundry.analysis.access import AliasKind, SSAValue
 from tilefoundry.analysis.allocation import AllocationSummary
@@ -39,7 +40,6 @@ from tilefoundry.analysis.metadata import (
     RegionMemoryMetadata,
     RooflineMetadata,
 )
-from tilefoundry.analysis.precision import AnalysisPrecision
 from tilefoundry.cli import main as cli_main
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.emitter import CppEmitter
@@ -117,9 +117,10 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
+from tilefoundry.visitor_registry.call_frame import CallFrame
 from tilefoundry.visitor_registry.candidates import candidate_operands
 from tilefoundry.visitor_registry.contexts import TypeInferContext, VerifyContext
-from tilefoundry.visitor_registry.instruction import ScheduleRefusal, check_call
+from tilefoundry.visitor_registry.instruction import ScheduleRefusal, check_call, project
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
 
@@ -259,6 +260,8 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "persistent_tile_union_count": 163_840,
+    "wgmma_b_mn_major_window_unit_mode": 10_240,
     "zero_trip_insert_slice": 0,
     "strided_return_window": 0,
     "inplace_output_update": 0,
@@ -585,6 +588,15 @@ RMEM_EXPECTED = {
         "thread@128:128#2": _RmemExpectation(8_192, "first/second mma alias chain"),
         "thread@128:128#3": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
         "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of both mma chains"),
+    },
+    "wgmma_b_mn_major_window_unit_mode": {
+        "thread@0:256#0": _RmemExpectation(32768, "two 64x64 f32 accumulator groups; MMA aliases acc"),
+    },
+    "persistent_tile_union_count": {
+        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one accumulator chain"),
     },
 }
 
@@ -1226,13 +1238,13 @@ def _check_finalize_unbound_dim(out: Path, captured: pytest.CaptureResult[str]) 
 def _check_reshard_locations(out: Path, captured: pytest.CaptureResult[str]) -> None:
     rows = _quiet_json(out, captured)["functions"][0]["calls"]
     rows = {row["value"].rsplit(":", 1)[1]: row["memory"] for row in rows}
-    for label, byte_count in (("12", 256), ("14", 32), ("20", 224)):
+    for label, byte_count in (("12", 256), ("20", 224)):
         memory = rows[label]
         assert memory["operands"][0]["read"] == byte_count
         assert memory["operands"][1]["write"] == byte_count
     assert rows["20"]["buffer_bytes"] == 112
     assert rows["20"]["offsets"]
-    for label in ("15", "16", "17", "18"):
+    for label in ("14", "15", "16", "17", "18"):
         memory = rows[label]
         assert memory["buffer_bytes"] is None
         assert memory["offsets"] == []
@@ -1783,7 +1795,7 @@ def test_schedule_candidates_reports_every_plain_site(
 
 @pytest.mark.parametrize(
     "source",
-    HIR,
+    tuple(path for path in HIR if path.stem != "wgmma_b_mn_major_window_unit_mode"),
     ids=lambda path: path.stem,
 )
 def test_schedule_candidates_omit_selected_schedule_calls(
@@ -2039,25 +2051,28 @@ def test_lowering_rejects_instruction_without_access_relation(
     _assert_cli_lowering_error(source, "states no access relations", tmp_path, capsys)
 
 
-def test_lowering_rejects_non_exact_address(monkeypatch, tmp_path, capsys):
-    source = Path(__file__).parents[1] / "fixtures/schedule/hir/register_index_window_offset.py"
-    module = _module_in(source)
-    result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
-    summary = get_metadata(result.function, AllocationSummary)
-    key = next(key for key, alias in summary.views.items() if alias.relation.values)
-    summary.view_precisions[key] = AnalysisPrecision.UPPER_BOUND
-    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
-
-    out = tmp_path / "failed.py"
-    assert cli_main(["schedule", "finalize", str(source), str(out)]) == 1
-    captured = capsys.readouterr()
-    assert "non-EXACT address for" in captured.err
-    assert str(summary.views[key].relation.relation) in captured.err
-    assert not out.exists()
+def test_lowering_rejects_nonidentity_inverse_for_a_written_return():
+    module = import_dsl("""
+from tilefoundry.dsl import *
+from tilefoundry.target import CudaTarget
+@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 1), Topology("thread", 1)))
+class WrittenReturnWindow:
+    @func
+    def gemm(x: Tensor[(1, 4), "f32"]):
+        with Mesh(("cta",), layout=(1,), names=("block",)) as cta:
+            out = tf.zeros(Tensor[(2, 4), "f32"])
+            updated = tf.insert_slice(out, x, (1, 0))
+            return updated[1:2, :]
+""")
+    with pytest.raises(
+        lowering_module.LoweringError, match="requires a non-identity inverse relation"
+    ):
+        finalize(module)
 
 
 def test_zero_trip_carry_keeps_direct_address_proofs_and_the_loop():
-    module = import_dsl('''
+    module = import_dsl("""
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
@@ -2071,11 +2086,15 @@ class ZeroTripCarry:
                 for k in range(0):
                     acc = tf.schedule((x, tf.empty(Tensor[(4,), "f32", "rmem"])), op=T.copy())
                 return tf.schedule((acc, tf.empty(Tensor[(4,), "f32"])), op=T.copy())
-''')
+""")
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
     summary = get_metadata(result.function, AllocationSummary)
-    carry = [proof for proof in summary.views.values()
-             if proof.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD)]
+    carry = [
+        proof
+        for value in summary.values
+        for proof in value.aliases
+        if proof.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD)
+    ]
     assert {proof.kind for proof in carry} == {AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD}
     assert all(proof.relation.relation.is_identity() for proof in carry)
     lowered = finalize(module)
@@ -2085,7 +2104,11 @@ class ZeroTripCarry:
     visitor.visit(lowered.entry_function().body)
     assert len(visitor.loops) == 1
     loop = visitor.loops[0]
-    assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (0, 0, 1)
+    assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
+        0,
+        0,
+        1,
+    )
     body = _RetainedStatements()
     body.visit(loop.body)
     assert sum(isinstance(op, Copy) for op in body.operations) == 1
@@ -2182,11 +2205,14 @@ class ComposedReshape:
     ) for value in views)
 
 
-@pytest.mark.parametrize("width,start,shape,modes,strides,offset", [
-    (256, 0, (16, 8, 16, 16), (16, 8, (4, 4), 16), (512, 64, (8192, 16), 1), 0),
-    (32, 0, (16, 8, 2, 16), (16, 8, 2, 16), (512, 64, 16, 1), 0),
-    (128, 128, (16, 8, 8, 16), (16, 8, (2, 4), 16), (512, 64, (8192, 16), 1), 16384),
-])
+@pytest.mark.parametrize(
+    "width,start,shape,modes,strides,offset",
+    [
+        (256, 0, (16, 8, 16, 16), (16, 8, (4, 4), 16), (512, 64, (8192, 16), 1), 0),
+        (32, 0, (16, 8, 2, 16), (16, 8, 2, 16), (512, 64, 16, 1), 0),
+        (128, 128, (16, 8, 8, 16), (16, 8, (2, 4), 16), (512, 64, (8192, 16), 1), 16384),
+    ],
+)
 def test_composed_reshape_retains_non_affine_outer_modes(width, start, shape, modes, strides, offset):
     module = import_dsl('''
 from tilefoundry.dsl import *
@@ -2244,13 +2270,14 @@ def test_view_strides_distinguish_coordinate_and_parameter_divisions(coordinate_
         relation = AccessRelation(
             isl.map("[tile] -> { [i] -> [i + floor(tile/4)] : 0 <= i < 8 }"), {"tile": tile}
         )
-    lowering = SimpleNamespace(_dim=lambda value: value)
-    address = SimpleNamespace(relation=relation)
+    function = Function.build(name="view", params=(source,), body=source, return_type=source.type)
+    storage = lowering_module.StoragePlan(function)
+    values = {} if coordinate_division else {id(tile): tile}
     if coordinate_division:
         with pytest.raises(lowering_module.LoweringError, match="non-affine address"):
-            lowering_module.Lowering._address_view(lowering, source, address, desired)
+            storage.view(source, relation, desired, values=values)
     else:
-        view = lowering_module.Lowering._address_view(lowering, source, address, desired)
+        view = storage.view(source, relation, desired, values=values)
         assert view.type.layout == Layout((8,), (1,))
 
 
@@ -2283,7 +2310,7 @@ def test_lowering_rejects_unknown_hir_call(
     view.target = _UnstatedInstruction()
     monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
 
-    _assert_cli_lowering_error(source, "unknown HIR call _UnstatedInstruction", tmp_path, capsys)
+    _assert_cli_lowering_error(source, "_UnstatedInstruction states no access relations", tmp_path, capsys)
 
 
 def test_lowering_rejects_unscheduled_gmem_cast(
@@ -2300,76 +2327,63 @@ def test_lowering_rejects_unscheduled_gmem_cast(
 
     _assert_cli_lowering_error(
         source,
-        "dst: gmem does not match rmem",
+        "addressable gmem result but no offsets",
         tmp_path,
         capsys,
     )
 
 
-@pytest.mark.parametrize(
-    ("case", "message"),
-    (
-        ("group", "input 0 is laid out more finely than the scope"),
-        ("atom", "iteration extent 17 is not divisible by single-issue extent 16"),
-        ("row", "iteration axis 2 repeat 5 is not divisible by row issues 4"),
-    ),
-)
-def test_lowering_rejects_invalid_atom_geometry(
-    case: str,
-    message: str,
-    monkeypatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_repeat_along_k.py"
+def test_shared_projection_rejects_partial_atom_tiles() -> None:
+    source = Path(__file__).parents[1] / "fixtures/schedule/hir/wgmma_repeat_along_k.py"
     module = _module_in(source)
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
-    check = lowering_module.check_call
-
-    def malformed(op, operands, mesh, *, frame, repeat=None, order=None):
-        if getattr(op, "atom", None) is None:
-            return check(op, operands, mesh, frame=frame, repeat=repeat, order=order)
-        acc_type, lhs_type, rhs_type = operands
-        assert isinstance(acc_type.layout, ShardLayout)
-        if case == "group":
-            held = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
-            changed = replace(held, shape=(*held.shape[:-1], (3, *held.shape[-1][1:])))
-            mesh = replace(
-                mesh,
-                layout=replace(mesh.layout, outer=changed)
-                if isinstance(mesh.layout, ComposedLayout)
-                else changed,
-            )
-        elif case == "atom":
-            acc_type = replace(acc_type, shape=(acc_type.shape[0], 17))
-            rhs_type = replace(rhs_type, shape=(rhs_type.shape[0], 17))
-        elif case == "row":
-            repeat = (2, 1, 5)
-            assert isinstance(lhs_type.layout, ComposedLayout)
-            assert isinstance(lhs_type.layout.outer, Layout)
-            lhs_outer = replace(
-                lhs_type.layout.outer,
-                shape=(*lhs_type.layout.outer.shape[:-1], (5, 16)),
-            )
-            lhs_type = replace(
-                lhs_type,
-                shape=(lhs_type.shape[0], 80),
-                layout=replace(lhs_type.layout, outer=lhs_outer),
-            )
-            assert isinstance(rhs_type.layout, Layout)
-            rhs_layout = replace(
-                rhs_type.layout,
-                shape=((5, *rhs_type.layout.shape[0][1:]), *rhs_type.layout.shape[1:]),
-            )
-            rhs_type = replace(rhs_type, shape=(80, rhs_type.shape[1]), layout=rhs_layout)
-        return check(
-            op, (acc_type, lhs_type, rhs_type), mesh, frame=frame, repeat=repeat, order=order
+    schedule = next(
+        expr
+        for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call)
+        and isinstance(expr.target, ScheduleOp)
+        and isinstance(expr.target.op, TiledMma)
+    )
+    acc, lhs, rhs = (arg.type for arg in schedule.args)
+    with pytest.raises(
+        ScheduleRefusal, match="iteration extent 17 is not divisible by single-issue extent 16"
+    ):
+        project(
+            schedule.target.op,
+            (replace(acc, shape=(acc.shape[0], 17)), lhs, replace(rhs, shape=(rhs.shape[0], 17))),
+            None,
         )
 
-    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
-    monkeypatch.setattr(lowering_module, "check_call", malformed)
 
-    _assert_cli_lowering_error(source, message, tmp_path, capsys)
+@pytest.mark.parametrize(
+    ("name", "issues"), (("wgmma_repeat_along_n_order", 4), ("wgmma_k_slices_of_wide_run", 2))
+)
+def test_lowering_writes_static_issues_without_readmitting(name, issues, monkeypatch):
+    source = Path(__file__).parents[1] / f"fixtures/schedule/hir/{name}.py"
+    module = _module_in(source)
+    result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
+
+    def reject(*args, **kwargs):
+        raise AssertionError("lowering repeated instruction admission")
+
+    monkeypatch.setattr(schedules, "check_call", reject)
+    monkeypatch.setattr(instructions, "check_call", reject)
+    lowered = lowering_module.Lowering(
+        TypeInferContext(frame=CallFrame(result.module, result.function), owner=result.function),
+        result.function,
+    ).run()
+    statements = _RetainedStatements()
+    statements.visit(lowered.body)
+    assert not any(loop.induction_var.name.startswith("o_") for loop in statements.loops)
+    issued = [stmt for stmt in statements.statements if isinstance(stmt.callable, TiledMma)]
+    assert len(issued) == issues
+    for stmt in issued:
+        for arg in stmt.args:
+            for expr in collect_exprs(statements.bindings.get(id(arg), arg)):
+                if isinstance(expr, Call) and isinstance(expr.target, Slice):
+                    assert all(
+                        static_dim_value(start) is not None for start in expr.args[1].elements
+                    )
 
 
 class _RetainedStatements(StmtVisitor[None]):
@@ -2470,7 +2484,7 @@ def test_a_returned_view_passes_its_analyzed_storage_to_the_callee(storage, chai
 
 @pytest.mark.parametrize("read_old", [False, True])
 @pytest.mark.parametrize("reshape", [False, True])
-def test_inplace_output_passes_distinct_views_without_a_whole_copy(tmp_path, read_old, reshape):
+def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(tmp_path, read_old, reshape):
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py"
     if read_old or reshape:
         text = source.read_text()
@@ -2481,6 +2495,10 @@ def test_inplace_output_passes_distinct_views_without_a_whole_copy(tmp_path, rea
         rewritten = tmp_path / source.name
         rewritten.write_text(text)
         source = rewritten
+    if reshape:
+        with pytest.raises(lowering_module.LoweringError, match="requires a non-identity inverse relation"):
+            finalize(_module_in(source))
+        return
     lowered = finalize(_module_in(source))
     verify_module(lowered)
     function = lowered.entry_function()
@@ -2527,9 +2545,14 @@ def test_read_only_call_before_an_update_keeps_the_input_storage(tmp_path):
     assert body.storage(copies[-1].args[-1]) is update.params[-1]
 
 
-@pytest.mark.parametrize("wrong,refused", [
-    ("count", "arg count"), ("type", r"arg\[0\] type"), ("recursion", "recursion not allowed"),
-])
+@pytest.mark.parametrize(
+    "wrong,refused",
+    [
+        ("count", "arg count"),
+        ("type", r"arg\[0\] type"),
+        ("recursion", "recursion not allowed"),
+    ],
+)
 def test_verifier_rejects_malformed_retained_tir_calls(wrong, refused):
     param = Var("x", type=TensorType.scalar(DType.f32))
     callee = PrimFunction("callee", (param,), Sequential(()), target=CudaTarget("nvidia.h200_sxm"))

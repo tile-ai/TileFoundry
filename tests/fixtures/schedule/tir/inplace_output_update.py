@@ -12,8 +12,8 @@ from tilefoundry.target import CudaTarget
 class InplaceOutputUpdate:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def update(out: Tensor[(2, 4), "f32"], x: Tensor[(1, 4), "f32"], out_1: Tensor[(2, 4), "f32"]):
-        with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
-            with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
+        with Mesh((Topology("cta", 1),), layout=(1,), names=("block",)) as cta:
+            with Mesh((Topology("thread", 32),), layout=(32,), names=("lane",)) as scope:
                 value = T.alloc_tensor(tensor_type=Tensor[(1, 4), "f32", (1, 4), "rmem"])
                 value_1 = T.tensor_view(T.ptr_of(x), layout=(1, 4), shape=(1, 4))
                 value_2 = T.tensor_view(T.ptr_of(value), layout=(1, 4), shape=(1, 4))
@@ -29,7 +29,7 @@ class InplaceOutputUpdate:
     # memory traffic=gmem:r16B/w16B@logical,r16B/w16B@total,r16B/w16B@cta,r16B/w16B@thread;rmem:r32B/w16B@logical,r32B/w16B@total,r32B/w16B@cta,r32B/w16B@thread footprint=v2:17:16B;x:16B footprint-precision=exact peak=gmem:48B;rmem:16B persistent=gmem:48B
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def gemm(out: Tensor[(2, 4), "f32"], x: Tensor[(1, 4), "f32"], out_1: Tensor[(2, 4), "f32"]):
-        with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
+        with Mesh((Topology("cta", 1),), layout=(1,), names=("block",)) as cta:
             value = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
             value_1 = T.tensor_view(T.ptr_of(x), layout=(1, 4), shape=(1, 4))
             value_2 = T.tensor_view(T.ptr_of(out_1), layout=(2, 4), shape=(2, 4))

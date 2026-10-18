@@ -216,8 +216,10 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
         raise ScheduleRefusal(f"{op_type.__name__} schedule operands must be tensors", op=op)
     atom = getattr(op, "atom", None)
     if not isinstance(atom, type):
+        admit_fields(op, operand_types, mesh, PatternMatcher(dict(getattr(atom, "bindings", {}))))
+        tiles = project(op, operand_types, mesh, repeat=repeat, order=order)
         bindings, _tiles = check_call(
-            op, operand_types, mesh, frame=frame, repeat=repeat, order=order
+            op, operand_types, mesh, frame=frame, repeat=repeat, order=order, projection=tiles
         )
         return (InstructionMatch(op, tuple(bindings.items())),)
     atom_param = next(param for param in op_type._op_schema.signature if param.name == "atom")
@@ -251,7 +253,8 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
                 for state in held
                 for value in range(1, largest + 1)
                 if all(
-                    type(extent := operand_types[index].shape[axis]) is not int or extent % value == 0
+                    type(extent := operand_types[index].shape[axis]) is not int
+                    or extent % value == 0
                     for index, axis in axes
                 )
                 and (probe := PatternMatcher(state)).match(param.pattern, value)
@@ -265,8 +268,15 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
     for state in states:
         instance = op_type(**{**attributes, "atom": atom(**state)})
         try:
+            tiles = project(instance, operand_types, mesh, repeat=repeat, order=order)
             bindings, _tiles = check_call(
-                instance, operand_types, mesh, frame=frame, repeat=repeat, order=order
+                instance,
+                operand_types,
+                mesh,
+                frame=frame,
+                repeat=repeat,
+                order=order,
+                projection=tiles,
             )
         except ScheduleRefusal as error:
             refusal = refusal or error
@@ -301,6 +311,19 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
                 order=call.target.order,
             )
         else:
+            admit_fields(
+                op,
+                tuple(ctx.type_of(arg) for arg in call.args),
+                ctx.current_mesh,
+                PatternMatcher(dict(getattr(getattr(op, "atom", None), "bindings", {}))),
+            )
+            tiles = project(
+                op,
+                tuple(ctx.type_of(arg) for arg in call.args),
+                ctx.current_mesh,
+                repeat=call.target.repeat,
+                order=call.target.order,
+            )
             check_call(
                 op,
                 tuple(ctx.type_of(arg) for arg in call.args),
@@ -308,6 +331,7 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
                 frame=ctx.frame,
                 repeat=call.target.repeat,
                 order=call.target.order,
+                projection=tiles,
             )
     except ScheduleRefusal as error:
         ctx.error(call, str(error))

@@ -127,7 +127,6 @@ def _a_k_major_sliced_smem_pattern(element_bytes: int, b_operand=False) -> Compo
             0 <= offset,
             offset < w,
         ),
-        issues_per_row=lambda captures: (int(not b_operand), captures[w.name] // k_elements),
     )
 
 

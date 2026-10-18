@@ -14,35 +14,63 @@ from tilefoundry.target import CudaTarget
 def embed(
     table: ConstTensor[(248320, 5120), "bf16"], token_ids: Tensor[(1024,), "i64"], out: Tensor[(1024, 5, 256, 4), "bf16"]
 ):
-    with Mesh((Topology("cta", 256),), layout=(256,), names=("d0",)) as cta:
-        with Mesh((Topology("thread", 256),), layout=(256,), names=("d0",)) as scope:
-            T.fill(out, 0.0)
+    with Mesh((Topology("cta", 256),), layout=(256,), names=("b",)) as cta:
+        with Mesh((Topology("thread", 256),), layout=(256,), names=("t",)) as scope:
+            value = T.tensor_view(
+                T.ptr_of(out), layout=(1024, 5, 256, 4), shape=(1024, 5, 256, 4)
+            )
+            T.fill(value, 0.0)
             for i in range(0, 4, 1):
-                value = T.alloc_tensor(
-                    tensor_type=Tensor[
-                        (1, 5, 256, 4), "bf16", (1, 5, 256 @ scope.d0, 4), "rmem"
-                    ]
+                value_1 = T.alloc_tensor(
+                    tensor_type=Tensor[(1, 5, 256, 4), "bf16", (1, 5, 256 @ scope.t, 4), "rmem"]
                 )
-                value_1 = T.tensor_view(
-                    T.ptr_of(token_ids[(cta.d0 * 4) + i:(cta.d0 * 4) + i + 1]),
-                    layout=(),
-                    shape=(),
+                value_2 = T.tensor_view(T.ptr_of(token_ids), layout=(1024,), shape=(1024,))
+                value_3 = T.tensor_view(
+                    T.ptr_of(value_2[(cta.b * 4) + i:(cta.b * 4) + i + 1]),
+                    layout=((1,), (0,)),
+                    shape=(1,),
                 )
-                value_2 = T.tensor_view(
-                    T.ptr_of(table[value_1:value_1 + 1, 0:0 + 1]),
+                value_4 = T.tensor_view(T.ptr_of(value_3), layout=(), shape=())
+                value_5 = T.tensor_view(
+                    T.ptr_of(table), layout=(248320, 5120), shape=(248320, 5120)
+                )
+                value_6 = T.tensor_view(
+                    T.ptr_of(value_5), layout=(248320, 5, 256, 4), shape=(248320, 5, 256, 4)
+                )
+                value_7 = T.tensor_view(
+                    T.ptr_of(value_6), layout=(248320, 5, 256, 4), shape=(248320, 5, 256, 4)
+                )
+                value_8 = T.tensor_view(
+                    T.ptr_of(value_7[value_4:value_4 + 1, 0:0 + 1, 0:0 + 1, 0:0 + 1]),
                     layout=((1, 5, 256, 4), (0, 1024, 4, 1)),
                     shape=(1, 5, 256, 4),
                 )
-                value_3 = T.tensor_view(
-                    T.ptr_of(value), layout=(1, 5, 256 @ scope.d0, 4), shape=(1, 5, 256, 4)
+                value_9 = T.tensor_view(
+                    T.ptr_of(value_1), layout=(1, 5, 256 @ scope.t, 4), shape=(1, 5, 256, 4)
                 )
-                T.copy(value_2, value_3)
-                value_4 = T.tensor_view(
+                dst_view = T.tensor_view(
+                    T.ptr_of(value_9[0:0 + 1, 0:0 + 5, 0:0 + 256, 0:0 + 4]),
+                    layout=(1, 5, 256 @ scope.t, 4),
+                    shape=(1, 5, 256, 4),
+                )
+                T.copy(value_8, dst_view)
+                value_view = T.tensor_view(
+                    T.ptr_of(value_9[0:0 + 1, 0:0 + 5, 0:0 + 256, 0:0 + 4]),
+                    layout=(1, 5, 256 @ scope.t, 4),
+                    shape=(1, 5, 256, 4),
+                )
+                value_10 = T.tensor_view(
                     T.ptr_of(out), layout=(1024, 5, 256, 4), shape=(1024, 5, 256, 4)
                 )
+                value_11 = T.tensor_view(
+                    T.ptr_of(value_10), layout=(1024, 5, 256, 4), shape=(1024, 5, 256, 4)
+                )
+                value_12 = T.tensor_view(
+                    T.ptr_of(value_11), layout=(1024, 5, 256, 4), shape=(1024, 5, 256, 4)
+                )
                 window = T.tensor_view(
-                    T.ptr_of(value_4[(cta.d0 * 4) + i:(cta.d0 * 4) + i + 1, 0:0 + 5, 0:0 + 256, 0:0 + 4]),
+                    T.ptr_of(value_12[(cta.b * 4) + i:(cta.b * 4) + i + 1, 0:0 + 5, 0:0 + 256, 0:0 + 4]),
                     layout=(1, 5, 256, 4),
                     shape=(1, 5, 256, 4),
                 )
-                T.copy(value_3, window)
+                T.copy(value_view, window)

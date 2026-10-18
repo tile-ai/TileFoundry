@@ -108,13 +108,11 @@ exactly where, and the only place where, the lowered code changes.
 
 ## Current regeneration status
 
-69 of 75 jobs completed. D70 comparison preserved all 35 groups; 31 complete groups were regenerated. The byte-for-byte o_proj/out_proj 8192 pair matched. The following groups retain their committed representative: **not regenerated: upstream timeout**.
+All **75 of 75** jobs completed, and all **35 groups** were regenerated.
+Every generated file passed TIR verification (`verify_module`). All 75-to-35
+normalized comparisons match the table above. The o_proj/out_proj 8192 pair and
+both projection-tail/down-tail 1024 pairs remain byte for byte identical.
 
-| Representative | Status |
-|---|---|
-| `down_pieces_1024.py` | not regenerated: upstream timeout |
-| `gate_up_pieces_1024.py` | not regenerated: upstream timeout |
-| `qkv_pieces_8192.py` | not regenerated: upstream timeout |
-| `qkv_whole_4096.py` | not regenerated: upstream timeout |
-
-Blocked jobs: `gate_up_pieces_1024.py`, `o_proj_pieces_1024.py`, `out_proj_pieces_1024.py`, `qkv_pieces_8192.py`, `qkv_whole_4096.py`, `qkv_whole_8192.py`.
+The two QKV whole jobs at 4096 and 8192 completed successfully after about
+42 minutes each. They retain native exact ISL counting; these cases remain
+expensive rather than substituting an approximate count.

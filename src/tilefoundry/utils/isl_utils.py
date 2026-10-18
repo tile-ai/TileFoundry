@@ -112,16 +112,33 @@ def param_points(image: "isl.set") -> tuple["isl.set", ...]:
     return tuple(points)
 
 
-def cardinality(image: "isl.set") -> int | None:
-    """Return a finite point count, maximizing over a small parameter box.
+def cardinality(image: "isl.set", *, union=()) -> int | None:
+    """Count finite points, maximizing over the remaining parameter box.
 
-    A box is counted by multiplying its bounded axis lengths, at a cost set by
-    rank alone; anything else falls back to ISL's count. Retained parameters
-    already fixed to one integer point are counted directly. With bounded free
-    parameters, every feasible integer point in a box of at most 4096 points
-    is counted and the true maximum is returned. A larger or unbounded
-    parameter box has no answer.
+    Boxes multiply bounded axis lengths before falling back to ISL's count.
+    Named ``union`` parameters are fixed before projection, then their fibers
+    are unioned and coalesced; oversized or unbounded boxes use projection.
+    Other free parameters maximize over at most 4096 feasible integer points;
+    a larger or unbounded parameter box has no answer.
     """
+    if union:
+        context = image.params()
+        for axis in reversed(range(context.dim(isl.dim_type.PARAM))):
+            if context.get_dim_name(isl.dim_type.PARAM, axis) not in union:
+                context = context.project_out(isl.dim_type.PARAM, axis, 1)
+        try:
+            points = param_points(context)
+        except ParameterBoxError:
+            points = (None,)
+        merged = None
+        for point in points:
+            piece = image if point is None else image.intersect_params(point)
+            for name in union:
+                axis = piece.find_dim_by_name(isl.dim_type.PARAM, name)
+                if axis >= 0:
+                    piece = piece.project_out(isl.dim_type.PARAM, axis, 1)
+            merged = piece if merged is None else merged.union(piece)
+        return 0 if merged is None else cardinality(merged.coalesce())
     if not image.dim(isl.dim_type.PARAM):
         return _count(image)
     context = image.params()

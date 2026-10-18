@@ -231,7 +231,6 @@ class MemoryMetadata(IRMetadata):
     footprint: Footprint | None = None
     buffer_bytes: int | None = None
     offsets: tuple[int, ...] = ()
-    alias: BufferAlias | None = None
     requires: ClassVar[tuple[type, ...]] = (BindingValuation, LoopNestValuation)
 
     def resolve(self, ctx: ValuationProvider) -> MemoryMetadata:

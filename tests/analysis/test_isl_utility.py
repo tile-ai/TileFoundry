@@ -316,12 +316,37 @@ def test_round_trip_lossless_for_every_dim_kind():
     assert recovered == dims
 
 
-@pytest.mark.parametrize("source", (
-    "{ [d] }", "{ [d] : d >= 0 }", "[n] -> { [i] : i >= 0 and 0 <= n < 3 }",
-))
+@pytest.mark.parametrize(
+    "source",
+    (
+        "{ [d] }",
+        "{ [d] : d >= 0 }",
+        "[n] -> { [i] : i >= 0 and 0 <= n < 3 }",
+    ),
+)
 def test_cardinality_of_an_unbounded_set_is_unknown(source):
     assert cardinality(isl.set(source)) is None
 
 
 def test_cardinality_of_a_bounded_parameter_box_stays_exact():
     assert cardinality(isl.set("[n] -> { [i] : 0 <= i < n and 0 <= n < 3 }")) == 2
+
+
+def test_cardinality_unions_selected_parameters_before_maximizing():
+    reached = isl.set("[m, n] -> { [i] : 0 <= m < 3 and 0 <= n <= 2 and 2m <= i < 2m+n }")
+    assert cardinality(reached) == 2
+    assert cardinality(reached, union=("m",)) == 6
+    assert cardinality(reached, union=("m", "n")) == 6
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    (
+        ("[m] -> { [i] : 0 <= m < 5000 and i = m }", 5000),
+        ("[m] -> { [i] : i = 0 }", 1),
+        ("[m] -> { [i] : i = m }", None),
+        ("[m] -> { [i] : false }", 0),
+    ),
+)
+def test_cardinality_union_fallback_and_empty_context(source, expected):
+    assert cardinality(isl.set(source), union=("m",)) == expected

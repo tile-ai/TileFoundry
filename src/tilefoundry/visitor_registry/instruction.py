@@ -12,21 +12,19 @@ from tilefoundry.ir.pattern import PatternMatcher, ShardLayoutPattern, TensorPat
 from tilefoundry.ir.pattern.utils import (
     declared_execution_mesh,
     declared_shape,
-    matched_row_issues,
     selected_pattern,
 )
 from tilefoundry.ir.types import TensorType, UnitType
-from tilefoundry.ir.types.layout import flatten, resolve_layout
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
+from tilefoundry.ir.types.layout import resolve_layout
 from tilefoundry.ir.types.mesh import separate
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
-    Split,
     shard_layout_of,
 )
 from tilefoundry.ir.types.utils import (
     _participant_frame,
+    local_type_of,
     participant_layout,
     strip_broadcast_layout,
     tile_inner_type,
@@ -107,8 +105,7 @@ class Projection:
     order: tuple
     shape: tuple
     issued: tuple = ()
-    parallel: tuple = ()
-    rows: tuple = ()
+    bind: tuple = ()
 
 
 def call_params(op, count):
@@ -255,44 +252,27 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
     inner_types = tuple(inner_types)
     if not fragments:
         return Projection(params, writes, patterns, inner_types, repeat, order, single_shape)
-    parallel = [1] * len(repeat)
-    if fragments:
-        for type_, boundary in zip(whole_types, single[: len(params)], strict=True):
-            shard = shard_layout_of(type_.layout)
-            if shard is None:
-                continue
-            shard = participant_layout(shard, participant)
-            physical = flatten(shard.mesh.layout)
-            _frame, dropped = _participant_frame(shard.mesh, participant)
-            corresponding = layout_correspondence(shard.layout.shape, type_.shape)
-            tensor_axes = corresponding.tensor_axes()
-            axes = projected_axes(boundary)
-            shares = [1] * len(repeat)
-            for mesh_axis in range(dropped):
-                count = physical.shape[mesh_axis]
-                attr = shard.attrs[mesh_axis]
-                if count == 1 or not isinstance(attr, Split):
-                    continue
-                axis = axes[tensor_axes[attr.axis]]
-                if axis is None or repeat[axis] % count:
+    serial = list(repeat)
+    for whole, inner, boundary in zip(whole_types, inner_types, single[: len(params)], strict=True):
+        local, issue = local_type_of(whole), local_type_of(inner)
+        for size, tile, axis in zip(
+            local.shape, issue.shape, projected_axes(boundary), strict=True
+        ):
+            if axis is not None:
+                if tile < 1 or size < tile or size % tile:
                     raise ScheduleRefusal(
-                        f"outer mesh mode {mesh_axis} of extent {count} does not divide its logical repeat",
+                        f"local extent {size} is not divisible by single-issue extent {tile}",
                         path=bindings,
                         op=op,
                     )
-                shares[axis] *= count
-            for axis, count in enumerate(shares):
-                if repeat[axis] % count:
-                    raise ScheduleRefusal(
-                        f"outer mesh extent {count} does not divide logical repeat {repeat[axis]}",
-                        path=bindings,
-                        op=op,
-                    )
-                parallel[axis] = max(parallel[axis], count)
+                serial[axis] = min(serial[axis], size // tile)
+    if any(count % local for count, local in zip(repeat, serial, strict=True)):
+        raise ScheduleRefusal("local issue counts do not divide repeat", path=bindings, op=op)
+    bind = tuple(count // local for count, local in zip(repeat, serial, strict=True))
     issued = []
     for type_, pattern, boundary in zip(whole_types, patterns, single[: len(params)], strict=True):
         axes = projected_axes(boundary)
-        counts = tuple(1 if axis is None else repeat[axis] // parallel[axis] for axis in axes)
+        counts = tuple(1 if axis is None else repeat[axis] // bind[axis] for axis in axes)
         shape = tuple(extent // count for extent, count in zip(type_.shape, counts, strict=True))
         attrs = (
             pattern.layout.attrs
@@ -321,7 +301,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
         order,
         single_shape,
         tuple(issued),
-        tuple(parallel),
+        bind,
     )
 
 
@@ -366,7 +346,7 @@ def admit_fields(op, operands, mesh, matcher):
             raise _pattern_refusal(matcher, op, param.name)
 
 
-def check_call(op, operands, mesh, *, frame, repeat=None, order=None):
+def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection=None):
     """Match whole fields, project atom tiles, then check one closed declaration.
 
     Operands may be types for candidate admission or typed expressions for
@@ -397,7 +377,11 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None):
     matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
     admit_fields(op, whole, mesh, matcher)
     try:
-        tiles = project(op, whole, mesh, bindings=matcher.bindings, repeat=repeat, order=order)
+        tiles = (
+            projection
+            if projection is not None
+            else project(op, whole, mesh, bindings=matcher.bindings, repeat=repeat, order=order)
+        )
     except ScheduleRefusal:
         raise
     except ValueError as error:
@@ -438,25 +422,4 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None):
             handler(call, ctx)
         except VerifyError as error:
             raise ScheduleRefusal(str(error), path=matcher.bindings, op=op) from error
-    if atom is not None:
-        boundaries = operand_relations(op, tiles.operands)
-        rows = tuple(
-            None
-            if (row := matched_row_issues(pattern, matcher)) is None
-            else (projected_axes(boundary)[row[0]], row[1])
-            for pattern, boundary in zip(tiles.patterns, boundaries, strict=False)
-        )
-        for row in rows:
-            if row is None:
-                continue
-            axis, width = row
-            serial = tiles.repeat[axis] // tiles.parallel[axis]
-            beside = min(width, serial)
-            if serial % beside:
-                raise ScheduleRefusal(
-                    f"iteration axis {axis} repeat {serial} is not divisible by row issues {beside}",
-                    path=matcher.bindings,
-                    op=op,
-                )
-        tiles = replace(tiles, rows=rows)
     return dict(matcher.bindings), tiles

@@ -1,0 +1,981 @@
+[
+  {
+    "function": "f0:gemm",
+    "leaves": [
+      {
+        "leaf": "f0:gemm/q[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/kv[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/idx[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 4>[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/idx_2[0]",
+        "present": true,
+        "partner": "f0:gemm/idx[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/kv_2[0]",
+        "present": true,
+        "partner": "f0:gemm/kv[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/q_2[0]",
+        "present": true,
+        "partner": "f0:gemm/q[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 8>[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/idx_3[0]",
+        "present": true,
+        "partner": "f0:gemm/idx[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/query[0]",
+        "present": true,
+        "partner": "f0:gemm/v1:39[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/table[0]",
+        "present": true,
+        "partner": "f0:gemm/v2:40[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v1:39[0]",
+        "present": true,
+        "partner": "f0:gemm/v0:39[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v0:39[0]",
+        "present": true,
+        "partner": "f0:gemm/q_2[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v2:40[0]",
+        "present": true,
+        "partner": "f0:gemm/kv_2[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 15>[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/idx_4[0]",
+        "present": true,
+        "partner": "f0:gemm/idx[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/ks[0]",
+        "present": true,
+        "partner": "f0:gemm/v17:42[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/output[0]",
+        "present": true,
+        "partner": "f0:gemm/v18:76[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/qs[0]",
+        "present": true,
+        "partner": "f0:gemm/v19:42[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v17:42[0]",
+        "present": true,
+        "partner": "f0:gemm/<value 21>[1]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 21>[0]",
+        "present": true,
+        "partner": "f0:gemm/<value 98>[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 21>[1]",
+        "present": true,
+        "partner": "f0:gemm/<value 98>[1]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/idx_5[0]",
+        "present": true,
+        "partner": "f0:gemm/idx[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/query_2[0]",
+        "present": true,
+        "partner": "f0:gemm/v1:39[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/table_2[0]",
+        "present": true,
+        "partner": "f0:gemm/v2:40[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v15:45[0]",
+        "present": true,
+        "partner": "f0:gemm/<value 26>[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 26>[0]",
+        "present": true,
+        "partner": "f0:gemm/qs_2[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 26>[1]",
+        "present": true,
+        "partner": "f0:gemm/ks_2[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/qs_2[0]",
+        "present": true,
+        "partner": "f0:gemm/v3:43[0]",
+        "kind": [
+          "CARRY_INIT",
+          "CARRY_INIT"
+        ],
+        "tied": [
+          {
+            "kind": "CARRY_INIT",
+            "partner": "f0:gemm/v3:43[0]",
+            "value": true
+          }
+        ],
+        "offsets": [
+          8192
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/ks_2[0]",
+        "present": true,
+        "partner": "f0:gemm/v4:44[0]",
+        "kind": [
+          "CARRY_INIT",
+          "CARRY_INIT"
+        ],
+        "tied": [
+          {
+            "kind": "CARRY_INIT",
+            "partner": "f0:gemm/v4:44[0]",
+            "value": true
+          }
+        ],
+        "offsets": [
+          0
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/idx_6[0]",
+        "present": true,
+        "partner": "f0:gemm/idx[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/query_3[0]",
+        "present": true,
+        "partner": "f0:gemm/v1:39[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/table_3[0]",
+        "present": true,
+        "partner": "f0:gemm/v2:40[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v3:43[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          8192
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v4:44[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          0
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v13:47[0]",
+        "present": true,
+        "partner": "f0:gemm/<value 36>[0]",
+        "kind": [
+          "FORWARD",
+          "CARRY_YIELD"
+        ],
+        "tied": [
+          {
+            "kind": "CARRY_YIELD",
+            "partner": "f0:gemm/ks_2[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 36>[0]",
+        "present": true,
+        "partner": "f0:gemm/<value 93>[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 36>[1]",
+        "present": true,
+        "partner": "f0:gemm/<value 93>[1]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/ks_3[0]",
+        "present": true,
+        "partner": "f0:gemm/ks_2[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/qs_3[0]",
+        "present": true,
+        "partner": "f0:gemm/qs_2[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/query_4[0]",
+        "present": true,
+        "partner": "f0:gemm/v1:39[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/row_index[0]",
+        "present": true,
+        "partner": "f0:gemm/v5:46[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/table_4[0]",
+        "present": true,
+        "partner": "f0:gemm/v2:40[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v5:46[0]",
+        "present": true,
+        "partner": "f0:gemm/idx_6[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v8:69[0]",
+        "present": true,
+        "partner": "f0:gemm/ks_2[0]",
+        "kind": [
+          "CARRY_YIELD",
+          "INSERT_SLICE"
+        ],
+        "tied": [
+          {
+            "kind": "INSERT_SLICE",
+            "partner": "f0:gemm/ks_3[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v7:71[0]",
+        "present": true,
+        "partner": "f0:gemm/v6:62[0]",
+        "kind": [
+          "VIEW",
+          "WINDOW"
+        ],
+        "tied": [
+          {
+            "kind": "WINDOW",
+            "partner": "f0:gemm/v8:69[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v6:62[0]",
+        "present": true,
+        "partner": "f0:gemm/v8:69[0]",
+        "kind": [
+          "WINDOW"
+        ],
+        "tied": [],
+        "offsets": [
+          0
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v12:55[0]",
+        "present": true,
+        "partner": "f0:gemm/qs_2[0]",
+        "kind": [
+          "CARRY_YIELD",
+          "INSERT_SLICE"
+        ],
+        "tied": [
+          {
+            "kind": "INSERT_SLICE",
+            "partner": "f0:gemm/qs_3[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v11:57[0]",
+        "present": true,
+        "partner": "f0:gemm/v10:48[0]",
+        "kind": [
+          "VIEW",
+          "WINDOW"
+        ],
+        "tied": [
+          {
+            "kind": "WINDOW",
+            "partner": "f0:gemm/v12:55[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v9:58[0]",
+        "present": true,
+        "partner": "f0:gemm/query_4[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v10:48[0]",
+        "present": true,
+        "partner": "f0:gemm/v12:55[0]",
+        "kind": [
+          "WINDOW"
+        ],
+        "tied": [],
+        "offsets": [
+          8192
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v14:47[0]",
+        "present": true,
+        "partner": "f0:gemm/<value 36>[1]",
+        "kind": [
+          "FORWARD",
+          "CARRY_YIELD"
+        ],
+        "tied": [
+          {
+            "kind": "CARRY_YIELD",
+            "partner": "f0:gemm/qs_2[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v16:45[0]",
+        "present": true,
+        "partner": "f0:gemm/<value 26>[1]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v18:76[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [],
+        "tied": [],
+        "offsets": [
+          66048
+        ],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v19:42[0]",
+        "present": true,
+        "partner": "f0:gemm/<value 21>[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v45:151[0]",
+        "present": true,
+        "partner": "output[0]",
+        "kind": [
+          "INSERT_SLICE",
+          "INSERT_SLICE"
+        ],
+        "tied": [
+          {
+            "kind": "INSERT_SLICE",
+            "partner": "f0:gemm/output[0]",
+            "value": true
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v44:150[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [
+          {
+            "kind": "WINDOW",
+            "partner": "f0:gemm/v45:151[0]",
+            "value": false
+          }
+        ],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v43:139[0]",
+        "present": true,
+        "partner": "f0:gemm/v20:133[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v20:133[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v41:128[0]",
+        "present": true,
+        "partner": "f0:gemm/v40:117[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v39:116[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v38:116[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v36:114[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v35:114[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v33:112[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v28:111[0]",
+        "present": true,
+        "partner": "f0:gemm/v27:110[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v27:110[0]",
+        "present": true,
+        "partner": "f0:gemm/v26:109[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v26:109[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v24:109[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v23:108[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v22:107[0]",
+        "present": true,
+        "partner": "f0:gemm/v21:100[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v21:100[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v25:109[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v32:88[0]",
+        "present": true,
+        "partner": "f0:gemm/v29:82[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v29:82[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v30:80[0]",
+        "present": true,
+        "partner": "f0:gemm/qs[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v31:81[0]",
+        "present": true,
+        "partner": "f0:gemm/ks[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v34:113[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v37:115[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v40:117[0]",
+        "present": true,
+        "partner": null,
+        "kind": [],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/v42:132[0]",
+        "present": true,
+        "partner": "f0:gemm/ks[0]",
+        "kind": [
+          "VIEW"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 93>[0]",
+        "present": true,
+        "partner": "f0:gemm/v8:69[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 93>[1]",
+        "present": true,
+        "partner": "f0:gemm/v12:55[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 98>[0]",
+        "present": true,
+        "partner": "f0:gemm/v15:45[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      },
+      {
+        "leaf": "f0:gemm/<value 98>[1]",
+        "present": true,
+        "partner": "f0:gemm/v16:45[0]",
+        "kind": [
+          "FORWARD"
+        ],
+        "tied": [],
+        "offsets": [],
+        "refusal": null
+      }
+    ]
+  }
+]

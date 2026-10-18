@@ -136,20 +136,15 @@ open-shape path is not implemented yet, so every repeat count MUST currently be
 one and a larger count is rejected as `transfer tiling is not yet supported`.
 
 `order` is a permutation of the iteration dimension positions and defaults to
-the identity permutation. `order` controls lowering loop nesting; it does not
-change operand or result types. For an atom instruction, lowering emits one
-`For(o_<axis>)` per iteration dimension inside each physical issue group, in
-`order` from outermost to innermost. It emits the loop even when its trip count
-is one. A swizzled row may issue adjacent atoms as straight-line statements in
-one loop iteration, but it does not remove that axis's loop. Transfer
-instructions emit no such atom loops. Supporting non-identity `order` here is
-an intentional extension beyond the AtomSched reference, which rejects it.
-
-Straight-line row issue is a property of the matched operand layout
-alternative. An alternative that packs adjacent issues MUST declare their
-tensor axis and count; an alternative without that property contributes one
-issue. Lowering MUST consume this declaration and MUST NOT infer the count from
-layout strides.
+the identity permutation. It does not change operand or result types. For an
+atom instruction, lowering writes each unit's serial issues in `order`, from
+outermost to innermost, with static integer operand starts. The operand's local
+ShardLayout type determines how many issues belong to each unit; the shared
+projection records the corresponding `bind` counts. Lowering emits no
+`For(o_<axis>)` loops and does not group issues by swizzle row. Existing view
+inference determines the swizzle phase at each static start. Transfer
+instructions issue once. Supporting non-identity `order` here is an intentional
+extension beyond the AtomSched reference, which rejects it.
 
 For each operand layout, non-unit repeat counts name leading CuTe tile modes;
 the remaining inner modes are the instruction fragment matched against its
