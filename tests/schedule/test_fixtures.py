@@ -103,7 +103,7 @@ from tilefoundry.ir.types import (
     Topology,
 )
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.layout import flatten, resolve_layout
+from tilefoundry.ir.types.layout import apply, flatten, resolve_layout
 from tilefoundry.ir.types.layout_algebra import cosize
 from tilefoundry.ir.types.mesh import levels, make_mesh, starts
 from tilefoundry.ir.types.utils import static_dim_value
@@ -145,6 +145,7 @@ FINALIZE_REFUSED = {
     "duplicate_output_storage": "return leaf (2,) shares storage with another output",
 }
 CANDIDATES_REFUSED = {
+    "smem_padded_stages": "source has no unscheduled candidate site",
     "zero_trip_insert_slice": "source has no unscheduled candidate site",
     "strided_return_window": "source has no unscheduled candidate site",
     "inplace_output_update": "source has no unscheduled candidate site",
@@ -260,13 +261,15 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "smem_padded_stages": 96,
+    "view_visit_memo": 0,
     "persistent_tile_union_count": 163_840,
-    "wgmma_b_mn_major_window_unit_mode": 10_240,
+    "wgmma_b_mn_major_window_unit_mode": 34_816,
     "zero_trip_insert_slice": 0,
     "strided_return_window": 0,
     "inplace_output_update": 0,
-    "wgmma_b_mn_major_grouped_n64": 6144,
-    "wgmma_b_mn_major_wide_lbo": 10240,
+    "wgmma_b_mn_major_grouped_n64": 18432,
+    "wgmma_b_mn_major_wide_lbo": 16384,
     "register_index_window": 0,
     "register_index_window_offset": 0,
     "register_full_like": 0,
@@ -314,6 +317,11 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "smem_padded_stages": {},
+    "view_visit_memo": {
+        "thread@0:1#0": _RmemExpectation(32, "one eight-element f32 row"),
+        "cta@0:1#0": _RmemExpectation(32, "parent envelope of the output row"),
+    },
     "zero_trip_insert_slice": {
         "thread@0:1#0": _RmemExpectation(16, "one four-element f32 update row"),
         "cta@0:1#0": _RmemExpectation(16, "parent envelope of the update row"),
@@ -1795,7 +1803,7 @@ def test_schedule_candidates_reports_every_plain_site(
 
 @pytest.mark.parametrize(
     "source",
-    tuple(path for path in HIR if path.stem != "wgmma_b_mn_major_window_unit_mode"),
+    tuple(path for path in HIR if path.stem not in ("wgmma_b_mn_major_window_unit_mode", "view_visit_memo")),
     ids=lambda path: path.stem,
 )
 def test_schedule_candidates_omit_selected_schedule_calls(
@@ -1856,13 +1864,16 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
     views: list[tuple[Var, int, int]] = []
     defined: dict[int, int] = {}
     last: dict[int, int] = {}
+    aliases: dict[int, set[int]] = {}
     clock = 0
 
     def use(expressions) -> None:
         for expression in expressions:
             for value in collect_exprs(expression):
-                if isinstance(value, Var) and id(value) in defined:
-                    last[id(value)] = clock
+                if isinstance(value, Var):
+                    for key in aliases.get(id(value), {id(value)}):
+                        if key in defined:
+                            last[key] = clock
 
     def walk(statement) -> None:
         nonlocal clock
@@ -1875,6 +1886,11 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
         elif isinstance(statement, LetStmt):
             use((statement.value,))
             defined[id(statement.var)] = last[id(statement.var)] = clock
+            aliases[id(statement.var)] = {
+                key
+                for value in collect_exprs(statement.value) if isinstance(value, Var)
+                for key in aliases.get(id(value), {id(value)})
+            } or {id(statement.var)}
             fields = (
                 statement.value.elements
                 if isinstance(statement.value, Tuple)
@@ -2414,6 +2430,53 @@ class _RetainedStatements(StmtVisitor[None]):
         self.statements.append(stmt)
         if isinstance(stmt.callable, (PrimFunction, ModuleList, Call)):
             self.calls.append(stmt)
+
+
+def test_authored_views_survive_region_forwarding_without_extra_wrappers():
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "view_visit_memo.py"
+    lowered = finalize(_module_in(source))
+    verify_module(lowered)
+    function = lowered.entry_function()
+    visitor = _RetainedStatements()
+    visitor.visit(function.body)
+    views = [value for value in visitor.bindings.values()
+             if isinstance(value, Call) and isinstance(value.target, TensorView)]
+    assert [view.type.shape for view in views] == [(1,), (), (16, 8), (1, 8)]
+    identity = views[2]
+    assert isinstance(identity.args[0].target, PtrOf)
+    assert identity.args[0].args[0] is function.params[0]
+    assert len(visitor.statements) == 1
+    assert isinstance(visitor.statements[0].callable, Copy)
+    assert visitor.statements[0].args[1] is function.params[-1]
+
+
+@pytest.mark.parametrize("name", (
+    "wgmma_b_mn_major_grouped_n64", "wgmma_b_mn_major_window_unit_mode",
+    "wgmma_b_mn_major_wide_lbo", "smem_padded_stages",
+))
+def test_smem_slots_reserve_all_physical_bytes(name):
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / f"{name}.py"
+    function = finalize(_module_in(source)).entry_function()
+    visitor = _RetainedStatements()
+    visitor.visit(function.body)
+    slots = []
+    for value in visitor.bindings.values():
+        fields = value.elements if isinstance(value, Tuple) else (value,)
+        for slot in fields:
+            if (isinstance(slot, Call) and isinstance(slot.target, TensorView)
+                    and slot.target.storage is StorageKind.SMEM and isinstance(slot.args[0], Constant)):
+                held = slot.type
+                offset = slot.args[0].value
+                assert offset % 16 == 0
+                slots.append({
+                    offset + (apply(held.layout, index) * held.dtype.bit_width + bit) // 8
+                    for index in range(prod(flatten(held.layout).shape))
+                    for bit in range(held.dtype.bit_width)
+                })
+    assert len(slots) == 2
+    assert slots[0].isdisjoint(slots[1])
+    peak = get_metadata(function, RegionMemoryMetadata).peak_for("smem").peak_bytes
+    assert all(min(slot) >= 0 and max(slot) < peak for slot in slots)
 
 
 def test_lowering_retains_all_four_instance_and_local_call_shapes():

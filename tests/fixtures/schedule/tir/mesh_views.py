@@ -36,26 +36,20 @@ def gemm(x: Tensor[(4, 8), "f32"], out: Tensor[(8, 4), "f32"]):
             ]
         )
         with Mesh((Topology("thread", 32),), layout=(4, 8), names=("row", "col")) as scope:
-            value_1 = T.tensor_view(T.ptr_of(x), layout=(4, 8), shape=(4, 8))
-            value_2 = T.tensor_view(
-                T.ptr_of(value), layout=((4 @ scope.row, 8 @ scope.col), (8, 1)), shape=(4, 8)
-            )
             dst_view = T.tensor_view(
-                T.ptr_of(value_2[0:0 + 4, 0:0 + 8]),
+                T.ptr_of(value[0:0 + 4, 0:0 + 8]),
                 layout=((4 @ scope.row, 8 @ scope.col), (8, 1)),
                 shape=(4, 8),
             )
-            T.copy(value_1, dst_view)
-            value_3 = T.tensor_view(
-                T.ptr_of(value_2), layout=((4 @ scope.row, 8 @ scope.col), (8, 1)), shape=(4, 8)
+            T.copy(x, dst_view)
+            value_1 = T.tensor_view(
+                T.ptr_of(value), layout=((4 @ scope.row, 8 @ scope.col), (8, 1)), shape=(4, 8)
             )
-            value_4 = T.tensor_view(
-                T.ptr_of(value_3), layout=((4 @ scope.row, 8 @ scope.col), (8, 1)), shape=(4, 8)
+            value_2 = T.tensor_view(
+                T.ptr_of(value_1), layout=((4 @ scope.row, 8 @ scope.col), (8, 1)), shape=(4, 8)
             )
             tile = T.tensor_view(
-                T.ptr_of(value_4[0:0 + 4, 0:0 + 8]),
-                layout=((8 @ scope.col, 4 @ scope.row), (1, 8)),
-                shape=(8, 4),
+                T.ptr_of(value_2), layout=((8 @ scope.col, 4 @ scope.row), (1, 8)), shape=(8, 4)
             )
             T.copy(tile, transposed)
         moved = T.alloc_tensor(
@@ -76,81 +70,35 @@ def gemm(x: Tensor[(4, 8), "f32"], out: Tensor[(8, 4), "f32"]):
                     (4, 8), "f32", ((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)), "rmem"
                 ]
             )
-            value_5 = T.tensor_view(
+            value_3 = T.tensor_view(
                 T.ptr_of(value),
                 layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
                 shape=(4, 8),
             )
-            value_6 = T.tensor_view(
-                T.ptr_of(value_5),
-                layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
-                shape=(4, 8),
-            )
-            value_7 = T.tensor_view(
-                T.ptr_of(value_6),
-                layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
-                shape=(4, 8),
-            )
-            value_8 = T.tensor_view(
-                T.ptr_of(value_7),
-                layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
-                shape=(4, 8),
-            )
-            value_9 = T.tensor_view(
-                T.ptr_of(value_8),
-                layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
-                shape=(4, 8),
-            )
-            value_10 = T.tensor_view(
-                T.ptr_of(value_9),
-                layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
-                shape=(4, 8),
-            )
             lhs_view = T.tensor_view(
-                T.ptr_of(value_10[0:0 + 4, 0:0 + 8]),
+                T.ptr_of(value_3[0:0 + 4, 0:0 + 8]),
                 layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
                 shape=(4, 8),
             )
-            value_11 = T.tensor_view(
-                T.ptr_of(value_6),
-                layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
-                shape=(4, 8),
-            )
-            value_12 = T.tensor_view(
-                T.ptr_of(value_11),
-                layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
-                shape=(4, 8),
-            )
-            value_13 = T.tensor_view(
-                T.ptr_of(value_12),
-                layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
-                shape=(4, 8),
-            )
-            value_14 = T.tensor_view(
-                T.ptr_of(value_13),
-                layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
-                shape=(4, 8),
-            )
-            value_15 = T.tensor_view(
-                T.ptr_of(value_14),
+            value_4 = T.tensor_view(
+                T.ptr_of(value_3),
                 layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
                 shape=(4, 8),
             )
             rhs_view = T.tensor_view(
-                T.ptr_of(value_15[0:0 + 4, 0:0 + 8]),
+                T.ptr_of(value_4[0:0 + 4, 0:0 + 8]),
                 layout=((4 @ scope_1.row, 8 @ scope_1.col), (8, 1)),
                 shape=(4, 8),
             )
             T.binary(lhs_view, rhs_view, mixed, kind=BinaryKind.ADD)
             tile_1 = T.tensor_view(
-                T.ptr_of(mixed[0:0 + 4, 0:0 + 8]),
+                T.ptr_of(mixed),
                 layout=((8 @ scope_1.col, 4 @ scope_1.row), (1, 8)),
                 shape=(8, 4),
             )
             T.copy(tile_1, moved)
         with Mesh((Topology("thread", 32),), layout=(8, 4), names=("row", "col")) as scope_2:
-            value_16 = T.tensor_view(T.ptr_of(out), layout=(8, 4), shape=(8, 4))
-            T.fill(value_16, 0.0)
+            T.fill(out, 0.0)
             result = T.alloc_tensor(
                 tensor_type=Tensor[
                     (8, 4),
@@ -166,42 +114,8 @@ def gemm(x: Tensor[(4, 8), "f32"], out: Tensor[(8, 4), "f32"]):
             with Mesh(
                 (Topology("thread", 32),), layout=(4, 8), names=("row", "col")
             ) as threads_5:
-                value_17 = T.tensor_view(
-                    T.ptr_of(transposed),
-                    layout=((8 @ threads_5.col, 4 @ threads_5.row), (4, 1)),
-                    shape=(8, 4),
-                )
-                value_18 = T.tensor_view(
-                    T.ptr_of(value_17),
-                    layout=((8 @ threads_5.col, 4 @ threads_5.row), (4, 1)),
-                    shape=(8, 4),
-                )
-                value_19 = T.tensor_view(
-                    T.ptr_of(value_18),
-                    layout=((8 @ threads_5.col, 4 @ threads_5.row), (4, 1)),
-                    shape=(8, 4),
-                )
-                value_20 = T.tensor_view(
-                    T.ptr_of(value_19),
-                    layout=((8 @ threads_5.col, 4 @ threads_5.row), (4, 1)),
-                    shape=(8, 4),
-                )
-                value_21 = T.tensor_view(
-                    T.ptr_of(moved),
-                    layout=((8 @ threads_5.col, 4 @ threads_5.row), (4, 1)),
-                    shape=(8, 4),
-                )
-                value_22 = T.tensor_view(
-                    T.ptr_of(value_21),
-                    layout=((8 @ threads_5.col, 4 @ threads_5.row), (4, 1)),
-                    shape=(8, 4),
-                )
-                T.binary(value_20, value_22, result, kind=BinaryKind.ADD)
+                T.binary(transposed, moved, result, kind=BinaryKind.ADD)
             with Mesh(
                 (Topology("thread", 32),), layout=(4, 8), names=("row", "col")
             ) as threads_6:
-                value_23 = T.tensor_view(T.ptr_of(out), layout=(8, 4), shape=(8, 4))
-                window = T.tensor_view(
-                    T.ptr_of(value_23[0:0 + 8, 0:0 + 4]), layout=(8, 4), shape=(8, 4)
-                )
-                T.copy(result, window)
+                T.copy(result, out)

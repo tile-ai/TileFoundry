@@ -305,15 +305,19 @@ class ConvertHIRToTIR(ModulePass):
     never at its definition; its sharding refers to that scope's mesh.
     Storage declarations follow their HIR definition's scope and position.
     Constant-address `smem` and scratch-backed `gmem` views are materialized in
-    each consuming scope. Each tensor SSA leaf MUST have its own Tensor or
-    TensorView object, even when several values have the same address. Lowering
-    MUST obtain storage answers from StoragePlan, the sole reader of analysis
+    each consuming scope. Visit memoizes each HIR node's lowered result in the
+    context; forwarded SSA leaves reuse that result. Storage links MUST NOT
+    introduce TensorView wrappers. HIR view operations retain their corresponding
+    views, including authored identity views. Instruction operands use the same
+    Visit path; only a required issue tile introduces a new operand window.
+    Lowering MUST obtain storage answers from StoragePlan, the sole reader of analysis
     storage metadata in this pass. The context reads `MemoryMetadata.offsets`,
     accepted links in AllocationSummary.values, and the unchanged
     AllocationSummary.address_decisions. It chooses direct storage partners,
     output positions and refusals; analysis publishes no derived aliases.
-    Each view is formed on its partner's tensor using the registered op's own
-    result-to-operand relation. Adopted update windows use InsertSlice's offsets
+    Each HIR view is formed on its visited operand using the registered op's
+    own result-to-operand relation. StoragePlan computes physical view recipes;
+    TirBuilder only declares, binds, materializes and emits them. Adopted update windows use InsertSlice's offsets
     at the storage representative; identity forwards need no inverse relation.
     Moving a decision through its structural chain, or placing a written
     producer on an output reached through a view, requires identity coordinates.

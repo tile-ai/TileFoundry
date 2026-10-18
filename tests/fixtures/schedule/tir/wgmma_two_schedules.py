@@ -52,108 +52,31 @@ def gemm(
             )
             for k in range(0, 32, 16):
                 with scope[:1, :32] as scope_2:
-                    value = T.tensor_view(T.ptr_of(a), layout=(64, 32), shape=(64, 32))
-                    value_1 = T.tensor_view(
-                        T.ptr_of(value[0:0 + 1, k:k + 1]),
+                    value = T.tensor_view(
+                        T.ptr_of(a[0:0 + 1, k:k + 1]),
                         layout=((64, 16), (32, 1)),
                         shape=(64, 16),
                     )
-                    value_2 = T.tensor_view(
-                        T.ptr_of(lhs_ring_stages[(k // 16) % 2]),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
+                    T.copy_async_tensor(value, lhs_ring_stages[(k // 16) % 2])
+                    value_1 = T.tensor_view(
+                        T.ptr_of(b[k:k + 1, 0:0 + 1]), layout=(16, 32), shape=(16, 32)
                     )
-                    T.copy_async_tensor(value_1, value_2)
-                    value_3 = T.tensor_view(T.ptr_of(b), layout=(32, 32), shape=(32, 32))
-                    value_4 = T.tensor_view(
-                        T.ptr_of(value_3[k:k + 1, 0:0 + 1]), layout=(16, 32), shape=(16, 32)
-                    )
-                    value_5 = T.tensor_view(
-                        T.ptr_of(rhs_ring_stages[(k // 16) % 2]),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
-                    T.copy_async_tensor(value_4, value_5)
+                    T.copy_async_tensor(value_1, rhs_ring_stages[(k // 16) % 2])
                 with Mesh(
                     scope[1:], layout=(4, 8, 4), names=("warp", "lane8", "lane4")
                 ) as scope_3:
-                    value_6 = T.tensor_view(
-                        T.ptr_of(acc),
-                        layout=((4 @ scope_3.warp, 2, 8 @ scope_3.lane8, 4, 4 @ scope_3.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                        shape=(64, 32),
-                    )
-                    value_7 = T.tensor_view(
-                        T.ptr_of(value_6),
-                        layout=((4 @ scope_3.warp, 2, 8 @ scope_3.lane8, 4, 4 @ scope_3.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                        shape=(64, 32),
-                    )
-                    value_8 = T.tensor_view(
-                        T.ptr_of(value_7),
-                        layout=((4 @ scope_3.warp, 2, 8 @ scope_3.lane8, 4, 4 @ scope_3.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                        shape=(64, 32),
-                    )
                     acc_view = T.tensor_view(
-                        T.ptr_of(value_8[0:0 + 64, 0:0 + 32]),
+                        T.ptr_of(acc[0:0 + 64, 0:0 + 32]),
                         layout=((4 @ scope_3.warp, 2, 8 @ scope_3.lane8, 4, 4 @ scope_3.lane4, 2), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 32),
-                    )
-                    value_9 = T.tensor_view(
-                        T.ptr_of(lhs_ring_stages[(k // 16) % 2]),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
-                    )
-                    value_10 = T.tensor_view(
-                        T.ptr_of(value_9),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
-                    )
-                    value_11 = T.tensor_view(
-                        T.ptr_of(value_10),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
-                    )
-                    value_12 = T.tensor_view(
-                        T.ptr_of(value_11),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
-                    )
-                    value_13 = T.tensor_view(
-                        T.ptr_of(value_12),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
                     )
                     lhs_view = T.tensor_view(
-                        T.ptr_of(value_13[0:0 + 64, 0:0 + 16]),
+                        T.ptr_of(lhs_ring_stages[(k // 16) % 2][0:0 + 64, 0:0 + 16]),
                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                         shape=(64, 16),
                     )
-                    value_14 = T.tensor_view(
-                        T.ptr_of(rhs_ring_stages[(k // 16) % 2]),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
-                    value_15 = T.tensor_view(
-                        T.ptr_of(value_14),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
-                    value_16 = T.tensor_view(
-                        T.ptr_of(value_15),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
-                    value_17 = T.tensor_view(
-                        T.ptr_of(value_16),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
-                    value_18 = T.tensor_view(
-                        T.ptr_of(value_17),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
                     rhs_view = T.tensor_view(
-                        T.ptr_of(value_18[0:0 + 16, 0:0 + 32]),
+                        T.ptr_of(rhs_ring_stages[(k // 16) % 2][0:0 + 16, 0:0 + 32]),
                         layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))) @ {B()},
                         shape=(16, 32),
                     )
@@ -164,123 +87,31 @@ def gemm(
                         atom=T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN),
                     )
                 with scope[:1, :32] as scope_4:
-                    value_19 = T.tensor_view(T.ptr_of(c), layout=(64, 32), shape=(64, 32))
-                    value_20 = T.tensor_view(
-                        T.ptr_of(value_19[0:0 + 1, k:k + 1]),
+                    value_2 = T.tensor_view(
+                        T.ptr_of(c[0:0 + 1, k:k + 1]),
                         layout=((64, 16), (32, 1)),
                         shape=(64, 16),
                     )
-                    value_21 = T.tensor_view(
-                        T.ptr_of(lhs_2_ring_stages[(k // 16) % 2]),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
+                    T.copy_async_tensor(value_2, lhs_2_ring_stages[(k // 16) % 2])
+                    value_3 = T.tensor_view(
+                        T.ptr_of(d[k:k + 1, 0:0 + 1]), layout=(16, 32), shape=(16, 32)
                     )
-                    T.copy_async_tensor(value_20, value_21)
-                    value_22 = T.tensor_view(T.ptr_of(d), layout=(32, 32), shape=(32, 32))
-                    value_23 = T.tensor_view(
-                        T.ptr_of(value_22[k:k + 1, 0:0 + 1]), layout=(16, 32), shape=(16, 32)
-                    )
-                    value_24 = T.tensor_view(
-                        T.ptr_of(rhs_2_ring_stages[(k // 16) % 2]),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
-                    T.copy_async_tensor(value_23, value_24)
+                    T.copy_async_tensor(value_3, rhs_2_ring_stages[(k // 16) % 2])
                 with Mesh(
                     scope[1:], layout=(4, 8, 4), names=("warp", "lane8", "lane4")
                 ) as scope_5:
-                    value_25 = T.tensor_view(
-                        T.ptr_of(acc),
-                        layout=((4 @ scope_5.warp, 2, 8 @ scope_5.lane8, 4, 4 @ scope_5.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                        shape=(64, 32),
-                    )
-                    value_26 = T.tensor_view(
-                        T.ptr_of(value_25),
-                        layout=((4 @ scope_5.warp, 2, 8 @ scope_5.lane8, 4, 4 @ scope_5.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                        shape=(64, 32),
-                    )
-                    value_27 = T.tensor_view(
-                        T.ptr_of(value_26),
-                        layout=((4 @ scope_5.warp, 2, 8 @ scope_5.lane8, 4, 4 @ scope_5.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                        shape=(64, 32),
-                    )
-                    value_28 = T.tensor_view(
-                        T.ptr_of(value_27),
-                        layout=((4 @ scope_5.warp, 2, 8 @ scope_5.lane8, 4, 4 @ scope_5.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                        shape=(64, 32),
-                    )
-                    value_29 = T.tensor_view(
-                        T.ptr_of(value_28),
-                        layout=((4 @ scope_5.warp, 2, 8 @ scope_5.lane8, 4, 4 @ scope_5.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                        shape=(64, 32),
-                    )
-                    value_30 = T.tensor_view(
-                        T.ptr_of(value_29),
-                        layout=((4 @ scope_5.warp, 2, 8 @ scope_5.lane8, 4, 4 @ scope_5.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                        shape=(64, 32),
-                    )
                     acc_view_1 = T.tensor_view(
-                        T.ptr_of(value_30[0:0 + 64, 0:0 + 32]),
+                        T.ptr_of(acc[0:0 + 64, 0:0 + 32]),
                         layout=((4 @ scope_5.warp, 2, 8 @ scope_5.lane8, 4, 4 @ scope_5.lane4, 2), (16, 8, 1, 512, 128, 64)),
                         shape=(64, 32),
-                    )
-                    value_31 = T.tensor_view(
-                        T.ptr_of(lhs_2_ring_stages[(k // 16) % 2]),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
-                    )
-                    value_32 = T.tensor_view(
-                        T.ptr_of(value_31),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
-                    )
-                    value_33 = T.tensor_view(
-                        T.ptr_of(value_32),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
-                    )
-                    value_34 = T.tensor_view(
-                        T.ptr_of(value_33),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
-                    )
-                    value_35 = T.tensor_view(
-                        T.ptr_of(value_34),
-                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                        shape=(64, 16),
                     )
                     lhs_view_1 = T.tensor_view(
-                        T.ptr_of(value_35[0:0 + 64, 0:0 + 16]),
+                        T.ptr_of(lhs_2_ring_stages[(k // 16) % 2][0:0 + 64, 0:0 + 16]),
                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                         shape=(64, 16),
                     )
-                    value_36 = T.tensor_view(
-                        T.ptr_of(rhs_2_ring_stages[(k // 16) % 2]),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
-                    value_37 = T.tensor_view(
-                        T.ptr_of(value_36),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
-                    value_38 = T.tensor_view(
-                        T.ptr_of(value_37),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
-                    value_39 = T.tensor_view(
-                        T.ptr_of(value_38),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
-                    value_40 = T.tensor_view(
-                        T.ptr_of(value_39),
-                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
-                        shape=(16, 32),
-                    )
                     rhs_view_1 = T.tensor_view(
-                        T.ptr_of(value_40[0:0 + 16, 0:0 + 32]),
+                        T.ptr_of(rhs_2_ring_stages[(k // 16) % 2][0:0 + 16, 0:0 + 32]),
                         layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))) @ {B()},
                         shape=(16, 32),
                     )
@@ -290,8 +121,7 @@ def gemm(
                         rhs_view_1,
                         atom=T.cuda.sm90.Wgmma(n=32, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN),
                     )
-            value_41 = T.tensor_view(T.ptr_of(out), layout=(64, 32), shape=(64, 32))
-            T.fill(value_41, 0.0)
+            T.fill(out, 0.0)
             with Mesh(scope[1:], layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as scope_6:
                 result = T.alloc_tensor(
                     tensor_type=Tensor[
@@ -301,34 +131,10 @@ def gemm(
                         "rmem",
                     ]
                 )
-                value_42 = T.tensor_view(
-                    T.ptr_of(acc),
-                    layout=((4 @ scope_6.warp, 2, 8 @ scope_6.lane8, 4, 4 @ scope_6.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                    shape=(64, 32),
-                )
-                value_43 = T.tensor_view(
-                    T.ptr_of(value_42),
-                    layout=((4 @ scope_6.warp, 2, 8 @ scope_6.lane8, 4, 4 @ scope_6.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                    shape=(64, 32),
-                )
-                value_44 = T.tensor_view(
-                    T.ptr_of(value_43),
-                    layout=((4 @ scope_6.warp, 2, 8 @ scope_6.lane8, 4, 4 @ scope_6.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                    shape=(64, 32),
-                )
-                value_45 = T.tensor_view(
-                    T.ptr_of(value_44),
-                    layout=((4 @ scope_6.warp, 2, 8 @ scope_6.lane8, 4, 4 @ scope_6.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                    shape=(64, 32),
-                )
                 src_view = T.tensor_view(
-                    T.ptr_of(value_45[0:0 + 64, 0:0 + 32]),
+                    T.ptr_of(acc[0:0 + 64, 0:0 + 32]),
                     layout=((4 @ scope_6.warp, 2, 8 @ scope_6.lane8, 4, 4 @ scope_6.lane4, 2), (16, 8, 1, 512, 128, 64)),
                     shape=(64, 32),
                 )
                 T.cast(src_view, result, dtype="bf16")
-                value_46 = T.tensor_view(T.ptr_of(out), layout=(64, 32), shape=(64, 32))
-                window = T.tensor_view(
-                    T.ptr_of(value_46[0:0 + 64, 0:0 + 32]), layout=(64, 32), shape=(64, 32)
-                )
-                T.copy(result, window)
+                T.copy(result, out)

@@ -550,6 +550,14 @@ class BufferAlias:
     declared access relation MUST bijectively map result coordinates to source
     coordinates with the same physical address, requiring the source's
     address and recording zero traffic.
+  - Fresh smem allocations MUST reserve a byte span covering the physical
+    layout's addresses within the selected topology unit, including stride holes
+    and composition offsets. Splits at coarser levels restrict the local domain;
+    finer splits remain in it. Swizzles
+    MAY reserve complete low-bit periods, preserving the unchanged high bits;
+    this is an arena-capacity bound, not a unique-footprint or traffic count.
+    Every staged slot MUST reserve that span at the required alignment.
+    Invalid negative or unresolved physical address ranges MUST be refused.
   - Registered buffer aliases MUST create an `AllocationValue(lifetime, aliases)`
     with its own SSA interval and the operand's byte span, requiring the same
     address. A persistent operand MUST pin its alias at the same

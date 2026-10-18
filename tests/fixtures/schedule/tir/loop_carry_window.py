@@ -13,37 +13,22 @@ from tilefoundry.target import CudaTarget
 def gemm(x: Tensor[(4, 4), "f32"], out: Tensor[(4, 4), "f32"]):
     with Mesh((Topology("cta", 1),), layout=(1,), names=("block",)) as cta:
         with Mesh((Topology("thread", 32),), layout=(32,), names=("lane",)) as scope:
-            value = T.tensor_view(T.ptr_of(out), layout=(4, 4), shape=(4, 4))
-            T.fill(value, 0.0)
+            T.fill(out, 0.0)
             out_1 = T.alloc_tensor(tensor_type=Tensor[(4, 4), "f32", "rmem"])
             T.fill(out_1, 0.0)
             for m in range(0, 2, 1):
-                value_1 = T.tensor_view(T.ptr_of(out_1), layout=(4, 4), shape=(4, 4))
-                value_2 = T.tensor_view(T.ptr_of(value_1), layout=(4, 4), shape=(4, 4))
-                value_3 = T.tensor_view(
-                    T.ptr_of(value_2[2 * m:2 * m + 1, 0:0 + 1]), layout=(2, 4), shape=(2, 4)
+                value = T.tensor_view(
+                    T.ptr_of(out_1[2 * m:2 * m + 1, 0:0 + 1]), layout=(2, 4), shape=(2, 4)
                 )
-                T.fill(value_3, 0.0)
+                T.fill(value, 0.0)
                 for k in range(0, 3, 1):
-                    value_4 = T.alloc_tensor(tensor_type=Tensor[(2, 4), "f32", "rmem"])
-                    value_5 = T.tensor_view(T.ptr_of(x), layout=(4, 4), shape=(4, 4))
-                    value_6 = T.tensor_view(
-                        T.ptr_of(value_5[2 * m:2 * m + 1, 0:0 + 1]), layout=(2, 4), shape=(2, 4)
+                    value_1 = T.alloc_tensor(tensor_type=Tensor[(2, 4), "f32", "rmem"])
+                    value_2 = T.tensor_view(
+                        T.ptr_of(x[2 * m:2 * m + 1, 0:0 + 1]), layout=(2, 4), shape=(2, 4)
                     )
-                    value_7 = T.tensor_view(T.ptr_of(value_4), layout=(2, 4), shape=(2, 4))
-                    T.copy(value_6, value_7)
-                    value_8 = T.tensor_view(T.ptr_of(out_1), layout=(4, 4), shape=(4, 4))
-                    value_9 = T.tensor_view(T.ptr_of(value_8), layout=(4, 4), shape=(4, 4))
-                    value_10 = T.tensor_view(
-                        T.ptr_of(value_9[2 * m:2 * m + 1, 0:0 + 1]), layout=(2, 4), shape=(2, 4)
+                    T.copy(value_2, value_1)
+                    value_3 = T.tensor_view(
+                        T.ptr_of(out_1[2 * m:2 * m + 1, 0:0 + 1]), layout=(2, 4), shape=(2, 4)
                     )
-                    value_11 = T.tensor_view(T.ptr_of(value_10), layout=(2, 4), shape=(2, 4))
-                    value_12 = T.tensor_view(T.ptr_of(value_11), layout=(2, 4), shape=(2, 4))
-                    T.binary(value_12, value_7, value_12, kind=BinaryKind.ADD)
-            value_13 = T.tensor_view(T.ptr_of(out_1), layout=(4, 4), shape=(4, 4))
-            value_14 = T.tensor_view(T.ptr_of(value_13), layout=(4, 4), shape=(4, 4))
-            value_15 = T.tensor_view(T.ptr_of(out), layout=(4, 4), shape=(4, 4))
-            window = T.tensor_view(
-                T.ptr_of(value_15[0:0 + 4, 0:0 + 4]), layout=(4, 4), shape=(4, 4)
-            )
-            T.copy(value_14, window)
+                    T.binary(value_3, value_1, value_3, kind=BinaryKind.ADD)
+            T.copy(out_1, out)

@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from itertools import combinations
+from math import prod
 from typing import ClassVar, Protocol
 
 import isl
@@ -24,9 +25,17 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import shape_to_isl_set
-from tilefoundry.ir.types import TensorType, TupleType, Type
+from tilefoundry.ir.types import (
+    ComposedLayout,
+    Layout,
+    ShardLayout,
+    Swizzle,
+    TensorType,
+    TupleType,
+    Type,
+)
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.layout import flatten, resolve_layout
 from tilefoundry.ir.types.mesh import levels
 from tilefoundry.ir.types.utils import (
     is_literal_shape,
@@ -1117,6 +1126,15 @@ class AllocationConstraintVisitor(ValuationVisitor[Storage]):
                 amount = target.lifetime.bytes
             elif quantity is not None:
                 level, amount = quantity
+                if level == "smem":
+                    copies = result_copies(node)
+                    size = max(
+                        amount // copies,
+                        storage_bytes(leaf, topology_level=ctx.topology_level, topologies=ctx.topologies),
+                    )
+                    if copies > 1:
+                        size = aligned(size, alignment_of(node))
+                    amount = size * copies
             else:
                 slots.append(None)
                 continue
@@ -1354,6 +1372,56 @@ def build_interference_graph(values, windows, by_value):
             for b in intervals[values[j]]
         )
     }
+
+
+def storage_bytes(held: TensorType, *, topology_level=None, topologies=()) -> int:
+    """A unit's safe arena span, including holes and all reachable swizzle phases."""
+    if not is_literal_shape(held.shape):
+        raise AnalysisError(f"allocation: unresolved physical shape {held.shape!r}")
+    if any(extent == 0 for extent in held.shape):
+        return 0
+
+    def bounds(layout, low, high, shape=None):
+        if layout is None:
+            return low, high
+        if isinstance(layout, ShardLayout):
+            if topology_level is not None:
+                shape = local_type_of(
+                    replace(held, layout=layout),
+                    topology_level=topology_level,
+                    topologies=topologies,
+                ).shape
+            return bounds(layout.layout, low, high, shape)
+        if isinstance(layout, ComposedLayout):
+            low, high = bounds(layout.outer, low, high, shape)
+            offset = static_dim_value(layout.offset)
+            if offset is None:
+                raise AnalysisError(f"allocation: unresolved physical offset {layout.offset!r}")
+            return bounds(layout.inner, low + offset, high + offset)
+        if isinstance(layout, Layout):
+            flat = flatten(resolve_layout(layout, layout.shape))
+            if not all(isinstance(value, int) for value in (*flat.shape, *flat.strides)):
+                raise AnalysisError(f"allocation: unresolved physical layout {layout!r}")
+            contributions = tuple(
+                (extent - 1) * stride
+                for extent, stride in zip(
+                    flat.shape if shape is None else shape, flat.strides, strict=True
+                )
+            )
+            return sum(min(0, value) for value in contributions), sum(
+                max(0, value) for value in contributions
+            )
+        if isinstance(layout, Swizzle):
+            if layout.bits == 0:
+                return low, high
+            period = 1 << (layout.bits + layout.base + abs(layout.shift))
+            return low // period * period, (high // period + 1) * period - 1
+        raise AnalysisError(f"allocation: unsupported physical layout {layout!r}")
+
+    low, high = bounds(held.layout, 0, prod(held.shape) - 1)
+    if not isinstance(low, int) or not isinstance(high, int) or low < 0:
+        raise AnalysisError(f"allocation: invalid physical address range [{low}, {high}]")
+    return -(-((high + 1) * held.dtype.bit_width) // 8)
 
 
 def alignment_of(value: Expr) -> int:

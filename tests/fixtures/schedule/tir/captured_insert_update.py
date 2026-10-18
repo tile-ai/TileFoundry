@@ -15,30 +15,18 @@ def gemm(
 ):
     with Mesh((Topology("cta", 1),), layout=(1,), names=("block",)) as cta:
         with Mesh((Topology("thread", 32),), layout=(32,), names=("lane",)) as scope:
-            value = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
-            T.fill(value, 0.0)
+            T.fill(out, 0.0)
             for r in range(0, 2, 1):
-                value_1 = T.tensor_view(T.ptr_of(x), layout=(4, 4), shape=(4, 4))
-                source = T.tensor_view(T.ptr_of(value_1), layout=(4, 4), shape=(4, 4))
                 row_dst = T.tensor_view(
                     16, dtype="bf16", storage="smem", layout=(1, 4), shape=(1, 4)
                 )
-                value_2 = T.tensor_view(T.ptr_of(row_dst), layout=(1, 4), shape=(1, 4))
-                value_3 = T.tensor_view(T.ptr_of(idx), layout=(2,), shape=(2,))
-                value_4 = T.tensor_view(
-                    T.ptr_of(value_3[r:r + 1]), layout=((1,), (0,)), shape=(1,)
-                )
-                T.copy_async(source, value_2, value_4, fill=0)
+                value = T.tensor_view(T.ptr_of(idx[r:r + 1]), layout=((1,), (0,)), shape=(1,))
+                T.copy_async(x, row_dst, value, fill=0)
                 with scope[:] as scope_1:
                     row_dst_2 = T.tensor_view(
                         16, dtype="bf16", storage="smem", layout=(1, 4), shape=(1, 4)
                     )
-                    value_5 = T.tensor_view(T.ptr_of(row_dst_2), layout=(1, 4), shape=(1, 4))
-                    value_6 = T.tensor_view(T.ptr_of(value_5), layout=(1, 4), shape=(1, 4))
-                    value_7 = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
-                    value_8 = T.tensor_view(T.ptr_of(value_7), layout=(2, 4), shape=(2, 4))
-                    value_9 = T.tensor_view(T.ptr_of(value_8), layout=(2, 4), shape=(2, 4))
                     window = T.tensor_view(
-                        T.ptr_of(value_9[r:r + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
+                        T.ptr_of(out[r:r + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
                     )
-                    T.copy(value_6, window)
+                    T.copy(row_dst_2, window)

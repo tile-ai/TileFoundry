@@ -146,6 +146,11 @@ inference determines the swizzle phase at each static start. Transfer
 instructions issue once. Supporting non-identity `order` here is an intentional
 extension beyond the AtomSched reference, which rejects it.
 
+ScheduleOp operands follow the same Visit and memo path as other operations.
+Each serial issue uses those lowered operands, introducing a Slice/TensorView
+only for its required tile window. Storage forwarding does not introduce views;
+explicit HIR view operations remain represented, including identity operations.
+
 For each operand layout, non-unit repeat counts name leading CuTe tile modes;
 the remaining inner modes are the instruction fragment matched against its
 operand declaration. A sharded operand's mesh layout follows the same rule:

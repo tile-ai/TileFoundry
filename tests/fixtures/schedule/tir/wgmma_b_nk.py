@@ -16,8 +16,7 @@ def gemm(
         with Mesh(
             (Topology("thread", 128),), layout=(4, 8, 4), names=("warp", "lane8", "lane4")
         ) as scope:
-            value = T.tensor_view(T.ptr_of(out), layout=(64, 16), shape=(64, 16))
-            T.fill(value, 0.0)
+            T.fill(out, 0.0)
             acc = T.alloc_tensor(
                 tensor_type=Tensor[
                     (64, 16),
@@ -27,7 +26,6 @@ def gemm(
                 ]
             )
             T.fill(acc, 0.0)
-            value_1 = T.tensor_view(T.ptr_of(a), layout=(64, 16), shape=(64, 16))
             lhs_dst = T.tensor_view(
                 512,
                 dtype="bf16",
@@ -35,18 +33,8 @@ def gemm(
                 layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                 shape=(64, 16),
             )
-            value_2 = T.tensor_view(
-                T.ptr_of(lhs_dst),
-                layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
-                shape=(64, 16),
-            )
-            T.copy(value_1, value_2)
-            value_3 = T.tensor_view(T.ptr_of(weight), layout=(16, 16), shape=(16, 16))
-            tile = T.tensor_view(
-                T.ptr_of(value_3[0:0 + 16, 0:0 + 16]),
-                layout=((16, 16), (1, 16)),
-                shape=(16, 16),
-            )
+            T.copy(a, lhs_dst)
+            tile = T.tensor_view(T.ptr_of(weight), layout=((16, 16), (1, 16)), shape=(16, 16))
             rhs_kn_1 = T.tensor_view(
                 T.ptr_of(scratch[0:0 + 256]), layout=(16, 16), shape=(16, 16)
             )
@@ -58,24 +46,19 @@ def gemm(
                 layout=Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))),
                 shape=(16, 16),
             )
-            value_4 = T.tensor_view(
-                T.ptr_of(rhs_dst),
-                layout=Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))),
-                shape=(16, 16),
-            )
-            T.copy(rhs_kn_1, value_4)
+            T.copy(rhs_kn_1, rhs_dst)
             acc_view = T.tensor_view(
                 T.ptr_of(acc[0:0 + 64, 0:0 + 16]),
                 layout=((4 @ scope.warp, 2, 8 @ scope.lane8, 2, 4 @ scope.lane4, 2), (16, 8, 1, 512, 128, 64)),
                 shape=(64, 16),
             )
             lhs_view = T.tensor_view(
-                T.ptr_of(value_2[0:0 + 64, 0:0 + 16]),
+                T.ptr_of(lhs_dst[0:0 + 64, 0:0 + 16]),
                 layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                 shape=(64, 16),
             )
             rhs_view = T.tensor_view(
-                T.ptr_of(value_4[0:0 + 16, 0:0 + 16]),
+                T.ptr_of(rhs_dst[0:0 + 16, 0:0 + 16]),
                 layout=Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))) @ {B()},
                 shape=(16, 16),
             )
@@ -85,18 +68,9 @@ def gemm(
                 rhs_view,
                 atom=T.cuda.sm90.Wgmma(n=16, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K),
             )
-            value_5 = T.tensor_view(
-                T.ptr_of(acc),
+            tile_1 = T.tensor_view(
+                T.ptr_of(acc[0:0 + 64, 0:0 + 16]),
                 layout=((4 @ scope.warp, 2, 8 @ scope.lane8, 2, 4 @ scope.lane4, 2), (16, 8, 1, 512, 128, 64)),
                 shape=(64, 16),
             )
-            value_view = T.tensor_view(
-                T.ptr_of(value_5[0:0 + 64, 0:0 + 16]),
-                layout=((4 @ scope.warp, 2, 8 @ scope.lane8, 2, 4 @ scope.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                shape=(64, 16),
-            )
-            value_6 = T.tensor_view(T.ptr_of(out), layout=(64, 16), shape=(64, 16))
-            window = T.tensor_view(
-                T.ptr_of(value_6[0:0 + 64, 0:0 + 16]), layout=(64, 16), shape=(64, 16)
-            )
-            T.copy(value_view, window)
+            T.copy(tile_1, out)

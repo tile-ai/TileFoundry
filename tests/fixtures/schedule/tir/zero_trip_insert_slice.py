@@ -12,17 +12,11 @@ from tilefoundry.target import CudaTarget
 def gemm(x: Tensor[(1, 4), "f32"], out: Tensor[(2, 4), "f32"]):
     with Mesh((Topology("cta", 1),), layout=(1,), names=("b",)) as cta:
         with Mesh((Topology("thread", 1),), layout=(1,), names=("t",)) as scope:
-            value = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
-            T.fill(value, 0.0)
+            T.fill(out, 0.0)
             for _i in range(0, 0, 1):
-                value_1 = T.alloc_tensor(tensor_type=Tensor[(1, 4), "f32", (1, 4), "rmem"])
-                value_2 = T.tensor_view(T.ptr_of(x), layout=(1, 4), shape=(1, 4))
-                value_3 = T.tensor_view(T.ptr_of(value_1), layout=(1, 4), shape=(1, 4))
-                T.copy(value_2, value_3)
-                value_4 = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
-                value_5 = T.tensor_view(T.ptr_of(value_4), layout=(2, 4), shape=(2, 4))
-                value_6 = T.tensor_view(T.ptr_of(value_5), layout=(2, 4), shape=(2, 4))
+                value = T.alloc_tensor(tensor_type=Tensor[(1, 4), "f32", (1, 4), "rmem"])
+                T.copy(x, value)
                 window = T.tensor_view(
-                    T.ptr_of(value_6[0:0 + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
+                    T.ptr_of(out[0:0 + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
                 )
-                T.copy(value_3, window)
+                T.copy(value, window)

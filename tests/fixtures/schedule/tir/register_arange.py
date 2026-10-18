@@ -14,6 +14,4 @@ def gemm(x: Tensor[(8,), "i32"], out: Tensor[(8,), "i32", (8,), "rmem"]):
         with Mesh((Topology("thread", 1),), layout=(1,), names=("t",)) as scope:
             indices = T.alloc_tensor(tensor_type=Tensor[(8,), "i32", "rmem"])
             T.arange(indices, start=0, step=1)
-            value = T.tensor_view(T.ptr_of(out), layout=(8,), shape=(8,))
-            value_1 = T.tensor_view(T.ptr_of(value), layout=(8,), shape=(8,))
-            T.copy(indices, value_1)
+            T.copy(indices, out)

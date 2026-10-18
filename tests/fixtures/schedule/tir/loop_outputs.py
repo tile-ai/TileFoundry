@@ -14,59 +14,35 @@ def gemm(
 ):
     with Mesh((Topology("cta", 1),), layout=(1,), names=("block",)) as cta:
         with Mesh((Topology("thread", 32),), layout=(32,), names=("lane",)) as scope:
-            value = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
-            T.fill(value, 0.0)
+            T.fill(out, 0.0)
             for row in range(0, 2, 1):
-                value_1 = T.tensor_view(T.ptr_of(x), layout=(2, 4), shape=(2, 4))
-                value_2 = T.tensor_view(
-                    T.ptr_of(value_1[row:row + 1, 0:0 + 1]),
-                    layout=((1, 4), (0, 1)),
-                    shape=(1, 4),
+                value = T.tensor_view(
+                    T.ptr_of(x[row:row + 1, 0:0 + 1]), layout=((1, 4), (0, 1)), shape=(1, 4)
                 )
                 landing = T.tensor_view(
                     0, dtype="bf16", storage="smem", layout=(1, 4), shape=(1, 4)
                 )
-                value_3 = T.tensor_view(T.ptr_of(landing), layout=(1, 4), shape=(1, 4))
-                T.copy_async(value_2, value_3)
-                value_4 = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))
-                value_5 = T.tensor_view(T.ptr_of(value_4), layout=(2, 4), shape=(2, 4))
-                value_6 = T.tensor_view(T.ptr_of(value_5), layout=(2, 4), shape=(2, 4))
+                T.copy_async(value, landing)
                 window = T.tensor_view(
-                    T.ptr_of(value_6[row:row + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
+                    T.ptr_of(out[row:row + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
                 )
-                T.copy(value_3, window)
-            value_7 = T.tensor_view(T.ptr_of(x), layout=(2, 4), shape=(2, 4))
-            value_8 = T.tensor_view(T.ptr_of(out_1), layout=(2, 4), shape=(2, 4))
-            value_9 = T.tensor_view(T.ptr_of(value_8), layout=(2, 4), shape=(2, 4))
-            T.copy(value_7, value_9)
+                T.copy(landing, window)
+            T.copy(x, out_1)
             for row_2 in range(0, 2, 1):
                 temporary_1 = T.tensor_view(
                     T.ptr_of(scratch[0:0 + 8]), layout=(2, 4), shape=(2, 4)
                 )
                 T.fill(temporary_1, 0.0)
-                value_10 = T.tensor_view(T.ptr_of(x), layout=(2, 4), shape=(2, 4))
-                value_11 = T.tensor_view(
-                    T.ptr_of(value_10[row_2:row_2 + 1, 0:0 + 1]),
-                    layout=((1, 4), (0, 1)),
-                    shape=(1, 4),
+                value_1 = T.tensor_view(
+                    T.ptr_of(x[row_2:row_2 + 1, 0:0 + 1]), layout=((1, 4), (0, 1)), shape=(1, 4)
                 )
                 landing_1 = T.tensor_view(
                     0, dtype="bf16", storage="smem", layout=(1, 4), shape=(1, 4)
                 )
-                value_12 = T.tensor_view(T.ptr_of(landing_1), layout=(1, 4), shape=(1, 4))
-                T.copy_async(value_11, value_12)
-                value_13 = T.tensor_view(T.ptr_of(temporary_1), layout=(2, 4), shape=(2, 4))
+                T.copy_async(value_1, landing_1)
                 window_1 = T.tensor_view(
-                    T.ptr_of(value_13[row_2:row_2 + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
+                    T.ptr_of(temporary_1[row_2:row_2 + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
                 )
-                T.copy(value_12, window_1)
-                value_14 = T.tensor_view(T.ptr_of(out_1), layout=(2, 4), shape=(2, 4))
-                value_15 = T.tensor_view(T.ptr_of(value_14), layout=(2, 4), shape=(2, 4))
-                value_16 = T.tensor_view(T.ptr_of(value_15), layout=(2, 4), shape=(2, 4))
-                value_17 = T.tensor_view(T.ptr_of(value_16), layout=(2, 4), shape=(2, 4))
-                T.copy(value_13, value_17)
-            value_18 = T.tensor_view(T.ptr_of(value), layout=(2, 4), shape=(2, 4))
-            value_19 = T.tensor_view(T.ptr_of(value_18), layout=(2, 4), shape=(2, 4))
-            value_20 = T.tensor_view(T.ptr_of(out_2), layout=(2, 4), shape=(2, 4))
-            value_21 = T.tensor_view(T.ptr_of(value_20), layout=(2, 4), shape=(2, 4))
-            T.copy(value_19, value_21)
+                T.copy(landing_1, window_1)
+                T.copy(temporary_1, out_1)
+            T.copy(out, out_2)

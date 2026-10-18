@@ -214,280 +214,140 @@ class TirBuilder:
         elif loop is not None:
             self.add(For(*loop, self.build(region)))
 
-    def tensor(self, expr, fallback=None, *, ctx, values, allocate=False, desired=None):
-        """Materialize a value by taking one view on its direct storage partner."""
-        if allocate:
-            leaf = expr
-            expr = leaf.expr
-            type_ = desired or leaves_of(expr.type)[leaf.index]
-            buffers = getattr(expr.target, "buffers", 1) if isinstance(expr, Call) else 1
-            owner = (
-                ctx.storage.placement[id(expr)][0]
-                if buffers > 1
-                else ctx.storage.placement.get(id(expr), (None, (), None))[2]
-                if type_.storage is StorageKind.RMEM
-                else None
-            )
-            with ctx.builder.region(owner=owner):
-                layout = (
-                    type_.layout.layout if isinstance(type_.layout, ShardLayout) else type_.layout
-                )
-                storage_type = replace(type_, layout=layout)
-                stem = ctx.names.fresh(
-                    expr.name if isinstance(expr, Var) else "value",
-                    ctx.authored_values.get(id(expr)),
-                )
-                if type_.storage is StorageKind.RMEM:
-                    storage_type = type_
-                    var = Var(stem, type=storage_type)
-                    ctx.builder.bind(
-                        var, Call(AllocTensor(tensor_type=storage_type), (), type=storage_type)
-                    )
-                    ctx.logical[id(var)] = type_
-                    return var
-                if storage_type.storage not in (StorageKind.SMEM, StorageKind.GMEM):
-                    raise LoweringError(
-                        f"{_label(expr)} has addressable result in unsupported storage {storage_type.storage}"
-                    )
-                offsets = ctx.storage.answers[leaf].offsets
-                if not offsets:
-                    raise LoweringError(
-                        f"{_label(expr)} has an addressable {storage_type.storage} result but no offsets"
-                    )
-                if len(offsets) != buffers:
-                    raise LoweringError(
-                        f"{_label(expr)} declares {buffers} buffer(s), but memory analysis placed {len(offsets)}"
-                    )
-                if storage_type.storage is StorageKind.GMEM:
-                    if buffers != 1:
-                        raise LoweringError(f"{_label(expr)} uses staged internal gmem")
-                    elements = prod(tuple(storage_type.shape))
-                    scratch = Var(
-                        ctx.names.fresh("scratch"),
-                        type=TensorType((elements,), storage_type.dtype, None, StorageKind.GMEM),
-                    )
-                    ctx.scratch.append(scratch)
-                    storage_type = replace(
-                        storage_type,
-                        layout=Layout(
-                            tuple(storage_type.shape),
-                            tuple(compact_row_major(tuple(storage_type.shape))),
-                        ),
-                    )
-                    view = View(scratch, (i64_const(0),), (elements,), storage_type, stem)
-                    ctx.logical[id(view)] = type_
-                    return view
-                fields = tuple(ctx.storage.view(offset, None, storage_type) for offset in offsets)
-                if len(fields) == 1:
-                    view = View(
-                        fields[0].args[0], (), tuple(storage_type.shape), storage_type, stem
-                    )
-                    ctx.logical[id(view)] = type_
-                    return view
-                stages = Var(
-                    ctx.names.fresh(f"{stem}_stages"),
-                    type=TupleType(tuple(field.type for field in fields)),
-                )
-                ctx.builder.bind(stages, Tuple(fields, type=stages.type))
-                ctx.logical[id(stages)] = type_
-                loops = ctx.storage.placement[id(expr)][1]
-                if any(
-                    static_dim_value(bound) is None
-                    for loop in loops[1:]
-                    for bound in (loop.start, loop.extent, loop.step)
-                ):
-                    key = tuple(id(loop) for loop in loops)
-                    if key not in self.stage_counters:
-                        counter = Var(ctx.names.fresh("stage_counter"), type=_BINDING)
-                        one = Var(ctx.names.fresh("stage_one"), type=_BINDING)
-                        with ctx.builder.region(owner=ctx.storage.placement[id(expr)][0]):
-                            for value, number in ((counter, 0), (one, 1)):
-                                ctx.builder.bind(
-                                    value,
-                                    Call(AllocTensor(tensor_type=_BINDING), (), type=_BINDING),
-                                )
-                                ctx.builder.add(
-                                    Evaluate(Fill(), (value, Constant(number, type=_BINDING)))
-                                )
-                        self.stage_counters[key] = (counter, one)
-                    counter, _one = self.stage_counters[key]
-                    index = simplify_dim(DimMod, (counter, len(stages.type.fields)))
-                    return Call(TupleGetItem(), (stages, index), type=stages.type.fields[0])
-                index = i64_const(0)
-                for depth, loop in enumerate(loops):
-                    induction = values.get(id(loop.induction_var))
-                    if not isinstance(induction, Var):
-                        raise LoweringError(
-                            f"{_label(expr)} staged selection has no owning induction"
-                        )
-                    start = static_dim_value(loop.start)
-                    stop = static_dim_value(loop.extent)
-                    step = static_dim_value(loop.step)
-                    if step is None:
-                        raise LoweringError(
-                            f"{_label(expr)} staged selection needs a literal step for "
-                            f"{loop.induction_var.name!r}"
-                        )
-                    if depth:
-                        trips = max(0, (stop - start + step - 1) // step)
-                        index = simplify_dim(DimMul, (index, trips))
-                    moved = (
-                        induction
-                        if start == 0
-                        else simplify_dim(DimSub, (induction, values[id(loop.start)]))
-                    )
-                    ordinal = moved if step == 1 else simplify_dim(DimFloorDiv, (moved, step))
-                    index = ordinal if depth == 0 else simplify_dim(DimAdd, (index, ordinal))
-                if loops:
-                    index = simplify_dim(DimMod, (index, len(stages.type.fields)))
-                field = stages.type.fields[0]
-                return Call(TupleGetItem(), (stages, index), type=field)
-        if not isinstance(expr, SSAValue):
-            index = 0
-
-            def build(type_, lowered):
-                nonlocal index
-                if isinstance(type_, TupleType):
-                    elements = (
-                        lowered.elements
-                        if isinstance(lowered, Tuple)
-                        else (None,) * len(type_.fields)
-                    )
-                    return Tuple(
-                        tuple(
-                            build(field, value)
-                            for field, value in zip(type_.fields, elements, strict=True)
-                        ),
-                        type=type_,
-                    )
-                leaf = SSAValue(expr, index)
-                index += 1
-                if type_.shape == () and isinstance(lowered, (Call, Constant)):
-                    return lowered
-                return (
-                    self.tensor(leaf, lowered, ctx=ctx, values=values)
-                    if leaf in ctx.storage.answers
-                    else lowered
-                )
-
-            return build(expr.type, fallback)
-        leaf = expr
-        known = ctx.tensors.get(leaf)
-        if known is not None:
-            return known
-        if (refusal := ctx.storage.answers[leaf].refusal) is not None:
-            raise LoweringError(refusal)
-        partner = ctx.storage.answers[leaf].partner
-        if isinstance(partner, int):
-            base = ctx.outputs[partner][1]
-        elif partner is not None:
-            base = self.tensor(partner, ctx=ctx, values=values)
-        else:
-            base = ctx.parameters.get(id(leaf.expr)) or ctx.allocations.get(leaf)
-            if base is None:
-                base = self.tensor(leaf, allocate=True, ctx=ctx, values=values)
-                ctx.allocations[leaf] = base
-        desired = leaves_of(leaf.expr.type)[leaf.index]
-        if desired.storage is StorageKind.GMEM and desired.dtype != base.type.dtype:
-            raise LoweringError("gmem cross-dtype reuse has no offset-view representation")
-        if desired.storage is StorageKind.SMEM and desired.dtype != base.type.dtype:
-            source = ctx.storage.answers[leaf].chain[-1]
-            result = self.tensor(source, allocate=True, desired=desired, ctx=ctx, values=values)
-        else:
-            result = (
-                base
-                if partner is None
-                else ctx.storage.view(
-                    base, ctx.storage.answers[leaf].relation, desired, values=values
-                )
-            )
-        ctx.logical[id(result)] = desired
-        ctx.tensors[leaf] = result
-        return result
-
-    def value(
-        self, value, *, desired=None, starts=None, sizes=None, stem="tile", whole_tensor=False, ctx
-    ):
-        """Materialize a deferred view or a window of an already lowered value."""
-        if isinstance(value, View):
-            scope = self.blocks[-1]
-            known = scope.views.get(id(value))
-            if known is None:
-                if isinstance(value.base, Constant) and isinstance(value.base.type, PointerType):
-                    result = self.bind(
-                        Var(value.stem, type=value.type),
-                        ctx.storage.view(value.base.value, None, value.type),
-                    )
-                else:
-                    result = self.value(
-                        value.base,
-                        desired=value.type,
-                        starts=value.starts,
-                        sizes=value.sizes,
-                        stem=value.stem,
-                        whole_tensor=value.whole_tensor,
-                        ctx=ctx,
-                    )
-                scope.views[id(value)] = (value, result)
-                ctx.logical[id(result)] = ctx.logical.get(id(value), value.type)
-            value = scope.views[id(value)][1]
-        if desired is None:
-            return value
-        held = value.type
-        if not isinstance(held, TensorType):
-            raise LoweringError(f"a tensor window cannot use {held!r} as its base")
-        if starts is None:
-            comparable = replace(desired, layout=resolve_layout(desired.layout, desired.shape))
-            if (
-                whole_tensor
-                and replace(held, layout=resolve_layout(held.layout, held.shape)) == comparable
-            ):
-                return value
-            actual = (
-                replace(held, layout=participant_layout(held.layout))
-                if isinstance(held.layout, ShardLayout)
-                else held
-            )
-            actual = replace(actual, layout=resolve_layout(actual.layout, actual.shape))
-            if actual == comparable or (
-                not whole_tensor
-                and not isinstance(desired.layout, ShardLayout)
-                and held.shape == desired.shape
-                and held.dtype == desired.dtype
-                and held.storage is desired.storage
-            ):
-                return value
-            starts, sizes = tuple(i64_const(0) for _ in held.shape), tuple(held.shape)
-        if len(starts) != len(held.shape):
-            raise LoweringError(
-                f"a rank-{len(held.shape)} buffer is windowed by {len(starts)} starts"
-            )
-        if desired.layout is None:
-            desired = replace(
-                desired,
-                layout=Layout(tuple(desired.shape), tuple(compact_row_major(tuple(desired.shape)))),
-            )
-        source = value
-        if not whole_tensor:
-            keys = Tuple(starts, type=TupleType(tuple(start.type for start in starts)))
-            source = Call(
-                Slice(sizes=tuple(sizes), strides=(1,) * len(sizes)),
-                (value, keys),
-                type=TensorType(tuple(sizes), held.dtype, None, held.storage),
-            )
-            inferred = typeinfer_registry.lookup(Slice)(
-                source,
-                TypeInferContext(
-                    memo={id(arg): (arg, arg.type) for arg in (value, *starts)},
-                    loops=tuple(self.loops),
-                ),
-            )
-            source.type = getattr(inferred, "type", inferred)
-        pointer = Call(PtrOf(), (source,), type=PointerType(held.dtype, held.storage))
-        view = Call(
-            TensorView(layout=desired.layout, shape=tuple(desired.shape)), (pointer,), type=desired
+    def declare(self, leaf, *, ctx, values, desired=None):
+        """Declare one allocation root in its owning scope."""
+        expr = leaf.expr
+        type_ = desired or leaves_of(expr.type)[leaf.index]
+        buffers = getattr(expr.target, "buffers", 1) if isinstance(expr, Call) else 1
+        owner = (
+            ctx.storage.placement[id(expr)][0]
+            if buffers > 1
+            else ctx.storage.placement.get(id(expr), (None, (), None))[2]
+            if type_.storage is StorageKind.RMEM
+            else None
         )
-        return self.bind(Var(ctx.names.fresh(stem), type=desired), view)
+        with ctx.builder.region(owner=owner):
+            layout = type_.layout.layout if isinstance(type_.layout, ShardLayout) else type_.layout
+            storage_type = replace(type_, layout=layout)
+            stem = ctx.names.fresh(
+                expr.name if isinstance(expr, Var) else "value",
+                ctx.authored_values.get(id(expr)),
+            )
+            if type_.storage is StorageKind.RMEM:
+                storage_type = type_
+                var = Var(stem, type=storage_type)
+                ctx.builder.bind(
+                    var, Call(AllocTensor(tensor_type=storage_type), (), type=storage_type)
+                )
+                return var
+            if storage_type.storage not in (StorageKind.SMEM, StorageKind.GMEM):
+                raise LoweringError(
+                    f"{_label(expr)} has addressable result in unsupported storage {storage_type.storage}"
+                )
+            offsets = ctx.storage.answers[leaf].offsets
+            if not offsets:
+                raise LoweringError(
+                    f"{_label(expr)} has an addressable {storage_type.storage} result but no offsets"
+                )
+            if len(offsets) != buffers:
+                raise LoweringError(
+                    f"{_label(expr)} declares {buffers} buffer(s), but memory analysis placed {len(offsets)}"
+                )
+            if storage_type.storage is StorageKind.GMEM:
+                if buffers != 1:
+                    raise LoweringError(f"{_label(expr)} uses staged internal gmem")
+                elements = prod(tuple(storage_type.shape))
+                scratch = Var(
+                    ctx.names.fresh("scratch"),
+                    type=TensorType((elements,), storage_type.dtype, None, StorageKind.GMEM),
+                )
+                ctx.scratch.append(scratch)
+                storage_type = replace(
+                    storage_type,
+                    layout=Layout(
+                        tuple(storage_type.shape),
+                        tuple(compact_row_major(tuple(storage_type.shape))),
+                    ),
+                )
+                view = View(scratch, (i64_const(0),), (elements,), storage_type, stem)
+                return view
+            fields = tuple(ctx.storage.view(offset, None, storage_type) for offset in offsets)
+            if len(fields) == 1:
+                view = View(fields[0].args[0], (), tuple(storage_type.shape), storage_type, stem)
+                return view
+            stages = Var(
+                ctx.names.fresh(f"{stem}_stages"),
+                type=TupleType(tuple(field.type for field in fields)),
+            )
+            ctx.builder.bind(stages, Tuple(fields, type=stages.type))
+            loops = ctx.storage.placement[id(expr)][1]
+            if any(
+                static_dim_value(bound) is None
+                for loop in loops[1:]
+                for bound in (loop.start, loop.extent, loop.step)
+            ):
+                key = tuple(id(loop) for loop in loops)
+                if key not in self.stage_counters:
+                    counter = Var(ctx.names.fresh("stage_counter"), type=_BINDING)
+                    one = Var(ctx.names.fresh("stage_one"), type=_BINDING)
+                    with ctx.builder.region(owner=ctx.storage.placement[id(expr)][0]):
+                        for value, number in ((counter, 0), (one, 1)):
+                            ctx.builder.bind(
+                                value,
+                                Call(AllocTensor(tensor_type=_BINDING), (), type=_BINDING),
+                            )
+                            ctx.builder.add(
+                                Evaluate(Fill(), (value, Constant(number, type=_BINDING)))
+                            )
+                    self.stage_counters[key] = (counter, one)
+                counter, _one = self.stage_counters[key]
+                index = simplify_dim(DimMod, (counter, len(stages.type.fields)))
+                return Call(TupleGetItem(), (stages, index), type=stages.type.fields[0])
+            index = i64_const(0)
+            for depth, loop in enumerate(loops):
+                induction = values.get(id(loop.induction_var))
+                if not isinstance(induction, Var):
+                    raise LoweringError(f"{_label(expr)} staged selection has no owning induction")
+                start = static_dim_value(loop.start)
+                stop = static_dim_value(loop.extent)
+                step = static_dim_value(loop.step)
+                if step is None:
+                    raise LoweringError(
+                        f"{_label(expr)} staged selection needs a literal step for "
+                        f"{loop.induction_var.name!r}"
+                    )
+                if depth:
+                    trips = max(0, (stop - start + step - 1) // step)
+                    index = simplify_dim(DimMul, (index, trips))
+                moved = (
+                    induction
+                    if start == 0
+                    else simplify_dim(DimSub, (induction, values[id(loop.start)]))
+                )
+                ordinal = moved if step == 1 else simplify_dim(DimFloorDiv, (moved, step))
+                index = ordinal if depth == 0 else simplify_dim(DimAdd, (index, ordinal))
+            if loops:
+                index = simplify_dim(DimMod, (index, len(stages.type.fields)))
+            field = stages.type.fields[0]
+            return Call(TupleGetItem(), (stages, index), type=field)
+
+    def value(self, value, *, ctx):
+        """Materialize a recipe in its consuming scope without changing it."""
+        if not isinstance(value, View):
+            return value
+        scope = self.blocks[-1]
+        known = scope.views.get(id(value))
+        if known is None:
+            base = self.value(value.base, ctx=ctx)
+            expression = ctx.storage.materialization(value, base, tuple(self.loops))
+            stem = (
+                value.stem
+                if isinstance(base, Constant) and isinstance(base.type, PointerType)
+                else ctx.names.fresh(value.stem)
+            )
+            result = self.bind(Var(stem, type=expression.type), expression)
+            scope.views[id(value)] = (value, result)
+        return scope.views[id(value)][1]
 
     def transfer(
         self,
@@ -499,8 +359,9 @@ class TirBuilder:
         desired: TensorType | None = None,
         ctx,
         op=None,
+        source_type=None,
     ) -> None:
-        source_type = ctx.logical.get(id(source), source.type)
+        source_type = source.type if source_type is None else source_type
         if not isinstance(source_type, TensorType) or not isinstance(target.type, TensorType):
             raise LoweringError("copy lowering requires tensor operands")
         mesh = next(
@@ -518,19 +379,17 @@ class TirBuilder:
             read = (
                 self.value(source, ctx=ctx)
                 if mesh is None
-                else self.value(
-                    source,
-                    ctx=ctx,
-                    desired=source_type,
-                    stem=f"{getattr(source, 'name', 'value')}_view",
-                )
+                else self.value(ctx.storage.operand(source, source_type), ctx=ctx)
             )
             written = self.value(target, ctx=ctx)
             if starts is not None:
                 if sizes is None or desired is None:
                     raise LoweringError("a windowed copy needs sizes and a destination type")
                 written = self.value(
-                    written, starts=starts, sizes=sizes, desired=desired, stem="window", ctx=ctx
+                    ctx.storage.operand(
+                        written, desired, starts=starts, sizes=sizes, stem="window"
+                    ),
+                    ctx=ctx,
                 )
             ctx.builder.add(Evaluate(Copy(), (read, written)))
 
@@ -586,6 +445,7 @@ class StorageAnswer:
     offsets: tuple[int, ...]
     relation: AccessRelation | None
     refusal: str | None
+    kind: AliasKind | None = None
 
 
 @dataclass
@@ -790,6 +650,7 @@ class StoragePlan:
                 getattr(get_metadata(leaf.expr, MemoryMetadata), "offsets", ()),
                 relation,
                 None,
+                kind,
             )
         return {
             leaf: replace(
@@ -897,9 +758,9 @@ class StoragePlan:
             )
         return result
 
-    def runtime_values(self, expr, tensors):
+    def runtime_values(self, expr, memo):
         """List HIR inputs the caller must lower before tensor calculations."""
-        dimensions, inductions = {}, {}
+        dimensions = {}
         leaves = (
             (expr,)
             if isinstance(expr, SSAValue)
@@ -911,15 +772,105 @@ class StoragePlan:
             if (refusal := self.answers[leaf].refusal) is not None:
                 raise LoweringError(refusal)
             for member in self.answers[leaf].chain:
-                if member in tensors:
+                if id(member.expr) in memo:
                     continue
                 for value in self.answers[member].relation.values.values():
                     dimensions[id(value)] = value
                 for loop in self.placement[id(member.expr)][1]:
-                    inductions[id(loop.induction_var)] = loop.induction_var
                     if static_dim_value(loop.start) != 0:
                         dimensions[id(loop.start)] = loop.start
-        return tuple(dimensions.values()), tuple(inductions.values())
+        return tuple(dimensions.values())
+
+    def hir_view(self, call, operands, values):
+        """Keep the view authored by this HIR operation, including identity views."""
+        region = self.regions[id(call)]
+        alias = buffer_alias(call, region, relations_of(call, region))
+        if alias is None:
+            raise LoweringError(self.answers[SSAValue(call)].refusal)
+        return self.view(operands[aliased_operand(call)], alias.relation, call.type, values=values)
+
+    def source(self, leaf, memo):
+        """Read a storage binding; HIR evaluation remains exclusively in Visit."""
+        windows = []
+        current = leaf
+        while True:
+            if current != leaf and id(current.expr) in memo:
+                return current, tuple(reversed(windows))
+            answer = self.answers[current]
+            if answer.refusal is not None:
+                raise LoweringError(answer.refusal)
+            if isinstance(answer.partner, int):
+                return answer.partner, tuple(reversed(windows))
+            if answer.partner is None:
+                return current, tuple(reversed(windows))
+            if answer.kind is AliasKind.WINDOW:
+                windows.append(current)
+            current = answer.partner
+
+    def operand(self, value, desired, *, starts=None, sizes=None, stem="tile", whole_tensor=False):
+        """Choose an existing operand or the window required at its use."""
+        held = value.type
+        if not isinstance(held, TensorType):
+            raise LoweringError(f"a tensor window cannot use {held!r} as its base")
+        if (
+            starts is not None
+            and tuple(sizes) == tuple(held.shape)
+            and all(static_dim_value(start) == 0 for start in starts)
+        ):
+            starts = None
+        if starts is None:
+            comparable = replace(desired, layout=resolve_layout(desired.layout, desired.shape))
+            actual = (
+                held
+                if whole_tensor
+                else replace(held, layout=participant_layout(held.layout))
+                if isinstance(held.layout, ShardLayout)
+                else held
+            )
+            actual = replace(actual, layout=resolve_layout(actual.layout, actual.shape))
+            if actual == comparable or (
+                not whole_tensor
+                and not isinstance(desired.layout, ShardLayout)
+                and held.shape == desired.shape
+                and held.dtype == desired.dtype
+                and held.storage is desired.storage
+            ):
+                return value
+            starts, sizes = tuple(i64_const(0) for _ in held.shape), tuple(held.shape)
+        return View(value, starts, sizes, desired, stem, whole_tensor)
+
+    def materialization(self, view, base, loops):
+        """Describe one physical TIR view without adding any statements."""
+        desired = view.type
+        if isinstance(base, Constant) and isinstance(base.type, PointerType):
+            return self.view(base.value, None, desired)
+        held = base.type
+        if len(view.starts) != len(held.shape):
+            raise LoweringError(
+                f"a rank-{len(held.shape)} buffer is windowed by {len(view.starts)} starts"
+            )
+        if desired.layout is None:
+            desired = replace(desired, layout=resolve_layout(None, desired.shape))
+        source = base
+        if not view.whole_tensor:
+            keys = Tuple(view.starts, type=TupleType(tuple(start.type for start in view.starts)))
+            source = Call(
+                Slice(sizes=tuple(view.sizes), strides=(1,) * len(view.sizes)),
+                (base, keys),
+                type=TensorType(tuple(view.sizes), held.dtype, None, held.storage),
+            )
+            inferred = typeinfer_registry.lookup(Slice)(
+                source,
+                TypeInferContext(
+                    memo={id(arg): (arg, arg.type) for arg in (base, *view.starts)},
+                    loops=loops,
+                ),
+            )
+            source.type = getattr(inferred, "type", inferred)
+        pointer = Call(PtrOf(), (source,), type=PointerType(held.dtype, held.storage))
+        return Call(
+            TensorView(layout=desired.layout, shape=tuple(desired.shape)), (pointer,), type=desired
+        )
 
     def window(self, target, desired, starts, *, instruction=False):
         """Derive a window at already lowered coordinates.
@@ -1189,11 +1140,75 @@ class LoweringContext(TypeInferContext):
     names: Names
     outputs: list[tuple[tuple[int, ...], Var]] = field(default_factory=list)
     scratch: list[Var] = field(default_factory=list)
-    logical: dict = field(default_factory=dict)
-    tensors: dict = field(default_factory=dict)
     allocations: dict = field(default_factory=dict)
     parameters: dict = field(default_factory=dict)
     authored_values: dict = field(default_factory=dict)
+
+    def value(self, leaf):
+        result = self.memo[id(leaf.expr)][1]
+        pending = [result]
+        index = 0
+        while pending:
+            value = pending.pop()
+            if isinstance(value, Tuple):
+                pending.extend(reversed(value.elements))
+            elif index == leaf.index:
+                return value
+            else:
+                index += 1
+        raise LoweringError(f"missing lowered leaf {leaf.index} of {_label(leaf.expr)}")
+
+    def result(self, expr):
+        """Select result storage using completed Visit results and root declarations."""
+        values = {key: value for key, (_expr, value) in self.memo.items()}
+        values.update(
+            (id(value), self.dim(value, self.memo))
+            for value in self.storage.runtime_values(expr, self.memo)
+        )
+        fields = []
+        for index, desired in enumerate(leaves_of(expr.type)):
+            leaf = SSAValue(expr, index)
+            source, windows = self.storage.source(leaf, self.memo)
+            if isinstance(source, int):
+                result = self.outputs[source][1]
+            elif id(source.expr) in self.memo:
+                result = self.value(source)
+            else:
+                result = self.allocations.get(source)
+                if result is None:
+                    result = self.builder.declare(source, ctx=self, values=values)
+                    self.allocations[source] = result
+            if desired.storage is StorageKind.GMEM and desired.dtype != result.type.dtype:
+                raise LoweringError("gmem cross-dtype reuse has no offset-view representation")
+            if desired.storage is StorageKind.SMEM and desired.dtype != result.type.dtype:
+                root = self.storage.answers[leaf].chain[-1]
+                result = self.builder.declare(root, ctx=self, values=values, desired=desired)
+            for window in windows:
+                result = self.storage.view(
+                    result,
+                    self.storage.answers[window].relation,
+                    leaves_of(window.expr.type)[window.index],
+                    values=values,
+                )
+                result = self.storage.operand(
+                    result.base,
+                    result.type,
+                    starts=result.starts,
+                    sizes=result.sizes,
+                    stem=result.stem,
+                    whole_tensor=result.whole_tensor,
+                )
+            fields.append(result)
+        fields = iter(fields)
+
+        def pack(type_):
+            return (
+                Tuple(tuple(pack(field) for field in type_.fields), type=type_)
+                if isinstance(type_, TupleType)
+                else next(fields)
+            )
+
+        return pack(expr.type)
 
     def dim(self, value, values) -> Expr:
         number = static_dim_value(value)
@@ -1252,6 +1267,9 @@ class Lowering(ValuationVisitor[Expr | View]):
                     ):
                         self.visit(value, ctx=ctx)
             return ctx.dim(expr, self._memo)
+        known = ctx.memo.get(id(expr))
+        if known is not None:
+            return known[1]
         ctx.names.pair(expr, ctx)
         if isinstance(expr, Constant):
             return expr
@@ -1263,17 +1281,12 @@ class Lowering(ValuationVisitor[Expr | View]):
         else:
             if isinstance(expr, (LoopRegion, MeshRegion)) and id(expr) not in self._memo:
                 values = tuple(self.visit(arg, ctx=ctx) for arg in expr.args)
-                for param, value in zip(expr.params, values, strict=True):
-                    self._memo[id(param)] = (
-                        param,
-                        self.tensor(param, value, ctx=ctx)
-                        if SSAValue(param) in ctx.storage.answers
-                        else value,
-                    )
+                for index, (param, value) in enumerate(zip(expr.params, values, strict=True)):
+                    if not isinstance(expr, LoopRegion) or index >= len(expr.yield_values):
+                        ctx.memo[id(param)] = (param, value)
             result = super().visit(expr, ctx)
-        return (
-            self.tensor(expr, result, ctx=ctx) if SSAValue(expr) in ctx.storage.answers else result
-        )
+        self._memo[id(expr)] = (expr, result)
+        return result
 
     def __post_init__(self) -> None:
         super().__init__()
@@ -1287,6 +1300,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             issues=IssuePlan(),
         )
         ctx = self.context
+        ctx.memo = self._memo
         if ctx.frame.function.body is not None and self.authored.body is not None:
             ctx.authored_values[id(ctx.frame.function.body)] = self.authored.body
         self.locations = self.index_contexts(ctx.frame.function, self.context)
@@ -1294,8 +1308,6 @@ class Lowering(ValuationVisitor[Expr | View]):
             physical = Var(param.name, type=param.type, is_const=param.is_const)
             ctx.parameters[id(param)] = physical
             self._memo[id(param)] = (param, physical)
-            if isinstance(param.type, TensorType):
-                ctx.logical[id(physical)] = param.type
 
     def run(self) -> PrimFunction:
         ctx = self.context
@@ -1330,15 +1342,6 @@ class Lowering(ValuationVisitor[Expr | View]):
             target=self.context.frame.target,
         )
 
-    def tensor(self, expr, fallback=None, *, ctx):
-        dimensions, inductions = ctx.storage.runtime_values(expr, ctx.tensors)
-        values = {id(value): self.visit(value, ctx=ctx, dimension=True) for value in dimensions}
-        for induction in inductions:
-            known = self._memo.get(id(induction))
-            if known is not None:
-                values[id(induction)] = known[1]
-        return ctx.builder.tensor(expr, fallback, ctx=ctx, values=values)
-
     def visit_MeshRegion(self, region: MeshRegion, ctx):
         mesh = region.mesh
         binding = Var(
@@ -1352,12 +1355,13 @@ class Lowering(ValuationVisitor[Expr | View]):
     def visit_LoopRegion(self, loop: LoopRegion, ctx) -> Expr:
         carried_values = []
         for slot, param in enumerate(loop.params[: len(loop.yield_values)]):
-            carried = self.tensor(param, ctx=ctx)
+            initial = self.visit(loop.args[slot], ctx=ctx)
+            carried = ctx.result(param)
             if not any(
                 alias.kind is AliasKind.CARRY_INIT and alias.target == SSAValue(loop.args[slot])
                 for alias in ctx.storage.answers[SSAValue(param)].aliases
             ):
-                ctx.builder.transfer(self.visit(loop.args[slot], ctx=ctx), carried, ctx=ctx)
+                ctx.builder.transfer(initial, carried, ctx=ctx, source_type=loop.args[slot].type)
             self._memo[id(param)] = (param, carried)
             carried_values.append(carried)
         init = tuple(carried_values)
@@ -1382,7 +1386,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                     alias.kind is AliasKind.CARRY_YIELD and alias.target == SSAValue(param)
                     for alias in ctx.storage.answers[SSAValue(source)].aliases
                 ):
-                    ctx.builder.transfer(value, carried, ctx=ctx)
+                    ctx.builder.transfer(value, carried, ctx=ctx, source_type=source.type)
             for counter, one in (
                 values for key, values in ctx.builder.stage_counters.items() if key[-1] == id(loop)
             ):
@@ -1396,20 +1400,26 @@ class Lowering(ValuationVisitor[Expr | View]):
 
     def visit_Call(self, call: Call, ctx) -> Expr:
         target = call.target
-        if self.callee_frame(call, ctx.frame) is not None:
-            return self._lower_call(call, ctx=ctx)
         if (
             is_dim_op_call(call)
             or isinstance(target, MeshCoord)
             or (isinstance(target, HirBinary) and call.type.shape == ())
         ):
             return self.visit(call, ctx=ctx, dimension=True)
+        values = {}
+        if SSAValue(call) in ctx.storage.answers:
+            if (refusal := ctx.storage.answers[SSAValue(call)].refusal) is not None:
+                raise LoweringError(refusal)
+            values = {
+                id(value): self.visit(value, ctx=ctx, dimension=True)
+                for value in ctx.storage.runtime_values(call, ctx.memo)
+            }
+        operands = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
+        if self.callee_frame(call, ctx.frame) is not None:
+            return self._lower_call(call, operands, ctx=ctx)
         name = type(target).__name__
         if name == "TupleGetItem":
-            source, index = (
-                self.visit(call.args[0], ctx=ctx),
-                self.visit(call.args[1], ctx=ctx, dimension=True),
-            )
+            source, index = operands
             return (
                 source.elements[index.value]
                 if isinstance(source, Tuple) and isinstance(index, Constant)
@@ -1418,13 +1428,11 @@ class Lowering(ValuationVisitor[Expr | View]):
         if name in ("Slice", "Reshape", "Bitcast") or (
             name == "Reshard" and aliased_operand(call) is not None
         ):
-            for arg in call.args:
-                self.visit(arg, ctx=ctx)
-            return self.tensor(call, ctx=ctx)
+            return ctx.storage.hir_view(call, operands, values)
         if name in ("Empty", "Zeros", "FullLike"):
             if name == "Empty" and call.type.storage is StorageKind.RMEM and target.buffers != 1:
                 raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
-            result = self.tensor(call, ctx=ctx)
+            result = ctx.result(call)
             if name != "Empty":
                 scalar = Constant(
                     getattr(target, "value", 0.0), type=TensorType.scalar(call.type.dtype)
@@ -1437,11 +1445,13 @@ class Lowering(ValuationVisitor[Expr | View]):
                 "tf.schedule((x, tf.empty(...), idx), op=T.copy_async(fill=...))"
             )
         if name == "InsertSlice":
-            return self.visit_InsertSlice(call, ctx)
+            return self.visit_InsertSlice(call, operands, ctx)
         op = ctx.issues.op(call)
-        return getattr(self, f"visit_{type(op).__name__}", self.instruction)(call, op, ctx)
+        return getattr(self, f"visit_{type(op).__name__}", self.instruction)(
+            call, op, operands, ctx
+        )
 
-    def _lower_call(self, call: Call, *, ctx) -> Expr | View:
+    def _lower_call(self, call: Call, args, *, ctx) -> Expr | View:
         frame = self.callee_frame(call, ctx.frame)
         lowering = self.callees.get(id(frame.function))
         if lowering is None:
@@ -1452,9 +1462,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             )
             lowering.lowered = lowering.run()
             self.callees[id(frame.function)] = lowering
-        args = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
-        destination = self.tensor(call, ctx=ctx)
-        ctx.logical[id(destination)] = call.type
+        destination = ctx.result(call)
         scratch = []
         for param in lowering.context.scratch:
             forwarded = Var(ctx.names.fresh(param.name), type=param.type)
@@ -1476,7 +1484,8 @@ class Lowering(ValuationVisitor[Expr | View]):
         for value, param in zip((*args, *scratch, destination), params, strict=True):
             passed.append(
                 ctx.builder.value(
-                    value, whole_tensor=True, ctx=ctx, desired=param.type, stem="argument"
+                    ctx.storage.operand(value, param.type, whole_tensor=True, stem="argument"),
+                    ctx=ctx,
                 )
                 if isinstance(param.type, TensorType)
                 else ctx.builder.value(value, ctx=ctx)
@@ -1484,15 +1493,14 @@ class Lowering(ValuationVisitor[Expr | View]):
         ctx.builder.add(Evaluate(target, tuple(passed)))
         return destination
 
-    def visit_InsertSlice(self, call: Call, ctx) -> Expr:
-        target = self.visit(call.args[0], ctx=ctx)
-        update = self.visit(call.args[1], ctx=ctx)
-        result = self.tensor(call, ctx=ctx)
+    def visit_InsertSlice(self, call: Call, operands, ctx) -> Expr:
+        target, update = operands[:2]
+        result = ctx.result(call)
         if not any(
             alias.kind is AliasKind.INSERT_SLICE and alias.target == SSAValue(call.args[0])
             for alias in ctx.storage.answers[SSAValue(call)].aliases
         ):
-            ctx.builder.transfer(target, result, ctx=ctx)
+            ctx.builder.transfer(target, result, ctx=ctx, source_type=call.args[0].type)
         if any(
             alias.kind is AliasKind.WINDOW and alias.target == SSAValue(call)
             for alias in ctx.storage.answers[SSAValue(call.args[1])].aliases
@@ -1517,10 +1525,11 @@ class Lowering(ValuationVisitor[Expr | View]):
             sizes=tuple(update.type.shape),
             desired=desired,
             ctx=ctx,
+            source_type=call.args[1].type,
         )
         return result
 
-    def instruction(self, call: Call, op, ctx) -> Expr:
+    def instruction(self, call: Call, op, operands, ctx) -> Expr:
         mesh = ctx.enclosing_mesh()
         plan, types, owner = ctx.issues.plan(call, op, mesh)
         params = plan.params
@@ -1532,32 +1541,17 @@ class Lowering(ValuationVisitor[Expr | View]):
             if isinstance(call.target, ScheduleOp) and produced
             else None
         )
-        actuals = (
-            None
-            if isinstance(call.target, ScheduleOp)
-            else tuple(self.visit(arg, ctx=ctx) for arg in call.args)
-        )
-        written = self.tensor(call, ctx=ctx) if produced else None
+
+        written = ctx.result(call) if produced else None
         read_values = {}
         supplied = params if isinstance(call.target, ScheduleOp) else reads
         for index, (param, operand) in enumerate(zip(supplied, call.args, strict=True)):
-            value = (
-                written
-                if operand is destination_operand
-                else self.visit(operand, ctx=ctx)
-                if actuals is None
-                else actuals[index]
-            )
+            value = written if operand is destination_operand else operands[index]
             if (
                 not isinstance(call.target, ScheduleOp)
                 and operand.type != types[params.index(param)]
             ):
-                value = View(
-                    value,
-                    tuple(i64_const(0) for _ in value.type.shape),
-                    tuple(value.type.shape),
-                    types[params.index(param)],
-                )
+                value = ctx.storage.operand(value, types[params.index(param)], whole_tensor=True)
             if (
                 isinstance(op, CopyAsync)
                 and is_indexed_copy(call.args)
@@ -1574,14 +1568,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                     value.type,
                     layout=ctx.issues.source_layout(value.type),
                 )
-                value = View(
-                    value,
-                    tuple(i64_const(0) for _ in value.type.shape),
-                    tuple(value.type.shape),
-                    type_,
-                    "source",
-                    whole_tensor=True,
-                )
+                value = ctx.storage.operand(value, type_, stem="source", whole_tensor=True)
             if (
                 isinstance(value.type, TensorType)
                 and value.type.shape == ()
@@ -1594,10 +1581,9 @@ class Lowering(ValuationVisitor[Expr | View]):
                         scalar, Call(AllocTensor(tensor_type=scalar_type), (), type=scalar_type)
                     )
                 ctx.builder.add(Evaluate(Fill(), (scalar, ctx.builder.value(value, ctx=ctx))))
-                ctx.logical[id(scalar)] = scalar_type
                 value = scalar
             read_values[param.name] = value
-        operands: list[tuple[str, Expr | None]] = []
+        issued_operands: list[tuple[str, Expr | None]] = []
         for param in params:
             value = (
                 read_values[param.name]
@@ -1606,8 +1592,14 @@ class Lowering(ValuationVisitor[Expr | View]):
             )
             if value is None:
                 raise LoweringError(f"{_label(call)} has no storage for {param.name}")
-            operands.append((param.name, value))
+            issued_operands.append((param.name, value))
 
+        types = tuple(
+            replace(type_, storage=StorageKind.RMEM)
+            if type_.shape == () and type_.storage is StorageKind.UMAT
+            else type_
+            for type_ in types
+        )
         atom = getattr(op, "atom", None)
         if atom is None:
             if mesh is None:
@@ -1616,10 +1608,12 @@ class Lowering(ValuationVisitor[Expr | View]):
                 mesh=owner, binding=Var(ctx.names.fresh("threads"), type=_BINDING)
             ):
                 issued = []
-                for role, value in operands:
-                    desired = ctx.logical.get(id(value), value.type)
+                for param, (role, value) in zip(params, issued_operands, strict=True):
+                    desired = types[params.index(param)]
                     issued.append(
-                        ctx.builder.value(value, ctx=ctx, desired=desired, stem=f"{role}_view")
+                        ctx.builder.value(
+                            ctx.storage.operand(value, desired, stem=f"{role}_view"), ctx=ctx
+                        )
                     )
                 attributes = {
                     param.name: getattr(op, param.name)
@@ -1635,20 +1629,24 @@ class Lowering(ValuationVisitor[Expr | View]):
             )
         for windows in ctx.issues.points(plan, op):
             issued = []
-            for (role, value), desired, starts in zip(operands, plan.issued, windows, strict=True):
-                logical_type = ctx.logical.get(id(value), value.type)
+            for (role, value), desired, starts in zip(
+                issued_operands, plan.issued, windows, strict=True
+            ):
+                logical_type = types[
+                    next(index for index, param in enumerate(params) if param.name == role)
+                ]
                 if tuple(logical_type.shape) == tuple(desired.shape):
-                    item = ctx.builder.value(value, ctx=ctx, desired=desired, stem=f"{role}_view")
+                    item = ctx.builder.value(
+                        ctx.storage.operand(value, desired, stem=f"{role}_view"), ctx=ctx
+                    )
                 else:
                     base = ctx.builder.value(value, ctx=ctx)
                     starts, physical = ctx.storage.window(base, desired, starts, instruction=True)
                     item = ctx.builder.value(
-                        base,
+                        ctx.storage.operand(
+                            base, physical, starts=starts, sizes=desired.shape, stem=f"{role}_view"
+                        ),
                         ctx=ctx,
-                        starts=starts,
-                        sizes=desired.shape,
-                        desired=physical,
-                        stem=f"{role}_view",
                     )
                 issued.append(item)
             ctx.builder.add(Evaluate(op, tuple(issued)))
