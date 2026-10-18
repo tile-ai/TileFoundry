@@ -11,8 +11,10 @@ No GPU, no codegen, no runtime.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from types import SimpleNamespace
 from typing import ClassVar
 
+import isl
 import pytest
 
 from tests.fixtures.logical.hir_composition import REFERENCE_PROGRAMS, CrossModule, Expert
@@ -20,10 +22,20 @@ from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.shapes.scaled_modules import FusedScaledParent, ScaledChild, StackedScaledParent
 from tests.models.qwen3_1_7b.case import CASE as QWEN_CASE
 from tests.models.qwen3_1_7b.model import Qwen3_1_7B
+from tilefoundry.analysis.access import SSAValue
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.metadata import ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata
+from tilefoundry.analysis.footprint import ReachedAddresses, resolve_footprint
+from tilefoundry.analysis.metadata import (
+    BindingValuation,
+    ComputeCostMetadata,
+    Footprint,
+    LoopNestValuation,
+    MemoryMetadata,
+    RegionMemoryMetadata,
+)
+from tilefoundry.analysis.precision import AnalysisPrecision
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Constant, Tuple, Var, attach_metadata, get_metadata
@@ -46,6 +58,7 @@ from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.utils import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget, Target
+from tilefoundry.visitor_registry.access_relation import AccessRelation
 from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
 
 _H200 = "nvidia.h200_sxm"
@@ -541,3 +554,58 @@ def test_repeated_callee_placement_compares_alias_even_at_the_same_offset():
     ]
     assert len(buffers) == 2
     assert all(len(record.offsets) == 1 for record in buffers)
+
+
+@pytest.mark.parametrize(
+    "ownership,coordinates",
+    [
+        (("layers",), "{ [layer, addr] : 0 <= layer < 3 and addr = 2*layer }"),
+        (
+            ("layers", "experts"),
+            "{ [layer, expert, addr] : 0 <= layer < 2 and 0 <= expert < 3 and addr = 10*layer + expert }",
+        ),
+    ],
+)
+def test_nested_weight_footprint_projection_keeps_instance_address_correlation(
+    ownership, coordinates
+):
+
+    weight = Var("w", type=TensorType((32,), DType.f32, None, StorageKind.GMEM), is_const=True)
+    item = ReachedAddresses(
+        SSAValue(weight),
+        None,
+        DType.f32,
+        isl.set(coordinates),
+        AnalysisPrecision.EXACT,
+        ownership=ownership,
+    )
+    footprint = Footprint((((), (item,)),))
+
+    def project(source):
+        shifted = source.relation.relation.apply_range(isl.map("{ [i] -> [j] : j=i+4 }"))
+        return replace(
+            source, relation=AccessRelation(shifted, source.relation.values)
+        ), AnalysisPrecision.EXACT
+
+    values = {
+        BindingValuation: SimpleNamespace(project=project),
+        LoopNestValuation: SimpleNamespace(domain=lambda: isl.set("{ [] }")),
+    }
+    result = resolve_footprint(
+        footprint, SimpleNamespace(request_valuation=lambda kind: values[kind])
+    )
+    actual = result.groups[0][1][0]
+    rank = len(ownership)
+    # Shift only the address coordinate; instance coordinates remain correlated.
+    offset = isl.map(
+        "{ ["
+        + ",".join(f"i{k}" for k in range(rank + 1))
+        + "] -> ["
+        + ",".join([*(f"i{k}" for k in range(rank)), f"i{rank}+4"])
+        + "] }"
+    )
+    expected = item.reached.apply(offset)
+    assert actual.reached.is_equal(expected)
+    assert actual.must.is_equal(expected)
+    assert actual.ownership == ownership
+    assert not actual.values
