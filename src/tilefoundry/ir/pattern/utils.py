@@ -114,6 +114,15 @@ def thread_execution_mesh() -> MeshPattern:
     return MeshPattern(("thread",), _THREAD_EXECUTION_LAYOUT)
 
 
+def memory_execution_mesh() -> OrPattern:
+    """Memory statements may execute on CUDA threads or Apple CPU/AMX units."""
+    return OrPattern(
+        thread_execution_mesh(),
+        MeshPattern(("core",), _THREAD_EXECUTION_LAYOUT),
+        MeshPattern(("amx",), _THREAD_EXECUTION_LAYOUT),
+    )
+
+
 def declared_execution_mesh(op_type) -> MeshPattern | OrPattern:
     """Return one op's reserved execution-mesh declaration or reject it."""
     declaration = op_type if isinstance(op_type, type) else type(op_type)
@@ -132,13 +141,14 @@ def declared_execution_mesh(op_type) -> MeshPattern | OrPattern:
     return declared
 
 
-def _sharded_on(execution_mesh: MeshPattern) -> OrPattern:
+def _sharded_on(execution_mesh: MeshPattern | OrPattern) -> OrPattern:
     """A lexical tile, or a shard explicitly held by *execution_mesh*."""
     return OrPattern(
-        ShardLayoutPattern(
-            layout=WildcardPattern(),
-            attrs=WildcardPattern(),
-            mesh=execution_mesh,
+        *(
+            ShardLayoutPattern(layout=WildcardPattern(), attrs=WildcardPattern(), mesh=mesh)
+            for mesh in (
+                execution_mesh.patterns if isinstance(execution_mesh, OrPattern) else (execution_mesh,)
+            )
         ),
         LayoutPattern(),
     )

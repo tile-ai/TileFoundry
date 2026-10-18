@@ -24,10 +24,14 @@ class Fill(Op):
 
     execution_mesh = utils.thread_execution_mesh()
 
+    @classmethod
+    def execution_mesh_pattern(cls):
+        return utils.memory_execution_mesh()
+
     tensor = ParamDef(
         kind="input",
         effect=MemoryEffect.WRITE,
-        pattern=utils.operand_tile(0, execution_mesh=execution_mesh),
+        pattern=utils.operand_tile(0, execution_mesh=utils.memory_execution_mesh()),
     )
     value = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=is_scalar_tensor())
 

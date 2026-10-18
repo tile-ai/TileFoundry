@@ -582,6 +582,11 @@ class TensorView(Op):
   - `T.ptr_of` MAY point at an allocated `ShardTensor`; the view rebuilds over
     the engine pointer rather than reusing the existing shard layout.
 
+Copy and Fill admit CUDA `thread`, CPU `core`, and Apple `amx` execution
+scopes through the shared memory execution pattern. A sharded register operand
+must name the selected scope. Their canonical CUDA `execution_mesh` descriptor
+remains available; admission uses `execution_mesh_pattern()`.
+
 ##### Copy
 ```python
 class Copy(Op):
