@@ -10,8 +10,8 @@ from tilefoundry.target import CudaTarget
 
 @prim_func(target=CudaTarget("nvidia.h200_sxm"))
 def gemm(x: Tensor[(6, 8), "bf16"], out: Tensor[(6, 8), "bf16", "rmem"]):
-    with Mesh((Topology("cta", 1),), layout=(1,), names=("block",)) as cta:
-        with Mesh((Topology("thread", 32),), layout=(32,), names=("lane",)) as scope:
+    with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
+        with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
             T.fill(out, 0.0)
             ring_stages = (
                 T.tensor_view(0, dtype="bf16", storage="smem", layout=(1, 8), shape=(1, 8)),
@@ -24,10 +24,13 @@ def gemm(x: Tensor[(6, 8), "bf16"], out: Tensor[(6, 8), "bf16", "rmem"]):
                         layout=((1, 8), (0, 1)),
                         shape=(1, 8),
                     )
-                    T.copy_async(value, ring_stages[((i * 3) + j) % 2])
                     value_1 = T.tensor_view(
+                        T.ptr_of(ring_stages[((i * 3) + j) % 2]), layout=(1, 8), shape=(1, 8)
+                    )
+                    T.copy_async(value, value_1)
+                    value_2 = T.tensor_view(
                         T.ptr_of(out[(3 * i) + j:(3 * i) + j + 1, 0:0 + 1]),
                         layout=((1, 8), (0, 1)),
                         shape=(1, 8),
                     )
-                    T.copy(ring_stages[((i * 3) + j) % 2], value_1)
+                    T.copy(value_1, value_2)

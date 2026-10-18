@@ -11,21 +11,20 @@ from tilefoundry.target import CudaTarget
 
 @prim_func(target=CudaTarget("nvidia.h200_sxm"))
 def gemm(x: Tensor[(4, 32), "f32"], out: Tensor[(4, 32), "f32"]):
-    with Mesh((Topology("cta", 4),), layout=(2, 2), names=("b", "c")) as cta:
+    with Mesh((Topology("cta", 4),), layout=(2, 2), names=("d0", "d1")) as cta:
         with cta[:, :1] as scope:
-            with Mesh((Topology("thread", 128),), layout=(4, 32), names=("w", "t")) as scope_1:
+            with Mesh(
+                (Topology("thread", 128),), layout=(4, 32), names=("d0", "d1")
+            ) as scope_1:
                 value = T.alloc_tensor(
-                    tensor_type=Tensor[(4, 32), "f32", (4 @ scope_1.w, 32 @ scope_1.t), "rmem"]
+                    tensor_type=Tensor[
+                        (4, 32), "f32", (4 @ scope_1.d0, 32 @ scope_1.d1), "rmem"
+                    ]
                 )
-                dst_view = T.tensor_view(
-                    T.ptr_of(value[0:0 + 4, 0:0 + 32]),
-                    layout=(4 @ scope_1.w, 32 @ scope_1.t),
-                    shape=(4, 32),
+                value_1 = T.tensor_view(T.ptr_of(x), layout=(4, 32), shape=(4, 32))
+                value_2 = T.tensor_view(
+                    T.ptr_of(value), layout=(4 @ scope_1.d0, 32 @ scope_1.d1), shape=(4, 32)
                 )
-                T.copy(x, dst_view)
-                src_view = T.tensor_view(
-                    T.ptr_of(value[0:0 + 4, 0:0 + 32]),
-                    layout=(4 @ scope_1.w, 32 @ scope_1.t),
-                    shape=(4, 32),
-                )
-                T.copy(src_view, out)
+                T.copy(value_1, value_2)
+                value_3 = T.tensor_view(T.ptr_of(out), layout=(4, 32), shape=(4, 32))
+                T.copy(value_2, value_3)
