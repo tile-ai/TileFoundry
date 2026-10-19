@@ -754,3 +754,28 @@ def shape_runtime_total(shape, dim_var_expr: dict[str, str]) -> object:
             return dyn_terms[0]
         return "(" + " * ".join(dyn_terms) + ")"
     return "(" + " * ".join([str(static_prod), *dyn_terms]) + ")"
+
+
+def leaves_of(type_: "Type") -> tuple:
+    """Every tensor leaf of one value, flat, in the order a reader indexes them."""
+    if isinstance(type_, TupleType):
+        return tuple(leaf for field in type_.fields for leaf in leaves_of(field))
+    return (type_,) if isinstance(type_, TensorType) else ()
+
+
+def leaf_span(type_: "Type", field: int) -> "tuple[int, int]":
+    """Where one field of a value begins among its flat leaves, and how many.
+
+    A structured value is indexed by leaf, not by top-level field, so a field
+    holding a tuple of its own covers a run of them. Whoever takes that field
+    takes that run.
+    """
+    if not isinstance(type_, TupleType):
+        return (0, len(leaves_of(type_)))
+    begin = sum(len(leaves_of(held)) for held in type_.fields[:field])
+    return (begin, len(leaves_of(type_.fields[field])))
+
+
+def leaf_rank(type_) -> int:
+    """Number of coordinates in a scalar or tensor leaf."""
+    return len(type_.shape) if isinstance(type_, TensorType) else 1

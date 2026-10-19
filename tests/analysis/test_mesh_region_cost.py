@@ -64,7 +64,7 @@ def _cost(owner) -> tuple[int, int, int, int]:
     assert record is not None
     memory = get_metadata(result.function, RegionMemoryMetadata)
     footprint_total = sum(
-        held.of("gmem").total for _buffer, held in memory.footprint.buffers
+        held.of("gmem").total for _buffer, _ownership, held in memory.footprint.buffers
     )
     assert get_metadata(result.function, RooflineMetadata).memory_ns == -(
         -(footprint_total * 1_000_000_000) // 4_800_000_000_000

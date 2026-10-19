@@ -102,8 +102,8 @@ def verify_mma(call: "Call", ctx: "VerifyContext") -> None:
     """Check target capability and operand shapes/dtypes after shared admission."""
     op = call.target
     atom = op.atom
-    if ctx.frame is not None and ctx.frame.module is not None:
-        capabilities = ctx.frame.target.architecture.capabilities
+    if ctx.module is not None and ctx.module is not None:
+        capabilities = ctx.target.architecture.capabilities
         if atom.capability not in capabilities:
             ctx.error(call, f"target does not support {atom.capability}")
     verify_operand_shapes(call, ctx)

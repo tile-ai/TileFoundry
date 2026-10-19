@@ -1,27 +1,15 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from typing import ClassVar
-
-
-class ValuationProvider(ABC):
-    """Supply the context needed to interpret a metadata record."""
-
-    @abstractmethod
-    def request_valuation[V](self, valuation: type[V]) -> V:
-        """Return the requested interpretation, or report an unsupported context."""
 
 
 @dataclass(frozen=True)
 class IRMetadata:
     """Base class for typed metadata attached to an IR expression."""
 
-    requires: ClassVar[tuple[type, ...]] = ()
-
-    def resolve(self, ctx: ValuationProvider) -> IRMetadata:
+    def resolve(self, ctx) -> IRMetadata:
         """Interpret this record in the current visit context."""
         return self
 
@@ -52,9 +40,10 @@ class RangeMetadata(IRMetadata):
     hi: int
 
 
-def get_metadata[T: IRMetadata](expr: "Expr", cls: type[T]) -> T | None:
-    """Return the metadata whose concrete class is ``cls``, if present."""
-    return next((value for value in expr.metadata if type(value) is cls), None)
+def get_metadata[T: IRMetadata](expr: "Expr", cls: type[T], *, ctx=None) -> T | None:
+    """Read a definition record, optionally interpreted in a visit context."""
+    record = next((value for value in expr.metadata if type(value) is cls), None)
+    return record if record is None or ctx is None else record.resolve(ctx)
 
 
 def binding_name(expr: "Expr") -> str | None:
@@ -151,7 +140,6 @@ def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr":
 
 __all__ = [
     "IRMetadata",
-    "ValuationProvider",
     "BindingMetadata",
     "RangeMetadata",
     "SourceSpanMetadata",

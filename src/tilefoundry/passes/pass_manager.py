@@ -62,7 +62,7 @@ class PassManager:
                 verify_hir_function(fn)
                 inference_type(
                     fn,
-                    TypeInferContext(frame=frame),
+                    TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies),
                     ranges=True,
                 )
             elif isinstance(fn, PrimFunction):

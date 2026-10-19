@@ -8,18 +8,17 @@ import isl
 import pytest
 
 from tilefoundry.analysis import MemoryMetadata, analyze
-from tilefoundry.analysis.access import AliasKind, SSAValue
+from tilefoundry.analysis.access import AliasKind
 from tilefoundry.analysis.allocation import (
-    AllocationSummary,
-    address_alias,
+    AllocationSummaryMetadata,
     covers_result,
-    root,
     storage_bytes,
 )
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import (
@@ -41,19 +40,29 @@ from tilefoundry.schedule import finalize
 from tilefoundry.visitor_registry.verify import verify_module
 
 
-@pytest.mark.parametrize(("layout", "dtype", "capacity"), [
-    (Layout((2, 3), (8, 1)), DType.f32, 44),
-    (Layout((2, 4), (0, 1)), DType.f32, 16),
-    (ComposedLayout(None, 3, Layout((4,), (-1,))), DType.f32, 16),
-    (ComposedLayout(None, 7, Layout((4,), (2,))), DType.bf16, 28),
-    (ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), 16), ((512, 64), 1))), DType.bf16, 8192),
-    (ComposedLayout(Swizzle(3, 4, 3), 16, Layout((2, 4), (16, 1))), DType.bf16, 2048),
-    (ComposedLayout(Swizzle(1, 1, -1), 0, Layout((4,), (8,))), DType.bf16, 64),
-    (ComposedLayout(Layout((4,), (3,)), 5, Layout((2,), (1,))), DType.f32, 40),
-    (ComposedLayout(ComposedLayout(Swizzle(1, 1, -1), 2, None), 1,
-                    Layout((3,), (8,))), DType.bf16, 48),
-    (Layout((3,), (9,)), DType.bool, 3),
-])
+@pytest.mark.parametrize(
+    ("layout", "dtype", "capacity"),
+    [
+        (Layout((2, 3), (8, 1)), DType.f32, 44),
+        (Layout((2, 4), (0, 1)), DType.f32, 16),
+        (ComposedLayout(None, 3, Layout((4,), (-1,))), DType.f32, 16),
+        (ComposedLayout(None, 7, Layout((4,), (2,))), DType.bf16, 28),
+        (
+            ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), 16), ((512, 64), 1))),
+            DType.bf16,
+            8192,
+        ),
+        (ComposedLayout(Swizzle(3, 4, 3), 16, Layout((2, 4), (16, 1))), DType.bf16, 2048),
+        (ComposedLayout(Swizzle(1, 1, -1), 0, Layout((4,), (8,))), DType.bf16, 64),
+        (ComposedLayout(Layout((4,), (3,)), 5, Layout((2,), (1,))), DType.f32, 40),
+        (
+            ComposedLayout(ComposedLayout(Swizzle(1, 1, -1), 2, None), 1, Layout((3,), (8,))),
+            DType.bf16,
+            48,
+        ),
+        (Layout((3,), (9,)), DType.bool, 3),
+    ],
+)
 def test_smem_capacity_covers_the_applied_layout(layout, dtype, capacity):
     shape = tuple(flatten(layout).shape)
     held = TensorType(shape, dtype, layout, StorageKind.SMEM)
@@ -72,13 +81,16 @@ def test_smem_capacity_rejects_negative_addresses_and_handles_empty_values():
     assert storage_bytes(TensorType((0, 4), DType.f32, None, StorageKind.SMEM)) == 0
 
 
-@pytest.mark.parametrize(("level", "capacity", "lanes"), [(None, 508, 4), ("cta", 108, 4), ("thread", 12, 1)])
+@pytest.mark.parametrize(
+    ("level", "capacity", "lanes"), [(None, 508, 4), ("cta", 108, 4), ("thread", 12, 1)]
+)
 def test_smem_capacity_counts_only_the_selected_units_coordinates(level, capacity, lanes):
     topologies = (Topology("cta", 2), Topology("thread", 4))
     mesh = Mesh(topologies, Layout((2, 4), (4, 1)), names=("block", "lane"))
     layout = Layout((2, 4, 3), (100, 8, 1))
-    held = TensorType((2, 4, 3), DType.f32,
-                      ShardLayout(layout, (Split(0), Split(1)), mesh), StorageKind.SMEM)
+    held = TensorType(
+        (2, 4, 3), DType.f32, ShardLayout(layout, (Split(0), Split(1)), mesh), StorageKind.SMEM
+    )
     assert storage_bytes(held, topology_level=level, topologies=topologies) == capacity
     addresses = {
         apply(layout, block + 2 * lane + 8 * column) * 4 + byte
@@ -97,7 +109,8 @@ def test_staged_smem_keeps_logical_capacity_and_aligns_each_slot(tmp_path):
     module = load_authored_ir(str(path))
     result = analyze(*check_program(module, module.entry_function()), analysis="memory")
     staged = next(
-        expr for expr in collect_exprs(result.function.body)
+        expr
+        for expr in collect_exprs(result.function.body)
         if isinstance(expr, Call) and getattr(expr.target, "buffers", 1) == 2
     )
     memory = get_metadata(staged, MemoryMetadata)
@@ -109,19 +122,18 @@ def test_staged_smem_keeps_logical_capacity_and_aligns_each_slot(tmp_path):
 def test_union_coverage_does_not_prove_complete_writes_per_iteration() -> None:
     """Complementary partial writes cannot justify destructive result aliasing."""
     outputs = isl.map(
-        "{ [iteration, element] -> [element] : "
+        "[iteration] -> { [element] -> [element] : "
         "0 <= iteration <= 1 and "
         "((iteration = 0 and 0 <= element <= 1) or "
         "(iteration = 1 and 2 <= element <= 3)) }"
     )
     result_box = isl.set("{ [element] : 0 <= element <= 3 }")
-    iterations = isl.set("{ [iteration] : 0 <= iteration <= 1 }")
+    iterations = isl.set("[iteration] -> { : 0 <= iteration <= 1 }")
     full_result = isl.set(
-        "{ [iteration, element] : "
-        "0 <= iteration <= 1 and 0 <= element <= 3 }"
+        "[iteration] -> { [element] : 0 <= iteration <= 1 and 0 <= element <= 3 }"
     )
 
-    assert outputs.range().is_equal(result_box)
+    assert outputs.range().project_out(isl.dim_type.PARAM, 0, 1).is_equal(result_box)
     assert not covers_result(outputs.domain(), full_result, outputs, iterations, result_box)
 
 
@@ -169,9 +181,12 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_u
     )
     inserted = get_metadata(insert, MemoryMetadata)
     called = get_metadata(call, MemoryMetadata)
-    proofs = {value.value: value for value in get_metadata(callee, AllocationSummary).values}
+    proofs = {
+        value.value: value for value in get_metadata(callee, AllocationSummaryMetadata).values
+    }
     callers = {
-        value.value: value for value in get_metadata(result.function, AllocationSummary).values
+        value.value: value
+        for value in get_metadata(result.function, AllocationSummaryMetadata).values
     }
     if later_use == "callee":
         assert not proofs[SSAValue(insert)].aliases
@@ -183,7 +198,7 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_u
         )
         assert link.target.expr is insert.args[0]
         assert link.relation.relation.is_identity()
-        composed = address_alias(proofs[SSAValue(insert)], proofs)
+        composed = AllocationSummaryMetadata(tuple(proofs.values())).address_alias(proofs[SSAValue(insert)])
         assert composed.target.expr is callee.params[0]
         assert composed.relation.relation.is_identity()
         assert inserted.buffer_bytes is None and inserted.offsets == ()
@@ -191,7 +206,7 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_u
         assert not callers[SSAValue(call)].aliases
         assert called.offsets
     else:
-        composed = address_alias(callers[SSAValue(call)], callers)
+        composed = AllocationSummaryMetadata(tuple(callers.values())).address_alias(callers[SSAValue(call)])
         assert composed.target.expr is result.function.params[0]
         assert composed.relation.relation.is_identity()
         assert called.buffer_bytes is None and called.offsets == ()
@@ -221,9 +236,10 @@ def test_retained_update_translates_an_actual_window(tmp_path):
     )
     memory = get_metadata(call, MemoryMetadata)
     values = {
-        value.value: value for value in get_metadata(result.function, AllocationSummary).values
+        value.value: value
+        for value in get_metadata(result.function, AllocationSummaryMetadata).values
     }
-    composed = address_alias(values[SSAValue(call)], values)
+    composed = AllocationSummaryMetadata(tuple(values.values())).address_alias(values[SSAValue(call)])
     assert composed.target.expr is result.function.params[0]
     expected = isl.map("{ [i, j] -> [i + 1, j] : 0 <= i < 2 and 0 <= j < 4 }")
     assert composed.relation.relation.is_equal(expected)
@@ -259,7 +275,8 @@ class SequentialCarries:
     ]
     assert len(inserts) == 3
     values = {
-        value.value: value for value in get_metadata(result.function, AllocationSummary).values
+        value.value: value
+        for value in get_metadata(result.function, AllocationSummaryMetadata).values
     }
     for insert in inserts:
         memory = get_metadata(insert, MemoryMetadata)
@@ -292,9 +309,10 @@ def test_read_only_call_return_keeps_storage_despite_later_actual_use(tmp_path, 
     )
     memory = get_metadata(call, MemoryMetadata)
     values = {
-        value.value: value for value in get_metadata(result.function, AllocationSummary).values
+        value.value: value
+        for value in get_metadata(result.function, AllocationSummaryMetadata).values
     }
-    composed = address_alias(values[SSAValue(call)], values)
+    composed = AllocationSummaryMetadata(tuple(values.values())).address_alias(values[SSAValue(call)])
     assert composed.target.expr is result.function.params[0]
     expected = (
         isl.map("{ [i, j] -> [i, j] : 0 <= i < 2 and 0 <= j < 4 }")
@@ -327,14 +345,18 @@ class FreshReturn:
     path.write_text(source)
     module = load_authored_ir(str(path))
     result = analyze(*check_program(module, module.entry_function()), analysis="memory")
-    call = next(value for value in collect_exprs(result.function.body)
-                if isinstance(value, Call) and isinstance(value.target, Function))
+    call = next(
+        value
+        for value in collect_exprs(result.function.body)
+        if isinstance(value, Call) and isinstance(value.target, Function)
+    )
     actual = get_metadata(call.args[0], MemoryMetadata)
     returned = get_metadata(call, MemoryMetadata)
     assert actual.offsets and returned.offsets
     assert (returned.offsets == actual.offsets) is (not later_use)
     assert returned.buffer_bytes == actual.buffer_bytes == 32
-    summary = get_metadata(result.function, AllocationSummary)
+    summary = get_metadata(result.function, AllocationSummaryMetadata)
     values = {value.value: value for value in summary.values}
-    assert (root(values[SSAValue(call)], values) is
-            root(values[SSAValue(call.args[0])], values)) is (not later_use)
+    assert (
+        AllocationSummaryMetadata(tuple(values.values())).root(values[SSAValue(call)]) is AllocationSummaryMetadata(tuple(values.values())).root(values[SSAValue(call.args[0])])
+    ) is (not later_use)

@@ -259,7 +259,8 @@ class MemoryMetadata(IRMetadata):
 class ReuseWindow:
     """One buffer's re-reads, and what keeping it costs the cache."""
 
-    buffer: str
+    buffer: SSAValue
+    ownership: tuple[str, ...] = ()
     time: str = ""
     space: str = ""
     holds_bytes: int = 0
@@ -385,7 +386,7 @@ counts one slice per index as an upper bound.
 ##### `Footprint`
 
 A footprint counts the unique addresses a program touches in the memory level
-a cache backs. It is stated per source buffer, named as a lifetime names one.
+a cache backs. It retains source-buffer identities; the printer supplies names.
 
 ```python
 class Footprint:
@@ -393,6 +394,7 @@ class Footprint:
 
     groups: tuple[tuple[int, tuple[ReachedAddresses, ...]], ...] = ()
     # reached, buffers and precision are derived properties.
+    # buffers yields (SSAValue, ownership, Breakdown[int]); no display strings.
 ```
 
 | Field | How it is computed | Reads the target |
@@ -470,14 +472,13 @@ class ValueLifetime:
     value: SSAValue
     defined_at: int
     last_used_at: int
-    binding: str = ""
     memory_level: str = ""
     bytes: int = 0
     persistent: bool = False
 ```
 
-Liveness MUST produce the sole per-leaf interval representation, `ValueLifetime`.
-Memory enriches that record with its binding, storage level, byte span and
+LivenessMetadata MUST produce the sole per-leaf interval representation, `ValueLifetime`.
+Memory enriches that record with its storage level, byte span and
 persistence. Allocation MUST NOT recompute leaf intervals from a second use
 index. Reports MUST omit `value` and retain the existing binding, memory_level,
 bytes, defined_at, last_used_at and persistent fields.
@@ -492,7 +493,7 @@ are monotonic across the whole Function, including nested and sibling regions.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names differ by the printer's numeric suffix in definition order. A value with neither name nor span is `<value N>` in definition order. A tuple result appends `[index]`, its flattened `SSAValue.index`; tensor results retain the unsuffixed name. | No |
+| Report `binding` | Render `ValueLifetime.value` through the same printer used for the surrounding IR. Metadata retains the SSAValue identity, without storing a display name. | No |
 | `ValueLifetime.memory_level` | Emit one lifetime per material `AllocationValue`, at the level occupied by its projected Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. A `ScheduleOp` whose selected instruction has a write-only result occupies `buffers` copies of those bytes; a `READ \| WRITE` result occupies one. | `MemoryHierarchyFacts.explicit_levels[].owner` |
 | `ValueLifetime.defined_at` | Definition event on the Function-wide structured SSA timeline. A staged (`buffers > 1`) result starts at the outermost enclosing loop's phi event rather than its own definition event. | No |
@@ -602,7 +603,7 @@ class BufferAlias:
     source. The table MUST store the fully composed `BufferAlias` under an
     `SSAValue` key, with precision in a parallel per-view table. All scopes in
     one definition share those tables; other definitions use independent tables.
-    AllocationSummary MUST expose the accepted `AllocationValue.aliases` and
+    AllocationSummaryMetadata MUST expose the accepted `AllocationValue.aliases` and
     `address_decisions` unchanged. Each address decision retains its holder,
     accepted link, and storage representative in acceptance order. Analysis MUST
     NOT rebuild executable relations, bind loop prefixes for lowering, choose
@@ -637,7 +638,7 @@ class BufferAlias:
     space and using the input's type for widening. Source relations retain their
     defining loop prefix, aligned to the access's enclosing loops; loops internal
     to an escaping region MUST be projected out.
-  - Liveness MUST record each SSA value's own interval. Except for dynamic
+  - LivenessMetadata MUST record each SSA value's own interval. Except for dynamic
     projections and their forwards described below, every tensor SSA value,
     including views, region parameters and results, and static tuple projections,
     MUST have its own `AllocationValue`; intervals MUST NOT be merged or extended
@@ -729,7 +730,7 @@ Its B endpoint is the last use of any B member strictly between L's phi and
 backedge events; inner-loop synthetic uses count. L's own backedge, exit, and
 later uses do not read the old phi content. Its A start is the earliest member
 definition inside L's body. The resulting end(B) MUST be at most start(A), with
-the same zero-offset proof at equality. Liveness intervals themselves MUST
+the same zero-offset proof at equality. LivenessMetadata intervals themselves MUST
 remain unchanged.
 
 After accepting links, CARRY_INIT, CARRY_YIELD, and INSERT_SLICE candidates whose
@@ -768,10 +769,13 @@ with the same IN_PLACE rules as ordinary operations; a later use of the actual
 MUST prevent reuse. These proofs MUST NOT create local
 IN_PLACE aliases, link formal storage to a result, or publish metadata.
 
-An internal AllocationSummary MUST contain the definition's values, windows,
-IN_PLACE capabilities, instance address evidence, and flat RegionInterval facts.
-At a Call leaf its resolve MUST translate windows and region events using
-TimingValuation. Windows rooted at a formal MUST name the actual SSA leaf;
+AllocationConstraintVisitor.run MUST return AllocationSummaryMetadata with
+values, IN_PLACE capabilities and accepted address decisions. Its private
+occupancy evidence retains translated windows; it MUST NOT retain a second
+call graph. Reading a called summary through get_metadata(..., ctx=ctx) uses
+the attached Scope and caches the bound result in its snapshot. Lifecycle
+region events remain owned by LivenessMetadata. Time translation uses
+`shifted(record, origin)`. Windows rooted at a formal MUST name the actual SSA leaf;
 windows rooted at a return MUST name the Call result leaf. Internal SSA values
 retain their identities and share one address across all translated windows.
 The caller MUST NOT mutate AllocationValue aliases in a callee summary. Own
@@ -891,7 +895,7 @@ once. A buffer with neither states no row.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `ReuseWindow.buffer` | The source buffer's lifetime label. | No |
+| `ReuseWindow.buffer` | The source buffer identity, rendered by the expression printer. | No |
 | `ReuseWindow.time` | The outermost enclosing loop whose different iterations reach the same addresses, named by its induction variable; empty when no loop supplies a second read. | No |
 | `ReuseWindow.space` | The mesh axis whose different coordinates reach the same addresses; empty when no mesh axis supplies a second read. | No |
 | `ReuseWindow.holds_bytes` | Unique bytes of every buffer the whole wave touches while this buffer must remain resident. | `MemoryHierarchyFacts` selects the backed level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
@@ -1483,7 +1487,7 @@ def check_program(
 ) -> tuple["Module", "Function"]: ...
 
 
-class AnalysisCheckContext:
+class AnalysisCheckContext(ValuationContext):
     """What every input check reads: the program, the machine, and the topology level.
 
     Costing here is a question, not a record: nothing a context computes is
@@ -1494,8 +1498,6 @@ class AnalysisCheckContext:
     function: "Function"
     target: "Target"
     topology_level: str | None
-    whole: CostContext
-    local: CostContext
 
 ```
 
@@ -1692,71 +1694,51 @@ def analyze(
 
 ### Visit context and local coordinates
 
-Metadata declares `requires` as a tuple of Valuation Protocol types and exposes
-`resolve(ctx)`. The context implements core `ValuationProvider`;
-`request_valuation(type)` returns the requested interpretation or raises
-`AnalysisError`. The core default `resolve` returns the same record.
+`get_metadata(expr, kind, ctx=ctx)` delegates to `IRMetadata.resolve(ctx)`
+and the already-bound Scope; its default
+returns the record unchanged. Metadata does not declare capability requirements.
+Analysis contexts extend `TypeInferContext`, not `CostContext`. The context
+prepares the callee and argument bindings. The context's `enter_call` calls the caller scope's `attach` operation and
+records the call edge. Reading `callee_scope` follows that existing edge;
+it does not recursively bind a definition tree. Consumers query `ctx.scope`,
+`ctx.scope.provenance`, and `ctx.scope.access` without an additional attach step.
+`scope.root` identifies the current definition. `scope.parent` always means the
+lexically enclosing scope; it MUST NOT be repurposed as a caller link.
+`call_site` identifies a Call, `caller_context` the caller environment, and
+`caller_scope`/`callee_scope` refer to scopes rather than functions.
 
-| Protocol | Methods | Meaning |
-|---|---|---|
-| `TimingValuation` | `event(local)`, `timeline(local)` | Shift local liveness events and performance intervals into caller coordinates. |
-| `LoopNestValuation` | `repeats()`, `domain()` | Surrounding loop multiplicities, precision, and caller iteration domain. |
-| `VarianceValuation` | `varies(formal)`, `trips(formals)` | The loops and formals on which an actual argument depends; `trips` returns the union's trip product and joined precision, or `(1, EXACT)` for no formals. |
-| `BindingValuation` | `actual(formal, index=0)`, `result()`, `project(source, actual_of=None)` | Caller source for a flattened formal tensor leaf and the call result's storage. Whole-tuple boundaries retain their definition-local identity source. `project` substitutes scalar formals, composes formal buffers with actuals, and prefixes the caller domain, returning `(BufferAlias, AnalysisPrecision)` with the joined substitution precision. An optional `actual_of` selects direct storage operands for allocation without changing data-source tables. |
-| `InstanceValuation` | `path()` | Module instance path, including slot indices. |
+Analyze drives each family once per reached definition, dependencies first.
+Definition-local snapshots remain symbolic and shared. A bound callee view
+substitutes actuals without mutating the definition tree. Calls do not create
+lexical scopes or trigger a second analysis of their callee body.
 
-Analysis families use their own contexts as valuation providers through
-`AnalyzeContext(CostContext)` and `ValuationContext`. They implement the
-Valuation Protocols they require directly; `request_valuation` returns that
-context rather than delegating to a separate call or visit frame. The current
-Call remains in the caller's frame, with its lexical mesh, loop and capture
-state supplied by the shared visitor. Each definition starts with its own root
-context; lexical parents do not form a cross-call scope tree.
-
-A retained call's result source MUST project the callee's definition-local
-return source at that call site. Formal buffers substitute actual sources;
-callee-internal buffers keep their definition identity. Source precision MUST
-join the local and substitution precisions, using the source and precision
-parallel tables. Loop results continue to use their carried phi.
-
-Before any family writes, Analyze MUST compute each family's read set as its
-`produces` plus the produced types of its transitive analyzer dependencies.
-Every required Valuation on those types MUST satisfy `issubclass` for the
-family context type. Failure MUST raise `AnalysisError` naming the
-family, metadata type, context, and missing Valuation. This applies equally to
-third-party analyzers. Readers that only inspect local fields with
-`get_metadata` do not resolve records and do not need a Valuation provider.
-
-Analyze MUST drive each family once per definition in dependency postorder,
-with the entry definition last. A retained Call MUST read and resolve its
-callee's completed metadata, then accumulate it through the same path as a
-primitive Call. The entry uses that same path, without another root traversal
-or aggregation. Fresh analysis calls may replace previously attached records.
-
-| Record | Required Valuations | Local form and resolution |
-|---|---|---|
-| `ComputeCostMetadata` | None | One-execution local counts; resolving a Call does not multiply caller loops. |
-| `MemoryMetadata` | Binding, LoopNest | One-execution traffic is unchanged by resolve; reached coordinates project through Binding. A retained Call carries its callee's traffic, with no footprint because it has no boundary of its own. Its resolved reached-address evidence remains internal to the memory family for Function accumulation. |
-| `RegionMemoryMetadata` | None | One execution of this definition; the entry is the final definition, using the same accumulation as callees. |
-| `Liveness` (internal) | Timing | Definition-local `ValueLifetime`, use and region events, timeline end, and loop windows; resolve only translates events. |
-| `AllocationSummary` (internal) | Binding, Timing, LoopNest | Values and occupancy windows, return candidates, instances, and flat region intervals; resolve maps formal/return boundaries and shifts events without mutating callee values. |
-| `RooflineMetadata` | None | Computed once from each definition's local compute and memory records. |
-| `PerformanceMetadata`, `PerformanceSummaryMetadata` | Timing, LoopNest | Definition-local intervals; resolve shifts their origin into the caller timeline. |
+| Record | Interpretation |
+|---|---|
+| ComputeCostMetadata | Local execution counts; caller loop scaling occurs during accumulation. |
+| MemoryMetadata | Local traffic; retained Calls have no independent boundary footprint. Callee accesses are translated once while building caller scopes. |
+| LivenessMetadata | Local event records; `at(origin)` uses the common `shifted` operation. |
+| AllocationSummaryMetadata | Values, in-place capabilities and unchanged raw address decisions. Bound occupancy is interpreted through the attached Scope and cached in its snapshot; consumers do not recursively expand calls. |
+| PerformanceMetadata / PerformanceSummaryMetadata | Local intervals; the performance family handles their origin, not Scope. |
 
 `Spread.logical_groups` is
 `tuple[tuple[tuple[Var, ...], V], ...] = ()`. `logical` is derived by summing
 its groups, or the typed zero for empty groups. Call groups name local induction
 variables and formals; Function accumulation consumes local induction variables
 and retains only the formals on which the count depends. Caller Function
-accumulation multiplies it by `VarianceValuation.trips` for that set, preserving the joined precision. Call resolution MUST NOT apply caller
+accumulation multiplies it by `scope.dependency_trips` for that set, preserving the joined precision. Call resolution MUST NOT apply caller
 loop multiplicities to either work or traffic. Renderers MUST show only `logical`,
 `total`, and `per_unit`, and MUST NOT render the groups.
 
 Footprint evidence retains local reached sets, their `AccessRelation.values`
 expressions, and groups of reached sets with local window multiplicities.
-Each reached set retains its source base name under the capture-name rule
-above. Rendering disambiguates these names before adding leaf and ownership text. Resolve recomputes it when the target maps to caller SSA; callee-internal
-targets retain their definition-local labels.
+Display names belong to the expression printer. Metadata references retain
+SSAValue identities and reuse the same printer bindings as the surrounding IR;
+cross-function references MUST use `function::local_name`, while references within
+the current function keep their local name. This prevents distinct buffers with
+the same local name from overwriting one another in reports. Within a function,
+ambiguous SSA references MUST append the printed definition line; a loop-carried
+parameter uses the loop header line. The code keeps its original local names;
+analysis does not generate buffer display strings or cache a separate name map.
 Loop coordinates MUST remain bounded parameters, named by induction identity,
 with values referring to their induction Vars. Resolve substitutes formals and
 retains callee loop parameters. Runtime scalar bindings remain symbolic until
@@ -1780,13 +1762,13 @@ the current Call's variance; implicit const weights remain invariant, and
 instance-index dependence is tested through the reached image. This may omit
 reuse for an internal temporary that depends only on constants.
 
-Liveness is internal metadata, not a report family. Each caller reserves a
+LivenessMetadata is internal metadata, not a report family. Each caller reserves a
 callee template's event span and records actual leaf uses at the translated
 formal-use events, preserving synthetic flags. Resolve only shifts the local
 template; it stores neither child templates nor a second timeline origin.
 Allocation may resolve the callee template at a Call to obtain internal windows.
 Standalone liveness for a function without Calls MUST work without a scope
-tree. It MUST NOT use an attached Liveness record as an implicit result cache.
+tree. It MUST NOT use an attached LivenessMetadata record as an implicit result cache.
 
 Implicit weights MUST be counted by `(slot key chain, weight)` and the union of
 reached instance-index tuples. Caller induction variables map from the loop
@@ -1807,36 +1789,36 @@ trees or resolving them again.
 
 ### 2.1 Shared IterationScope and Access
 
-Each reached definition is visited once in dependency postorder per `analyze()`
-call. That visit produces a local `IterationScope` tree parallel to Function,
-LoopRegion, and MeshRegion nesting; calls do not create scopes. A definition's
-root has `parent=None` and `depth=0`. Its inherited mesh comes from the checked
-Function's `ExecutionMeshMetadata`. The walk constructs sources
-and `Access` relations for the narrow, device and unit views. Without a selected
-topology level, the unit view MUST use logical coordinates. Every view MUST
-construct a source for every value in its own coordinates. Unit coordinates are the logical
-coordinates composed with the layout's decomposition map; intersection with the
-operand's index box and parameter widening MUST use its unit-local type.
-Registered-view proofs MUST run once in logical coordinates and be reused for
-the unit view: bijective decomposition preserves the proven properties. Unit
-accesses MUST NOT fall back to narrow accesses. A refused unit boundary MUST
-contribute unknown evidence; a missing boundary MUST contribute lower-bound
-evidence through the same completeness rules as other refused or missing
-boundaries. A mesh scope adds no
-iteration dimension: it keeps its parent's depth and domain, so the first
-`depth` input dimensions of an access relation remain the enclosing loops.
-`IterationScope.execution_mesh()` composes all enclosing MeshRegion meshes
-from outer to inner after the definition's inherited mesh, matching type
-inference's current mesh. `enclosing_mesh()` returns the nearest region's mesh,
-or the inherited mesh when no local region encloses the point. All upward
-traversals, including captures, loop domains, trips, repeats, and mesh positions,
-MUST stop at the definition boundary. A callee loop whose start or extent
-references a formal parameter MUST follow the existing runtime-bound refusal
-with `AnalysisError`, even if a particular call supplies a constant.
+Each reached definition is visited once to build its IterationScope tree.
+`ValueProvenance` and `AccessAnalysis` are defined beside IterationScope in
+`analysis/iteration_scope.py` and composed as `scope.provenance` and `scope.access`.
+The first implements source/dependency queries; the second implements access
+and projection queries. Both operate on the scope's single `snapshot`:
 
-`IterationScope.domain` is the accumulated authored loop domain;
-`IterationScope.accesses` and `IterationScope.refused` are the shared family
-inputs for movement and footprint conclusions.
+| Snapshot section | Ownership and lifetime |
+|---|---|
+| `definition` | Shared definition facts: value snapshots, access records, relations, refusal evidence, and operation locations. |
+| `attachments` | Call edges in this calling environment, including the callee reference, arguments, and instance identity. |
+| `resolved` | Value, parameter, and relation results in this fixed lexical and calling environment. |
+
+Attach MUST NOT recursively copy the definition tree or project every child
+domain. A lexical entry is obtained only when needed, shares definition facts,
+and keeps derived results separate from other calling environments. Binding
+changes require a new environment rather than reuse of stale results.
+`scope.at(path)` follows existing call edges and definition location indexes;
+it does not rescan the callee tree or initiate another callee analysis.
+Scope itself owns lexical structure, the iteration domain, and multiplicities.
+
+`snapshot.definition.values[SSAValue]` contains one SnapshotEntry with `root`, `narrow`, `device`,
+`unit`, `varies`, and optional `forward`. `forward` is a direct structural operand,
+not the data-identity root. Three views remain supported; a missing unit view is
+unknown. Types and display names are not duplicated in snapshots.
+`domain` is an AccessRelation of zero-dimensional tuples with constraints on
+identity-named loop parameters. `first()` constrains each coordinate to its
+loop's start. `compose`, `constrain`, and `project` maintain parameter mappings
+in AccessRelation; consumers do not maintain parallel parameter-name tables.
+`SSAValue` is defined in ir/core/expr.py, and exposes `leaves` and `leaf`.
+
 An input `Access` stores its original Call boundary index as well as its relation
 and allocation expression; an output stores `input_index=None` and its own output
 boundary index, which is the tuple field it answers for. Failed boundaries remain
@@ -1846,7 +1828,7 @@ level and element width are read from `Access.target.expr` at
 label is `<name>[index]`. A whole-tuple input boundary uses leaf-slot coordinates;
 `resolve_access` MUST expand each possibly selected slot into a separate Access
 in that leaf's legal tensor-element coordinates. These accesses retain the
-original boundary index, precision and may-access flag, and their target remains
+original boundary index and may-access flag; precision is produced at counting time, and their target remains
 the definition-local tuple leaf. No sentinel leaf index represents a whole tuple. A refused descendant
 makes its owning scope unknown for that view. Non-affine runtime indices retain
 the widest legal access approximation.
@@ -1863,7 +1845,7 @@ widening; the two modules do not define a second affine graph representation.
     whole affine expression with each such leaf as one identity-deduplicated
     isl parameter constrained by that range. A leaf without a range MUST be
     refused.
-  - `IterationScope.domain_params` MUST map each of those parameter names back
+  - `IterationScope.domain.values` MUST map each of those parameter names back
     to the value it stands for, because the name itself carries no meaning and
     a reader that must recognise a unit coordinate cannot re-derive it without
     restating how the name was made.
@@ -1893,8 +1875,7 @@ class AnalyzeContext:
     target: Target
     topology_level: str | None
     options: object | None
-    root: IterationScope | None = None
-    current: IterationScope | None = None
+    scope: IterationScope | None = None
     current_mesh: Mesh | None = None
 
     @property
@@ -1944,7 +1925,7 @@ class Target:
 - constraints:
   - `AnalysisCallable` MUST receive the normalized Function graph and one
     `AnalyzeContext` carrying the exact Module, Target, resolved topology level,
-    caller options, and the shared root/current `IterationScope` view. The
+    caller options, and the shared `scope` view (`scope.root` for the definition). The
     `topology_level` MAY be `None` only when the Module declares no topology;
     options MAY be `None`.
   - The same `AnalyzeContext` is what analysis reads types and access relations

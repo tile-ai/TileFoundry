@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from .errors import VerifyError
 from .inspection import Printable, PrinterBase
-from .expr import Call, Constant, Expr, Tuple, Var
+from .expr import Call, Constant, Expr, SSAValue, Tuple, Var
 from .metadata import (
     BindingMetadata,
     IRMetadata,
-    ValuationProvider,
     RangeMetadata,
     SourceSpanMetadata,
     attach_metadata,
@@ -44,12 +43,12 @@ from .context import TypeInferContext
 
 __all__ = [
     "Expr",
+    "SSAValue",
     "Var",
     "Constant",
     "Call",
     "Tuple",
     "IRMetadata",
-    "ValuationProvider",
     "RangeMetadata",
     "BindingMetadata",
     "SourceSpanMetadata",

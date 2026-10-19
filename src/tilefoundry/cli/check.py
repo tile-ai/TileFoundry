@@ -33,7 +33,7 @@ from tilefoundry.runtime.resource import (
     SafetensorsResource,
     draw_tensor,
 )
-from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import ValuationContext
 
 SEED = 0
 
@@ -267,7 +267,7 @@ def read_inputs(paths: Sequence[str], device: str) -> tuple[Any, ...]:
 
 def draw_inputs(module: Module, dims: dict[str, int], seed: int, device: str):
     function = module.entry_function()
-    residual_dims(function, CallFrame(module, function))
+    residual_dims(function, ValuationContext(module, function))
     concrete = replace(
         function,
         params=tuple(

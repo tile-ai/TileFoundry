@@ -36,6 +36,12 @@ class Function(Expr):
     )
     _display_name: str | None = field(default=None, compare=False, hash=False, repr=False)
 
+    def carries(self):
+        return ()
+
+    def captures(self):
+        return ()
+
     @classmethod
     def build(
         cls,

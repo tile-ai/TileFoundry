@@ -2,51 +2,41 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from functools import cached_property
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr, get_metadata
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.core import Expr, Var, get_metadata
+from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.isl_interop import dim_range
-from tilefoundry.ir.types import Mesh, TensorType, Topology
+from tilefoundry.ir.types import Mesh, Topology
 from tilefoundry.ir.types.dim import DimSub, simplify_dim
 from tilefoundry.ir.types.layout import ComposedLayout, get, size
-from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.ir.types.utils import leaf_rank, leaf_span, static_dim_value
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
     access_relation_registry,
     identity_access,
-    leaves_of,
     projected,
     relations_of,
     renaming_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.call_frame import CallFrame, ValuationVisitor
 from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 from .access import (
-    Access,
-    AliasKind,
-    BufferAlias,
-    SSAValue,
-    aligned_source,
-    apply_source,
+    SnapshotEntry,
+    _RegionBindingResolver,
     buffer_alias,
     eliminate_parameters,
-    forwarded_leaves,
-    referenced_values,
     resolve_access,
 )
 from .errors import AnalysisError
-from .loop_domain import induction_name, iteration_domain
+from .loop_domain import induction_name, iteration_domain, refuse_runtime_bound
 from .metadata import ExecutionMeshMetadata
 from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
@@ -80,90 +70,495 @@ class Repeats:
     trips_precision: AnalysisPrecision
 
 
-@dataclass(eq=False)
+@dataclass
+class DefinitionSnapshot:
+    """Facts computed once for a lexical definition node."""
+
+    owner: object
+    parent: IterationScope | None = None
+    children: tuple = ()
+    domain: AccessRelation = field(default_factory=lambda: AccessRelation(isl.map("{ [] -> [] }")))
+    mesh: Mesh | None = None
+    topologies: tuple = ()
+    values: dict = field(default_factory=dict)
+    locations: dict = field(default_factory=dict)
+    accesses: dict = field(default_factory=dict)
+    outputs: dict = field(default_factory=dict)
+    relations: dict = field(default_factory=dict)
+    refused: dict = field(default_factory=dict)
+
+
+@dataclass
+class ResolvedSnapshot:
+    """Derived results in one fixed lexical and calling environment."""
+
+    values: dict = field(default_factory=dict)
+    parameters: dict = field(default_factory=dict)
+    relations: dict = field(default_factory=dict)
+    allocations: dict = field(default_factory=dict)
+    scopes: dict = field(default_factory=dict)
+    accesses: dict = field(default_factory=dict)
+
+
+@dataclass
+class ScopeSnapshot:
+    definition: DefinitionSnapshot
+    attachments: dict = field(default_factory=dict)
+    resolved: ResolvedSnapshot = field(default_factory=ResolvedSnapshot)
+
+
+@dataclass
+class ValueProvenance:
+    """One definition's value facts, interpreted through optional caller bindings."""
+
+    scope: IterationScope
+
+    @property
+    def snapshot(self):
+        return self.scope.snapshot.definition.values
+
+    @property
+    def arguments(self):
+        return self.scope._binding._arguments
+
+    @property
+    def caller_provenance(self):
+        caller = self.scope.caller_scope
+        return None if caller is None else caller.provenance
+
+    @property
+    def resolved(self):
+        return self.scope.snapshot.resolved.values
+
+    def lookup(self, value: SSAValue) -> SnapshotEntry:
+        if value in self.resolved:
+            return self.resolved[value]
+        entry = self.snapshot.get(value)
+        if entry is None:
+            if self.scope.parent is not None:
+                return self.scope.parent.provenance.lookup(value)
+            raise AnalysisError(f"no source recorded for {value.expr!r}")
+        if self.caller_provenance is None:
+            return entry
+        self.resolved[value] = self.resolve(entry)
+        return self.resolved[value]
+
+    def resolve(self, entry):
+        caller_provenance = self.caller_provenance
+        argument = self.arguments.get(id(entry.root.expr))
+        actual = (
+            None
+            if argument is None
+            else caller_provenance.lookup(SSAValue(argument, entry.root.index))
+        )
+        changing = set(entry.varies)
+        for formal, bound in self.arguments.items():
+            if formal in changing:
+                changing.remove(formal)
+                changing.update(caller_provenance.varies(bound))
+        relations = {}
+        for view in ("narrow", "device", "unit"):
+            relation = getattr(entry, view)
+            if relation is not None:
+                relation = self.scope.access.project(relation, view=view)
+                if actual is not None:
+                    source = getattr(actual, view)
+                    relation = None if source is None else relation.compose(source)
+            relations[view] = relation
+        return replace(
+            entry,
+            root=entry.root if actual is None else actual.root,
+            varies=frozenset(changing),
+            **relations,
+        )
+
+    def actual(self, formal, index=0):
+        if self.caller_provenance is None or id(formal) not in self.arguments:
+            raise AnalysisError("parameter has no binding in this calling context")
+        return self.caller_provenance.lookup(SSAValue(self.arguments[id(formal)], index))
+
+    def result(self, index=0):
+        return self.lookup(SSAValue(self.scope.root.owner.body, index))
+
+    def varies(self, value):
+        argument = self.arguments.get(id(value))
+        if argument is not None and self.caller_provenance is not None:
+            return self.caller_provenance.varies(argument)
+        entry = self.snapshot.get(SSAValue(value))
+        changing = set() if entry is None else set(entry.varies)
+        if self.caller_provenance is not None:
+            for formal, argument in self.arguments.items():
+                if formal in changing:
+                    changing.remove(formal)
+                    changing.update(self.caller_provenance.varies(argument))
+        return frozenset(changing)
+
+    def dependencies(self, value):
+        changing = self.varies(value)
+        dependencies = []
+        provenance = self
+        while provenance is not None:
+            scope = provenance.scope
+            dependencies.extend(p for p in scope.root.owner.params if id(p) in changing)
+            dependencies.extend(
+                loop.owner.induction_var for loop in scope.loop_scopes if id(loop.owner) in changing
+            )
+            provenance = provenance.caller_provenance
+        return tuple(dict.fromkeys(dependencies))
+
+
+@dataclass
+class AccessAnalysis:
+    """Declared boundaries, resolved accesses, and projections in one environment."""
+
+    scope: IterationScope
+
+    @property
+    def accesses(self):
+        return self._bound_accesses("accesses")
+
+    @property
+    def outputs(self):
+        return self._bound_accesses("outputs")
+
+    @property
+    def relations(self):
+        return self.scope.snapshot.definition.relations
+
+    @property
+    def refused(self):
+        definition = self.scope.snapshot.definition.refused
+        if self.scope.caller_scope is None:
+            return definition
+        cache = self.scope.snapshot.resolved.accesses
+        if "refused" not in cache:
+            cache["refused"] = dict(definition)
+        return cache["refused"]
+
+    @property
+    def projections(self):
+        return self.scope.snapshot.resolved.relations
+
+    @property
+    def instance(self):
+        return self.scope._binding._instance
+
+    def _bound_accesses(self, name):
+        definition = getattr(self.scope.snapshot.definition, name)
+        if self.scope.caller_scope is None:
+            return definition
+        cache = self.scope.snapshot.resolved.accesses
+        if name in cache:
+            return cache[name]
+        callee_scope = self.scope
+        snapshot = callee_scope.caller_scope.snapshot.definition.values
+        result = {}
+        for view, records in definition.items():
+            into = result.setdefault(view, {})
+            for path, (primitive, items) in records.items():
+                scope = callee_scope.at(path[:1])
+                translated = []
+                for item in items:
+                    source = scope.provenance.lookup(item.target)
+                    if source.root not in snapshot:
+                        snapshot[source.root] = replace(
+                            source,
+                            forward=None,
+                            **{
+                                kind: None
+                                if getattr(source, kind) is None
+                                else identity_access(
+                                    getattr(source, kind).relation.dim(isl.dim_type.OUT)
+                                )
+                                for kind in ("narrow", "device", "unit")
+                            },
+                        )
+                    relation = scope.access.project(item.relation, view=view)
+                    if id(item.target.expr) in callee_scope.provenance.arguments:
+                        upstream = getattr(source, view)
+                        if upstream is None:
+                            refused = self.refused.get(view, frozenset())
+                            self.refused[view] = refused | {primitive}
+                            continue
+                        relation = relation.compose(upstream)
+                    if callee_scope.access.instance is not None and getattr(
+                        item.target.expr, "is_const", False
+                    ):
+                        instance = callee_scope.access.instance
+                        prefix = instance.relation.add_dims(
+                            isl.dim_type.IN, relation.relation.dim(isl.dim_type.IN)
+                        )
+                        relation = relation._result(
+                            prefix.flat_range_product(relation.relation),
+                            instance.values,
+                            may_access=instance.may_access,
+                        )
+                    translated.append(replace(item, target=source.root, relation=relation))
+                into[path] = (primitive, tuple(translated))
+        cache[name] = result
+        return result
+
+    def resolve_parameter(self, value, *, view):
+        cache = self.scope.snapshot.resolved.parameters
+        key = ("resolver", view)
+        if key not in cache:
+            cache[key] = _RegionBindingResolver(narrow=view == "narrow")
+        return cache[key].visit(value, self.scope) if isinstance(value, Expr) else value
+
+    def _affine(self, value, *, caller=False):
+        cache = self.scope.snapshot.resolved.parameters
+        key = ("affine", id(value), caller)
+        if key not in cache:
+            values = {}
+            scope = self.scope.caller_scope if caller else self.scope
+            term = AccessRelation.affine(value, scope, values=values)
+            cache[key] = (value, term, values)
+        return cache[key][1:]
+
+    def projected_relations(self, call, ctx):
+        key = (id(call), ctx.topology_level)
+        if key not in self.projections:
+            stated = self.relations.get(id(call))
+            stated = relations_of(call, ctx) if stated is None else stated[1]
+            self.projections[key] = tuple(r.normalized(ctx) for r in projected(stated, call, ctx))
+        return self.projections[key]
+
+    def project(self, relation, *, view="narrow"):
+        """Bind scalar parameters before composing tensor origins at the call boundary."""
+        key = ("bound", id(relation), view)
+        if key in self.projections:
+            return self.projections[key][1]
+        result = self._project(relation, view=view)
+        self.projections[key] = (relation, result)
+        return result
+
+    def _project(self, relation, *, view):
+        provenance = self.scope.provenance
+        caller_provenance = provenance.caller_provenance
+        if caller_provenance is None:
+            return relation.constrain(self.scope.domain)
+        result = relation
+        for name, value in tuple(relation.values.items()):
+            if not isinstance(value, Expr):
+                continue
+            resolved = self.resolve_parameter(value, view=view)
+            if resolved is value:
+                continue
+            term, values = self._affine(resolved, caller=True)
+            named = isl.pw_aff(f"[{name}] -> {{ [({name})] }}")
+            result = result.constrain(named.eq_set(term).params(), values).project((value,))
+        caller = caller_provenance.scope
+        result = result.constrain(caller.domain)
+        return result if caller.caller_scope is None else caller.access.project(result, view=view)
+
+
 class IterationScope:
-    """One Function, authored loop, or mesh region, with all accesses below it."""
+    """A lexical node or a calling-environment entry over shared definition facts."""
 
-    owner: Function | LoopRegion | MeshRegion
-    parent: IterationScope | None
-    children: tuple[IterationScope, ...]
-    depth: int
-    domain: isl.set
-    context: AnalyzeContext
-    domain_params: dict[str, object] = field(default_factory=dict)
-    sources: dict[str, dict[SSAValue, BufferAlias]] = field(default_factory=dict)
-    precisions: dict[str, dict[SSAValue, AnalysisPrecision]] = field(default_factory=dict)
-    accesses: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
-    outputs: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
-    relations: dict[int, tuple[Call, tuple[AccessRelation, ...]]] = field(default_factory=dict)
-    projections: dict[tuple[int, str | None], tuple[Call, tuple[AccessRelation, ...]]] = field(
-        default_factory=dict
-    )
-    refused: dict[str, frozenset[Call]] = field(default_factory=dict)
-    variance: dict[int, frozenset[int]] = field(default_factory=dict)
+    def __init__(self, owner, parent=None, children=(), domain=None, mesh=None, topologies=()):
+        self.snapshot = ScopeSnapshot(
+            DefinitionSnapshot(
+                owner,
+                parent,
+                children,
+                AccessRelation(isl.map("{ [] -> [] }")) if domain is None else domain,
+                mesh,
+                topologies,
+            )
+        )
+        self._definition = self
+        self._binding = self
+        self.caller_scope = None
+        self._arguments = {}
+        self._instance = None
+        self.provenance = ValueProvenance(self)
+        self.access = AccessAnalysis(self)
 
-    @cached_property
-    def capture_names(self):
-        """The first authored capture name for each source in this definition."""
-        names = {}
-        for scope in walk_scopes(self):
-            for param, _argument in scope.captures:
-                names.setdefault(scope.context.capture_root(param), param)
-        return names
+    @classmethod
+    def _entry(cls, definition, binding=None, *, caller=None, arguments=None, instance=None):
+        entry = object.__new__(cls)
+        entry.snapshot = ScopeSnapshot(definition.snapshot.definition)
+        entry._definition = definition
+        entry._binding = entry if binding is None else binding
+        entry.caller_scope = caller if binding is None else binding.caller_scope
+        entry._arguments = {} if arguments is None else dict(arguments)
+        entry._instance = instance
+        entry.provenance = ValueProvenance(entry)
+        entry.access = AccessAnalysis(entry)
+        return entry
+
+    def attach(self, *, call_site, callee, arguments, instance=None):
+        """Graft one call edge without visiting or copying the definition's children."""
+        key = SSAValue(call_site)
+        previous = self.snapshot.attachments.get(key)
+        if (
+            previous is None
+            or previous._definition is not callee
+            or previous._instance is not instance
+            or previous._arguments.keys() != arguments.keys()
+            or any(previous._arguments[name] is not value for name, value in arguments.items())
+        ):
+            self.snapshot.attachments[key] = self._entry(
+                callee,
+                caller=self,
+                arguments=arguments,
+                instance=instance,
+            )
+        return self.snapshot.attachments[key]
+
+    def attachment(self, call_site):
+        """Follow an existing edge in this calling environment."""
+        call_site = call_site if isinstance(call_site, SSAValue) else SSAValue(call_site)
+        edges = self.snapshot.attachments
+        if call_site not in edges and self._definition is not self:
+            template = self._definition.snapshot.attachments.get(call_site)
+            if template is not None:
+                instance = template.access.instance
+                edges[call_site] = self._entry(
+                    template._definition,
+                    caller=self,
+                    arguments=template.provenance.arguments,
+                    instance=None if instance is None else self.access.project(instance),
+                )
+        return edges.get(call_site)
+
+    def _at_definition(self, definition):
+        if self.caller_scope is None:
+            return definition
+        root = self._binding
+        if definition is root._definition:
+            return root
+        nodes = root.snapshot.resolved.scopes
+        if definition not in nodes:
+            nodes[definition] = self._entry(definition, root)
+        return nodes[definition]
+
+    def at(self, path):
+        """Locate an occurrence using recorded locations and existing call edges."""
+        scope = self
+        for index, operation in enumerate(path):
+            operation = operation if isinstance(operation, SSAValue) else SSAValue(operation)
+            scope = scope._at_definition(scope.snapshot.definition.locations[id(operation.expr)])
+            if index + 1 < len(path):
+                scope = scope.attachment(operation)
+                if scope is None:
+                    raise AnalysisError("access path has no recorded call attachment")
+        return scope
+
+    def _access_environment(self, path):
+        """Interpret the existing access index in its attached execution environment."""
+        origin = self.at(path)
+        loops = list(origin.loop_scopes)
+        caller = origin.caller_scope
+        while caller is not None:
+            loops[:0] = caller.loop_scopes
+            caller = caller.caller_scope
+        return origin, tuple(loops)
+
+    @property
+    def owner(self):
+        return self.snapshot.definition.owner
+
+    @property
+    def parent(self):
+        parent = self.snapshot.definition.parent
+        return None if parent is None else self._at_definition(parent)
+
+    @property
+    def children(self):
+        return tuple(self._at_definition(child) for child in self.snapshot.definition.children)
+
+    @children.setter
+    def children(self, value):
+        self.snapshot.definition.children = value
+
+    @property
+    def domain(self):
+        original = self.snapshot.definition.domain
+        return original if self.caller_scope is None else self.access.project(original)
+
+    @property
+    def mesh(self):
+        return self.snapshot.definition.mesh
+
+    @property
+    def topologies(self):
+        return self.snapshot.definition.topologies
+
+    @property
+    def root(self):
+        return self if self.parent is None else self.parent.root
+
+    def ancestors(self):
+        scope = self
+        while scope is not None:
+            yield scope
+            scope = scope.parent
+
+    @property
+    def loop_scopes(self):
+        return tuple(reversed([s for s in self.ancestors() if isinstance(s.owner, LoopRegion)]))
 
     @property
     def captures(self):
-        return self.owner.captures() if isinstance(self.owner, (MeshRegion, LoopRegion)) else ()
+        return self.owner.captures()
 
-    def projected_relations(self, call: Call, ctx: TypeInferContext) -> tuple[AccessRelation, ...]:
-        """Return *call*'s relations in *ctx*'s topology window, projecting it once.
+    def carries(self):
+        return self.owner.carries()
 
-        Cache on the scope that recorded the call's stated relations, keyed by
-        the window. Contexts that substitute types must project on their own.
-        """
-        holder, stated = self, None
-        cursor: IterationScope | None = self
-        while cursor is not None:
-            recorded = cursor.relations.get(id(call))
-            if recorded is not None and recorded[0] is call:
-                holder, stated = cursor, recorded[1]
+    def capture_root(self, value):
+        """Read capture identities without recursively resolving their relations."""
+        while isinstance(value, Var):
+            entry = self.provenance.snapshot.get(SSAValue(value))
+            if entry is None or entry.forward is None:
                 break
-            cursor = cursor.parent
-        key = (id(call), getattr(ctx, "topology_level", None))
-        held = holder.projections.get(key)
-        if held is not None and held[0] is call:
-            return held[1]
-        local = projected(stated if stated is not None else relations_of(call, ctx), call, ctx)
-        holder.projections[key] = (call, local)
-        return local
+            value = entry.forward.expr
+        return self.provenance.arguments.get(id(value), value)
 
-    def is_variant(self, value: Expr) -> bool:
-        """Whether *value* depends on this loop's induction or carry values."""
-        if not isinstance(self.owner, LoopRegion):
-            return False
-        return id(self) in self.variance.get(id(value), frozenset())
+    def first(self, loops=None):
+        loops = self.loop_scopes if loops is None else tuple(loops)
+        key = ("first", loops)
+        cache = self.snapshot.resolved.relations
+        if key not in cache:
+            relation = iteration_domain(self.owner, self.parent, first=True, loops=loops)
+            cache[key] = self.access.project(relation) if self.caller_scope else relation
+        return cache[key]
 
-    def mesh_positions(self, unit: str | None) -> int:
-        mesh = self.context.current_mesh
+    def is_variant(self, value):
+        return id(self.owner) in self.provenance.varies(value)
+
+    def mesh_positions(self, unit):
         return (
             1
-            if mesh is None or unit is None
-            else _positions_at(mesh, unit, self.context.topologies)
+            if self.mesh is None or unit is None
+            else _positions_at(self.mesh, unit, self.topologies)
         )
 
-    def repeats_of(self, call: Call, unit: str | None, stop=None) -> Repeats:
-        """Return this Call's loop and mesh multiplicities in the current scope."""
+    def dependency_trips(self, formals):
+        changing = set().union(*(self.provenance.varies(p) for p in formals))
+        count, precision = 1, AnalysisPrecision.EXACT
+        provenance = self.provenance
+        while provenance is not None:
+            for loop in provenance.scope.loop_scopes:
+                if id(loop.owner) in changing:
+                    changing.remove(id(loop.owner))
+                    count *= loop.trips()
+                    precision = precision.join(loop.trips_precision)
+            provenance = provenance.caller_provenance
+        return count, precision
+
+    def repeats_of(self, call, unit, stop=None):
         varying = loops = 1
         precision = AnalysisPrecision.EXACT
-        cursor: IterationScope | None = self
-        while cursor is not None and cursor is not stop:
-            if isinstance(cursor.owner, LoopRegion):
-                trips = cursor.trips()
-                loops *= trips
-                if id(cursor) in self.variance.get(id(call), frozenset()):
-                    varying *= trips
-                precision = precision.join(cursor.trips_precision)
-            cursor = cursor.parent
+        changing = self.provenance.varies(call)
+        for scope in self.ancestors():
+            if scope is stop:
+                break
+            if isinstance(scope.owner, LoopRegion):
+                loops *= scope.trips()
+                if id(scope.owner) in changing:
+                    varying *= scope.trips()
+                precision = precision.join(scope.trips_precision)
         return Repeats(varying, loops, self.mesh_positions(unit), precision)
 
     def _counted(self) -> tuple[int, AnalysisPrecision]:
@@ -194,11 +589,7 @@ class IterationScope:
             except (ArithmeticError, TypeError, ValueError):
                 bounds = None
             if bounds is None:
-                raise AnalysisError(
-                    f"loop {induction_name(owner)!r} runs from {owner.start!r} to "
-                    f"{owner.extent!r}, which state no bounded span; its trip count "
-                    "cannot be determined"
-                )
+                refuse_runtime_bound(owner, "extent")
             widest = bounds[1] - 1
             if bounds[1] - bounds[0] > 1:
                 precision = AnalysisPrecision.UPPER_BOUND
@@ -208,11 +599,10 @@ class IterationScope:
 
     def trips(self) -> int:
         """Return this scope's iteration count relative to its parent."""
-        cached = getattr(self, "_trips_cache", None)
-        if cached is None:
-            cached = self._counted()
-            self._trips_cache = cached
-        return cached[0]
+        cache = self.snapshot.resolved.parameters
+        if "trips" not in cache:
+            cache["trips"] = self._counted()
+        return cache["trips"][0]
 
     @property
     def trips_precision(self) -> AnalysisPrecision:
@@ -223,316 +613,215 @@ class IterationScope:
         here fixes -- a coordinate of the scope the loop is entered from.
         """
         self.trips()
-        return self._trips_cache[1]
+        return self.snapshot.resolved.parameters["trips"][1]
 
 
 class ScopeBuilder(ValuationVisitor[None]):
-    """Build one IterationScope tree and its access views for a Function.
-
-    Scopes record each call's logical relations, whatever level the caller's
-    context reports, so the builder reads through that context without a level.
-    """
+    """Calculate one definition's value and access facts in a single traversal."""
 
     def __init__(
-        self,
-        module: Module,
-        graph: Function,
-        *,
-        views: Sequence[str] = ("narrow", "device", "unit"),
-        ctx: AnalyzeContext | None = None,
-        is_root: bool = True,
-        returns: Mapping[int, Mapping[str, tuple[tuple[BufferAlias, AnalysisPrecision], ...]]]
-        | None = None,
-    ) -> None:
+        self, module, graph, *, views=("narrow", "device", "unit"), ctx=None, is_root=True
+    ):
         super().__init__(root_function=graph)
-        self.graph = graph
-        self.is_root = is_root
-        self.returns = {} if returns is None else returns
-        frame = CallFrame(module, graph) if ctx is None or ctx.frame is None else ctx.frame
-        self.views = tuple(views)
-        self.sources: dict[str, dict[SSAValue, BufferAlias]] = {view: {} for view in self.views}
-        self.precisions: dict[str, dict[SSAValue, AnalysisPrecision]] = {
-            view: {} for view in self.views
-        }
-        self.type_ctx = (
-            AnalyzeContext(frame=frame, topologies=frame.topologies)
-            if ctx is None
-            else replace(ctx, topology_level=None)
-        )
-        self.unit_ctx = ctx if ctx is not None else self.type_ctx
-        self.seeds: dict[int, IterationScope]
-        self.variance: dict[int, frozenset[int]]
+        self.graph, self.views, self.is_root = graph, tuple(views), is_root
+        self.context = ctx or AnalyzeContext(module=module, function=graph)
+        self.snapshot = {}
+        self.seeds = {}
 
-    def _empty_accesses(self) -> dict[str, dict[int, tuple[Call, tuple[Access, ...]]]]:
-        return {view: {} for view in self.views}
+    def _views(self, ctx):
+        logical = ctx if ctx.topology_level is None else replace(ctx, topology_level=None)
+        return {view: ctx if view == "unit" else logical for view in self.views}
 
-    def _view_context(self, view: str, scope: IterationScope) -> TypeInferContext:
-        return replace(
-            scope.context,
-            topology_level=self.unit_ctx.topology_level if view == "unit" else None,
-            access_view=view,
-        )
-
-    def _source_relation(self, source: BufferAlias, held, scope: IterationScope) -> BufferAlias:
-        """Align one cached leaf source with this region's loop coordinates."""
-        rank = len(held.shape) if isinstance(held, TensorType) else 1
-        relation = aligned_source(source, rank, scope.depth, scope.domain_params)
-        relation = relation.intersect_domain(
-            scope.domain.insert_dims(
-                isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
-            )
-        )
-        retained = {**source.relation.values, **scope.domain_params}
-        values = {
-            name: retained[name]
-            for axis in range(relation.dim(isl.dim_type.PARAM))
-            if (name := relation.get_dim_name(isl.dim_type.PARAM, axis)) in retained
-        }
-        return replace(source, relation=AccessRelation(relation, values))
-
-    def _identity_source(self, value: SSAValue, held, scope: IterationScope) -> BufferAlias:
-        """A material leaf names itself, with no data-coordinate renaming."""
-        rank = len(held.shape) if isinstance(held, TensorType) else 1
-        relation = identity_access(rank).relation.insert_dims(isl.dim_type.IN, 0, scope.depth)
-        relation = relation.intersect_domain(
-            scope.domain.insert_dims(isl.dim_type.SET, scope.depth, rank)
-        )
-        values = referenced_values(relation, scope.domain_params)
-        return BufferAlias(value, AccessRelation(relation, values), AliasKind.FORWARD)
-
-    def _forward(self, expr, operands, scope, view):
-        """Cache flattened sources once for tuple, capture and region forwarding."""
-        types = leaves_of(self._view_context(view, scope).local_type_of(expr))
-        for index, (operand, held) in enumerate(zip(operands, types, strict=True)):
-            value = SSAValue(expr, index)
-            self.sources[view][value] = self._source_relation(
-                self.sources[view][operand], held, scope
-            )
-            self.precisions[view][value] = self.precisions[view][operand]
-
-    def _record_source(self, expr, scope, view, local_relations=(), alias=None):
-        """Cache each leaf's fully composed source before any access reads it."""
-        table, precisions = self.sources[view], self.precisions[view]
-        ctx = self._view_context(view, scope)
-        if (operands := forwarded_leaves(expr, ctx)) is not None:
-            self._forward(expr, operands, scope, view)
-            return
-        if alias is not None and view == "unit":
-            alias = replace(alias, relation=renaming_relation(expr, ctx, local_relations))
-        if alias is not None:
-            source = table[alias.target]
-            relation = alias.relation.relation.insert_dims(isl.dim_type.IN, 0, scope.depth)
-            relation = relation.intersect_domain(
-                scope.domain.insert_dims(
-                    isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
-                )
-            )
-            retained = dict(scope.domain_params)
-            relation, precision = eliminate_parameters(
-                relation,
-                alias.relation.values,
-                scope,
-                ctx.local_type_of(alias.target.expr)
-                if view == "unit"
-                else scope.context.capture_root(alias.target.expr).type,
-                narrow=view == "narrow",
-                retained=retained,
-                formals=() if self.is_root else self.graph.params,
-            )
-            held = ctx.local_type_of(alias.target.expr)
-            rank = len(held.shape) if isinstance(held, TensorType) else 1
-            relation = apply_source(relation, source, rank, scope.depth, scope.domain_params)
-            retained.update(source.relation.values)
-            values = {
-                name: retained[name]
-                for axis in range(relation.dim(isl.dim_type.PARAM))
-                if (name := relation.get_dim_name(isl.dim_type.PARAM, axis)) in retained
-            }
-            table[SSAValue(expr)] = BufferAlias(
-                source.target, AccessRelation(relation, values), AliasKind.VIEW
-            )
-            precisions[SSAValue(expr)] = precision.join(precisions[alias.target])
-            return
-        held = ctx.local_type_of(expr)
-        for index, leaf in enumerate(leaves_of(held) or (held,)):
-            value = SSAValue(expr, index)
-            table[value] = self._identity_source(value, leaf, scope)
-            precisions[value] = AnalysisPrecision.EXACT
-
-    def _record_accesses(self, expr: Call, scope: IterationScope) -> None:
-        if (
-            isinstance(expr.target, Function)
-            or not leaves_of(expr.type)
-            or access_relation_registry.lookup(type(expr.target)) is None
-        ):
-            for view in self.views:
-                self._record_source(expr, scope, view)
-            return
-        logical = self._view_context("narrow", scope)
-        try:
-            stated = relations_of(expr, logical)
-            scope.relations[id(expr)] = (expr, stated)
-        except (NotImplementedError, TypeError, ValueError, isl.Error):
-            for view in self.views:
-                self._record_source(expr, scope, view)
-                scope.refused[view] = scope.refused.get(view, frozenset()) | {expr}
-            return
-        alias = (
-            buffer_alias(expr, logical, scope.projected_relations(expr, logical))
-            if aliased_operand(expr) is not None
-            else None
-        )
-        for view in self.views:
-            ctx = self._view_context(view, scope)
-            try:
-                local_relations = scope.projected_relations(expr, ctx)
-            except (NotImplementedError, TypeError, ValueError, isl.Error):
-                self._record_source(expr, scope, view)
-                scope.refused[view] = scope.refused.get(view, frozenset()) | {expr}
-                continue
-            self._record_source(expr, scope, view, local_relations, alias)
-            for inputs, boundaries, into in (
-                (True, local_relations[: len(expr.args)], scope.accesses),
-                (False, local_relations[len(expr.args) :], scope.outputs),
-            ):
-                built: list[Access] = []
-                for index, boundary in enumerate(boundaries):
-                    operand = expr.args[index] if inputs else expr
-                    access = resolve_access(
-                        operand,
-                        boundary,
+    def _record(self, expr, ctx, *, forward=None, alias=None, relations=None, views=None):
+        ctx.scope.snapshot.definition.locations[id(expr)] = ctx.scope
+        views = self._views(ctx) if views is None else views
+        scope = ctx.scope
+        changing = set()
+        for operand in expr_children(expr):
+            changing.update(scope.provenance.varies(operand))
+        if id(expr) in self.seeds:
+            changing.add(id(self.seeds[id(expr)].owner))
+        if isinstance(expr, Var) and any(expr is p for p in self.graph.params):
+            changing.add(id(expr))
+        for value in SSAValue.leaves(expr):
+            source = None if forward is None else forward[value.index]
+            origin = None if source is None else scope.provenance.lookup(source)
+            if origin is not None:
+                changing.update(origin.varies)
+            view_relations = {view: None for view in ("narrow", "device", "unit")}
+            root = value
+            for view, local in views.items():
+                if origin is not None:
+                    relation, root = getattr(origin, view), origin.root
+                elif alias is not None:
+                    origin_alias = scope.provenance.lookup(alias.target)
+                    relation = renaming_relation(expr, local, relations[view]).normalized(scope)
+                    relation, _ = eliminate_parameters(
+                        relation,
                         scope,
-                        ctx,
-                        input_index=index if inputs else None,
-                        output_index=None if inputs else index,
+                        alias.target.leaf(),
                         narrow=view == "narrow",
-                        sources=self.sources[view],
-                        precisions=self.precisions[view],
                         formals=() if self.is_root else self.graph.params,
+                        keep_possible=True,
                     )
-                    built.extend(access)
-                into.setdefault(view, {})[id(expr)] = (expr, tuple(built))
+                    upstream = getattr(origin_alias, view)
+                    relation = None if upstream is None else relation.compose(upstream)
+                    root = origin_alias.root
+                else:
+                    relation = identity_access(leaf_rank(value.leaf(local.local_type_of(expr))))
+                view_relations[view] = (
+                    None if relation is None else relation.constrain(scope.domain)
+                )
+            self.snapshot[value] = SnapshotEntry(
+                root, **view_relations, varies=frozenset(changing), forward=source
+            )
 
-    def _record_variance(self, expr: Expr, operands: tuple[Expr, ...]) -> None:
-        changing: set[int] = set()
-        for operand in operands:
-            changing.update(self.variance.get(id(operand), frozenset()))
-        if (loop := self.seeds.get(id(expr))) is not None:
-            changing.add(id(loop))
-        self.variance[id(expr)] = frozenset(changing)
-
-    def region_context(self, expr, ctx):
-        scope = ctx.current
-        domain, parameters = (
-            iteration_domain(expr, scope)
-            if isinstance(expr, LoopRegion)
-            else (scope.domain, scope.domain_params)
-        )
-        child = IterationScope(
-            owner=expr,
-            parent=scope,
-            children=(),
-            depth=scope.depth + isinstance(expr, LoopRegion),
-            domain=domain,
-            domain_params=parameters,
-            context=ctx,
-            accesses=self._empty_accesses(),
-            variance=self.variance,
-            sources=self.sources,
-            precisions=self.precisions,
-        )
-        scope.children = (*scope.children, child)
-        inner = super().region_context(expr, ctx)
-        child.context = inner
-        if isinstance(expr, LoopRegion):
-            for param in (expr.induction_var, *expr.params[: len(expr.yield_values)]):
-                self.seeds[id(param)] = child
-        for param, argument in expr.captures():
-            self._record_variance(param, (argument,))
-            self._memo[id(param)] = (param, None)
+    def _record_accesses(self, call, ctx):
+        scope, access = ctx.scope, ctx.scope.access
+        if not SSAValue.leaves(call) or access_relation_registry.lookup(type(call.target)) is None:
+            self._record(call, ctx)
+            return
+        views = self._views(ctx)
+        logical = views["device"] if "device" in views else replace(ctx, topology_level=None)
+        try:
+            stated = relations_of(call, logical)
+            access.relations[id(call)] = (call, stated)
+            relations = {
+                view: access.projected_relations(call, local) for view, local in views.items()
+            }
+            alias = (
+                buffer_alias(call, logical, relations["narrow"])
+                if aliased_operand(call) is not None
+                else None
+            )
+            self._record(call, ctx, alias=alias, relations=relations, views=views)
+            for view, local in views.items():
+                for inputs, boundaries, into in (
+                    (True, relations[view][: len(call.args)], access.accesses),
+                    (False, relations[view][len(call.args) :], access.outputs),
+                ):
+                    built = tuple(
+                        item
+                        for index, boundary in enumerate(boundaries)
+                        for item in resolve_access(
+                            call.args[index] if inputs else call,
+                            boundary,
+                            scope,
+                            local,
+                            input_index=index if inputs else None,
+                            output_index=None if inputs else index,
+                            view=view,
+                            formals=() if self.is_root else self.graph.params,
+                        )
+                    )
+                    into.setdefault(view, {})[(SSAValue(call),)] = (call, built)
+        except (NotImplementedError, TypeError, ValueError, isl.Error):
+            self._record(call, ctx)
             for view in self.views:
-                self._forward(param, forwarded_leaves(param, inner), child, view)
+                access.refused[view] = access.refused.get(view, frozenset()) | {call}
+                access.accesses.setdefault(view, {})[(SSAValue(call),)] = (call, ())
+
+    def on_region_start(self, region, ctx):
+        inner = TypeInferContext.enter_region(ctx, region)
+        child = IterationScope(
+            region,
+            parent=ctx.scope,
+            domain=iteration_domain(region, ctx.scope),
+            mesh=inner.current_mesh,
+            topologies=ctx.topologies,
+        )
+        child.snapshot.definition.values = self.snapshot
+        child.snapshot.definition.locations = ctx.scope.snapshot.definition.locations
+        child.snapshot.definition.locations[id(region)] = ctx.scope
+        ctx.scope.children += (child,)
+        inner = replace(inner, scope=child)
+        if isinstance(region, LoopRegion):
+            for param in (region.induction_var, *(phi for phi, _, _ in region.carries())):
+                self.seeds[id(param)] = child
+                child.snapshot.definition.locations[id(param)] = child
+        for param, argument in region.captures():
+            self._record(param, inner, forward=SSAValue.leaves(argument))
+            self._memo[id(param)] = (param, None)
         return inner
 
-    def default_visit_leaf(self, expr, operands, ctx):
-        scope = ctx.current
-        if isinstance(expr, (LoopRegion, MeshRegion)):
-            scope = scope.parent
-            for view in self.views:
-                self._forward(expr, forwarded_leaves(expr, ctx), scope, view)
-        elif isinstance(expr, Call):
-            callee = self.callee_frame(expr, ctx.frame)
-            if callee is None:
-                self._record_accesses(expr, scope)
-            else:
-                for view in self.views:
-                    binding = self._view_context(view, scope).for_call(expr)
-                    for index, (source, precision) in enumerate(
-                        self.returns[id(callee.function)][view]
-                    ):
-                        value = SSAValue(expr, index)
-                        projected, bounded = binding.project(source)
-                        self.sources[view][value] = projected
-                        self.precisions[view][value] = precision.join(bounded)
-        else:
-            for view in self.views:
-                self._record_source(expr, scope, view)
-        self._record_variance(expr, expr_children(expr))
+    def on_region_end(self, region, operands, ctx):
+        parent = ctx.scope.parent.access
+        for name in ("accesses", "outputs"):
+            for view, records in getattr(ctx.scope.access, name).items():
+                getattr(parent, name).setdefault(view, {}).update(records)
+        for view, refused in ctx.scope.access.refused.items():
+            parent.refused[view] = parent.refused.get(view, frozenset()) | refused
+        parent.relations.update(ctx.scope.access.relations)
+        return operands
 
-    def build(self) -> IterationScope:
-        self.seeds = {}
-        self.variance = {}
-        domain, domain_params = iteration_domain(self.graph, None)
+    def visit_leaf_Tuple(self, expr, operands, ctx):
+        self._record(
+            expr,
+            ctx,
+            forward=tuple(v for element in expr.elements for v in SSAValue.leaves(element)),
+        )
+
+    def visit_leaf_MeshRegion(self, expr, operands, ctx):
+        self._record(expr, ctx, forward=SSAValue.leaves(expr.body))
+
+    def visit_leaf_LoopRegion(self, expr, operands, ctx):
+        values = tuple(phi for phi, _, _ in expr.carries()) or (expr.body,)
+        self._record(
+            expr, ctx, forward=tuple(v for value in values for v in SSAValue.leaves(value))
+        )
+
+    def visit_TupleGetItem(self, call, ctx):
+        index = static_dim_value(call.args[1])
+        self._record_accesses(call, ctx)
+        if index is not None:
+            begin, count = leaf_span(call.args[0].type, index)
+            self._record(
+                call,
+                ctx,
+                forward=tuple(SSAValue(call.args[0], i) for i in range(begin, begin + count)),
+            )
+
+    def on_call_start(self, call, ctx):
+        inner = super().on_call_start(call, ctx)
+        ctx.scope.snapshot.definition.locations[id(call)] = ctx.scope
+        return inner
+
+    def visit_Call(self, call, ctx):
+        self.visit_operands(call, ctx)
+        callee_scope = ctx.callee_scope
+        if callee_scope is None:
+            handler = getattr(self, f"visit_{type(call.target).__name__}", self._record_accesses)
+            handler(call, ctx)
+            return
+        for value in SSAValue.leaves(call):
+            self.snapshot[value] = replace(
+                callee_scope.provenance.result(value.index), forward=None
+            )
+        for name in ("accesses", "outputs"):
+            for view, records in getattr(callee_scope.access, name).items():
+                into = getattr(ctx.scope.access, name).setdefault(view, {})
+                into.update({(SSAValue(call), *path): record for path, record in records.items()})
+        for view, refused in callee_scope.access.refused.items():
+            ctx.scope.access.refused[view] = (
+                ctx.scope.access.refused.get(view, frozenset()) | refused
+            )
+
+    def default_visit_leaf(self, expr, operands, ctx):
+        self._record(expr, ctx)
+
+    def build(self):
         mesh = get_metadata(self.graph, ExecutionMeshMetadata)
-        context = replace(
-            self.type_ctx,
-            owner=self.graph,
-            parent=None,
-            current_mesh=None if mesh is None else mesh.mesh,
-        )
         root = IterationScope(
-            owner=self.graph,
-            parent=None,
-            children=(),
-            depth=0,
-            domain=domain,
-            domain_params=domain_params,
-            context=context,
-            accesses=self._empty_accesses(),
-            variance=self.variance,
-            sources=self.sources,
-            precisions=self.precisions,
+            self.graph, mesh=None if mesh is None else mesh.mesh, topologies=self.context.topologies
         )
-        context.root = context.current = root
+        root.snapshot.definition.values = self.snapshot
+        self.context.scope = root
+        ctx = replace(self.context, owner=self.graph, parent=None, current_mesh=root.mesh)
         for param in self.graph.params:
-            self.visit(param, context)
-            self.variance[id(param)] = frozenset((id(param),))
-        self.visit_function_body(self.graph, context)
+            self.visit(param, ctx)
+        self.visit_function_body(self.graph, ctx)
         return root
 
 
-def build_scopes(
-    module: Module,
-    graph: Function,
-    *,
-    views: Sequence[str] = ("narrow", "device", "unit"),
-    ctx: AnalyzeContext | None = None,
-) -> IterationScope:
-    """Build the iteration-scope tree and access views in one normalized walk."""
+def build_scopes(module, graph, *, views=("narrow", "device", "unit"), ctx=None):
     return ScopeBuilder(module, graph, views=views, ctx=ctx).build()
-
-
-def walk_scopes(root: IterationScope) -> Iterator[IterationScope]:
-    """Yield an iteration scope and its descendants in lexical order."""
-    yield root
-    for child in root.children:
-        yield from walk_scopes(child)
-
-
-__all__ = [
-    "IterationScope",
-    "Repeats",
-    "ScopeBuilder",
-    "build_scopes",
-    "walk_scopes",
-]

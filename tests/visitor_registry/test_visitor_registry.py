@@ -11,8 +11,6 @@ raise rather than return a zero.
 
 from __future__ import annotations
 
-from dataclasses import fields
-
 import pytest
 
 from tilefoundry.evaluator import eval_registry
@@ -31,8 +29,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CudaTarget
-from tilefoundry.visitor_registry.call_frame import CallFrame
-from tilefoundry.visitor_registry.contexts import CostContext, TypeInferContext, VerifyContext
+from tilefoundry.visitor_registry.contexts import CostContext, VerifyContext
 from tilefoundry.visitor_registry.registries import (
     codegen_registry,
     cost_evaluator_registry,
@@ -136,21 +133,3 @@ def test_visitors_fail_closed_when_unregistered() -> None:
         CodegenVisitor(_Ctx(), codegen_registry, target=CudaTarget).emit_expr(call)
     with pytest.raises(VerifyError, match="no cost evaluator registered for _UnknownOp"):
         CostEvaluator().visit_Call(call, CostContext())
-
-
-def test_where_a_walk_reads_is_an_internal_call_frame() -> None:
-    """The location API is `CallFrame` and `TypeInferContext.frame`.
-
-    The frame is internal to visitor contexts and carries the effective
-    execution domain. A context does not answer construct-specific questions.
-    """
-    assert CallFrame.__dataclass_params__.frozen
-    assert [field.name for field in fields(CallFrame)] == ["module", "function", "target", "topologies"]
-
-    for context in (TypeInferContext, VerifyContext, CostContext):
-        declared = [field.name for field in fields(context)]
-        assert declared[:3] == ["frame", "current_mesh", "memo"]
-        assert not any(
-            hasattr(context, name)
-            for name in ("module", "caller", "child_call", "child_call_owner")
-        )

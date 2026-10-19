@@ -9,14 +9,13 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_scalar_tensor
 from tilefoundry.ir.types import TupleType
+from tilefoundry.ir.types.utils import leaf_span, leaves_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
     control_read,
     identity_access,
     iterating,
-    leaf_span,
-    leaves_of,
     register_access_relation,
 )
 

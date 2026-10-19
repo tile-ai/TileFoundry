@@ -42,6 +42,7 @@ from tilefoundry.analysis.compute_cost import (
 )
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import MemoryOptions
+from tilefoundry.analysis.metadata import shifted
 from tilefoundry.dsl import *
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
 from tilefoundry.ir.core import (
@@ -54,7 +55,6 @@ from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _ROUNDING_M = 14_593
@@ -75,14 +75,22 @@ def test_invariant_gemm_operands_repeat_in_total_traffic() -> None:
 
 
 def test_reshard_compares_address_boxes_without_participant_ownership() -> None:
-    result = analyze(*check_program(TransposeShard, TransposeShard.entry_function()), analysis="memory")
-    (reshard,) = (expr for expr in collect_exprs(result.function.body)
-                  if isinstance(expr, Call) and isinstance(expr.target, Reshard))
+    result = analyze(
+        *check_program(TransposeShard, TransposeShard.entry_function()), analysis="memory"
+    )
+    (reshard,) = (
+        expr
+        for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, Reshard)
+    )
     assert aliased_operand(reshard) == 0
     record = get_metadata(reshard, MemoryMetadata)
     assert record.buffer_bytes is None and not record.offsets
     assert record.traffic.communication.of("gpu") is None
-    assert get_metadata(result.function, RegionMemoryMetadata).peak_for("gmem").peak_bytes == HELD_BYTES
+    assert (
+        get_metadata(result.function, RegionMemoryMetadata).peak_for("gmem").peak_bytes
+        == HELD_BYTES
+    )
 
 
 _ROUNDING_N = 11_489
@@ -210,7 +218,7 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
     timed = []
     context = _build_context(cross_scope.module, cross_scope.function)[-1]
     for call in _calls(cross_scope.function):
-        frame = CallFrameVisitor.callee_frame(call, context.frame)
+        frame = context._callee_context(call)
         occurrence = get_metadata(call, PerformanceMetadata)
         if frame is None or occurrence is None:
             continue
@@ -218,7 +226,9 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
             record = get_metadata(primitive, PerformanceMetadata)
             if record is None:
                 continue
-            resolved = record.resolve(context.for_call(call))
+            resolved = replace(
+                record, timeline=shifted(record.timeline, occurrence.timeline.start_ns)
+            )
             for invocation in range(occurrence.timeline.trips):
                 for iteration in range(resolved.timeline.trips):
                     offset = (
@@ -452,10 +462,10 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
         analysis="memory",
     )
     assert [
-        (item.binding, item.memory_level, item.bytes, item.defined_at, item.last_used_at)
+        (type(item.value.expr), item.value.index, item.memory_level, item.bytes, item.defined_at, item.last_used_at)
         for item in get_metadata(fits.function, RegionMemoryMetadata).lifetimes
     ] == [
-        (item.binding, item.memory_level, item.bytes, item.defined_at, item.last_used_at)
+        (type(item.value.expr), item.value.index, item.memory_level, item.bytes, item.defined_at, item.last_used_at)
         for item in get_metadata(relieved.function, RegionMemoryMetadata).lifetimes
     ]
 

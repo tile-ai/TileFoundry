@@ -17,13 +17,13 @@ from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import access_relation_registry
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.call_frame import CallFrame, ValuationVisitor
 from tilefoundry.visitor_registry.candidates import (
     candidate_operands,
     candidate_ops,
     sole_candidate,
 )
-from tilefoundry.visitor_registry.contexts import ValuationContext
+from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 
 def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
@@ -43,12 +43,19 @@ def candidates(
     module, entry = check_program(module, entry, dims=dims)
     target = module.resolve_target()
     contexts = {}
-    frames = tuple(ValuationVisitor.walk_frames(CallFrame(module, entry)))
+    frames = tuple(ValuationVisitor.definitions(ValuationContext(module, entry)))
     for frame in frames:
         mesh = get_metadata(frame.function, ExecutionMeshMetadata)
-        contexts.update(ValuationVisitor.index_contexts(frame.function, ValuationContext(
-            frame=frame, owner=frame.function, current_mesh=None if mesh is None else mesh.mesh,
-        )))
+        contexts.update(
+            ValuationVisitor.index_contexts(
+                frame.function,
+                TypeInferContext(
+                    module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies,
+                    owner=frame.function,
+                    current_mesh=None if mesh is None else mesh.mesh,
+                ),
+            )
+        )
     declared = _instructions(target)
     type_printer = PythonPrinter()
     pattern_printer = PatternPrinter()
@@ -68,7 +75,7 @@ def candidates(
             continue
         calls.append(call)
         context = contexts[id(call)]
-        frame, mesh = context.frame, context.current_mesh
+        frame, mesh = context, context.current_mesh
         level = None if mesh is None else mesh.topologies[-1].name
         usable, refused = [], []
         for op_type, capability in declared:

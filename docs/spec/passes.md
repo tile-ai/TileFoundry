@@ -312,8 +312,8 @@ class ConvertHIRToTIR(ModulePass):
     Visit path; only a required issue tile introduces a new operand window.
     Lowering MUST obtain storage answers from StoragePlan, the sole reader of analysis
     storage metadata in this pass. The context reads `MemoryMetadata.offsets`,
-    accepted links in AllocationSummary.values, and the unchanged
-    AllocationSummary.address_decisions. It chooses direct storage partners,
+    accepted links in AllocationSummaryMetadata.values, and the unchanged
+    AllocationSummaryMetadata.address_decisions. It chooses direct storage partners,
     output positions and refusals; analysis publishes no derived aliases.
     Each HIR view is formed on its visited operand using the registered op's
     own result-to-operand relation. StoragePlan computes physical view recipes;

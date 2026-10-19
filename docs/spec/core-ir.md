@@ -108,7 +108,7 @@ Python-to-HIR entry and HIR-to-HIR device calls are governed by
   effective levels and creates a lexical mesh binding.
 
 **Effective context.** `target` and `topologies` record what a Module
-*declares*, not what it resolves to; a visitor carries the effective declarations in its current `CallFrame`,
+*declares*, not what it resolves to; a visitor carries the effective declarations in its current `ValuationContext`,
 without copying them onto shared definitions or Functions.
 
 - constraints:
@@ -156,7 +156,7 @@ by the visitor from the callee declaration or the inherited caller context.
 
 - constraints:
   - `resolve_target()` MUST return this Module's declared target. Inherited
-    context belongs to the visitor's `CallFrame`, not the shared Module.
+    context belongs to the visitor's `ValuationContext`, not the shared Module.
   - Callee context inheritance and call compatibility follow
     [hir §1.1](./hir.md#11-function).
   - A root Module with no target declaration MUST be refused
@@ -227,7 +227,7 @@ shape-specialization variants live inside that entry's `Function.variants`
 
 `tilefoundry.ir.module_utils.list_call_paths(root)` enumerates each declared
 function once by identity, in DFS first-instance order. It returns a
-`dict[call_path, CallFrame]`, including HIR Functions and PrimFunctions. A
+`dict[call_path, ValuationContext]`, including HIR Functions and PrimFunctions. A
 call path is a dot-separated string. The frame records the current Module,
 function, effective target, and effective topologies; shared definitions use the first
 path for generated names, including indexed segments such as `layers.0.run`.
@@ -280,19 +280,11 @@ functions in different child modules are distinct symbols.
 ## 2. `Expr`
 
 ```python
-class ValuationProvider(ABC):
-    """Supply the current interpretation of metadata free variables."""
-
-    @abstractmethod
-    def request_valuation[V](self, valuation: type[V]) -> V: ...
-
-
 class IRMetadata:
     """Describe one immutable expression annotation."""
 
-    requires: ClassVar[tuple[type, ...]] = ()
 
-    def resolve(self, ctx: ValuationProvider) -> IRMetadata: ...
+    def resolve(self, ctx) -> IRMetadata: ...
 
 class BindingMetadata(IRMetadata):
     """Describe an authored SSA binding name.
@@ -323,14 +315,14 @@ class SourceSpanMetadata(IRMetadata):
 
 - constraints:
   - the immutable base of every typed annotation stored on an `Expr`: typed
-    fields and a context interpretation contract. `requires` lists Valuation
-    Protocol types; the default `resolve(ctx)` returns the same record. A
-    context implements `ValuationProvider.request_valuation`, while concrete
-    domain providers own unsupported-context errors. Core MUST NOT import
-    analysis to interpret metadata. What a record looks like as text
-    or as JSON is decided by inspection
-    ([inspection §2.8](./inspection.md#28-record-comment-forms)), so a record
-    MUST NOT carry a rendering, a key name, or a family name of its own.
+    fields and an optional `resolve(ctx)` interpretation. The default returns
+    the same record. Analysis supplies its context; environment-dependent records
+    use that context's bound Scope. Core metadata does not define a capability
+    provider or declare requirements. Core MUST NOT
+    import analysis to interpret metadata. Text and JSON rendering belong to
+    inspection ([inspection §2.8](./inspection.md#28-record-comment-forms)); a
+    record MUST NOT carry a rendering, a key name, or a family name of its own.
+
   - `BindingMetadata` is the authored SSA label. The parser maps explicit DSL
     `loc=` syntax and inferred assignment names to this metadata; there is no
     parallel `Expr.loc` field.
@@ -364,7 +356,7 @@ class Expr:
   - `metadata` MUST NOT participate in expression equality, hashing, or repr.
 
 ```python
-def get_metadata(expr: "Expr", cls: type[T]) -> T | None: ...
+def get_metadata(expr: "Expr", cls: type[T], *, ctx=None) -> T | None: ...
 def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr": ...
 def attach_metadata(expr: "Expr", value: IRMetadata) -> None: ...
 def detach_metadata(expr: "Expr", cls: type[IRMetadata]) -> None: ...
@@ -377,7 +369,9 @@ def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]: ...
 - constraints:
   - `get_metadata` and `remove_metadata` match an exact concrete class, not
     subclasses, and never mutate the input expression.
-  - `get_metadata` returns the unique matching value or `None`.
+  - `get_metadata` returns the unique matching definition record or `None`. With
+    `ctx`, it returns `record.resolve(ctx)`; context-independent records return
+    themselves. Resolving MUST NOT mutate the shared definition record.
   - `remove_metadata` returns a copy without the matching value; when the class
     is absent it returns the input expression unchanged.
   - `attach_metadata` and `detach_metadata` perform those exact-class updates

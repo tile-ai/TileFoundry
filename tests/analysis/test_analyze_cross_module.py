@@ -46,20 +46,24 @@ from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.utils import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget, Target
-from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
+from tilefoundry.visitor_registry.contexts import ValuationContext
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)
 
 
-def _matmul_records(result) -> tuple[tuple[ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata], ...]:
+def _matmul_records(
+    result,
+) -> tuple[tuple[ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata], ...]:
     """Both halves of each occurrence's MatMul record."""
     records = []
+
     def visit(frame):
         for expr in collect_exprs(frame.function.body):
             if not isinstance(expr, Call):
                 continue
-            child = CallFrameVisitor.callee_frame(expr, frame)
+            child = frame._callee_context(expr)
             if child is not None:
                 visit(child)
             elif isinstance(expr.target, MatMul):
@@ -68,7 +72,7 @@ def _matmul_records(result) -> tuple[tuple[ComputeCostMetadata, MemoryMetadata, 
                 assert record is not None
                 records.append((record, moved))
 
-    visit(CallFrame(result.module, result.function))
+    visit(ValuationContext(result.module, result.function))
     return tuple(records)
 
 
@@ -248,7 +252,9 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
     expected = {"routed_expert": ((120,), 0), "shared_expert": ((12,), 120)}
     reached = {
         fn.name: _placed_primitives(fn)
-        for frame in list_call_paths(check_program(MoEMegaKernel, MoEMegaKernel.entry_function())[0]).values()
+        for frame in list_call_paths(
+            check_program(MoEMegaKernel, MoEMegaKernel.entry_function())[0]
+        ).values()
         for fn in (frame.function,)
     }
 
@@ -263,6 +269,7 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
 
 def _stacked_program(count, trips=None):
     trips = count if trips is None else trips
+
     @module(entry="run", target=CudaTarget(_H200), topologies=_CTA)
     class Stack:
         layers = ModuleList(ScaledChild, count)
@@ -284,8 +291,11 @@ def _call_program(definition, *, count=1, indexed=False, name="run"):
     for index in range(count):
         target = slot
         if indexed:
-            target = Call(TupleGetItem(), (slot, Constant(index, type=TensorType.scalar(DType.i32))),
-                          type=slot.type.fields[index])
+            target = Call(
+                TupleGetItem(),
+                (slot, Constant(index, type=TensorType.scalar(DType.i32))),
+                type=slot.type.fields[index],
+            )
         value = Call(target, (value,), type=param.type)
         calls.append(value)
     if name == "twice":
@@ -297,21 +307,37 @@ def _call_program(definition, *, count=1, indexed=False, name="run"):
         body = Tuple((iteration,), type=TupleType((param.type,)))
         loop = LoopRegion(
             induction_var=Var("i", type=TensorType.scalar(DType.i32)),
-            params=(carry,), args=(param,), body=body, yield_values=(iteration,),
-            start=0, extent=3, step=1, type=body.type,
+            params=(carry,),
+            args=(param,),
+            body=body,
+            yield_values=(iteration,),
+            start=0,
+            extent=3,
+            step=1,
+            type=body.type,
         )
         value = loop
     function = Function.build(name=name, params=(param,), body=value, return_type=param.type)
-    return Module(name, (function,), name, children={"layers" if indexed else "mm": slot},
-                  target=CudaTarget(_H200), topologies=_CTA)
+    return Module(
+        name,
+        (function,),
+        name,
+        children={"layers" if indexed else "mm": slot},
+        target=CudaTarget(_H200),
+        topologies=_CTA,
+    )
 
 
 @pytest.mark.parametrize(
     "kind,flops,traffic,peak,persistent,occurrences",
-    [("cross", 512, 512, 512, 384, 1), ("twice", 1056, 1408, 640, 384, 2),
-     ("looped", 1536, 1536, 640, 384, 1),
-     ("one", 4, 48, 48, 32, 1), ("unrolled", 12, 144, 80, 64, 3),
-     ("stacked", 12, 144, 80, 64, 1)],
+    [
+        ("cross", 512, 512, 512, 384, 1),
+        ("twice", 1056, 1408, 640, 384, 2),
+        ("looped", 1536, 1536, 640, 384, 1),
+        ("one", 4, 48, 48, 32, 1),
+        ("unrolled", 12, 144, 80, 64, 3),
+        ("stacked", 12, 144, 80, 64, 1),
+    ],
 )
 def test_retained_calls_match_the_memory_and_work_acceptance_values(
     kind, flops, traffic, peak, persistent, occurrences
@@ -336,20 +362,23 @@ def test_retained_calls_match_the_memory_and_work_acceptance_values(
     assert moved.traffic.storage.of("gmem").total.total_bytes == traffic
     assert (region.peak_bytes, region.persistent_bytes) == (peak, persistent)
     assert len(result.functions) == 2
-    frames = tuple(CallFrameVisitor.walk_frames(CallFrame(result.module, result.function)))
+    frames = tuple(ValuationVisitor.definitions(ValuationContext(result.module, result.function)))
     sites = [
         (call, child)
         for frame in frames
         for call in collect_exprs(frame.function.body)
-        if isinstance(call, Call)
-        and (child := CallFrameVisitor.callee_frame(call, frame)) is not None
+        if isinstance(call, Call) and (child := frame._callee_context(call)) is not None
     ]
     assert len(sites) == occurrences
     if kind == "stacked":
-        assert sum(isinstance(node, LoopRegion) for node in collect_exprs(result.function.body)) == 1
+        assert (
+            sum(isinstance(node, LoopRegion) for node in collect_exprs(result.function.body)) == 1
+        )
     for call, child in sites:
         assert get_metadata(child.function.body, ComputeCostMetadata) is not None
-        assert get_metadata(call, ComputeCostMetadata) == get_metadata(child.function, ComputeCostMetadata)
+        assert get_metadata(call, ComputeCostMetadata) == get_metadata(
+            child.function, ComputeCostMetadata
+        )
 
 
 def test_derived_nodes_and_bodies_do_not_grow_with_indexed_instance_count():
@@ -358,8 +387,7 @@ def test_derived_nodes_and_bodies_do_not_grow_with_indexed_instance_count():
         root = _stacked_program(count)
         checked, function = check_program(root, root.entry_function())
         functions = tuple(frame.function for frame in list_call_paths(checked).values())
-        sizes.append((sum(len(collect_exprs(body.body)) for body in functions),
-                      len(functions)))
+        sizes.append((sum(len(collect_exprs(body.body)) for body in functions), len(functions)))
         assert sum(isinstance(node, LoopRegion) for node in collect_exprs(function.body)) == 1
         with pytest.raises(AnalysisError, match="derived body nodes.*node budget"):
             check_program(root, root.entry_function(), budget=sizes[-1][0] - 1)
@@ -373,13 +401,18 @@ def test_the_published_qwen_stack_shares_its_layer_definition_and_fits_the_budge
     assert all(element is elements[0] for element in elements)
     root = QWEN_CASE.build()
     checked, _function = check_program(root, root.lookup("decoder_layer"), dims={"ctx_len": 128})
-    assert sum(len(collect_exprs(frame.function.body)) for frame in list_call_paths(checked).values()) <= 10_000
+    assert (
+        sum(len(collect_exprs(frame.function.body)) for frame in list_call_paths(checked).values())
+        <= 10_000
+    )
 
 
 def _direct_program(callee, params, calls):
     body = Tuple(tuple(calls), type=TupleType(tuple(call.type for call in calls)))
     function = Function.build(name="root", params=params, body=body, return_type=body.type)
-    return Module("DirectCalls", (callee, function), "root", target=CudaTarget(_H200), topologies=_CTA)
+    return Module(
+        "DirectCalls", (callee, function), "root", target=CudaTarget(_H200), topologies=_CTA
+    )
 
 
 @pytest.mark.parametrize("difference", ["layout", "storage", "mesh"])
@@ -400,7 +433,9 @@ def test_one_definition_rejects_different_call_signatures(difference):
         first = MeshRegion(Mesh(_CTA, Layout((1,), (1,)), ("first",)), first, type=type_)
         second = MeshRegion(Mesh(_CTA, Layout((1,), (1,)), ("second",)), second, type=changed)
     root = _direct_program(callee, (left, right), (first, second))
-    with pytest.raises(AnalysisError, match="callee 'helper'.*root/v0.*root/v1.*versus"):
+    with pytest.raises(
+        AnalysisError, match="callee 'helper'.*root/<value 0>.*root/<value 1>.*versus"
+    ):
         check_program(root, root.entry_function())
 
 
@@ -429,7 +464,9 @@ def test_an_analyzer_cannot_write_records_on_a_shared_derived_callee():
     def write_on_definition(_function, context):
         attach_metadata(_function.body, MemoryMetadata())
 
-    target = _WriteGuardTarget(Analyzer("bad", write_on_definition, produces=(ComputeCostMetadata,)))
+    target = _WriteGuardTarget(
+        Analyzer("bad", write_on_definition, produces=(ComputeCostMetadata,))
+    )
     root = replace(CrossModule, target=target, topologies=None)
     with pytest.raises(AnalysisError, match="changed Metadata it does not declare"):
         analyze(*check_program(root, root.entry_function()), analysis="bad")
@@ -453,7 +490,9 @@ def test_repeated_callee_temporaries_require_one_shared_memory_placement():
 
     x, w = Var("x", type=type_), Var("w", type=type_, is_const=True)
     product = Call(Binary(kind=BinaryKind.MUL), (copy(x), copy(w)), type=type_)
-    helper = Function.build(name="helper", params=(x, w), body=write_back(product), return_type=type_)
+    helper = Function.build(
+        name="helper", params=(x, w), body=write_back(product), return_type=type_
+    )
     root_x, root_w = Var("root_x", type=type_), Var("root_w", type=type_, is_const=True)
     cap_x, cap_w = Var("cap_x", type=type_), Var("cap_w", type=type_)
     first = Call(helper, (cap_x, cap_w), type=type_)
@@ -461,27 +500,42 @@ def test_repeated_callee_temporaries_require_one_shared_memory_placement():
     result = write_back(Call(Binary(kind=BinaryKind.ADD), (copy(first), copy(second)), type=type_))
     topologies = (Topology("cta", 1), Topology("thread", 32))
     body = MeshRegion(
-        Mesh(topologies, Layout((1, 32), (32, 1)), ("block", "lane")), result,
-        params=(cap_x, cap_w), args=(root_x, root_w), type=type_,
+        Mesh(topologies, Layout((1, 32), (32, 1)), ("block", "lane")),
+        result,
+        params=(cap_x, cap_w),
+        args=(root_x, root_w),
+        type=type_,
     )
     function = Function.build(name="root", params=(root_x, root_w), body=body, return_type=type_)
-    root = Module("SharedPressure", (helper, function), "root",
-                  target=CudaTarget(_H200), topologies=topologies)
+    root = Module(
+        "SharedPressure",
+        (helper, function),
+        "root",
+        target=CudaTarget(_H200),
+        topologies=topologies,
+    )
     analyzed = analyze(*check_program(root, function), analysis="memory")
     derived = next(fn for fn in analyzed.functions if fn.name == "helper")
-    temporaries = [node for node in collect_exprs(derived.body)
-                   if isinstance(node, Call) and isinstance(node.target, Empty)
-                   and node.type.storage is StorageKind.SMEM]
+    temporaries = [
+        node
+        for node in collect_exprs(derived.body)
+        if isinstance(node, Call)
+        and isinstance(node.target, Empty)
+        and node.type.storage is StorageKind.SMEM
+    ]
     assert len(temporaries) == 2
-    frame = CallFrame(analyzed.module, analyzed.function)
-    calls = [child for node in collect_exprs(analyzed.function.body)
-             if isinstance(node, Call) and (child := CallFrameVisitor.callee_frame(node, frame)) is not None
-             and child.function is derived]
+    frame = ValuationContext(analyzed.module, analyzed.function)
+    calls = [
+        child
+        for node in collect_exprs(analyzed.function.body)
+        if isinstance(node, Call)
+        and (child := frame._callee_context(node)) is not None
+        and child.function is derived
+    ]
     assert len(calls) == 2
     assert calls[0].function is calls[1].function
     offsets = [get_metadata(node, MemoryMetadata).offsets for node in temporaries]
     assert all(len(held) == 1 for held in offsets)
-
 
 
 def test_partial_indexed_loop_counts_only_reached_persistent_weights():
@@ -499,44 +553,68 @@ def test_repeated_callee_placement_compares_alias_even_at_the_same_offset():
     offset = Var("offset", type=scalar)
     shared_type = replace(type_, layout=Layout((32,), (1,)), storage=StorageKind.SMEM)
     shared_short = replace(short, layout=Layout((16,), (1,)), storage=StorageKind.SMEM)
-    held = Call(ScheduleOp(op=Copy()), (
-        x, Call(Empty(type=shared_type), (), type=shared_type),
-    ), type=shared_type)
-    update = Call(ScheduleOp(op=Copy()), (
-        y, Call(Empty(type=shared_short), (), type=shared_short),
-    ), type=shared_short)
+    held = Call(
+        ScheduleOp(op=Copy()),
+        (
+            x,
+            Call(Empty(type=shared_type), (), type=shared_type),
+        ),
+        type=shared_type,
+    )
+    update = Call(
+        ScheduleOp(op=Copy()),
+        (
+            y,
+            Call(Empty(type=shared_short), (), type=shared_short),
+        ),
+        type=shared_short,
+    )
     starts = Tuple((offset,), type=TupleType((scalar,)))
     updated = Call(InsertSlice(), (held, update, starts), type=type_)
     value = Call(Binary(kind=BinaryKind.ADD), (updated, updated), type=type_)
     zero = Constant(0, type=scalar)
-    result = Call(InsertSlice(), (
-        Call(Zeros(type=type_), (), type=type_), value,
-        Tuple((zero,), type=TupleType((scalar,))),
-    ), type=type_)
+    result = Call(
+        InsertSlice(),
+        (
+            Call(Zeros(type=type_), (), type=type_),
+            value,
+            Tuple((zero,), type=TupleType((scalar,))),
+        ),
+        type=type_,
+    )
     helper = Function.build(name="helper", params=(x, y, offset), body=result, return_type=type_)
     root_x, root_y = Var("root_x", type=type_), Var("root_y", type=short)
     cap_x, cap_y = Var("cap_x", type=type_), Var("cap_y", type=short)
-    calls = tuple(Call(helper, (cap_x, cap_y, Constant(i, type=scalar)), type=type_) for i in (1, 2))
+    calls = tuple(
+        Call(helper, (cap_x, cap_y, Constant(i, type=scalar)), type=type_) for i in (1, 2)
+    )
     values = Tuple(calls, type=TupleType((type_, type_)))
     topologies = (Topology("cta", 1), Topology("thread", 32))
     body = MeshRegion(
-        Mesh(topologies, Layout((1, 32), (32, 1)), ("block", "lane")), values,
-        params=(cap_x, cap_y), args=(root_x, root_y), type=values.type,
+        Mesh(topologies, Layout((1, 32), (32, 1)), ("block", "lane")),
+        values,
+        params=(cap_x, cap_y),
+        args=(root_x, root_y),
+        type=values.type,
     )
-    function = Function.build(name="root", params=(root_x, root_y), body=body, return_type=body.type)
-    root = Module("SharedAliases", (helper, function), "root",
-                  target=CudaTarget(_H200), topologies=topologies)
+    function = Function.build(
+        name="root", params=(root_x, root_y), body=body, return_type=body.type
+    )
+    root = Module(
+        "SharedAliases", (helper, function), "root", target=CudaTarget(_H200), topologies=topologies
+    )
     analyzed = analyze(*check_program(root, function), analysis="memory")
     derived = next(fn for fn in analyzed.functions if fn.name == "helper")
-    frame = CallFrame(analyzed.module, analyzed.function)
+    frame = ValuationContext(analyzed.module, analyzed.function)
     reached = [
-        child.function for node in collect_exprs(analyzed.function.body)
-        if isinstance(node, Call)
-        and (child := CallFrameVisitor.callee_frame(node, frame)) is not None
+        child.function
+        for node in collect_exprs(analyzed.function.body)
+        if isinstance(node, Call) and (child := frame._callee_context(node)) is not None
     ]
     assert reached == [derived, derived]
     buffers = [
-        get_metadata(node, MemoryMetadata) for node in collect_exprs(derived.body)
+        get_metadata(node, MemoryMetadata)
+        for node in collect_exprs(derived.body)
         if isinstance(node, Call) and isinstance(node.target, Empty)
     ]
     assert len(buffers) == 2

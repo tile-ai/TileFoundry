@@ -87,9 +87,9 @@ grep -E '^# (memory|roofline) ' Naive.txt
 ```
 
 ```text
-# memory traffic=gmem:r70.00KB/w42.44KB@logical,r70.00KB/w42.44KB@total,r70.00KB/w42.44KB@cta,r336B/w224B@thread;rmem:r589.35KB/w476.90KB@logical,r589.35KB/w476.90KB@total,r589.35KB/w476.90KB@cta,r2.54KB/w2.04KB@thread footprint=a:28.00KB;gamma:14.00KB;v10:32:56.00KB;v11:44:14.00KB;v13:45:448B footprint-precision=exact peak=gmem:70.00KB;rmem:112.44KB persistent=gmem:42.00KB
+# memory traffic=gmem:r70.00KB/w42.44KB@logical,r70.00KB/w42.44KB@total,r70.00KB/w42.44KB@cta,r336B/w224B@thread;rmem:r589.35KB/w476.90KB@logical,r589.35KB/w476.90KB@total,r589.35KB/w476.90KB@cta,r2.54KB/w2.04KB@thread footprint=a:28.00KB;gamma:14.00KB;norm::v11:56.00KB;v13:14.00KB;v15:448B footprint-precision=exact peak=gmem:70.00KB;rmem:112.01KB persistent=gmem:42.00KB
 # roofline ideal-ns=24 bound-by=memory
-# memory traffic=gmem:r42.00KB/w28.00KB@logical,r42.00KB/w28.00KB@total,r42.00KB/w28.00KB@cta,r224B/w112B@thread;rmem:r322.03KB/w266.02KB@logical,r322.03KB/w266.02KB@total,r322.03KB/w266.02KB@cta,r1.33KB/w1.11KB@thread footprint=a:28.00KB;gamma:14.00KB;v10:32:28.00KB footprint-precision=exact
+# memory traffic=gmem:r42.00KB/w28.00KB@logical,r42.00KB/w28.00KB@total,r42.00KB/w28.00KB@cta,r224B/w112B@thread;rmem:r322.03KB/w266.02KB@logical,r322.03KB/w266.02KB@total,r322.03KB/w266.02KB@cta,r1.33KB/w1.11KB@thread footprint=a:28.00KB;gamma:14.00KB;v11:28.00KB footprint-precision=exact
 # roofline ideal-ns=15 bound-by=memory
 ```
 
@@ -133,7 +133,7 @@ grep -E '^# (memory|roofline) ' Fused.txt
 ```
 
 ```text
-# memory traffic=gmem:r42.00KB/w14.44KB@logical,r42.00KB/w14.44KB@total,r42.00KB/w14.44KB@cta,r224B/w112B@thread;rmem:r561.35KB/w448.90KB@logical,r561.35KB/w448.90KB@total,r561.35KB/w448.90KB@cta,r2.43KB/w1.93KB@thread footprint=a:28.00KB;gamma:14.00KB;v19:64:14.00KB;v21:65:448B footprint-precision=exact peak=gmem:56.44KB;rmem:112.44KB persistent=gmem:42.00KB
+# memory traffic=gmem:r42.00KB/w14.44KB@logical,r42.00KB/w14.44KB@total,r42.00KB/w14.44KB@cta,r224B/w112B@thread;rmem:r561.35KB/w448.90KB@logical,r561.35KB/w448.90KB@total,r561.35KB/w448.90KB@cta,r2.43KB/w1.93KB@thread footprint=a:28.00KB;gamma:14.00KB;v22:14.00KB;v24:448B footprint-precision=exact peak=gmem:56.44KB;rmem:112.01KB persistent=gmem:42.00KB
 # roofline ideal-ns=13 bound-by=memory
 ```
 

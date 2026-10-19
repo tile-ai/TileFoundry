@@ -23,6 +23,9 @@ class MeshRegion(Expr):
     params: tuple[Var, ...] = ()
     args: tuple[Expr, ...] = ()
 
+    def carries(self):
+        return ()
+
     def captures(self) -> tuple[tuple[Var, Expr], ...]:
         """Pair every region parameter with its argument."""
         return tuple(zip(self.params, self.args, strict=True))

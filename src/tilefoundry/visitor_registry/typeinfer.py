@@ -24,7 +24,7 @@ from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
 from tilefoundry.ir.types.utils import tensor_types, types_compatible
 from tilefoundry.ir.visitor import expr_children
-from tilefoundry.visitor_registry.call_frame import ValuationVisitor
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 from .contexts import TypeInferContext, TypeInferResults
 from .instruction import check_input_reachability
@@ -34,7 +34,7 @@ from .registries import typeinfer_registry
 def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
     """Validate one entry call or subscript, returning its normalized index.
 
-    Validate the slot from the current CallFrame's module. A dynamic index
+    Validate the slot from the current ValuationContext's module. A dynamic index
     remains an expression; runtime bounds are checked when it is evaluated.
     """
     if index is MISSING:
@@ -62,13 +62,17 @@ def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
                 f"ModuleList slot {slot.key!r}: index {index!r} out of range for N={len(slot)}"
             )
     elif any(element is not slot.elements[0] for element in slot.elements[1:]):
-        raise ValueError(f"ModuleList slot {slot.key!r}: variable index requires the same definition")
+        raise ValueError(
+            f"ModuleList slot {slot.key!r}: variable index requires the same definition"
+        )
     return index
 
 
 def _require_axis_groups(node, type_, ctx):
     for tensor in tensor_types(type_):
-        if tensor.layout is not None and tensor != TensorType.umat_tensor(tensor.shape, tensor.dtype):
+        if tensor.layout is not None and tensor != TensorType.umat_tensor(
+            tensor.shape, tensor.dtype
+        ):
             try:
                 layout_correspondence(tensor.layout.shape, tensor.shape).tensor_axes()
             except ValueError as error:
@@ -144,8 +148,8 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         target = call.target
         if isinstance(target, TupleGetItem) and isinstance(call.args[0], ModuleList):
             slot = call.args[0]
-            if ctx.frame is not None:
-                slot = ctx.frame.module.children[slot.key]
+            if ctx.module is not None:
+                slot = ctx.module.children[slot.key]
             try:
                 index = _check_module_index(slot, call.args[1], index_type=arg_types[1])
             except ValueError as error:
@@ -154,9 +158,9 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         if isinstance(target, Call):
             arg_types = arg_types[1:]
         try:
-            if isinstance(target, ModuleList) and ctx.frame is not None:
-                _check_module_index(ctx.frame.module.children[target.key])
-            child_frame = self.callee_frame(call, ctx.frame)
+            if isinstance(target, ModuleList) and ctx.module is not None:
+                _check_module_index(ctx.module.children[target.key])
+            child_frame = ctx._callee_context(call)
             if child_frame is not None:
                 target = child_frame.function
         except (KeyError, ValueError) as error:
@@ -188,12 +192,10 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         arg_types: tuple[Type, ...],
         ctx: TypeInferContext,
         *,
-        child_frame: CallFrame | None = None,
+        child_frame: ValuationContext | None = None,
     ) -> Type:
         child = child_frame is not None and not isinstance(call.target, Function)
-        supplied = tuple(
-            param for param in callee.params if not (child and param.is_const)
-        )
+        supplied = tuple(param for param in callee.params if not (child and param.is_const))
         if len(arg_types) != len(supplied):
             kind = "activation(s)" if child else "parameter(s)"
             ctx.error(
@@ -221,9 +223,11 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         if callee.body is None or callee.variants:
             return callee.return_type
 
-        inner = ctx.for_callee(callee, frame=child_frame)
-        context = None if inner.frame is None else (
-            id(inner.frame.module), inner.frame.target, inner.frame.topologies
+        inner = replace(child_frame or ctx, function=callee, owner=callee, parent=None, call_site=None, memo={})
+        context = (
+            None
+            if inner.module is None
+            else (id(inner.module), inner.target, inner.topologies)
         )
         key = (id(callee), arg_types, ctx.current_mesh, context)
         cached = ctx.instantiated_memo.get(key)
@@ -237,7 +241,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
 
     def visit_leaf_ModuleList(self, slot, _operands, ctx: TypeInferContext) -> Type:
         try:
-            current = ctx.frame.module.children[slot.key] if ctx.frame is not None else slot
+            current = ctx.module.children[slot.key] if ctx.module is not None else slot
             return current.type
         except (KeyError, ValueError) as error:
             ctx.error(slot, str(error))
@@ -299,7 +303,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
             owns_body=self._owns_body,
             ranges=self._ranges,
         )
-        ctx = replace(ctx.for_region(region), memo=memo)
+        ctx = replace(ctx.enter_region(region), memo=memo)
         body_type = inner.visit(region.body, ctx)
         carried = region.params[: len(region.yield_values)]
         for index, (phi, y) in enumerate(zip(carried, region.yield_values, strict=True)):
@@ -326,15 +330,13 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         """
         memo = self._region_memo(expr, ctx)
         inner = TypeInferVisitor(memo=memo, owns_body=self._owns_body, ranges=self._ranges)
-        return inner.visit(
-            expr.body, replace(ctx.for_region(expr), memo=memo)
-        )
+        return inner.visit(expr.body, replace(ctx.enter_region(expr), memo=memo))
 
     def visit_Function(self, fn: Function, ctx: TypeInferContext) -> Type:
         """Refresh one complete function after binding its parameter types."""
         ctx = replace(ctx, owner=fn)
-        if ctx.frame is not None and ctx.frame.function is not fn:
-            ctx = replace(ctx, frame=replace(ctx.frame, function=fn))
+        if ctx.module is not None and ctx.function is not fn:
+            ctx = replace(ctx, function=fn)
         for param in fn.params:
             _require_axis_groups(param, param.annotation, ctx)
         memo = {id(param): (param, param.annotation) for param in fn.params}

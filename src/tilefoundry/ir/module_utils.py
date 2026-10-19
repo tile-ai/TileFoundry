@@ -1,9 +1,9 @@
 """Enumerate definition call paths and their effective execution contexts."""
 
-from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import ValuationContext
 
 
-def list_call_paths(root) -> dict[str, CallFrame]:
+def list_call_paths(root) -> dict[str, ValuationContext]:
     """One frame per function, at its first DFS call path, without copying definitions."""
     found, modules, functions = {}, set(), set()
 
@@ -16,7 +16,7 @@ def list_call_paths(root) -> dict[str, CallFrame]:
         for function in node.functions:
             if id(function) not in functions:
                 functions.add(id(function))
-                found[f"{path}{function.name}"] = CallFrame(node, function, target, topologies)
+                found[f"{path}{function.name}"] = ValuationContext(node, function, target, topologies)
         for key, slot in node.children.items():
             for index, child in enumerate(slot.elements):
                 suffix = f"{key}.{index}." if slot.indexed else f"{key}."

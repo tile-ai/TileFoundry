@@ -1,4 +1,5 @@
 """Per-analysis context dataclasses used by registry visitors."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -10,12 +11,11 @@ from tilefoundry.ir.core.expr import Call, Expr
 from tilefoundry.ir.core.metadata import (
     BindingMetadata,
     SourceSpanMetadata,
-    ValuationProvider,
     binding_name,
     get_metadata,
 )
 from tilefoundry.ir.core.stmt import Stmt
-from tilefoundry.ir.types import Mesh, Topology
+from tilefoundry.ir.types import Mesh
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.tensor_type import DType, Type
 from tilefoundry.ir.types.utils import local_type_of
@@ -30,26 +30,21 @@ class TypeInferResults:
 
 
 @dataclass
-class TypeInferContext:
-    """Track walk location and route type-inference queries.
+class ValuationContext:
+    """Shared lexical environment and call transitions for valuation visitors."""
 
-    Derivation lives in ``TypeInferVisitor``. ``frame`` says where the walk is
-    reading. ``current_mesh`` is the composed HIR execution domain.
-    See [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
-    """
-
-    frame: CallFrame | None = None
+    module: "Module | None" = None
+    function: "Function | PrimFunction | None" = None
+    target: "Target | None" = None
+    topologies: "tuple[Topology, ...] | None" = None
+    caller_context: ValuationContext | None = field(default=None, repr=False, compare=False)
     current_mesh: Mesh | None = None
-    memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
-    instantiated_memo: dict[tuple, Type] = field(
-        default_factory=dict, repr=False, compare=False
-    )
     loops: tuple[tuple[Expr, object, object, object], ...] = ()
     loop_aliases: dict[int, Expr] = field(default_factory=dict, repr=False, compare=False)
 
-    call: Call | None = None
+    call_site: Call | None = None
     owner: Expr | None = None
-    parent: TypeInferContext | None = field(default=None, repr=False, compare=False)
+    parent: ValuationContext | None = field(default=None, repr=False, compare=False)
 
     def with_captures(self, captures):
         """Keep captured induction parameters in their original loop coordinate."""
@@ -58,7 +53,7 @@ class TypeInferContext:
             aliases[id(param)] = self.capture_root(arg)
         return replace(self, loop_aliases=aliases)
 
-    def for_region(self, region):
+    def enter_region(self, region):
         """Enter a region after its arguments have been visited outside it."""
         from tilefoundry.ir.hir.loop_region import LoopRegion  # noqa: PLC0415
 
@@ -69,9 +64,82 @@ class TypeInferContext:
         mesh = make_mesh(self.current_mesh, region.mesh) if self.current_mesh else region.mesh
         return replace(inner, current_mesh=mesh, owner=region, parent=self)
 
-    def for_call(self, call):
-        """Interpret a call in its caller's frame."""
-        return replace(self, call=call)
+    def __post_init__(self):
+        if self.module is not None:
+            if self.target is None:
+                self.target = self.module.target
+            if self.topologies is None:
+                self.topologies = tuple(self.module.topologies or ())
+
+    def enter_call(self, call):
+        """Keep operands in the caller environment while identifying this call."""
+        return replace(self, call_site=call, caller_context=self)
+
+    @property
+    def caller(self):
+        return self.function
+
+    @property
+    def callee(self):
+        context = self._callee_context()
+        return None if context is None else context.function
+
+    def _callee_context(self, call=None):
+        """Prepare the called definition's environment without visiting its body."""
+        from tilefoundry.ir.core.expr import Constant  # noqa: PLC0415
+        from tilefoundry.ir.hir.function import Function  # noqa: PLC0415
+        from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
+
+        call = self.call_site if call is None else call
+        if call is None:
+            return None
+        if isinstance(call.target, (Function, PrimFunction)):
+            if self.module is None:
+                return None
+            return replace(
+                self,
+                function=call.target,
+                owner=call.target,
+                call_site=None,
+                parent=None,
+                caller_context=self,
+            )
+        slot, index = self.module_slot(call)
+        if slot is None:
+            return None
+        if self.module is None:
+            raise ValueError("instance call requires a module context")
+        slot = self.module.children[slot.key]
+        index = index.value if isinstance(index, Constant) else 0
+        module = slot.elements[index]
+        function = module.entry_function()
+        return replace(
+            self,
+            module=module,
+            function=function,
+            owner=function,
+            target=module.target if module.target is not None else self.target,
+            topologies=module.topologies if module.topologies is not None else self.topologies,
+            call_site=None,
+            parent=None,
+            caller_context=self,
+        )
+
+    @staticmethod
+    def module_slot(call):
+        from tilefoundry.ir.core.module import ModuleList  # noqa: PLC0415
+        from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem  # noqa: PLC0415
+
+        target = call.target
+        if isinstance(target, ModuleList):
+            return target, 0
+        if (
+            isinstance(target, Call)
+            and isinstance(target.target, TupleGetItem)
+            and isinstance(target.args[0], ModuleList)
+        ):
+            return target.args[0], target.args[1]
+        return None, None
 
     def capture_root(self, expr):
         """Resolve captures without treating carried values as invariant aliases."""
@@ -102,14 +170,16 @@ class TypeInferContext:
         )
 
     def resolve_target(self):
-        """The target carried by this visitor's current call frame."""
-        return None if self.frame is None else self.frame.target
+        """The target carried by this visitor's current environment."""
+        return self.target
 
-    def for_callee(self, callee: object, *, frame=None) -> TypeInferContext:
-        """Enter a same-module function with fresh type bindings."""
-        if frame is None and self.frame is not None:
-            frame = replace(self.frame, function=callee)
-        return replace(self, frame=frame, owner=callee, parent=None, call=None, memo={})
+
+@dataclass
+class TypeInferContext(ValuationContext):
+    """Type inference bindings over the shared valuation environment."""
+
+    memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
+    instantiated_memo: dict[tuple, Type] = field(default_factory=dict, repr=False, compare=False)
 
     def type_of(self, expr: Expr) -> Type:
         """The type this inference derived or bound for *expr*.
@@ -146,19 +216,8 @@ class TypeInferContext:
         raise VerifyError(f"{name}: {msg}{where}")
 
 
-class ValuationContext(TypeInferContext, ValuationProvider):
-    """Provide the interpretations implemented by the current family context."""
-
-    def request_valuation[V](self, valuation: type[V]) -> V:
-        if isinstance(self, valuation):
-            return self
-        self.error(
-            self.call or self.owner, f"{type(self).__name__} does not provide {valuation.__name__}"
-        )
-
-
 @dataclass
-class VerifyContext(ValuationContext):
+class VerifyContext(TypeInferContext):
     """The context a per-stmt verify handler is annotated against.
 
     The enclosing scope a handler asks about is the TIR ``mesh_scope``
@@ -174,7 +233,7 @@ class VerifyContext(ValuationContext):
 
 
 @dataclass
-class CostContext(ValuationContext):
+class CostContext(TypeInferContext):
     """Cost Evaluator context for one topology window.
 
     ``topology_level=None`` exposes the types as written. A named level projects
@@ -185,7 +244,6 @@ class CostContext(ValuationContext):
     selected_types: Mapping[int, Type] = field(default_factory=dict)
     selected_output_type: Type | None = None
     topology_level: str | None = None
-    topologies: tuple[Topology, ...] = ()
 
     def type_of(self, expr: Expr) -> Type:
         selected = self.selected_types.get(id(expr))

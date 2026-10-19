@@ -27,8 +27,8 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
             produces=(ComputeCostMetadata,),
         )
     if selector == "memory":
-        from tilefoundry.analysis.allocation import AllocationSummary  # noqa: PLC0415
-        from tilefoundry.analysis.liveness import Liveness  # noqa: PLC0415
+        from tilefoundry.analysis.allocation import AllocationSummaryMetadata  # noqa: PLC0415
+        from tilefoundry.analysis.liveness import LivenessMetadata  # noqa: PLC0415
         from tilefoundry.analysis.memory import analyze_memory  # noqa: PLC0415
         from tilefoundry.analysis.metadata import (  # noqa: PLC0415
             MemoryMetadata,
@@ -38,7 +38,12 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
         return Analyzer(
             "memory",
             analyze_memory,
-            produces=(MemoryMetadata, RegionMemoryMetadata, Liveness, AllocationSummary),
+            produces=(
+                MemoryMetadata,
+                RegionMemoryMetadata,
+                LivenessMetadata,
+                AllocationSummaryMetadata,
+            ),
         )
     if selector == "roofline":
         from tilefoundry.analysis.metadata import RooflineMetadata  # noqa: PLC0415

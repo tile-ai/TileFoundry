@@ -10,60 +10,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import ClassVar, Protocol, runtime_checkable
+from functools import cached_property
+from typing import ClassVar
 
+from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
-from .access import BufferAlias, SSAValue
 from .precision import AnalysisPrecision
-
-
-@runtime_checkable
-class TimingValuation(Protocol):
-    """Translate a definition's event and time coordinates to its caller."""
-
-    def event(self, local: int) -> int: ...
-
-    def timeline(self, local: TimelineMetadata) -> TimelineMetadata: ...
-
-
-@runtime_checkable
-class LoopNestValuation(Protocol):
-    """Describe the loops surrounding a call in its caller's coordinates."""
-
-    def repeats(self) -> Repeats: ...
-
-    def domain(self) -> isl.set: ...
-
-
-@runtime_checkable
-class VarianceValuation(Protocol):
-    """Resolve a formal parameter's dependency on enclosing loops."""
-
-    def varies(self, formal: Var) -> frozenset[int]: ...
-
-    def trips(self, formals: tuple[Var, ...]) -> tuple[int, AnalysisPrecision]: ...
-
-
-@runtime_checkable
-class BindingValuation(Protocol):
-    """Resolve parameter and return storage at one call boundary."""
-
-    def actual(self, formal: Var, index: int = 0) -> BufferAlias: ...
-
-    def result(self) -> BufferAlias: ...
-
-    def project(
-        self, source: BufferAlias, actual_of=None
-    ) -> tuple[BufferAlias, AnalysisPrecision]: ...
-
-
-@runtime_checkable
-class InstanceValuation(Protocol):
-    """Name the owning module instance on the current call path."""
-
-    def path(self) -> tuple[str, ...]: ...
 
 
 @dataclass(frozen=True)
@@ -169,7 +123,6 @@ class ComputeCostMetadata(IRMetadata):
     flops: Breakdown[int] = Breakdown()
     other_ops: Breakdown[int] = Breakdown()
     precision: AnalysisPrecision = AnalysisPrecision.EXACT
-    requires: ClassVar[tuple[type, ...]] = ()
 
 
 @dataclass(frozen=True)
@@ -194,25 +147,29 @@ class Footprint:
 
     groups: tuple[tuple[int, tuple[ReachedAddresses, ...]], ...] = ()
 
-    @property
+    @cached_property
+    def _grouped(self):
+        from .footprint import merged  # noqa: PLC0415
+
+        return tuple((windows, merged(items)) for windows, items in self.groups)
+
+    @cached_property
     def reached(self) -> tuple[ReachedAddresses, ...]:
         from .footprint import merged  # noqa: PLC0415
 
-        return merged(item for _windows, items in self.groups for item in items)
+        return merged(item for _windows, items in self._grouped for item in items)
 
-    @property
-    def buffers(self) -> tuple[tuple[str, Breakdown[int]], ...]:
+    @cached_property
+    def buffers(self) -> tuple[tuple[SSAValue, tuple[str, ...], Breakdown[int]], ...]:
         from .footprint import counted_buffers  # noqa: PLC0415
 
         return counted_buffers(self)
 
-    @property
+    @cached_property
     def precision(self) -> AnalysisPrecision:
-        from .footprint import _window_item, counted_precision  # noqa: PLC0415
+        from .footprint import counted_precision  # noqa: PLC0415
 
-        return counted_precision(
-            _window_item(item) for _windows, items in self.groups for item in items
-        )
+        return counted_precision(item for _windows, items in self._grouped for item in items)
 
 
 @dataclass(frozen=True)
@@ -231,15 +188,6 @@ class MemoryMetadata(IRMetadata):
     footprint: Footprint | None = None
     buffer_bytes: int | None = None
     offsets: tuple[int, ...] = ()
-    requires: ClassVar[tuple[type, ...]] = (BindingValuation, LoopNestValuation)
-
-    def resolve(self, ctx: ValuationProvider) -> MemoryMetadata:
-        from .footprint import resolve_footprint  # noqa: PLC0415
-
-        return replace(
-            self,
-            footprint=resolve_footprint(self.footprint, ctx),
-        )
 
 
 @dataclass(frozen=True)
@@ -269,14 +217,14 @@ class ValueLifetime:
     than until its last use. Every parameter is persistent because a function
     cannot reclaim caller-owned storage.
 
-    ``binding`` names one value: where an authored name covers several, the later
-    ones carry the numeric suffix the printed form of the same program uses.
+    Display bindings are produced from ``value`` by the expression printer.
     """
+
+    events: ClassVar = ("defined_at", "last_used_at")
 
     value: SSAValue
     defined_at: int
     last_used_at: int
-    binding: str = ""
     memory_level: str = ""
     bytes: int = 0
     persistent: bool = False
@@ -293,7 +241,8 @@ class ReuseWindow:
     are not fetched again once it does.
     """
 
-    buffer: str
+    buffer: SSAValue
+    ownership: tuple[str, ...] = ()
     time: str = ""
     space: str = ""
     holds_bytes: int = 0
@@ -320,7 +269,6 @@ class RegionMemoryMetadata(IRMetadata):
     peaks: tuple[MemoryLevelPeak, ...] = ()
     errors: tuple[str, ...] = ()
     advisories: tuple[str, ...] = ()
-    requires: ClassVar[tuple[type, ...]] = ()
 
     def peak_for(self, name: str) -> MemoryLevelPeak | None:
         """The peak recorded for *name*, if this region touches it."""
@@ -345,7 +293,6 @@ class RooflineMetadata(IRMetadata):
     memory_ns: int = 0
     ideal_ns: int = 0
     bound_by: str = "none"
-    requires: ClassVar[tuple[type, ...]] = ()
 
 
 @dataclass(frozen=True)
@@ -357,6 +304,8 @@ class TimelineMetadata:
     performance record carries rather than a record of its own: what the
     interval spans is decided by the record it sits in.
     """
+
+    events: ClassVar = ("start_ns", "end_ns")
 
     start_ns: int = 0
     end_ns: int = 0
@@ -374,12 +323,6 @@ class PerformanceMetadata(IRMetadata):
     """
 
     timeline: TimelineMetadata
-    requires: ClassVar[tuple[type, ...]] = (TimingValuation, LoopNestValuation)
-
-    def resolve(self, ctx: ValuationProvider) -> PerformanceMetadata:
-        timing = ctx.request_valuation(TimingValuation)
-        ctx.request_valuation(LoopNestValuation)
-        return replace(self, timeline=timing.timeline(self.timeline))
 
 
 @dataclass(frozen=True)
@@ -394,17 +337,9 @@ class PerformanceSummaryMetadata(IRMetadata):
 
     timeline: TimelineMetadata
     waves: int
-    requires: ClassVar[tuple[type, ...]] = (TimingValuation, LoopNestValuation)
-
-    resolve = PerformanceMetadata.resolve
 
 
 __all__ = [
-    "BindingValuation",
-    "InstanceValuation",
-    "LoopNestValuation",
-    "TimingValuation",
-    "VarianceValuation",
     "Breakdown",
     "MemoryMetadata",
     "ComputeCostMetadata",
@@ -423,3 +358,8 @@ __all__ = [
     "breakdown",
     "shares",
 ]
+
+
+def shifted(record, origin):
+    """Translate only the event coordinates declared by a record."""
+    return replace(record, **{name: getattr(record, name) + origin for name in record.events})

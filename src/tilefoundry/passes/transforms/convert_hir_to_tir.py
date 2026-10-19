@@ -17,8 +17,8 @@ from math import prod
 import isl
 
 from tilefoundry.analysis import MemoryMetadata, analyze
-from tilefoundry.analysis.access import AliasKind, SSAValue, buffer_alias, forwarded_leaves
-from tilefoundry.analysis.allocation import AllocationSummary
+from tilefoundry.analysis.access import AliasKind, buffer_alias, forwarded_leaves
+from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.check import check_program
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
@@ -34,6 +34,7 @@ from tilefoundry.ir.core import (
     get_metadata,
     op_identifier,
 )
+from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.param_def import MemoryEffect
@@ -80,6 +81,7 @@ from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import (
     i64_const,
+    leaves_of,
     participant_layout,
     static_dim_value,
 )
@@ -91,20 +93,19 @@ from tilefoundry.visitor_registry.access_relation import (
     affine_term,
     identity_access,
     leaf_paths,
-    leaves_of,
     projected_axes,
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor, ValuationVisitor
 from tilefoundry.visitor_registry.candidates import (
     candidate_operands,
     candidate_ops,
     sole_candidate,
 )
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal, project
 from tilefoundry.visitor_registry.registries import typeinfer_registry
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 _INDEX = TensorType.umat_scalar()
 _BINDING = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
@@ -434,7 +435,7 @@ def _label(call: Expr) -> str:
     if isinstance(call, Var):
         return call.name
     binding = get_metadata(call, BindingMetadata)
-    return binding.name if binding is not None else type(call.target).__name__
+    return binding.name if binding is not None else type(call.target if isinstance(call, Call) else call).__name__
 
 
 @dataclass(frozen=True)
@@ -453,7 +454,7 @@ class StoragePlan:
     """Interpret raw allocation decisions without publishing derived geometry."""
 
     function: Function
-    frame: CallFrame | None = None
+    context: ValuationContext | None = None
     mesh: Mesh | None = None
 
     @cached_property
@@ -461,13 +462,13 @@ class StoragePlan:
         values = (*self.function.params, *collect_exprs(self.function.body))
         memo = {id(expr): (expr, expr.type) for expr in values}
         ctx = TypeInferContext(
-            frame=self.frame, owner=self.function, current_mesh=self.mesh, memo=memo
+            module=self.context.module, function=self.function, target=self.context.target, topologies=self.context.topologies, owner=self.function, current_mesh=self.mesh, memo=memo
         )
         return ValuationVisitor.index_contexts(self.function, ctx)
 
     @cached_property
     def answers(self):
-        summary = get_metadata(self.function, AllocationSummary)
+        summary = get_metadata(self.function, AllocationSummaryMetadata)
         values = {value.value: value for value in summary.values}
         links, operations, outputs, refusals = {}, {}, {}, {}
         for leaf, value in values.items():
@@ -512,7 +513,7 @@ class StoragePlan:
                         chain[: chain.index(representative) + 1], operations, values
                     )
                     if representative in chain
-                    else f"address for {values[holder].lifetime.binding} requires an inverse relation to an unreachable storage representative: {alias.relation.relation}"
+                    else f"address for {_label(values[holder].value.expr)} requires an inverse relation to an unreachable storage representative: {alias.relation.relation}"
                 )
                 if refusal is not None:
                     refusals[representative] = refusal
@@ -539,7 +540,7 @@ class StoragePlan:
             for offset, item in enumerate(chain):
                 retained = (
                     isinstance(item.expr, Call)
-                    and CallFrameVisitor.callee_frame(item.expr, self.frame) is not None
+                    and self.context._callee_context(item.expr) is not None
                 )
                 writes = any(
                     operations.get(member, (None, None))[0] is AliasKind.INSERT_SLICE
@@ -579,7 +580,7 @@ class StoragePlan:
         for leaf in values:
             if id(leaf.expr) not in self.regions or not isinstance(leaf.expr, Call):
                 continue
-            callee = CallFrameVisitor.callee_frame(leaf.expr, self.frame)
+            callee = self.context._callee_context(leaf.expr)
             if callee is None:
                 continue
             child = StoragePlan(callee.function, callee)
@@ -612,7 +613,7 @@ class StoragePlan:
                 alias = buffer_alias(origin, ctx, relations_of(origin, ctx))
                 if alias is None:
                     refusals[leaf] = (
-                        f"non-EXACT address for {value.lifetime.binding}: {value.aliases[0].relation.relation}"
+                        f"non-EXACT address for {_label(value.value.expr)}: {value.aliases[0].relation.relation}"
                     )
                 else:
                     relation = alias.relation
@@ -703,8 +704,8 @@ class StoragePlan:
                     continue
             relation = declared if kind is AliasKind.VIEW and declared is not None else accepted
             return (
-                f"address for {values[chain[0]].lifetime.binding} requires a non-identity inverse relation "
-                f"at {value.lifetime.binding}: {None if relation is None else relation.relation.relation}"
+                f"address for {_label(values[chain[0]].value.expr)} requires a non-identity inverse relation "
+                f"at {_label(value.value.expr)}: {None if relation is None else relation.relation.relation}"
             )
         return None
 
@@ -1293,31 +1294,31 @@ class Lowering(ValuationVisitor[Expr | View]):
         self.context = LoweringContext(
             **vars(self.context),
             storage=StoragePlan(
-                self.context.frame.function, self.context.frame, self.context.current_mesh
+                self.context.function, self.context, self.context.current_mesh
             ),
-            builder=TirBuilder([TirScope(region=self.context.frame.function)]),
+            builder=TirBuilder([TirScope(region=self.context.function)]),
             names=Names({param.name for param in self.authored.params}),
             issues=IssuePlan(),
         )
         ctx = self.context
         ctx.memo = self._memo
-        if ctx.frame.function.body is not None and self.authored.body is not None:
-            ctx.authored_values[id(ctx.frame.function.body)] = self.authored.body
-        self.locations = self.index_contexts(ctx.frame.function, self.context)
-        for param in ctx.frame.function.params:
+        if ctx.function.body is not None and self.authored.body is not None:
+            ctx.authored_values[id(ctx.function.body)] = self.authored.body
+        self.locations = self.index_contexts(ctx.function, self.context)
+        for param in ctx.function.params:
             physical = Var(param.name, type=param.type, is_const=param.is_const)
             ctx.parameters[id(param)] = physical
             self._memo[id(param)] = (param, physical)
 
     def run(self) -> PrimFunction:
         ctx = self.context
-        if ctx.frame.function.body is None:
-            raise LoweringError(f"{ctx.frame.function.name!r} has no body to lower")
-        returns = tuple(leaf_paths(ctx.frame.function.return_type))
+        if ctx.function.body is None:
+            raise LoweringError(f"{ctx.function.name!r} has no body to lower")
+        returns = tuple(leaf_paths(ctx.function.return_type))
         for index, (path, type_) in enumerate(returns):
             if not isinstance(type_, TensorType):
                 raise LoweringError(f"return leaf {path!r} has non-tensor type {type_!r}")
-            leaf = SSAValue(ctx.frame.function.body, index)
+            leaf = SSAValue(ctx.function.body, index)
             if leaf not in ctx.storage.answers:
                 raise LoweringError(f"return leaf {path!r} cannot be placed on its output: None")
             if (refusal := ctx.storage.answers[leaf].refusal) is not None:
@@ -1330,25 +1331,25 @@ class Lowering(ValuationVisitor[Expr | View]):
             )
             output = Var(ctx.names.fresh("out"), type=output_type)
             ctx.outputs.append((path, output))
-        self.visit(ctx.frame.function.body, ctx=ctx)
+        self.visit(ctx.function.body, ctx=ctx)
         statements = ctx.builder.build(ctx.builder.blocks[0])
 
-        params = tuple(ctx.parameters[id(param)] for param in ctx.frame.function.params)
+        params = tuple(ctx.parameters[id(param)] for param in ctx.function.params)
         return PrimFunction(
-            ctx.frame.function.name,
+            ctx.function.name,
             (*params, *ctx.scratch, *(output for _path, output in ctx.outputs)),
             statements,
             output_count=len(ctx.outputs),
-            target=self.context.frame.target,
+            target=self.context.target,
         )
 
     def visit_MeshRegion(self, region: MeshRegion, ctx):
         mesh = region.mesh
         binding = Var(
-            ctx.names.fresh("cta" if region is ctx.frame.function.body else "scope"), type=_BINDING
+            ctx.names.fresh("cta" if region is ctx.function.body else "scope"), type=_BINDING
         )
         with ctx.builder.region(mesh=mesh, binding=binding, owner=region) as scope:
-            result = self.visit(region.body, self.region_context(region, ctx))
+            result = self.visit(region.body, self.on_region_start(region, ctx))
             scope.result = result
         return result
 
@@ -1376,7 +1377,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             ),
             owner=loop,
         ) as scope:
-            inner = self.region_context(loop, ctx)
+            inner = self.on_region_start(loop, ctx)
             self.visit(loop.body, inner)
             yielded = tuple(self.visit(value, inner) for value in loop.yield_values)
             for param, source, carried, value in zip(
@@ -1415,7 +1416,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 for value in ctx.storage.runtime_values(call, ctx.memo)
             }
         operands = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
-        if self.callee_frame(call, ctx.frame) is not None:
+        if ctx._callee_context(call) is not None:
             return self._lower_call(call, operands, ctx=ctx)
         name = type(target).__name__
         if name == "TupleGetItem":
@@ -1452,11 +1453,11 @@ class Lowering(ValuationVisitor[Expr | View]):
         )
 
     def _lower_call(self, call: Call, args, *, ctx) -> Expr | View:
-        frame = self.callee_frame(call, ctx.frame)
+        frame = ctx._callee_context(call)
         lowering = self.callees.get(id(frame.function))
         if lowering is None:
             lowering = Lowering(
-                TypeInferContext(frame=frame, owner=frame.function, current_mesh=ctx.current_mesh),
+                TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies, owner=frame.function, current_mesh=ctx.current_mesh),
                 origin_of(frame.function) or frame.function,
                 self.callees,
             )
@@ -1560,7 +1561,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                     value.type.layout is None
                     or any(
                         value is self._memo[id(argument)][1]
-                        for argument in ctx.frame.function.params
+                        for argument in ctx.function.params
                     )
                 )
             ):
@@ -1681,7 +1682,7 @@ class ConvertHIRToTIR(ModulePass):
         lowered = {}
         lowering = Lowering(
             TypeInferContext(
-                frame=CallFrame(result.module, result.function), owner=result.function
+                module=result.module, function=result.function, owner=result.function
             ),
             authored,
             lowered,
