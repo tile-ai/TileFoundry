@@ -13,6 +13,7 @@ from tilefoundry.analysis.facts import (
     MemoryHierarchyFacts,
     MemoryLevelRelation,
     MemoryRelationKind,
+    PerformanceServiceFacts,
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType
@@ -99,7 +100,35 @@ def throughput(target: AmxTarget, query: object = None) -> ThroughputFacts:
     )
 
 
+def performance_service(target: AmxTarget, query: object = None) -> PerformanceServiceFacts:
+    """Project the documented M2 Pro compute and host-service model.
+
+    FP16 work shares AMX clusters; FP32 host work uses the measured NEON rate.
+    Non-FLOP services use the document's explicitly estimated lane-event rate.
+    """
+    unit = "core" if query is None else str(query)
+    if unit not in ("core", "amx"):
+        raise ValueError(f"AMX performance services have no topology level {unit!r}")
+    device = target.device
+    share = device.performance_core_count
+    rates = dict(device.unit_flops_per_second.get("neon", {}))
+    if device.performance_amx_f16 is not None:
+        rates[DType.f16] = device.performance_amx_f16 * device.sm_count // share
+    lane_events = device.performance_host_lane_events
+    return PerformanceServiceFacts(
+        unit_flops=tuple(sorted(rates.items(), key=lambda item: item[0].name)),
+        unit_ops=tuple(
+            (kind, lane_events)
+            for kind in ("integer", "predicate", "select", "local_move", "special")
+            if lane_events is not None
+        ),
+        unit_bandwidth=(("gmem", device.unified_memory_bandwidth_bytes_per_second // share),),
+        unit=unit,
+    )
+
+
 __all__ = [
     "memory_hierarchy",
     "throughput",
+    "performance_service",
 ]

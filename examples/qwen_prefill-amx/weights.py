@@ -101,3 +101,52 @@ class GGUFResource:
         return GGUFResource(
             self.path, self.alias, prefix=self.prefix + seg + ".", shared=self.shared
         )
+
+
+class PreparedModelResource:
+    """GGUF checkpoint with the original N/64,K,64 prepared AMX weights."""
+
+    def __init__(self, checkpoint, directory):
+        self.checkpoint = Path(checkpoint).expanduser().resolve()
+        self.directory = Path(directory).expanduser().resolve()
+        self.reader = GGUFReader(str(self.checkpoint))
+
+    def entries(self):
+        for tensor in self.reader.tensors:
+            if (
+                tensor.tensor_type != GGMLQuantizationType.Q8_0
+                or len(tensor.shape) != 2
+            ):
+                continue
+            k, n = map(int, tensor.shape)
+            if n % 64 or k % 32:
+                continue
+            if not tensor.name or any(
+                c
+                not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_."
+                for c in tensor.name
+            ):
+                raise ValueError("Invalid GGUF tensor name")
+            yield tensor.name, n, k, self.directory / (tensor.name + ".bin")
+
+    def prepare(self):
+        from scheduled import scheduled_projection
+        from tilefoundry.runtime import DictResource, SafetensorsResource
+
+        self.directory.mkdir(parents=True, exist_ok=True)
+        raw = GGUFResource(
+            self.checkpoint, {t.name: t.name for t in self.reader.tensors}
+        )
+        for name, n, k, path in self.entries():
+            if path.exists():
+                if path.stat().st_size != n * k * 2:
+                    raise ValueError(f"Invalid prepared weight size: {path}")
+                continue
+            stage = self.directory / name
+            scheduled_projection(128, n, k).prepare(
+                DictResource({"raw": raw.load(name)}), str(stage), device="cpu"
+            )
+            packed = SafetensorsResource(str(stage), device="cpu").load("w")
+            temporary = path.with_suffix(".bin.tmp")
+            packed.contiguous().numpy().tofile(temporary)
+            temporary.replace(path)

@@ -1618,7 +1618,12 @@ class Lowering(ValuationVisitor[Expr | View]):
                 attributes = {
                     param.name: getattr(op, param.name)
                     for param in type(op)._op_schema.signature
-                    if param.kind == "attribute" and (not param.has_default or param.name == "fill")
+                    if param.kind == "attribute"
+                    and (
+                        not param.has_default
+                        or getattr(op, param.name) != param.default
+                        or param.name == "fill"
+                    )
                 }
                 ctx.builder.add(Evaluate(type(op)(**attributes), tuple(issued)))
             result_param = next(param for param in params if param.effect & MemoryEffect.WRITE)

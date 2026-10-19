@@ -47,6 +47,7 @@ from tilefoundry.visitor_registry.instruction import (
     operand_relations,
     project,
 )
+from tilefoundry.visitor_registry.registries import cost_evaluator_registry
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,9 @@ def _schedule_access_relation(call: Call, ctx) -> tuple[AccessRelation, ...]:
 
 @register_cost_evaluator(ScheduleOp)
 def _schedule_cost(call: Call, ctx) -> Cost:
+    evaluator = cost_evaluator_registry.lookup(type(call.target.op))
+    if evaluator is not None:
+        return evaluator(Call(call.target.op, call.args, type=call.type), ctx)
     stated = relations_of(call, ctx)
     local = projected(stated, call, ctx)
     types = (*(ctx.local_type_of(arg) for arg in call.args), ctx.local_output_type(call))

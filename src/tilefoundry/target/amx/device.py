@@ -34,6 +34,8 @@ class AppleM2Pro(Device):
 
 
     _unit_flops: tuple[tuple[str, tuple[tuple[DType, int], ...]], ...]
+    performance_amx_f16: int | None
+    performance_host_lane_events: int | None
 
     def _python_import_module(self) -> str:
         if type(self) is AppleM2Pro:

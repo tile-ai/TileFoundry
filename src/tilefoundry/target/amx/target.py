@@ -144,15 +144,19 @@ class AmxTarget(Target):
 
         from tilefoundry.analysis.facts import (  # noqa: PLC0415
             MemoryHierarchyFacts,
+            PerformanceServiceFacts,
             ThroughputFacts,
         )
         from tilefoundry.target.amx.facts import (  # noqa: PLC0415
             memory_hierarchy,
+            performance_service,
             throughput,
         )
 
         if facts_type is MemoryHierarchyFacts:
             return facts_result(self, facts_type, memory_hierarchy(self, query))
+        if facts_type is PerformanceServiceFacts:
+            return facts_result(self, facts_type, performance_service(self, query))
         if facts_type is ThroughputFacts:
             return facts_result(self, facts_type, throughput(self, query))
         return super().get_facts(facts_type, query)

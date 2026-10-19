@@ -7,7 +7,7 @@ materialized RMS scales and negative exp(A_log) are retained explicitly.
 
 import math
 from tilefoundry import module, func
-from tilefoundry.dsl import Tensor, ConstTensor, ModuleList, tf
+from tilefoundry.dsl import Tensor, ConstTensor, ModuleList, Topology, tf
 from tilefoundry.target import AmxTarget
 
 
@@ -384,7 +384,7 @@ def build(config, S, *, linear=projection):
 
     definitions = {kind: layer(kind) for kind in set(kinds)}
 
-    @module(target=AmxTarget())
+    @module(target=AmxTarget(), topologies=(Topology("core", 8), Topology("amx", 1)))
     class Base:
         layers = ModuleList(tuple(definitions[kind] for kind in kinds))
         norm = ModuleList(Norm)
@@ -404,7 +404,7 @@ def build(config, S, *, linear=projection):
     import hashlib
 
     lines = [
-        "@module(entry='prefill',target=AmxTarget())",
+        "@module(entry='prefill',target=AmxTarget(),topologies=(Topology('core',8),Topology('amx',1)))",
         "class QwenPrefill:",
         "    layers=ModuleList(DEFINITIONS)",
         "    norm=ModuleList(NORM)",
@@ -435,6 +435,7 @@ def build(config, S, *, linear=projection):
         Tensor=Tensor,
         ConstTensor=ConstTensor,
         AmxTarget=AmxTarget,
+        Topology=Topology,
         S=S,
         R=R,
         H=H,
@@ -442,3 +443,9 @@ def build(config, S, *, linear=projection):
     )
     exec(compile(source, str(path), "exec"), namespace)
     return namespace["QwenPrefill"]
+
+
+from config import config
+
+Qwen3_1_7B = build(config("1.7b"), 128)
+Qwen3_5_4B = build(config("4b"), 128)

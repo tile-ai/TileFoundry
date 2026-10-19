@@ -97,6 +97,10 @@ def build_apple_m2_pro(document: HardwareDocument) -> AppleM2Pro:
             "memory.unified.bandwidth", unit="byte/s"
         ),
         _unit_flops=unit_flops,
+        performance_amx_f16=reader.optional_integer("performance.amx.f16", unit="flop/s"),
+        performance_host_lane_events=reader.optional_integer(
+            "performance.host.lane_events", unit="op/s"
+        ),
     )
     reader.text("geometry.neon_f32_outer_product")
     reader.close()

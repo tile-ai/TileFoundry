@@ -110,3 +110,18 @@ unit = "element"
 origin = "derived"
 source = "Arm A64 instruction set, FMLA (by element)"
 conditions = "four FMLA vD.4s, vN.4s, vM.s[i] over four accumulator registers are the smallest whole f32 outer product NEON issues"
+
+
+[facts.performance.amx.f16]
+value = 504869155110
+unit = "flop/s"
+origin = "estimated"
+source = "throughput.amx.f32 in this document; https://github.com/corsix/amx/issues/6#issuecomment-1477016531"
+conditions = "M2 Pro nominal FP16-input/FP32-accumulator service estimate, anchored to this host's measured 504.9 GFLOP/s AMX F32 GEMM rate. The reference reports near-equal full-Z rates for mixed FP16 (one 4096-byte accumulator, 1636.8 GFLOP/s) and FP32 (four accumulators totaling 4096 bytes, 1636.9 GFLOP/s). Apply only that ratio: floor(504900000000 * 16368 / 16369). This is not a new M2 Pro FP16 measurement or a transfer of another chip's absolute throughput. Cluster sharing is applied by the Facts projection."
+
+[facts.performance.host.lane_events]
+value = 53850000000
+unit = "op/s"
+origin = "estimated"
+source = "throughput.neon.f32 in this document; https://github.com/corsix/amx/issues/7#issuecomment-1475996279"
+conditions = "M2 Pro optimistic CPU service model, not measured integer or transcendental throughput. Divide this host's measured 107.7 GFLOP/s NEON F32 FMA rate by two FLOPs per lane FMA: 53.85 billion lane events/s per performance core. Assign one lane event per integer, predicate, select, local-move or special-function result. The reference explains NEON lane/FMA counting, not these services' throughput. Polynomial expansion, instruction mix and Torch overhead are outside this nominal model."

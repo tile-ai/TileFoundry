@@ -583,6 +583,9 @@ class AppleM2Pro:
     unified_memory_bandwidth_bytes_per_second: int
     _unit_flops: tuple[tuple[str, tuple[tuple[DType, int], ...]], ...]
 
+    performance_amx_f16: int | None
+    performance_host_lane_events: int | None
+
     def throughput_for(self, unit: str, dtype: DType) -> int: ...
 ```
 
@@ -608,6 +611,17 @@ class AppleM2Pro:
   - `throughput_for` MUST return a measured per-unit throughput recorded in the
     installed document, and MUST raise an actionable error for a unit or compute
     DType with no measured entry rather than return an estimate.
+  - `performance_amx_f16` and `performance_host_lane_events` MUST read their
+    available or unavailable entries from the installed document. Estimates MUST
+    state their sources and assumptions separately from measured throughput and
+    MUST NOT populate `throughput_for`'s measured-rate map.
+  - AMX `PerformanceServiceFacts` MUST use the measured NEON FP32 rate for host
+    arithmetic. FP16 service MUST divide the documented per-AMX-unit estimate
+    across core streams using the AMX unit count and performance-core count.
+    Non-FLOP work MUST use the documented per-core lane-event estimate.
+    Global-memory bandwidth MUST be shared across the same core streams.
+    Unrecorded DTypes and services MUST remain absent.
+
 
 ## 9. `AmxTarget`
 
