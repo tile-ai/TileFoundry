@@ -11,9 +11,7 @@ from tilefoundry.analysis import MemoryMetadata, analyze
 from tilefoundry.analysis.access import AliasKind
 from tilefoundry.analysis.allocation import (
     AllocationSummaryMetadata,
-    address_alias,
     covers_result,
-    root,
     storage_bytes,
 )
 from tilefoundry.analysis.check import check_program
@@ -200,7 +198,7 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_u
         )
         assert link.target.expr is insert.args[0]
         assert link.relation.relation.is_identity()
-        composed = address_alias(proofs[SSAValue(insert)], proofs)
+        composed = AllocationSummaryMetadata(tuple(proofs.values())).address_alias(proofs[SSAValue(insert)])
         assert composed.target.expr is callee.params[0]
         assert composed.relation.relation.is_identity()
         assert inserted.buffer_bytes is None and inserted.offsets == ()
@@ -208,7 +206,7 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_u
         assert not callers[SSAValue(call)].aliases
         assert called.offsets
     else:
-        composed = address_alias(callers[SSAValue(call)], callers)
+        composed = AllocationSummaryMetadata(tuple(callers.values())).address_alias(callers[SSAValue(call)])
         assert composed.target.expr is result.function.params[0]
         assert composed.relation.relation.is_identity()
         assert called.buffer_bytes is None and called.offsets == ()
@@ -241,7 +239,7 @@ def test_retained_update_translates_an_actual_window(tmp_path):
         value.value: value
         for value in get_metadata(result.function, AllocationSummaryMetadata).values
     }
-    composed = address_alias(values[SSAValue(call)], values)
+    composed = AllocationSummaryMetadata(tuple(values.values())).address_alias(values[SSAValue(call)])
     assert composed.target.expr is result.function.params[0]
     expected = isl.map("{ [i, j] -> [i + 1, j] : 0 <= i < 2 and 0 <= j < 4 }")
     assert composed.relation.relation.is_equal(expected)
@@ -314,7 +312,7 @@ def test_read_only_call_return_keeps_storage_despite_later_actual_use(tmp_path, 
         value.value: value
         for value in get_metadata(result.function, AllocationSummaryMetadata).values
     }
-    composed = address_alias(values[SSAValue(call)], values)
+    composed = AllocationSummaryMetadata(tuple(values.values())).address_alias(values[SSAValue(call)])
     assert composed.target.expr is result.function.params[0]
     expected = (
         isl.map("{ [i, j] -> [i, j] : 0 <= i < 2 and 0 <= j < 4 }")
@@ -360,5 +358,5 @@ class FreshReturn:
     summary = get_metadata(result.function, AllocationSummaryMetadata)
     values = {value.value: value for value in summary.values}
     assert (
-        root(values[SSAValue(call)], values) is root(values[SSAValue(call.args[0])], values)
+        AllocationSummaryMetadata(tuple(values.values())).root(values[SSAValue(call)]) is AllocationSummaryMetadata(tuple(values.values())).root(values[SSAValue(call.args[0])])
     ) is (not later_use)

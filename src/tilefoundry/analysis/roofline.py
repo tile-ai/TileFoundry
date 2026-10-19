@@ -113,12 +113,12 @@ def _cost_bound(
     buffers = () if moved.footprint is None else moved.footprint.buffers
     if moved.footprint is not None and all(
         level == facts.bandwidth_level
-        for _buffer, breakdown in buffers
+        for _buffer, _ownership, breakdown in buffers
         for level, _spread in breakdown.kinds
     ):
         crossed = TrafficBytes(
             read=sum(
-                spread.total for _buffer, breakdown in buffers for _level, spread in breakdown.kinds
+                spread.total for _buffer, _ownership, breakdown in buffers for _level, spread in breakdown.kinds
             )
         )
     return _bound(

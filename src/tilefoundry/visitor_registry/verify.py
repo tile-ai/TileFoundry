@@ -59,7 +59,6 @@ from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
-from tilefoundry.visitor_registry.call_frame import CallFrame
 from tilefoundry.visitor_registry.contexts import TypeInferContext, VerifyContext
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal, check_call
 from tilefoundry.visitor_registry.typeinfer import inference_type
@@ -341,7 +340,7 @@ def verify_prim_function(
     scope: list[Mesh] = []
 
     if isinstance(module_fns, Module):
-        ctx.frame = next(
+        environment = next(
             (
                 frame
                 for frame in list_call_paths(module_fns).values()
@@ -349,6 +348,10 @@ def verify_prim_function(
             ),
             None,
         )
+
+        if environment is not None:
+            ctx = VerifyContext(module=environment.module, function=fn,
+                                target=environment.target, topologies=environment.topologies)
 
     _walk_stmt(fn.body, ctx, scope, fn, module_context, _Binders(fn.params))
 
@@ -634,7 +637,7 @@ def _verify_shape_of(expr: ShapeOf) -> None:
 def _resolve_symbol_ref(ref, module_context, caller, frame=None):
     """Resolve relative to the caller's slot context, through the shared reader."""
     scope = module_context
-    if frame is not None:
+    if frame is not None and frame.module is not None:
         scope = frame.module
     elif isinstance(scope, Module):
         owner = next(
@@ -662,7 +665,7 @@ def _verify_symbol_call(stmt: Evaluate, fn, module_context, ctx):
             f"Evaluate(SymbolRef {ref.name!r}) requires module context; "
             f"call verify_prim_function(fn, module_fns=...) or verify_module([...])"
         )
-    callee = _resolve_symbol_ref(ref, module_context, fn, ctx.frame)
+    callee = _resolve_symbol_ref(ref, module_context, fn, ctx)
     expected_type = callable_type_for_prim_function(callee)
     if ref.type != expected_type:
         raise VerifyError(
@@ -671,7 +674,7 @@ def _verify_symbol_call(stmt: Evaluate, fn, module_context, ctx):
         )
     if callee is fn:
         raise VerifyError("Evaluate(SymbolRef): recursion not allowed")
-    _assert_no_path_back(callee, fn, module_context, visited=set(), frame=ctx.frame)
+    _assert_no_path_back(callee, fn, module_context, visited=set(), frame=ctx)
     _verify_call_arguments(stmt, callee.params, f"Evaluate(SymbolRef {ref.name!r})", ctx)
 
 
@@ -703,8 +706,8 @@ def _retained_callee(target, frame):
     if not isinstance(target, PrimFunction):
         if frame is None:
             raise VerifyError("instance TIR call requires module context")
-        inference_type(target, TypeInferContext(frame=frame))
-    inner = CallFrame.resolve(Call(target, (), type=UnitType()), frame)
+        inference_type(target, TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies))
+    inner = None if frame is None else frame._callee_context(Call(target, (), type=UnitType()))
     callee = inner.function if inner is not None else target
     if not isinstance(callee, PrimFunction):
         raise VerifyError(f"TIR instance entry {callee.name!r} is not a PrimFunction")
@@ -713,7 +716,7 @@ def _retained_callee(target, frame):
 
 def _verify_retained_call(stmt, fn, module_context, ctx):
     target = stmt.callable
-    callee, frame = _retained_callee(target, ctx.frame)
+    callee, frame = _retained_callee(target, ctx)
     direct = isinstance(target, PrimFunction)
     label = (
         target.name
@@ -827,7 +830,7 @@ def _verify_launch(stmt: Evaluate, fn, module_context, ctx):
             raise VerifyError(f"Launch of {ref.name!r}: forwarded arg[{i}] must be a tensor")
     if not module_context:
         return
-    callee = _resolve_symbol_ref(ref, module_context, fn, ctx.frame)
+    callee = _resolve_symbol_ref(ref, module_context, fn, ctx)
     if isinstance(callee, Function):
         return
     if not isinstance(callee.target, CudaTarget):

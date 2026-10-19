@@ -13,7 +13,7 @@ from functools import cached_property
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr, get_metadata, value_labels
+from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -32,15 +32,14 @@ from tilefoundry.visitor_registry.contexts import CostContext
 
 from .access import Access, widest_allowed
 from .facts import MemoryHierarchyFacts
-from .iteration_scope import IterationScope, walk_scopes
+from .iteration_scope import IterationScope
 from .loop_domain import induction_name
 from .metadata import (
-    Breakdown,
     Footprint,
     MemoryMetadata,
     ReuseWindow,
-    Spread,
     TrafficBytes,
+    breakdown,
 )
 from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
@@ -180,11 +179,6 @@ def _restrict_to_wave(
         lower = lower.set_coefficient_si(isl.dim_type.PARAM, axis, stride)
         upper = upper.set_coefficient_si(isl.dim_type.PARAM, axis, -stride)
     return relation.intersect_params(context.add_constraint(lower).add_constraint(upper))
-
-
-def _loop_scopes(scope: IterationScope) -> tuple[IterationScope, ...]:
-    """Read loop facts from the common lexical contexts."""
-    return scope.loop_scopes
 
 
 def _project_mesh_parameters(reached: isl.set, parameters: tuple[tuple[str, Call], ...]) -> isl.set:
@@ -515,17 +509,6 @@ def _wave_mesh(scope: IterationScope, topology_level: str) -> Mesh | None:
     return None
 
 
-def _access_scopes(scope, path, ctx):
-    """Resolve lexical environments along an already recorded access path."""
-    origin = scope.at(path)
-    result = list(origin.loop_scopes)
-    caller = origin.caller_scope
-    while caller is not None:
-        result[:0] = caller.loop_scopes
-        caller = caller.caller_scope
-    return origin, tuple(result)
-
-
 def _first(loops):
     result = AccessRelation(isl.map("{ [] -> [] }"))
     for scope in loops:
@@ -563,7 +546,6 @@ def moving_boundaries(
     memory_level: str,
     wave: tuple[int, int],
     ctx: AnalyzeContext,
-    labels: Mapping[SSAValue, str],
 ) -> tuple[MovingBoundary, ...]:
     """Collect boundaries that move bytes at *memory_level* in one scope walk.
 
@@ -571,112 +553,107 @@ def moving_boundaries(
     """
     whole = replace(ctx, topology_level=None, topologies=())
     wave_units, declared_units = wave
-    topology_level = ctx.topology_level or ctx.frame.target.get_facts(TopologyFacts).parallel_level
+    topology_level = ctx.topology_level or ctx.target.get_facts(TopologyFacts).parallel_level
     definitions = {
         value_id: scope
         for definition in ctx.definitions.values()
-        for scope in walk_scopes(definition)
-        for value_id in (
-            *scope.access.relations,
-            *(
-                id(phi)
-                for phi, initial, yielded in scope.owner.carries()
-                if scope.provenance.lookup(SSAValue(initial)).root
-                != scope.provenance.lookup(SSAValue(yielded)).root
-            ),
+        for value_id, scope in definition.snapshot.definition.locations.items()
+        if value_id in definition.access.relations
+        or any(
+            id(phi) == value_id
+            and scope.provenance.lookup(SSAValue(initial)).root
+            != scope.provenance.lookup(SSAValue(yielded)).root
+            for phi, initial, yielded in scope.owner.carries()
         )
     }
     found: list[MovingBoundary] = []
-    for scope in walk_scopes(root):
+    for path, (call, _recorded) in root.access.accesses.get("narrow", {}).items():
+        scope = root.at(path[:1])
         mesh = _wave_mesh(scope, topology_level)
         axis_parameters = _axis_parameters(scope, mesh)
-        for path, (call, _recorded) in scope.access.accesses.get("narrow", {}).items():
-            _origin, loops = _access_scopes(scope, path, ctx)
-            moved = get_metadata(call, MemoryMetadata)
-            if moved is None or len(moved.operands) != len(call.args) + 1:
-                continue
-            if _one_time_fill(loops, moved.operands):
-                continue
-            device_recorded = scope.access.accesses.get("device", {}).get(path)
-            device_by_boundary = (
-                {
-                    (item.input_index, item.output_index, item.target.index): item
-                    for item in device_recorded[1]
-                }
-                if device_recorded is not None and device_recorded[0] is call
-                else {}
-            )
-            unit_by_boundary = {
+        _origin, loops = scope._access_environment(path)
+        moved = get_metadata(call, MemoryMetadata)
+        if moved is None or len(moved.operands) != len(call.args) + 1:
+            continue
+        if _one_time_fill(loops, moved.operands):
+            continue
+        device_recorded = root.access.accesses.get("device", {}).get(path)
+        device_by_boundary = (
+            {
                 (item.input_index, item.output_index, item.target.index): item
-                for item in _call_accesses(scope, call, "unit", path=path)
+                for item in device_recorded[1]
             }
-            for access in _call_accesses(scope, call, path=path):
-                movement = (
-                    moved.operands[access.input_index]
+            if device_recorded is not None and device_recorded[0] is call
+            else {}
+        )
+        unit_by_boundary = {
+            (item.input_index, item.output_index, item.target.index): item
+            for item in _call_accesses(scope, call, "unit", path=path)
+        }
+        for access in _call_accesses(scope, call, path=path):
+            movement = (
+                moved.operands[access.input_index]
+                if access.input_index is not None
+                else moved.operands[-1]
+            )
+            if movement.read <= 0 and movement.write <= 0:
+                continue
+            held = _boundary_type(access, call, whole)
+            if held is None:
+                continue
+            leaves = leaves_of(held)
+            if memory_level not in {str(leaf.storage) for leaf in leaves}:
+                continue
+            if len(leaves) != 1 or not isinstance(leaves[0], TensorType):
+                continue
+            boundary_key = (access.input_index, access.output_index, access.target.index)
+            space_wave_access = device_by_boundary.get(boundary_key, access)
+            unit_access = unit_by_boundary.get(boundary_key)
+            if unit_access is None:
+                continue
+            mesh_parameters = _mesh_parameters(
+                scope, access.relation.relation, values=access.relation.values
+            )
+            position = (
+                _wave_position(
+                    access.relation.constrain(_first(loops)).relation, mesh_parameters
+                )
+                if wave_units < declared_units and mesh_parameters
+                else None
+            )
+            wave_stated = not (
+                wave_units < declared_units and mesh_parameters and position is None
+            )
+            found.append(
+                MovingBoundary(
+                    scope=scope,
+                    loops=loops,
+                    dependency=path[0].expr
+                    if (
+                        (source_scope := definitions.get(id(access.target.expr))) is not None
+                        and source_scope.root.owner is not root.owner
+                    )
+                    else call.args[access.input_index]
                     if access.input_index is not None
-                    else moved.operands[-1]
-                )
-                if movement.read <= 0 and movement.write <= 0:
-                    continue
-                held = _boundary_type(access, call, whole)
-                if held is None:
-                    continue
-                leaves = leaves_of(held)
-                if memory_level not in {str(leaf.storage) for leaf in leaves}:
-                    continue
-                if len(leaves) != 1 or not isinstance(leaves[0], TensorType):
-                    continue
-                label = labels.get(access.target)
-                if label is None:
-                    continue
-                boundary_key = (access.input_index, access.output_index, access.target.index)
-                space_wave_access = device_by_boundary.get(boundary_key, access)
-                unit_access = unit_by_boundary.get(boundary_key)
-                if unit_access is None:
-                    continue
-                mesh_parameters = _mesh_parameters(
-                    scope, access.relation.relation, values=access.relation.values
-                )
-                position = (
-                    _wave_position(
-                        access.relation.constrain(_first(loops)).relation, mesh_parameters
+                    else access.target.expr,
+                    access=access,
+                    space_wave_access=space_wave_access,
+                    unit_access=unit_access,
+                    dtype=leaves[0].dtype,
+                    mesh=mesh,
+                    reads=movement.read > 0,
+                    wave_units=wave_units,
+                    wave_stated=wave_stated,
+                    mesh_parameters=mesh_parameters,
+                    axis_parameters=axis_parameters
+                    if wave_stated
+                    and _shared_origin(
+                        scope, access.target.expr, definitions, topology_level, wave
                     )
-                    if wave_units < declared_units and mesh_parameters
-                    else None
+                    else (),
+                    position=position,
                 )
-                wave_stated = not (
-                    wave_units < declared_units and mesh_parameters and position is None
-                )
-                found.append(
-                    MovingBoundary(
-                        scope=scope,
-                        loops=loops,
-                        dependency=path[0].expr
-                        if (
-                            (source_scope := definitions.get(id(access.target.expr))) is not None
-                            and source_scope.root.owner is not root.owner
-                        )
-                        else call.args[access.input_index]
-                        if access.input_index is not None
-                        else access.target.expr,
-                        access=access,
-                        space_wave_access=space_wave_access,
-                        unit_access=unit_access,
-                        dtype=leaves[0].dtype,
-                        mesh=mesh,
-                        reads=movement.read > 0,
-                        wave_units=wave_units,
-                        wave_stated=wave_stated,
-                        mesh_parameters=mesh_parameters,
-                        axis_parameters=axis_parameters
-                        if wave_stated
-                        and _shared_origin(
-                            scope, access.target.expr, definitions, topology_level, wave
-                        )
-                        else (),
-                        position=position,
-                    )
-                )
+            )
     return tuple(found)
 
 
@@ -689,60 +666,56 @@ def _uncounted_movements(
     """Keep completeness evidence that has no countable moving boundary."""
     whole = replace(ctx, topology_level=None, topologies=())
     found: list[tuple[IterationScope, ReachedAddresses]] = []
-    for scope in walk_scopes(root):
-        refused = scope.access.refused.get("narrow", frozenset()) | scope.access.refused.get(
-            "unit", frozenset()
-        )
-        for call in refused:
-            found.extend(
-                (scope, item)
-                for item in _uncounted_boundaries(call, whole, AnalysisPrecision.UNKNOWN)
+    for path, (call, _recorded) in root.access.accesses.get("narrow", {}).items():
+        scope = root.at(path[:1])
+        refused = scope.access.refused.get("narrow", frozenset()) | scope.access.refused.get("unit", frozenset())
+        if call in refused:
+            found.extend((scope, item) for item in _uncounted_boundaries(call, whole, AnalysisPrecision.UNKNOWN))
+            continue
+        if ctx.module is not None and ctx._callee_context(call) is not None:
+            continue
+        if call in refused:
+            continue
+        moved = get_metadata(call, MemoryMetadata)
+        operands = () if moved is None else moved.operands
+        accesses = _call_accesses(scope, call, path=path)
+        if len(operands) != len(call.args) + 1:
+            found.extend((scope, item) for item in _uncounted_boundaries(call, whole))
+            continue
+        _origin, loops = scope._access_environment(path)
+        if _one_time_fill(loops, operands):
+            continue
+        for access in accesses:
+            movement = (
+                operands[access.input_index] if access.input_index is not None else operands[-1]
             )
-        for path, (call, _recorded) in scope.access.accesses.get("narrow", {}).items():
-            if ctx.frame is not None and ctx.callee_frame(call) is not None:
+            if movement.read <= 0 and movement.write <= 0:
                 continue
-            if call in refused:
+            held = _boundary_type(access, call, whole)
+            if held is None:
                 continue
-            moved = get_metadata(call, MemoryMetadata)
-            operands = () if moved is None else moved.operands
-            accesses = _call_accesses(scope, call, path=path)
-            if len(operands) != len(call.args) + 1:
-                found.extend((scope, item) for item in _uncounted_boundaries(call, whole))
-                continue
-            _origin, loops = _access_scopes(scope, path, ctx)
-            if _one_time_fill(loops, operands):
-                continue
-            for access in accesses:
-                movement = (
-                    operands[access.input_index] if access.input_index is not None else operands[-1]
-                )
-                if movement.read <= 0 and movement.write <= 0:
-                    continue
-                held = _boundary_type(access, call, whole)
-                if held is None:
-                    continue
-                leaves = leaves_of(held)
-                if memory_level in {str(leaf.storage) for leaf in leaves} and (
-                    len(leaves) != 1 or not isinstance(leaves[0], TensorType)
-                ):
-                    found.append(
-                        (
-                            scope,
-                            ReachedAddresses(
-                                access.target,
-                                access.output_index,
-                                None,
-                                None,
-                                AnalysisPrecision.LOWER_BOUND,
-                            ),
-                        )
+            leaves = leaves_of(held)
+            if memory_level in {str(leaf.storage) for leaf in leaves} and (
+                len(leaves) != 1 or not isinstance(leaves[0], TensorType)
+            ):
+                found.append(
+                    (
+                        scope,
+                        ReachedAddresses(
+                            access.target,
+                            access.output_index,
+                            None,
+                            None,
+                            AnalysisPrecision.LOWER_BOUND,
+                        ),
                     )
-            found.extend(
-                (scope, item)
-                for item in _missing_boundaries(
-                    call, _call_accesses(scope, call, "unit", path=path), operands, whole
                 )
+        found.extend(
+            (scope, item)
+            for item in _missing_boundaries(
+                call, _call_accesses(scope, call, "unit", path=path), operands, whole
             )
+        )
     return tuple(found)
 
 
@@ -768,7 +741,7 @@ def reached_by(
             AnalysisPrecision.UNKNOWN if refused else AnalysisPrecision.LOWER_BOUND,
         )
     if loops is None:
-        _origin, loops = _access_scopes(scope, path or (SSAValue(call),), ctx)
+        _origin, loops = scope._access_environment(path or (SSAValue(call),))
     if _one_time_fill(loops, operands):
         return ()
 
@@ -903,7 +876,7 @@ def _window_footprints(boundaries, uncounted, buffers):
         reached.extend(
             item
             for scope, item in uncounted
-            if time_scope is None or time_scope in _loop_scopes(scope)
+            if time_scope is None or time_scope in scope.loop_scopes
         )
         footprints[time_scope] = Footprint(((1, merged(reached)),))
     return footprints
@@ -918,10 +891,9 @@ def _reuse_rows(
     prepared = {
         scope: (
             {
-                name: sum(spread.logical for _level, spread in held.kinds)
-                for name, held in counted.buffers
+                (value, ownership): sum(spread.logical for _level, spread in held.kinds)
+                for value, ownership, held in counted.buffers
             },
-            buffer_names(counted.reached),
             counted.precision,
         )
         for scope, counted in footprints.items()
@@ -931,16 +903,17 @@ def _reuse_rows(
     for item in buffers.values():
         if item.time_scope not in prepared:
             continue
-        amounts, labels, precision = prepared[item.time_scope]
-        label = "/".join((*item.boundary.ownership, labels[item.boundary.access.target]))
+        amounts, precision = prepared[item.time_scope]
+        key = item.boundary.access.target, item.boundary.ownership
         holds = sum(amounts.values())
         repeats = (1 if item.time_scope is None else item.time_scope.trips()) * item.space_units
-        reuse = max(0, repeats - 1) * amounts.get(label, 0)
+        reuse = max(0, repeats - 1) * amounts.get(key, 0)
         if reuse == 0:
             continue
         rows.append(
             ReuseWindow(
-                buffer=label,
+                buffer=key[0],
+                ownership=key[1],
                 time=(
                     induction_name(item.time_scope.owner)
                     if item.time_scope is not None and isinstance(item.time_scope.owner, LoopRegion)
@@ -1044,40 +1017,28 @@ def counted_precision(items):
 def counted_buffers(footprint):
     """Union by SSA identity and instance ownership before packing bytes."""
     groups, items = footprint._grouped, footprint.reached
-    labels = buffer_names(items)
     totals = {}
     for windows, group in groups:
         for item in group:
             key = item.target, item.ownership
             totals[key] = totals.get(key, 0) + item.counted[0] * windows
-    logical, counted = {}, {}
+    logical = {}
     for item in items:
         if item.reached is not None:
             key = item.target, item.ownership
             logical[key] = logical.get(key, 0) + item.counted[0]
-            counted[key] = item
     entries = []
-    for key, item in counted.items():
-        held = leaves_of(item.target.expr.type)[item.target.index]
-        entries.append(
-            (
-                "/".join((*item.ownership, labels[item.target])),
-                Breakdown(
-                    (
-                        (
-                            str(held.storage),
-                            Spread(total=totals[key], logical_groups=(((), logical[key]),)),
-                        ),
-                    )
-                ),
-            )
-        )
-    return tuple(sorted(entries, key=lambda entry: entry[0]))
+    for key, amount in logical.items():
+        target, ownership = key
+        level = str(leaves_of(target.expr.type)[target.index].storage)
+        held = breakdown({level: totals[key]}, (), 0, logical={level: amount})
+        entries.append((target, ownership, held))
+    return tuple(entries)
 
 
-def reuse_windows(root, *, memory_level, wave, ctx, capacity, labels):
+def reuse_windows(root, *, memory_level, wave, ctx, capacity):
     boundaries = moving_boundaries(
-        root, memory_level=memory_level, wave=wave, ctx=ctx, labels=labels
+        root, memory_level=memory_level, wave=wave, ctx=ctx
     )
     buffers = _by_buffer(boundaries, wave)
     footprints = _window_footprints(
@@ -1147,9 +1108,3 @@ __all__ = [
     "time_axis",
     "wave_of",
 ]
-
-
-def buffer_names(items):
-    """Assign display names only at the report boundary."""
-    values = tuple(dict.fromkeys(item.target for item in items))
-    return dict(zip(values, value_labels(value.expr for value in values), strict=True))

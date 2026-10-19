@@ -259,7 +259,8 @@ class MemoryMetadata(IRMetadata):
 class ReuseWindow:
     """One buffer's re-reads, and what keeping it costs the cache."""
 
-    buffer: str
+    buffer: SSAValue
+    ownership: tuple[str, ...] = ()
     time: str = ""
     space: str = ""
     holds_bytes: int = 0
@@ -385,7 +386,7 @@ counts one slice per index as an upper bound.
 ##### `Footprint`
 
 A footprint counts the unique addresses a program touches in the memory level
-a cache backs. It is stated per source buffer, named as a lifetime names one.
+a cache backs. It retains source-buffer identities; the printer supplies names.
 
 ```python
 class Footprint:
@@ -393,6 +394,7 @@ class Footprint:
 
     groups: tuple[tuple[int, tuple[ReachedAddresses, ...]], ...] = ()
     # reached, buffers and precision are derived properties.
+    # buffers yields (SSAValue, ownership, Breakdown[int]); no display strings.
 ```
 
 | Field | How it is computed | Reads the target |
@@ -470,14 +472,13 @@ class ValueLifetime:
     value: SSAValue
     defined_at: int
     last_used_at: int
-    binding: str = ""
     memory_level: str = ""
     bytes: int = 0
     persistent: bool = False
 ```
 
 LivenessMetadata MUST produce the sole per-leaf interval representation, `ValueLifetime`.
-Memory enriches that record with its binding, storage level, byte span and
+Memory enriches that record with its storage level, byte span and
 persistence. Allocation MUST NOT recompute leaf intervals from a second use
 index. Reports MUST omit `value` and retain the existing binding, memory_level,
 bytes, defined_at, last_used_at and persistent fields.
@@ -492,7 +493,7 @@ are monotonic across the whole Function, including nested and sibling regions.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names differ by the printer's numeric suffix in definition order. A value with neither name nor span is `<value N>` in definition order. A tuple result appends `[index]`, its flattened `SSAValue.index`; tensor results retain the unsuffixed name. | No |
+| Report `binding` | Render `ValueLifetime.value` through the same printer used for the surrounding IR. Metadata retains the SSAValue identity, without storing a display name. | No |
 | `ValueLifetime.memory_level` | Emit one lifetime per material `AllocationValue`, at the level occupied by its projected Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. A `ScheduleOp` whose selected instruction has a write-only result occupies `buffers` copies of those bytes; a `READ \| WRITE` result occupies one. | `MemoryHierarchyFacts.explicit_levels[].owner` |
 | `ValueLifetime.defined_at` | Definition event on the Function-wide structured SSA timeline. A staged (`buffers > 1`) result starts at the outermost enclosing loop's phi event rather than its own definition event. | No |
@@ -768,10 +769,13 @@ with the same IN_PLACE rules as ordinary operations; a later use of the actual
 MUST prevent reuse. These proofs MUST NOT create local
 IN_PLACE aliases, link formal storage to a result, or publish metadata.
 
-An internal AllocationSummaryMetadata MUST contain the definition's local values,
-Call origins, IN_PLACE capabilities, and accepted address decisions. At a Call
-leaf the reader expands the referenced summaries and translates liveness windows
-and region events with `shifted(record, origin)`. Windows rooted at a formal MUST name the actual SSA leaf;
+AllocationConstraintVisitor.run MUST return AllocationSummaryMetadata with
+values, IN_PLACE capabilities and accepted address decisions. Its private
+occupancy evidence retains translated windows; it MUST NOT retain a second
+call graph. Reading a called summary through get_metadata(..., ctx=ctx) uses
+the attached Scope and caches the bound result in its snapshot. Lifecycle
+region events remain owned by LivenessMetadata. Time translation uses
+`shifted(record, origin)`. Windows rooted at a formal MUST name the actual SSA leaf;
 windows rooted at a return MUST name the Call result leaf. Internal SSA values
 retain their identities and share one address across all translated windows.
 The caller MUST NOT mutate AllocationValue aliases in a callee summary. Own
@@ -891,7 +895,7 @@ once. A buffer with neither states no row.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `ReuseWindow.buffer` | The source buffer's lifetime label. | No |
+| `ReuseWindow.buffer` | The source buffer identity, rendered by the expression printer. | No |
 | `ReuseWindow.time` | The outermost enclosing loop whose different iterations reach the same addresses, named by its induction variable; empty when no loop supplies a second read. | No |
 | `ReuseWindow.space` | The mesh axis whose different coordinates reach the same addresses; empty when no mesh axis supplies a second read. | No |
 | `ReuseWindow.holds_bytes` | Unique bytes of every buffer the whole wave touches while this buffer must remain resident. | `MemoryHierarchyFacts` selects the backed level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
@@ -1483,7 +1487,7 @@ def check_program(
 ) -> tuple["Module", "Function"]: ...
 
 
-class AnalysisCheckContext:
+class AnalysisCheckContext(ValuationContext):
     """What every input check reads: the program, the machine, and the topology level.
 
     Costing here is a question, not a record: nothing a context computes is
@@ -1494,8 +1498,6 @@ class AnalysisCheckContext:
     function: "Function"
     target: "Target"
     topology_level: str | None
-    whole: CostContext
-    local: CostContext
 
 ```
 
@@ -1692,11 +1694,11 @@ def analyze(
 
 ### Visit context and local coordinates
 
-`IRMetadata.resolve(scope)` directly queries an already-bound scope; its default
+`get_metadata(expr, kind, ctx=ctx)` delegates to `IRMetadata.resolve(ctx)`
+and the already-bound Scope; its default
 returns the record unchanged. Metadata does not declare capability requirements.
 Analysis contexts extend `TypeInferContext`, not `CostContext`. The context
-prepares the callee and argument bindings. The analysis visitor's
-`on_call_start` explicitly calls the caller scope's `attach` operation and
+prepares the callee and argument bindings. The context's `enter_call` calls the caller scope's `attach` operation and
 records the call edge. Reading `callee_scope` follows that existing edge;
 it does not recursively bind a definition tree. Consumers query `ctx.scope`,
 `ctx.scope.provenance`, and `ctx.scope.access` without an additional attach step.
@@ -1715,7 +1717,7 @@ lexical scopes or trigger a second analysis of their callee body.
 | ComputeCostMetadata | Local execution counts; caller loop scaling occurs during accumulation. |
 | MemoryMetadata | Local traffic; retained Calls have no independent boundary footprint. Callee accesses are translated once while building caller scopes. |
 | LivenessMetadata | Local event records; `at(origin)` uses the common `shifted` operation. |
-| AllocationSummaryMetadata | Sparse local values, `(call, origin)` records, in-place capabilities, and unchanged raw address decisions. Readers expand windows and regions as needed. |
+| AllocationSummaryMetadata | Values, in-place capabilities and unchanged raw address decisions. Bound occupancy is interpreted through the attached Scope and cached in its snapshot; consumers do not recursively expand calls. |
 | PerformanceMetadata / PerformanceSummaryMetadata | Local intervals; the performance family handles their origin, not Scope. |
 
 `Spread.logical_groups` is
@@ -1729,8 +1731,14 @@ loop multiplicities to either work or traffic. Renderers MUST show only `logical
 
 Footprint evidence retains local reached sets, their `AccessRelation.values`
 expressions, and groups of reached sets with local window multiplicities.
-Display names are derived from parser metadata with `value_label` and
-disambiguated at rendering time; analysis does not store capture-name strings.
+Display names belong to the expression printer. Metadata references retain
+SSAValue identities and reuse the same printer bindings as the surrounding IR;
+cross-function references MUST use `function::local_name`, while references within
+the current function keep their local name. This prevents distinct buffers with
+the same local name from overwriting one another in reports. Within a function,
+ambiguous SSA references MUST append the printed definition line; a loop-carried
+parameter uses the loop header line. The code keeps its original local names;
+analysis does not generate buffer display strings or cache a separate name map.
 Loop coordinates MUST remain bounded parameters, named by induction identity,
 with values referring to their induction Vars. Resolve substitutes formals and
 retains callee loop parameters. Runtime scalar bindings remain symbolic until

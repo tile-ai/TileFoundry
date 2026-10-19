@@ -29,6 +29,7 @@ from tilefoundry.ir.core import (
     binding_name,
     get_metadata,
 )
+from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.core.param_def import variadic_item_annotation
@@ -54,10 +55,10 @@ from tilefoundry.ir.types.shard_layout import (
     Partial,
     Split,
 )
-from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.ir.types.utils import leaves_of, static_dim_value
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.utils.python_source import PythonExpr
-from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import ValuationContext
 
 from .print_context import HirPrintContext
 from .printer_base import PythonPrinter
@@ -72,18 +73,34 @@ class HirPrinter(PythonPrinter):
     def __init__(self) -> None:
         super().__init__()
         self._names: dict[int, str] = {}
+        self._definitions: dict[int, HirPrinter] = {}
+        self._function: HirFunction | None = None
+        self._statements: dict[int, _PrintedStatement] = {}
         self._param_alias: dict[int, Expr] = {}
         self._child_entries: dict[int, str] = {}
         self._moved_window = lambda start, size, stride: None
 
     def print(self, value, ctx=None, indent: str = "", *, options=None) -> str:
         """A whole HIR function under *options*; any other value as ``PythonPrinter`` does."""
+        if isinstance(value, SSAValue):
+            text = self.print(value.expr, ctx, indent)
+            owner = self._definitions.get(id(value.expr))
+            if owner is not None and (statement := owner._statements.get(id(value.expr))) is not None:
+                if tuple(owner._names.values()).count(owner._names[id(value.expr)]) > 1:
+                    text += f":{statement.line}"
+            return text if len(leaves_of(value.expr.type)) == 1 else f"{text}[{value.index}]"
         if isinstance(value, HirFunction):
             return self.render(value, options=options).source
+        if isinstance(value, Expr) and id(value) in self._definitions:
+            owner = self._definitions[id(value)]
+            text = owner.reference(value, ctx)
+            return text if owner._function is self._function else f"{owner._function.name}::{text}"
         return super().print(value, ctx, indent)
 
     def render(self, fn: HirFunction, *, options=None) -> _PythonRendering:
-        return _render_hir_function(fn, options=options)
+        if options is not None and options.comment_metadata_types:
+            _render_hir_function(fn, printer=self)
+        return _render_hir_function(fn, options=options, printer=self)
 
     def bind_def(
         self,
@@ -121,17 +138,17 @@ class HirPrinter(PythonPrinter):
             return self.reference(self._param_alias[id(expr)], ctx)
         projection = _region_projection(expr)
         if isinstance(projection, LoopRegion):
-            return self._names[id(projection.params[_projection_index(expr)])]
+            return self.reference(projection.params[_projection_index(expr)], ctx)
         if isinstance(expr, LoopRegion):
             carried = tuple(
-                self._names[id(carry)] for carry in expr.params[: len(expr.yield_values)]
+                self.reference(carry, ctx) for carry in expr.params[: len(expr.yield_values)]
             )
             return carried[0] if len(carried) == 1 else "(" + ", ".join(carried) + ")"
         if isinstance(projection, MeshRegion):
             return self.reference(projection.body.elements[_projection_index(expr)], ctx)
         if isinstance(expr, MeshRegion):
             return self.reference(expr.body, ctx)
-        return self._names[id(expr)]
+        return self._names.get(id(expr)) or binding_name(expr) or self.visit(expr, ctx)
 
     def _tuple_get_item_text(self, expr: Call, ctx=None) -> str:
         held, index = expr.args
@@ -223,7 +240,7 @@ class PythonPrintOptions:
 
 @dataclass(frozen=True)
 class _PrintedStatement:
-    """The left-hand side and physical start line of one emitted Call."""
+    """The left-hand side and physical start line of an emitted value definition."""
 
     value: str
     line: int
@@ -269,7 +286,7 @@ def _comments(expr: Expr, options: PythonPrintOptions, printer: PythonPrinter, c
         metadata = get_metadata(expr, metadata_type)
         if metadata is None:
             continue
-        comment = render_comment(metadata, opt_in=options.comment_opt_in)
+        comment = render_comment(metadata, opt_in=options.comment_opt_in, printer=printer)
         if comment is not None:
             comments.append(comment)
     return f"  # {PARTS.join(comments)}" if comments else ""
@@ -794,6 +811,12 @@ def _emit_def(
         if isinstance(expr, LoopRegion):
             _assign_name(expr.induction_var)
     printer.bind_def(_names, _param_alias, child_entries, _moved_window)
+    shared = getattr(ctx, "value_printer", printer)
+    printer._function = fn
+    shared._definitions[id(fn)] = printer
+    shared._definitions.update({identity: printer for identity in _names})
+    printer._definitions = shared._definitions
+    printer._statements = shared._statements
 
     return_type = fn.return_type
     arrow = ""
@@ -922,6 +945,11 @@ def _emit_def(
         lines.append(
             f"{level}for {_names[id(region.induction_var)]} in {loop}:{_comments(region, options, printer, ctx)}"
         )
+        if statements is not None:
+            for carry in region.params[: len(region.yield_values)]:
+                statements[id(carry)] = _PrintedStatement(
+                    value=_names[id(carry)], line=line_offset + _physical_line_count(lines)
+                )
         printed.add(key)
         inner = level + "    "
         _emit_expr(region.body, inner)
@@ -1105,6 +1133,7 @@ def _render_hir_function(
     fn: HirFunction,
     *,
     options: PythonPrintOptions | None = None,
+    printer: HirPrinter | None = None,
 ) -> _PythonRendering:
     """Render a HIR Function and locate every Call equation in the same pass.
 
@@ -1115,6 +1144,7 @@ def _render_hir_function(
     """
     indent = "    "
     ctx = _new_hir_context()
+    ctx.value_printer = printer or HirPrinter()
     statements: dict[int, _PrintedStatement] = {}
     lines = _emit_decorated_defs(
         fn,
@@ -1130,6 +1160,7 @@ def _render_hir_function(
         identity: _PrintedStatement(value=item.value, line=item.line + header_lines)
         for identity, item in statements.items()
     }
+    ctx.value_printer._statements.update(statements)
     return _PythonRendering("\n".join(header + lines) + "\n", statements)
 
 
@@ -1279,7 +1310,7 @@ def _emit_module_class(
         if isinstance(fn, HirFunction):
             blocks.append(_emit_decorated_defs(fn, ctx, indent, options, child_entries))
         elif isinstance(fn, PrimFunction):
-            tir_block = _tir_function_block(fn, frame=CallFrame(mod, fn))
+            tir_block = _tir_function_block(fn, frame=ValuationContext(mod, fn))
             ctx.imports.update(tir_block.imports)
             blocks.append(tir_block)
         else:

@@ -192,22 +192,23 @@ class LivenessVisitor(ValuationVisitor[None]):
 
     def visit_Call(self, call: Call, ctx=None) -> None:
         context = ctx
-        callee_frame = None if context is None else context.callee_frame(call)
-        if callee_frame is None:
+        callee = None if context is None else context.callee
+        if callee is None:
             return self.default_visit_leaf(call, self.visit_operands(call, ctx), ctx)
         self.visit_operands(call, ctx)
         argument_use = self.next_event()
         for argument in call.args:
             self.use(argument, argument_use)
-        template = get_metadata(callee_frame.function, LivenessMetadata)
+        template = get_metadata(callee, LivenessMetadata)
         if template is None:
             raise AnalysisError(
-                f"liveness: missing local template for {callee_frame.function.name!r}"
+                f"liveness: missing local template for {callee.name!r}"
             )
         start = self.next_event()
         template = template.at(start)
+        self.regions.extend(template.regions)
         arguments = context.callee_scope.provenance.arguments
-        for formal in callee_frame.function.params:
+        for formal in callee.params:
             if id(formal) not in arguments:
                 continue
             argument = arguments[id(formal)]

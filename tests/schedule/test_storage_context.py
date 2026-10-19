@@ -22,14 +22,14 @@ from tilefoundry.passes.transforms.convert_hir_to_tir import (
     TirBuilder,
     TirScope,
 )
-from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import ValuationContext
 
 
 def storage_plan(name):
     source = Path(__file__).parents[1] / "fixtures/schedule/hir" / f"{name}.py"
     module = load_authored_ir(str(source))
     result = analyze(*check_program(module, module.entry_function()), analysis="memory")
-    return StoragePlan(result.function, CallFrame(result.module, result.function))
+    return StoragePlan(result.function, ValuationContext(result.module, result.function))
 
 
 def test_staged_storage_answer_reserves_two_aligned_physical_slots():

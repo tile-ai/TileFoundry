@@ -10,8 +10,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.utils.isl_utils import has_unbounded_param
 from tilefoundry.visitor_registry.access_relation import AccessRelation
-from tilefoundry.visitor_registry.call_frame import CallFrame
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
 
 from .errors import AnalysisError
 
@@ -24,15 +23,6 @@ class AnalyzeContext(TypeInferContext):
     definitions: dict[int, IterationScope] = field(default_factory=dict)
     caller_context: AnalyzeContext | None = field(default=None, repr=False)
     topology_level: str | None = None
-    topologies: tuple = ()
-
-    @property
-    def module(self):
-        return self.frame.module
-
-    @property
-    def target(self):
-        return self.resolve_target()
 
     def type_of(self, expr):
         return expr.type
@@ -57,14 +47,21 @@ class AnalyzeContext(TypeInferContext):
         )
 
     def enter_call(self, call):
-        return replace(self, call_site=call)
+        inner = super().enter_call(call)
+        frame = inner._callee_context()
+        if frame is not None:
+            arguments, instance = inner.call_bindings(frame)
+            self.scope.attach(
+                call_site=call,
+                callee=self.definitions[id(frame.function)],
+                arguments=arguments,
+                instance=instance,
+            )
+        return inner
 
-    def for_callee(self, callee, *, frame=None):
-        return replace(
-            super().for_callee(callee, frame=frame),
-            caller_context=self,
-            scope=self.callee_scope if self.call_site is not None else self.definitions[id(callee)],
-        )
+    @property
+    def caller_scope(self):
+        return self.scope
 
     @property
     def callee_scope(self):
@@ -79,7 +76,7 @@ class AnalyzeContext(TypeInferContext):
         )
         arguments = {id(p): arg for p, arg in zip(formals, self.call_site.args, strict=True)}
         instance = None
-        slot, index = CallFrame.module_slot(self.call_site)
+        slot, index = ValuationContext.module_slot(self.call_site)
         if slot is not None:
             values = {}
             try:

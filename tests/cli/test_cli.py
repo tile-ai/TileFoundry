@@ -107,24 +107,24 @@ def test_parse_dims_rejects_one_dimension_stated_twice() -> None:
 
 
 _NEIGHBOURS = (
-    "from tilefoundry.dsl import *\n"
-    "\n"
-    "from tilefoundry.target import CudaTarget\n"
-    "\n"
-    "N = 132 * 128\n"
+    'from tilefoundry.dsl import *\n'
+    '\n'
+    'from tilefoundry.target import CudaTarget\n'
+    '\n'
+    'N = 132 * 128\n'
     "_H200 = CudaTarget('nvidia.h200_sxm')\n"
-    "\n"
-    "\n"
+    '\n'
+    '\n'
     "@module(entry='nope', target=_H200, topologies=(Topology('cta', 132),))\n"
-    "class Unsound:\n"
-    "    @func\n"
+    'class Unsound:\n'
+    '    @func\n'
     "    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
-    "        return tf.square(x)\n"
-    "\n"
-    "\n"
+    '        return tf.square(x)\n'
+    '\n'
+    '\n'
     "@module(entry='kernel', target=_H200, topologies=(Topology('cta', 132),))\n"
-    "class Sound:\n"
-    "    @func\n"
+    'class Sound:\n'
+    '    @func\n'
     "    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
     "        with Mesh(('cta',), layout=(132,), names=('block',)) as m:\n"
     "            placed = tf.reshard(x, (N @ m.block,), 'gmem')\n"
@@ -152,7 +152,8 @@ def test_analyze_disarms_its_watchdog_on_every_exit(
     assert not disarmed.is_set()
 
     assert (
-        cli.main(["analyze", f"{source}:{root}", str(tmp_path / "report.txt"), *flags]) == expected
+        cli.main(["analyze", f"{source}:{root}", str(tmp_path / "report.txt"), *flags])
+        == expected
     )
     assert disarmed.is_set()
 
@@ -176,7 +177,7 @@ def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(tmp_path, capsy
     assert capsys.readouterr().out == ""
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["module"] == "Sound"
-    assert report["functions"][0]["totals"]["flops"]
+    assert report["functions"][0]['totals']["flops"]
 
     assert (
         cli.main(["analyze", str(source), str(tmp_path / "bad.json"), "--compute-cost", "--json"])
@@ -361,12 +362,12 @@ def test_repeated_source_loads_keep_one_logical_target_registration(tmp_path) ->
     source = tmp_path / "model.py"
     source.write_text(
         (
-            "from tilefoundry.dsl import *\n"
-            "from provider import ReloadTarget\n"
-            "@module(target=ReloadTarget())\n"
-            "class Model:\n"
-            "    def forward(self):\n"
-            "        return None\n"
+            'from tilefoundry.dsl import *\n'
+            'from provider import ReloadTarget\n'
+            '@module(target=ReloadTarget())\n'
+            'class Model:\n'
+            '    def forward(self):\n'
+            '        return None\n'
         ),
         encoding="utf-8",
     )
@@ -770,6 +771,12 @@ def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> No
     cost = payload["functions"][0]["function_records"]["compute-cost"]
     moved = payload["functions"][0]["function_records"]["memory"]
     bound = payload["functions"][0]["function_records"]["roofline"]
+    assert {name: held["gmem"]["logical"] for name, held in moved["footprint"]["buffers"].items()} == {
+        "tokens": 2560,
+        "routed_expert::placed": 30976,
+        "shared_expert::placed": 33280,
+        "v2": 30720,
+    }
     assert payload["wave"] == {"counted": 132, "declared": 132}
     assert "cache" not in payload
     assert (
@@ -792,7 +799,7 @@ def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> No
         f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']} precision=exact",
         "# memory traffic=gmem:r120.00KB/w90.00KB@logical,"
         "r7.79MB/w3.93MB@total,r62.75KB/w32.75KB@cta "
-        "footprint=<value>:42:30.00KB;placed:28:30.25KB;placed:36:32.50KB;tokens:2.50KB "
+        "footprint=tokens:2.50KB;routed_expert::placed:30.25KB;shared_expert::placed:32.50KB;v2:30.00KB "
         "footprint-precision=exact peak=gmem:90.00KB persistent=gmem:30.00KB",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "

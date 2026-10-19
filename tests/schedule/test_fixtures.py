@@ -118,7 +118,6 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.call_frame import CallFrame
 from tilefoundry.visitor_registry.candidates import candidate_operands
 from tilefoundry.visitor_registry.contexts import TypeInferContext, VerifyContext
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal, check_call, project
@@ -784,7 +783,9 @@ def test_scheduled_hir_program_has_analysis_metadata(
         placement = get_metadata(result.function, RegionMemoryMetadata)
         assert placement is not None
         liveness = get_metadata(result.function, LivenessMetadata)
-        regions = tuple(window.region for window in liveness.regions)
+        local = {id(expr) for expr in collect_exprs(result.function.body)}
+        region_windows = tuple(window for window in liveness.regions if id(window.region) in local)
+        regions = tuple(window.region for window in region_windows)
         region_records = tuple(
             record
             for region in regions
@@ -820,7 +821,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
         occurrences: dict[str, int] = {}
         observed_rmem = {}
         observed_smem = {}
-        for window in liveness.regions:
+        for window in region_windows:
             key = _region_key(window.region, occurrences)
             record = get_metadata(window.region, RegionMemoryMetadata)
             peak = record.peak_for("rmem") if record is not None else None
@@ -2480,7 +2481,7 @@ def test_lowering_writes_static_issues_without_readmitting(name, issues, monkeyp
     monkeypatch.setattr(schedules, "check_call", reject)
     monkeypatch.setattr(instructions, "check_call", reject)
     lowered = lowering_module.Lowering(
-        TypeInferContext(frame=CallFrame(result.module, result.function), owner=result.function),
+        TypeInferContext(module=result.module, function=result.function, owner=result.function),
         result.function,
     ).run()
     statements = _RetainedStatements()

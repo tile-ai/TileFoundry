@@ -42,6 +42,7 @@ class AnalysisRendering:
     data: dict[str, object]
     annotated: str
     summary: tuple[IRMetadata, ...] = ()
+    printer: HirPrinter | None = None
 
 
 def selected_types(result: AnalysisResult) -> tuple[type[IRMetadata], ...]:
@@ -52,22 +53,23 @@ def selected_types(result: AnalysisResult) -> tuple[type[IRMetadata], ...]:
 def render_analysis(result: AnalysisResult, *, operands: bool = False) -> AnalysisRendering:
     """Render one result once for both annotated source and report data."""
     selected_types_ = selected_types(result)
-    labels, sources = {}, []
-    for function in result.functions:
-        rendered = HirPrinter().render(
+    labels, sources = {}, {}
+    printer = HirPrinter()
+    for function in reversed(result.functions):
+        rendered = printer.render(
             function,
             options=PythonPrintOptions(
                 show_types=True, comment_metadata_types=selected_types_,
                 comment_opt_in=frozenset({"operands"}) if operands else frozenset(),
             ),
         )
-        sources.append(rendered.source)
+        sources[id(function)] = rendered.source
         labels.update({identity: f"{statement.value}:{statement.line}"
                        for identity, statement in rendered.statements.items()})
     data = report_data(
         module=result.module, function=result.function, analyses=result.analyses,
         topology_level=result.topology_level, executed=result.executed,
-        metadata_types=result.metadata_types, labels=labels, functions=result.functions,
+        metadata_types=result.metadata_types, labels=labels, functions=result.functions, printer=printer,
     )
     selected = frozenset(selected_types_)
     summaries = tuple(
@@ -76,9 +78,10 @@ def render_analysis(result: AnalysisResult, *, operands: bool = False) -> Analys
     )
     return AnalysisRendering(
         data=data,
-        annotated="\n".join((render_summary(summary) + "\n\n" if index else "") + source
-                            for index, (summary, source) in enumerate(zip(summaries, sources, strict=True))),
+        annotated="\n".join((render_summary(summary, printer=printer._definitions[id(result.functions[index])]) + "\n\n" if index else "") + source
+                            for index, (summary, source) in enumerate(zip(summaries, (sources[id(fn)] for fn in result.functions), strict=True))),
         summary=summaries[0],
+        printer=printer._definitions[id(result.function)],
     )
 
 
@@ -132,7 +135,7 @@ def report(result: AnalysisResult) -> dict[str, object]:
 
 def render_text(rendering: AnalysisRendering) -> str:
     """Render one stable comment line per report conclusion."""
-    return render_summary(rendering.summary)
+    return render_summary(rendering.summary, printer=rendering.printer)
 
 
 def memory_summary(memory: RegionMemoryMetadata) -> tuple[IRMetadata, ...]:
@@ -145,13 +148,13 @@ def memory_summary(memory: RegionMemoryMetadata) -> tuple[IRMetadata, ...]:
     )
 
 
-def render_summary(records: Iterable[IRMetadata], *, opt_in: frozenset[str] = frozenset()) -> str:
+def render_summary(records: Iterable[IRMetadata], *, opt_in: frozenset[str] = frozenset(), printer=None) -> str:
     """Print report rows with the shared metadata comment renderers."""
     nested = (ReuseWindow, ErrorSummary, AdvisorySummary)
     return "\n".join(
         f"# {'  ' if isinstance(view, nested) else ''}{comment}"
         for view in records
-        if (comment := render_comment(view, opt_in=opt_in)) is not None
+        if (comment := render_comment(view, opt_in=opt_in, printer=printer)) is not None
     )
 
 

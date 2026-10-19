@@ -95,8 +95,7 @@ from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
-from tilefoundry.visitor_registry.call_frame import CallFrame
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor, inference_type
 
 T = TypeVar("T")
@@ -295,7 +294,7 @@ runtime = SimpleNamespace(
     TensorType=TensorType,
     TupleType=TupleType,
     TypeInferContext=TypeInferContext,
-    CallFrame=CallFrame,
+    ValuationContext=ValuationContext,
     TypeInferVisitor=TypeInferVisitor,
     TupleGetItem=TupleGetItem,
     Unary=Unary,
@@ -1223,7 +1222,7 @@ class ModuleBuildContext:
                 verify_function(function, module=result)
                 inference_type(
                     function,
-                    runtime.TypeInferContext(frame=runtime.CallFrame(result, function)),
+                    runtime.TypeInferContext(module=result, function=function),
                     ranges=True,
                 )
             elif isinstance(function, runtime.PrimFunction):
@@ -1323,7 +1322,7 @@ class MatchContext:
         scope.define(
             _TYPE_INFER_CONTEXT,
             ParserTypeInferContext(
-                frame=CallFrame(function.module, None) if function.module is not None else None,
+                module=function.module,
                 current_mesh=resolved_mesh,
                 parser_target=function.target,
             ),
@@ -1352,7 +1351,7 @@ class MatchContext:
             scope.define(
                 _TYPE_INFER_CONTEXT,
                 ParserTypeInferContext(
-                    frame=CallFrame(function.module, None) if function.module is not None else None,
+                    module=function.module,
                     parser_target=function.target,
                 ),
             )

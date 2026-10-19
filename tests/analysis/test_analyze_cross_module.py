@@ -46,7 +46,8 @@ from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.utils import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget, Target
-from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import ValuationContext
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)
@@ -62,7 +63,7 @@ def _matmul_records(
         for expr in collect_exprs(frame.function.body):
             if not isinstance(expr, Call):
                 continue
-            child = CallFrame.resolve(expr, frame)
+            child = frame._callee_context(expr)
             if child is not None:
                 visit(child)
             elif isinstance(expr.target, MatMul):
@@ -71,7 +72,7 @@ def _matmul_records(
                 assert record is not None
                 records.append((record, moved))
 
-    visit(CallFrame(result.module, result.function))
+    visit(ValuationContext(result.module, result.function))
     return tuple(records)
 
 
@@ -361,12 +362,12 @@ def test_retained_calls_match_the_memory_and_work_acceptance_values(
     assert moved.traffic.storage.of("gmem").total.total_bytes == traffic
     assert (region.peak_bytes, region.persistent_bytes) == (peak, persistent)
     assert len(result.functions) == 2
-    frames = tuple(CallFrame(result.module, result.function).walk())
+    frames = tuple(ValuationVisitor.definitions(ValuationContext(result.module, result.function)))
     sites = [
         (call, child)
         for frame in frames
         for call in collect_exprs(frame.function.body)
-        if isinstance(call, Call) and (child := CallFrame.resolve(call, frame)) is not None
+        if isinstance(call, Call) and (child := frame._callee_context(call)) is not None
     ]
     assert len(sites) == occurrences
     if kind == "stacked":
@@ -523,12 +524,12 @@ def test_repeated_callee_temporaries_require_one_shared_memory_placement():
         and node.type.storage is StorageKind.SMEM
     ]
     assert len(temporaries) == 2
-    frame = CallFrame(analyzed.module, analyzed.function)
+    frame = ValuationContext(analyzed.module, analyzed.function)
     calls = [
         child
         for node in collect_exprs(analyzed.function.body)
         if isinstance(node, Call)
-        and (child := CallFrame.resolve(node, frame)) is not None
+        and (child := frame._callee_context(node)) is not None
         and child.function is derived
     ]
     assert len(calls) == 2
@@ -604,11 +605,11 @@ def test_repeated_callee_placement_compares_alias_even_at_the_same_offset():
     )
     analyzed = analyze(*check_program(root, function), analysis="memory")
     derived = next(fn for fn in analyzed.functions if fn.name == "helper")
-    frame = CallFrame(analyzed.module, analyzed.function)
+    frame = ValuationContext(analyzed.module, analyzed.function)
     reached = [
         child.function
         for node in collect_exprs(analyzed.function.body)
-        if isinstance(node, Call) and (child := CallFrame.resolve(node, frame)) is not None
+        if isinstance(node, Call) and (child := frame._callee_context(node)) is not None
     ]
     assert reached == [derived, derived]
     buffers = [

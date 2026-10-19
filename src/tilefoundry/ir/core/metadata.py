@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 class IRMetadata:
     """Base class for typed metadata attached to an IR expression."""
 
-    def resolve(self, scope) -> IRMetadata:
+    def resolve(self, ctx) -> IRMetadata:
         """Interpret this record in the current visit context."""
         return self
 
@@ -40,9 +40,10 @@ class RangeMetadata(IRMetadata):
     hi: int
 
 
-def get_metadata[T: IRMetadata](expr: "Expr", cls: type[T]) -> T | None:
-    """Return the metadata whose concrete class is ``cls``, if present."""
-    return next((value for value in expr.metadata if type(value) is cls), None)
+def get_metadata[T: IRMetadata](expr: "Expr", cls: type[T], *, ctx=None) -> T | None:
+    """Read a definition record, optionally interpreted in a visit context."""
+    record = next((value for value in expr.metadata if type(value) is cls), None)
+    return record if record is None or ctx is None else record.resolve(ctx)
 
 
 def binding_name(expr: "Expr") -> str | None:

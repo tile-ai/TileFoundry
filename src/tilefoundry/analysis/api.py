@@ -26,7 +26,8 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.visitor import function_values
 from tilefoundry.target import Target, UnsupportedCapabilityError
-from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import ValuationContext
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 
 @dataclass(frozen=True)
@@ -136,12 +137,11 @@ def _build_context(
         topology_level = topologies[0].name if topologies else None
 
     contexts, definitions = [], {}
-    frames = tuple(CallFrame(module, function).walk(postorder=True))
+    frames = tuple(ValuationVisitor.definitions(ValuationContext(module, function), postorder=True))
     for frame in frames:
         context = AnalyzeContext(
-            frame=frame,
+            module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies,
             owner=frame.function,
-            topologies=frame.topologies,
             topology_level=topology_level,
             options=options,
             entry=function,
@@ -194,7 +194,7 @@ def analyze(
         options=options,
     )
     context = contexts[-1]
-    functions = tuple(frame.function for frame in context.frame.walk())
+    functions = tuple(frame.function for frame in ValuationVisitor.definitions(context))
 
     order: list[type[IRMetadata]] = []
     written_records: set[tuple] = set()
@@ -202,7 +202,7 @@ def analyze(
         before = _metadata_snapshot(functions)
         try:
             for local in contexts:
-                algorithm.run(local.frame.function, local)
+                algorithm.run(local.function, local)
         except UnsupportedCapabilityError as error:
             raise AnalysisError(f"{algorithm.selector}: {error}") from None
         after = _metadata_snapshot(functions)

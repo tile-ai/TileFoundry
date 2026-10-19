@@ -28,7 +28,6 @@ from tilefoundry.ir.types.substitute import (
 )
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.ir.visitor import ExprCloner, ExprVisitor
-from tilefoundry.visitor_registry.call_frame import CallFrame
 
 from .function import Function
 
@@ -405,7 +404,7 @@ class _DimVarCollector(ExprVisitor[None]):
         self._collect_bounds(expr)
         self._visit_children(expr, frame)
         target = expr.target
-        inner = CallFrame.resolve(expr, frame)
+        inner = None if frame is None else frame._callee_context(expr)
         callee = inner.function if inner is not None else target
         if isinstance(callee, Function):
             self.visit_function(callee, inner)

@@ -25,7 +25,6 @@ from tilefoundry.visitor_registry.access_relation import (
     renaming_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.call_frame import CallFrame
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
@@ -96,7 +95,9 @@ class ResolvedSnapshot:
     values: dict = field(default_factory=dict)
     parameters: dict = field(default_factory=dict)
     relations: dict = field(default_factory=dict)
+    allocations: dict = field(default_factory=dict)
     scopes: dict = field(default_factory=dict)
+    accesses: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -214,11 +215,11 @@ class AccessAnalysis:
 
     @property
     def accesses(self):
-        return self.scope.snapshot.definition.accesses
+        return self._bound_accesses("accesses")
 
     @property
     def outputs(self):
-        return self.scope.snapshot.definition.outputs
+        return self._bound_accesses("outputs")
 
     @property
     def relations(self):
@@ -226,7 +227,13 @@ class AccessAnalysis:
 
     @property
     def refused(self):
-        return self.scope.snapshot.definition.refused
+        definition = self.scope.snapshot.definition.refused
+        if self.scope.caller_scope is None:
+            return definition
+        cache = self.scope.snapshot.resolved.accesses
+        if "refused" not in cache:
+            cache["refused"] = dict(definition)
+        return cache["refused"]
 
     @property
     def projections(self):
@@ -235,6 +242,61 @@ class AccessAnalysis:
     @property
     def instance(self):
         return self.scope._binding._instance
+
+    def _bound_accesses(self, name):
+        definition = getattr(self.scope.snapshot.definition, name)
+        if self.scope.caller_scope is None:
+            return definition
+        cache = self.scope.snapshot.resolved.accesses
+        if name in cache:
+            return cache[name]
+        callee_scope = self.scope
+        snapshot = callee_scope.caller_scope.snapshot.definition.values
+        result = {}
+        for view, records in definition.items():
+            into = result.setdefault(view, {})
+            for path, (primitive, items) in records.items():
+                scope = callee_scope.at(path[:1])
+                translated = []
+                for item in items:
+                    source = scope.provenance.lookup(item.target)
+                    if source.root not in snapshot:
+                        snapshot[source.root] = replace(
+                            source,
+                            forward=None,
+                            **{
+                                kind: None
+                                if getattr(source, kind) is None
+                                else identity_access(
+                                    getattr(source, kind).relation.dim(isl.dim_type.OUT)
+                                )
+                                for kind in ("narrow", "device", "unit")
+                            },
+                        )
+                    relation = scope.access.project(item.relation, view=view)
+                    if id(item.target.expr) in callee_scope.provenance.arguments:
+                        upstream = getattr(source, view)
+                        if upstream is None:
+                            refused = self.refused.get(view, frozenset())
+                            self.refused[view] = refused | {primitive}
+                            continue
+                        relation = relation.compose(upstream)
+                    if callee_scope.access.instance is not None and getattr(
+                        item.target.expr, "is_const", False
+                    ):
+                        instance = callee_scope.access.instance
+                        prefix = instance.relation.add_dims(
+                            isl.dim_type.IN, relation.relation.dim(isl.dim_type.IN)
+                        )
+                        relation = relation._result(
+                            prefix.flat_range_product(relation.relation),
+                            instance.values,
+                            may_access=instance.may_access,
+                        )
+                    translated.append(replace(item, target=source.root, relation=relation))
+                into[path] = (primitive, tuple(translated))
+        cache[name] = result
+        return result
 
     def resolve_parameter(self, value, *, view):
         cache = self.scope.snapshot.resolved.parameters
@@ -383,6 +445,16 @@ class IterationScope:
                     raise AnalysisError("access path has no recorded call attachment")
         return scope
 
+    def _access_environment(self, path):
+        """Interpret the existing access index in its attached execution environment."""
+        origin = self.at(path)
+        loops = list(origin.loop_scopes)
+        caller = origin.caller_scope
+        while caller is not None:
+            loops[:0] = caller.loop_scopes
+            caller = caller.caller_scope
+        return origin, tuple(loops)
+
     @property
     def owner(self):
         return self.snapshot.definition.owner
@@ -435,10 +507,12 @@ class IterationScope:
         return self.owner.carries()
 
     def capture_root(self, value):
-        for scope in self.ancestors():
-            for formal, argument in scope.captures:
-                if value is formal:
-                    value = argument
+        """Read capture identities without recursively resolving their relations."""
+        while isinstance(value, Var):
+            entry = self.provenance.snapshot.get(SSAValue(value))
+            if entry is None or entry.forward is None:
+                break
+            value = entry.forward.expr
         return self.provenance.arguments.get(id(value), value)
 
     def first(self, loops=None):
@@ -550,7 +624,7 @@ class ScopeBuilder(ValuationVisitor[None]):
     ):
         super().__init__(root_function=graph)
         self.graph, self.views, self.is_root = graph, tuple(views), is_root
-        self.context = ctx or AnalyzeContext(frame=CallFrame(module, graph))
+        self.context = ctx or AnalyzeContext(module=module, function=graph)
         self.snapshot = {}
         self.seeds = {}
 
@@ -559,9 +633,9 @@ class ScopeBuilder(ValuationVisitor[None]):
         return {view: ctx if view == "unit" else logical for view in self.views}
 
     def _record(self, expr, ctx, *, forward=None, alias=None, relations=None, views=None):
+        ctx.scope.snapshot.definition.locations[id(expr)] = ctx.scope
         views = self._views(ctx) if views is None else views
         scope = ctx.scope
-        scope.snapshot.definition.locations.setdefault(id(expr), scope)
         changing = set()
         for operand in expr_children(expr):
             changing.update(scope.provenance.varies(operand))
@@ -645,6 +719,7 @@ class ScopeBuilder(ValuationVisitor[None]):
             self._record(call, ctx)
             for view in self.views:
                 access.refused[view] = access.refused.get(view, frozenset()) | {call}
+                access.accesses.setdefault(view, {})[(SSAValue(call),)] = (call, ())
 
     def on_region_start(self, region, ctx):
         inner = TypeInferContext.enter_region(ctx, region)
@@ -663,10 +738,21 @@ class ScopeBuilder(ValuationVisitor[None]):
         if isinstance(region, LoopRegion):
             for param in (region.induction_var, *(phi for phi, _, _ in region.carries())):
                 self.seeds[id(param)] = child
+                child.snapshot.definition.locations[id(param)] = child
         for param, argument in region.captures():
             self._record(param, inner, forward=SSAValue.leaves(argument))
             self._memo[id(param)] = (param, None)
         return inner
+
+    def on_region_end(self, region, operands, ctx):
+        parent = ctx.scope.parent.access
+        for name in ("accesses", "outputs"):
+            for view, records in getattr(ctx.scope.access, name).items():
+                getattr(parent, name).setdefault(view, {}).update(records)
+        for view, refused in ctx.scope.access.refused.items():
+            parent.refused[view] = parent.refused.get(view, frozenset()) | refused
+        parent.relations.update(ctx.scope.access.relations)
+        return operands
 
     def visit_leaf_Tuple(self, expr, operands, ctx):
         self._record(
@@ -697,15 +783,6 @@ class ScopeBuilder(ValuationVisitor[None]):
 
     def on_call_start(self, call, ctx):
         inner = super().on_call_start(call, ctx)
-        frame = inner.callee_frame()
-        if frame is not None:
-            arguments, instance = inner.call_bindings(frame)
-            ctx.scope.attach(
-                call_site=call,
-                callee=ctx.definitions[id(frame.function)],
-                arguments=arguments,
-                instance=instance,
-            )
         ctx.scope.snapshot.definition.locations[id(call)] = ctx.scope
         return inner
 
@@ -720,53 +797,14 @@ class ScopeBuilder(ValuationVisitor[None]):
             self.snapshot[value] = replace(
                 callee_scope.provenance.result(value.index), forward=None
             )
-        for scope in walk_scopes(callee_scope):
-            for view, refused in scope.access.refused.items():
-                ctx.scope.access.refused[view] = (
-                    ctx.scope.access.refused.get(view, frozenset()) | refused
-                )
-            for name in ("accesses", "outputs"):
-                for view, records in getattr(scope.access, name).items():
-                    into = getattr(ctx.scope.access, name).setdefault(view, {})
-                    for path, (primitive, items) in records.items():
-                        translated = []
-                        for item in items:
-                            source = scope.provenance.lookup(item.target)
-                            if source.root not in self.snapshot:
-                                self.snapshot[source.root] = replace(
-                                    source,
-                                    forward=None,
-                                    **{
-                                        kind: None
-                                        if getattr(source, kind) is None
-                                        else identity_access(
-                                            getattr(source, kind).relation.dim(isl.dim_type.OUT)
-                                        )
-                                        for kind in ("narrow", "device", "unit")
-                                    },
-                                )
-                            relation = scope.access.project(item.relation, view=view)
-                            if id(item.target.expr) in callee_scope.provenance.arguments:
-                                upstream = getattr(source, view)
-                                if upstream is None:
-                                    refused = ctx.scope.access.refused.get(view, frozenset())
-                                    ctx.scope.access.refused[view] = refused | {primitive}
-                                    continue
-                                relation = relation.compose(upstream)
-                            if callee_scope.access.instance is not None and getattr(
-                                item.target.expr, "is_const", False
-                            ):
-                                instance = callee_scope.access.instance
-                                prefix = instance.relation.add_dims(
-                                    isl.dim_type.IN, relation.relation.dim(isl.dim_type.IN)
-                                )
-                                relation = relation._result(
-                                    prefix.flat_range_product(relation.relation),
-                                    instance.values,
-                                    may_access=instance.may_access,
-                                )
-                            translated.append(replace(item, target=source.root, relation=relation))
-                        into[(SSAValue(call), *path)] = (primitive, tuple(translated))
+        for name in ("accesses", "outputs"):
+            for view, records in getattr(callee_scope.access, name).items():
+                into = getattr(ctx.scope.access, name).setdefault(view, {})
+                into.update({(SSAValue(call), *path): record for path, record in records.items()})
+        for view, refused in callee_scope.access.refused.items():
+            ctx.scope.access.refused[view] = (
+                ctx.scope.access.refused.get(view, frozenset()) | refused
+            )
 
     def default_visit_leaf(self, expr, operands, ctx):
         self._record(expr, ctx)
@@ -787,9 +825,3 @@ class ScopeBuilder(ValuationVisitor[None]):
 
 def build_scopes(module, graph, *, views=("narrow", "device", "unit"), ctx=None):
     return ScopeBuilder(module, graph, views=views, ctx=ctx).build()
-
-
-def walk_scopes(root):
-    yield root
-    for child in root.children:
-        yield from walk_scopes(child)

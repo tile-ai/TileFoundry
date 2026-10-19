@@ -22,7 +22,6 @@ from tilefoundry.ir.types import StorageKind, TensorType, TupleType, UnitType
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.target import CpuTarget, CudaTarget
-from tilefoundry.visitor_registry.call_frame import CallFrame
 
 _DEFAULT_ENTRY_NAME = "main"
 
@@ -128,7 +127,7 @@ def reject_omitted_child_weights(module: Module) -> None:
 
         def visit_Call(self, call, frame):
             self.visit_operands(call, frame)
-            inner = CallFrame.resolve(call, frame)
+            inner = frame._callee_context(call) if frame is not None else None
             if inner is None or isinstance(call.target, Function):
                 return
             callee = inner.function

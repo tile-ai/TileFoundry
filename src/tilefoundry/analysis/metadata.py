@@ -160,7 +160,7 @@ class Footprint:
         return merged(item for _windows, items in self._grouped for item in items)
 
     @cached_property
-    def buffers(self) -> tuple[tuple[str, Breakdown[int]], ...]:
+    def buffers(self) -> tuple[tuple[SSAValue, tuple[str, ...], Breakdown[int]], ...]:
         from .footprint import counted_buffers  # noqa: PLC0415
 
         return counted_buffers(self)
@@ -217,8 +217,7 @@ class ValueLifetime:
     than until its last use. Every parameter is persistent because a function
     cannot reclaim caller-owned storage.
 
-    ``binding`` names one value: where an authored name covers several, the later
-    ones carry the numeric suffix the printed form of the same program uses.
+    Display bindings are produced from ``value`` by the expression printer.
     """
 
     events: ClassVar = ("defined_at", "last_used_at")
@@ -226,7 +225,6 @@ class ValueLifetime:
     value: SSAValue
     defined_at: int
     last_used_at: int
-    binding: str = ""
     memory_level: str = ""
     bytes: int = 0
     persistent: bool = False
@@ -243,7 +241,8 @@ class ReuseWindow:
     are not fetched again once it does.
     """
 
-    buffer: str
+    buffer: SSAValue
+    ownership: tuple[str, ...] = ()
     time: str = ""
     space: str = ""
     holds_bytes: int = 0

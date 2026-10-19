@@ -306,7 +306,7 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
                 attributes,
                 tuple(ctx.type_of(arg) for arg in call.args),
                 ctx.current_mesh,
-                frame=ctx.frame,
+                frame=ctx,
                 repeat=call.target.repeat,
                 order=call.target.order,
             )
@@ -328,7 +328,7 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
                 op,
                 tuple(ctx.type_of(arg) for arg in call.args),
                 ctx.current_mesh,
-                frame=ctx.frame,
+                frame=ctx,
                 repeat=call.target.repeat,
                 order=call.target.order,
                 projection=tiles,

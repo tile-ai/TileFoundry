@@ -35,18 +35,17 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.access import Access, eliminate_parameters
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata, aligned
-from tilefoundry.analysis.allocation import root as storage_root
 from tilefoundry.analysis.api import _build_context
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
+from tilefoundry.analysis.iteration_scope import IterationScope
 from tilefoundry.analysis.liveness import LivenessMetadata
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
 from tilefoundry.dsl import *
-from tilefoundry.ir.core import Call, describe_expr, get_metadata, value_label
+from tilefoundry.ir.core import Call, describe_expr, get_metadata
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
@@ -63,7 +62,8 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
-from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import ValuationContext
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
@@ -500,7 +500,7 @@ def assert_internal_contract(result: AnalysisResult, scopes: tuple[IterationScop
     ):
         if (
             not isinstance(expr, Call)
-            or CallFrame.resolve(expr, CallFrame(result.module, function)) is not None
+            or ValuationContext(result.module, function)._callee_context(expr) is not None
         ):
             continue
         cost = get_metadata(expr, ComputeCostMetadata)
@@ -522,7 +522,10 @@ def assert_internal_contract(result: AnalysisResult, scopes: tuple[IterationScop
         runs = span // duration
         available = 1
         owner = next(
-            (scope for scope in scopes if (SSAValue(expr),) in scope.access.accesses.get("narrow", {})),
+            (
+                scope.snapshot.definition.locations[id(expr)]
+                for scope in scopes if id(expr) in scope.snapshot.definition.locations
+            ),
             None,
         )
         if owner is not None:
@@ -674,14 +677,17 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
     )
     _assert_reported(case, json.loads(render_json(report)))
     context = _build_context(result.module, result.function, topology_level=result.level)
-    scopes = tuple(scope for local in context for scope in walk_scopes(local.scope.root))
+    scopes = tuple(
+        scope for local in context
+        for scope in dict.fromkeys((local.scope, *local.scope.snapshot.definition.locations.values()))
+    )
     assert_internal_contract(result, scopes)
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
         rms_scopes = [
             scope
             for scope in scopes
             for path, (call, _) in scope.access.accesses.get("narrow", {}).items()
-            if len(path) == 1 and isinstance(call.target, RMSNorm)
+            if len(path) == 1 and scope.at(path) is scope and isinstance(call.target, RMSNorm)
         ]
         assert len(rms_scopes) == 4
         assert all(not scope.loop_scopes for scope in rms_scopes)
@@ -690,7 +696,7 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
             (scope, access)
             for scope in scopes
             for path, (call, accesses) in scope.access.outputs.get("narrow", {}).items()
-            if len(path) == 1 and isinstance(call.target, CacheUpdate)
+            if len(path) == 1 and scope.at(path) is scope and isinstance(call.target, CacheUpdate)
             for access in accesses
         ]
         assert cache_writes and all(
@@ -759,10 +765,10 @@ def test_dynamic_tuple_selection_keeps_all_possible_storage_resident() -> None:
     assert all(left[1] <= right[0] for left, right in zip(spans, spans[1:]))
     moved = get_metadata(result.function, RegionMemoryMetadata)
     assert moved.peak_for("smem").peak_bytes == 40
-    lifetimes = {life.binding: life for life in moved.lifetimes}
-    output = lifetimes[value_label(consumer)]
+    lifetimes = {life.value: life for life in moved.lifetimes}
+    output = lifetimes[SSAValue(consumer)]
     assert all(
-        lifetimes[value_label(leaf)].last_used_at < output.defined_at for leaf in (first, second)
+        lifetimes[SSAValue(leaf)].last_used_at < output.defined_at for leaf in (first, second)
     )
     assert get_metadata(selected, MemoryMetadata).buffer_bytes is None
     assert not get_metadata(selected, MemoryMetadata).offsets
@@ -781,7 +787,7 @@ def test_dynamic_tuple_selection_keeps_all_possible_storage_resident() -> None:
         assert all(by_value.get(SSAValue(param)) is None for param in region.params)
     allocated = by_value[SSAValue(consumer)]
     assert all(
-        storage_root(allocated, by_value) is not storage_root(by_value[SSAValue(leaf)], by_value)
+        summary.root(allocated) is not summary.root(SSAValue(leaf))
         for leaf in (first, second)
     )
 
@@ -824,7 +830,7 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     assert result.function.name == authored.name
     assert all(
         residual_dims(frame.function, frame) == ()
-        for frame in CallFrame(result.module, result.function).walk()
+        for frame in ValuationVisitor.definitions(ValuationContext(result.module, result.function))
     )
 
 

@@ -17,7 +17,7 @@ from tilefoundry.visitor_registry.valuation import ValuationVisitor
 from .compute_cost import local_duration_ns
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
-from .iteration_scope import IterationScope, walk_scopes
+from .iteration_scope import IterationScope
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -43,14 +43,24 @@ class PerformanceContext(AnalyzeContext):
 class PerformanceVisitor(ValuationVisitor[None]):
     """Collect one duration per Call in authored order."""
 
+    def __init__(self, scope):
+        super().__init__()
+        self.positions = {unit.name: scope.mesh_positions(unit.name) for unit in scope.topologies}
+
+    def on_region_start(self, region, ctx):
+        inner = super().on_region_start(region, ctx)
+        for unit in self.positions:
+            self.positions[unit] = max(self.positions[unit], inner.scope.mesh_positions(unit))
+        return inner
+
     def visit_Call(self, call, ctx):
         self.visit_operands(call, ctx)
-        callee_frame = ctx.callee_frame(call)
-        if callee_frame is None:
+        callee = ctx.callee
+        if callee is None:
             return self.default_visit_leaf(call, (), ctx)
-        summary = get_metadata(callee_frame.function, PerformanceSummaryMetadata)
+        summary = get_metadata(callee, PerformanceSummaryMetadata, ctx=ctx)
         if summary is None:
-            raise AnalysisError(f"performance: missing summary for {callee_frame.function.name!r}")
+            raise AnalysisError(f"performance: missing summary for {callee.name!r}")
         duration = (summary.timeline.end_ns - summary.timeline.start_ns) // summary.waves
         ctx.occurrences.append((ctx.scope, call, duration))
 
@@ -141,7 +151,8 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     facts = context.target.get_facts(ThroughputFacts)
     services = context.target.get_facts(PerformanceServiceFacts, context.topology_level)
     performance_context = PerformanceContext(**vars(context), facts=facts, services=services)
-    PerformanceVisitor().visit(function.body, performance_context)
+    visitor = PerformanceVisitor(context.scope)
+    visitor.visit(function.body, performance_context)
     total_cursor = schedule(performance_context.occurrences, context, origin=context.scope.root)
     summary_end = total_cursor
     roofline = get_metadata(function, RooflineMetadata)
@@ -156,7 +167,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     topology_extent = (
         static_dim_value(topology.size)
         if function is context.entry
-        else max(scope.mesh_positions(level.name) for scope in walk_scopes(context.scope.root))
+        else visitor.positions[level.name]
     )
     if topology_extent is None:
         raise AnalysisError(

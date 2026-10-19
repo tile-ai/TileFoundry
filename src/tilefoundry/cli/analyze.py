@@ -18,7 +18,8 @@ from tilefoundry.inspection.analysis_report import (
     render_text,
 )
 from tilefoundry.ir.hir.specialize import SpecializationError
-from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import ValuationContext
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 EVIDENCE: dict[str, str] = {
     "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
@@ -136,7 +137,7 @@ def run_authored_analysis(
         if not analyses:
             annotated = "\n".join(
                 as_script(frame.function, options=PythonPrintOptions(show_types=True))
-                for frame in CallFrame(checked, root).walk()
+                for frame in ValuationVisitor.definitions(ValuationContext(checked, root))
             )
             Path(out_path).write_text(annotated, encoding="utf-8")
             return 0

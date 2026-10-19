@@ -172,22 +172,26 @@ class DispatchRegistry[Key]:
 Context:
 
 ```python
-@dataclass(frozen=True)
-class CallFrame:
-    """Current function definition and effective execution context."""
+@dataclass
+class ValuationContext:
+    """Shared definition environment, lexical transitions and call resolution."""
 
-    module: Module
-    function: Function | None
+    module: Module | None = None
+    function: Function | None = None
     target: Target | None = None
     topologies: tuple[Topology, ...] | None = None
+    current_mesh: Mesh | None = None
+    call_site: Call | None = None
+    caller_context: ValuationContext | None = None
+
+    def enter_region(self, region) -> ValuationContext: ...
+    def enter_call(self, call: Call) -> ValuationContext: ...
 
 
 @dataclass
-class TypeInferContext:
-    """Walk location and type-inference memo state."""
+class TypeInferContext(ValuationContext):
+    """Type inference state over the shared environment."""
 
-    frame: CallFrame | None = None
-    current_mesh: Mesh | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
     instantiated_memo: dict[tuple, Type] = field(
         default_factory=dict, repr=False, compare=False
@@ -203,7 +207,6 @@ class TypeInferContext:
     def enter_call(self, call: Call) -> TypeInferContext: ...
     def capture_root(self, expr: Expr) -> Expr: ...
     def resolve_target(self) -> Target | None: ...
-    def for_callee(self, callee: Function, *, frame=None) -> TypeInferContext: ...
     def type_of(self, expr: Expr) -> Type: ...
     def local_type_of(self, expr: Expr) -> Type: ...
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
@@ -221,29 +224,30 @@ repeat callbacks. Shared region-child traversal is implemented in
 `visit_operands`, so a `visit_leaf_LoopRegion` override retains the transitions.
 Arguments and loop bounds use the outer context; parameters, body, and yields
 use the inner context. The region's own leaf uses the outer context.
-A Call remains in its caller's frame; visiting its operands does not enter the
-callee body. Explicit definition entry uses `for_callee` with fresh type bindings.
+A Call remains in its caller environment; visiting its operands does not enter
+the callee body. Type inference seeds fresh type bindings when it analyzes a
+called definition.
 Lexical parent links and caller links MUST remain distinct.
 
-`CallFrame` carries the current Module, function, effective target, and
-whole topology hierarchy. It is imported internally from
-`visitor_registry/call_frame.py`; it is not exported from `tilefoundry` or
-`tilefoundry.ir.core`. A shared definition carries no parent or inherited
-execution context ([core-ir §1](./core-ir.md#1-module)).
+`ValuationContext` carries the current Module, function, effective target, and
+whole topology hierarchy directly. There is no separate CallFrame wrapper.
+A shared definition carries no parent or inherited execution context
+([core-ir §1](./core-ir.md#1-module)).
 
 - constraints:
-  - `frame` MUST be the context state describing where a walk is reading.
-    `CallFrame.resolve(call, frame)`, exposed by `ctx.callee_frame(call)`, MUST implement
-    [core-ir §2.1](./core-ir.md#21-call). Direct Function/PrimFunction calls with
-    no caller frame and all Op calls return `None`; instance calls require one.
-    `frame.walk(postorder=False)` enumerates reached HIR definitions
-    once in DFS order; `postorder=True` yields dependencies before callers.
+  - `caller` and `callee` identify functions; `call_site` identifies the Call.
+    Shared call resolution MUST implement [core-ir §2.1](./core-ir.md#21-call).
+    Direct Function/PrimFunction calls without a module environment and Op
+    calls have no resolved called environment; instance calls require a module.
+    `ValuationVisitor.definitions(context, postorder=False)` visits reached HIR
+    definitions once through the shared dispatch; postorder visits dependencies
+    before callers. Ordinary Call visits do not enter the called body.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
     subclass retains its analysis-specific state. It also retains `current_mesh`:
     a callee inherits the call site's mesh, and a region in its body composes
     with it using the usual nested-region rules.
-  - `resolve_target` MUST return the current frame's effective Target, or
-    `None` without a frame. The parser MAY fall back to the target under which
+  - `resolve_target` MUST return the context's effective Target, or
+    `None` when none is supplied. The parser MAY fall back to the target under which
     a not-yet-finalized Module is being built
     ([parser §1.4](./parser.md#14-context-and-diagnostics)).
   - `memo` is the current scope's identity-pinned type table. Crossing a

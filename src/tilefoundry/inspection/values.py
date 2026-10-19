@@ -63,6 +63,15 @@ class PerformanceSummaryView(IRMetadata):
 class CommentPrinter:
     """Render metadata by explicit ``print_<Type>`` methods."""
 
+    def __init__(self, printer=None):
+        self.printer = printer
+
+    def print_SSAValue(self, value):
+        if self.printer is None:
+            from .python_printer import HirPrinter  # noqa: PLC0415
+            return HirPrinter().print(value)
+        return self.printer.print(value)
+
     def print(self, value):
         method = getattr(self, f"print_{type(value).__name__}", None)
         if method:
@@ -137,13 +146,12 @@ class CommentPrinter:
             kind: self._spread(spread, topologies, logical=logical) for kind, spread in held.kinds
         }
 
-    @staticmethod
-    def _footprint(footprint):
+    def _footprint(self, footprint):
         if footprint is None:
             return {}
         return {
-            name: format_bytes(sum(spread.logical for _level, spread in breakdown.kinds))
-            for name, breakdown in footprint.buffers
+            "/".join((*ownership, self.print(value))): format_bytes(sum(spread.logical for _level, spread in breakdown.kinds))
+            for value, ownership, breakdown in footprint.buffers
         }
 
     def print_ComputeCostMetadata(self, record, **_):
@@ -200,7 +208,7 @@ class CommentPrinter:
         return self._record(
             "",
             (
-                ("buffer", record.buffer),
+                ("buffer", "/".join((*record.ownership, self.print(record.buffer)))),
                 ("holds", format_bytes(record.holds_bytes)),
                 ("time", record.time or "none"),
                 ("space", record.space or "none"),
@@ -268,8 +276,8 @@ class CommentPrinter:
 _PRINTER = CommentPrinter()
 
 
-def render_comment(record, *, opt_in=frozenset()):
-    method = getattr(_PRINTER, f"print_{type(record).__name__}", None)
+def render_comment(record, *, opt_in=frozenset(), printer=None):
+    method = getattr(_PRINTER if printer is None else CommentPrinter(printer), f"print_{type(record).__name__}", None)
     return (method(record, opt_in=opt_in) or None) if method else None
 
 

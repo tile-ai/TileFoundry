@@ -23,7 +23,7 @@ from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, LayoutBase, PointerType, TensorType, UnitType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.visitor import ExprVisitor, StmtVisitor
-from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import ValuationContext
 
 _LINE_LENGTH = 100
 
@@ -271,9 +271,9 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], ExprVisitor[str]):
     def _emit_evaluate(self, stmt):
         target = stmt.callable
         if isinstance(target, (PrimFunction, ModuleList, Call)):
-            frame = getattr(self.context, "frame", None)
+            frame = getattr(self.context, "valuation", None)
             frame = (
-                CallFrame.resolve(Call(target, stmt.args, type=UnitType()), frame)
+                frame._callee_context(Call(target, stmt.args, type=UnitType()))
                 if frame is not None
                 else None
             )
@@ -410,7 +410,7 @@ def _function_block(
     fn: PrimFunction, context: TirPrintContext | None = None, *, frame=None
 ) -> list[str]:
     ctx = context or TirPrintContext()
-    ctx.frame = frame
+    ctx.valuation = frame
     target = ctx.use(fn.target.to_python())
     dim_vars = {
         d.name: d
@@ -506,7 +506,7 @@ def _single_module_to_python(mod: Module, module_name: str, names, *, options=No
             if isinstance(fn, HirFunction):
                 raise NotImplementedError("mixed HIR/TIR module printing is not yet supported")
             raise TypeError(f"TIR printer cannot serialize {type(fn).__name__}")
-        block = _function_block(fn, frame=CallFrame(mod, fn))
+        block = _function_block(fn, frame=ValuationContext(mod, fn))
         ctx.imports.update(block.imports)
         blocks.append([*_function_comments(fn, options), *block])
     for index, block in enumerate(blocks):

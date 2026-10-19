@@ -49,6 +49,8 @@ class ValuationVisitor[T](ExprVisitor[T]):
 
     def visit_operands(self, expr, ctx):
         if not isinstance(expr, (LoopRegion, MeshRegion)):
+            if isinstance(expr, Call) and ctx is not None and ctx.call_site is expr:
+                ctx = ctx.caller_context or ctx
             return super().visit_operands(expr, ctx)
         if isinstance(expr, LoopRegion):
             for bound in (expr.start, expr.extent, expr.step):
@@ -76,3 +78,35 @@ class ValuationVisitor[T](ExprVisitor[T]):
         contexts = {id(function): ctx, **{id(param): ctx for param in function.params}}
         ValuationVisitor(contexts=contexts).visit_function_body(function, ctx)
         return contexts
+
+    @staticmethod
+    def definitions(context, *, postorder=False):
+        """Reach definitions once through the shared call dispatch."""
+        context = ValuationContext(
+            module=context.module,
+            function=context.function,
+            target=context.target,
+            topologies=context.topologies,
+        )
+        reached, seen = [], set()
+
+        class Definitions(ValuationVisitor):
+            def on_call_start(self, call, ctx):
+                inner = super().on_call_start(call, ctx)
+                callee = inner._callee_context()
+                if callee is not None:
+                    visit(callee)
+                return inner
+
+        def visit(ctx):
+            if id(ctx.function) in seen:
+                return
+            seen.add(id(ctx.function))
+            if not postorder:
+                reached.append(ctx)
+            Definitions().visit_function_body(ctx.function, ctx)
+            if postorder:
+                reached.append(ctx)
+
+        visit(context)
+        return tuple(reached)

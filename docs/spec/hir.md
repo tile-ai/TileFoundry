@@ -1444,7 +1444,7 @@ Consensus torch.nn.functional ops.
   - Where no Target is in reach (`ctx.resolve_target()` is `None`), a `MatMul`
     with an operand in `smem` or `rmem` has `umat` result storage: which
     instruction computes it, and so where it lands, is decided once a Target
-    is known. A shared child is typed under the visitor's current CallFrame.
+    is known. A shared child is typed under the visitor's current ValuationContext.
   - `Conv2D` requires rank-4 NCHW input and OIHW weight, a rank-1 bias, and one
     common operand dtype. `stride` and `dilation` are positive length-2 tuples,
     `padding` is a non-negative length-2 tuple, and `groups` is positive. Input
@@ -1755,7 +1755,7 @@ class InstantiateDimensionCloner(ExprCloner):
     def function(self, function: Function) -> Function: ...
 
 
-def residual_dims(fn: Function, frame: CallFrame | None = None) -> tuple[str, ...]:
+def residual_dims(fn: Function, frame: ValuationContext | None = None) -> tuple[str, ...]:
     """Return every dimension still stated as a range.
 
     Args:
@@ -1768,7 +1768,7 @@ def residual_dims(fn: Function, frame: CallFrame | None = None) -> tuple[str, ..
     ...
 
 
-def dim_vars_reached(fn: Function, frame: CallFrame | None = None) -> dict[str, object]:
+def dim_vars_reached(fn: Function, frame: ValuationContext | None = None) -> dict[str, object]:
     """Return residual dimension declarations by name.
 
     Args:
@@ -1804,6 +1804,6 @@ def dim_vars_reached(fn: Function, frame: CallFrame | None = None) -> dict[str, 
     graph, including signatures, bodies, Op attributes, loop bounds, variants,
     and called functions, including return types. Runtime values without a
     `DimVar` are rejected later by their consumer.
-  - Instance dimension scans MUST receive a `CallFrame` and recurse through
+  - Instance dimension scans MUST receive a `ValuationContext` and recurse through
     element entries using the current frame's children ([core-ir §2.1](./core-ir.md#21-call)).
     Function-only graphs retain the frame-free query API.

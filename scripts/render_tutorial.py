@@ -185,6 +185,8 @@ def main() -> int:
                 render_markdown(notebook, outputs=False), encoding="utf-8"
             )
             _execute(notebook, notebook_path, workdir)
+        for cell in notebook["cells"]:
+            cell["source"] = _text(cell["source"]).splitlines(keepends=True)
         notebook_path.write_text(
             json.dumps(notebook, ensure_ascii=True, indent=1) + "\n", encoding="utf-8"
         )

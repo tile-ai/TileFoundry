@@ -19,11 +19,13 @@ from tilefoundry.analysis.metadata import (
     PerformanceMetadata,
     PerformanceSummaryMetadata,
     RegionMemoryMetadata,
+    ReuseWindow,
     RooflineMetadata,
     Spread,
     ValueLifetime,
 )
-from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata, value_label
+from tilefoundry.ir.core import Call, IRMetadata, get_metadata
+from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -32,6 +34,7 @@ from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.types.utils import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.visitor_registry.valuation import ValuationContext, ValuationVisitor
 
 _FAMILIES: dict[type[IRMetadata], str] = {}
 _EXPR_FIELDS: dict[type[IRMetadata], dict[str, Callable[..., object]]] = {}
@@ -68,22 +71,25 @@ def expr_fields(record: type[IRMetadata]) -> frozenset[str]:
     return frozenset(_EXPR_FIELDS.get(record, {}))
 
 
-def render_record(record: IRMetadata, expr: object) -> dict[str, object]:
+def render_record(record: IRMetadata, expr: object, *, printer=None) -> dict[str, object]:
     """Serialize every record field under its declared field name."""
+    if printer is None:
+        from tilefoundry.inspection.python_printer import HirPrinter  # noqa: PLC0415
+        printer = HirPrinter()
     from_expr = _EXPR_FIELDS.get(type(record), {})
     hints = get_type_hints(type(record))
     reported: dict[str, object] = {}
     for name in (item.name for item in fields(record)):
         if name in from_expr:
-            value = from_expr[name](record, expr)
+            value = from_expr[name](record, expr, printer=printer)
             if value is not None:
                 reported[name] = value
             continue
-        reported[name] = _reported_value(getattr(record, name), hints[name])
+        reported[name] = _reported_value(getattr(record, name), hints[name], printer)
     return reported
 
 
-def _reported_value(value: object, declared: object) -> object:
+def _reported_value(value: object, declared: object, printer=None) -> object:
     """Serialize one value according to the type its field declared.
 
     A field that may be absent declares a union with ``None``; the value that
@@ -91,6 +97,8 @@ def _reported_value(value: object, declared: object) -> object:
     """
     if value is None:
         return None
+    if isinstance(value, SSAValue):
+        return printer.print(value)
     if isinstance(value, Enum):
         return value.value
     if get_origin(declared) in (Union, UnionType):
@@ -100,48 +108,42 @@ def _reported_value(value: object, declared: object) -> object:
     if isinstance(value, Footprint):
         return {
             "buffers": {
-                name: _reported_value(held, Breakdown[int]) for name, held in value.buffers
+                "/".join((*ownership, printer.print(buffer))): _reported_value(held, Breakdown[int], printer)
+                for buffer, ownership, held in value.buffers
             },
             "precision": value.precision.value,
         }
-    if isinstance(value, ValueLifetime):
-        return {
-            name: getattr(value, name)
-            for name in (
-                "binding",
-                "memory_level",
-                "bytes",
-                "defined_at",
-                "last_used_at",
-                "persistent",
-            )
-        }
     if is_dataclass(declared) and isinstance(declared, type):
         hints = get_type_hints(declared)
-        return {
-            item.name: _reported_value(getattr(value, item.name), hints[item.name])
+        result = {
+            item.name: _reported_value(getattr(value, item.name), hints[item.name], printer)
             for item in fields(declared)
         }
+        if isinstance(value, ValueLifetime):
+            result["binding"] = result.pop("value")
+        elif isinstance(value, ReuseWindow):
+            result["buffer"] = "/".join((*result.pop("ownership"), result["buffer"]))
+        return result
     origin = get_origin(declared)
     if origin is Breakdown:
         (item,) = get_args(declared)
-        return {kind: _reported_value(spread, Spread[item]) for kind, spread in value.kinds}
+        return {kind: _reported_value(spread, Spread[item], printer) for kind, spread in value.kinds}
     if origin is Spread:
         (item,) = get_args(declared)
         return {
-            "logical": _reported_value(value.logical, item),
-            "total": _reported_value(value.total, item),
-            "per_unit": [_reported_value(share, item) for share in value.per_unit],
+            "logical": _reported_value(value.logical, item, printer),
+            "total": _reported_value(value.total, item, printer),
+            "per_unit": [_reported_value(share, item, printer) for share in value.per_unit],
         }
     if origin is dict:
         _, value_type = get_args(declared)
-        return {key: _reported_value(item, value_type) for key, item in value.items()}
+        return {key: _reported_value(item, value_type, printer) for key, item in value.items()}
     if origin in (tuple, list):
         item_type = _item_type(declared)
         pair = _pair_types(item_type)
         if pair is not None:
-            return {key: _reported_value(item, pair[1]) for key, item in value}
-        return [_reported_value(item, item_type) for item in value]
+            return {key: _reported_value(item, pair[1], printer) for key, item in value}
+        return [_reported_value(item, item_type, printer) for item in value]
     return value
 
 
@@ -183,17 +185,7 @@ def _type_text(type_: object) -> str:
     return f"{first.dtype.name}[{shape}]{more}{storage}"
 
 
-def _operand_name(operand: object) -> str:
-    """What to call this operand, from the program rather than from the record."""
-    name = binding_name(operand) or getattr(operand, "name", None)
-    if name:
-        return name
-    if isinstance(operand, Call):
-        return type(operand.target).__name__.lower()
-    return type(operand).__name__.lower()
-
-
-def _operands(record: MemoryMetadata, expr: object) -> list[dict[str, object]] | None:
+def _operands(record: MemoryMetadata, expr: object, *, printer) -> list[dict[str, object]] | None:
     """Each recorded amount, against the operand it was charged to."""
     if not isinstance(expr, Call) or not record.operands:
         return None
@@ -201,7 +193,7 @@ def _operands(record: MemoryMetadata, expr: object) -> list[dict[str, object]] |
     return [
         {
             "arg": "result" if index == len(expr.args) else index,
-            "name": _operand_name(operand),
+            "name": printer.print(operand),
             "type": _type_text(operand.type),
             "read": moved.read,
             "write": moved.write,
@@ -213,7 +205,7 @@ def _operands(record: MemoryMetadata, expr: object) -> list[dict[str, object]] |
 expr_field(MemoryMetadata, "operands", _operands)
 
 
-def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str, object]:
+def _records_of(expr: object, selected: frozenset[type[IRMetadata]], printer) -> dict[str, object]:
     """Every selected record on *expr*, keyed by the family that owns it."""
     result: dict[str, object] = {}
     for metadata_type in declared_records():
@@ -221,7 +213,7 @@ def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str
             continue
         record = get_metadata(expr, metadata_type)
         if record is not None:
-            result[family_of(metadata_type)] = render_record(record, expr)
+            result[family_of(metadata_type)] = render_record(record, expr, printer=printer)
     return result
 
 
@@ -247,9 +239,15 @@ def report_data(
     executed: tuple[str, ...],
     metadata_types: tuple[type[IRMetadata], ...],
     labels: Mapping[int, str] | None = None,
+    printer=None,
     functions: tuple[Function, ...] = (),
 ) -> dict[str, object]:
     """Project every definition once, in root-first order."""
+    if printer is None:
+        from tilefoundry.inspection.python_printer import HirPrinter  # noqa: PLC0415
+        printer = HirPrinter()
+        for ctx in reversed(ValuationVisitor.definitions(ValuationContext(module, function))):
+            printer.render(ctx.function)
     selected = frozenset(selected_types(module, analyses, metadata_types))
     target = module.resolve_target()
     wave = wave_of(module, target, topology_level)
@@ -260,9 +258,10 @@ def report_data(
     }
     rows = []
     for body in functions or (function,):
+        local_printer = printer._definitions[id(body)]
         row = {
             "function": f"{owners.get(id(origin_of(body) or body), module.name)}.{body.name}",
-            "function_records": _records_of(body, selected),
+            "function_records": _records_of(body, selected, local_printer),
             "calls": [],
             "loops": [],
             "meshes": [],
@@ -271,11 +270,11 @@ def report_data(
             classifier = _ROWS.get(type(expr))
             if classifier is None:
                 continue
-            held = _records_of(expr, selected)
+            held = _records_of(expr, selected, local_printer)
             if not held:
                 continue
             kind, label = classifier
-            value = (labels.get(id(expr)) if labels is not None else None) or label(expr, row)
+            value = (labels.get(id(expr)) if labels is not None else None) or (local_printer.print(expr) if isinstance(expr, Call) else label(expr, row))
             row[kind].append({"value": value, **held})
         asked = {ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata}
         if asked & selected or ("roofline" in analyses and asked & set(metadata_types)):
@@ -343,7 +342,7 @@ __all__ = [
 
 
 _ROWS = {
-    Call: ("calls", lambda expr, row: value_label(expr) or type(expr.target).__name__.lower()),
+    Call: ("calls", None),
     LoopRegion: ("loops", lambda expr, row: expr.induction_var.name),
     MeshRegion: ("meshes", lambda expr, row: f"mesh{len(row['meshes'])}"),
 }

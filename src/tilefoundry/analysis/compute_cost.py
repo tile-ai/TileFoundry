@@ -212,7 +212,7 @@ def accumulate_logical(into, name, spread, ctx):
     precision = AnalysisPrecision.EXACT
     scope = (
         ctx.callee_scope
-        if ctx.call_site is not None and ctx.callee_frame() is not None
+        if ctx.call_site is not None and ctx._callee_context() is not None
         else ctx.scope
     )
     for dependencies, value in spread.logical_groups:
@@ -312,8 +312,8 @@ class ComputeCostVisitor(ValuationVisitor[None]):
         if not ctx.units:
             raise AnalysisError("compute-cost: visitor context is missing its cost context")
         repeats = ctx.scope.repeats_of(expr, ctx.topology_level)
-        callee_frame = ctx.callee_frame(expr)
-        if callee_frame is None:
+        callee = ctx.callee
+        if callee is None:
             record = _call_cost_record(
                 expr,
                 {unit: replace(ctx, topology_level=unit) for unit in ctx.units},
@@ -329,7 +329,7 @@ class ComputeCostVisitor(ValuationVisitor[None]):
                 other_ops=with_dependencies(record.other_ops, dependencies),
             )
         else:
-            record = get_metadata(callee_frame.function, ComputeCostMetadata).resolve(ctx)
+            record = get_metadata(callee, ComputeCostMetadata, ctx=ctx)
         attach(expr, record)
         ctx.precision[0] = ctx.precision[0].join(repeats.trips_precision).join(record.precision)
         _accumulate(ctx, record, repeats)

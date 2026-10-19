@@ -52,7 +52,7 @@ from tilefoundry.analysis import footprint as footprint_analysis
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
-from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
+from tilefoundry.analysis.iteration_scope import build_scopes
 from tilefoundry.analysis.report import report_data
 from tilefoundry.ir.core import get_metadata
 from tilefoundry.ir.core.expr import SSAValue
@@ -145,7 +145,7 @@ def test_uncounted_boundary_marks_the_footprint_incomplete(
         merged((uncounted, counted)),
     )
 
-    assert dict(footprint.buffers)["x"].of("gmem").total == 8
+    assert {value: held for value, _ownership, held in footprint.buffers}[SSAValue(buffer)].of("gmem").total == 8
     expected = (
         missing_precision
         if counted_precision in (AnalysisPrecision.EXACT, missing_precision)
@@ -178,8 +178,8 @@ def test_tuple_output_boundaries_add_instead_of_union(
     footprint = footprint_of(
         distinct,
     )
-    by_name = dict(footprint.buffers)
-    gmem = by_name["x"].of("gmem")
+    by_value = {value: held for value, _ownership, held in footprint.buffers}
+    gmem = by_value[SSAValue(buffer)].of("gmem")
 
     assert len(distinct) == 2
     assert gmem is not None and gmem.total == 2 * 4 * 2
@@ -223,11 +223,13 @@ def test_invariant_reuse_matches_the_written_arithmetic() -> None:
         "total": 384,
         "per_unit": [96],
     }
-    scopes = tuple(walk_scopes(build_scopes(result.module, result.function)))
+    root = build_scopes(result.module, result.function)
+    scopes = tuple(dict.fromkeys((root, *root.snapshot.definition.locations.values())))
     loaded = next(
         call
         for scope in scopes
-        for call, _ in scope.access.accesses.get("narrow", {}).values()
+        for path, (call, _) in scope.access.accesses.get("narrow", {}).items()
+        if root.at(path[:1]) is scope
         if isinstance(call.target, Reshard)
     )
     n_scope = next(
@@ -314,7 +316,7 @@ def test_truncated_wave_keeps_reuse_from_participating_boundaries() -> None:
     )
     assert _reuse_conclusions(memory) == [
         {
-            "buffer": "viewed",
+            "buffer": "view::viewed:10",
             "time": "",
             "space": "cta.i",
             "holds_bytes": 32,

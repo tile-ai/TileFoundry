@@ -218,7 +218,7 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
     timed = []
     context = _build_context(cross_scope.module, cross_scope.function)[-1]
     for call in _calls(cross_scope.function):
-        frame = context.callee_frame(call)
+        frame = context._callee_context(call)
         occurrence = get_metadata(call, PerformanceMetadata)
         if frame is None or occurrence is None:
             continue
@@ -462,10 +462,10 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
         analysis="memory",
     )
     assert [
-        (item.binding, item.memory_level, item.bytes, item.defined_at, item.last_used_at)
+        (type(item.value.expr), item.value.index, item.memory_level, item.bytes, item.defined_at, item.last_used_at)
         for item in get_metadata(fits.function, RegionMemoryMetadata).lifetimes
     ] == [
-        (item.binding, item.memory_level, item.bytes, item.defined_at, item.last_used_at)
+        (type(item.value.expr), item.value.index, item.memory_level, item.bytes, item.defined_at, item.last_used_at)
         for item in get_metadata(relieved.function, RegionMemoryMetadata).lifetimes
     ]
 

@@ -22,7 +22,7 @@ from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.target import CpuTarget, Target
-from tilefoundry.visitor_registry.call_frame import CallFrame
+from tilefoundry.visitor_registry.contexts import ValuationContext
 
 
 def _function_paths(module: Module, prefix: tuple[str, ...] = ()):
@@ -133,7 +133,7 @@ class CodegenContext:
     targets: Mapping[int, Target]
     symbols: FunctionSymbolTable
     launch_edges: tuple[LaunchEdge, ...]
-    topology_domains: Mapping[int, CallFrame]
+    topology_domains: Mapping[int, ValuationContext]
     launch_callables: Mapping[int, CallableSignature]
     groups: tuple[EmissionGroup, ...]
 
@@ -202,7 +202,7 @@ def _product(values: tuple[object, ...]) -> object:
     return result
 
 
-def _launch_extents(frame: CallFrame) -> tuple[object, object]:
+def _launch_extents(frame: ValuationContext) -> tuple[object, object]:
     """Derive one-dimensional grid/block extents from declared topologies."""
     ctas = tuple(
         topology.size for topology in frame.topologies if topology.name == "cta"

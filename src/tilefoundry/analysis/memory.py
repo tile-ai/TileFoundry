@@ -44,24 +44,21 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .access import AliasKind
 from .allocation import (
-    collect_allocation,
-    root,
+    AllocationConstraintVisitor,
+    AllocationSummaryMetadata,
     solve_allocation,
-    summary_of,
 )
 from .compute_cost import accumulate_logical, grouped_breakdown, with_dependencies
 from .errors import AnalysisError
 from .facts import TARGET_MEMORY_OWNER, MemoryHierarchyFacts
 from .footprint import (
-    _access_scopes,
-    buffer_names,
     cached_level,
     footprint_of,
     reached_by,
     reuse_windows,
     wave_of,
 )
-from .iteration_scope import IterationScope, Repeats, walk_scopes
+from .iteration_scope import IterationScope, Repeats
 from .liveness import analyze_liveness, result_copies
 from .metadata import (
     Breakdown,
@@ -494,8 +491,8 @@ class MemoryVisitor(ValuationVisitor[None]):
         recorded = (SSAValue(expr),) in ctx.scope.access.accesses.get("narrow", {})
         if not ctx.units:
             raise AnalysisError("memory: visitor context is missing cost contexts")
-        callee_frame = ctx.callee_frame(expr)
-        if callee_frame is None:
+        callee = ctx.callee
+        if callee is None:
             moved = (
                 call_traffic(
                     expr,
@@ -517,12 +514,10 @@ class MemoryVisitor(ValuationVisitor[None]):
                 ),
             )
         else:
-            summary = get_metadata(callee_frame.function, RegionMemoryMetadata)
+            summary = get_metadata(callee, RegionMemoryMetadata, ctx=ctx)
             if summary is None:
-                raise AnalysisError(f"memory: missing summary for {callee_frame.function.name!r}")
-            moved = MemoryMetadata(topologies=summary.topologies, traffic=summary.traffic).resolve(
-                ctx
-            )
+                raise AnalysisError(f"memory: missing summary for {callee.name!r}")
+            moved = MemoryMetadata(topologies=summary.topologies, traffic=summary.traffic)
         attach(expr, moved)
         repeats = ctx.scope.repeats_of(expr, ctx.topology_level)
         add_traffic(
@@ -570,89 +565,50 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     MemoryVisitor().visit(function.body, memory_context)
     liveness = analyze_liveness(function, context, is_callee=function is not context.entry)
     attach(function, liveness)
-    quantities = {}
-    persistent = set()
-    placement = CostContext(
-        frame=context.frame, topology_level=topology_level, topologies=topologies
-    )
-    for lifetime in liveness.intervals:
-        key = lifetime.value
-        leaves = leaves_of(placement.local_type_of(key.expr))
-        if not leaves:
-            continue
-        held = leaves[key.index]
-        quantity = next(
-            (
-                (level, amount)
-                for level, amount in bytes_by_storage(held).items()
-                if facts.explicit(level) is not None
-            ),
-            None,
-        )
-        if quantity is not None:
-            level, amount = quantity
-            quantities[key] = level, amount * result_copies(key.expr)
-        if any(key.expr is param for param in function.params):
-            persistent.add(key)
-    allocation = collect_allocation(function, context, liveness, quantities, frozenset(persistent))
-    attach(function, summary_of(allocation))
+    allocation = AllocationConstraintVisitor()
+    attach(function, allocation.run(function, context))
     for value in allocation.by_value.values():
         expr = value.value.expr
-        if id(expr) not in allocation.locations:
+        if id(expr) not in context.scope.snapshot.definition.locations:
             continue
         moved = get_metadata(expr, MemoryMetadata)
         if moved is not None:
             attach(expr, replace(moved, buffer_bytes=None, offsets=()))
     footprint = None
-    labels = {}
     if memory_level is not None and wave is not None:
         groups = defaultdict(list)
         available = True
-        for scope in walk_scopes(context.scope.root):
-            for path, (call, _accesses) in scope.access.accesses.get("narrow", {}).items():
-                moved = get_metadata(call, MemoryMetadata)
-                origin, loops = _access_scopes(scope, path, context)
-                evidence = reached_by(
-                    scope,
-                    call,
-                    memory_level=memory_level,
-                    wave_units=wave[0],
-                    declared_units=wave[1],
-                    operands=() if moved is None else moved.operands,
-                    ctx=replace(context, topology_level=None),
-                    window=len(scope.loop_scopes) - 1,
-                    path=path,
-                    loops=loops,
-                )
-                if evidence is None:
-                    available = False
-                    continue
-                windows = -(-origin.mesh_positions(topology_level) // wave[0])
-                trips = prod(loop.trips() for loop in loops)
-                key = (path[:-1], origin, windows * trips)
-                groups[key].extend(evidence)
-                if len(path) == 1 and moved is not None:
-                    attach(call, replace(moved, footprint=footprint_of(evidence, windows=windows)))
-            for call in scope.access.refused.get("narrow", ()):
-                moved = get_metadata(call, MemoryMetadata)
-                evidence = reached_by(
-                    scope,
-                    call,
-                    memory_level=memory_level,
-                    wave_units=wave[0],
-                    declared_units=wave[1],
-                    operands=(),
-                    ctx=replace(context, topology_level=None),
-                    window=len(scope.loop_scopes) - 1,
-                )
-                groups[((SSAValue(call),), scope, 1)].extend(evidence or ())
+        for path, (call, _accesses) in context.scope.root.access.accesses.get("narrow", {}).items():
+            scope = context.scope.root.at(path[:1])
+            moved = get_metadata(call, MemoryMetadata)
+            origin, loops = scope._access_environment(path)
+            evidence = reached_by(
+                scope,
+                call,
+                memory_level=memory_level,
+                wave_units=wave[0],
+                declared_units=wave[1],
+                operands=() if moved is None else moved.operands,
+                ctx=replace(context, topology_level=None),
+                window=len(scope.loop_scopes) - 1,
+                path=path,
+                loops=loops,
+            )
+            if evidence is None:
+                available = False
+                continue
+            windows = -(-origin.mesh_positions(topology_level) // wave[0])
+            trips = prod(loop.trips() for loop in loops)
+            key = (path[:-1], origin, windows * trips)
+            groups[key].extend(evidence)
+            if len(path) == 1 and moved is not None:
+                attach(call, replace(moved, footprint=footprint_of(evidence, windows=windows)))
         if available:
             footprint = Footprint(
                 tuple(
                     (windows, tuple(items)) for (_path, _origin, windows), items in groups.items()
                 )
             )
-            labels = buffer_names(footprint.reached)
     reuse = (
         ()
         if memory_level is None or wave is None
@@ -662,7 +618,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             wave=wave,
             ctx=replace(context, topology_level=topology_level),
             capacity=cache[2],
-            labels=labels,
         )
     )
     peaks, lifetimes, status = (), (), "not_run"
@@ -701,7 +656,7 @@ def _resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
     for window in windows:
         value = model.by_value.get(window.value)
         if value is not None:
-            levels.setdefault(window.memory_level, []).append((root(value, model.by_value), window))
+            levels.setdefault(window.memory_level, []).append((model.root(value), window))
     peaks = []
     for name, items in sorted(levels.items()):
         events = {
@@ -743,18 +698,20 @@ def _resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
 
 def _place(model, facts, topologies):
     """Solve the entry's flat windows once and publish shared definition addresses."""
-    for values, windows, regions in model.expanded_calls.values():
-        for value in values:
-            model.by_value.setdefault(value.value, value)
-        model.windows.extend(
-            window for window in windows if window.value in {value.value for value in values}
-        )
-        model.regions.extend(regions)
     model._groups = model._occupancy = None
-    options = model.options if isinstance(model.options, MemoryOptions) else MemoryOptions()
+    options = (
+        model.context.options
+        if isinstance(model.context.options, MemoryOptions)
+        else MemoryOptions()
+    )
     offsets, high_water = {}, {}
     for name in ("gmem", "smem"):
-        solved = solve_allocation(name, model, options)
+        solved = solve_allocation(
+            get_metadata(model.context.function, AllocationSummaryMetadata),
+            model.context,
+            options,
+            memory_level=name,
+        )
         offsets.update(solved.offsets)
         high_water[name] = solved.peak_bytes
     sizes = {value: model.size(value) for value in model.roots()}
@@ -774,9 +731,7 @@ def _place(model, facts, topologies):
         moved = get_metadata(expr, MemoryMetadata) or MemoryMetadata()
         values.sort(key=lambda value: value.value.index)
         addresses = tuple(
-            offsets[root(value, model.by_value)]
-            for value in values
-            if not value.lifetime.persistent
+            offsets[model.root(value)] for value in values if not value.lifetime.persistent
         )
         copies = result_copies(expr)
         size = values[0].lifetime.bytes // copies
@@ -797,8 +752,8 @@ def _place(model, facts, topologies):
     )
     regions, claimed = {}, set()
     rmem_peak = 0
-    names = tuple(level.name for level in model.target.get_facts(TopologyFacts).topologies)
-    for window in model.regions:
+    names = tuple(level.name for level in model.context.target.get_facts(TopologyFacts).topologies)
+    for window in model.liveness.regions:
         resident = values_in_region(
             tuple(model.windows), window.region, window.entered_at, window.exited_at, facts, names
         )
@@ -845,7 +800,7 @@ def _place(model, facts, topologies):
     for value in model.by_value.values():
         if any(alias.kind in (AliasKind.VIEW, AliasKind.FORWARD) for alias in value.aliases):
             continue
-        if id(value.value.expr) in model.locations:
+        if id(value.value.expr) in model.context.scope.snapshot.definition.locations:
             lifetimes.append(value.lifetime)
         else:
             lifetimes.extend(windows[value.value])
@@ -877,7 +832,9 @@ def _memory_findings(peaks, footprint, reuse, cache, wave):
             else:
                 advisories += (message,)
         used = sum(
-            spread.logical for _name, held in footprint.buffers for _level, spread in held.kinds
+            spread.logical
+            for _value, _ownership, held in footprint.buffers
+            for _level, spread in held.kinds
         )
         if used >= cache[2] and not any(
             not row.fits
