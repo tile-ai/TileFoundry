@@ -78,6 +78,8 @@ beside `run.py`, builds the supplied native libraries and FFI entry under
 `tf_amx_load_prepared` / `tf_amx_clear_prepared` exports; a standard upstream
 checkout alone does not provide that execution path. `LLAMA_BUILD` can select
 an existing CPU/Accelerate build. No source checkout is modified automatically.
+The projection kernel is in the supplied `ggml/src/ggml-blas/shared_fp16.hpp`;
+`kernels/prefill.cpp` provides its FFI and native model-driver bridge.
 
 `--prepared` can reuse the original experiment's packed `.bin` directory
 for the same checkpoint; its metadata does not need a separate manifest.
@@ -124,7 +126,9 @@ with QwenPrefill(config("1.7b"), sequence=128) as runtime:
 `scheduled.make_scheduled(c, 128)` constructs the scheduled HIR used by
 `runtime.module` for inspection. Execution calls the original native model
 graph rather than evaluating the IR. Use one checkpoint per process, as in
-the supplied runtime. Each source file also exposes `Qwen3_1_7B` and `Qwen3_5_4B` as
+the supplied runtime. The HIR keeps weights on the root module and passes them
+explicitly to shared child definitions, retaining the root's weight converters.
+Each source file also exposes `Qwen3_1_7B` and `Qwen3_5_4B` as
 CLI-selectable modules with a 128-token prompt:
 
 ```sh
@@ -148,6 +152,8 @@ model descriptions and do not require weights or the native extension.
 Measured on **2026-10-19**, Apple M2 Pro, 32 GiB unified memory, CPU-only, eight
 threads/workers. Our implementation uses the supplied packed-FP16 AMX runtime
 for eligible large projections and retains its native C++ model execution.
+The AMX column measures that modified llama.cpp execution path; the model
+driver and host operations still come from llama.cpp.
 llama.cpp is the local `e5819f0dd` working tree (build 2, existing BLAS/AMX edits),
 rebuilt in Release with AppleClang 21.0.0. Accelerate, BLAS, native ARM
 instructions, CPU repacking and Flash Attention are enabled; Metal and KleidiAI

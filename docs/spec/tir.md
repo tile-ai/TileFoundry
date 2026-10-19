@@ -599,10 +599,10 @@ checked against the corresponding HIR operation. Access relations, evaluation
 and arithmetic costs retain that operation's semantics; these are software
 kernel contracts rather than AMX ISA operations.
 
-Copy and Fill admit CUDA `thread`, CPU `core`, and Apple `amx` execution
-scopes through the shared memory execution pattern. A sharded register operand
-must name the selected scope. Their canonical CUDA `execution_mesh` descriptor
-remains available; admission uses `execution_mesh_pattern()`.
+Copy and Fill bind the current innermost execution level through a shared mesh
+wildcard. They require a contiguous run and sharded register operands on that
+same level. The module's Target Facts validate topology names and extents;
+memory declarations do not enumerate backend topology names.
 
 ##### Copy
 ```python

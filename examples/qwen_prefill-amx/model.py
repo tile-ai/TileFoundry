@@ -442,7 +442,9 @@ def build(config, S, *, linear=projection):
         V=V,
     )
     exec(compile(source, str(path), "exec"), namespace)
-    return namespace["QwenPrefill"]
+    from weights import explicit_weights
+
+    return explicit_weights(namespace["QwenPrefill"])
 
 
 from config import config

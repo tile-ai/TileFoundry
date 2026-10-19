@@ -1187,21 +1187,27 @@ def resolve_footprint(footprint, ctx):
                 continue
 
             def project_image(image):
-                """Keep instance coordinates correlated with addresses during projection."""
-                relation = isl.map.from_range(image)
                 for axis in reversed(range(len(item.ownership))):
-                    relation = relation.move_dims(isl.dim_type.IN, 0, isl.dim_type.OUT, axis, 1)
+                    image = image.set_dim_name(isl.dim_type.SET, axis, f"__tf_instance_{axis}")
+                    image = image.move_dims(
+                        isl.dim_type.PARAM, image.dim(isl.dim_type.PARAM), isl.dim_type.SET, axis, 1
+                    )
                 source = BufferAlias(
                     item.target,
-                    AccessRelation(relation, item.values),
+                    AccessRelation(isl.map.from_range(image), item.values),
                     AliasKind.FORWARD,
                 )
                 projected, precision = binding.project(source)
                 relation = projected.relation.relation
                 values = dict(projected.relation.values)
-                for axis in range(len(item.ownership)):
-                    relation = relation.move_dims(isl.dim_type.OUT, axis, isl.dim_type.IN, depth, 1)
                 relation = relation.project_out(isl.dim_type.IN, 0, depth)
+                for axis in range(len(item.ownership)):
+                    parameter = relation.find_dim_by_name(
+                        isl.dim_type.PARAM, f"__tf_instance_{axis}"
+                    )
+                    relation = relation.move_dims(
+                        isl.dim_type.OUT, axis, isl.dim_type.PARAM, parameter, 1
+                    )
                 image = relation.range()
                 return projected.target, image, values, precision
 

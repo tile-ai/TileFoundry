@@ -765,6 +765,10 @@ implicitly. Predicates on a surrounding `ComposedLayoutPattern` instead
 check the whole matched layout. Execution-mesh declarations may admit leading
 modes with `StarPattern`; operand mesh declarations keep their exact axis
 structure because shard attrs refer to those axes.
+A wildcard in `MeshPattern.topologies` selects the innermost execution level
+and binds its one-name tuple. Reusing that wildcard in an operand mesh requires
+the same level; valid topology names and extents come from the module's Target
+Facts, as specified in [target §11](./target.md#11-target-facts-projection).
 `ShardLayoutPattern` names the same `layout`, `attrs`, and `mesh` fields as
 `ShardLayout`: `layout` and `mesh` are nested patterns, while `attrs` remains
 an exact structural value. Its mesh pattern may use the bare/composed identity

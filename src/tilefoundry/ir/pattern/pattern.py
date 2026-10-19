@@ -331,13 +331,13 @@ class ComposedLayoutPattern(Pattern):
 
 @dataclass(frozen=True)
 class MeshPattern(Pattern):
-    """Match named mesh levels after separating and recomposing them."""
+    """Match named levels, or bind the innermost level with a wildcard."""
 
-    topologies: tuple[str, ...]
+    topologies: tuple[str, ...] | WildcardPattern
     layout: object
 
     def __post_init__(self):
-        if (
+        if not isinstance(self.topologies, WildcardPattern) and (
             not self.topologies
             or any(not isinstance(name, str) or not name for name in self.topologies)
             or len(set(self.topologies)) != len(self.topologies)

@@ -429,7 +429,12 @@ class PatternPrinter:
         return self._rules_of((pattern.inner, pattern.offset, pattern.outer))
 
     def visit_MeshPattern(self, pattern, name) -> str:
-        return f"Mesh({pattern.topologies!r}, {self.written(pattern.layout)})"
+        topologies = (
+            repr(pattern.topologies)
+            if isinstance(pattern.topologies, tuple)
+            else self.written(pattern.topologies)
+        )
+        return f"Mesh({topologies}, {self.written(pattern.layout)})"
 
     def rules_MeshPattern(self, pattern, name) -> tuple[str, ...]:
         return self.rules(pattern.layout)

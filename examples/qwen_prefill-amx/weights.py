@@ -6,6 +6,175 @@ import torch
 from gguf import GGUFReader, GGMLQuantizationType
 
 
+def explicit_weights(root):
+    """Keep model weights on the root and pass them through shared definitions."""
+    from dataclasses import replace
+    from tilefoundry.ir.core import Call, Var
+    from tilefoundry.ir.core.module import ModuleList
+    from tilefoundry.ir.hir.function import Function
+    from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
+    from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
+
+    cache = {}
+
+    def lift(mod):
+        if id(mod) in cache:
+            return cache[id(mod)]
+        children = {}
+        specs = {name: (ty, None, ()) for name, ty in mod.weights.items()}
+        for fn in mod.functions:
+            for name, converter in fn.converters:
+                specs[name] = (specs[name][0], converter, ())
+        for key, slot in mod.children.items():
+            definitions = []
+            for i, child in enumerate(slot.elements):
+                definition, child_specs, _ = lift(child)
+                definitions.append(definition)
+                prefix = f"{key}__{i}__" if slot.indexed else f"{key}__"
+                for name, (ty, converter, path) in child_specs.items():
+                    specs[prefix + name] = (ty, converter, (prefix, *path))
+            children[key] = ModuleList(
+                tuple(definitions) if slot.indexed else definitions[0]
+            )
+        needs, functions = {}, {}
+
+        def callee(call):
+            frame = CallFrameVisitor.callee_frame(call, CallFrame(mod, None))
+            if frame is None:
+                return None
+            if isinstance(call.target, Function):
+                return call.target, ""
+            slot = (
+                call.target
+                if isinstance(call.target, ModuleList)
+                else call.target.args[0]
+            )
+            index = (
+                0 if isinstance(call.target, ModuleList) else call.target.args[1].value
+            )
+            prefix = f"{slot.key}__{index}__" if slot.indexed else f"{slot.key}__"
+            return frame.function, prefix
+
+        def needed(fn):
+            if id(fn) not in needs:
+                names = [p.name for p in fn.params if p.is_const]
+                for call in collect_exprs(fn.body):
+                    if not isinstance(call, Call) or (item := callee(call)) is None:
+                        continue
+                    target, prefix = item
+                    target_needs = (
+                        needed(target)
+                        if not prefix
+                        else lift(
+                            CallFrameVisitor.callee_frame(
+                                call, CallFrame(mod, fn)
+                            ).module
+                        )[2][id(target)]
+                    )
+                    names.extend(prefix + name for name in target_needs)
+                needs[id(fn)] = tuple(dict.fromkeys(names))
+            return needs[id(fn)]
+
+        def rewrite(fn):
+            if id(fn) in functions:
+                return functions[id(fn)]
+            inputs = tuple(
+                Var(p.name, type=p.type) for p in fn.params if not p.is_const
+            )
+            weights = {name: Var(name, type=specs[name][0]) for name in needed(fn)}
+            input_iter = iter(inputs)
+            bindings = {
+                id(p): weights[p.name] if p.is_const else next(input_iter)
+                for p in fn.params
+            }
+
+            class Rewrite(BindingSubstitutionCloner):
+                def visit_ModuleList(self, slot, ctx=None):
+                    return children[slot.key]
+
+                def visit_Call(self, call, ctx=None):
+                    args = tuple(self.visit(arg, ctx) for arg in call.args)
+                    item = callee(call)
+                    if item is None:
+                        return replace(call, args=args)
+                    target, prefix = item
+                    if prefix:
+                        child = CallFrameVisitor.callee_frame(
+                            call, CallFrame(mod, fn)
+                        ).module
+                        child_needs = lift(child)[2][id(target)]
+                        target = self.visit(call.target, ctx)
+                    else:
+                        args = tuple(
+                            arg
+                            for param, arg in zip(target.params, args)
+                            if not param.is_const
+                        )
+                        child_needs = needed(target)
+                        target = rewrite(target)
+                    return replace(
+                        call,
+                        target=target,
+                        args=(*args, *(weights[prefix + name] for name in child_needs)),
+                    )
+
+            result = Function.build(
+                name=fn.name,
+                params=(*inputs, *weights.values()),
+                body=Rewrite().visit(fn.body, bindings),
+                return_type=fn.return_type,
+            )
+            functions[id(fn)] = result
+            return result
+
+        result = replace(
+            mod, functions=tuple(rewrite(fn) for fn in mod.functions), children=children
+        )
+        cache[id(mod)] = result, specs, needs
+        return cache[id(mod)]
+
+    result, specs, needs = lift(root)
+    entry = result.entry_function()
+    names = needs[id(root.entry_function())]
+    weights = set(names)
+    params = tuple(
+        Var(p.name, type=p.type, is_const=p.name in weights) for p in entry.params
+    )
+    converters = []
+    for name in names:
+        _, converter, path = specs[name]
+        if converter is None:
+            continue
+        prefix = "".join(path)
+        raw = tuple(
+            Var(prefix + p.name, type=p.type, is_const=True) for p in converter.params
+        )
+        converted = Function.build(
+            name=prefix + converter.name,
+            params=raw,
+            body=BindingSubstitutionCloner().visit(
+                converter.body, {id(p): v for p, v in zip(converter.params, raw)}
+            ),
+            return_type=converter.return_type,
+        )
+        converters.append((name, converted))
+    entry = Function.build(
+        name=entry.name,
+        params=params,
+        body=BindingSubstitutionCloner().visit(
+            entry.body, {id(p): v for p, v in zip(entry.params, params)}
+        ),
+        return_type=entry.return_type,
+        converters=tuple(converters),
+    )
+    return replace(
+        result,
+        functions=tuple(
+            entry if fn.name == entry.name else fn for fn in result.functions
+        ),
+    )
+
+
 def aliases(config):
     out = {
         "table": "token_embd.weight",
@@ -51,7 +220,7 @@ def aliases(config):
                 ("gamma", "ssm_norm.weight"),
             ):
                 out[p + ".mixer.math." + name] = b + "." + tensor
-    return out
+    return {key.replace(".", "__"): value for key, value in out.items()}
 
 
 class GGUFResource:

@@ -114,13 +114,9 @@ def thread_execution_mesh() -> MeshPattern:
     return MeshPattern(("thread",), _THREAD_EXECUTION_LAYOUT)
 
 
-def memory_execution_mesh() -> OrPattern:
-    """Memory statements may execute on CUDA threads or Apple CPU/AMX units."""
-    return OrPattern(
-        thread_execution_mesh(),
-        MeshPattern(("core",), _THREAD_EXECUTION_LAYOUT),
-        MeshPattern(("amx",), _THREAD_EXECUTION_LAYOUT),
-    )
+def memory_execution_mesh() -> MeshPattern:
+    """Bind a contiguous run at the current innermost topology level."""
+    return MeshPattern(WildcardPattern("execution_topologies"), _THREAD_EXECUTION_LAYOUT)
 
 
 def declared_execution_mesh(op_type) -> MeshPattern | OrPattern:
@@ -141,14 +137,13 @@ def declared_execution_mesh(op_type) -> MeshPattern | OrPattern:
     return declared
 
 
-def _sharded_on(execution_mesh: MeshPattern | OrPattern) -> OrPattern:
+def _sharded_on(execution_mesh: MeshPattern) -> OrPattern:
     """A lexical tile, or a shard explicitly held by *execution_mesh*."""
     return OrPattern(
-        *(
-            ShardLayoutPattern(layout=WildcardPattern(), attrs=WildcardPattern(), mesh=mesh)
-            for mesh in (
-                execution_mesh.patterns if isinstance(execution_mesh, OrPattern) else (execution_mesh,)
-            )
+        ShardLayoutPattern(
+            layout=WildcardPattern(),
+            attrs=WildcardPattern(),
+            mesh=execution_mesh,
         ),
         LayoutPattern(),
     )
