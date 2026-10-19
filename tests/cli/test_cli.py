@@ -107,24 +107,24 @@ def test_parse_dims_rejects_one_dimension_stated_twice() -> None:
 
 
 _NEIGHBOURS = (
-    'from tilefoundry.dsl import *\n'
-    '\n'
-    'from tilefoundry.target import CudaTarget\n'
-    '\n'
-    'N = 132 * 128\n'
+    "from tilefoundry.dsl import *\n"
+    "\n"
+    "from tilefoundry.target import CudaTarget\n"
+    "\n"
+    "N = 132 * 128\n"
     "_H200 = CudaTarget('nvidia.h200_sxm')\n"
-    '\n'
-    '\n'
+    "\n"
+    "\n"
     "@module(entry='nope', target=_H200, topologies=(Topology('cta', 132),))\n"
-    'class Unsound:\n'
-    '    @func\n'
+    "class Unsound:\n"
+    "    @func\n"
     "    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
-    '        return tf.square(x)\n'
-    '\n'
-    '\n'
+    "        return tf.square(x)\n"
+    "\n"
+    "\n"
     "@module(entry='kernel', target=_H200, topologies=(Topology('cta', 132),))\n"
-    'class Sound:\n'
-    '    @func\n'
+    "class Sound:\n"
+    "    @func\n"
     "    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
     "        with Mesh(('cta',), layout=(132,), names=('block',)) as m:\n"
     "            placed = tf.reshard(x, (N @ m.block,), 'gmem')\n"
@@ -152,8 +152,7 @@ def test_analyze_disarms_its_watchdog_on_every_exit(
     assert not disarmed.is_set()
 
     assert (
-        cli.main(["analyze", f"{source}:{root}", str(tmp_path / "report.txt"), *flags])
-        == expected
+        cli.main(["analyze", f"{source}:{root}", str(tmp_path / "report.txt"), *flags]) == expected
     )
     assert disarmed.is_set()
 
@@ -177,7 +176,7 @@ def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(tmp_path, capsy
     assert capsys.readouterr().out == ""
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["module"] == "Sound"
-    assert report["functions"][0]['totals']["flops"]
+    assert report["functions"][0]["totals"]["flops"]
 
     assert (
         cli.main(["analyze", str(source), str(tmp_path / "bad.json"), "--compute-cost", "--json"])
@@ -362,12 +361,12 @@ def test_repeated_source_loads_keep_one_logical_target_registration(tmp_path) ->
     source = tmp_path / "model.py"
     source.write_text(
         (
-            'from tilefoundry.dsl import *\n'
-            'from provider import ReloadTarget\n'
-            '@module(target=ReloadTarget())\n'
-            'class Model:\n'
-            '    def forward(self):\n'
-            '        return None\n'
+            "from tilefoundry.dsl import *\n"
+            "from provider import ReloadTarget\n"
+            "@module(target=ReloadTarget())\n"
+            "class Model:\n"
+            "    def forward(self):\n"
+            "        return None\n"
         ),
         encoding="utf-8",
     )
@@ -751,7 +750,7 @@ def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> No
             "performance",
         ]
     )
-    assert set(payload["functions"][0]['function_records']) == {
+    assert set(payload["functions"][0]["function_records"]) == {
         "compute-cost",
         "memory",
         "roofline",
@@ -762,23 +761,26 @@ def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> No
     assert "function=routed_expert" in annotated
     assert "function=shared_expert" in annotated
     assert annotated.count("reshard(tokens") == 2
-    assert "v0 = tf.reshard(tokens" in annotated
-    assert annotated.count("v0 = tf.reshard(tokens") == 2
+    assert "local = tf.reshard(tokens" in annotated
+    assert annotated.count("local = tf.reshard(tokens") == 2
     assert "with mesh[:120] as cta:" in annotated
     assert "with mesh[120:] as cta:" in annotated
 
-    summary = payload["functions"][0]['function_records']["performance"]
-    cost = payload["functions"][0]['function_records']["compute-cost"]
-    moved = payload["functions"][0]['function_records']["memory"]
-    bound = payload["functions"][0]['function_records']["roofline"]
+    summary = payload["functions"][0]["function_records"]["performance"]
+    cost = payload["functions"][0]["function_records"]["compute-cost"]
+    moved = payload["functions"][0]["function_records"]["memory"]
+    bound = payload["functions"][0]["function_records"]["roofline"]
     assert payload["wave"] == {"counted": 132, "declared": 132}
     assert "cache" not in payload
-    assert not {
-        "cache_level",
-        "cache_capacity_bytes",
-        "wave_units",
-        "declared_units",
-    } & moved.keys()
+    assert (
+        not {
+            "cache_level",
+            "cache_capacity_bytes",
+            "wave_units",
+            "declared_units",
+        }
+        & moved.keys()
+    )
     assert header.splitlines() == [
         "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts "
         f"topology={payload['topology']} wave=132/132",
@@ -790,18 +792,17 @@ def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> No
         f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']} precision=exact",
         "# memory traffic=gmem:r120.00KB/w90.00KB@logical,"
         "r7.79MB/w3.93MB@total,r62.75KB/w32.75KB@cta "
-        "footprint=tokens:2.50KB;v1:28:30.25KB;v1:36:32.50KB;v2:42:30.00KB "
+        "footprint=<value>:42:30.00KB;placed:28:30.25KB;placed:36:32.50KB;tokens:2.50KB "
         "footprint-precision=exact peak=gmem:90.00KB persistent=gmem:30.00KB",
-        "#   buffer=tokens holds=92.50KB time=none space=cta.tile reuse=327.50KB fits=yes precision=exact",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
         f"predicted-ns={summary['timeline']['end_ns']} "
         f"waves={summary['waves']}",
     ]
-    assert payload["functions"][0]['totals']["flops"] == {
+    assert payload["functions"][0]["totals"]["flops"] == {
         name: spread["total"] for name, spread in cost["flops"].items()
     }
-    assert payload["functions"][0]['totals']["traffic"] == {
+    assert payload["functions"][0]["totals"]["traffic"] == {
         name: value["total"] for name, value in moved["traffic"]["storage"].items()
     }
 
@@ -833,10 +834,15 @@ def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> No
     assert timed == [0, 1, 2, 4, 7]
     rendered = {
         function["function"]: block.rstrip().splitlines()
-        for function, block in zip(payload["functions"],
-            re.split(r"(?m)(?=^from __future__ import annotations$)", annotated)[1:], strict=True)
+        for function, block in zip(
+            payload["functions"],
+            re.split(r"(?m)(?=^from __future__ import annotations$)", annotated)[1:],
+            strict=True,
+        )
     }
-    for function, row in ((function, row) for function in payload["functions"] for row in function["calls"]):
+    for function, row in (
+        (function, row) for function in payload["functions"] for row in function["calls"]
+    ):
         value, line_text = row["value"].rsplit(":", 1)
         body = rendered[function["function"]]
         start = int(line_text)
@@ -858,5 +864,11 @@ def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> No
         placed_meshes = set(re.findall(r"mesh=(\w+),", statement))
         assert placed_meshes <= scoped | {"mesh"}
     assert len([line for line in lines if "; performance=" in line]) == len(timed)
-    assert len({(function["function"], row["value"]) for function in payload["functions"] for row in function["calls"]}) == len(rows)
+    assert len(
+        {
+            (function["function"], row["value"])
+            for function in payload["functions"]
+            for row in function["calls"]
+        }
+    ) == len(rows)
     assert "units=" not in annotated

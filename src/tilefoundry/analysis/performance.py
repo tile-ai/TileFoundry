@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core import attach_metadata as attach
@@ -12,7 +12,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 from .compute_cost import local_duration_ns
 from .errors import AnalysisError
@@ -38,12 +38,6 @@ class PerformanceContext(AnalyzeContext):
     facts: ThroughputFacts | None = None
     services: PerformanceServiceFacts | None = None
     occurrences: list[tuple[IterationScope, Call, int]] = field(default_factory=list)
-    time_base: int = 0
-
-    def timeline(self, local: TimelineMetadata) -> TimelineMetadata:
-        return replace(
-            local, start_ns=self.time_base + local.start_ns, end_ns=self.time_base + local.end_ns
-        )
 
 
 class PerformanceVisitor(ValuationVisitor[None]):
@@ -51,22 +45,21 @@ class PerformanceVisitor(ValuationVisitor[None]):
 
     def visit_Call(self, call, ctx):
         self.visit_operands(call, ctx)
-        callee = CallFrameVisitor.callee_frame(call, ctx.frame)
-        if callee is None:
+        callee_frame = ctx.callee_frame(call)
+        if callee_frame is None:
             return self.default_visit_leaf(call, (), ctx)
-        summary = get_metadata(callee.function, PerformanceSummaryMetadata)
+        summary = get_metadata(callee_frame.function, PerformanceSummaryMetadata)
         if summary is None:
-            raise AnalysisError(f"performance: missing summary for {callee.function.name!r}")
-        summary = summary.resolve(ctx.for_call(call))
+            raise AnalysisError(f"performance: missing summary for {callee_frame.function.name!r}")
         duration = (summary.timeline.end_ns - summary.timeline.start_ns) // summary.waves
-        ctx.occurrences.append((ctx.current, call, duration))
+        ctx.occurrences.append((ctx.scope, call, duration))
 
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: PerformanceContext
     ) -> None:
         if not isinstance(expr, Call):
             return
-        scope = ctx.current
+        scope = ctx.scope
         cost = get_metadata(expr, ComputeCostMetadata)
         moved = get_metadata(expr, MemoryMetadata)
         if cost is None or moved is None:
@@ -88,7 +81,7 @@ def schedule(occurrences, context, *, origin):
     scope_periods: dict[object, int] = defaultdict(int)
     for scope, call, duration in occurrences:
         if not (
-            (scope.depth - origin.depth) == 2
+            (len(scope.loop_scopes) - len(origin.loop_scopes)) == 2
             and isinstance(call.target, Binary)
             and getattr(call.type, "shape", ()) == ()
         ):
@@ -103,9 +96,10 @@ def schedule(occurrences, context, *, origin):
         trips = scope.repeats_of(call, context.topology_level, stop=origin).loop_trips
         scheduled = duration * trips
         serialize_boundary = (
-            (scope.depth - origin.depth) >= 4 and getattr(call.type, "shape", ()) != ()
+            (len(scope.loop_scopes) - len(origin.loop_scopes)) >= 4
+            and getattr(call.type, "shape", ()) != ()
         ) or (
-            (scope.depth - origin.depth) == 2
+            (len(scope.loop_scopes) - len(origin.loop_scopes)) == 2
             and isinstance(call.target, Binary)
             and getattr(call.type, "shape", ()) == ()
         )
@@ -118,7 +112,9 @@ def schedule(occurrences, context, *, origin):
         else:
             stride = scope_periods[scope] if trips > 1 else 0
             end = start + duration
-            cursor += duration if (scope.depth - origin.depth) < 4 else scheduled
+            cursor += (
+                duration if (len(scope.loop_scopes) - len(origin.loop_scopes)) < 4 else scheduled
+            )
         records.append((call, start, end, trips, stride, scheduled))
         total_cursor += scheduled
     for call, start, end, trips, stride, scheduled in records:
@@ -146,7 +142,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     services = context.target.get_facts(PerformanceServiceFacts, context.topology_level)
     performance_context = PerformanceContext(**vars(context), facts=facts, services=services)
     PerformanceVisitor().visit(function.body, performance_context)
-    total_cursor = schedule(performance_context.occurrences, context, origin=context.root)
+    total_cursor = schedule(performance_context.occurrences, context, origin=context.scope.root)
     summary_end = total_cursor
     roofline = get_metadata(function, RooflineMetadata)
     if function is context.entry and roofline is not None:
@@ -160,7 +156,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     topology_extent = (
         static_dim_value(topology.size)
         if function is context.entry
-        else max(scope.mesh_positions(level.name) for scope in walk_scopes(context.root))
+        else max(scope.mesh_positions(level.name) for scope in walk_scopes(context.scope.root))
     )
     if topology_extent is None:
         raise AnalysisError(

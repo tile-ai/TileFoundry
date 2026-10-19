@@ -12,7 +12,7 @@ from tilefoundry.ir.core import Call, Expr, describe_expr, get_metadata
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
-from tilefoundry.visitor_registry.call_frame import ValuationVisitor
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 from .errors import AnalysisError
 from .facts import ThroughputFacts
@@ -118,9 +118,7 @@ def _cost_bound(
     ):
         crossed = TrafficBytes(
             read=sum(
-                spread.total
-                for _buffer, breakdown in buffers
-                for _level, spread in breakdown.kinds
+                spread.total for _buffer, breakdown in buffers for _level, spread in breakdown.kinds
             )
         )
     return _bound(

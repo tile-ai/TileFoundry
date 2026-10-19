@@ -49,13 +49,13 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis import footprint as footprint_analysis
-from tilefoundry.analysis.access import SSAValue
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
 from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
 from tilefoundry.analysis.report import report_data
 from tilefoundry.ir.core import get_metadata
+from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import DType
@@ -76,7 +76,7 @@ def _report(module, *, analysis=("memory",)) -> dict:
 
 
 def _memory_record(module) -> dict:
-    return _report(module)["functions"][0]['function_records']["memory"]
+    return _report(module)["functions"][0]["function_records"]["memory"]
 
 
 def _footprint_bytes(memory: dict, name: str) -> int:
@@ -101,7 +101,9 @@ def _reuse_conclusions(memory: dict) -> list[dict]:
     ((DataStart, 8, "upper_bound"), (MeshStart, 0, "exact")),
 )
 def test_window_starts_preserve_read_traffic_and_footprint_precision(
-    module, start_bytes: int, precision: str,
+    module,
+    start_bytes: int,
+    precision: str,
 ) -> None:
     """Each CTA loads a window, then reads its gmem copy for insertion."""
     memory = _memory_record(module)
@@ -109,7 +111,9 @@ def test_window_starts_preserve_read_traffic_and_footprint_precision(
     traffic = memory["traffic"]["storage"]["gmem"]
     assert traffic["total"]["read"] == C * (start_bytes + 2 * window_bytes)
     assert traffic["per_unit"][0]["read"] == start_bytes + 2 * window_bytes
-    assert _footprint_bytes(memory, "x") == (C * window_bytes if module is MeshStart else window_bytes)
+    assert _footprint_bytes(memory, "x") == (
+        C * window_bytes if module is MeshStart else window_bytes
+    )
     assert memory["footprint"]["precision"] == precision
 
 
@@ -124,15 +128,17 @@ def test_uncounted_boundary_marks_the_footprint_incomplete(
     buffer = InvariantReuse.entry_function().params[0]
     uncounted = ReachedAddresses(
         target=SSAValue(buffer),
-        label="x",
         output_index=0,
         dtype=None,
         reached=None,
         precision=missing_precision,
     )
     counted = ReachedAddresses(
-        SSAValue(buffer), 0, DType.bf16, isl.set("{ [i] : 0 <= i < 4 }"), counted_precision,
-        label="x",
+        SSAValue(buffer),
+        0,
+        DType.bf16,
+        isl.set("{ [i] : 0 <= i < 4 }"),
+        counted_precision,
     )
 
     footprint = footprint_of(
@@ -146,23 +152,20 @@ def test_uncounted_boundary_marks_the_footprint_incomplete(
         else AnalysisPrecision.UNKNOWN
     )
     assert footprint.precision is expected
-    assert (
-        footprint_of((uncounted,)).precision
-        is missing_precision
-    )
+    assert footprint_of((uncounted,)).precision is missing_precision
 
 
 @pytest.mark.parametrize("left", tuple(AnalysisPrecision))
 @pytest.mark.parametrize("right", tuple(AnalysisPrecision))
 def test_tuple_output_boundaries_add_instead_of_union(
-    left: AnalysisPrecision, right: AnalysisPrecision,
+    left: AnalysisPrecision,
+    right: AnalysisPrecision,
 ) -> None:
     buffer = InvariantReuse.entry_function().params[0]
     addresses = isl.set("{ [i] : 0 <= i < 4 }")
     reached = tuple(
         ReachedAddresses(
             target=SSAValue(buffer),
-            label="x",
             output_index=index,
             dtype=DType.bf16,
             reached=addresses,
@@ -181,8 +184,10 @@ def test_tuple_output_boundaries_add_instead_of_union(
     assert len(distinct) == 2
     assert gmem is not None and gmem.total == 2 * 4 * 2
     expected = (
-        right if left is AnalysisPrecision.EXACT
-        else left if right is AnalysisPrecision.EXACT or left is right
+        right
+        if left is AnalysisPrecision.EXACT
+        else left
+        if right is AnalysisPrecision.EXACT or left is right
         else AnalysisPrecision.UNKNOWN
     )
     assert footprint.precision is expected
@@ -201,7 +206,7 @@ def test_invariant_reuse_matches_the_written_arithmetic() -> None:
         executed=result.executed,
         metadata_types=result.metadata_types,
     )
-    memory = data["functions"][0]['function_records']["memory"]
+    memory = data["functions"][0]["function_records"]["memory"]
     traffic = memory["traffic"]["storage"]["gmem"]
     assert traffic["logical"] == {"read": 64, "write": 0}
     assert traffic["total"] == {"read": 768, "write": 0}
@@ -209,22 +214,25 @@ def test_invariant_reuse_matches_the_written_arithmetic() -> None:
     assert _footprint_bytes(memory, "x") == 16
     footprint_total = memory["footprint"]["buffers"]["x"]["gmem"]["total"]
     assert footprint_total == 192
-    assert data["functions"][0]['function_records']["roofline"]["memory_ns"] == -(
+    assert data["functions"][0]["function_records"]["roofline"]["memory_ns"] == -(
         -(footprint_total * 1_000_000_000) // 4_800_000_000_000
     )
     assert N // BN == 3
-    assert data["functions"][0]['function_records']["compute-cost"]["flops"]["bf16"] == {
-        "logical": 32, "total": 384, "per_unit": [96],
+    assert data["functions"][0]["function_records"]["compute-cost"]["flops"]["bf16"] == {
+        "logical": 32,
+        "total": 384,
+        "per_unit": [96],
     }
     scopes = tuple(walk_scopes(build_scopes(result.module, result.function)))
     loaded = next(
         call
         for scope in scopes
-        for call, _ in scope.accesses["narrow"].values()
+        for call, _ in scope.access.accesses.get("narrow", {}).values()
         if isinstance(call.target, Reshard)
     )
     n_scope = next(
-        scope for scope in scopes
+        scope
+        for scope in scopes
         if isinstance(scope.owner, LoopRegion) and scope.owner.induction_var.name == "n"
     )
     assert not n_scope.is_variant(loaded)
@@ -270,7 +278,7 @@ def test_packed_dtype_rounds_up_to_whole_bytes() -> None:
 
 def test_wave_truncation_counts_only_the_resident_ctas() -> None:
     resident_data = _report(WaveTruncation, analysis=("memory", "roofline"))
-    resident = resident_data["functions"][0]['function_records']["memory"]
+    resident = resident_data["functions"][0]["function_records"]["memory"]
     wide_target = CudaTarget(
         replace(WaveTruncation.target.device, sm_count=256),
         architecture=WaveTruncation.target.architecture,
@@ -278,7 +286,7 @@ def test_wave_truncation_counts_only_the_resident_ctas() -> None:
     all_declared_data = _report(
         replace(WaveTruncation, target=wide_target), analysis=("memory", "roofline")
     )
-    all_declared = all_declared_data["functions"][0]['function_records']["memory"]
+    all_declared = all_declared_data["functions"][0]["function_records"]["memory"]
 
     assert resident_data["wave"] == {"counted": 132, "declared": 256}
     assert _footprint_bytes(resident, "x") == 132 * 4 * 2
@@ -288,22 +296,20 @@ def test_wave_truncation_counts_only_the_resident_ctas() -> None:
     assert _footprint_bytes(all_declared, "x") == 256 * 4 * 2
     assert resident["footprint"]["buffers"]["x"]["gmem"]["total"] == 2112
     assert all_declared["footprint"]["buffers"]["x"]["gmem"]["total"] == 2048
-    assert resident_data["functions"][0]['function_records']["roofline"]["memory_ns"] == -(
+    assert resident_data["functions"][0]["function_records"]["roofline"]["memory_ns"] == -(
         -(2112 * 1_000_000_000) // 4_800_000_000_000
     )
 
 
 def test_truncated_wave_keeps_reuse_from_participating_boundaries() -> None:
     data = _report(TruncatedWaveReuse, analysis=("memory", "roofline"))
-    memory = data["functions"][0]['function_records']["memory"]
+    memory = data["functions"][0]["function_records"]["memory"]
 
     assert data["wave"] == {"counted": 132, "declared": 256}
     assert memory["traffic"]["storage"]["gmem"]["total"] == {"read": 8192, "write": 0}
     assert _working_set_bytes(memory) == 32
-    assert sum(
-        levels["gmem"]["total"] for levels in memory["footprint"]["buffers"].values()
-    ) == 64
-    assert data["functions"][0]['function_records']["roofline"]["memory_ns"] == -(
+    assert sum(levels["gmem"]["total"] for levels in memory["footprint"]["buffers"].values()) == 64
+    assert data["functions"][0]["function_records"]["roofline"]["memory_ns"] == -(
         -(64 * 1_000_000_000) // 4_800_000_000_000
     )
     assert _reuse_conclusions(memory) == [
@@ -382,7 +388,8 @@ def test_persistent_gemm_fits_reuse_conclusions_match_the_reviewed_report() -> N
 
 @pytest.mark.parametrize("precision", tuple(AnalysisPrecision))
 def test_persistent_gemm_over_reuse_conclusions_match_the_reviewed_report(
-    precision: AnalysisPrecision, monkeypatch: pytest.MonkeyPatch,
+    precision: AnalysisPrecision,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(footprint_analysis, "counted_precision", lambda items: precision)
     memory = _memory_record(Gemm_MNK_NN128x128x64_w12x11_k16384)
@@ -405,9 +412,11 @@ def test_persistent_gemm_over_reuse_conclusions_match_the_reviewed_report(
             "fits": False,
         },
     ]
-    category = "errors" if precision in (
-        AnalysisPrecision.EXACT, AnalysisPrecision.LOWER_BOUND
-    ) else "advisories"
+    category = (
+        "errors"
+        if precision in (AnalysisPrecision.EXACT, AnalysisPrecision.LOWER_BOUND)
+        else "advisories"
+    )
     assert all(row["precision"] == precision.value for row in memory["reuse_windows"])
     assert memory[category] == [
         "l2 reuse window mi holds 176.00MB at a 132-unit wave, exceeding capacity 47.68MB",
@@ -423,7 +432,7 @@ def test_capacity_exceeded_matches_the_written_ratio(
 ) -> None:
     monkeypatch.setattr(footprint_analysis, "counted_precision", lambda items: precision)
     data = _report(CapacityExceeded)
-    memory = data["functions"][0]['function_records']["memory"]
+    memory = data["functions"][0]["function_records"]["memory"]
     used = _working_set_bytes(memory)
     capacity = 1_048_576
     category = (
@@ -436,9 +445,9 @@ def test_capacity_exceeded_matches_the_written_ratio(
     diagnosis = [
         "l2 working set 1.50MB at the first iteration of a 1-unit wave exceeds capacity 1.00MB"
     ]
-    assert memory["errors"] == [
-        "rmem placement peak 1.50MB exceeds capacity 256.00KB"
-    ] + (diagnosis if category == "errors" else [])
+    assert memory["errors"] == ["rmem placement peak 1.50MB exceeds capacity 256.00KB"] + (
+        diagnosis if category == "errors" else []
+    )
     assert memory["advisories"] == (diagnosis if category == "advisories" else [])
 
 
@@ -458,14 +467,14 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression(
     if not seeded:
         monkeypatch.setattr(allocation, "_first_fit", lambda *args, **kwargs: None)
     data = _report(PersistentGemmTiled, analysis=("memory", "compute-cost"))
-    memory = data["functions"][0]['function_records']["memory"]
+    memory = data["functions"][0]["function_records"]["memory"]
 
     assert _footprint_bytes(memory, "a") == 12 * 64 * 32 * 2
     assert _footprint_bytes(memory, "b") == 11 * 32 * 64 * 2
     assert memory["footprint"]["precision"] == "exact"
     (product,) = (
         call
-        for call in data["functions"][0]['calls']
+        for call in data["functions"][0]["calls"]
         if [operand["type"] for operand in call["memory"]["operands"]]
         == [
             f"bf16[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BK}] smem",
@@ -498,11 +507,12 @@ def test_persistent_flat_states_its_precision() -> None:
     column blocks, and 132 distinct output tiles.
     """
     data = _report(PersistentGemmFlat)
-    memory = data["functions"][0]['function_records']["memory"]
+    memory = data["functions"][0]["function_records"]["memory"]
     store = next(
         call
-        for call in data["functions"][0]['calls']
-        if any(operand["arg"] == "result" for operand in call["memory"]["operands"])
+        for call in data["functions"][0]["calls"]
+        if len(call["memory"]["operands"]) > 1
+        and any(operand["arg"] == "result" for operand in call["memory"]["operands"])
         and any(operand["name"] == "out" for operand in call["memory"]["operands"])
     )
 

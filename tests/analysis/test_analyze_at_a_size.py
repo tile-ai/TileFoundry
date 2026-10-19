@@ -33,20 +33,21 @@ from tilefoundry.analysis import (
     RegionMemoryMetadata,
     analyze,
 )
-from tilefoundry.analysis.access import Access, SSAValue
-from tilefoundry.analysis.allocation import AllocationSummary, aligned
+from tilefoundry.analysis.access import Access, eliminate_parameters
+from tilefoundry.analysis.allocation import AllocationSummaryMetadata, aligned
 from tilefoundry.analysis.allocation import root as storage_root
 from tilefoundry.analysis.api import _build_context
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, walk_scopes
-from tilefoundry.analysis.liveness import Liveness
+from tilefoundry.analysis.liveness import LivenessMetadata
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, describe_expr, get_metadata, value_label
+from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
@@ -62,7 +63,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
-from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame
 
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
@@ -135,8 +136,8 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 16384,
         "smem": 64 * 16 * 2 + 16 * 32 * 2,
     },
-    "data_started_window.DataStart.probe[static]": {"gmem": 3_360, "rmem": 16, "smem": 256},
-    "data_started_window.MeshStart.probe[static]": {"gmem": 3_360, "rmem": 8, "smem": 256},
+    "data_started_window.DataStart.probe[static]": {"gmem": 3_104, "rmem": 16, "smem": 256},
+    "data_started_window.MeshStart.probe[static]": {"gmem": 3_104, "rmem": 8, "smem": 256},
     "derived_prefill.DerivedPrefill.prefill[prefill_n=64,topology_only=128]": {
         "gmem": 288,
     },
@@ -334,7 +335,7 @@ EXPECTED_MEMORY_PEAKS = {
     "rmsnorm.RmsnormModule.rmsnorm[static]": {"gmem": 6_144, "rmem": 12_292},
     "rmsnorm_quant_seq2.RmsnormQuantSeq2Module.rmsnorm_quant_seq_2[static]": {
         "gmem": 9_312,
-        "rmem": 24_672,
+        "rmem": 24_584,
     },
     "rmsnorm_seq2.RmsnormSeq2Module.rmsnorm_seq_2[static]": {
         "gmem": 12_288,
@@ -378,7 +379,7 @@ def _loop_scopes(scopes: tuple[IterationScope, ...]) -> dict[str, IterationScope
 
 
 def _insert_slice_output(scope: IterationScope) -> Access:
-    for call, accesses in scope.outputs.get("narrow", {}).values():
+    for call, accesses in scope.access.outputs.get("narrow", {}).values():
         if isinstance(call.target, InsertSlice):
             assert len(accesses) == 1
             return accesses[0]
@@ -401,8 +402,14 @@ def _assert_persistent_schedule(
         assert loops[name].trips() == trips
 
     store = _insert_slice_output(loops[expected.store_loop])
-    assert store.precision is expected.store_precision
-    written = store.relation.range()
+    scope = loops[expected.store_loop]
+    relation, precision = eliminate_parameters(
+        store.relation, scope, store.target.leaf(), narrow=True
+    )
+    assert precision is expected.store_precision
+    written = relation.project(
+        tuple(loop.owner.induction_var for loop in scope.loop_scopes)
+    ).relation.range()
     first, second = (_at_unit(written, unit) for unit in expected.compared_units)
     assert first.is_disjoint(second)
 
@@ -428,7 +435,7 @@ def assert_reported_contract(report: dict) -> None:
     written once, and its last trip still lands inside the prediction that
     contains it. A loop is not an occurrence and carries no timeline of its own.
     """
-    records = report["functions"][0]['function_records']
+    records = report["functions"][0]["function_records"]
     summary = records["performance"]
     timeline = summary["timeline"]
     assert 0 <= timeline["start_ns"] <= timeline["end_ns"]
@@ -438,7 +445,7 @@ def assert_reported_contract(report: dict) -> None:
     assert records["roofline"]["ideal_ns"] <= predicted_ns
 
     timed = 0
-    for call in report["functions"][0]['calls']:
+    for call in report["functions"][0]["calls"]:
         record = call.get("performance")
         if record is None:
             continue
@@ -451,7 +458,7 @@ def assert_reported_contract(report: dict) -> None:
         assert (stride == 0) if trips == 1 else (stride >= end - start), call["value"]
         assert end + (trips - 1) * stride <= timeline["end_ns"], call["value"]
     assert bool(timed) is bool(predicted_ns)
-    for loop in report["functions"][0]['loops']:
+    for loop in report["functions"][0]["loops"]:
         assert "performance" not in loop, loop["value"]
 
     def nonnegative(value: object) -> None:
@@ -478,9 +485,7 @@ def assert_reported_contract(report: dict) -> None:
         assert "<buffer " not in lifetime["binding"]
 
 
-def assert_internal_contract(
-    result: AnalysisResult, scopes: tuple[IterationScope, ...]
-) -> None:
+def assert_internal_contract(result: AnalysisResult, scopes: tuple[IterationScope, ...]) -> None:
     """Each duration matches its priced work and divides the enclosing loop trips.
 
     A definition-local duration is its own compute-cost record priced at the
@@ -490,8 +495,13 @@ def assert_internal_contract(
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts, result.level)
-    for function, expr in ((function, expr) for function in result.functions for expr in collect_exprs(function.body)):
-        if not isinstance(expr, Call) or CallFrameVisitor.callee_frame(expr, CallFrame(result.module, function)) is not None:
+    for function, expr in (
+        (function, expr) for function in result.functions for expr in collect_exprs(function.body)
+    ):
+        if (
+            not isinstance(expr, Call)
+            or CallFrame.resolve(expr, CallFrame(result.module, function)) is not None
+        ):
             continue
         cost = get_metadata(expr, ComputeCostMetadata)
         assert cost is not None
@@ -512,11 +522,7 @@ def assert_internal_contract(
         runs = span // duration
         available = 1
         owner = next(
-            (
-                scope
-                for scope in scopes
-                if id(expr) in scope.accesses.get("narrow", {})
-            ),
+            (scope for scope in scopes if (SSAValue(expr),) in scope.access.accesses.get("narrow", {})),
             None,
         )
         if owner is not None:
@@ -585,7 +591,7 @@ def _assert_reported(case: ConcreteCase, report: dict) -> None:
     """
     assert set(report["executed"]) == set(FAMILIES)
     assert_reported_contract(report)
-    reported = report["functions"][0]['function_records']["memory"]
+    reported = report["functions"][0]["function_records"]["memory"]
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
         gmem = reported["traffic"]["storage"]["gmem"]
         assert gmem["logical"]["read"] + gmem["logical"]["write"] == 102_172_180
@@ -604,17 +610,12 @@ def _assert_reported(case: ConcreteCase, report: dict) -> None:
         )
         assert peak["peak_bytes"] >= largest_value
         aligned_live_upper = sum(
-            aligned(lifetime["bytes"], _ALLOCATION_ALIGNMENT)
-            for lifetime in level_lifetimes
+            aligned(lifetime["bytes"], _ALLOCATION_ALIGNMENT) for lifetime in level_lifetimes
         )
         if peak["peak_bytes"] > aligned_live_upper:
             over_bound.add((case.id, memory_level))
-    assert over_bound == {
-        key for key in KNOWN_OVER_BOUND if key[0] == case.id
-    }, {
-        key: KNOWN_OVER_BOUND[key]
-        for key in KNOWN_OVER_BOUND
-        if key[0] == case.id
+    assert over_bound == {key for key in KNOWN_OVER_BOUND if key[0] == case.id}, {
+        key: KNOWN_OVER_BOUND[key] for key in KNOWN_OVER_BOUND if key[0] == case.id
     }
     observed = {item["memory_level"]: item["peak_bytes"] for item in reported["peaks"]}
     assert observed == EXPECTED_MEMORY_PEAKS[case.id]
@@ -673,27 +674,29 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
     )
     _assert_reported(case, json.loads(render_json(report)))
     context = _build_context(result.module, result.function, topology_level=result.level)
-    scopes = tuple(scope for local in context for scope in walk_scopes(local.root))
+    scopes = tuple(scope for local in context for scope in walk_scopes(local.scope.root))
     assert_internal_contract(result, scopes)
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]":
         rms_scopes = [
             scope
             for scope in scopes
-            for call, _ in scope.accesses["narrow"].values()
-            if isinstance(call.target, RMSNorm)
+            for path, (call, _) in scope.access.accesses.get("narrow", {}).items()
+            if len(path) == 1 and isinstance(call.target, RMSNorm)
         ]
         assert len(rms_scopes) == 4
-        assert all(not scope.context.enclosing_loops() for scope in rms_scopes)
+        assert all(not scope.loop_scopes for scope in rms_scopes)
     if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]":
         cache_writes = [
-            access
+            (scope, access)
             for scope in scopes
-            for call, accesses in scope.outputs.get("narrow", {}).values()
-            if isinstance(call.target, CacheUpdate)
+            for path, (call, accesses) in scope.access.outputs.get("narrow", {}).items()
+            if len(path) == 1 and isinstance(call.target, CacheUpdate)
             for access in accesses
         ]
         assert cache_writes and all(
-            access.precision is AnalysisPrecision.UPPER_BOUND for access in cache_writes
+            eliminate_parameters(access.relation, scope, access.target.leaf(), narrow=True)[1]
+            is AnalysisPrecision.UPPER_BOUND
+            for scope, access in cache_writes
         ), "CacheUpdate cur/width lack RangeMetadata; widest_allowed must keep writes UPPER_BOUND"
     if case.id == "rmsnorm_quant_seq2.RmsnormQuantSeq2Module.rmsnorm_quant_seq_2[static]":
         reshaped = next(
@@ -701,7 +704,7 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
             for expr in collect_exprs(result.function.body)
             if isinstance(expr, Call) and isinstance(expr.target, Reshape)
         )
-        liveness = get_metadata(result.function, Liveness)
+        liveness = get_metadata(result.function, LivenessMetadata)
         assert liveness.interval_of(SSAValue(reshaped)).last_used_at == 19
         assert get_metadata(reshaped, MemoryMetadata).buffer_bytes is None
         assert not get_metadata(reshaped, MemoryMetadata).offsets
@@ -712,8 +715,10 @@ def test_every_internal_record_agrees(case: ConcreteCase) -> None:
 
 def test_dynamic_tuple_selection_keeps_all_possible_storage_resident() -> None:
     """A captured dynamic view pins both possible leaves without enabling reuse."""
+
     @module(
-        entry="choose", target=CudaTarget("nvidia.h200_sxm"),
+        entry="choose",
+        target=CudaTarget("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1),),
     )
     class DynamicSelection:
@@ -734,31 +739,38 @@ def test_dynamic_tuple_selection_keeps_all_possible_storage_resident() -> None:
         analysis="memory",
     )
     selected = next(
-        expr for expr in collect_exprs(result.function.body)
+        expr
+        for expr in collect_exprs(result.function.body)
         if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem)
     )
     first, second = selected.args[0].elements
     consumer = next(
-        expr for expr in collect_exprs(result.function.body)
-        if isinstance(expr, Call) and len(expr.args) == 2
+        expr
+        for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call)
+        and len(expr.args) == 2
         and all(isinstance(arg, MeshRegion) for arg in expr.args)
     )
     records = [get_metadata(value, MemoryMetadata) for value in (first, second, consumer)]
     assert all(record.buffer_bytes == 8 and len(record.offsets) == 1 for record in records)
-    spans = sorted((record.offsets[0], record.offsets[0] + record.buffer_bytes) for record in records)
+    spans = sorted(
+        (record.offsets[0], record.offsets[0] + record.buffer_bytes) for record in records
+    )
     assert all(left[1] <= right[0] for left, right in zip(spans, spans[1:]))
     moved = get_metadata(result.function, RegionMemoryMetadata)
     assert moved.peak_for("smem").peak_bytes == 40
     lifetimes = {life.binding: life for life in moved.lifetimes}
     output = lifetimes[value_label(consumer)]
-    assert all(lifetimes[value_label(leaf)].last_used_at < output.defined_at for leaf in (first, second))
+    assert all(
+        lifetimes[value_label(leaf)].last_used_at < output.defined_at for leaf in (first, second)
+    )
     assert get_metadata(selected, MemoryMetadata).buffer_bytes is None
     assert not get_metadata(selected, MemoryMetadata).offsets
-    summary = get_metadata(result.function, AllocationSummary)
+    summary = get_metadata(result.function, AllocationSummaryMetadata)
     by_value = {value.value: value for value in summary.values}
     assert not by_value[SSAValue(consumer)].aliases
     assert SSAValue(selected) not in by_value
-    liveness = get_metadata(result.function, Liveness)
+    liveness = get_metadata(result.function, LivenessMetadata)
     for index in range(len(selected.args[0].elements)):
         assert (
             liveness.interval_of(SSAValue(selected.args[0], index)).last_used_at
@@ -812,7 +824,7 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     assert result.function.name == authored.name
     assert all(
         residual_dims(frame.function, frame) == ()
-        for frame in CallFrameVisitor.walk_frames(CallFrame(result.module, result.function))
+        for frame in CallFrame(result.module, result.function).walk()
     )
 
 

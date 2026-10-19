@@ -59,7 +59,7 @@ from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame
 from tilefoundry.visitor_registry.contexts import TypeInferContext, VerifyContext
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal, check_call
 from tilefoundry.visitor_registry.typeinfer import inference_type
@@ -329,9 +329,7 @@ def verify_prim_function(
         if len(variant.specializations) != 1 or not isinstance(
             variant.specializations[0], RangePattern
         ):
-            raise VerifyError(
-                f"PrimFunction {fn.name!r}: each variant must have one RangePattern"
-            )
+            raise VerifyError(f"PrimFunction {fn.name!r}: each variant must have one RangePattern")
         pat = variant.specializations[0]
         if locate_dim_var(fn.params, pat.dim_var) is None:
             raise VerifyError(
@@ -343,8 +341,14 @@ def verify_prim_function(
     scope: list[Mesh] = []
 
     if isinstance(module_fns, Module):
-        ctx.frame = next((frame for frame in list_call_paths(module_fns).values()
-                          if fn is frame.function or any(fn is v for v in frame.function.variants)), None)
+        ctx.frame = next(
+            (
+                frame
+                for frame in list_call_paths(module_fns).values()
+                if fn is frame.function or any(fn is v for v in frame.function.variants)
+            ),
+            None,
+        )
 
     _walk_stmt(fn.body, ctx, scope, fn, module_context, _Binders(fn.params))
 
@@ -633,8 +637,14 @@ def _resolve_symbol_ref(ref, module_context, caller, frame=None):
     if frame is not None:
         scope = frame.module
     elif isinstance(scope, Module):
-        owner = next((item for item in list_call_paths(scope).values()
-                      if caller is item.function or any(caller is v for v in item.function.variants)), None)
+        owner = next(
+            (
+                item
+                for item in list_call_paths(scope).values()
+                if caller is item.function or any(caller is v for v in item.function.variants)
+            ),
+            None,
+        )
         if owner is None:
             path = ".".join((*ref.nested, ref.name))
             raise VerifyError(f"symbol {path!r}: caller {caller.name!r} has no owning Module")
@@ -667,10 +677,7 @@ def _verify_symbol_call(stmt: Evaluate, fn, module_context, ctx):
 
 def _verify_call_arguments(stmt, params, label, ctx):
     if len(stmt.args) != len(params):
-        raise VerifyError(
-            f"{label}: arg count {len(stmt.args)} != "
-            f"param count {len(params)}"
-        )
+        raise VerifyError(f"{label}: arg count {len(stmt.args)} != param count {len(params)}")
     for i, (arg, param) in enumerate(zip(stmt.args, params)):
         arg_ty = ctx.type_of(arg)
         param_ty = param.type
@@ -681,11 +688,12 @@ def _verify_call_arguments(stmt, params, label, ctx):
             )
         if isinstance(arg_ty, TensorType):
             arg_ty = dataclasses.replace(arg_ty, layout=resolve_layout(arg_ty.layout, arg_ty.shape))
-            param_ty = dataclasses.replace(param_ty, layout=resolve_layout(param_ty.layout, param_ty.shape))
+            param_ty = dataclasses.replace(
+                param_ty, layout=resolve_layout(param_ty.layout, param_ty.shape)
+            )
         if arg_ty != param_ty:
             raise VerifyError(
-                f"{label}: arg[{i}] type {arg_ty} != "
-                f"param {param.name!r} type {param_ty}"
+                f"{label}: arg[{i}] type {arg_ty} != param {param.name!r} type {param_ty}"
             )
 
 
@@ -696,7 +704,7 @@ def _retained_callee(target, frame):
         if frame is None:
             raise VerifyError("instance TIR call requires module context")
         inference_type(target, TypeInferContext(frame=frame))
-    inner = CallFrameVisitor.callee_frame(Call(target, (), type=UnitType()), frame)
+    inner = CallFrame.resolve(Call(target, (), type=UnitType()), frame)
     callee = inner.function if inner is not None else target
     if not isinstance(callee, PrimFunction):
         raise VerifyError(f"TIR instance entry {callee.name!r} is not a PrimFunction")
@@ -707,13 +715,22 @@ def _verify_retained_call(stmt, fn, module_context, ctx):
     target = stmt.callable
     callee, frame = _retained_callee(target, ctx.frame)
     direct = isinstance(target, PrimFunction)
-    label = target.name if direct else (
-        target.key if isinstance(target, ModuleList)
-        else f"{target.args[0].key}[{TirPrinter().visit(target.args[1])}]"
+    label = (
+        target.name
+        if direct
+        else (
+            target.key
+            if isinstance(target, ModuleList)
+            else f"{target.args[0].key}[{TirPrinter().visit(target.args[1])}]"
+        )
     )
     prefix = f"Evaluate({label})"
     _assert_no_path_back(
-        callee, fn, module_context, visited=set(), frame=frame,
+        callee,
+        fn,
+        module_context,
+        visited=set(),
+        frame=frame,
         recursion=f"{prefix}: recursion not allowed",
     )
     params = tuple(param for param in callee.params if direct or not param.is_const)
@@ -838,11 +855,17 @@ def _verify_launch(stmt: Evaluate, fn, module_context, ctx):
 
 def _assert_no_path_back(callee, root, module_context, visited, frame=None, recursion=None):
     if callee is root:
-        raise VerifyError(recursion or f"call DAG violation: {callee.name!r} calls back into {root.name!r}")
+        raise VerifyError(
+            recursion or f"call DAG violation: {callee.name!r} calls back into {root.name!r}"
+        )
     if isinstance(module_context, Module):
         frame = next(
-            (item for item in list_call_paths(module_context).values()
-             if callee is item.function or any(callee is variant for variant in item.function.variants)),
+            (
+                item
+                for item in list_call_paths(module_context).values()
+                if callee is item.function
+                or any(callee is variant for variant in item.function.variants)
+            ),
             frame,
         )
     key = (id(callee), id(frame.module) if frame is not None else None)
@@ -912,7 +935,12 @@ def verify_module(fns) -> None:
                     f"module function must be callable"
                 )
         elif isinstance(f, PrimFunction):
-            verify_prim_function(f, module_fns=root if root is not None else tuple(each for f in prim_fns for each in (f, *f.variants)))
+            verify_prim_function(
+                f,
+                module_fns=root
+                if root is not None
+                else tuple(each for f in prim_fns for each in (f, *f.variants)),
+            )
         else:
             raise VerifyError(f"verify_module: unknown function type {type(f).__name__}")
 

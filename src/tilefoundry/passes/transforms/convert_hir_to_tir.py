@@ -17,8 +17,8 @@ from math import prod
 import isl
 
 from tilefoundry.analysis import MemoryMetadata, analyze
-from tilefoundry.analysis.access import AliasKind, SSAValue, buffer_alias, forwarded_leaves
-from tilefoundry.analysis.allocation import AllocationSummary
+from tilefoundry.analysis.access import AliasKind, buffer_alias, forwarded_leaves
+from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.check import check_program
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import ReportIdentity, ReportSelection
@@ -34,6 +34,7 @@ from tilefoundry.ir.core import (
     get_metadata,
     op_identifier,
 )
+from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.param_def import MemoryEffect
@@ -80,6 +81,7 @@ from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import (
     i64_const,
+    leaves_of,
     participant_layout,
     static_dim_value,
 )
@@ -91,12 +93,11 @@ from tilefoundry.visitor_registry.access_relation import (
     affine_term,
     identity_access,
     leaf_paths,
-    leaves_of,
     projected_axes,
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor, ValuationVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame
 from tilefoundry.visitor_registry.candidates import (
     candidate_operands,
     candidate_ops,
@@ -105,6 +106,7 @@ from tilefoundry.visitor_registry.candidates import (
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal, project
 from tilefoundry.visitor_registry.registries import typeinfer_registry
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 _INDEX = TensorType.umat_scalar()
 _BINDING = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
@@ -467,7 +469,7 @@ class StoragePlan:
 
     @cached_property
     def answers(self):
-        summary = get_metadata(self.function, AllocationSummary)
+        summary = get_metadata(self.function, AllocationSummaryMetadata)
         values = {value.value: value for value in summary.values}
         links, operations, outputs, refusals = {}, {}, {}, {}
         for leaf, value in values.items():
@@ -539,7 +541,7 @@ class StoragePlan:
             for offset, item in enumerate(chain):
                 retained = (
                     isinstance(item.expr, Call)
-                    and CallFrameVisitor.callee_frame(item.expr, self.frame) is not None
+                    and CallFrame.resolve(item.expr, self.frame) is not None
                 )
                 writes = any(
                     operations.get(member, (None, None))[0] is AliasKind.INSERT_SLICE
@@ -579,7 +581,7 @@ class StoragePlan:
         for leaf in values:
             if id(leaf.expr) not in self.regions or not isinstance(leaf.expr, Call):
                 continue
-            callee = CallFrameVisitor.callee_frame(leaf.expr, self.frame)
+            callee = CallFrame.resolve(leaf.expr, self.frame)
             if callee is None:
                 continue
             child = StoragePlan(callee.function, callee)
@@ -1348,7 +1350,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             ctx.names.fresh("cta" if region is ctx.frame.function.body else "scope"), type=_BINDING
         )
         with ctx.builder.region(mesh=mesh, binding=binding, owner=region) as scope:
-            result = self.visit(region.body, self.region_context(region, ctx))
+            result = self.visit(region.body, self.on_region_start(region, ctx))
             scope.result = result
         return result
 
@@ -1376,7 +1378,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             ),
             owner=loop,
         ) as scope:
-            inner = self.region_context(loop, ctx)
+            inner = self.on_region_start(loop, ctx)
             self.visit(loop.body, inner)
             yielded = tuple(self.visit(value, inner) for value in loop.yield_values)
             for param, source, carried, value in zip(
@@ -1415,7 +1417,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 for value in ctx.storage.runtime_values(call, ctx.memo)
             }
         operands = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
-        if self.callee_frame(call, ctx.frame) is not None:
+        if ctx.callee_frame(call) is not None:
             return self._lower_call(call, operands, ctx=ctx)
         name = type(target).__name__
         if name == "TupleGetItem":
@@ -1452,7 +1454,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         )
 
     def _lower_call(self, call: Call, args, *, ctx) -> Expr | View:
-        frame = self.callee_frame(call, ctx.frame)
+        frame = ctx.callee_frame(call)
         lowering = self.callees.get(id(frame.function))
         if lowering is None:
             lowering = Lowering(

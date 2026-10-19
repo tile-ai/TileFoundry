@@ -195,12 +195,12 @@ class TypeInferContext:
 
     loops: tuple[tuple[Expr, object, object, object], ...] = ()
     loop_aliases: dict[int, Expr] = field(default_factory=dict)
-    call: Call | None = None
+    call_site: Call | None = None
     owner: Expr | None = None
     parent: TypeInferContext | None = None
 
-    def for_region(self, region) -> TypeInferContext: ...
-    def for_call(self, call: Call) -> TypeInferContext: ...
+    def enter_region(self, region) -> TypeInferContext: ...
+    def enter_call(self, call: Call) -> TypeInferContext: ...
     def capture_root(self, expr: Expr) -> Expr: ...
     def resolve_target(self) -> Target | None: ...
     def for_callee(self, callee: Function, *, frame=None) -> TypeInferContext: ...
@@ -209,20 +209,21 @@ class TypeInferContext:
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
 ```
 
-`ValuationContext(TypeInferContext, ValuationProvider)` adds only
-`request_valuation(type)`: it returns the current context when that context
-implements the requested valuation, and otherwise uses the context's diagnostic.
-`CostContext` and `VerifyContext` inherit from `ValuationContext`.
+`ValuationContext` defines `enter_call` and `enter_region`. `TypeInferContext`
+extends this fixed traversal interface; `CostContext` and `VerifyContext` extend
+`TypeInferContext`. There is no capability-provider or request protocol.
 
-`ValuationVisitor(CallFrameVisitor)` provides the shared HIR region traversal.
-Region arguments are visited outside the region. The body and loop yields use
-`for_region`, extracted from TypeInfer's existing mesh, loop and capture handling.
-`owner` and `parent` describe lexical region ownership; only entering a region
-adds a parent link. A Call uses `for_call` without changing the caller frame or
-entering a callee body. Explicit definition entry uses `for_callee` with fresh
-memo state. Captures map parameter identities to their originating expressions;
-carry initial values are not invariant captures. Planning consumers may index
-references to these contexts without maintaining another lexical tree.
+`ValuationVisitor(ExprVisitor)` supplies four overridable callbacks:
+`on_call_start`, `on_call_end`, `on_region_start`, and `on_region_end`.
+Start callbacks derive the context through its corresponding `enter_*` method;
+end callbacks return the result unchanged by default. Memoized visits do not
+repeat callbacks. Shared region-child traversal is implemented in
+`visit_operands`, so a `visit_leaf_LoopRegion` override retains the transitions.
+Arguments and loop bounds use the outer context; parameters, body, and yields
+use the inner context. The region's own leaf uses the outer context.
+A Call remains in its caller's frame; visiting its operands does not enter the
+callee body. Explicit definition entry uses `for_callee` with fresh type bindings.
+Lexical parent links and caller links MUST remain distinct.
 
 `CallFrame` carries the current Module, function, effective target, and
 whole topology hierarchy. It is imported internally from
@@ -232,10 +233,10 @@ execution context ([core-ir §1](./core-ir.md#1-module)).
 
 - constraints:
   - `frame` MUST be the context state describing where a walk is reading.
-    `CallFrameVisitor.callee_frame(call, frame)` MUST implement
+    `CallFrame.resolve(call, frame)`, exposed by `ctx.callee_frame(call)`, MUST implement
     [core-ir §2.1](./core-ir.md#21-call). Direct Function/PrimFunction calls with
     no caller frame and all Op calls return `None`; instance calls require one.
-    `walk_frames(frame, postorder=False)` enumerates reached HIR definitions
+    `frame.walk(postorder=False)` enumerates reached HIR definitions
     once in DFS order; `postorder=True` yields dependencies before callers.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
     subclass retains its analysis-specific state. It also retains `current_mesh`:
@@ -473,7 +474,7 @@ Context (extends `TypeInferContext` with the TIR traversal scope cache):
 
 ```python
 @dataclass
-class VerifyContext(ValuationContext):   # inherits frame / current_mesh
+class VerifyContext(TypeInferContext):   # inherits frame / current_mesh
     """TIR verification context with its statement-walk scope cache.
 
     Attributes:

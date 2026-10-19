@@ -19,9 +19,10 @@ from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types import StorageKind, TensorType, TupleType, UnitType
+from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.target import CpuTarget, CudaTarget
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame
 
 _DEFAULT_ENTRY_NAME = "main"
 
@@ -121,13 +122,13 @@ def reject_omitted_child_weights(module: Module) -> None:
     frames = list_call_paths(module)
     selectors = {id(frame.function): path for path, frame in frames.items()}
 
-    class Check(CallFrameVisitor[None]):
+    class Check(ExprVisitor[None]):
         def default_visit_leaf(self, expr, operands, frame):
             return None
 
         def visit_Call(self, call, frame):
             self.visit_operands(call, frame)
-            inner = self.callee_frame(call, frame)
+            inner = CallFrame.resolve(call, frame)
             if inner is None or isinstance(call.target, Function):
                 return
             callee = inner.function

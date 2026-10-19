@@ -21,6 +21,7 @@ import isl
 from tilefoundry.ir.core.expr import Constant
 from tilefoundry.ir.isl_interop import (
     IslParamValues,
+    dim_to_isl_pw_aff,
     isl_to_dim,
     layout_to_isl_map,
     shape_to_isl_set,
@@ -31,6 +32,7 @@ from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis, shard_
 from tilefoundry.ir.types.utils import (
     divided_mesh_axes,
     is_literal_shape,
+    leaves_of,
     static_dim_value,
     tensor_bytes,
 )
@@ -68,6 +70,70 @@ class AccessRelation:
                 f"an access relation binds {sorted(self.values)} but its relation names "
                 f"{sorted(named)}; a parameter nobody can bind is a hole"
             )
+
+    def _result(self, relation, values=(), *, may_access=False):
+        """Keep the parameter table exactly aligned with an operation's result."""
+        values = {**self.values, **dict(values)}
+        return AccessRelation(
+            relation,
+            {name: values[name] for name in _parameter_names(relation)},
+            self.may_access or may_access,
+        )
+
+    def compose(self, other: AccessRelation) -> AccessRelation:
+        return self._result(
+            self.relation.apply_range(other.relation), other.values, may_access=other.may_access
+        )
+
+    def constrain(self, params, values=()) -> AccessRelation:
+        if isinstance(params, AccessRelation):
+            values, params = params.values, params.relation.params()
+        if not params.dim(isl.dim_type.PARAM) and params.plain_is_universe():
+            return self
+        return self._result(self.relation.intersect_params(params), values)
+
+    def project(self, exprs, ctx=None) -> AccessRelation:
+        names = {self.param_name(expr, ctx) for expr in exprs}
+        if not names.intersection(self.values):
+            return self
+        relation = self.relation
+        for index in reversed(range(relation.dim(isl.dim_type.PARAM))):
+            if relation.get_dim_name(isl.dim_type.PARAM, index) in names:
+                relation = relation.project_out(isl.dim_type.PARAM, index, 1)
+        return self._result(relation)
+
+    @staticmethod
+    def param_name(expr, ctx=None) -> str:
+        return f"__tf_{id(ctx.capture_root(expr) if ctx is not None else expr)}"
+
+    @staticmethod
+    def affine(expr, ctx=None, *, values=None):
+        return dim_to_isl_pw_aff(
+            expr,
+            {} if values is None else values,
+            param_name=lambda value: AccessRelation.param_name(value, ctx),
+        )
+
+    def normalized(self, ctx=None) -> AccessRelation:
+        """Translate an op's local parameter spelling once at the analysis boundary."""
+        if not self.values:
+            return self
+        relation = self.relation
+        values = {}
+        for name, value in self.values.items():
+            value = ctx.capture_root(value) if ctx is not None else value
+            target = self.param_name(value)
+            index = relation.find_dim_by_name(isl.dim_type.PARAM, name)
+            other = relation.find_dim_by_name(isl.dim_type.PARAM, target)
+            if index < 0:
+                continue
+            if other >= 0 and other != index:
+                relation = relation.equate(isl.dim_type.PARAM, index, isl.dim_type.PARAM, other)
+                relation = relation.project_out(isl.dim_type.PARAM, index, 1)
+            else:
+                relation = relation.set_dim_name(isl.dim_type.PARAM, index, target)
+            values[target] = value
+        return AccessRelation(relation, values, self.may_access)
 
 
 def _parameter_names(relation) -> list[str]:
@@ -166,13 +232,12 @@ def projected(
 ) -> tuple[AccessRelation, ...]:
     """Every boundary in the coordinates the reader asking can address.
 
-    An Op states where it reads and writes among logical axes; a reader addresses
-    positions, which depend on the layout the value ended up with, so the two
-    are composed here for every Op. That also holds a participant to its own
-    iterations, and every boundary to the same ones. With no topology level the
-    coordinates stay logical; with one, they are the positions the unit
-    *device* holds -- a coordinate per mesh axis, keyed by its name (or number
-    when unnamed), each 0 unless given. The arguments' relations come first.
+    Compose logical accesses with layout positions, restricting participants
+    and boundaries to shared iterations. Without a topology level coordinates
+    stay logical; otherwise *device* supplies each mesh coordinate, keyed by
+    axis name (or number when unnamed), defaulting to zero. Inputs come first.
+    Unplaced, parameter-free boundaries own every iteration they answer about,
+    so their unchanged logical view needs no cross-boundary restriction.
     """
     ninputs = len(call.args)
     held = ctx.local_type_of(call)
@@ -212,14 +277,26 @@ def projected(
         _placed(access, *view, label, call, placement, bindings)
         for access, view, label in zip(relations, views, where, strict=True)
     )
+    carried = tuple(
+        _addressed(relation, bindings, label, call, may_access=access.may_access)
+        for relation, label, access in zip(placed, where, relations, strict=True)
+    )
+    if (
+        level is None
+        and all(local is logical for local, logical in views)
+        and all(not access.values for access in relations)
+        and all(
+            access.relation.get_space()
+            .domain()
+            .is_equal(relations[0].relation.get_space().domain())
+            for access in relations[1:]
+        )
+    ):
+        return carried
     answered = tuple(
         _answered(access, view[1]) for access, view in zip(relations, views, strict=True)
     )
     share = _own_iterations(relations, placed, answered, ninputs)
-    carried = tuple(
-        _addressed(relation, view[0], bindings, label, call, may_access=access.may_access)
-        for relation, view, label, access in zip(placed, views, where, relations, strict=True)
-    )
     if share is None:
         return carried
     return tuple(_iterating_over(access, share, bindings) for access in carried)
@@ -412,7 +489,7 @@ def _placed(
     """
     relation = access.relation
     if not isinstance(local, TensorType) or not isinstance(logical, TensorType):
-        return relation
+        return _within_positions(relation, local)
     if relation.dim(isl.dim_type.OUT) != len(logical.shape):
         raise ValueError(
             f"{type(call.target).__name__} reads {where} at "
@@ -444,18 +521,17 @@ def _within_positions(relation: "isl.map", local) -> "isl.map":
 
 
 def _addressed(
-    relation: "isl.map", local, bindings: IslParamValues, where: str, call, *, may_access=False
+    relation: "isl.map", bindings: IslParamValues, where: str, call, *, may_access=False
 ) -> AccessRelation:
     """One placed boundary, held to the coordinates the value actually has.
 
     The projected relation is then the whole answer: what it reaches is what
     crossed, with nothing left for a reader to intersect again or to forget to.
     """
-    held = _within_positions(relation, local)
-    names = _parameter_names(held)
+    names = _parameter_names(relation)
     return _held_countable(
         AccessRelation(
-            held, {name: bindings[name] for name in names if name in bindings}, may_access
+            relation, {name: bindings[name] for name in names if name in bindings}, may_access
         ),
         where,
         call,
@@ -869,13 +945,6 @@ def control_leaves(type_: "Type") -> int:
     return len(leaves_of(type_))
 
 
-def leaves_of(type_: "Type") -> tuple:
-    """Every tensor leaf of one value, flat, in the order a reader indexes them."""
-    if isinstance(type_, TupleType):
-        return tuple(leaf for field in type_.fields for leaf in leaves_of(field))
-    return (type_,) if isinstance(type_, TensorType) else ()
-
-
 def iteration_geometry(relations) -> tuple[tuple[int, ...], tuple[str, ...]]:
     """Static extents and authored axis names of one relation domain."""
     domain = iteration_universe(relations)
@@ -898,19 +967,6 @@ def leaf_paths(type_: "Type", path: tuple[int, ...] = ()):
             yield from leaf_paths(field, (*path, index))
     else:
         yield path, type_
-
-
-def leaf_span(type_: "Type", field: int) -> "tuple[int, int]":
-    """Where one field of a value begins among its flat leaves, and how many.
-
-    A structured value is indexed by leaf, not by top-level field, so a field
-    holding a tuple of its own covers a run of them. Whoever takes that field
-    takes that run.
-    """
-    if not isinstance(type_, TupleType):
-        return (0, len(leaves_of(type_)))
-    begin = sum(len(leaves_of(held)) for held in type_.fields[:field])
-    return (begin, len(leaves_of(type_.fields[field])))
 
 
 def reached_leaves(access: AccessRelation, count: int) -> "frozenset[int] | None":

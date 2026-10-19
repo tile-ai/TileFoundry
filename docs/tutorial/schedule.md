@@ -130,10 +130,6 @@ class PERSISTENT:
 ```bash
 set -euo pipefail
 tilefoundry analyze persistent.py persistent.txt --compute-cost --memory --performance
-if grep -qE '^#.*(error|advisory)="l2 ' persistent.txt; then
-  printf '%s\n' 'persistent cache residency exceeds L2 capacity' >&2
-  exit 1
-fi
 sed -n '/^from __future__/q;p' persistent.txt
 ```
 
@@ -141,7 +137,10 @@ sed -n '/^from __future__/q;p' persistent.txt
 # analysis target=nvidia.h200_sxm module=PERSISTENT function=gemm topology=cta wave=132/132
 # selection requested=compute-cost,memory,performance executed=compute-cost,memory,roofline,performance
 # compute-cost flops=bf16:21476933632@logical,2834955239424@total,21476933632@cta,21476933632@thread;f32:167772160@logical,22145925120@total,167772160@cta,167772160@thread other-ops=integer:65@logical,16896@total,128@cta,128@thread precision=upper_bound
-# memory traffic=gmem:r86.50MB/w280.00MB@logical,r31.45GB/w36.09GB@total,r244.00MB/w280.00MB@cta,r244.00MB/w280.00MB@thread;rmem:r1.26GB/w1.25GB@logical,r166.57GB/w166.55GB@total,r1.26GB/w1.26GB@cta,r1.26GB/w1.26GB@thread;smem:r240.00MB/w82.50MB@logical,r30.94GB/w30.94GB@total,r240.00MB/w240.00MB@cta,r240.00MB/w240.00MB@thread footprint=a:32.00KB;b:2.12MB;v20:36:128.00KB;v21:37:8.25MB footprint-precision=exact peak=gmem:522.00MB;rmem:256.00KB;smem:48.00KB persistent=gmem:250.00MB
+# memory traffic=gmem:r86.50MB/w280.00MB@logical,r31.45GB/w36.09GB@total,r244.00MB/w280.00MB@cta,r244.00MB/w280.00MB@thread;rmem:r1.26GB/w1.25GB@logical,r166.57GB/w166.55GB@total,r1.26GB/w1.26GB@cta,r1.26GB/w1.26GB@thread;smem:r240.00MB/w82.50MB@logical,r30.94GB/w30.94GB@total,r240.00MB/w240.00MB@cta,r240.00MB/w240.00MB@thread footprint=a:16.00KB;b:2.12MB;out:37:4.25MB;tile_out:36:128.00KB footprint-precision=exact peak=gmem:522.00MB;rmem:256.00KB;smem:48.00KB persistent=gmem:250.00MB
+#   buffer=b holds=175.62MB time=mt space=none reuse=10.46GB fits=no precision=exact
+#   buffer=a holds=6.52MB time=none space=cta.p reuse=2.05MB fits=yes precision=exact
+#   error="l2 reuse window mt holds 175.62MB at a 132-unit wave, exceeding capacity 47.68MB"
 # performance root=PERSISTENT::gemm predicted-ns=18317269 waves=1
 ```
 
@@ -149,8 +148,7 @@ One wave replaces 33, and the model's prediction falls with it. These `predicted
 values compare two HIR structures under the same static model; they are not wall-clock
 times. Measure the generated kernel before making a performance claim.
 
-The memory report has no L2 capacity error or advisory; the command checks that before
-showing the report. A one-time fill of the output is not an L2 reuse window.
+The persistent schedule reduces the number of waves, but the B reuse window across M tiles still exceeds L2 capacity. The report now shows that limit; grouping tiles is a separate scheduling choice. A one-time fill of the output is not an L2 reuse window.
 
 ## 3. Group 16 M tiles
 
@@ -185,7 +183,7 @@ sed -n '/tf.matmul/,+4p; /refused.*T.binary/,+1p; /refused.*T.cast/,+1p' candida
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
     refused     T.binary
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
-  v10:31  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", (128, 64), "smem"]  rhs=Tensor[(64, 256), "bf16", (64, 256), "smem"]  result=Tensor[(128, 256), "f32", (128, 256), "rmem"]
+  part:31  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", (128, 64), "smem"]  rhs=Tensor[(64, 256), "bf16", (64, 256), "smem"]  result=Tensor[(128, 256), "f32", (128, 256), "rmem"]
     refused     T.cuda.sm90.Wgmma  dtype=f16, form=SS, a_major=MN, b_major=MN
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8, 4),), ((*gs, 32, 4, 1),))))
     refused     T.cuda.sm80.Mma
@@ -379,8 +377,8 @@ sed -n '1,114p' optimal_tir.py
 ```text
 # analysis target=nvidia.h200_sxm module=GEMM_8192X17408X5120_OPTIMAL function=gemm topology=cta wave=132/132
 # selection requested=memory executed=memory
-# memory traffic=gmem:r125.81MB/w276.12MB@logical,r16.22GB/w35.59GB@total,r125.81MB/w276.12MB@cta,r125.81MB/w276.12MB@thread;rmem:r336.27MB/w332.19MB@logical,r43.35GB/w43.34GB@total,r336.27MB/w336.19MB@cta,r1.40MB/w1.31MB@thread;smem:r125.81MB/w125.81MB@logical,r16.22GB/w16.22GB@total,r125.81MB/w125.81MB@cta,r23.33MB/w123.76MB@thread footprint=a:1.00MB;b:288.00KB;v24:101:64.00KB;v26:103:36.00MB footprint-precision=upper_bound peak=gmem:794.06MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
-#   buffer=a holds=37.34MB time=none space=cta.persistent reuse=131.00MB fits=yes precision=upper_bound
+# memory traffic=gmem:r125.81MB/w276.12MB@logical,r16.22GB/w35.59GB@total,r125.81MB/w276.12MB@cta,r125.81MB/w276.12MB@thread;rmem:r336.27MB/w332.19MB@logical,r43.35GB/w43.34GB@total,r336.27MB/w336.19MB@cta,r1.40MB/w1.31MB@thread;smem:r125.81MB/w125.81MB@logical,r16.22GB/w16.22GB@total,r125.81MB/w125.81MB@cta,r23.33MB/w123.76MB@thread footprint=a:16.00KB;b:288.00KB;out:103:576.00KB;tile_dst:101:64.00KB footprint-precision=upper_bound peak=gmem:794.06MB;rmem:128.00KB;smem:208.00KB persistent=gmem:250.00MB
+#   buffer=a holds=944.00KB time=none space=cta.persistent reuse=2.05MB fits=yes precision=upper_bound
 
 from __future__ import annotations
 

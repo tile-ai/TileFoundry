@@ -12,7 +12,6 @@ from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.visitor import StmtVisitor
 
-from .call_frame import ValuationVisitor
 from .contexts import Cost, CostContext, VerifyContext
 from .instruction import ScheduleRefusal, check_call
 from .registries import (
@@ -22,6 +21,7 @@ from .registries import (
     spelled,
     verify_stmt_registry,
 )
+from .valuation import ValuationVisitor
 
 
 class VerifyVisitor(StmtVisitor[None]):
@@ -64,7 +64,9 @@ class VerifyVisitor(StmtVisitor[None]):
         outer = self.ctx
         self.ctx = replace(
             outer,
-            current_mesh=make_mesh(outer.current_mesh, stmt.mesh) if outer.current_mesh else stmt.mesh,
+            current_mesh=make_mesh(outer.current_mesh, stmt.mesh)
+            if outer.current_mesh
+            else stmt.mesh,
             mesh_scope=(*outer.mesh_scope, stmt.mesh),
         )
         try:
@@ -128,7 +130,7 @@ class CostEvaluator(ValuationVisitor[Cost]):
         self.registry = registry
 
     def visit_Call(self, call: Call, ctx: CostContext) -> Cost:
-        ctx = ctx.for_call(call)
+        ctx = ctx.enter_call(call)
         fn = self.registry.lookup(type(call.target))
         if fn is None:
             ctx.error(call, f"no cost evaluator registered for {type(call.target).__name__}")

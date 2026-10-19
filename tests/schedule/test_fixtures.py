@@ -27,11 +27,11 @@ import tilefoundry.ir.hir.schedule as schedules
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 import tilefoundry.visitor_registry.instruction as instructions
 from tests._source import import_dsl
-from tilefoundry.analysis.access import AliasKind, SSAValue
-from tilefoundry.analysis.allocation import AllocationSummary
+from tilefoundry.analysis.access import AliasKind
+from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.liveness import Liveness, result_copies
+from tilefoundry.analysis.liveness import LivenessMetadata, result_copies
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -59,6 +59,7 @@ from tilefoundry.ir.core import (
     supported_op_capabilities,
 )
 from tilefoundry.ir.core.errors import VerifyError
+from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef, collect_param_defs
@@ -334,25 +335,37 @@ RMEM_EXPECTED = {
         "cta@0:1#0": _RmemExpectation(16, "CTA envelope of the row register storage"),
     },
     "wgmma_b_mn_major_grouped_n64": {
-        "thread@0:256#0": _RmemExpectation(32768, "two 64x64 f32 accumulator groups; MMA aliases acc"),
+        "thread@0:256#0": _RmemExpectation(
+            32768, "two 64x64 f32 accumulator groups; MMA aliases acc"
+        ),
     },
     "wgmma_b_mn_major_wide_lbo": {
         "thread@0:128#0": _RmemExpectation(32768, "64x128 f32 accumulator and MMA result alias"),
     },
     "register_index_window": {
-        "thread@0:1#0": _RmemExpectation(32, "8 f32 output elements; index/view lifetimes reuse their storage"),
+        "thread@0:1#0": _RmemExpectation(
+            32, "8 f32 output elements; index/view lifetimes reuse their storage"
+        ),
         "cta@0:1#0": _RmemExpectation(32, "parent envelope of the register output"),
     },
     "register_index_window_offset": {
-        "thread@0:1#0": _RmemExpectation(32, "8 f32 output elements; index/view lifetimes reuse their storage"),
+        "thread@0:1#0": _RmemExpectation(
+            32, "8 f32 output elements; index/view lifetimes reuse their storage"
+        ),
         "cta@0:1#0": _RmemExpectation(32, "parent envelope of the register output"),
     },
     "register_full_like": {
-        "thread@0:1#0": _RmemExpectation(65, "two independent 8-element f32 buffers and a predicate"),
-        "cta@0:1#0": _RmemExpectation(65, "parent envelope of the independent buffers and predicate"),
+        "thread@0:1#0": _RmemExpectation(
+            65, "two independent 8-element f32 buffers and a predicate"
+        ),
+        "cta@0:1#0": _RmemExpectation(
+            65, "parent envelope of the independent buffers and predicate"
+        ),
     },
     "register_arange": {
-        "thread@0:1#0": _RmemExpectation(64, "independent 8-element i32 indices and output buffers"),
+        "thread@0:1#0": _RmemExpectation(
+            64, "independent 8-element i32 indices and output buffers"
+        ),
         "cta@0:1#0": _RmemExpectation(64, "parent envelope of the two independent buffers"),
     },
     "reshard_views": {
@@ -373,15 +386,11 @@ RMEM_EXPECTED = {
     "submesh_slice_in_sibling": {},
     "duplicate_output_storage": {},
     "loop_carry_rebind": {
-        "thread@0:32#0": _RmemExpectation(
-            96, "independent live Buffers: 1 * 32B + 1 * 64B"
-        ),
+        "thread@0:32#0": _RmemExpectation(96, "independent live Buffers: 1 * 32B + 1 * 64B"),
         "cta@0:1#0": _RmemExpectation(96, "independent live Buffers: 1 * 32B + 1 * 64B"),
     },
     "loop_carry_window": {
-        "thread@0:32#0": _RmemExpectation(
-            96, "independent live Buffers: 1 * 32B + 1 * 64B"
-        ),
+        "thread@0:32#0": _RmemExpectation(96, "independent live Buffers: 1 * 32B + 1 * 64B"),
         "cta@0:1#0": _RmemExpectation(96, "independent live Buffers: 1 * 32B + 1 * 64B"),
     },
     "staged_dynamic_inner": {
@@ -392,15 +401,9 @@ RMEM_EXPECTED = {
     },
     "mesh_capture_outside": {},
     "mesh_views": {
-        "thread@0:32#0": _RmemExpectation(
-            256, "independent live Buffers: 2 * 128B"
-        ),
-        "thread@0:32#1": _RmemExpectation(
-            256, "independent live Buffers: 2 * 128B"
-        ),
-        "thread@0:32#2": _RmemExpectation(
-            256, "independent live Buffers: 2 * 128B"
-        ),
+        "thread@0:32#0": _RmemExpectation(256, "independent live Buffers: 2 * 128B"),
+        "thread@0:32#1": _RmemExpectation(256, "independent live Buffers: 2 * 128B"),
+        "thread@0:32#2": _RmemExpectation(256, "independent live Buffers: 2 * 128B"),
     },
     "mesh_zeros_submesh": {},
     "loop_outputs": {},
@@ -413,12 +416,8 @@ RMEM_EXPECTED = {
         ),
     },
     "child_weight": {
-        "thread@0:32#0": _RmemExpectation(
-            384, "independent live Buffers: 3 * 128B"
-        ),
-        "cta@0:1#0": _RmemExpectation(
-            384, "independent live Buffers: 3 * 128B"
-        ),
+        "thread@0:32#0": _RmemExpectation(384, "independent live Buffers: 3 * 128B"),
+        "cta@0:1#0": _RmemExpectation(384, "independent live Buffers: 3 * 128B"),
     },
     "wgmma_b_nk": {
         "thread@0:128#0": _RmemExpectation(
@@ -462,7 +461,9 @@ RMEM_EXPECTED = {
             "independent live Buffers: 1 * 512B + 2 * 65536B",
         ),
         "thread@128:256#2": _RmemExpectation(65_536, "f32 loop result/bf16 cast alias"),
-        "thread@0:384#0": _RmemExpectation(131584, "independent live Buffers: 1 * 512B + 2 * 65536B"),
+        "thread@0:384#0": _RmemExpectation(
+            131584, "independent live Buffers: 1 * 512B + 2 * 65536B"
+        ),
     },
     "gemm_8192x17408x5120_register_store": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
@@ -502,9 +503,7 @@ RMEM_EXPECTED = {
     "wgmma_cast_between_schedules": {
         "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
         "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
-        "thread@128:128#2": _RmemExpectation(
-            16384, "independent live Buffers: 2 * 8192B"
-        ),
+        "thread@128:128#2": _RmemExpectation(16384, "independent live Buffers: 2 * 8192B"),
         "thread@0:32#1": _RmemExpectation(
             2_048,
             "f32 loader tile (2048); bf16 cast follows its last read",
@@ -598,7 +597,9 @@ RMEM_EXPECTED = {
         "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of both mma chains"),
     },
     "wgmma_b_mn_major_window_unit_mode": {
-        "thread@0:256#0": _RmemExpectation(32768, "two 64x64 f32 accumulator groups; MMA aliases acc"),
+        "thread@0:256#0": _RmemExpectation(
+            32768, "two 64x64 f32 accumulator groups; MMA aliases acc"
+        ),
     },
     "persistent_tile_union_count": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
@@ -627,7 +628,9 @@ def _tir_in(path: Path) -> Module | PrimFunction:
     assert spec is not None and spec.loader is not None
     loaded = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(loaded)
-    return next(value for value in vars(loaded).values() if isinstance(value, (Module, PrimFunction)))
+    return next(
+        value for value in vars(loaded).values() if isinstance(value, (Module, PrimFunction))
+    )
 
 
 def _prim_in(path: Path) -> PrimFunction:
@@ -730,10 +733,12 @@ def test_scheduled_hir_program_has_analysis_metadata(
     if path.stem == "module_instances":
         record_type = PerformanceMetadata if analysis == "performance" else metadata_type
         for function in result.functions[1:]:
-            schedules = [expr for expr in collect_exprs(function.body)
-                         if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)]
-            assert any(get_metadata(expr, record_type) is not None
-                       for expr in schedules)
+            schedules = [
+                expr
+                for expr in collect_exprs(function.body)
+                if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
+            ]
+            assert any(get_metadata(expr, record_type) is not None for expr in schedules)
 
     if analysis == "memory":
         for expr in collect_exprs(result.function.body):
@@ -778,7 +783,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
     if analysis == "memory":
         placement = get_metadata(result.function, RegionMemoryMetadata)
         assert placement is not None
-        liveness = get_metadata(result.function, Liveness)
+        liveness = get_metadata(result.function, LivenessMetadata)
         regions = tuple(window.region for window in liveness.regions)
         region_records = tuple(
             record
@@ -877,7 +882,7 @@ def test_schedule_memory_report_carries_allocations(
     assert cli_main(["analyze", str(path), str(out), "--memory", "--json"]) == 0
     assert capsys.readouterr() == ("", "")
     report = json.loads(out.read_text())
-    memory = report["functions"][0]['function_records']["memory"]
+    memory = report["functions"][0]["function_records"]["memory"]
     peaks = {item["memory_level"]: item["peak_bytes"] for item in memory["peaks"]}
     program = _module_in(path)
     has_smem = any(
@@ -890,7 +895,7 @@ def test_schedule_memory_report_carries_allocations(
         assert "smem" not in peaks
         assert SMEM_GOLDEN[path.stem] == 0
     assert memory["solver_status"] == "feasible"
-    for row in report["functions"][0]['calls']:
+    for row in report["functions"][0]["calls"]:
         allocation = row["memory"]
         if "operands" not in allocation:
             continue
@@ -1003,7 +1008,8 @@ def test_schedule_arange_evaluates_static_coordinates(dtype) -> None:
     torch_dtype = to_torch_dtype(dtype)
     result = _evaluate_call(
         ScheduleOp(op=TirArange(start=3, step=2)),
-        ((type_, torch.empty(8, dtype=torch_dtype)),), type_,
+        ((type_, torch.empty(8, dtype=torch_dtype)),),
+        type_,
     )
     assert torch.equal(result, torch.tensor([3, 5, 7, 9, 11, 13, 15, 17], dtype=torch_dtype))
 
@@ -1287,12 +1293,41 @@ def _reshape_tensor(expected: bool = False) -> torch.Tensor:
 FIXTURES = (
     FixtureCase(
         "reshard is charged only when an element moves",
-        ("analyze", "tests/fixtures/schedule/plain/reshard_locations.py", "{out}", "--memory", "--json"),
+        (
+            "analyze",
+            "tests/fixtures/schedule/plain/reshard_locations.py",
+            "{out}",
+            "--memory",
+            "--json",
+        ),
         _check_reshard_locations,
     ),
     FixtureCase(
         "check binds two DimVars in a reshape",
-        ("check", "tests/fixtures/placed/two_dimvar_reshape.py:TwoDimVarReshape", "--inputs", "files:{tmp}/x.pt", "--expected", "{tmp}/expected.pt", "--dim", "T=8", "--dim", "C=16", "--device", "cpu", "--out", "output", "--fn", "allclose", "--atol", "0", "--rtol", "0", "--json", "{out}"),
+        (
+            "check",
+            "tests/fixtures/placed/two_dimvar_reshape.py:TwoDimVarReshape",
+            "--inputs",
+            "files:{tmp}/x.pt",
+            "--expected",
+            "{tmp}/expected.pt",
+            "--dim",
+            "T=8",
+            "--dim",
+            "C=16",
+            "--device",
+            "cpu",
+            "--out",
+            "output",
+            "--fn",
+            "allclose",
+            "--atol",
+            "0",
+            "--rtol",
+            "0",
+            "--json",
+            "{out}",
+        ),
         _check_reshape_matches_torch,
         files={"x.pt": _reshape_tensor, "expected.pt": partial(_reshape_tensor, True)},
     ),
@@ -1303,7 +1338,9 @@ FIXTURES = (
         code=1,
     ),
     FixtureCase(
-        "analyze help names only Module.function", ("analyze", "--help"), _check_selector_help,
+        "analyze help names only Module.function",
+        ("analyze", "--help"),
+        _check_selector_help,
     ),
     FixtureCase(
         "finalize binds an open row dimension",
@@ -1660,10 +1697,14 @@ def test_tir_program_is_verified_and_canonical(path: Path) -> None:
     source = path.read_text()
     expected = source[source.index("from __future__ import annotations") :]
     if isinstance(program, Module):
-        expected = "\n".join(
-            line for line in expected.splitlines()
-            if not line.lstrip().startswith(("# analysis ", "# selection ", "# memory "))
-        ) + "\n"
+        expected = (
+            "\n".join(
+                line
+                for line in expected.splitlines()
+                if not line.lstrip().startswith(("# analysis ", "# selection ", "# memory "))
+            )
+            + "\n"
+        )
     assert as_script(program) == expected
 
 
@@ -1803,7 +1844,11 @@ def test_schedule_candidates_reports_every_plain_site(
 
 @pytest.mark.parametrize(
     "source",
-    tuple(path for path in HIR if path.stem not in ("wgmma_b_mn_major_window_unit_mode", "view_visit_memo")),
+    tuple(
+        path
+        for path in HIR
+        if path.stem not in ("wgmma_b_mn_major_window_unit_mode", "view_visit_memo")
+    ),
     ids=lambda path: path.stem,
 )
 def test_schedule_candidates_omit_selected_schedule_calls(
@@ -1828,7 +1873,16 @@ def test_schedule_candidates_omit_selected_schedule_calls(
     assert "tf.reshard" not in ops
     assert any(
         op
-        in {"tf.arange", "tf.binary", "tf.cast", "tf.clamp", "tf.relu", "tf.reduce", "tf.unary", "tf.transpose"}
+        in {
+            "tf.arange",
+            "tf.binary",
+            "tf.cast",
+            "tf.clamp",
+            "tf.relu",
+            "tf.reduce",
+            "tf.unary",
+            "tf.transpose",
+        }
         for op in ops
     )
     if source.stem == "wgmma_cast_between_schedules":
@@ -1888,7 +1942,8 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
             defined[id(statement.var)] = last[id(statement.var)] = clock
             aliases[id(statement.var)] = {
                 key
-                for value in collect_exprs(statement.value) if isinstance(value, Var)
+                for value in collect_exprs(statement.value)
+                if isinstance(value, Var)
                 for key in aliases.get(id(value), {id(value)})
             } or {id(statement.var)}
             fields = (
@@ -1965,7 +2020,8 @@ def test_schedule_finalize_writes_verified_tir(
     lowered = _tir_in(out)
     functions = (
         tuple(frame.function for frame in list_call_paths(lowered).values())
-        if isinstance(lowered, Module) else (lowered,)
+        if isinstance(lowered, Module)
+        else (lowered,)
     )
     found = []
     for function in functions:
@@ -1979,7 +2035,11 @@ def test_schedule_finalize_writes_verified_tir(
         visitor.visit(functions[0].body)
         assert len(visitor.loops) == 1
         loop = visitor.loops[0]
-        assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (0, 0, 1)
+        assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
+            0,
+            0,
+            1,
+        )
     assert found
     wgmma_lhs = [
         captures
@@ -2008,9 +2068,13 @@ def test_schedule_finalize_json_carries_the_same_source(
 def _m1_analysis():
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
     module = _module_in(source)
-    return source, module, analyze(
-        *check_program(module, module.entry_function()),
-        analysis=("memory",),
+    return (
+        source,
+        module,
+        analyze(
+            *check_program(module, module.entry_function()),
+            analysis=("memory",),
+        ),
     )
 
 
@@ -2102,7 +2166,7 @@ class ZeroTripCarry:
                 return tf.schedule((acc, tf.empty(Tensor[(4,), "f32"])), op=T.copy())
 """)
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
-    summary = get_metadata(result.function, AllocationSummary)
+    summary = get_metadata(result.function, AllocationSummaryMetadata)
     carry = [
         proof
         for value in summary.values
@@ -2129,7 +2193,7 @@ class ZeroTripCarry:
 
 
 def test_dynamic_window_keeps_a_mixed_scalar_and_constant_key():
-    module = import_dsl('''
+    module = import_dsl("""
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
@@ -2143,26 +2207,36 @@ class Window:
                 start = tf.reshape(held, new_shape=())
                 window = x[start + 1:start + 9, 0:8]
                 return tf.schedule((window, tf.empty(Tensor[(8, 8), "f32", (8, 8), "rmem"])), op=T.copy())
-''')
+""")
     lowered = finalize(module)
     verify_module(lowered)
     printed = as_script(lowered)
     verify_module(import_dsl(printed))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
-    views = [value for value in visitor.bindings.values()
-             if isinstance(value, Call) and isinstance(value.target, TensorView)
-             and value.type.shape == (8, 8)]
-    assert any(resolve_layout(view.type.layout, view.type.shape).strides == (8, 1)
-               and any(isinstance(expr, Call) and isinstance(expr.target, Slice)
-                       and expr.target.sizes == (1, 1)
-                       and isinstance(expr.args[1].elements[0], Call)
-                       and expr.args[1].elements[1].value == 0
-                       for expr in collect_exprs(view)) for view in views)
+    views = [
+        value
+        for value in visitor.bindings.values()
+        if isinstance(value, Call)
+        and isinstance(value.target, TensorView)
+        and value.type.shape == (8, 8)
+    ]
+    assert any(
+        resolve_layout(view.type.layout, view.type.shape).strides == (8, 1)
+        and any(
+            isinstance(expr, Call)
+            and isinstance(expr.target, Slice)
+            and expr.target.sizes == (1, 1)
+            and isinstance(expr.args[1].elements[0], Call)
+            and expr.args[1].elements[1].value == 0
+            for expr in collect_exprs(view)
+        )
+        for view in views
+    )
 
 
 def test_register_row_pointer_keeps_the_split_axis_whole():
-    module = import_dsl('''
+    module = import_dsl("""
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
@@ -2177,21 +2251,27 @@ class RegisterRows:
                 for i in range(16):
                     out = tf.insert_slice(out, held[i:i+1, :], (i,0))
                 return out
-''')
+""")
     lowered = finalize(module)
     verify_module(lowered)
     verify_module(import_dsl(as_script(lowered)))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
-    slices = [expr for value in visitor.bindings.values() for expr in collect_exprs(value)
-              if isinstance(expr, Call) and isinstance(expr.target, Slice)
-              and isinstance(expr.args[0].type.layout, ShardLayout)]
+    slices = [
+        expr
+        for value in visitor.bindings.values()
+        for expr in collect_exprs(value)
+        if isinstance(expr, Call)
+        and isinstance(expr.target, Slice)
+        and isinstance(expr.args[0].type.layout, ShardLayout)
+    ]
     assert slices and all(expr.target.sizes[1] == 16 for expr in slices)
 
 
 @pytest.mark.parametrize("start,offset", [(0, 0), (64, 4096)])
 def test_composed_view_keeps_its_layout_when_logical_rank_changes(start, offset):
-    module = import_dsl('''
+    module = import_dsl(
+        """
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
@@ -2205,18 +2285,25 @@ class ComposedReshape:
                 shared = tf.schedule((x, tf.empty(Tensor[(64,128), "bf16", layout, "smem"])), op=T.copy())
                 reshaped = tf.reshape(shared[:,START:START+64], (8,8,16,4))
                 return tf.schedule((reshaped, tf.empty(Tensor[(8,8,16,4), "bf16", "rmem"])), op=T.copy())
-'''.replace('START', str(start)))
+""".replace("START", str(start))
+    )
     lowered = finalize(module)
     verify_module(lowered)
     verify_module(import_dsl(as_script(lowered)))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
-    views = [value for value in visitor.bindings.values()
-             if isinstance(value, Call) and isinstance(value.target, TensorView)
-             and value.type.shape == (8, 8, 16, 4)]
-    assert any(value.type.layout == ComposedLayout(
-        Swizzle(3, 4, 3), offset, Layout((8, 8, 16, 4), (512, 64, 4, 1))
-    ) for value in views)
+    views = [
+        value
+        for value in visitor.bindings.values()
+        if isinstance(value, Call)
+        and isinstance(value.target, TensorView)
+        and value.type.shape == (8, 8, 16, 4)
+    ]
+    assert any(
+        value.type.layout
+        == ComposedLayout(Swizzle(3, 4, 3), offset, Layout((8, 8, 16, 4), (512, 64, 4, 1)))
+        for value in views
+    )
 
 
 @pytest.mark.parametrize(
@@ -2227,8 +2314,11 @@ class ComposedReshape:
         (128, 128, (16, 8, 8, 16), (16, 8, (2, 4), 16), (512, 64, (8192, 16), 1), 16384),
     ],
 )
-def test_composed_reshape_retains_non_affine_outer_modes(width, start, shape, modes, strides, offset):
-    module = import_dsl('''
+def test_composed_reshape_retains_non_affine_outer_modes(
+    width, start, shape, modes, strides, offset
+):
+    module = import_dsl(
+        """
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
@@ -2242,20 +2332,25 @@ class ComposedReshape:
                 shared = tf.schedule((x, tf.empty(Tensor[(128,256), "bf16", layout, "smem"])), op=T.copy())
                 reshaped = tf.reshape(shared[:,START:START+WIDTH], SHAPE)
                 return tf.schedule((reshaped, tf.empty(Tensor[SHAPE, "bf16", "rmem"])), op=T.copy())
-'''.replace('WIDTH', str(width)).replace('START', str(start)).replace('SHAPE', repr(shape)))
+""".replace("WIDTH", str(width))
+        .replace("START", str(start))
+        .replace("SHAPE", repr(shape))
+    )
     lowered = finalize(module)
     verify_module(import_dsl(as_script(lowered)))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
-    expected = ComposedLayout(
-        Swizzle(3, 4, 3), offset, Layout(modes, strides)
+    expected = ComposedLayout(Swizzle(3, 4, 3), offset, Layout(modes, strides))
+    assert any(
+        isinstance(value, Call)
+        and isinstance(value.target, TensorView)
+        and value.type.layout == expected
+        for value in visitor.bindings.values()
     )
-    assert any(isinstance(value, Call) and isinstance(value.target, TensorView)
-               and value.type.layout == expected for value in visitor.bindings.values())
 
 
 def test_address_origin_can_divide_a_runtime_loop_index():
-    module = import_dsl('''
+    module = import_dsl("""
 from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
@@ -2270,7 +2365,7 @@ class ModularWindow:
                     start = (u % 4) * 8
                     out = tf.schedule((x[start:start+8], tf.empty(Tensor[(8,), "f32", "rmem"])), op=T.copy())
                 return out
-''')
+""")
     verify_module(import_dsl(as_script(finalize(module))))
 
 
@@ -2324,7 +2419,9 @@ def test_lowering_rejects_unknown_hir_call(
     view.target = _UnstatedInstruction()
     monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
 
-    _assert_cli_lowering_error(source, "_UnstatedInstruction states no access relations", tmp_path, capsys)
+    _assert_cli_lowering_error(
+        source, "_UnstatedInstruction states no access relations", tmp_path, capsys
+    )
 
 
 def test_lowering_rejects_unscheduled_gmem_cast(
@@ -2437,8 +2534,11 @@ def test_authored_views_survive_region_forwarding_without_extra_wrappers():
     function = lowered.entry_function()
     visitor = _RetainedStatements()
     visitor.visit(function.body)
-    views = [value for value in visitor.bindings.values()
-             if isinstance(value, Call) and isinstance(value.target, TensorView)]
+    views = [
+        value
+        for value in visitor.bindings.values()
+        if isinstance(value, Call) and isinstance(value.target, TensorView)
+    ]
     assert [view.type.shape for view in views] == [(1,), (), (16, 8), (1, 8)]
     identity = views[2]
     assert isinstance(identity.args[0].target, PtrOf)
@@ -2448,10 +2548,15 @@ def test_authored_views_survive_region_forwarding_without_extra_wrappers():
     assert visitor.statements[0].args[1] is function.params[-1]
 
 
-@pytest.mark.parametrize("name", (
-    "wgmma_b_mn_major_grouped_n64", "wgmma_b_mn_major_window_unit_mode",
-    "wgmma_b_mn_major_wide_lbo", "smem_padded_stages",
-))
+@pytest.mark.parametrize(
+    "name",
+    (
+        "wgmma_b_mn_major_grouped_n64",
+        "wgmma_b_mn_major_window_unit_mode",
+        "wgmma_b_mn_major_wide_lbo",
+        "smem_padded_stages",
+    ),
+)
 def test_smem_slots_reserve_all_physical_bytes(name):
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / f"{name}.py"
     function = finalize(_module_in(source)).entry_function()
@@ -2461,16 +2566,22 @@ def test_smem_slots_reserve_all_physical_bytes(name):
     for value in visitor.bindings.values():
         fields = value.elements if isinstance(value, Tuple) else (value,)
         for slot in fields:
-            if (isinstance(slot, Call) and isinstance(slot.target, TensorView)
-                    and slot.target.storage is StorageKind.SMEM and isinstance(slot.args[0], Constant)):
+            if (
+                isinstance(slot, Call)
+                and isinstance(slot.target, TensorView)
+                and slot.target.storage is StorageKind.SMEM
+                and isinstance(slot.args[0], Constant)
+            ):
                 held = slot.type
                 offset = slot.args[0].value
                 assert offset % 16 == 0
-                slots.append({
-                    offset + (apply(held.layout, index) * held.dtype.bit_width + bit) // 8
-                    for index in range(prod(flatten(held.layout).shape))
-                    for bit in range(held.dtype.bit_width)
-                })
+                slots.append(
+                    {
+                        offset + (apply(held.layout, index) * held.dtype.bit_width + bit) // 8
+                        for index in range(prod(flatten(held.layout).shape))
+                        for bit in range(held.dtype.bit_width)
+                    }
+                )
     assert len(slots) == 2
     assert slots[0].isdisjoint(slots[1])
     peak = get_metadata(function, RegionMemoryMetadata).peak_for("smem").peak_bytes
@@ -2491,14 +2602,21 @@ def test_lowering_retains_all_four_instance_and_local_call_shapes():
     visitor.visit(lowered.entry_function().body)
     assert len(visitor.loops) == 1
     assert len(visitor.calls) == 5
-    assert sum(isinstance(call.callable, ModuleList) and call.callable.key == mm.key
-               for call in visitor.calls) == 2
+    assert (
+        sum(
+            isinstance(call.callable, ModuleList) and call.callable.key == mm.key
+            for call in visitor.calls
+        )
+        == 2
+    )
     indexed = [call for call in visitor.calls if isinstance(call.callable, Call)]
     assert len(indexed) == 2
     assert all(call.callable.args[0].key == layers.key for call in indexed)
     assert any(isinstance(call.callable.args[1], Var) for call in indexed)
-    assert any(isinstance(call.callable.args[1], Constant) and call.callable.args[1].value == 0
-               for call in indexed)
+    assert any(
+        isinstance(call.callable.args[1], Constant) and call.callable.args[1].value == 0
+        for call in indexed
+    )
     for call in visitor.calls:
         assert len(call.args) == (3 if isinstance(call.callable, PrimFunction) else 2)
         with pytest.raises(RuntimeError, match="no codegen handler for Op"):
@@ -2516,9 +2634,14 @@ def _returned_view(storage, chain=False):
     if chain:
         call = Call(slot, (call,), type=type_)
     root = Function.build(name="root", params=(activation,), body=call, return_type=type_)
-    return Module("ViewCaller", (root,), "root", children={"child": slot},
-                  target=CudaTarget("nvidia.h200_sxm"),
-                  topologies=(Topology("cta", 1), Topology("thread", 32)))
+    return Module(
+        "ViewCaller",
+        (root,),
+        "root",
+        children={"child": slot},
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 1), Topology("thread", 32)),
+    )
 
 
 @pytest.mark.parametrize("storage", [StorageKind.GMEM, StorageKind.SMEM])
@@ -2545,19 +2668,25 @@ def test_a_returned_view_passes_its_analyzed_storage_to_the_callee(storage, chai
 
 @pytest.mark.parametrize("read_old", [False, True])
 @pytest.mark.parametrize("reshape", [False, True])
-def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(tmp_path, read_old, reshape):
+def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(
+    tmp_path, read_old, reshape
+):
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py"
     if read_old or reshape:
         text = source.read_text()
         if read_old:
             text = text.replace("(x, tf.empty", "(out[0:1, :], tf.empty")
         if reshape:
-            text = text.replace("return update(out, x)", "return tf.reshape(update(out, x), (4, 2))")
+            text = text.replace(
+                "return update(out, x)", "return tf.reshape(update(out, x), (4, 2))"
+            )
         rewritten = tmp_path / source.name
         rewritten.write_text(text)
         source = rewritten
     if reshape:
-        with pytest.raises(lowering_module.LoweringError, match="requires a non-identity inverse relation"):
+        with pytest.raises(
+            lowering_module.LoweringError, match="requires a non-identity inverse relation"
+        ):
             finalize(_module_in(source))
         return
     lowered = finalize(_module_in(source))
@@ -2581,13 +2710,19 @@ def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(tmp_path
 
 def test_read_only_call_before_an_update_keeps_the_input_storage(tmp_path):
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py"
-    text = source.read_text().replace(
-        "    @func\n    def update",
-        '    @func\n    def identity(out: Tensor[(2, 4), "f32"]):\n'
-        '        return out\n\n    @func\n    def update',
-    ).replace(
-        "row = tf.schedule((x,", "old = identity(out)\n                row = tf.schedule((old[0:1, :],"
-    ).replace("return tf.insert_slice(out,", "return tf.insert_slice(old,")
+    text = (
+        source.read_text()
+        .replace(
+            "    @func\n    def update",
+            '    @func\n    def identity(out: Tensor[(2, 4), "f32"]):\n'
+            "        return out\n\n    @func\n    def update",
+        )
+        .replace(
+            "row = tf.schedule((x,",
+            "old = identity(out)\n                row = tf.schedule((old[0:1, :],",
+        )
+        .replace("return tf.insert_slice(out,", "return tf.insert_slice(old,")
+    )
     path = tmp_path / source.name
     path.write_text(text)
     lowered = finalize(_module_in(path))
@@ -2626,13 +2761,19 @@ def test_verifier_rejects_malformed_retained_tir_calls(wrong, refused):
 
 
 def test_verifier_rejects_non_integer_indexed_tir_target():
-    lowered = finalize(_module_in(Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py"))
+    lowered = finalize(
+        _module_in(Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py")
+    )
     slot = lowered.children["layers"]
-    target = Call(TupleGetItem(), (slot, Constant(0.5, type=TensorType.scalar(DType.f32))),
-                  type=slot.type.fields[0])
+    target = Call(
+        TupleGetItem(),
+        (slot, Constant(0.5, type=TensorType.scalar(DType.f32))),
+        type=slot.type.fields[0],
+    )
     root = replace(lowered.entry_function(), body=Sequential((Evaluate(target, ()),)))
-    functions = tuple(root if function is lowered.entry_function() else function
-                      for function in lowered.functions)
+    functions = tuple(
+        root if function is lowered.entry_function() else function for function in lowered.functions
+    )
     malformed = replace(lowered, functions=functions)
     with pytest.raises(VerifyError, match="index must be an integer scalar"):
         verify_module(malformed)

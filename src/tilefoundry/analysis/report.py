@@ -23,7 +23,7 @@ from tilefoundry.analysis.metadata import (
     Spread,
     ValueLifetime,
 )
-from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
+from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata, value_label
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -268,25 +268,15 @@ def report_data(
             "meshes": [],
         }
         for expr in collect_exprs(body.body):
-            if not isinstance(expr, (Call, LoopRegion, MeshRegion)):
+            classifier = _ROWS.get(type(expr))
+            if classifier is None:
                 continue
             held = _records_of(expr, selected)
             if not held:
                 continue
-            value = (labels.get(id(expr)) if labels is not None else None) or (
-                expr.induction_var.name
-                if isinstance(expr, LoopRegion)
-                else f"mesh{len(row['meshes'])}"
-                if isinstance(expr, MeshRegion)
-                else binding_name(expr) or type(expr.target).__name__.lower()
-            )
-            row[
-                "loops"
-                if isinstance(expr, LoopRegion)
-                else "meshes"
-                if isinstance(expr, MeshRegion)
-                else "calls"
-            ].append({"value": value, **held})
+            kind, label = classifier
+            value = (labels.get(id(expr)) if labels is not None else None) or label(expr, row)
+            row[kind].append({"value": value, **held})
         asked = {ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata}
         if asked & selected or ("roofline" in analyses and asked & set(metadata_types)):
             row["totals"] = _work_totals(body)
@@ -350,3 +340,10 @@ __all__ = [
     "report_data",
     "selected_types",
 ]
+
+
+_ROWS = {
+    Call: ("calls", lambda expr, row: value_label(expr) or type(expr.target).__name__.lower()),
+    LoopRegion: ("loops", lambda expr, row: expr.induction_var.name),
+    MeshRegion: ("meshes", lambda expr, row: f"mesh{len(row['meshes'])}"),
+}

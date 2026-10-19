@@ -11,12 +11,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from tilefoundry.ir.core import (
-    BindingMetadata,
     Call,
     Expr,
     RangeMetadata,
     attach_metadata,
-    binding_name,
+    value_labels,
 )
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function
@@ -33,9 +32,10 @@ from tilefoundry.ir.types.substitute import dim_vars_by_name, substitute_shape_d
 from tilefoundry.ir.visitor import collect_exprs, expr_children
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
-from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor, ValuationVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts
@@ -161,16 +161,14 @@ def _required_frame(module: Module, function: Function):
 
 def _view_metadata(expr: Expr) -> tuple:
     """Authored metadata carried into a fresh analysis view."""
-    return tuple(item for item in expr.metadata
-                 if type(item) not in _DERIVED_METADATA and type(item) is not BindingMetadata)
+    return tuple(item for item in expr.metadata if type(item) not in _DERIVED_METADATA)
 
 
 def _prepare_function(function):
-    """Clear derived facts and number calls, including authored loop bounds."""
-    seen, number = set(), 0
+    """Clear derived facts while preserving authored names and loop bounds."""
+    seen = set()
 
     def prepare(node):
-        nonlocal number
         if isinstance(node, ModuleList) or id(node) in seen:
             return
         seen.add(id(node))
@@ -178,42 +176,51 @@ def _prepare_function(function):
         if isinstance(node, Function):
             children = (*node.params, node.body)
         elif isinstance(node, LoopRegion):
-            children = (*node.args, node.induction_var, *node.params,
-                        *(bound for bound in (node.start, node.extent, node.step) if isinstance(bound, Expr)),
-                        node.body, *node.yield_values)
+            children = (
+                *node.args,
+                node.induction_var,
+                *node.params,
+                *(
+                    bound
+                    for bound in (node.start, node.extent, node.step)
+                    if isinstance(bound, Expr)
+                ),
+                node.body,
+                *node.yield_values,
+            )
         elif isinstance(node, MeshRegion):
             children = (*node.args, *node.params, node.body)
         else:
             children = expr_children(node)
         for child in children:
             prepare(child)
-        if isinstance(node, Call):
-            node.metadata = (*node.metadata, BindingMetadata(f"v{number}"))
-            number += 1
 
     prepare(function)
 
 
 class _CheckCalls(ValuationVisitor[None]):
-    def __init__(self, derive, label):
+    def __init__(self, derive, label, function):
         super().__init__()
         self.derive, self.label = derive, label
+        calls = tuple(node for node in collect_exprs(function.body) if isinstance(node, Call))
+        self.labels = dict(zip(calls, value_labels(calls), strict=True))
 
     def default_visit_leaf(self, expr, operands, mesh):
         return None
 
-
     def visit_Call(self, call, ctx):
         self.visit_operands(call, ctx)
-        inner = self.callee_frame(call, ctx.frame)
+        inner = ctx.callee_frame(call)
         if inner is None:
             return
         callee = inner.function
         implicit = not isinstance(call.target, Function)
         given = iter(call.args)
-        types = tuple(param.type if implicit and param.is_const else next(given).type
-                      for param in callee.params)
-        self.derive(inner, types, ctx.current_mesh, f"{self.label}/{binding_name(call)}")
+        types = tuple(
+            param.type if implicit and param.is_const else next(given).type
+            for param in callee.params
+        )
+        self.derive(inner, types, ctx.current_mesh, f"{self.label}/{self.labels[call]}")
 
 
 def check_program(
@@ -245,7 +252,9 @@ def check_program(
             )
         for name, extent in dims.items():
             if not isinstance(name, str) or not name:
-                raise SpecializationError(f"specialising {function.name!r}: {name!r} is not a dimension name")
+                raise SpecializationError(
+                    f"specialising {function.name!r}: {name!r} is not a dimension name"
+                )
             if isinstance(extent, bool) or not isinstance(extent, int):
                 raise SpecializationError(
                     f"specialising {function.name!r}: dimension {name!r} takes an integer extent, got {extent!r}"
@@ -262,7 +271,9 @@ def check_program(
         raise AnalysisError(f"cannot analyze Function {name!r} without a body at {path!r}")
     unknown = sorted(set(supplied) - declared.keys())
     if unknown:
-        raise SpecializationError(f"{function.name!r} has no dimension named {unknown!r}; it states {sorted(declared)}")
+        raise SpecializationError(
+            f"{function.name!r} has no dimension named {unknown!r}; it states {sorted(declared)}"
+        )
     for name, extent in supplied.items():
         substitute_shape_dim(declared[name], {name: extent})
     cloner = InstantiateDimensionCloner(dims)
@@ -301,12 +312,12 @@ def check_program(
         TypeInferVisitor(ranges=True).visit(definition, context)
         definition.return_type = definition.body.type
         definition.type = callable_type_for(definition.params, definition.return_type)
-        _CheckCalls(derive, label).visit(definition.body, context)
+        _CheckCalls(derive, label, definition).visit(definition.body, context)
 
     root, module = bound_root, bound_module
     derive(initial, tuple(p.type for p in root.params), None, function.name)
 
-    frames = tuple(CallFrameVisitor.walk_frames(CallFrame(module, root)))
+    frames = tuple(CallFrame(module, root).walk())
     functions = tuple(frame.function for frame in frames)
     size = sum(len(collect_exprs(body.body)) for body in functions)
     if size > budget:
@@ -332,13 +343,17 @@ def check_program(
 
     for frame in frames:
         for call in collect_exprs(frame.function.body):
-            if not isinstance(call, Call) or (inner := CallFrameVisitor.callee_frame(call, frame)) is None:
+            if not isinstance(call, Call) or (inner := CallFrame.resolve(call, frame)) is None:
                 continue
             for field, noun in (("target", "target"), ("topologies", "topology hierarchy")):
                 expected, actual = getattr(frame, field), getattr(inner, field)
                 if expected != actual:
-                    suffix = "one kernel invocation runs one target" if field == "target" else (
-                        "one kernel invocation runs one hierarchy -- declare none on the child and inherit"
+                    suffix = (
+                        "one kernel invocation runs one target"
+                        if field == "target"
+                        else (
+                            "one kernel invocation runs one hierarchy -- declare none on the child and inherit"
+                        )
                     )
                     raise AnalysisError(
                         f"{frame.module.name!r} calls {inner.module.name!r}, which resolves "
@@ -356,7 +371,7 @@ def check_analyses(
     topology_level: str | None = None,
 ) -> None:
     """Check requested families against a built program before any writes."""
-    functions = tuple(frame.function for frame in CallFrameVisitor.walk_frames(CallFrame(module, function)))
+    functions = tuple(frame.function for frame in CallFrame(module, function).walk())
     ctx = analysis_check_context(module, function, topology_level)
     for analyzer in analyzers:
         checker = analyzer.get_checker()

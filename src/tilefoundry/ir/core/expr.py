@@ -7,6 +7,7 @@ from tilefoundry.ir.core.metadata import IRMetadata, diagnostic_location
 from tilefoundry.ir.core.op import Op
 
 from ..types.tensor_type import Type
+from ..types.utils import leaves_of
 
 
 @dataclass(unsafe_hash=True)
@@ -53,6 +54,7 @@ def child_exprs(expr: Expr):
     Read off the node rather than listed per class, so a field holding a tuple
     of Functions or a tuple of (name, Function) pairs is reached like any other.
     """
+
     def walk(value):
         if isinstance(value, Expr):
             yield value
@@ -137,3 +139,24 @@ class Tuple(Expr):
     """
 
     elements: tuple[Expr, ...]
+
+
+@dataclass(frozen=True, eq=False)
+class SSAValue:
+    """One expression's flattened result, compared by SSA identity."""
+
+    expr: Expr
+    index: int = 0
+
+    def __eq__(self, other):
+        return isinstance(other, SSAValue) and self.expr is other.expr and self.index == other.index
+
+    def __hash__(self):
+        return hash((id(self.expr), self.index))
+
+    @staticmethod
+    def leaves(expr: Expr) -> tuple[SSAValue, ...]:
+        return tuple(SSAValue(expr, index) for index, _ in enumerate(leaves_of(expr.type)))
+
+    def leaf(self, held: Type | None = None) -> Type:
+        return leaves_of(self.expr.type if held is None else held)[self.index]

@@ -170,9 +170,12 @@ def _dim_visitor_type():
         from tilefoundry.ir.visitor import ExprVisitor  # noqa: PLC0415
 
         class _DimVisitor(ExprVisitor[str]):
-            def __init__(self, values: IslParamValues, coords: Mapping[int, str]) -> None:
+            def __init__(
+                self, values: IslParamValues, coords: Mapping[int, str], param_name=None
+            ) -> None:
                 super().__init__()
                 self.values = values
+                self.param_name = param_name
                 self.coord_names = set(coords.values())
                 self.known = {id(value): name for name, value in values.items()}
                 self.known.update(coords)
@@ -182,7 +185,11 @@ def _dim_visitor_type():
                 """The name *value* has here, naming it into ``values`` if it has none."""
                 name = self.known.get(id(value))
                 if name is None:
-                    name = _fresh_name(self.values, self.coord_names)
+                    name = (
+                        self.param_name(value)
+                        if self.param_name
+                        else _fresh_name(self.values, self.coord_names)
+                    )
                     self.known[id(value)] = name
                     self.values[name] = value
                     self.bounds[name] = _leaf_bound(value)
@@ -301,12 +308,14 @@ def _dim_visitor_type():
     return _DIM_VISITOR_TYPE
 
 
-def _render(dim, values: IslParamValues, coords: Mapping[int, str], *, bounded: bool):
+def _render(
+    dim, values: IslParamValues, coords: Mapping[int, str], *, bounded: bool, param_name=None
+):
     """*dim* as a piecewise affine over *coords*, with or without its parameters' ranges."""
     clash = set(values) & set(coords.values())
     if clash:
         raise ValueError(f"{sorted(clash)} name both a parameter and a coordinate")
-    visitor = _dim_visitor_type()(values, coords)
+    visitor = _dim_visitor_type()(values, coords, param_name)
     expr = visitor.visit(dim)
     params = visitor.bounds
     prefix = f"[{', '.join(params)}] -> " if params else ""
@@ -322,7 +331,7 @@ def _render(dim, values: IslParamValues, coords: Mapping[int, str], *, bounded: 
 
 
 def dim_to_isl_pw_aff(
-    dim, values: IslParamValues, *, coords: Mapping[int, str] | None = None
+    dim, values: IslParamValues, *, coords: Mapping[int, str] | None = None, param_name=None
 ) -> "isl.pw_aff":
     """*dim* as an isl piecewise affine over *coords*; each new leaf is named into *values*.
 
@@ -333,7 +342,7 @@ def dim_to_isl_pw_aff(
     no other value or coordinate has. What a parameter's value may be is stated
     as a constraint on the result rather than kept on the side.
     """
-    return _render(dim, values, coords or {}, bounded=True)
+    return _render(dim, values, coords or {}, bounded=True, param_name=param_name)
 
 
 def _raw_dim_call(op_cls, args: tuple):

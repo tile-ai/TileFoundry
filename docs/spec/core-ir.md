@@ -280,19 +280,11 @@ functions in different child modules are distinct symbols.
 ## 2. `Expr`
 
 ```python
-class ValuationProvider(ABC):
-    """Supply the current interpretation of metadata free variables."""
-
-    @abstractmethod
-    def request_valuation[V](self, valuation: type[V]) -> V: ...
-
-
 class IRMetadata:
     """Describe one immutable expression annotation."""
 
-    requires: ClassVar[tuple[type, ...]] = ()
 
-    def resolve(self, ctx: ValuationProvider) -> IRMetadata: ...
+    def resolve(self, scope) -> IRMetadata: ...
 
 class BindingMetadata(IRMetadata):
     """Describe an authored SSA binding name.
@@ -323,14 +315,13 @@ class SourceSpanMetadata(IRMetadata):
 
 - constraints:
   - the immutable base of every typed annotation stored on an `Expr`: typed
-    fields and a context interpretation contract. `requires` lists Valuation
-    Protocol types; the default `resolve(ctx)` returns the same record. A
-    context implements `ValuationProvider.request_valuation`, while concrete
-    domain providers own unsupported-context errors. Core MUST NOT import
-    analysis to interpret metadata. What a record looks like as text
-    or as JSON is decided by inspection
-    ([inspection §2.8](./inspection.md#28-record-comment-forms)), so a record
-    MUST NOT carry a rendering, a key name, or a family name of its own.
+    fields and an optional `resolve(scope)` interpretation. The default returns
+    the same record. Analysis supplies an already-bound scope; core metadata
+    does not define a capability provider or declare requirements. Core MUST NOT
+    import analysis to interpret metadata. Text and JSON rendering belong to
+    inspection ([inspection §2.8](./inspection.md#28-record-comment-forms)); a
+    record MUST NOT carry a rendering, a key name, or a family name of its own.
+
   - `BindingMetadata` is the authored SSA label. The parser maps explicit DSL
     `loc=` syntax and inferred assignment names to this metadata; there is no
     parallel `Expr.loc` field.

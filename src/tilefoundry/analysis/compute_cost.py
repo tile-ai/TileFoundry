@@ -8,8 +8,8 @@ from tilefoundry.ir.core import Call, Expr, VerifyError, get_metadata
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor, ValuationVisitor
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
+from tilefoundry.visitor_registry.valuation import ValuationVisitor
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
@@ -210,11 +210,18 @@ def _domain_values(held: Breakdown[int], domain: str) -> tuple[tuple[str, int], 
 def accumulate_logical(into, name, spread, ctx):
     """Consume local loop dependencies, retaining only this definition's formals."""
     precision = AnalysisPrecision.EXACT
+    scope = (
+        ctx.callee_scope
+        if ctx.call_site is not None and ctx.callee_frame() is not None
+        else ctx.scope
+    )
     for dependencies, value in spread.logical_groups:
-        changing = set().union(*(ctx.varies(dependency) for dependency in dependencies))
-        factor, bounded = ctx.trips(dependencies)
+        changing = set().union(
+            *(scope.provenance.varies(dependency) for dependency in dependencies)
+        )
+        factor, bounded = scope.dependency_trips(dependencies)
         precision = precision.join(bounded)
-        formals = tuple(formal for formal in ctx.root.owner.params if id(formal) in changing)
+        formals = tuple(formal for formal in ctx.scope.root.owner.params if id(formal) in changing)
         key = (name, tuple(id(formal) for formal in formals))
         value = scaled(value, factor)
         if key in into:
@@ -304,9 +311,9 @@ class ComputeCostVisitor(ValuationVisitor[None]):
             return
         if not ctx.units:
             raise AnalysisError("compute-cost: visitor context is missing its cost context")
-        repeats = ctx.current.repeats_of(expr, ctx.topology_level)
-        callee = CallFrameVisitor.callee_frame(expr, ctx.frame)
-        if callee is None:
+        repeats = ctx.scope.repeats_of(expr, ctx.topology_level)
+        callee_frame = ctx.callee_frame(expr)
+        if callee_frame is None:
             record = _call_cost_record(
                 expr,
                 {unit: replace(ctx, topology_level=unit) for unit in ctx.units},
@@ -314,15 +321,15 @@ class ComputeCostVisitor(ValuationVisitor[None]):
                 replace(ctx, topology_level=None),
                 ctx.topology_level,
             )
-            dependencies = ctx.dependencies(expr)
+            dependencies = ctx.scope.provenance.dependencies(expr)
 
             record = replace(
                 record,
                 flops=with_dependencies(record.flops, dependencies),
-                other_ops=with_dependencies(record.other_ops, dependencies)
+                other_ops=with_dependencies(record.other_ops, dependencies),
             )
         else:
-            record = get_metadata(callee.function, ComputeCostMetadata).resolve(ctx)
+            record = get_metadata(callee_frame.function, ComputeCostMetadata).resolve(ctx)
         attach(expr, record)
         ctx.precision[0] = ctx.precision[0].join(repeats.trips_precision).join(record.precision)
         _accumulate(ctx, record, repeats)

@@ -27,8 +27,8 @@ from tilefoundry.ir.types.substitute import (
     substitute_topology_dims,
 )
 from tilefoundry.ir.types.tensor_type import TensorType
-from tilefoundry.ir.visitor import ExprCloner
-from tilefoundry.visitor_registry.call_frame import CallFrameVisitor
+from tilefoundry.ir.visitor import ExprCloner, ExprVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame
 
 from .function import Function
 
@@ -167,8 +167,14 @@ class InstantiateDimensionCloner(ExprCloner):
         body = None if chosen.body is None else self.visit(chosen.body)
         result_type = substitute_dims(chosen.return_type, self.dims)
         derived = dataclasses.replace(
-            chosen, name=fn.name, params=params, body=body, return_type=result_type,
-            type=callable_type_for(params, result_type), variants=(), converters=(),
+            chosen,
+            name=fn.name,
+            params=params,
+            body=body,
+            return_type=result_type,
+            type=callable_type_for(params, result_type),
+            variants=(),
+            converters=(),
         )
         _record_provenance(derived, chosen, self.dims or None)
         self.functions[id(fn)] = self.functions[id(chosen)] = derived
@@ -183,11 +189,16 @@ class InstantiateDimensionCloner(ExprCloner):
             elements = tuple(self.module(child) for child in slot.elements)
             children[key] = ModuleList(elements if slot.indexed else elements[0])
         topologies = (
-            None if node.topologies is None
-            else tuple(substitute_topology_dims(topology, self.dims) for topology in node.topologies)
+            None
+            if node.topologies is None
+            else tuple(
+                substitute_topology_dims(topology, self.dims) for topology in node.topologies
+            )
         )
         functions = tuple(self.functions.get(id(fn), fn) for fn in node.functions)
-        cloned = dataclasses.replace(node, children=children, functions=functions, topologies=topologies)
+        cloned = dataclasses.replace(
+            node, children=children, functions=functions, topologies=topologies
+        )
         self.modules[id(node)] = cloned
         return cloned
 
@@ -215,9 +226,11 @@ class InstantiateDimensionCloner(ExprCloner):
 
     def visit_MeshRegion(self, region, ctx=None):
         return dataclasses.replace(
-            region, args=tuple(self.visit(arg) for arg in region.args),
+            region,
+            args=tuple(self.visit(arg) for arg in region.args),
             params=tuple(self.visit(param) for param in region.params),
-            body=self.visit(region.body), mesh=substitute_mesh_dims(region.mesh, self.dims),
+            body=self.visit(region.body),
+            mesh=substitute_mesh_dims(region.mesh, self.dims),
             type=substitute_dims(region.type, self.dims),
         )
 
@@ -228,11 +241,15 @@ class InstantiateDimensionCloner(ExprCloner):
             return self.visit(value) if isinstance(value, Expr) else value
 
         return dataclasses.replace(
-            region, args=tuple(self.visit(arg) for arg in region.args),
+            region,
+            args=tuple(self.visit(arg) for arg in region.args),
             params=tuple(self.visit(param) for param in region.params),
-            induction_var=self.visit(region.induction_var), body=self.visit(region.body),
+            induction_var=self.visit(region.induction_var),
+            body=self.visit(region.body),
             yield_values=tuple(self.visit(value) for value in region.yield_values),
-            start=bound(region.start), extent=bound(region.extent), step=bound(region.step),
+            start=bound(region.start),
+            extent=bound(region.extent),
+            step=bound(region.step),
             type=substitute_dims(region.type, self.dims),
         )
 
@@ -305,7 +322,7 @@ def dim_vars_reached(fn: Function, frame=None) -> dict[str, object]:
     return found
 
 
-class _DimVarCollector(CallFrameVisitor[None]):
+class _DimVarCollector(ExprVisitor[None]):
     """Collect dimensions from Expr values plus Function/Op side fields."""
 
     def __init__(self, found, dims=None):
@@ -388,7 +405,7 @@ class _DimVarCollector(CallFrameVisitor[None]):
         self._collect_bounds(expr)
         self._visit_children(expr, frame)
         target = expr.target
-        inner = self.callee_frame(expr, frame)
+        inner = CallFrame.resolve(expr, frame)
         callee = inner.function if inner is not None else target
         if isinstance(callee, Function):
             self.visit_function(callee, inner)

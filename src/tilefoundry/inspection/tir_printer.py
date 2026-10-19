@@ -22,8 +22,8 @@ from tilefoundry.ir.tir.stmts import (
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, LayoutBase, PointerType, TensorType, UnitType
 from tilefoundry.ir.types.dim import is_dim_op_call
-from tilefoundry.ir.visitor import StmtVisitor
-from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
+from tilefoundry.ir.visitor import ExprVisitor, StmtVisitor
+from tilefoundry.visitor_registry.call_frame import CallFrame
 
 _LINE_LENGTH = 100
 
@@ -65,7 +65,7 @@ class _RenderedLines(list):
         self.imports = imports
 
 
-class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
+class TirPrinter(PythonPrinter, StmtVisitor[list[str]], ExprVisitor[str]):
     """TIR statement printer with explicit statement-visitor entry points.
 
     The legacy helpers below remain as the formatting implementation while the
@@ -272,10 +272,16 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], CallFrameVisitor[str]):
         target = stmt.callable
         if isinstance(target, (PrimFunction, ModuleList, Call)):
             frame = getattr(self.context, "frame", None)
-            frame = self.callee_frame(Call(target, stmt.args, type=UnitType()), frame) if frame is not None else None
+            frame = (
+                CallFrame.resolve(Call(target, stmt.args, type=UnitType()), frame)
+                if frame is not None
+                else None
+            )
             callee = target if frame is None else frame.function
-            head = callee.name if isinstance(target, PrimFunction) else (
-                target.key if isinstance(target, ModuleList) else target.args[0].key
+            head = (
+                callee.name
+                if isinstance(target, PrimFunction)
+                else (target.key if isinstance(target, ModuleList) else target.args[0].key)
             )
             if isinstance(target, Call):
                 head += f"[{self.visit(target.args[1])}]"
@@ -360,9 +366,13 @@ class _BindingCollector(StmtVisitor):
 
     def generic_visit(self, stmt):
         binding = (
-            stmt.var if isinstance(stmt, LetStmt) else
-            stmt.binding if isinstance(stmt, MeshScope) else
-            stmt.induction_var if isinstance(stmt, For) else None
+            stmt.var
+            if isinstance(stmt, LetStmt)
+            else stmt.binding
+            if isinstance(stmt, MeshScope)
+            else stmt.induction_var
+            if isinstance(stmt, For)
+            else None
         )
         if binding is not None:
             self.bindings.append(binding)
@@ -376,22 +386,29 @@ def _definition_lines(fn: PrimFunction, name: str, ctx: TirPrintContext) -> list
         printer = TirPrinter(context=ctx)
         rendered = []
         for param in fn.params:
-            type_ = printer.visit(param.type, ctx) if isinstance(param.type, (TensorType, PointerType)) else repr(param.type)
+            type_ = (
+                printer.visit(param.type, ctx)
+                if isinstance(param.type, (TensorType, PointerType))
+                else repr(param.type)
+            )
             if param.is_const and isinstance(param.type, TensorType):
                 type_ = type_.replace("Tensor[", "ConstTensor[", 1)
             rendered.append(f"{printer.visit(param)}: {type_}")
         params = ", ".join(rendered)
         definition = f"def {name}({params}):"
         lines = (
-            [definition] if len(definition) + 4 <= _LINE_LENGTH else
-            [f"def {name}(", f"    {params}", "):"]
+            [definition]
+            if len(definition) + 4 <= _LINE_LENGTH
+            else [f"def {name}(", f"    {params}", "):"]
         )
         body = TirPrinter(context=ctx, indent="    ").visit(fn.body)
         lines.extend(body or ["    pass"])
         return lines
 
 
-def _function_block(fn: PrimFunction, context: TirPrintContext | None = None, *, frame=None) -> list[str]:
+def _function_block(
+    fn: PrimFunction, context: TirPrintContext | None = None, *, frame=None
+) -> list[str]:
     ctx = context or TirPrintContext()
     ctx.frame = frame
     target = ctx.use(fn.target.to_python())
