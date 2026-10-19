@@ -56,6 +56,13 @@ class TopologyFacts:
         return self.level(self.parallel_level)
 
 
+@dataclasses.dataclass(frozen=True)
+class MemoryExecutionFacts:
+    """Topology levels that may execute synchronous memory operations."""
+
+    topologies: tuple[str, ...]
+
+
 class TargetFactsError(Exception):
     """A Target failed to provide the requested immutable Facts aggregate."""
 
@@ -88,5 +95,6 @@ __all__ = [
     "TargetFactsError",
     "TopologyFacts",
     "TopologyLevelFacts",
+    "MemoryExecutionFacts",
     "facts_result",
 ]

@@ -15,6 +15,7 @@ from tilefoundry.target.cpu import CpuTarget
 from tilefoundry.target.cuda import CudaArchitecture, CudaDevice, CudaTarget
 from tilefoundry.target.cuda.spec import H200_SXM_ID
 from tilefoundry.target.facts import (
+    MemoryExecutionFacts,
     TargetFactsError,
     TopologyFacts,
     TopologyLevelFacts,
@@ -75,6 +76,7 @@ __all__ = [
     "CudaTarget",
     "Device",
     "MemoryHierarchyFacts",
+    "MemoryExecutionFacts",
     "PerformanceServiceFacts",
     "Target",
     "TargetFactsError",

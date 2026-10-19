@@ -84,7 +84,7 @@ def _register(hir, arity):
     attrs = {
         "__init__": constructor,
         "__module__": __name__,
-        "capability": OpCapability(None),
+        "capability": OpCapability("cpu_tensor"),
         "resource": "cpu_engine",
         "execution_mesh": CORE,
         **attributes,
@@ -141,7 +141,7 @@ def _register(hir, arity):
 
     @register_verify_stmt(cls)
     def verify(call, ctx):
-        target = ctx.frame.target if ctx.frame is not None else None
+        target = ctx.resolve_target()
         if target is not None and target.name not in ("cpu", "amx"):
             ctx.error(call, "Host tensor kernels require a CPU/AMX target")
         original = Call(reconstruct(call.target), call.args[:arity], type=UnitType())

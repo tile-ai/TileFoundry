@@ -78,13 +78,13 @@ def one(target: Target, wanted: str | type) -> dict[str, Any]:
             branches[0].attribute,
             {
                 op_identifier(item.declaration): declared_execution_mesh(
-                    op_type(**{item.attribute: item.declaration})
+                    op_type(**{item.attribute: item.declaration}), target
                 )
                 for item in branches
             },
         )
     else:
-        execution_mesh = declared_execution_mesh(op_type)
+        execution_mesh = declared_execution_mesh(op_type, target)
     sections = PatternPrinter().declaration(op_type)
     return {
         "target": target.identity,

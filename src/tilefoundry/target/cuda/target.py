@@ -26,6 +26,7 @@ from tilefoundry.target.cuda.spec import (
     build_cuda_device,
 )
 from tilefoundry.target.facts import (
+    MemoryExecutionFacts,
     TopologyFacts,
     TopologyLevelFacts,
     facts_result,
@@ -155,6 +156,10 @@ class CudaTarget(Target):
         """Project CUDA hardware through the facts this Target owns."""
         if facts_type is TopologyFacts and query is None:
             return facts_result(self, facts_type, self._topology_facts())
+        if facts_type is MemoryExecutionFacts and query is None:
+            return facts_result(
+                self, facts_type, MemoryExecutionFacts((self._topology_facts().topologies[-1].name,))
+            )
         if facts_type is TopologyLevelFacts:
             level = self._topology_facts().level(
                 query if isinstance(query, str) else None

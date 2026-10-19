@@ -116,11 +116,11 @@ def thread_execution_mesh() -> MeshPattern:
 
 def memory_execution_mesh() -> MeshPattern:
     """Bind a contiguous run at the current innermost topology level."""
-    return MeshPattern(WildcardPattern("execution_topologies"), _THREAD_EXECUTION_LAYOUT)
+    return MeshPattern(WildcardPattern(), _THREAD_EXECUTION_LAYOUT)
 
 
-def declared_execution_mesh(op_type) -> MeshPattern | OrPattern:
-    """Return one op's reserved execution-mesh declaration or reject it."""
+def declared_execution_mesh(op_type, target=None) -> MeshPattern | OrPattern:
+    """Resolve one execution declaration, specializing memory levels from Target Facts."""
     declaration = op_type if isinstance(op_type, type) else type(op_type)
     factory = getattr(op_type, "execution_mesh_pattern", None)
     if callable(factory):
@@ -134,6 +134,18 @@ def declared_execution_mesh(op_type) -> MeshPattern | OrPattern:
         raise ValueError(
             f"{name} execution_mesh must be a constant, ParamDef, or operand mesh reference"
         )
+    if target is not None and any(isinstance(choice.topologies, WildcardPattern) for choice in choices):
+        from tilefoundry.target.facts import MemoryExecutionFacts  # noqa: PLC0415
+
+        levels = target.get_facts(MemoryExecutionFacts).topologies
+        expanded = []
+        for choice in choices:
+            if isinstance(choice.topologies, WildcardPattern):
+                expanded.extend(replace(choice, topologies=(level,)) for level in levels)
+            else:
+                expanded.append(choice)
+        choices = tuple(expanded)
+        return choices[0] if len(choices) == 1 else OrPattern(*choices)
     return declared
 
 

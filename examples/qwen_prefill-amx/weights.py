@@ -13,7 +13,7 @@ def explicit_weights(root):
     from tilefoundry.ir.core.module import ModuleList
     from tilefoundry.ir.hir.function import Function
     from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
-    from tilefoundry.visitor_registry.call_frame import CallFrame, CallFrameVisitor
+    from tilefoundry.visitor_registry.contexts import ValuationContext
 
     cache = {}
 
@@ -39,7 +39,7 @@ def explicit_weights(root):
         needs, functions = {}, {}
 
         def callee(call):
-            frame = CallFrameVisitor.callee_frame(call, CallFrame(mod, None))
+            frame = ValuationContext(module=mod)._callee_context(call)
             if frame is None:
                 return None
             if isinstance(call.target, Function):
@@ -66,9 +66,7 @@ def explicit_weights(root):
                         needed(target)
                         if not prefix
                         else lift(
-                            CallFrameVisitor.callee_frame(
-                                call, CallFrame(mod, fn)
-                            ).module
+                            ValuationContext(module=mod, function=fn)._callee_context(call).module
                         )[2][id(target)]
                     )
                     names.extend(prefix + name for name in target_needs)
@@ -99,9 +97,7 @@ def explicit_weights(root):
                         return replace(call, args=args)
                     target, prefix = item
                     if prefix:
-                        child = CallFrameVisitor.callee_frame(
-                            call, CallFrame(mod, fn)
-                        ).module
+                        child = ValuationContext(module=mod, function=fn)._callee_context(call).module
                         child_needs = lift(child)[2][id(target)]
                         target = self.visit(call.target, ctx)
                     else:

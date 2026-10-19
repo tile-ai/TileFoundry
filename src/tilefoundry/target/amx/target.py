@@ -26,6 +26,7 @@ from tilefoundry.target.base import (
     select,
 )
 from tilefoundry.target.facts import (
+    MemoryExecutionFacts,
     TopologyFacts,
     TopologyLevelFacts,
     facts_result,
@@ -134,6 +135,11 @@ class AmxTarget(Target):
         """Project AMX hardware through the facts this Target owns."""
         if facts_type is TopologyFacts and query is None:
             return facts_result(self, facts_type, self._topology_facts())
+        if facts_type is MemoryExecutionFacts and query is None:
+            return facts_result(
+                self, facts_type,
+                MemoryExecutionFacts(tuple(level.name for level in self._topology_facts().topologies)),
+            )
         if facts_type is TopologyLevelFacts:
             level = self._topology_facts().level(
                 query if isinstance(query, str) else None

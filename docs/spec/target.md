@@ -56,6 +56,7 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     by inheriting a backend-specific analysis base class. A missing Facts
     projection MUST fail when the selected analyzer requests it.
   - `facts_result`, `TargetFactsError`, `TopologyFacts`, `TopologyLevelFacts`,
+    `MemoryExecutionFacts`,
     `MemoryHierarchyFacts`, `ThroughputFacts`, and `PerformanceServiceFacts`
     MUST be importable from `tilefoundry.target` for provider implementations.
   - `name` MUST be a non-empty class variable declared directly by every
@@ -836,9 +837,19 @@ class TopologyFacts:
 
     def level(self, name: str | None) -> TopologyLevelFacts | None: ...
     def parallel(self) -> TopologyLevelFacts | None: ...
+
+
+class MemoryExecutionFacts:
+    topologies: tuple[str, ...]
 ```
 
 - constraints:
+  - `MemoryExecutionFacts.topologies` MUST list the Target's execution levels
+    admitted for synchronous Copy and Fill. Each name MUST occur in
+    `TopologyFacts.topologies`. CUDA admits its thread level; AMX admits its
+    core and coprocessor levels. An empty list admits no memory execution scope.
+    Shared instruction matching MUST specialize the memory mesh wildcard from
+    this projection before checking operands.
   - `max_logical_units` is the program-side declaration limit.
     `max_physical_units` is the machine-side count of positions the level
     divides over. For CUDA CTAs it counts one CTA per SM for this model; it is

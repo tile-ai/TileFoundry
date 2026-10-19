@@ -313,7 +313,7 @@ def _pattern_refusal(matcher: PatternMatcher, op, parameter=None) -> ScheduleRef
     return ScheduleRefusal(PatternPrinter().refusal_reason(refusal, parameter), path=path, op=op)
 
 
-def admit_fields(op, operands, mesh, matcher):
+def admit_fields(op, operands, mesh, matcher, *, target=None):
     """Admit attributes, execution mesh and operand fields before tile projection."""
     for param in type(op)._op_schema.signature:
         if param.kind != "attribute" or param.name == "execution_mesh":
@@ -336,7 +336,7 @@ def admit_fields(op, operands, mesh, matcher):
             raise ScheduleRefusal(f"{param.name} must be int, got {type(value).__name__}", op=op)
         if param.pattern is not None and not matcher.match(param.pattern, value):
             raise _pattern_refusal(matcher, op, param.name)
-    if not matcher.match(declared_execution_mesh(op), mesh):
+    if not matcher.match(declared_execution_mesh(op, target), mesh):
         raise _pattern_refusal(matcher, op, "mesh")
     for param, type_ in zip(call_params(op, len(operands)), operands, strict=True):
         pattern = _operand_pattern(param, op, matcher.bindings)
@@ -375,7 +375,7 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
     )
     atom = getattr(op, "atom", None)
     matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
-    admit_fields(op, whole, mesh, matcher)
+    admit_fields(op, whole, mesh, matcher, target=None if frame is None else frame.target)
     try:
         tiles = (
             projection

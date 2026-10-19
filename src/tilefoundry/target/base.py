@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, ClassVar, Mapping, TypeVar
 
 from tilefoundry.ir.types import DType, Topology
-from tilefoundry.target.facts import TopologyFacts, facts_result
+from tilefoundry.target.facts import MemoryExecutionFacts, TopologyFacts, facts_result
 from tilefoundry.target.hardware.envelope import (
     DuplicateRegistrationError,
     HardwareDocument,
@@ -243,6 +243,8 @@ class Target:
         """
         if facts_type is TopologyFacts and query is None:
             return facts_result(self, facts_type, TopologyFacts(()))
+        if facts_type is MemoryExecutionFacts and query is None:
+            return facts_result(self, facts_type, MemoryExecutionFacts(()))
         raise UnsupportedCapabilityError(
             f"{_target_summary(self)}: no Facts projection for "
             f"{getattr(facts_type, '__name__', facts_type)!r}"
