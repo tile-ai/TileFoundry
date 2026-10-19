@@ -596,7 +596,6 @@ def test_nested_weight_footprint_projection_keeps_instance_address_correlation(
     )
     actual = result.groups[0][1][0]
     rank = len(ownership)
-    # Shift only the address coordinate; instance coordinates remain correlated.
     offset = isl.map(
         "{ ["
         + ",".join(f"i{k}" for k in range(rank + 1))

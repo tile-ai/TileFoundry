@@ -94,3 +94,18 @@ resources and native AMX are compared with the unscheduled whole-model evaluator
 The full-model smoke confirms execution, not generation quality. This migration
 does not rerun performance experiments and does not claim the old llama.cpp
 bridge's speedups for this runtime.
+
+## Execution validation
+
+Rechecked on M2 Pro on 2026-10-19 using the commands above and existing prepared
+Q8_0 resources. Both full-model runs used 128 tokens; all logits were finite.
+
+| Model | Logits shape | Native AMX calls | First-token argmax |
+|---|---|---:|---:|
+| Qwen3-1.7B | `[1, 151936]` | 196 | 1813 |
+| Qwen3.5-4B | `[1, 248320]` | 248 | 306 |
+
+The dense/hybrid migration checks also passed against the whole-model HIR
+evaluator, with maximum absolute errors of 0 and 5.74e-5 respectively. These
+checks establish execution and small-model numerical agreement; the fixed-token
+full-model smoke does not establish generation quality or performance.

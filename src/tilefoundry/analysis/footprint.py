@@ -1187,11 +1187,9 @@ def resolve_footprint(footprint, ctx):
                 continue
 
             def project_image(image):
+                """Keep instance coordinates correlated with addresses during projection."""
                 relation = isl.map.from_range(image)
                 for axis in reversed(range(len(item.ownership))):
-                    # Instance coordinates are relation dimensions, not
-                    # external parameters with an unknown SSA binding. Keep
-                    # their correlation with addresses through projection.
                     relation = relation.move_dims(isl.dim_type.IN, 0, isl.dim_type.OUT, axis, 1)
                 source = BufferAlias(
                     item.target,

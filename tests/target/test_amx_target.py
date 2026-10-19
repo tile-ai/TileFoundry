@@ -128,7 +128,6 @@ def test_memory_lowering_admits_apple_executor_scopes(level):
                 x = tf.zeros(Tensor[(2, 3), "f32", None, "gmem"])
                 return tf.transpose(x, perm=(1, 0))
 
-    # finalize verifies concrete statements as well as authored HIR admission.
     result = finalize(AppleMemory)
     text = as_script(result)
     assert "T.fill" in text and "T.copy" in text
