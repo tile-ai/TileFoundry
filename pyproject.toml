@@ -65,6 +65,7 @@ where = ["src"]
 "tilefoundry.target.amx.hardware" = ["*.toml"]
 
 [tool.setuptools.data-files]
+"include/tilefoundry/runtime/amx" = ["include/tilefoundry/runtime/amx/*.h"]
 "share/tilefoundry/spec" = ["docs/spec/*.md"]
 # Tutorial pages have distinct filenames, so one destination is sufficient.
 "share/tilefoundry/tutorial" = ["docs/tutorial/*.md"]

@@ -1,11 +1,76 @@
-"""Model config snapshots and local resource paths."""
+"""Architecture parameters for the two Qwen text prefill examples."""
 
-import json
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent
+CONFIGS = {
+    "1.7b": {
+        "hidden_size": 2048,
+        "intermediate_size": 6144,
+        "vocab_size": 151936,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+        "rms_norm_eps": 1e-06,
+        "num_hidden_layers": 28,
+        "rope_theta": 1000000,
+    },
+    "4b": {
+        "hidden_size": 2560,
+        "intermediate_size": 9216,
+        "vocab_size": 248320,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 4,
+        "head_dim": 256,
+        "rms_norm_eps": 1e-06,
+        "num_hidden_layers": 32,
+        "attn_output_gate": True,
+        "layer_types": [
+            "linear_attention",
+            "linear_attention",
+            "linear_attention",
+            "full_attention",
+            "linear_attention",
+            "linear_attention",
+            "linear_attention",
+            "full_attention",
+            "linear_attention",
+            "linear_attention",
+            "linear_attention",
+            "full_attention",
+            "linear_attention",
+            "linear_attention",
+            "linear_attention",
+            "full_attention",
+            "linear_attention",
+            "linear_attention",
+            "linear_attention",
+            "full_attention",
+            "linear_attention",
+            "linear_attention",
+            "linear_attention",
+            "full_attention",
+            "linear_attention",
+            "linear_attention",
+            "linear_attention",
+            "full_attention",
+            "linear_attention",
+            "linear_attention",
+            "linear_attention",
+            "full_attention",
+        ],
+        "linear_num_key_heads": 16,
+        "linear_num_value_heads": 32,
+        "linear_key_head_dim": 128,
+        "linear_value_head_dim": 128,
+        "linear_conv_kernel_dim": 4,
+        "rope_parameters": {
+            "mrope_interleaved": True,
+            "mrope_section": [11, 11, 10],
+            "rope_type": "default",
+            "rope_theta": 10000000,
+            "partial_rotary_factor": 0.25,
+        },
+    },
+}
 
 
 def config(model):
-    data = json.loads((ROOT / "configs" / f"{model}.json").read_text())
-    return data.get("text_config", data)
+    return dict(CONFIGS[model])

@@ -1,5 +1,5 @@
 #pragma once
-#include "amx.hpp"
+#include <tilefoundry/runtime/amx/instructions.h>
 #include <arm_neon.h>
 #include <algorithm>
 #include <atomic>
@@ -93,21 +93,20 @@ inline void prefill(const float *x, int m, const Weight &w, float *out,
     int panels = (w.n + taskcols - 1) / taskcols;
     local_amx::pool().run(cyclic ? 8 : panels, [&](int task) {
         alignas(128) float z[32];
-        AMX_SET();
+        tilefoundry::amx::start();
         for (int panel = task; panel < panels; panel += cyclic ? 8 : panels)
             for (int n0 = panel * taskcols;
                  n0 < std::min(w.n, (panel + 1) * taskcols); n0 += 32)
                 for (int m0 = 0; m0 < m; m0 += 32) {
                     for (int p = 0; p < w.k; p++) {
-                        AMX_LDX(ldxy{}.bind((void *)w.at(n0, p)));
-                        AMX_LDY(
-                            ldxy{}.bind(a.data() + (m0 / 32 * w.k + p) * 32));
-                        auto op = fma16{}.f32_z();
-                        AMX_FMA16(p == 0 ? op.skip_z() : op);
+                        tilefoundry::amx::load_x(w.at(n0, p));
+                        tilefoundry::amx::load_y(a.data() +
+                                                 (m0 / 32 * w.k + p) * 32);
+                        tilefoundry::amx::fma16(p == 0);
                     }
                     for (int row = 0; row < std::min(32, m - m0); row++) {
-                        AMX_STZ(ldstz{}.row_index(row * 2).bind(z));
-                        AMX_STZ(ldstz{}.row_index(row * 2 + 1).bind(z + 16));
+                        tilefoundry::amx::store_z(z, row * 2);
+                        tilefoundry::amx::store_z(z + 16, row * 2 + 1);
                         for (int j = 0; j < 32; j += 8) {
                             auto pair = vzipq_f32(vld1q_f32(z + j / 2),
                                                   vld1q_f32(z + 16 + j / 2));
@@ -118,7 +117,7 @@ inline void prefill(const float *x, int m, const Weight &w, float *out,
                         }
                     }
                 }
-        AMX_CLR();
+        tilefoundry::amx::stop();
     });
 }
 }

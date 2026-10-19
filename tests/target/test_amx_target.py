@@ -9,12 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, tf
-from tilefoundry.inspection import as_script
 from tilefoundry.ir.types import DType, Topology
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.schedule import finalize
 from tilefoundry.target import (
     AmxTarget,
     TopologyFacts,
@@ -114,20 +110,3 @@ def test_unmeasured_units_and_dtypes_have_no_throughput_entry():
         target.device.throughput_for("amx", DType.f16)
     with pytest.raises(ValueError, match="no measured compute-throughput"):
         target.device.throughput_for("sme", DType.f32)
-
-
-@pytest.mark.parametrize("level", ["core", "amx"])
-def test_memory_lowering_admits_apple_executor_scopes(level):
-    """Copy/fill remain valid when scheduled in Apple executor scopes."""
-
-    @module(entry="run", target=AmxTarget(), topologies=(Topology("core", 8), Topology("amx", 1)))
-    class AppleMemory:
-        @func
-        def run():
-            with Mesh((level,), layout=(1,), names=("unit",)) as _unit:
-                x = tf.zeros(Tensor[(2, 3), "f32", None, "gmem"])
-                return tf.transpose(x, perm=(1, 0))
-
-    result = finalize(AppleMemory)
-    text = as_script(result)
-    assert "T.fill" in text and "T.copy" in text

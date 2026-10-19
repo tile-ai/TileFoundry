@@ -1,3 +1,5 @@
 /artifacts/
+/prepared/
+/kernels/.build/
 __pycache__/
 *.py[cod]

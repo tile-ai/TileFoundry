@@ -1,4 +1,4 @@
-// Hand-written AMX projection runtime; independent of llama.cpp.
+/** Qwen prefill projection and TVM FFI entry. */
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/container/tensor.h>
 #include "runtime.hpp"

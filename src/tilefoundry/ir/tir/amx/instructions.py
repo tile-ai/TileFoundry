@@ -1,40 +1,38 @@
-"""Example-local AMX contracts; no machine-code generation is involved.
+"""Apple AMX FP16 outer-product and memory-transfer contracts.
 
 X holds 32 weight columns, Y holds 32 activation rows, and Z accumulates
 32x32 FP32 results. The native module implements the same explicit contract.
 """
 
+from tilefoundry.evaluator.registry import register_schedule_eval
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import ParamDef, MemoryEffect
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
-    TensorPattern,
+    ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
-    ComposedLayoutPattern,
+    TensorPattern,
     WildcardPattern,
 )
 from tilefoundry.ir.types import (
     DType,
     Layout,
     Mesh,
-    Topology,
     StorageKind,
+    Topology,
     UnitType,
-    LayoutBase,
 )
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    register_access_relation,
     identity_relations,
     matmul_relations,
+    register_access_relation,
 )
-from tilefoundry.evaluator.registry import register_schedule_eval
-from tilefoundry.evaluator.value import TensorValue
 
 Z_LAYOUT = Layout((32, (16, 2)), (32, (1, 16)))
 AMX = Mesh((Topology("amx", 1),), Layout((1,), (1,)), ("unit",))
-CORE = Mesh((Topology("core", 8),), Layout((1,), (1,)), ("worker",))
 
 
 def mesh_pattern(name):
@@ -49,7 +47,6 @@ def mesh_pattern(name):
 
 
 AMX_PATTERN = mesh_pattern("amx")
-CORE_PATTERN = mesh_pattern("core")
 R = MemoryEffect.READ
 W = MemoryEffect.WRITE
 
@@ -143,22 +140,3 @@ def transfer(name, shape, dtype, storage, execution):
 LoadX = transfer("amx_load_x", (1, 32), DType.f16, StorageKind.RMEM, AMX_PATTERN)
 LoadY = transfer("amx_load_y", (32, 1), DType.f16, StorageKind.RMEM, AMX_PATTERN)
 StoreZ = transfer("amx_store", (32, 32), DType.f32, StorageKind.GMEM, AMX_PATTERN)
-
-
-@register_op(dialect="T", category="amx", name="amx_pack")
-class Pack(Op):
-    capability = OpCapability("amx_outer_product")
-    resource = "cpu_engine"
-    execution_mesh = CORE_PATTERN
-    src = ParamDef(kind="input", effect=R, pattern=TensorPattern())
-    dst = ParamDef(
-        kind="input", effect=W, pattern=TensorPattern(storage=StorageKind.GMEM)
-    )
-    gmem_layout = ParamDef(kind="attribute", annotation=LayoutBase)
-
-
-register_typeinfer(Pack)(lambda call, ctx: UnitType())
-register_access_relation(Pack)(identity_relations)
-register_schedule_eval(Pack)(
-    lambda ctx: TensorValue(data=ctx.args[0].data.contiguous(), type=ctx.result_type)
-)

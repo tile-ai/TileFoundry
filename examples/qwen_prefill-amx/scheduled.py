@@ -1,17 +1,10 @@
-"""Explicit AMX projection schedule, plus typed CPU-kernel fallback choices."""
+"""Qwen HIR with explicit AMX projection layouts and worker schedules."""
 
 from dataclasses import replace
 from tilefoundry import module, func
 from tilefoundry.dsl import Tensor, ConstTensor, Mesh, T, Topology, tf
 from tilefoundry.ir.types import Layout, DType
-from instructions import Z_LAYOUT
-from tilefoundry.ir.core import Call, Var
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.visitor import ExprCloner, BindingSubstitutionCloner
-from host_instructions import instruction_for, INSTRUCTIONS
-from tilefoundry.ir.types import Mesh as MeshValue
+from tilefoundry.ir.tir.amx.instructions import Z_LAYOUT
 from model import build
 
 BM = 32
@@ -40,7 +33,7 @@ def scheduled_projection(M, N, K):
             def _(raw: ConstTensor[(N, K), "f16"]):
                 return tf.transpose(raw, perm=(1, 0))
 
-        return cpu_schedule(Head)
+        return Head
 
     @module(entry="forward", topologies=(Topology("core", 8), Topology("amx", 1)))
     class Linear:
@@ -49,10 +42,7 @@ def scheduled_projection(M, N, K):
             with Mesh(("core",), layout=(1,), names=("packer",)) as _packer:
                 # One CPU pack, outside all K issues. The physical 32-row
                 # panel makes each AMX Y load a contiguous 64-byte vector.
-                half = tf.schedule(
-                    (x, tf.empty(Tensor[(M, K), "f16", None, "gmem"])),
-                    op=T.amx_host_cast(dtype=DType.f16),
-                )
+                half = tf.cast(x, dtype="f16")
                 view = tf.transpose(
                     tf.reshape(half, new_shape=(M // BM, BM, K)), perm=(0, 2, 1)
                 )
@@ -68,9 +58,7 @@ def scheduled_projection(M, N, K):
                             ]
                         ),
                     ),
-                    op=T.amx_pack(
-                        gmem_layout=Layout((M // BM, K, BM), (K * BM, BM, 1))
-                    ),
+                    op=T.copy(),
                 )
                 out = tf.zeros(Tensor[(M, N), "f32"])
             with Mesh(("core",), layout=(WORKERS,), names=("worker",)) as cores:
@@ -137,85 +125,8 @@ def scheduled_projection(M, N, K):
     return Linear
 
 
-class CPUChoices(ExprCloner):
-    """Record explicit software-kernel choices without wrapping whole functions."""
-
-    def visit_Call(self, call, ctx=None):
-        args = tuple(self.visit(arg, ctx) for arg in call.args)
-        # Integer coordinate arithmetic stays index arithmetic, not a kernel.
-        if (type(call.target), len(args)) in INSTRUCTIONS and not (
-            call.type.shape == () and call.type.dtype in (DType.i64, DType.i32)
-        ):
-            op = instruction_for(call.target, len(args), call.type.dtype)
-            from tilefoundry.ir.hir.tensor.empty import Empty
-            from tilefoundry.ir.types import StorageKind
-            from tilefoundry.ir.types.stride import compact_row_major
-
-            ty = replace(
-                call.type,
-                storage=StorageKind.GMEM,
-                layout=Layout(
-                    call.type.shape, tuple(compact_row_major(call.type.shape))
-                ),
-            )
-            dst = Call(Empty(type=ty), (), type=ty)
-            return Call(ScheduleOp(op=op), (*args, dst), type=ty)
-        return replace(call, args=args)
-
-
-def cpu_schedule(module, memo=None):
-    from tilefoundry.dsl import ModuleList
-    from tilefoundry.ir.core import Op
-
-    memo = {} if memo is None else memo
-    if id(module) in memo:
-        return memo[id(module)]
-    functions = []
-    for fn in module.functions:
-        if fn.body is None:
-            raise ValueError("No dispatch prototypes")
-        if isinstance(fn.body, MeshRegion) or any(
-            isinstance(v, Call) and not isinstance(v.target, Op)
-            for v in collect_exprs(fn.body)
-        ):
-            functions.append(fn)
-            continue
-        body = CPUChoices().visit(fn.body)
-        mesh = MeshValue((Topology("core", 8),), Layout((1,), (1,)), ("worker",))
-        params = tuple(Var(p.name, type=p.type) for p in fn.params)
-        body = BindingSubstitutionCloner().visit(
-            body, {id(p): v for p, v in zip(fn.params, params)}
-        )
-        body = MeshRegion(
-            mesh, body, params=params, args=fn.params, type=fn.return_type
-        )
-        functions.append(replace(fn, body=body))
-    mapping = {id(old): new for old, new in zip(module.functions, functions)}
-
-    class Retarget(ExprCloner):
-        def visit_Call(self, call, ctx=None):
-            result = replace(
-                call,
-                args=tuple(self.visit(arg, ctx) for arg in call.args),
-                target=self.visit(call.target, ctx)
-                if isinstance(call.target, Call)
-                else call.target,
-            )
-            return replace(result, target=mapping.get(id(result.target), result.target))
-
-    for fn in functions:
-        fn.body = Retarget().visit(fn.body)
-    children = {
-        key: ModuleList(tuple(cpu_schedule(child, memo) for child in slot.elements))
-        if slot.indexed
-        else ModuleList(cpu_schedule(slot.elements[0], memo))
-        for key, slot in module.children.items()
-    }
-    result = replace(module, functions=tuple(functions), children=children)
-    memo[id(module)] = result
-    return result
-
-
 def make_scheduled(config, sequence=128):
-    root = cpu_schedule(build(config, sequence, linear=scheduled_projection))
-    return replace(root, topologies=(Topology("core", 8), Topology("amx", 1)))
+    return replace(
+        build(config, sequence, linear=scheduled_projection),
+        topologies=(Topology("core", 8), Topology("amx", 1)),
+    )

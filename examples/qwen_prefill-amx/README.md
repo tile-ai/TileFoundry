@@ -1,111 +1,64 @@
-# Qwen text Prefill on Apple AMX
+# Qwen text prefill on Apple AMX
 
-Qwen3-1.7B and Qwen3.5-4B, batch one, text Prefill only. The example provides
-whole-model HIR, explicit AMX schedules, retained-call TIR and a hand-written
-TVM FFI runtime. No Decode, MTP, vision or compiler code generation is involved.
-
-The model uses `ModuleList` instance slots: the dense model's 28 layers share
-one layer definition; the hybrid model's 32 layers share two. Each instance
-retains its own resources. Static calls select the heterogeneous layer slots;
-the compiler does not clone or inline their bodies.
+Qwen3-1.7B and Qwen3.5-4B text prefill, batch one, on Apple Silicon. The HIR
+expresses the whole model; the scheduled HIR assigns its projections to AMX.
+A Python runtime module implements the same module tree and calls C++ AMX
+kernels through TVM FFI. Other operations run on the CPU using Torch.
 
 ## Files
 
-| File | Role |
+| File | Purpose |
 |---|---|
-| `model.py` | Dense/hybrid architecture and whole Prefill HIR |
-| `scheduled.py` | Explicit destinations, activation/weight layout and worker schedule |
-| `instructions.py` | Example-local X/Y load, FMA16, Z store and packing contracts |
-| `host_instructions.py` | Typed host software kernels for non-AMX operations |
-| `runtime_model.py` | One runtime twin per shared HIR definition |
-| `weights.py` | GGUF aliases and Q8_0 decoding |
-| `native/` | Standalone hand-written AMX kernel, thread pool and reverse-engineered instruction header |
-| `prepare.py`, `run.py`, `export_ir.py`, `check.py` | Reproduction entry points |
-
-AMX contracts are local extensions in this example, not claims that an AMX
-code generator has been added to TileFoundry. Host operations are software
-kernels implemented using Torch; they are not AMX ISA instructions. The native
-projection kernel and its FFI module have no llama.cpp dependency.
-
-## Schedule and numerical contract
-
-Weights arrive as Q8_0 GGUF and are dequantized to FP16. The original quantization
-error remains. `Module.prepare` packs each projection from `[N,K]` to `[N/B,K,B]`,
-where B is 64, or 32 for narrow projections. Activations are converted to FP16
-and packed into contiguous 32-row panels before accumulation.
-
-Eight logical workers distribute N panels cyclically. Each holds a 32x32 FP32
-Z accumulator, advances K by loading 32 weights into X and 32 activations into
-Y, and issues FP16 outer products with FP32 accumulation. Z stays resident until
-the tile is complete, then its interleaved rows are unpacked. The final M=1
-vocabulary projection uses a host kernel; it is not a Decode workload.
-
-The reverse-engineered AMX header is retained from the original user-provided
-runtime. This path is validated on M2 Pro. Worker identity is logical; the
-runtime does not promise OS thread affinity.
+| `model.py` | Whole-model HIR, shared layer definitions and weight converters |
+| `scheduled.py` | AMX projection schedule, packed layouts and worker assignment |
+| `runtime_model.py` | Explicit Python runtime modules for projections, attention, GDN and layers |
+| `kernels/prefill.cpp`, `kernels/runtime.hpp` | Native projection kernel and FFI entry |
+| `kernels/__init__.py` | Build and load the native kernel on first use |
+| `weights.py` | Q8_0 GGUF reading and resource aliases |
+| `config.py` | Architecture parameters for the two models |
+| `run.py` | Weight preparation, loading and one prefill call |
 
 ## Run
 
-Use an Apple Silicon Mac with Command Line Tools and the existing `tf` Conda
-environment. Dependencies are TileFoundry from this checkout, Torch, `gguf`,
-`safetensors` and `tvm_ffi`. Use the same Python for building and running.
+Requires an Apple Silicon Mac, Xcode Command Line Tools, Python 3.12+, this
+TileFoundry revision, Torch, `gguf`, `safetensors` and `apache-tvm-ffi`.
 
 ```sh
-conda activate tf
-python examples/qwen_prefill-amx/build.py
-python examples/qwen_prefill-amx/check.py
-
-python examples/qwen_prefill-amx/prepare.py --model 1.7b --checkpoint /path/to/Qwen3-1.7B-Q8_0.gguf
-python examples/qwen_prefill-amx/run.py --model 1.7b
-
-python examples/qwen_prefill-amx/prepare.py --model 4b --checkpoint /path/to/Qwen3.5-4B-Q8_0.gguf
-python examples/qwen_prefill-amx/run.py --model 4b
+python examples/qwen_prefill-amx/run.py --model 1.7b --checkpoint /path/to/Qwen3-1.7B-Q8_0.gguf
+python examples/qwen_prefill-amx/run.py --model 4b --checkpoint /path/to/Qwen3.5-4B-Q8_0.gguf
 ```
 
-Config snapshots are in `configs/`. Checkpoint paths must be supplied explicitly;
-there are no user-specific absolute paths or downloads during a run. `prepare`
-uses the authored converters and writes canonical weights under
-`artifacts/prepared-<model>`. `run` loads only those prepared resources and
-executes one 128-token Prefill over a fixed valid token pattern. It checks the
-logits shape and finiteness, prints the first-token argmax and actual AMX call
-counts, and saves `smoke.json`. It has no warmup, repetition or speedup table.
+The first run prepares the GGUF weights under `prepared/<model>/` and compiles
+the C++ kernel under `kernels/.build/`. Subsequent runs reuse both. Use
+`--prepared /path/to/prepared-weights` to choose another resource directory.
+`--sequence` selects a positive multiple of 32; the default is 128. The entry
+runs a fixed token sequence and prints the logits shape and next-token ID.
 
-Prompt lengths must be positive multiples of 32; `--sequence` selects the static
-shape. The prepare/load/run stages are separate, and packed weight layouts do
-not depend on prompt length. Large prepared weights and generated binaries are
-ignored by Git.
+The runtime module can also be called directly with your own token IDs:
 
-## Inspect the compiler path
+```python
+from config import config
+from runtime_model import make_runtime, inputs
+from tilefoundry.runtime import SafetensorsResource
 
-```sh
-python examples/qwen_prefill-amx/export_ir.py --model 1.7b
-python examples/qwen_prefill-amx/export_ir.py --model 4b
-python examples/qwen_prefill-amx/verify_ir.py --model 1.7b
-python examples/qwen_prefill-amx/verify_ir.py --model 4b
+c = config("1.7b")
+runtime = make_runtime(c, sequence=128)()
+runtime.load(SafetensorsResource("prepared/1.7b", device="cpu"))
+logits = runtime(*inputs(c, 128, token_ids))  # token_ids: CPU int64 tensor [128]
 ```
 
-The three source files are emitted into `artifacts/ir-<model>/`. Finalization
-uses the current API and retained calls, with no old node-budget, recursion-limit
-or no-traffic workaround. The runtime is hand-written; emitting TIR does not
-compile that TIR into the executed native kernel.
+Run this snippet from the example directory. `runtime.module` is the scheduled
+HIR module; `model.build(c, 128)` constructs its unscheduled counterpart.
 
-`check.py` is a small dense/hybrid migration check: actual converters, loaded
-resources and native AMX are compared with the unscheduled whole-model evaluator.
-The full-model smoke confirms execution, not generation quality. This migration
-does not rerun performance experiments and does not claim the old llama.cpp
-bridge's speedups for this runtime.
+## Execution arrangement
 
-## Execution validation
+Q8_0 weights are dequantized to FP16 and packed from `[N,K]` to `[N/B,K,B]`,
+with B=64, or 32 for narrow projections. Eight logical workers divide N panels
+cyclically. Each AMX unit accumulates a 32×32 FP32 tile from FP16 outer products;
+activations are packed into contiguous 32-row panels. The final one-row vocabulary
+projection uses Torch. GDN, normalization, rotary embeddings and attention also
+execute in the Python runtime using Torch.
 
-Rechecked on M2 Pro on 2026-10-19 using the commands above and existing prepared
-Q8_0 resources. Both full-model runs used 128 tokens; all logits were finite.
-
-| Model | Logits shape | Native AMX calls | First-token argmax |
-|---|---|---:|---:|
-| Qwen3-1.7B | `[1, 151936]` | 196 | 1813 |
-| Qwen3.5-4B | `[1, 248320]` | 248 | 306 |
-
-The dense/hybrid migration checks also passed against the whole-model HIR
-evaluator, with maximum absolute errors of 0 and 5.74e-5 respectively. These
-checks establish execution and small-model numerical agreement; the fixed-token
-full-model smoke does not establish generation quality or performance.
+AMX instruction contracts and the native instruction wrappers are provided by
+TileFoundry. The example supplies the model-specific schedule and hand-written
+runtime. It covers text prefill through logits, with no decode, MTP or vision.
