@@ -31,14 +31,17 @@
 
 ## Latest News
 
+- 10/2026 🚀: **TileFoundry 0.0.3 is on PyPI** — scheduled HIR lowers end to end to TIR, analysis models staged memory allocation, and the CLI starts without loading torch.
+- 10/2026 ⚡: [Qwen3.8-27B prefill](https://github.com/tile-ai/TileFoundry/tree/main/examples/qwen3_8_27b_prefill-tilelang) — a 64-layer gated-delta-net / attention hybrid, **faster than SGLang** at 1024 / 4096 / 8192 tokens, and [**1.88x–1.03x faster** at 128–1024 tokens](https://github.com/tile-ai/TileFoundry/tree/main/examples/qwen3_8_27b_prefill_short-tilelang), across the roofline ridge.
+- 10/2026 🍎: [Qwen prefill on Apple AMX](https://github.com/tile-ai/TileFoundry/tree/main/examples/qwen_prefill-amx) — Qwen3-1.7B and Qwen3.5-4B text prefill on an M2 Pro, with the large projections as FP16 AMX outer products.
 - 09/2026 📝: [AI Compilers in the Agentic Era](https://tile-ai.github.io/TileFoundry.github.io/blog/AI-compilers-in-the-agentic-era/) — where is the right boundary between coding agents and AI compilers?
 - 09/2026 🔧: **TileFoundry 0.0.2 is on PyPI** — bug fixes and refactoring across the analysis, parser, and IR layers.
-- 08/2026 ⚡: [Nemotron-3.5-Lightning-30B-A3B](https://github.com/tile-ai/TileFoundry/tree/main/examples/nemotron_3_5_lightning_30b_a3b-tilelang) — a 52-layer Mamba2 / attention / MoE hybrid in a **single mega decode kernel**, one launch a step with no CUDA graph, reaching **97.5% of SGLang** at short context and **83.2%** at 262144.
-- 08/2026 📦: Four [worked examples](https://github.com/tile-ai/TileFoundry/tree/main/examples) added — Qwen3-1.7B (tilelang), Qwen3.5-35B-A3B (tilelang), MiniCPM3-4B (CuTeDSL) and granite-4.0-h-small (CUDA C) — each one a real agent run kept whole, with the decode throughput it measured.
 
 <details>
 <summary>Earlier</summary>
 
+- 08/2026 ⚡: [Nemotron-3.5-Lightning-30B-A3B](https://github.com/tile-ai/TileFoundry/tree/main/examples/nemotron_3_5_lightning_30b_a3b-tilelang) — a 52-layer Mamba2 / attention / MoE hybrid in a **single mega decode kernel**, one launch a step with no CUDA graph, reaching **97.5% of SGLang** at short context and **83.2%** at 262144.
+- 08/2026 📦: Four [worked examples](https://github.com/tile-ai/TileFoundry/tree/main/examples) added — Qwen3-1.7B (tilelang), Qwen3.5-35B-A3B (tilelang), MiniCPM3-4B (CuTeDSL) and granite-4.0-h-small (CUDA C) — each one a real agent run kept whole, with the decode throughput it measured.
 - 08/2026 🎉: **TileFoundry 0.0.1 is on PyPI** — the first public release.
 
 </details>
