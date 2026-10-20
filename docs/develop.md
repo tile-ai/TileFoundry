@@ -43,6 +43,17 @@ skips) the compile / e2e tests, so end-to-end coverage is never silently
 hidden. Per-test dump output lands under
 `test_results/{file_stem}/{test_name}/...` (gitignored).
 
+Set `TILEFOUNDRY_CACHE_DIR` to keep compile results across runs. The test session
+defaults `CCACHE_DIR` to its `ccache/` subdirectory and `TORCH_EXTENSIONS_DIR` to
+its `torch_extensions/` subdirectory, creating both directories. With `ccache`
+on `PATH`, it defaults `CMAKE_CUDA_COMPILER_LAUNCHER` and
+`CMAKE_CXX_COMPILER_LAUNCHER` to `ccache`. `CCACHE_BASEDIR` follows the process's
+temporary directory (`TMPDIR`), and `CCACHE_NOHASHDIR` defaults to `1`. Existing
+environment values take precedence. Only the main test process removes torch
+extension locks older than 30 minutes. Without a cache root, torch extensions
+stay under `<repo>/.torch_extensions` and no compiler launcher is configured.
+CI uses `/__w/tf-cache` as its cache root.
+
 Common inner loops:
 
 ```sh

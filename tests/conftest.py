@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -23,12 +26,37 @@ _SANITIZE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def pytest_configure(config) -> None:
+    cache = os.environ.get("TILEFOUNDRY_CACHE_DIR")
+    if cache:
+        _use_shared_caches(Path(cache), main=not hasattr(config, "workerinput"))
+        return
     extensions = Path(config.rootpath) / ".torch_extensions"
     os.environ.setdefault("TORCH_EXTENSIONS_DIR", str(extensions))
     if hasattr(config, "workerinput"):
         return
     for lock in extensions.glob("*/lock"):
         lock.unlink(missing_ok=True)
+
+
+def _use_shared_caches(root: Path, *, main: bool) -> None:
+    """Reuse compile caches and expire abandoned torch locks in the main process."""
+    extensions = Path(os.environ.setdefault("TORCH_EXTENSIONS_DIR", str(root / "torch_extensions")))
+    ccache = Path(os.environ.setdefault("CCACHE_DIR", str(root / "ccache")))
+    for directory in (extensions, ccache):
+        directory.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("CCACHE_BASEDIR", tempfile.gettempdir())
+    os.environ.setdefault("CCACHE_NOHASHDIR", "1")
+    if shutil.which("ccache"):
+        for language in ("CUDA", "CXX"):
+            os.environ.setdefault(f"CMAKE_{language}_COMPILER_LAUNCHER", "ccache")
+    if main:
+        cutoff = time.time() - 30 * 60
+        for lock in extensions.glob("*/lock"):
+            try:
+                if lock.stat().st_mtime < cutoff:
+                    lock.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _split_nodeid(nodeid: str) -> tuple[str, str | None]:
