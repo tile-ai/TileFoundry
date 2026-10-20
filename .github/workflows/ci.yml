@@ -26,8 +26,19 @@ jobs:
     env:
       UV_CACHE_DIR: /__w/uv-cache
       UV_NO_PROGRESS: "1"
+      TILEFOUNDRY_CACHE_DIR: /__w/tf-cache
+      CCACHE_STATSLOG: ${{ runner.temp }}/ccache-stats.log
     steps:
       - uses: actions/checkout@v4
+      - name: Keep pull requests from writing the shared caches
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "CCACHE_READONLY=1" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/torch_extensions"
+          if [ -d "$TILEFOUNDRY_CACHE_DIR/torch_extensions" ]; then
+            cp -a "$TILEFOUNDRY_CACHE_DIR/torch_extensions/." "$RUNNER_TEMP/torch_extensions/"
+          fi
+          echo "TORCH_EXTENSIONS_DIR=$RUNNER_TEMP/torch_extensions" >> "$GITHUB_ENV"
       - name: Prepare the project environment
         run: |
           mkdir -p test_results
@@ -57,6 +68,9 @@ jobs:
           pytest tests/ -n 4 \
             --cov=tilefoundry --cov-branch --cov-context=test \
             --cov-report=xml:test_results/coverage-source.xml --cov-report=
+      - name: Report compile cache use
+        if: always()
+        run: ccache --dir "$TILEFOUNDRY_CACHE_DIR/ccache" --show-log-stats
       - name: Build the wheel
         run: uv build --wheel --out-dir "$RUNNER_TEMP/wheel"
       - name: Install the wheel into a clean environment
