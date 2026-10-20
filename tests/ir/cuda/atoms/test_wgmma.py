@@ -14,6 +14,11 @@ from ._cute_reference import (
     tv_configs,
     tv_key,
 )
+from ._operand_layout import (
+    _assert_reshard_typeinfer_ok,
+    _bound_fragment,
+    _check_split_extents_match_mesh,
+)
 
 
 def _atom_slices(dtype, major, swizzle, role, raw):
@@ -78,7 +83,6 @@ def test_wgmma_atom():
     """All supported TV layouts and shared-memory atom slices agree with CuTe."""
     reference = cute_reference()
     failures = []
-    tv_count = smem_count = 0
     for dtype, form, n in tv_configs():
         key = tv_key(dtype, form, n)
         atom = T.cuda.sm90.Wgmma(
@@ -89,9 +93,14 @@ def test_wgmma_atom():
             b_major=wgmma.Major.K,
         )
         for role in ("A", "B", "C"):
+            broadcast = role == "B" or role == "A" and form == wgmma.Form.SS
+            if not broadcast:
+                shard = _bound_fragment(atom, role)
+                _check_split_extents_match_mesh(shard)
+                shape = atom.operand_shapes()[("C", "A", "B").index(role)]
+                _assert_reshard_typeinfer_ok(shape, "f32" if role == "C" else dtype.name, shard)
             ours = to_tv_layout(atom, role)
-            theirs = reference_tv(reference[key][role])
-            tv_count += 1
+            theirs = reference_tv(reference[key][role], broadcast=broadcast)
             if ours != theirs:
                 failures.append(f"{key} {role}: {ours} != {theirs}")
     for dtype, major, swizzle in smem_atoms():
@@ -107,7 +116,6 @@ def test_wgmma_atom():
             ):
                 actual = to_byte_layout(ours, shape, eb, region)
                 expected = to_byte_layout(theirs, region, eb, region)
-                smem_count += 1
                 if actual != expected:
                     first = next(
                         i for i, pair in enumerate(zip(actual, expected)) if pair[0] != pair[1]
@@ -116,5 +124,4 @@ def test_wgmma_atom():
                         f"{key} {role} offset={offset}: {ours} != {theirs}; "
                         f"byte address at point {first}: {actual[first]} != {expected[first]}"
                     )
-    print(f"CuTe comparisons: TV={tv_count}, smem={smem_count}")
     assert not failures, "\n".join(failures)

@@ -13,16 +13,12 @@ from pathlib import Path
 
 from tilefoundry.ir.pattern.utils import selected_pattern
 from tilefoundry.ir.tir.cuda.nn import wgmma
-from tilefoundry.ir.types import Broadcast, Layout
-from tilefoundry.ir.types.int_tuple import flatten
+from tilefoundry.ir.types import Layout
+from tilefoundry.ir.types.int_tuple import flatten, product
 from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 
-from ._operand_layout import (
-    _assert_reshard_typeinfer_ok,
-    _bound_fragment,
-    _check_split_extents_match_mesh,
-)
+from ._operand_layout import _bound_fragment
 
 
 def tv_configs():
@@ -74,24 +70,6 @@ def cute_reference():
     assert cuda and (cuda / "cuda_runtime_api.h").is_file(), (
         f"Missing CUDA headers: searched CUDA_HOME/include and nvcc/../include ({cuda})"
     )
-    build = Path(tempfile.mkdtemp(prefix="tilefoundry_cute_reference_"))
-    obj, executable = build / "reference.o", build / "reference"
-    ccache = shutil.which("ccache")
-    _run(
-        [
-            *([ccache] if ccache else []),
-            compiler,
-            "-std=c++17",
-            "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",
-            f"-I{cutlass}",
-            f"-I{cuda}",
-            "-c",
-            str(Path(__file__).with_name("cute_reference.cpp")),
-            "-o",
-            str(obj),
-        ]
-    )
-    _run([compiler, str(obj), "-o", str(executable)])
     requests = {"mma": "mma bf16 - 0 - 0"}
     requests.update(
         {
@@ -105,7 +83,26 @@ def cute_reference():
             for dtype, major, sw in smem_atoms()
         }
     )
-    output = _run([str(executable)], input="\n".join(f"{k} {v}" for k, v in requests.items()))
+    with tempfile.TemporaryDirectory(prefix="tilefoundry_cute_reference_") as directory:
+        build = Path(directory)
+        obj, executable = build / "reference.o", build / "reference"
+        ccache = shutil.which("ccache")
+        _run(
+            [
+                *([ccache] if ccache else []),
+                compiler,
+                "-std=c++17",
+                "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",
+                f"-I{cutlass}",
+                f"-I{cuda}",
+                "-c",
+                str(Path(__file__).with_name("cute_reference.cpp")),
+                "-o",
+                str(obj),
+            ]
+        )
+        _run([compiler, str(obj), "-o", str(executable)])
+        output = _run([str(executable)], input="\n".join(f"{k} {v}" for k, v in requests.items()))
     try:
         reference = json.loads(output)
     except json.JSONDecodeError as error:
@@ -122,8 +119,8 @@ def _canonical(shape, strides, *, values=False):
     return coalesce(Layout(tuple(s for s, _ in modes), tuple(d for _, d in modes)))
 
 
-def reference_tv(raw):
-    """Canonicalize thread order and each thread's element set, separately."""
+def reference_tv(raw, *, broadcast=False):
+    """Preserve broadcast operand axes; canonicalize register element sets."""
 
     def tuples(value):
         return tuple(tuples(x) for x in value) if isinstance(value, list) else value
@@ -132,12 +129,10 @@ def reference_tv(raw):
     parts = []
     for index in range(2):
         s, d = shape[index], strides[index]
+        s = s if isinstance(s, tuple) else (s,)
+        d = d if isinstance(d, tuple) else (d,)
         parts.append(
-            _canonical(
-                s if isinstance(s, tuple) else (s,),
-                d if isinstance(d, tuple) else (d,),
-                values=index == 1,
-            )
+            Layout(s, d) if broadcast and index == 1 else _canonical(s, d, values=index == 1)
         )
     return Layout(tuple(p.shape for p in parts), tuple(p.strides for p in parts))
 
@@ -147,19 +142,11 @@ def to_tv_layout(atom, role):
     shape = atom.operand_shapes()[("C", "A", "B").index(role)]
     pattern = selected_pattern(atom.role(role), atom.bindings).layout
     if pattern.attrs == wgmma.BROADCAST:
-        assert all(isinstance(attr, Broadcast) for attr in pattern.attrs)
-        element_bytes = atom.bindings["dtype"].bit_width // 8
-        assert shape == (
-            (64, 32 // element_bytes) if role == "A" else (32 // element_bytes, atom.bindings["n"])
-        )
-        return Layout(((128,), (shape[0] * shape[1],)), ((0,), (1,)))
+        shape = shape[::-1] if role == "B" else shape
+        threads = product(flatten(atom.required_execution_mesh.layout.shape))
+        return Layout(((threads,), shape), ((0,), (1, shape[0])))
 
     shard = _bound_fragment(atom, role)
-    _check_split_extents_match_mesh(shard)
-    dtype = atom.bindings.get("dtype")
-    _assert_reshard_typeinfer_ok(
-        shape, "f32" if role == "C" else dtype.name if dtype is not None else "bf16", shard
-    )
     corresponding = layout_correspondence(shard.layout.shape, shape)
     steps = [0] * len(corresponding.extents)
     for axis, group in enumerate(corresponding.groups):
