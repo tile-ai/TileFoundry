@@ -95,6 +95,7 @@ def cute_reference():
                 "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",
                 f"-I{cutlass}",
                 f"-I{cuda}",
+                f"-I{cuda}/cccl",
                 "-c",
                 str(Path(__file__).with_name("cute_reference.cpp")),
                 "-o",
