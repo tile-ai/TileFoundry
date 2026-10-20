@@ -6,7 +6,6 @@ from itertools import product
 from math import prod
 
 import isl
-import torch
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
@@ -35,6 +34,7 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.stride import compact_col_major, crd2idx, idx2crd
 from tilefoundry.ir.types.utils import is_literal_shape, participant_layout
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,

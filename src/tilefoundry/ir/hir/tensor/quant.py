@@ -7,7 +7,6 @@ The result is ``(x_q, x_scale)``. ``x_q`` preserves the input shape;
 from __future__ import annotations
 
 import isl
-import torch
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue, to_torch_dtype
@@ -29,6 +28,7 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,

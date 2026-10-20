@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import torch
-
 from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.utils.lazy import torch
 
 
 def gather(

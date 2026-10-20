@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import torch
-
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
@@ -13,6 +11,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import is_dim_expr
 from tilefoundry.ir.types.tensor_type import ShapeDim
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,

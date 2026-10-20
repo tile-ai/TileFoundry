@@ -131,6 +131,8 @@ short bullet list — keep it that way.
   `forward-references` pre-commit hook rejects that shim. Ruff cannot be asked
   to do it — its own `TC001`-`TC003` push the other way.
 - Import runtime dependencies normally or lazily at their point of use.
+  Import torch through the proxies in `tilefoundry.utils.lazy` so
+  `import tilefoundry` does not load torch.
 
 ### Tests
 

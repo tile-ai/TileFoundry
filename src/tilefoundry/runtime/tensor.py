@@ -12,11 +12,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import torch
-
 from tilefoundry.ir.types import Placement, Topology
 from tilefoundry.ir.types.shard_layout import local_layout_and_offset, shard_layout_of
 from tilefoundry.ir.types.tensor_type import TensorType
+from tilefoundry.utils.lazy import torch
 
 
 @dataclass(frozen=True)

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import torch
-
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -16,6 +14,7 @@ from tilefoundry.ir.types import DType, Layout, TensorType
 from tilefoundry.ir.types.shard_layout import Broadcast, shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,

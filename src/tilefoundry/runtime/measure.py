@@ -8,19 +8,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, ClassVar, Mapping, Sequence
 
-import torch
-
 from tilefoundry.evaluator.value import from_torch_dtype
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.runtime.tensor import ShardTensor
+from tilefoundry.utils.lazy import torch
 
 _NEAR_ZERO = 1e-12
 
 _SIGNED_BITS = {
-    torch.bfloat16: torch.int16,
-    torch.float16: torch.int16,
-    torch.float32: torch.int32,
-    torch.float64: torch.int64,
+    "torch.bfloat16": "int16",
+    "torch.float16": "int16",
+    "torch.float32": "int32",
+    "torch.float64": "int64",
 }
 
 
@@ -225,7 +224,7 @@ def _ordered_bits(tensor: torch.Tensor) -> torch.Tensor:
     difference is a count of representable values.
     """
     try:
-        as_integer = tensor.view(_SIGNED_BITS[tensor.dtype])
+        as_integer = tensor.view(getattr(torch, _SIGNED_BITS[str(tensor.dtype)]))
     except KeyError:
         raise ValueError(
             f"check: ulp is defined on a float output, not on {tensor.dtype}"

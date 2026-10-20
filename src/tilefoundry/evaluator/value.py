@@ -3,10 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-import torch
-
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard_layout import ShardLayout
+from tilefoundry.utils.lazy import torch
 
 
 class EvalError(Exception):
@@ -33,20 +32,20 @@ class TupleValue(Value):
 
 
 _TORCH_DTYPE = {
-    DType.f32: torch.float32,
-    DType.f16: torch.float16,
-    DType.bf16: torch.bfloat16,
-    DType.fp8e4m3: torch.float8_e4m3fn,
-    DType.f8e8m0: torch.float8_e8m0fnu,
-    DType.i32: torch.int32,
-    DType.i64: torch.int64,
-    DType.bool: torch.bool,
+    DType.f32: "float32",
+    DType.f16: "float16",
+    DType.bf16: "bfloat16",
+    DType.fp8e4m3: "float8_e4m3fn",
+    DType.f8e8m0: "float8_e8m0fnu",
+    DType.i32: "int32",
+    DType.i64: "int64",
+    DType.bool: "bool",
 }
 
 
 def to_torch_dtype(dtype: DType) -> torch.dtype:
     try:
-        return _TORCH_DTYPE[dtype]
+        return getattr(torch, _TORCH_DTYPE[dtype])
     except KeyError:
         raise EvalError(f"evaluator: unsupported dtype {dtype}") from None
 
@@ -57,8 +56,8 @@ def from_torch_dtype(dtype: torch.dtype) -> DType:
     The declared dtype a torch dtype stands for -- ``to_torch_dtype`` inverted,
     off the same table, so a name reported back cannot drift from one accepted.
     """
-    for declared, torch_dtype in _TORCH_DTYPE.items():
-        if torch_dtype == dtype:
+    for declared, name in _TORCH_DTYPE.items():
+        if getattr(torch, name) == dtype:
             return declared
     raise EvalError(f"evaluator: no declared dtype for {dtype}")
 

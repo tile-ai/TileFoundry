@@ -11,11 +11,10 @@ import dataclasses
 import weakref
 from typing import Any, Callable, Mapping, Protocol, Union
 
-import torch
-
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.types.tensor_type import TensorType
+from tilefoundry.utils.lazy import torch
 
 
 @dataclasses.dataclass(frozen=True)
@@ -25,7 +24,7 @@ class Absolute:
     name: str
 
 
-Convert = Callable[[torch.Tensor], torch.Tensor]
+Convert = Callable[["torch.Tensor"], "torch.Tensor"]
 
 
 @dataclasses.dataclass(frozen=True)

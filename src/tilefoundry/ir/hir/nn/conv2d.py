@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import isl
-import torch.nn.functional as F
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
@@ -17,6 +16,7 @@ from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import i64_const, static_dim_value
+from tilefoundry.utils.lazy import F
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,

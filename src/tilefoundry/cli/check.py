@@ -10,8 +10,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
-import torch
-
 from tilefoundry.cli.source import load_namespace, parse_dims
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import from_torch_dtype
@@ -33,6 +31,7 @@ from tilefoundry.runtime.resource import (
     SafetensorsResource,
     draw_tensor,
 )
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry.contexts import ValuationContext
 
 SEED = 0

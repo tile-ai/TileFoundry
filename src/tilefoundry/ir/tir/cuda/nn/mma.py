@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import torch
-
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, Mesh, UnitType
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,

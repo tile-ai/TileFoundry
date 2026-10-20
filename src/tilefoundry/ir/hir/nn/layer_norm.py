@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import isl
-import torch.nn.functional as F
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
@@ -12,6 +11,7 @@ from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard_layout import ShardLayout, split_target_axes
+from tilefoundry.utils.lazy import F
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,

@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import torch
-
 from tilefoundry.evaluator.context import EvaluateContext
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import eval_registry
@@ -28,6 +26,7 @@ from tilefoundry.ir.pattern import locate_dim_var
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.utils.lazy import torch
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 _MISSING_PREPARED_WEIGHT = "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"

@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Tuple
 
 import isl
-import torch
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
@@ -19,6 +18,7 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Layout, TensorType
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,

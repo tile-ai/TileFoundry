@@ -9,7 +9,6 @@ remains a separate node.
 from __future__ import annotations
 
 import isl
-import torch
 
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
@@ -39,6 +38,7 @@ from tilefoundry.ir.types.shard_layout import (
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.tensor_type import ShapeDim
 from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,

@@ -12,7 +12,6 @@ dtype / layout / storage with their respective Q / K input.
 from __future__ import annotations
 
 import isl
-import torch
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
@@ -24,6 +23,7 @@ from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TupleType
 from tilefoundry.ir.types.utils import is_literal_shape
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
