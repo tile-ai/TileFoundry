@@ -31,7 +31,7 @@
 
 ## Latest News
 
-- 10/2026 🚀: **TileFoundry 0.0.3 is on PyPI** — scheduled HIR lowers end to end to TIR, analysis models staged memory allocation, and the CLI starts without loading torch.
+- 10/2026 🚀: **TileFoundry 0.0.3 is on PyPI** — `tilefoundry schedule` shows which hardware instructions can implement an HIR program and lowers the chosen schedule to TIR, down to block-scaled FP8 GEMM on SM90 WGMMA; `analyze` now models staged memory allocation and reuse.
 - 10/2026 ⚡: [Qwen3.8-27B prefill](https://github.com/tile-ai/TileFoundry/tree/main/examples/qwen3_8_27b_prefill-tilelang) — a 64-layer gated-delta-net / attention hybrid, **faster than SGLang** at 1024 / 4096 / 8192 tokens, and [**1.88x–1.03x faster** at 128–1024 tokens](https://github.com/tile-ai/TileFoundry/tree/main/examples/qwen3_8_27b_prefill_short-tilelang), across the roofline ridge.
 - 10/2026 🍎: [Qwen prefill on Apple AMX](https://github.com/tile-ai/TileFoundry/tree/main/examples/qwen_prefill-amx) — Qwen3-1.7B and Qwen3.5-4B text prefill on an M2 Pro, with the large projections as FP16 AMX outer products.
 - 09/2026 📝: [AI Compilers in the Agentic Era](https://tile-ai.github.io/TileFoundry.github.io/blog/AI-compilers-in-the-agentic-era/) — where is the right boundary between coding agents and AI compilers?
