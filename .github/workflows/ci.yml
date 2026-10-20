@@ -27,7 +27,6 @@ jobs:
       UV_CACHE_DIR: /__w/uv-cache
       UV_NO_PROGRESS: "1"
       TILEFOUNDRY_CACHE_DIR: /__w/tf-cache
-      CCACHE_STATSLOG: ${{ runner.temp }}/ccache-stats.log
     steps:
       - uses: actions/checkout@v4
       - name: Keep pull requests from writing the shared caches
@@ -64,12 +63,15 @@ jobs:
       - name: Run tests
         env:
           COVERAGE_FILE: test_results/.coverage
+          CCACHE_STATSLOG: ${{ runner.temp }}/ccache-stats.log
         run: |
           pytest tests/ -n 4 \
             --cov=tilefoundry --cov-branch --cov-context=test \
             --cov-report=xml:test_results/coverage-source.xml --cov-report=
       - name: Report compile cache use
         if: always()
+        env:
+          CCACHE_STATSLOG: ${{ runner.temp }}/ccache-stats.log
         run: ccache --dir "$TILEFOUNDRY_CACHE_DIR/ccache" --show-log-stats
       - name: Build the wheel
         run: uv build --wheel --out-dir "$RUNNER_TEMP/wheel"
