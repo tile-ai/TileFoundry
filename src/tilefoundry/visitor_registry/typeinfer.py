@@ -303,9 +303,12 @@ class TypeInferVisitor(ValuationVisitor[Type]):
             step = static_dim_value(region.step)
             bounds = None
             if step is not None and step > 0:
-                start, stop = dim_range(region.start), dim_range(region.extent)
-                if start is not None and stop is not None and start[0] < stop[1] - 1:
-                    bounds = (start[0], stop[1] - 1)
+                try:
+                    start, stop = dim_range(region.start), dim_range(region.extent)
+                    if start is not None and stop is not None and start[0] < stop[1] - 1:
+                        bounds = (start[0], stop[1] - 1)
+                except (NotImplementedError, ArithmeticError, TypeError, ValueError):
+                    bounds = None
             self._record_range(
                 region.induction_var,
                 TypeInferResults(region.induction_var.annotation, value_range=bounds),
