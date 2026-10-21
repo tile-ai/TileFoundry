@@ -173,3 +173,26 @@ def test_tir_for_codegen_renders_nonconstant_bounds() -> None:
     context = CudaCodegenContext()
     context.emit_node(loop)
     assert "i_1 < n_2" in context.source()
+
+
+def test_long_statement_sequence_prints() -> None:
+    statements = "\n".join(
+        f'            value_{i} = T.alloc_tensor(tensor_type=Tensor[(), "f32", "rmem"])'
+        for i in range(1000)
+    )
+    module = import_dsl(
+        'from tilefoundry.dsl import *\n'
+        'from tilefoundry.target import CudaTarget\n'
+        '@module()\n'
+        'class LongSequence:\n'
+        '    @prim_func(target=CudaTarget("nvidia.h200_sxm"))\n'
+        '    def sequence():\n'
+        '        with Mesh((Topology("thread", 32),), layout=(32,)) as thread:\n'
+        f'{statements}\n',
+    )
+    printed = as_script(module)
+    assert printed.count("T.alloc_tensor(") == 1000
+    verify_module(module)
+    context = CudaCodegenContext()
+    context.emit_node(module.functions[0])
+    assert context.source()

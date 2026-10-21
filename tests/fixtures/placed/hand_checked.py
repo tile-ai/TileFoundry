@@ -196,7 +196,21 @@ class CapacityExceeded:
             return tf.reshard(x, (786432,), "rmem")
 
 
+@module(entry="read", target=_H200, topologies=(Topology("cta", 4),))
+class CausalStartReuse:
+    """Four CTAs read overlapping suffixes; their partial overlap has no exact reuse model."""
+
+    @func
+    def read(x: Tensor[(16,), "f32"]):
+        with Mesh(("cta",), layout=(4,), names=("t",)) as cta:
+            result = tf.zeros(Tensor[(4,), "f32", (4,), "rmem"])
+            for n in range(cta.t, 4):
+                result = tf.reshard(x[n * 4 : n * 4 + 4], (4,), "rmem")
+            return result
+
+
 __all__ = [
+    "CausalStartReuse",
     "InvariantReuse",
     "CapacityExceeded",
     "SiblingLoopReuse",

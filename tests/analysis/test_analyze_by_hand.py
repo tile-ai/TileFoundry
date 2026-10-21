@@ -29,6 +29,7 @@ from tests.fixtures.placed.gemm_schedules import (
 from tests.fixtures.placed.hand_checked import (
     BN,
     CapacityExceeded,
+    CausalStartReuse,
     InvariantReuse,
     N,
     OverlappingReads,
@@ -631,3 +632,14 @@ def test_a_window_every_position_writes_alike_costs_its_share() -> None:
         assert gmem.total.write == 4 * gmem.at(0).write == 4 * 256
         durations.append(_first_duration(result, InsertSlice))
     assert durations == [3, 7]
+
+
+def test_mesh_started_loop_keeps_an_unknown_reuse_row() -> None:
+    memory = _memory_record(CausalStartReuse)
+    rows = [row for row in memory["reuse_windows"] if row["buffer"] == "x"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["reuse_bytes"] is None
+    assert row["precision"] == "unknown"
+    assert "cta.t" in row["reason"]
+    assert "overlap is not modelled" in row["reason"]

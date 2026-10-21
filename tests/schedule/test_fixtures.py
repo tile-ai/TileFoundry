@@ -125,6 +125,7 @@ from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
 
 PLAIN = (
+    "unit_mesh_axis_loop_carry",
     "reshard_locations",
     "chunk_rmsnorm",
     "fp8_block_scaled_gemm",
@@ -317,6 +318,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "finalize_footprint_mesh_offset": 0,
     "smem_padded_stages": 96,
     "view_visit_memo": 0,
     "persistent_tile_union_count": 163_840,
@@ -373,6 +375,12 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "finalize_footprint_mesh_offset": {
+        "thread@0:32#0": _RmemExpectation(136, "32 f32 row elements and one i64 mesh offset"),
+        "cta@0:4#0": _RmemExpectation(8, "one i64 mesh offset"),
+        "thread@0:32#1": _RmemExpectation(256, "32 f32 accumulator and loaded row elements"),
+        "cta@0:4#1": _RmemExpectation(8, "one i64 output offset"),
+    },
     "smem_padded_stages": {},
     "view_visit_memo": {
         "thread@0:1#0": _RmemExpectation(32, "one eight-element f32 row"),
