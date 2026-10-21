@@ -193,6 +193,6 @@ def test_long_statement_sequence_prints() -> None:
     printed = as_script(module)
     assert printed.count("T.alloc_tensor(") == 1000
     verify_module(module)
-    context = CudaCodegenContext()
-    context.emit_node(module.functions[0])
+    context = CudaCodegenContext(target=module.functions[0].target)
+    context.emit_node(module.functions[0].body)
     assert context.source()

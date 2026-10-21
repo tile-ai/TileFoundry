@@ -343,7 +343,7 @@ def test_stmt_mutator_covers_all_subclasses_with_identity_invariant() -> None:
         return Sequential(body=tuple(items))
 
     stmts = (
-        LetStmt(var=_var("y"), value=_call(_OpA(), _var("z")), body=_seq(Return())),
+        LetStmt(var=_var("y"), value=_call(_OpA(), _var("z"))),
         Return(),
         For(
             induction_var=i,

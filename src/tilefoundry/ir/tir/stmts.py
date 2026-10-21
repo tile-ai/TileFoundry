@@ -34,11 +34,10 @@ class Sequential(Stmt):
 
 @dataclass(unsafe_hash=True)
 class LetStmt(Stmt):
-    """TIR's single value-binding node."""
+    """Bind var to value for the following statements of the enclosing Sequential."""
 
     var: Var
     value: Expr
-    body: Sequential
 
 
 @dataclass(unsafe_hash=True)

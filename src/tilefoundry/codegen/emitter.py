@@ -98,14 +98,12 @@ class CppEmitter(StmtVisitor[None]):
         """
         if isinstance(node.value, Tuple):
             self.context.register_tuple(node.var, node.value)
-            self.visit(node.body)
             return
         if not isinstance(node.value, Call):
             raise RuntimeError(
                 f"LetStmt.value must be a Call (TIR-owned Expr Op), got {type(node.value).__name__}"
             )
         self.emit_let_op(node.value, node)
-        self.visit(node.body)
 
     def visit_Evaluate(self, node: Evaluate) -> None:
         op = node.callable

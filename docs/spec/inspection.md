@@ -112,7 +112,7 @@ def as_script(
     Args:
         fn: Function or Module to render.
         module: Optional wrapper class name for a Function.
-        options: Optional inspection annotations.
+        options: Optional inspection annotations for HIR only; TIR prints no annotations.
 
     Returns:
         Python DSL source.

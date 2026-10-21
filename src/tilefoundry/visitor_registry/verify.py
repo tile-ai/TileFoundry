@@ -7,7 +7,7 @@ The checked rule set is defined by
 from __future__ import annotations
 
 import dataclasses
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import Iterable
 
 from tilefoundry.inspection.tir_printer import TirPrinter
@@ -414,8 +414,11 @@ class _Binders:
 def _walk_stmt(stmt, ctx, scope, fn, module_context, binders: _Binders):
     match stmt:
         case Sequential():
-            for s in stmt.body:
-                _walk_stmt(s, ctx, scope, fn, module_context, binders)
+            with ExitStack() as bound:
+                for s in stmt.body:
+                    _walk_stmt(s, ctx, scope, fn, module_context, binders)
+                    if isinstance(s, LetStmt):
+                        bound.enter_context(binders.bind(s.var, s))
             return
         case LetStmt():
             binders.uses(stmt.value, stmt)
@@ -428,9 +431,6 @@ def _walk_stmt(stmt, ctx, scope, fn, module_context, binders: _Binders):
 
             _reject_nested_alloc_tensor(stmt.value, at_letstmt_value=True)
             _check_embedded_sharding(stmt.value, scope, fn)
-
-            with binders.bind(stmt.var, stmt):
-                _walk_stmt(stmt.body, ctx, scope, fn, module_context, binders)
             return
         case For():
             binders.uses((stmt.start, stmt.stop, stmt.step), stmt)
@@ -898,7 +898,7 @@ def _iter_all_stmts(body):
         yield s
         if isinstance(s, Sequential):
             stack.extend(s.body)
-        elif isinstance(s, (For, While, MeshScope, LetStmt)):
+        elif isinstance(s, (For, While, MeshScope)):
             stack.append(s.body)
         elif isinstance(s, If):
             stack.append(s.then_body)

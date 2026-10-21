@@ -118,7 +118,7 @@ def _stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
     into embedded Expr by default; see StmtExprMutator for combined traversal.)
 
     P2: ``body`` fields are ``Sequential`` (a Stmt), so control-flow /
-    scope / binding Stmts report their body as a single child Sequential.
+    scope Stmts report their body as a single child Sequential.
     ``Sequential`` itself reports its packed ``body`` tuple as children.
 
     ``PrimFunction`` is itself a Stmt whose child is the body Sequential.
@@ -130,7 +130,6 @@ def _stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
             return body
         case (
             PrimFunction(body=body)
-            | LetStmt(body=body)
             | For(body=body)
             | While(body=body)
             | MeshScope(body=body)
@@ -138,7 +137,7 @@ def _stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
             return (body,)
         case If(then_body=then_body, else_body=else_body):
             return (then_body, else_body)
-        case Return() | Evaluate():
+        case LetStmt() | Return() | Evaluate():
             return ()
         case _:
             raise AssertionError(f"_stmt_children: unknown Stmt subclass {type(stmt).__name__}")
@@ -149,7 +148,7 @@ def _rebuild_stmt_children(stmt: Stmt, new_children: tuple[Stmt, ...]) -> Stmt:
     match stmt:
         case Sequential():
             return replace(stmt, body=new_children)
-        case PrimFunction() | LetStmt() | For() | While() | MeshScope():
+        case PrimFunction() | For() | While() | MeshScope():
             (body,) = new_children
             assert isinstance(body, Sequential)
             return replace(stmt, body=body)
@@ -158,7 +157,7 @@ def _rebuild_stmt_children(stmt: Stmt, new_children: tuple[Stmt, ...]) -> Stmt:
             assert isinstance(then_body, Sequential)
             assert isinstance(else_body, Sequential)
             return replace(stmt, then_body=then_body, else_body=else_body)
-        case Return() | Evaluate():
+        case LetStmt() | Return() | Evaluate():
             return stmt
         case _:
             raise AssertionError(

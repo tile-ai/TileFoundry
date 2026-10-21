@@ -18,7 +18,7 @@ from tilefoundry.ir.core import Call, Constant, Op, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.tir.memory import Copy
-from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return
 from tilefoundry.ir.types import (
     DType,
     Layout,
@@ -109,7 +109,6 @@ def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough(src,
         LetStmt(
             var=Var(type=_t(), name="x"),
             value=Constant(type=_t(), value=1.0),
-            body=Sequential(body=()),
         )
     )
 

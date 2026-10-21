@@ -5532,7 +5532,7 @@ class StatementPattern(ElementPattern):
                 return value
             variable = runtime.Var(type=value.type, name=name)
             context.lexical_scope.define(name, variable)
-            return runtime.LetStmt(variable, value, runtime.Sequential(body=()))
+            return runtime.LetStmt(variable, value)
         elif match.branch_id == "return":
             if context.function.dialect == "tir":
                 if "value" in children:
@@ -5612,22 +5612,7 @@ class BlockPattern(ElementPattern):
                 return None
             raise ParseError.from_node(match.node, context, "HIR body must end with return")
 
-        def fold(index: int) -> list[object]:
-            output: list[object] = []
-            while index < len(values):
-                value = values[index]
-                if value is None:
-                    index += 1
-                    continue
-                if isinstance(value, runtime.LetStmt):
-                    nested = runtime.Sequential(body=tuple(fold(index + 1)))
-                    output.append(dataclasses.replace(value, body=nested))
-                    return output
-                output.append(value)
-                index += 1
-            return output
-
-        return runtime.Sequential(body=tuple(fold(0)))
+        return runtime.Sequential(body=tuple(value for value in values if value is not None))
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 

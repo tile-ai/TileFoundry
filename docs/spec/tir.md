@@ -63,17 +63,15 @@ class Sequential(Stmt):
     body: tuple[Stmt, ...]
 
 class LetStmt(Stmt):
-    """Bind a variable to an expression before a nested body.
+    """Bind a variable for the following statements of its enclosing Sequential.
 
     Attributes:
         var: attribute; Bound variable.
         value: attribute; Bound expression.
-        body: attribute; Nested statements.
     """
 
     var: Var
     value: Expr
-    body: Sequential
 
 class For(Stmt):
     """Represent a counted loop.
@@ -176,8 +174,10 @@ parameters; omitting it means one output.
   by more than one `LetStmt` / `For` / `MeshScope` across the
   function. Parameters seed the bound set.
 - **Lexical uses**. A `Var` MUST be visible in the scope that binds it. Let
-  values and loop bounds are checked before their binders enter scope; branch,
-  loop, and mesh bindings do not escape. Every variant uses its own parameters.
+  values and loop bounds are checked before their binders enter scope. A
+  `LetStmt` variable is visible from the next statement to the end of its
+  enclosing `Sequential`; branch, loop, and mesh bindings do not escape.
+  Every variant uses its own parameters.
   Expression fields, including intrinsic statements and Return, MUST contain
   IR nodes; lowering recipes are rejected. Op, PrimFunction, and SymbolRef
   callables are permitted.

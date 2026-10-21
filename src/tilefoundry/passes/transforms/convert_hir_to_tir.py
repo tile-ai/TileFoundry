@@ -158,12 +158,10 @@ class TirBuilder:
         return var
 
     def build(self, region=None):
-        body = ()
-        for entry in reversed((region or self.blocks[-1]).entries):
-            body = (
-                (LetStmt(*entry, Sequential(body)),) if isinstance(entry, tuple) else (entry, *body)
-            )
-        return Sequential(body)
+        return Sequential(tuple(
+            LetStmt(*entry) if isinstance(entry, tuple) else entry
+            for entry in (region or self.blocks[-1]).entries
+        ))
 
     @contextmanager
     def region(self, *, owner=None, mesh=None, binding=None, loop=None):

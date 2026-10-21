@@ -166,12 +166,12 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], ExprVisitor[str]):
         rendered = self.visit(stmt.value)
         line = f"{self.indent}{self.visit(stmt.var)} = {rendered}"
         if len(line) + 4 <= _LINE_LENGTH or not isinstance(stmt.value, Call):
-            return [line] + self.visit(stmt.body)
+            return [line]
         if isinstance(stmt.value.target, AllocTensor):
             lines = self._wrapped_alloc(stmt)
         else:
             lines = self._wrapped_call(f"{self.visit(stmt.var)} = ", rendered)
-        return lines + self.visit(stmt.body)
+        return lines
 
     def _wrapped_call(self, prefix: str, rendered: str) -> list[str]:
         head, separator, arguments = rendered.partition("(")

@@ -2034,7 +2034,6 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
                             span * field.type.dtype.bit_width // 8,
                         )
                     )
-            walk(statement.body)
         elif isinstance(statement, (For, While)):
             use(
                 (statement.start, statement.stop, statement.step)
@@ -2571,7 +2570,6 @@ class _RetainedStatements(StmtVisitor[None]):
 
     def visit_LetStmt(self, stmt, ctx=None):
         self.bindings[id(stmt.var)] = stmt.value
-        self.visit(stmt.body)
 
     def storage(self, value):
         if isinstance(value, Var) and id(value) in self.bindings:

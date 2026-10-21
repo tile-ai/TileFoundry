@@ -15,7 +15,7 @@ from tilefoundry.ir.core import Call, Constant, Var, VerifyError
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.memory.ptr_of import PtrOf
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import For, If, LetStmt, MeshScope, Return, Sequential
+from tilefoundry.ir.tir.stmts import For, If, LetStmt, MeshScope, Sequential
 from tilefoundry.ir.types import DType, Layout, Mesh, TensorType, Topology, make_tensor_type
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.passes.transforms.convert_hir_to_tir import View
@@ -27,7 +27,7 @@ def _alloc_call(t: TensorType) -> Call:
 
 
 def _let(var: Var, value: Call) -> LetStmt:
-    return LetStmt(var=var, value=value, body=Sequential(body=(Return(),)))
+    return LetStmt(var=var, value=value)
 
 
 def _pf(*stmts) -> PrimFunction:
@@ -44,11 +44,10 @@ def test_letstmt_requires_a_fresh_var_anywhere_in_the_function():
     rmem = make_tensor_type((4,), storage="rmem")
     v = Var(type=rmem, name="v")
 
-    nested = LetStmt(
-        var=v,
-        value=_alloc_call(rmem),
-        body=Sequential(body=(_let(v, _alloc_call(rmem)),)),
-    )
+    nested = Sequential(body=(
+        _let(v, _alloc_call(rmem)),
+        Sequential(body=(_let(v, _alloc_call(rmem)),)),
+    ))
     with pytest.raises(VerifyError, match="fresh Var"):
         verify_prim_function(_pf(nested))
 
@@ -91,14 +90,14 @@ def test_var_use_must_be_inside_its_binding_scope(scope):
     one = Constant(type=scalar, value=1)
     empty = Sequential(body=())
     if scope == "let":
-        binding = LetStmt(var=local, value=zero, body=empty)
+        binding = Sequential(body=(LetStmt(var=local, value=zero),))
     elif scope == "if":
         condition = Constant(
             type=make_tensor_type((), DType.bool, storage="rmem"), value=True
         )
         binding = If(
             cond=condition,
-            then_body=Sequential(body=(LetStmt(var=local, value=zero, body=empty),)),
+            then_body=Sequential(body=(LetStmt(var=local, value=zero),)),
             else_body=empty,
         )
     elif scope == "for":
@@ -106,9 +105,23 @@ def test_var_use_must_be_inside_its_binding_scope(scope):
     else:
         mesh = Mesh((Topology("thread", 1),), Layout((1,), (1,)))
         binding = MeshScope(mesh=mesh, binding=local, body=empty)
-    consumer = LetStmt(var=Var(type=scalar, name="escaped"), value=local, body=empty)
+    consumer = LetStmt(var=Var(type=scalar, name="escaped"), value=local)
     with pytest.raises(VerifyError, match="local.*used outside the scope that binds it"):
         verify_prim_function(_pf(binding, consumer))
+
+
+@pytest.mark.parametrize("self_reference", (False, True))
+def test_letstmt_value_cannot_use_an_unbound_var(self_reference):
+    """A value cannot read its own binding or a later statement's binding."""
+    scalar = make_tensor_type((), DType.i32, storage="rmem")
+    local = Var(type=scalar, name="local")
+    consumer = LetStmt(
+        var=local if self_reference else Var(type=scalar, name="early"),
+        value=local,
+    )
+    binding = LetStmt(var=local, value=Constant(type=scalar, value=0))
+    with pytest.raises(VerifyError, match="local.*used outside the scope that binds it"):
+        verify_prim_function(_pf(consumer, binding))
 
 
 def test_verify_rejects_a_non_ir_node():
@@ -123,7 +136,6 @@ def test_verify_rejects_a_non_ir_node():
             LetStmt(
                 var=Var(type=tensor, name="leaked"),
                 value=recipe,
-                body=Sequential(body=()),
             ),
         )),
     )
@@ -150,7 +162,6 @@ def small(x: Tensor[(N,), "f32"]):
     variant.body = Sequential(body=(LetStmt(
         var=Var(type=function.params[0].type, name="escaped"),
         value=function.params[0],
-        body=Sequential(body=()),
     ),))
     with pytest.raises(VerifyError, match="x.*used outside the scope that binds it"):
         verify_prim_function(function)

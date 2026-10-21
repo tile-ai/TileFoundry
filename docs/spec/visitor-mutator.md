@@ -220,7 +220,7 @@ come back via `StmtExprMutator`):
 | `For` / `While` | `(body,)` |
 | `If` | `(then_body, else_body)` |
 | `MeshScope` | `(body,)` |
-| `LetStmt` | `(body,)` |
+| `LetStmt` | `()` |
 | `Return` | `()` |
 | `Evaluate` | `()` (leaf in the Stmt tree; its Expr fields are `args`, plus `callable` when `callable` is a `SymbolRef`) |
 | `Abort` | `()` |
