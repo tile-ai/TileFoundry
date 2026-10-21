@@ -1,7 +1,3 @@
-# analysis target=nvidia.h200_sxm module=GroupedMnMajorB function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r6.00KiB/w64.00KiB@logical,r6.00KiB/w64.00KiB@total,r6.00KiB/w64.00KiB@cta,r6.00KiB/w32.12KiB@thread;rmem:r64.02KiB/w64.00KiB@logical,r64.02KiB/w64.00KiB@total,r64.02KiB/w64.00KiB@cta,r272B/w256B@thread;smem:r6.00KiB/w6.00KiB@logical,r6.00KiB/w6.00KiB@total,r6.00KiB/w6.00KiB@cta,r576B/w6.00KiB@thread footprint=a:2.00KiB;b:4.00KiB;v7:21:32.00KiB footprint-precision=exact peak=gmem:38.00KiB;rmem:32.00KiB;smem:6.00KiB persistent=gmem:6.00KiB
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

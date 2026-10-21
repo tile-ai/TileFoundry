@@ -4,10 +4,9 @@ from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 B = 1
-
 N = 128
-
 D = 64
+
 
 @module(entry="acc", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
 class UnitAxisCarry:

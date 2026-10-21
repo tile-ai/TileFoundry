@@ -1,7 +1,3 @@
-# analysis target=nvidia.h200_sxm module=FP8_BLOCK_SCALED_GEMM function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r130.02KiB/w64.00KiB@logical,r130.02KiB/w64.00KiB@total,r130.02KiB/w64.00KiB@cta,r128.05KiB/w32.12KiB@thread;rmem:r1.35MiB/w1.16MiB@logical,r1.35MiB/w1.35MiB@total,r1.35MiB/w1.35MiB@cta,r5.17KiB/w4.92KiB@thread;smem:r128.00KiB/w128.00KiB@logical,r128.00KiB/w128.00KiB@total,r128.00KiB/w128.00KiB@cta,r17.00KiB/w128.00KiB@thread footprint=a:16.00KiB;a_scale:512B;b:16.00KiB;b_scale:4B;v24:110:32.00KiB footprint-precision=exact peak=gmem:162.02KiB;rmem:128.50KiB;smem:64.00KiB persistent=gmem:130.02KiB
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

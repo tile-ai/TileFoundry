@@ -7,6 +7,7 @@ import json
 import math
 from contextlib import contextmanager
 
+from tilefoundry.inspection.values import CommentPrinter
 from tilefoundry.ir.core import (
     Call,
     Constant,
@@ -59,7 +60,7 @@ _DIM_FUNC_OPS: dict[type, str] = {
 }
 
 
-class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
+class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[str]):
     """Render the Python DSL with one dispatch root for expressions and types."""
 
     def __init__(self) -> None:

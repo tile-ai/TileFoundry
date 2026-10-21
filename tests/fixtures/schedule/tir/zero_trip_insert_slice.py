@@ -1,7 +1,3 @@
-# analysis target=nvidia.h200_sxm module=ZeroTripInsertSlice function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r16B/w48B@logical,r16B/w48B@total,r16B/w48B@cta,r16B/w48B@thread;rmem:r32B/w16B@logical,r32B/w16B@total,r32B/w16B@cta,r32B/w16B@thread footprint=v3:15:0;x:0 footprint-precision=lower_bound peak=gmem:48B;rmem:16B persistent=gmem:16B
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

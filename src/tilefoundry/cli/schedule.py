@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from tilefoundry.analysis import RegionMemoryMetadata
 from tilefoundry.cli.source import (
     load_authored_ir,
     one_extent_per_dim,
@@ -14,8 +13,7 @@ from tilefoundry.cli.source import (
     require_bound_dims,
 )
 from tilefoundry.cli.target import target_by_identity
-from tilefoundry.inspection import PythonPrintOptions, as_script
-from tilefoundry.inspection.values import ReportIdentity, ReportSelection
+from tilefoundry.inspection import as_script
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.schedule import (
@@ -45,12 +43,7 @@ def run_finalize(
     module = finalize(module, dims=stated)
     functions = tuple(fn for frame in list_call_paths(module).values() for fn in (frame.function,) if isinstance(fn, PrimFunction))
     function = module.entry_function() if len(functions) == 1 else module
-    rendered = as_script(
-        function,
-        options=PythonPrintOptions(
-            comment_metadata_types=(ReportIdentity, ReportSelection, RegionMemoryMetadata),
-        ),
-    )
+    rendered = as_script(function)
     text = json.dumps({"source": rendered}, indent=2) if as_json else rendered
     _write(out, text)
     return 0

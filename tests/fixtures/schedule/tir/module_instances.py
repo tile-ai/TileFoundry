@@ -52,9 +52,6 @@ class ModuleInstances:
                 window = T.tensor_view(T.ptr_of(value_2[0:0 + 32]), layout=(32,), shape=(32,))
                 T.copy(value_1, window)
 
-    # analysis target=nvidia.h200_sxm module=ModuleInstances function=gemm topology=cta wave=1/1
-    # selection requested=memory executed=memory
-    # memory traffic=gmem:r2.12KiB/w2.00KiB@logical,r2.12KiB/w2.25KiB@total,r2.12KiB/w2.25KiB@cta,r2.12KiB/w2.25KiB@thread;rmem:r2.43KiB/w2.38KiB@logical,r2.43KiB/w2.38KiB@total,r2.43KiB/w2.38KiB@cta,r2.43KiB/w2.38KiB@thread footprint=layers/w:384B;mm/w:128B;state:128B;v1:50:128B;v3:44:128B;v7:25:256B;x:128B footprint-precision=exact peak=gmem:1.00KiB;rmem:384B persistent=gmem:768B
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def gemm(
         x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"], scratch: Tensor[(32,), "f32"], scratch_1: Tensor[(32,), "f32"], scratch_2: Tensor[(32,), "f32"], scratch_3: Tensor[(32,), "f32"], scratch_4: Tensor[(32,), "f32"], out: Tensor[(32,), "f32"]

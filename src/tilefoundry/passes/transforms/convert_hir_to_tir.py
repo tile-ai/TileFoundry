@@ -20,8 +20,6 @@ from tilefoundry.analysis import MemoryMetadata, analyze
 from tilefoundry.analysis.access import AliasKind, buffer_alias, forwarded_leaves
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.check import check_program
-from tilefoundry.inspection.analysis_report import render_analysis
-from tilefoundry.inspection.values import ReportIdentity, ReportSelection
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
@@ -30,7 +28,6 @@ from tilefoundry.ir.core import (
     SourceSpanMetadata,
     Tuple,
     Var,
-    attach_metadata,
     get_metadata,
     op_identifier,
 )
@@ -1687,12 +1684,8 @@ class ConvertHIRToTIR(ModulePass):
             authored,
             lowered,
         )
-        root = lowering.lowered = lowering.run()
+        lowering.lowered = lowering.run()
         lowered[id(result.function)] = lowering
-        root.metadata = result.function.metadata
-        for record in render_analysis(result).summary:
-            if isinstance(record, (ReportIdentity, ReportSelection)):
-                attach_metadata(root, record)
         modules = set()
 
         def lower_module(node):

@@ -1,7 +1,3 @@
-# analysis target=nvidia.h200_sxm module=WGMMA_REPEAT_ALONG_K function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r36.00KiB/w8.00KiB@logical,r36.00KiB/w8.00KiB@total,r36.00KiB/w8.00KiB@cta,r36.00KiB/w4.02KiB@thread;rmem:r28.08KiB/w28.00KiB@logical,r28.08KiB/w28.00KiB@total,r28.08KiB/w28.00KiB@cta,r192B/w112B@thread;smem:r36.00KiB/w36.00KiB@logical,r36.00KiB/w36.00KiB@total,r36.00KiB/w36.00KiB@cta,r1.50KiB/w36.00KiB@thread footprint=a:16.00KiB;b:2.00KiB;v12:78:4.00KiB footprint-precision=exact peak=gmem:40.00KiB;rmem:8.00KiB;smem:36.00KiB persistent=gmem:36.00KiB
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

@@ -1765,18 +1765,7 @@ def test_tir_program_is_verified_and_canonical(path: Path) -> None:
         verify_module(program)
     else:
         verify_prim_function(program)
-    source = path.read_text()
-    expected = source[source.index("from __future__ import annotations") :]
-    if isinstance(program, Module):
-        expected = (
-            "\n".join(
-                line
-                for line in expected.splitlines()
-                if not line.lstrip().startswith(("# analysis ", "# selection ", "# memory "))
-            )
-            + "\n"
-        )
-    assert as_script(program) == expected
+    assert as_script(program) == path.read_text()
 
 
 def test_parameter_structure_does_not_repeat_its_name() -> None:

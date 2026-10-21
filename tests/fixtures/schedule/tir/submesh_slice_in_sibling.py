@@ -1,7 +1,3 @@
-# analysis target=nvidia.h200_sxm module=SubmeshSliceInSibling function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r32B/w16B@logical,r32B/w16B@total,r32B/w16B@cta,r32B/w16B@thread;rmem:r8B/w0@logical,r8B/w0@total,r8B/w0@cta,r8B/w0@thread;smem:r16B/w32B@logical,r16B/w32B@total,r16B/w32B@cta,r16B/w32B@thread footprint=v3:17:16B;x:32B footprint-precision=exact peak=gmem:48B;rmem:0;smem:32B persistent=gmem:32B
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

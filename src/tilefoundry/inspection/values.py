@@ -62,28 +62,26 @@ class PerformanceSummaryView(IRMetadata):
 class CommentPrinter:
     """Render metadata by explicit ``print_<Type>`` methods."""
 
-    def __init__(self, printer=None):
-        self.printer = printer
-
     def print_SSAValue(self, value):
-        if self.printer is None:
-            from .python_printer import HirPrinter  # noqa: PLC0415
-            return HirPrinter().print(value)
-        return self.printer.print(value)
+        return self.print(value)
 
-    def print(self, value):
+    def comment(self, record, *, opt_in=frozenset()) -> str | None:
+        method = getattr(self, f"print_{type(record).__name__}", None)
+        return (method(record, opt_in=opt_in) or None) if method else None
+
+    def comment_value(self, value):
         method = getattr(self, f"print_{type(value).__name__}", None)
         if method:
             return method(value)
         if is_dataclass(value):
             return ENTRIES.join(
-                f"{item.name}{ENTRY}{self.print(getattr(value, item.name))}"
+                f"{item.name}{ENTRY}{self.comment_value(getattr(value, item.name))}"
                 for item in fields(value)
             )
         if isinstance(value, Mapping):
-            return ";".join(f"{k}{ENTRY}{self.print(v)}" for k, v in value.items())
+            return ";".join(f"{k}{ENTRY}{self.comment_value(v)}" for k, v in value.items())
         if isinstance(value, (tuple, list)):
-            return ENTRIES.join(self.print(v) for v in value)
+            return ENTRIES.join(self.comment_value(v) for v in value)
         return str(value)
 
     def print_Prose(self, value):
@@ -117,7 +115,7 @@ class CommentPrinter:
                     continue
             elif self._empty_without_default(value):
                 continue
-            out.append(f"{key.replace('_', '-')}={self.print(value)}")
+            out.append(f"{key.replace('_', '-')}={self.comment_value(value)}")
         if not family:
             return FIELDS.join(out)
         return FIELDS.join([family, *out]) if out else ""
@@ -127,18 +125,18 @@ class CommentPrinter:
             return ""
         if default is _UNSET and self._empty_without_default(value):
             return ""
-        return f"{family}{FIELD}{self.print(value)}"
+        return f"{family}{FIELD}{self.comment_value(value)}"
 
     def _spread(self, spread, topologies, *, logical=True):
         values = []
         if logical:
-            values.append(f"{self.print(spread.logical)}@logical")
-        values.append(f"{self.print(spread.total)}@total")
+            values.append(f"{self.comment_value(spread.logical)}@logical")
+        values.append(f"{self.comment_value(spread.total)}@total")
         values.extend(
-            f"{self.print(value)}@{topology}"
+            f"{self.comment_value(value)}@{topology}"
             for topology, value in zip(topologies, spread.per_unit, strict=False)
         )
-        return self.print(values)
+        return self.comment_value(values)
 
     def _breakdown(self, held, topologies, *, logical=True):
         return {
@@ -149,7 +147,7 @@ class CommentPrinter:
         if footprint is None:
             return {}
         return {
-            "/".join((*ownership, self.print(value))): format_bytes(sum(spread.logical for _level, spread in breakdown.kinds))
+            "/".join((*ownership, self.comment_value(value))): format_bytes(sum(spread.logical for _level, spread in breakdown.kinds))
             for value, ownership, breakdown in footprint.buffers
         }
 
@@ -207,7 +205,7 @@ class CommentPrinter:
         return self._record(
             "",
             (
-                ("buffer", "/".join((*record.ownership, self.print(record.buffer)))),
+                ("buffer", "/".join((*record.ownership, self.comment_value(record.buffer)))),
                 ("holds", format_bytes(record.holds_bytes)),
                 ("time", record.time or "none"),
                 ("space", record.space or "none"),
@@ -272,18 +270,9 @@ class CommentPrinter:
         )
 
 
-_PRINTER = CommentPrinter()
-
-
-def render_comment(record, *, opt_in=frozenset(), printer=None):
-    method = getattr(_PRINTER if printer is None else CommentPrinter(printer), f"print_{type(record).__name__}", None)
-    return (method(record, opt_in=opt_in) or None) if method else None
-
-
 __all__ = [
     "CommentPrinter",
     "Prose",
-    "render_comment",
     "PAIR",
     "PER_UNIT",
     "ENTRY",

@@ -1,10 +1,3 @@
-# analysis target=nvidia.h200_sxm module=GEMM_8192X17408X5120_REGISTER_STORE function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r250.00MiB/w544.00MiB@logical,r15.94GiB/w544.00MiB@total,r15.94GiB/w544.00MiB@cta,r15.94GiB/w273.06MiB@thread;rmem:r43.30GiB/w42.77GiB@logical,r43.31GiB/w43.30GiB@total,r43.31GiB/w43.30GiB@cta,r183.88MiB/w173.19MiB@thread;smem:r15.94GiB/w250.00MiB@logical,r15.94GiB/w15.94GiB@total,r15.94GiB/w15.94GiB@cta,r2.74GiB/w15.94GiB@thread footprint=a:16.00KiB;b:32.00KiB;v12:82:64.00KiB footprint-precision=exact peak=gmem:522.00MiB;rmem:128.00KiB;smem:192.00KiB persistent=gmem:250.00MiB
-#   buffer=b holds=175.50MiB time=m space=none reuse=10.46GiB fits=no precision=exact
-#   buffer=a holds=3.81MiB time=n space=none reuse=83.75MiB fits=yes precision=exact
-#   error="l2 reuse window m holds 175.50MiB at a 1-unit wave, exceeding capacity 47.68MiB"
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

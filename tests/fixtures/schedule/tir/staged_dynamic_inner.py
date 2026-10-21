@@ -1,8 +1,3 @@
-# analysis target=nvidia.h200_sxm module=StagedDynamicInner function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r16B/w0@logical,r992B/w0@total,r992B/w0@cta,r992B/w0@thread;rmem:r992B/w528B@logical,r1.94KiB/w1.95KiB@total,r1.94KiB/w1.95KiB@cta,r1.94KiB/w1.95KiB@thread;smem:r16B/w16B@logical,r992B/w992B@total,r992B/w992B@cta,r992B/w992B@thread footprint=x:16B footprint-precision=exact peak=gmem:16B;rmem:16B;smem:32B persistent=gmem:16B
-#   buffer=x holds=16B time=i space=none reuse=16B fits=yes precision=exact
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

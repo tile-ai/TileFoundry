@@ -1,8 +1,3 @@
-# analysis target=nvidia.h200_sxm module=CtaSubmeshThreadScope function=gemm topology=cta wave=4/4
-# selection requested=memory executed=memory
-# memory traffic=gmem:r512B/w512B@logical,r1.00KiB/w1.00KiB@total,r512B/w512B@cta,r4B/w4B@thread;rmem:r512B/w512B@logical,r1.00KiB/w1.00KiB@total,r512B/w512B@cta,r4B/w4B@thread footprint=v2:15:512B;x:512B footprint-precision=exact peak=gmem:1.00KiB;rmem:512B persistent=gmem:512B
-#   buffer=x holds=1.00KiB time=none space=cta.b reuse=512B fits=yes precision=exact
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

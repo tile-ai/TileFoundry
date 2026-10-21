@@ -365,21 +365,16 @@ class GEMM_8192X17408X5120_OPTIMAL:
 
 ## 6. Finalize HIR into TIR
 
-Finalize the extracted program and inspect the beginning of its TIR, including the
-analysis report, persistent loops, and buffer placements:
+Finalize the extracted program and inspect the beginning of its TIR, including
+persistent loops and buffer placements:
 
 ```bash
 set -euo pipefail
 tilefoundry schedule finalize optimal.py optimal_tir.py
-sed -n '1,114p' optimal_tir.py
+sed -n '1,109p' optimal_tir.py
 ```
 
 ```text
-# analysis target=nvidia.h200_sxm module=GEMM_8192X17408X5120_OPTIMAL function=gemm topology=cta
-# selection requested=memory executed=memory
-# memory traffic=gmem:r125.81MiB/w276.12MiB@logical,r16.22GiB/w35.59GiB@total,r125.81MiB/w276.12MiB@cta,r125.81MiB/w276.12MiB@thread;rmem:r336.27MiB/w332.19MiB@logical,r43.35GiB/w43.34GiB@total,r336.27MiB/w336.19MiB@cta,r1.40MiB/w1.31MiB@thread;smem:r125.81MiB/w125.81MiB@logical,r16.22GiB/w16.22GiB@total,r125.81MiB/w125.81MiB@cta,r23.33MiB/w123.76MiB@thread footprint=a:16.00KiB;b:288.00KiB;tf.empty(type=Tensor[(128, 256), "bf16", (128, 256)]):64.00KiB;tf.insert_slice(out, tile, (m, n)):576.00KiB footprint-precision=upper_bound peak=gmem:794.06MiB;rmem:128.00KiB;smem:208.00KiB persistent=gmem:250.00MiB
-#   buffer=a holds=944.00KiB time=none space=cta.persistent reuse=2.05MiB fits=yes precision=upper_bound
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

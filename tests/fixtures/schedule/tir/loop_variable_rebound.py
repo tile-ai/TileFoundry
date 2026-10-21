@@ -1,8 +1,3 @@
-# analysis target=nvidia.h200_sxm module=LoopVariableRebound function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r64B/w0@logical,r96B/w0@total,r96B/w0@cta,r96B/w0@thread;rmem:r208B/w192B@logical,r208B/w224B@total,r208B/w224B@cta,r208B/w224B@thread footprint=x:32B footprint-precision=exact peak=gmem:32B;rmem:64B persistent=gmem:32B
-#   buffer=x holds=32B time=u space=none reuse=32B fits=yes precision=exact
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

@@ -4,8 +4,8 @@ from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 N = 8
-
 R = 32
+
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", R)))
 class LoopStart:

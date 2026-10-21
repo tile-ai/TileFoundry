@@ -24,9 +24,6 @@ class InplaceOutputUpdate:
                 )
                 T.copy(value_2, window)
 
-    # analysis target=nvidia.h200_sxm module=InplaceOutputUpdate function=gemm topology=cta wave=1/1
-    # selection requested=memory executed=memory
-    # memory traffic=gmem:r16B/w16B@logical,r16B/w16B@total,r16B/w16B@cta,r16B/w16B@thread;rmem:r32B/w16B@logical,r32B/w16B@total,r32B/w16B@cta,r32B/w16B@thread footprint=v2:17:16B;x:16B footprint-precision=exact peak=gmem:48B;rmem:16B persistent=gmem:48B
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def gemm(out: Tensor[(2, 4), "f32"], x: Tensor[(1, 4), "f32"], out_1: Tensor[(2, 4), "f32"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:

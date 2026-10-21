@@ -4,8 +4,8 @@ from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 N = 4
-
 R = 32
+
 
 @module(
     entry="gemm",

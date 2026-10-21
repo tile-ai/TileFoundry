@@ -1,7 +1,3 @@
-# analysis target=nvidia.h200_sxm module=DynWindowOffset function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r40B/w0@logical,r40B/w0@total,r40B/w0@cta,r40B/w0@thread;rmem:r8B/w40B@logical,r8B/w40B@total,r8B/w40B@cta,r8B/w40B@thread footprint=starts:8B;x:32B footprint-precision=upper_bound peak=gmem:264B;rmem:32B persistent=gmem:264B
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

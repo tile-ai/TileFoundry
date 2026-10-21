@@ -1,7 +1,3 @@
-# analysis target=nvidia.h200_sxm module=RegisterFullLike function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r32B/w0@logical,r32B/w0@total,r32B/w0@cta,r32B/w0@thread;rmem:r133B/w129B@logical,r133B/w129B@total,r133B/w129B@cta,r133B/w129B@thread footprint=x:32B footprint-precision=exact peak=gmem:32B;rmem:65B persistent=gmem:32B
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

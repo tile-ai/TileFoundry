@@ -64,7 +64,7 @@ from .print_context import HirPrintContext
 from .printer_base import PythonPrinter
 from .tir_printer import _function_block as _tir_function_block
 from .tir_printer import tir_function_to_python, tir_module_to_python
-from .values import PARTS, render_comment
+from .values import PARTS
 
 
 class HirPrinter(PythonPrinter):
@@ -286,7 +286,7 @@ def _comments(expr: Expr, options: PythonPrintOptions, printer: PythonPrinter, c
         metadata = get_metadata(expr, metadata_type)
         if metadata is None:
             continue
-        comment = render_comment(metadata, opt_in=options.comment_opt_in, printer=printer)
+        comment = printer.comment(metadata, opt_in=options.comment_opt_in)
         if comment is not None:
             comments.append(comment)
     return f"  # {PARTS.join(comments)}" if comments else ""
@@ -1187,14 +1187,14 @@ def as_script(
     """
     if isinstance(fn, Module):
         if fn.functions and all(isinstance(item, PrimFunction) for item in fn.functions):
-            return tir_module_to_python(fn, module, options=options)
+            return tir_module_to_python(fn, module)
         return _module_to_python(fn, module, options=options)
     if isinstance(fn, PrimFunction) and module is None:
-        return tir_function_to_python(fn, options=options)
+        return tir_function_to_python(fn)
     if module is not None:
         if isinstance(fn, PrimFunction):
             return tir_module_to_python(
-                Module(name=module, functions=(fn,), entry=fn.name), options=options
+                Module(name=module, functions=(fn,), entry=fn.name)
             )
         return _module_to_python(fn, module, options=options)
     return hir_function_to_python(fn, options=options)

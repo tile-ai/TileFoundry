@@ -1,7 +1,3 @@
-# analysis target=nvidia.h200_sxm module=StagedNested function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r96B/w0@logical,r96B/w0@total,r96B/w0@cta,r96B/w0@thread;rmem:r416B/w288B@logical,r480B/w288B@total,r480B/w288B@cta,r480B/w288B@thread;smem:r96B/w96B@logical,r96B/w96B@total,r96B/w96B@cta,r96B/w96B@thread footprint=x:16B footprint-precision=exact peak=gmem:96B;rmem:96B;smem:32B persistent=gmem:96B
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

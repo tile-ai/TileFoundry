@@ -1,8 +1,3 @@
-# analysis target=nvidia.h200_sxm module=SparseDecode function=gemm topology=cta wave=1/1
-# selection requested=memory executed=memory
-# memory traffic=gmem:r17.00KiB/w16.00KiB@logical,r17.00KiB/w16.00KiB@total,r17.00KiB/w16.00KiB@cta,r17.00KiB/w8.06KiB@thread;rmem:r189.60KiB/w153.52KiB@logical,r189.60KiB/w153.52KiB@total,r189.60KiB/w153.52KiB@cta,r6.54KiB/w2.23KiB@thread;smem:r40.00KiB/w48.00KiB@logical,r40.00KiB/w48.00KiB@total,r40.00KiB/w48.00KiB@cta,r18.75KiB/w48.00KiB@thread footprint=idx:512B;kv:128B;q:128B;v45:151:8.00KiB footprint-precision=exact peak=gmem:72.50KiB;rmem:32.25KiB;smem:16.00KiB persistent=gmem:64.50KiB
-#   buffer=kv holds=264B time=r space=none reuse=7.88KiB fits=yes precision=exact
-
 from __future__ import annotations
 
 from tilefoundry.dsl import *

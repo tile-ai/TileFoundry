@@ -29,7 +29,6 @@ from tilefoundry.inspection.values import (
     Prose,
     ReportIdentity,
     ReportSelection,
-    render_comment,
 )
 from tilefoundry.ir.core import IRMetadata, get_metadata
 from tilefoundry.ir.hir.function import Function
@@ -144,13 +143,13 @@ def memory_summary(memory: RegionMemoryMetadata) -> tuple[IRMetadata, ...]:
     )
 
 
-def render_summary(records: Iterable[IRMetadata], *, opt_in: frozenset[str] = frozenset(), printer=None) -> str:
+def render_summary(records: Iterable[IRMetadata], *, printer, opt_in: frozenset[str] = frozenset()) -> str:
     """Print report rows with the shared metadata comment renderers."""
     nested = (ReuseWindow, ErrorSummary, AdvisorySummary)
     return "\n".join(
         f"# {'  ' if isinstance(view, nested) else ''}{comment}"
         for view in records
-        if (comment := render_comment(view, opt_in=opt_in, printer=printer)) is not None
+        if (comment := printer.comment(view, opt_in=opt_in)) is not None
     )
 
 
