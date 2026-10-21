@@ -4827,14 +4827,12 @@ class LoopIteratorPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-def _mentions_mesh_coordinate(node: ast.AST, context: MatchContext) -> bool:
-    """Whether *node* references a mesh bound in the active lexical scope."""
-    for subnode in ast.walk(node):
-        if not isinstance(subnode, ast.Attribute) or not isinstance(subnode.value, ast.Name):
-            continue
-        if isinstance(context.lexical_scope.lookup(subnode.value.id), runtime.Mesh):
-            return True
-    return False
+def _reads_program_value(node: ast.AST, context: MatchContext) -> bool:
+    """Whether a bound reads a mesh coordinate or an expression in lexical scope."""
+    return any(
+        isinstance(context.lexical_scope.lookup(name.id), (runtime.Mesh, runtime.Expr))
+        for name in ast.walk(node) if isinstance(name, ast.Name)
+    )
 
 
 def _iterator_arity_failure(kind: str, count: int, node: ast.Call) -> PatternFailure | None:
@@ -4876,7 +4874,7 @@ class LoopHeaderPattern(ElementPattern):
     def _bound_pattern(node: ast.AST, context: MatchContext) -> AstPattern[Any]:
         if context.function is not None and context.function.dialect == "tir":
             return ChoicePattern(ExpressionPattern(), StaticValuePattern())
-        if _mentions_mesh_coordinate(node, context):
+        if _reads_program_value(node, context):
             return ExpressionPattern()
         return StaticValuePattern()
 

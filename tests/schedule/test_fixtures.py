@@ -318,6 +318,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "loop_bound_from_outer_induction": 0,
     "finalize_footprint_mesh_offset": 0,
     "smem_padded_stages": 96,
     "view_visit_memo": 0,
@@ -375,6 +376,9 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "loop_bound_from_outer_induction": {
+        "thread@0:32#0": _RmemExpectation(256, "32 f32 accumulator and loaded row elements"),
+    },
     "finalize_footprint_mesh_offset": {
         "thread@0:32#0": _RmemExpectation(136, "32 f32 row elements and one i64 mesh offset"),
         "cta@0:4#0": _RmemExpectation(8, "one i64 mesh offset"),

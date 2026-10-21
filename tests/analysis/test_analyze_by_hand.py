@@ -8,6 +8,7 @@ from pathlib import Path
 import isl
 import pytest
 
+from tests._source import import_dsl
 from tests.fixtures.placed import persistent_gemm_tiled
 from tests.fixtures.placed.data_started_window import C, D, DataStart, MeshStart, W
 from tests.fixtures.placed.gemm_schedules import (
@@ -55,6 +56,7 @@ from tilefoundry.analysis import (
 from tilefoundry.analysis import footprint as footprint_analysis
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.compute_cost import local_duration_ns
+from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
 from tilefoundry.analysis.iteration_scope import build_scopes
 from tilefoundry.analysis.report import report_data
@@ -643,3 +645,24 @@ def test_mesh_started_loop_keeps_an_unknown_reuse_row() -> None:
     assert row["precision"] == "unknown"
     assert "cta.t" in row["reason"]
     assert "overlap is not modelled" in row["reason"]
+
+
+def test_runtime_loop_start_names_the_unbounded_value() -> None:
+    module = import_dsl('''from tilefoundry.dsl import *
+from tilefoundry.target import CudaTarget
+
+@module(entry="read", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+class RuntimeStart:
+    @func
+    def read(x: Tensor[(16,), "f32"], start: Tensor[(), "i64"]):
+        with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
+            result = tf.zeros(Tensor[(4,), "f32", (4,), "rmem"])
+            for n in range(start, 4):
+                result = tf.reshard(x[n * 4 : n * 4 + 4], (4,), "rmem")
+            return result
+''')
+    with pytest.raises(
+        AnalysisError,
+        match=r"loop 'n' takes its start from 'start'.*analysis needs a literal start or a stated value range",
+    ):
+        _memory_record(module)

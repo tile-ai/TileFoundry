@@ -15,6 +15,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.types.callable_type import callable_type_for
 from tilefoundry.ir.types.dim import DimVar
@@ -22,7 +23,7 @@ from tilefoundry.ir.types.dtype import IntegerDType
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
-from tilefoundry.ir.types.utils import tensor_types, types_compatible
+from tilefoundry.ir.types.utils import static_dim_value, tensor_types, types_compatible
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
@@ -298,6 +299,17 @@ class TypeInferVisitor(ValuationVisitor[Type]):
             )
         memo = self._region_memo(region, ctx)
         memo[id(region.induction_var)] = (region.induction_var, region.induction_var.annotation)
+        if self._ranges:
+            step = static_dim_value(region.step)
+            bounds = None
+            if step is not None and step > 0:
+                start, stop = dim_range(region.start), dim_range(region.extent)
+                if start is not None and stop is not None and start[0] < stop[1] - 1:
+                    bounds = (start[0], stop[1] - 1)
+            self._record_range(
+                region.induction_var,
+                TypeInferResults(region.induction_var.annotation, value_range=bounds),
+            )
         inner = TypeInferVisitor(
             memo=memo,
             owns_body=self._owns_body,
