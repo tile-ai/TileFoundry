@@ -823,9 +823,9 @@ def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> No
     annotated_types = [
         line.split("  # ", 1)[1].split("; ", 1)[0] for line in lines if "  # Tensor[" in line
     ]
-    assert 'Tensor[(120, 64), "f32", ((120 @ cta.tile, 64), (64, 1))]' in annotated_types
-    assert 'Tensor[(120, 64), "f32", ((12 @ cta.tile, 10, 64), (640, 64, 1))]' in annotated_types
-    assert 'Tensor[(120, 64), "f32", (120, 64)]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", (120 @ cta.tile, 64)]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", (12 @ cta.tile, 10, 64)]' in annotated_types
+    assert 'Tensor[(120, 64), "f32"]' in annotated_types
 
     rows = [row for function in payload["functions"] for row in function["calls"]]
     assert len(rows) == 9

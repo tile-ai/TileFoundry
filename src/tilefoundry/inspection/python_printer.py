@@ -97,10 +97,10 @@ class HirPrinter(PythonPrinter):
             return text if owner._function is self._function else f"{owner._function.name}::{text}"
         return super().print(value, ctx, indent)
 
-    def render(self, fn: HirFunction, *, options=None) -> _PythonRendering:
+    def render(self, fn: HirFunction, *, options=None, target=None) -> _PythonRendering:
         if options is not None and options.comment_metadata_types:
-            _render_hir_function(fn, printer=self)
-        return _render_hir_function(fn, options=options, printer=self)
+            _render_hir_function(fn, printer=self, target=target)
+        return _render_hir_function(fn, options=options, printer=self, target=target)
 
     def bind_def(
         self,
@@ -1061,6 +1061,7 @@ def _emit_def(
 def _new_hir_context(*, target=None) -> HirPrintContext:
     """Create a HIR context with imports owned by the surrounding file."""
     ctx = HirPrintContext()
+    ctx.target = target
     if target is not None:
         rendered = target.to_python()
         ctx.imports.update(rendered.imports)
@@ -1140,6 +1141,7 @@ def _render_hir_function(
     *,
     options: PythonPrintOptions | None = None,
     printer: HirPrinter | None = None,
+    target=None,
 ) -> _PythonRendering:
     """Render a HIR Function and locate every Call equation in the same pass.
 
@@ -1150,6 +1152,7 @@ def _render_hir_function(
     """
     indent = "    "
     ctx = _new_hir_context()
+    ctx.target = target
     ctx.value_printer = printer or HirPrinter()
     statements: dict[int, _PrintedStatement] = {}
     lines = _emit_decorated_defs(

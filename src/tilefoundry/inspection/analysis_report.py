@@ -57,6 +57,7 @@ def render_analysis(result: AnalysisResult, *, operands: bool = False) -> Analys
     for function in reversed(result.functions):
         rendered = printer.render(
             function,
+            target=result.module.target,
             options=PythonPrintOptions(
                 show_types=True, comment_metadata_types=selected_types_,
                 comment_opt_in=frozenset({"operands"}) if operands else frozenset(),

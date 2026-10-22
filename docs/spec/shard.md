@@ -1047,8 +1047,9 @@ def right_inverse(layout: Layout | ComposedLayout):
 - constraints:
   - Default strides come from `default_layout`: compact row-major, symbolic
     products retained, and statically unit leaves zero. A Split at a level in
-    `instance_levels` gets stride zero and counts as extent one when compacting
-    the remaining modes, so one instance has no holes. The target supplies the
+    `instance_levels` gets stride zero. When compacting the remaining modes, it
+    drops only its mesh factor and keeps its local residual (extent one for a
+    fully factored Split), so one instance has no holes. The target supplies the
     memory owner's level and every coarser level; absent memory facts mean an
     empty set. Explicit tensor layouts normalize only unit leaves; mesh layouts
     and layout-algebra intermediates are not normalized by this tensor rule.

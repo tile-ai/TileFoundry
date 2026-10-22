@@ -180,15 +180,23 @@ def fill_shard_strides(shard: ShardLayout, *, instance_levels=frozenset()) -> Sh
         for level in separate(shard.mesh)
         for _ in flatten(level.layout).shape
     )
-    local_shape = list(shard.layout.shape)
+    local_attrs = []
     for mesh_axis, attr in enumerate(shard.attrs):
         if isinstance(attr, Split):
-            if mesh_axis >= len(levels) or attr.axis >= len(local_shape):
+            if mesh_axis >= len(levels) or attr.axis >= len(shard.layout.shape):
                 raise ValueError(f"Split({attr.axis}) has no matching mesh axis {mesh_axis}")
             if levels[mesh_axis] in instance_levels:
-                local_shape[attr.axis] = 1
-    strides = default_layout(tuple(local_shape)).strides
-    return replace(shard, layout=Layout(shard.layout.shape, strides))
+                local_attrs.append(attr)
+                continue
+        local_attrs.append(Broadcast())
+    local_shape = shard_layout_local_shape(
+        replace(shard, attrs=tuple(local_attrs)), require_static=False
+    )
+    strides = list(default_layout(local_shape).strides)
+    for attr in local_attrs:
+        if isinstance(attr, Split):
+            strides[attr.axis] = 0
+    return replace(shard, layout=Layout(shard.layout.shape, tuple(strides)))
 
 
 def shard_layout_local_shape(sl: "ShardLayout", *, require_static: bool = True) -> tuple:

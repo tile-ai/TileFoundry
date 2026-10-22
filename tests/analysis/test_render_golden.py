@@ -9,8 +9,8 @@ import pytest
 
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.check import check_program
-from tilefoundry.inspection import as_script
 from tilefoundry.inspection.analysis_report import render_analysis
+from tilefoundry.inspection.python_printer import HirPrinter
 from tilefoundry.ir.core.module import Module
 
 FIXTURES_ROOT = Path(__file__).parents[1] / "fixtures"
@@ -63,5 +63,5 @@ def test_analysis_annotates_the_printed_program_without_changing_it(
     rendered = render_analysis(result, operands=operands)
     assert rendered.annotated == golden.read_text()
     assert _without_comments(rendered.annotated) == _without_comments(
-        as_script(result.function)
+        HirPrinter().render(result.function, target=result.module.target).source
     )

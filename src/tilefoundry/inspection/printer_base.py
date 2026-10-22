@@ -289,7 +289,7 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
         states = partials
 
         explicit = layout.strides is not None
-        if explicit and storage is not None and ctx is not None:
+        if explicit and storage is not None and ctx is not None and ctx.target is not None:
             default = fill_shard_strides(
                 value, instance_levels=instance_levels(ctx.target, storage)
             )

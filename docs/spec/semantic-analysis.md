@@ -174,8 +174,9 @@ def derive_output_shard_layout(
     overlap.
   - `fresh_strides=True` uses `default_layout` for fresh row-major strides;
     statically unit leaves have stride zero, and symbolic strides remain symbolic.
-    Split modes in `instance_levels` also have stride zero and count as extent one
-    while compacting the remaining modes. The set comes from the target memory
+    Split modes in `instance_levels` also have stride zero. Compacting the remaining
+    modes drops only each Split's mesh factor and retains its local residual
+    (extent one for a fully factored Split). The set comes from the target memory
     owner and every coarser topology level. With no memory hierarchy it is empty.
     Otherwise a compatible propagated physical layout is preserved when possible.
   - `ShardLayout.attrs` is indexed by mesh axis. A `Partial(reduction)` is a

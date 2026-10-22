@@ -23,6 +23,7 @@ from tilefoundry.ir.types import Broadcast, Layout, Mesh, ShardLayout, Topology,
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 
 
@@ -80,14 +81,15 @@ CASES = [
         ExpectedError(match="storage change requires"),
     ),
     TypeInferCase(
-        "unbound_target_rmem_defaults_to_shared",
+        "high_to_low_sugar_materializes_per_instance",
         Reshard(layout=_SL_H2L, storage=rmem),
         (make_tensor_type((2, 4, 128)),),
         make_tensor_type(
             (2, 4, 128),
             storage=rmem,
-            layout=_materialized((2, 4, 128), (512, 128, 1), (Split(1),), _MESH_H2L),
+            layout=_materialized((2, 4, 128), (128, 0, 1), (Split(1),), _MESH_H2L),
         ),
+        target=CudaTarget("nvidia.h200_sxm"),
     ),
     TypeInferCase(
         "low_to_high_sugar_materializes_shared",
@@ -120,14 +122,15 @@ CASES = [
         ),
     ),
     TypeInferCase(
-        "unbound_target_dynamic_axis_defaults_to_shared",
+        "high_to_low_dynamic_bare_axis_materializes_per_instance",
         Reshard(layout=_SL_DYN_BARE, storage=rmem),
         (make_tensor_type((1, _S_DYN, 32, 128)),),
         make_tensor_type(
             (1, _S_DYN, 32, 128),
             storage=rmem,
-            layout=_materialized((1, _S_DYN, 32, 128), (0, 32 * 128, 128, 1), (Split(2),), _MESH_DYN),
+            layout=_materialized((1, _S_DYN, 32, 128), (0, 4 * 128, 0, 1), (Split(2),), _MESH_DYN),
         ),
+        target=CudaTarget("nvidia.h200_sxm"),
     ),
 ]
 
