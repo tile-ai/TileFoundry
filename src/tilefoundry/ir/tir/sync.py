@@ -196,7 +196,6 @@ def participation(mesh: Mesh) -> Participation:
     if (
         not isinstance(offset, int)
         or any(not isinstance(s, int) for s in shape)
-        or strides is None
         or any(not isinstance(s, int) for s in strides)
     ):
         raise VerifyError("T.sync: a mesh with a dynamic layout cannot be classified")

@@ -42,6 +42,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
+from tilefoundry.visitor_registry.type_defaults import default_type
 
 
 @register_op(name="bitcast")
@@ -133,10 +134,14 @@ def _address_mapping(
 def _(call: Call, ctx) -> TensorType:
     source = ctx.type_of(call.args[0])
     stated_layout = call.target.layout
-    layout = stated_layout
     if not is_literal_shape(source.shape):
         ctx.error(call, "source tensor shape must be literal")
-    sharded = isinstance(source.layout, ShardLayout) or isinstance(layout, ShardLayout)
+    sharded = isinstance(source.layout, ShardLayout) or isinstance(stated_layout, ShardLayout)
+    shape = source.shape if sharded else tuple(prod(flatten(mode)) for mode in stated_layout.shape)
+    result = default_type(
+        TensorType(shape, source.dtype, stated_layout, source.storage), target=ctx.target
+    )
+    layout = result.layout
     if sharded:
         if source.storage is not StorageKind.RMEM:
             ctx.error(call, "sharded bitcast requires rmem storage")
@@ -182,7 +187,6 @@ def _(call: Call, ctx) -> TensorType:
             ctx.error(call, f"{end} layout must be plain (without ShardLayout): {held!r}")
         if not is_literal_shape(flatten(held.shape)):
             ctx.error(call, f"{end} layout shape must be literal")
-    shape = source.shape if sharded else tuple(prod(flatten(mode)) for mode in layout.shape)
     count = prod(source.shape)
     layout_count = prod(flatten(layout.shape))
     if layout_count != count:
@@ -193,7 +197,7 @@ def _(call: Call, ctx) -> TensorType:
         _address_mapping(source.layout, layout, count, source.shape, shape)
     except ValueError as error:
         ctx.error(call, str(error))
-    return TensorType(shape, source.dtype, stated_layout, source.storage)
+    return result
 
 
 @register_buffer_alias(Bitcast)

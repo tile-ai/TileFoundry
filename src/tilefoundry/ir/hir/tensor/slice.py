@@ -331,8 +331,7 @@ def window_layout(source, logical_shape, starts, sizes, strides, ctx):
     if correspondence.groups is None:
         raise ValueError(f"layout {primitive!r} crosses logical axes of {logical_shape}")
     split = {attr.axis for attr in shard.attrs if isinstance(attr, Split)} if shard else set()
-    resolved = primitive
-    steps = tuple(flatten(resolved.strides))
+    steps = tuple(flatten(primitive.strides))
     grouped = any(isinstance(mode, tuple) for mode in primitive.shape)
     shape_modes, stride_modes, tilers, positions = [], [], [], {}
     offset, known_offset = 0, True
@@ -341,7 +340,7 @@ def window_layout(source, logical_shape, starts, sizes, strides, ctx):
         extents = tuple(correspondence.extents[position] for position in group)
         walks = tuple(steps[position] for position in group)
         shape_modes.append(correspondence.axis_mode(primitive.shape, axis))
-        stride_modes.append(correspondence.axis_mode(resolved.strides, axis))
+        stride_modes.append(correspondence.axis_mode(primitive.strides, axis))
         start, size, step = starts[axis], sizes[axis], strides[axis]
         distributed = bool(split.intersection(group))
         kept = list(zip(group, extents, strict=True))

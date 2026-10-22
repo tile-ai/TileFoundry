@@ -702,7 +702,9 @@ second presentation of the result.
   for that logical shape under the existing layout-position-to-tensor-axis rules.
   Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
   components, or both MUST be rmem `ShardLayout` on the same mesh containing
-  only `Split` attributes. Every `Layout` component MUST have stated strides.
+  only `Split` attributes. Omitted authored strides MUST be materialized at
+  Bitcast type inference using the same default and storage-owner rules as
+  Reshard and TensorView; every resulting `Layout` component has concrete strides.
   For rmem shards, an address is the owning mesh coordinate paired with the
   offset within that unit; the two address sets MUST be equal, so every element
   stays in its original unit and register. `Broadcast` and `Partial` shards
@@ -788,8 +790,9 @@ Type inference derives fresh output ownership from those access maps. A
 propagation proves a zero-offset projection. A `Split` on the concatenated axis
 MUST be rejected, including when it appears only on the zero-offset first
 input, and the diagnostic MUST require an explicit `Reshard` before `Concat`.
-Dynamic ownership, incompatible meshes, nonuniform `Partial` states, and an
-unrepresentable derived layout MUST likewise fail with the `Reshard` remedy.
+Dynamic ownership, incompatible meshes, and nonuniform `Partial` states MUST
+likewise fail with the `Reshard` remedy. Compatible propagated ownership receives
+concrete default strides; the input's physical layout need not be reused.
 An output with no real sharding receives a fresh C-order `Layout`.
 
 ##### Rank and ShapeOf
@@ -997,10 +1000,11 @@ class Stack(Op):
     propagation derives any representable ownership from that relation.
   - Compatible `Split` ownership carries to the shifted old logical axis. A
     fully replicated input contributes no sharding. Incompatible input meshes
-    or per-axis states, a non-uniform `Partial` across result slices, and an
-    unrepresentable result layout MUST fail naming the conflicting input and
-    requiring an explicit `Reshard`; typeinfer MUST NOT select input zero's
-    layout or silently discard real ownership.
+    or per-axis states, and a non-uniform `Partial` across result slices MUST
+    fail naming the conflicting input and requiring an explicit `Reshard`;
+    typeinfer MUST NOT select input zero's layout or silently discard real
+    ownership. Compatible ownership receives concrete default result strides
+    rather than requiring reuse of an input's physical layout.
 
 ##### TupleGetItem
 
