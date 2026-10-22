@@ -50,11 +50,28 @@ def test_reduce_store_cost_dispatches_through_schedule():
     assert cost.traffic == (TrafficBytes(read=16_384), TrafficBytes(write=16_384), TrafficBytes())
 
 
-def test_partial_to_broadcast_reshard_is_not_a_view():
+@pytest.mark.parametrize("move_axis", (False, True), ids=("broadcast", "move_axis"))
+def test_partial_to_broadcast_reshard_is_not_a_view(move_axis):
     src, _ = _types()
-    dst = replace(src, layout=replace(src.layout, attrs=(Broadcast(),)))
+    if move_axis:
+        mesh = Mesh((Topology("cta", 4),), Layout((2, 2), (2, 1)))
+        src = replace(
+            src, layout=replace(src.layout, attrs=(Partial("sum"), Broadcast()), mesh=mesh)
+        )
+        attrs = (Broadcast(), Partial("sum"))
+    else:
+        attrs = (Broadcast(),)
+    dst = replace(src, layout=replace(src.layout, attrs=attrs))
     call = Call(Reshard(layout=dst.layout, storage=dst.storage), (Var("src", type=src),), type=dst)
     assert aliased_operand(call) is None
+
+
+def test_broadcast_to_plain_reshard_still_aliases():
+    src, _ = _types()
+    src = replace(src, layout=replace(src.layout, attrs=(Broadcast(),)))
+    dst = replace(src, layout=src.layout.layout)
+    call = Call(Reshard(layout=dst.layout, storage=dst.storage), (Var("src", type=src),), type=dst)
+    assert aliased_operand(call) == 0
 
 
 @pytest.mark.parametrize("reverse", (False, True))

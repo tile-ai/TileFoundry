@@ -27,7 +27,6 @@ import tilefoundry.ir.hir.schedule as schedules
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 import tilefoundry.visitor_registry.instruction as instructions
 from tests._source import import_dsl
-from tests.ir.cuda.test_copy_reduce_async_tensor import _types as _reduce_store_types
 from tilefoundry.analysis.access import AliasKind
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.api import analyze
@@ -99,6 +98,7 @@ from tilefoundry.ir.types import (
     DType,
     Layout,
     Mesh,
+    Partial,
     ShardLayout,
     StorageKind,
     Swizzle,
@@ -1142,7 +1142,14 @@ def test_schedule_copy_evaluates_to_the_source_value() -> None:
 
 
 def test_schedule_reduce_store_adds_to_an_explicit_nonzero_destination():
-    source_type, result_type = _reduce_store_types()
+    cta = Mesh((Topology("cta", 2),), Layout((2,), (1,)))
+    source_type = TensorType(
+        (64, 64),
+        DType.f32,
+        ShardLayout(Layout((64, 64), (64, 1)), (Partial("sum"),), cta),
+        StorageKind.SMEM,
+    )
+    result_type = TensorType((64, 64), DType.f32, Layout((64, 64), (64, 1)), StorageKind.GMEM)
     source = torch.arange(4096, dtype=torch.float32).reshape(64, 64)
     destination = torch.full_like(source, 7)
     result = _evaluate_call(

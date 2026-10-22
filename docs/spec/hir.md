@@ -1622,7 +1622,7 @@ class Reshard(Op):
   - Supplied `layout` is a `LayoutBase` (`Layout` / `ComposedLayout` / `ShardLayout`).
   - Memory analysis and lowering MUST treat a Reshard as a view iff storage
     is unchanged, the shape is literal, both structural address boxes agree,
-    and the conversion does not remove `Partial` state.
+    and the conversion does not change any mesh axis's `Partial` state.
     A box records each zero-stride Split's mesh axis, logical tensor axis,
     position within that axis, and extent. Its physical address layout is the
     coalesced layout after removing these independent modes; swizzle and offset

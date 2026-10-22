@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from itertools import zip_longest
 from math import prod
 
 from tilefoundry.evaluator.registry import register_eval
@@ -15,7 +16,6 @@ from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten, resolve_lay
 from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import (
-    Partial,
     ShardLayout,
     Split,
     shard_layout_local_shape,
@@ -32,6 +32,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 def _dim_mul(a, b):
@@ -181,11 +182,13 @@ def _buffer_alias(call: Call) -> int | None:
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage or not is_literal_shape(result.shape):
         return None
-    before, after = (shard_layout_of(held.layout) for held in (source, result))
-    if (
-        before is not None
-        and any(isinstance(attr, Partial) for attr in before.attrs)
-        and (after is None or not any(isinstance(attr, Partial) for attr in after.attrs))
+
+    if any(
+        before != after
+        for before, after in zip_longest(
+            partial_reductions_by_axis(source.layout),
+            partial_reductions_by_axis(result.layout),
+        )
     ):
         return None
     boxes = []
