@@ -6,7 +6,15 @@ from dataclasses import dataclass, fields, is_dataclass, replace
 from itertools import count
 from typing import Callable, Iterable
 
-from tilefoundry.ir.types import Broadcast, ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
+from tilefoundry.ir.types import (
+    Broadcast,
+    ComposedLayout,
+    Layout,
+    Partial,
+    ShardLayout,
+    Swizzle,
+    TensorType,
+)
 from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.layout_algebra import coalesce, is_inverse_projectable
 
@@ -113,10 +121,13 @@ class Predicate(Pattern):
     """A computed condition over a subject and the matcher's bindings."""
 
     @staticmethod
-    def arrangement(subject) -> Layout | None:
+    def arrangement(subject, *, allow_partial=False) -> Layout | None:
         """Read the static strided layout beneath shard and composition wrappers."""
         if isinstance(subject, ShardLayout):
-            if not all(isinstance(attr, Broadcast) for attr in subject.attrs):
+            if not all(
+                isinstance(attr, Broadcast) or (allow_partial and isinstance(attr, Partial))
+                for attr in subject.attrs
+            ):
                 return None
             subject = subject.layout
         if isinstance(subject, ComposedLayout):
@@ -587,6 +598,8 @@ class WholeVectors(Predicate):
 class PlainArrangement(Predicate):
     """Require an arrangement with no transform and no nonzero offset."""
 
+    allow_partial: bool = False
+
     @staticmethod
     def _stated(subject):
         return subject.layout if isinstance(subject, ShardLayout) else subject
@@ -595,7 +608,7 @@ class PlainArrangement(Predicate):
         stated = self._stated(subject)
         if isinstance(stated, ComposedLayout) and (stated.inner is not None or stated.offset != 0):
             return False
-        return self.arrangement(subject) is not None
+        return self.arrangement(subject, allow_partial=self.allow_partial) is not None
 
 @dataclass(frozen=True)
 class Run:
@@ -642,9 +655,10 @@ class BoxDims(Predicate):
     dtype: str
     limit: int
     span: int | None = None
+    allow_partial: bool = False
 
     def reading(self, subject, captures) -> tuple[tuple | None, str | None]:
-        layout = self.arrangement(subject)
+        layout = self.arrangement(subject, allow_partial=self.allow_partial)
         if layout is None:
             return None, f"{subject!r} is no static strided arrangement"
         width = getattr(captures.get(self.dtype), "bit_width", None)

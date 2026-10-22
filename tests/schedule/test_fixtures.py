@@ -27,6 +27,7 @@ import tilefoundry.ir.hir.schedule as schedules
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 import tilefoundry.visitor_registry.instruction as instructions
 from tests._source import import_dsl
+from tests.ir.cuda.test_copy_reduce_async_tensor import _types as _reduce_store_types
 from tilefoundry.analysis.access import AliasKind
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.api import analyze
@@ -87,6 +88,7 @@ from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.arange import Arange as TirArange
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.cuda.memory.copy_async_tensor import CopyAsyncTensor
+from tilefoundry.ir.tir.cuda.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Form, Wgmma
@@ -147,6 +149,7 @@ FINALIZE_REFUSED = {
     "duplicate_output_storage": "return leaf (2,) shares storage with another output",
 }
 CANDIDATES_REFUSED = {
+    "bulk_reduce_store": "source has no unscheduled candidate site",
     "wgmma_n16_within_warpgroup_share": "source has no unscheduled candidate site",
     "wgmma_b_mn_major_one_atom_column_slice": "source has no unscheduled candidate site",
     "wgmma_b_mn_major_two_atom_column_slice": "source has no unscheduled candidate site",
@@ -199,6 +202,7 @@ instructions
   T.copy_async                 cp.async
   T.copy_async_bulk            cp.async.bulk
   T.copy_async_tensor          cp.async.bulk.tensor
+  T.copy_reduce_async_tensor   cp.async.bulk.tensor
   T.copy                       all targets
   T.ldmatrix                   ldmatrix
   T.stmatrix                   stmatrix
@@ -220,6 +224,7 @@ _H200_FACTS_JSON = {
         {"id": "T.copy_async", "capability": "cp.async"},
         {"id": "T.copy_async_bulk", "capability": "cp.async.bulk"},
         {"id": "T.copy_async_tensor", "capability": "cp.async.bulk.tensor"},
+        {"id": "T.copy_reduce_async_tensor", "capability": "cp.async.bulk.tensor"},
         {"id": "T.copy", "capability": None},
         {"id": "T.ldmatrix", "capability": "ldmatrix"},
         {"id": "T.stmatrix", "capability": "stmatrix"},
@@ -324,6 +329,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "bulk_reduce_store": 16_384,
     "wgmma_accumulator_stmatrix": 6_144,
     "wgmma_n16_within_warpgroup_share": 61_440,
     "wgmma_b_mn_major_one_atom_column_slice": 49_152,
@@ -386,6 +392,7 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "bulk_reduce_store": {},
     "wgmma_accumulator_stmatrix": {
         "thread@0:128#0": _RmemExpectation(
             12_288, "64x48 f32 accumulator; bf16 cast aliases the fragment"
@@ -1132,6 +1139,18 @@ def test_schedule_copy_evaluates_to_the_source_value() -> None:
     )
 
     assert torch.equal(result, source)
+
+
+def test_schedule_reduce_store_adds_to_an_explicit_nonzero_destination():
+    source_type, result_type = _reduce_store_types()
+    source = torch.arange(4096, dtype=torch.float32).reshape(64, 64)
+    destination = torch.full_like(source, 7)
+    result = _evaluate_call(
+        ScheduleOp(op=CopyReduceAsyncTensor()),
+        ((source_type, source), (result_type, destination)),
+        result_type,
+    )
+    assert torch.equal(result, destination + source)
 
 
 @pytest.mark.parametrize(
@@ -2680,6 +2699,32 @@ class _RetainedStatements(StmtVisitor[None]):
         if isinstance(stmt.callable, (PrimFunction, ModuleList, Call)):
             self.calls.append(stmt)
 
+
+def test_reduce_store_stays_in_its_warp_scope():
+    source = next(path for path in HIR if path.stem == "bulk_reduce_store")
+    lowered = finalize(_module_in(source))
+
+    class Scope(StmtVisitor[None]):
+        def __init__(self):
+            self.scopes = []
+            self.found = 0
+
+        def visit_MeshScope(self, stmt, ctx=None):
+            self.scopes.append(stmt.mesh)
+            self.visit(stmt.body)
+            self.scopes.pop()
+
+        def visit_Evaluate(self, stmt, ctx=None):
+            if isinstance(stmt.callable, CopyReduceAsyncTensor):
+                assert tuple(topology.name for topology in self.scopes[-1].topologies) == (
+                    "thread",
+                )
+                assert prod(flatten(self.scopes[-1].layout).shape) == 32
+                self.found += 1
+
+    visitor = Scope()
+    visitor.visit(lowered.entry_function().body)
+    assert visitor.found == 1
 
 
 def test_grouped_n16_issues_keep_source_addresses():

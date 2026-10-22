@@ -51,10 +51,12 @@ from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, For, LetStmt, MeshScope, Sequential
 from tilefoundry.ir.types import (
+    Broadcast,
     ComposedLayout,
     DType,
     Layout,
     Mesh,
+    Partial,
     PointerType,
     ShardLayout,
     StorageKind,
@@ -1136,7 +1138,15 @@ class IssuePlan:
             projection = project(op, types, mesh, repeat=repeat, order=order)
             owner = next(
                 (
-                    participant_layout(type_.layout).mesh
+                    participant_layout(
+                        replace(
+                            type_.layout,
+                            attrs=tuple(
+                                Broadcast() if isinstance(attr, Partial) else attr
+                                for attr in type_.layout.attrs
+                            ),
+                        )
+                    ).mesh
                     for type_ in types
                     if isinstance(type_.layout, ShardLayout)
                 ),

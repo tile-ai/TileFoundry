@@ -71,7 +71,7 @@ def _dim_range(name: str) -> tuple:
     return dim >= 1, dim <= BOX_EXTENT
 
 
-def TmaBoxPattern(dtype: str) -> SwitchPattern:
+def TmaBoxPattern(dtype: str, *, allow_partial=False) -> SwitchPattern:
     rest = tuple(_dim(f"dim{index}") for index in range(1, TMA_RANK))
     rest_formulas = tuple(
         formula for index in range(1, TMA_RANK) for formula in _dim_range(f"dim{index}")
@@ -80,8 +80,8 @@ def TmaBoxPattern(dtype: str) -> SwitchPattern:
     boxes = {
         TmaSwizzle.NONE: LayoutPattern(
             predicates=(
-                P.PlainArrangement(),
-                P.BoxDims(plain_dims, dtype, BOX_EXTENT),
+                P.PlainArrangement(allow_partial=allow_partial),
+                P.BoxDims(plain_dims, dtype, BOX_EXTENT, allow_partial=allow_partial),
                 *_dim_formulas("dim0", dtype),
                 *rest_formulas,
             )
@@ -99,12 +99,13 @@ def TmaBoxPattern(dtype: str) -> SwitchPattern:
             0,
             LayoutPattern(
                 predicates=(
-                    P.PlainArrangement(),
+                    P.PlainArrangement(allow_partial=allow_partial),
                     P.BoxDims(
                         dims,
                         dtype,
                         BOX_EXTENT,
                         span=mode.value,
+                        allow_partial=allow_partial,
                     ),
                     *_dim_formulas(leading, dtype, span=mode.value),
                     *rest_formulas,

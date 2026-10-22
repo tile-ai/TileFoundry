@@ -1,5 +1,7 @@
 """SM90 warpgroup register-fragment store through warp stmatrix instructions."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 
 from tilefoundry.evaluator.registry import register_schedule_eval, schedule_eval_registry
@@ -53,3 +55,6 @@ register_typeinfer(StMatrix)(typeinfer_registry.lookup(Copy))
 register_verify_stmt(StMatrix)(verify_stmt_registry.lookup(Copy))
 register_access_relation(StMatrix)(identity_relations)
 register_schedule_eval(StMatrix)(schedule_eval_registry.lookup(Copy))
+
+
+__all__ = ["StMatrix"]

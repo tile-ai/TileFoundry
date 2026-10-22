@@ -15,6 +15,7 @@ from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten, resolve_lay
 from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import (
+    Partial,
     ShardLayout,
     Split,
     shard_layout_local_shape,
@@ -179,6 +180,13 @@ class Reshard(Op):
 def _buffer_alias(call: Call) -> int | None:
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage or not is_literal_shape(result.shape):
+        return None
+    before, after = (shard_layout_of(held.layout) for held in (source, result))
+    if (
+        before is not None
+        and any(isinstance(attr, Partial) for attr in before.attrs)
+        and (after is None or not any(isinstance(attr, Partial) for attr in after.attrs))
+    ):
         return None
     boxes = []
     for held in (source, result):

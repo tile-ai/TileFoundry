@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import prod
 
-from tilefoundry.ir.types import Broadcast, ComposedLayout, Layout, ShardLayout, Swizzle
+from tilefoundry.ir.types import Broadcast, ComposedLayout, Layout, Partial, ShardLayout, Swizzle
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.tensor_type import TensorType
 
@@ -68,7 +68,10 @@ class SameConstraint(Constraint):
 class SameModesConstraint(Constraint):
     """Require two tensor layouts to run along the same final mode of one axis."""
 
-    def __init__(self, left: str, right: str):
+    allow_partial: bool = False
+
+    def __init__(self, left: str, right: str, *, allow_partial=False):
+        object.__setattr__(self, "allow_partial", allow_partial)
         object.__setattr__(self, "field", "layout")
         object.__setattr__(self, "left", left)
         object.__setattr__(self, "right", right)
@@ -78,10 +81,13 @@ class SameModesConstraint(Constraint):
         return None if any(not isinstance(value, TensorType) for value in held) else held
 
     @staticmethod
-    def reading(tensor: TensorType, arrangement=None):
+    def reading(tensor: TensorType, arrangement=None, *, allow_partial=False):
         layout = tensor.layout if arrangement is None else arrangement
         if isinstance(layout, ShardLayout):
-            if not all(isinstance(attr, Broadcast) for attr in layout.attrs):
+            if not all(
+                isinstance(attr, Broadcast) or (allow_partial and isinstance(attr, Partial))
+                for attr in layout.attrs
+            ):
                 layout = None
             else:
                 layout = layout.layout
@@ -127,7 +133,7 @@ class SameModesConstraint(Constraint):
         else:
             arrangements = (None, None)
         return tuple(
-            self.reading(value, arrangement)
+            self.reading(value, arrangement, allow_partial=self.allow_partial)
             for value, arrangement in zip(pair, arrangements)
         )
 

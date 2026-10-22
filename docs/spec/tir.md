@@ -1303,6 +1303,32 @@ class CopyAsyncTensor(Op):
     CUDA codegen MUST reject it until host-encoded tensor-map construction
     exists; this stage does not silently lower it to another copy instruction.
 
+##### CopyReduceAsyncTensor
+
+```python
+class CopyReduceAsyncTensor(Op):
+    src: Tensor
+    dst: Tensor
+    kind: str = "add"
+    execution_mesh: Mesh | None = None
+```
+
+- constraints:
+  - The source is a shared-memory TMA box and MAY carry `Partial` state;
+    the destination is an explicit global tensor-map operand, read and written.
+    Shape, dtype and contiguous tile modes MUST agree. Ordinary tensor-map
+    copies continue to reject `Partial` state.
+  - Only `kind="add"` is supported. The logical result is `dst + src`;
+    the evaluator's source already represents the sum of its parts.
+  - One aligned warp participates, with the same execution-mesh declaration as
+    `CopyAsyncTensor`. The capability is `cp.async.bulk.tensor` and the resource
+    is `tma_engine`. Partial state MUST NOT select instruction owner levels;
+    owner selection treats Partial as Broadcast while retaining Split placement.
+  - Cost MUST charge one source read and one destination write per unit, no
+    destination read and no FLOPs. The hardware addition occurs in L2; analysis
+    reports the write as gmem traffic under the existing leaf-storage rule.
+  - CUDA codegen MUST reject it until host-encoded tensor-map support exists.
+
 ##### LdMatrix
 
 ```python

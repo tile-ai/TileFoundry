@@ -9,7 +9,7 @@ class BulkReduceStore:
     @func
     def gemm():
         with Mesh(("cta",), layout=(2,), names=("k",)) as cta:
-            part_s = tf.zeros(Tensor[(64, 64), "f32", (64, 64) @ {cta.k @ P("sum")}, "smem"])
-            dq0 = tf.zeros(Tensor[(64, 64), "f32"])
             with Mesh(("thread",), layout=(32,), names=("lane",)) as _warp:
+                part_s = tf.zeros(Tensor[(64, 64), "f32", (64, 64) @ {cta.k @ P("sum")}, "smem"])
+                dq0 = tf.zeros(Tensor[(64, 64), "f32"])
                 return tf.schedule((part_s, dq0), op=T.copy_reduce_async_tensor())
