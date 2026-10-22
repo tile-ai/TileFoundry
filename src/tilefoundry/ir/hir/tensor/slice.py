@@ -22,7 +22,7 @@ from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx, try_compact_major
 from tilefoundry.ir.types.substitute import dim_vars_by_name
-from tilefoundry.ir.types.utils import i64_const
+from tilefoundry.ir.types.utils import i64_const, static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -286,6 +286,34 @@ def _dim_mul(left, right):
     return simplify_dim(DimMul, (left, right))
 
 
+def _aligned(start, size, loops, aliases):
+    """Prove block alignment over the authored loop domain, without rewriting Exprs."""
+    from tilefoundry.ir.isl_interop import dim_to_isl_pw_aff  # noqa: PLC0415
+
+    number = static_dim_value(start)
+    if number is not None:
+        return number % size == 0
+    values = {}
+    names = [f"i{index}" for index in range(len(loops))]
+    coords = {id(loop[0]): name for loop, name in zip(loops, names, strict=True)}
+    coords.update({alias: coords[root] for alias, root in aliases.items() if root in coords})
+    domain = isl.set(f"{{ [{', '.join(names)}] }}")
+    try:
+        for index, (_var, begin, end, step) in enumerate(loops):
+            begin = dim_to_isl_pw_aff(begin, values, coords=coords)
+            end = dim_to_isl_pw_aff(end, values, coords=coords)
+            step = static_dim_value(step)
+            if step is None or step <= 0:
+                return False
+            iv = isl.pw_aff(f"{{ [{', '.join(names)}] -> [{names[index]}] }}")
+            domain = domain.intersect(begin.le_set(iv)).intersect(iv.lt_set(end))
+            domain = domain.intersect(iv.sub(begin).mod(isl.val(step)).zero_set())
+        position = dim_to_isl_pw_aff(start, values, coords=coords)
+        return position.mod(isl.val(size)).non_zero_set().intersect(domain).is_empty()
+    except (TypeError, ValueError, NotImplementedError, isl.Error):
+        return False
+
+
 def _window_layout(source, logical_shape, starts, sizes, strides, ctx):
     """Compose logical-axis windows while retaining each surviving shard mode."""
     shard = source if isinstance(source, ShardLayout) else None
@@ -331,8 +359,6 @@ def _window_layout(source, logical_shape, starts, sizes, strides, ctx):
         if _literal(start) == 0 and size == logical_shape[axis] and step == 1:
             tilers.append(None)
         elif shard is not None and (distributed or len(group) > 1):
-            from tilefoundry.ir.types.window import _aligned  # noqa: PLC0415
-
             mesh_axis = next(
                 (
                     i

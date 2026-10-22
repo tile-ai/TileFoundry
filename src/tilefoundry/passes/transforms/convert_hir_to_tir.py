@@ -39,7 +39,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp, operand_relations
+from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -90,7 +90,6 @@ from tilefoundry.visitor_registry.access_relation import (
     affine_term,
     identity_access,
     leaf_paths,
-    projected_axes,
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
@@ -129,6 +128,7 @@ class View:
     type: TensorType
     stem: str = "tile"
     whole_tensor: bool = False
+    instruction_origin: bool = False
 
 
 @dataclass
@@ -803,7 +803,17 @@ class StoragePlan:
                 windows.append(current)
             current = answer.partner
 
-    def operand(self, value, desired, *, starts=None, sizes=None, stem="tile", whole_tensor=False):
+    def operand(
+        self,
+        value,
+        desired,
+        *,
+        starts=None,
+        sizes=None,
+        stem="tile",
+        whole_tensor=False,
+        instruction_origin=False,
+    ):
         """Choose an existing operand or the window required at its use."""
         held = value.type
         if not isinstance(held, TensorType):
@@ -833,10 +843,15 @@ class StoragePlan:
             ):
                 return value
             starts, sizes = tuple(i64_const(0) for _ in held.shape), tuple(held.shape)
-        return View(value, starts, sizes, desired, stem, whole_tensor)
+        return View(value, starts, sizes, desired, stem, whole_tensor, instruction_origin)
 
     def materialization(self, view, base, loops):
-        """Describe one physical TIR view without adding any statements."""
+        """Describe one physical TIR view without adding any statements.
+
+        Gapped bind tiles retain their issued strides with a source-relative
+        origin. An affine origin surrounds ownership; a swizzled origin stays
+        inside the swizzle. Contiguous windows use Slice.
+        """
         desired = view.type
         if isinstance(base, Constant) and isinstance(base.type, PointerType):
             return self.view(base.value, None, desired)
@@ -848,7 +863,34 @@ class StoragePlan:
         if desired.layout is None:
             desired = replace(desired, layout=resolve_layout(None, desired.shape))
         source = base
-        if not view.whole_tensor:
+        if view.instruction_origin:
+            layout = held.layout.layout if isinstance(held.layout, ShardLayout) else held.layout
+            flat = flatten(resolve_layout(layout, held.shape))
+            start = tuple(static_dim_value(value) for value in view.starts)
+            if any(value is None for value in start):
+                raise LoweringError("an instruction origin needs static issue coordinates")
+            linear = sum(
+                value * stride
+                for value, stride in zip(start, compact_row_major(held.shape), strict=True)
+            )
+            digits = layout_correspondence(flat.shape, held.shape).digits(linear)
+            offset = sum(value * stride for value, stride in zip(digits, flat.strides, strict=True))
+            if isinstance(layout, ComposedLayout):
+                offset += layout.offset
+            issued = (
+                desired.layout.layout if isinstance(desired.layout, ShardLayout) else desired.layout
+            )
+            if isinstance(issued, ComposedLayout):
+                issued = replace(issued, offset=offset)
+                desired = replace(
+                    desired,
+                    layout=replace(desired.layout, layout=issued)
+                    if isinstance(desired.layout, ShardLayout)
+                    else issued,
+                )
+            else:
+                desired = replace(desired, layout=ComposedLayout(None, offset, desired.layout))
+        elif not view.whole_tensor:
             keys = Tuple(view.starts, type=TupleType(tuple(start.type for start in view.starts)))
             source = Call(
                 Slice(sizes=tuple(view.sizes), strides=(1,) * len(view.sizes)),
@@ -1111,19 +1153,32 @@ class IssuePlan:
         serial = tuple(
             count // bind for count, bind in zip(projection.repeat, projection.bind, strict=True)
         )
-        step = tuple(
-            size * bind for size, bind in zip(projection.shape, projection.bind, strict=True)
-        )
-        axes = tuple(
-            projected_axes(boundary)
-            for boundary in operand_relations(op, projection.operands)[: len(projection.params)]
-        )
         for counters in product(*(range(serial[axis]) for axis in projection.order)):
-            offsets = tuple(
-                dict(zip(projection.order, counters, strict=True))[axis] * step[axis]
-                for axis in range(len(serial))
-            )
-            yield tuple(tuple(i64_const(offsets[axis]) for axis in mapped) for mapped in axes)
+            counters = dict(zip(projection.order, counters, strict=True))
+            result = []
+            for operand in projection.repeat_layouts:
+                starts = []
+                for axis, layout, bound in operand:
+                    shape = tuple(
+                        width for width, owned in zip(layout.shape, bound, strict=True) if not owned
+                    )
+                    strides = tuple(
+                        stride
+                        for stride, owned in zip(layout.strides, bound, strict=True)
+                        if not owned
+                    )
+                    coordinate = 0 if axis is None else counters[axis]
+                    digits = layout_correspondence(shape, (prod(shape),)).digits(coordinate)
+                    starts.append(
+                        i64_const(
+                            sum(
+                                digit * stride
+                                for digit, stride in zip(digits, strides, strict=True)
+                            )
+                        )
+                    )
+                result.append(tuple(starts))
+            yield tuple(result)
 
 
 @dataclass(kw_only=True)
@@ -1630,9 +1685,25 @@ class Lowering(ValuationVisitor[Expr | View]):
             )
         for windows in ctx.issues.points(plan, op):
             issued = []
-            for (role, value), desired, starts in zip(
-                issued_operands, plan.issued, windows, strict=True
+            for (role, value), desired, starts, repeats in zip(
+                issued_operands, plan.issued, windows, plan.repeat_layouts, strict=True
             ):
+                grouped = any(
+                    any(
+                        owner
+                        and extent > 1
+                        and any(
+                            not other and width > 1
+                            for width, other in zip(
+                                repeat.shape[index + 1 :], bound[index + 1 :], strict=True
+                            )
+                        )
+                        for index, (extent, owner) in enumerate(
+                            zip(repeat.shape, bound, strict=True)
+                        )
+                    )
+                    for _, repeat, bound in repeats
+                )
                 logical_type = types[
                     next(index for index, param in enumerate(params) if param.name == role)
                 ]
@@ -1642,10 +1713,20 @@ class Lowering(ValuationVisitor[Expr | View]):
                     )
                 else:
                     base = ctx.builder.value(value, ctx=ctx)
-                    starts, physical = ctx.storage.window(base, desired, starts, instruction=True)
+                    if grouped:
+                        physical = desired
+                    else:
+                        starts, physical = ctx.storage.window(
+                            base, desired, starts, instruction=True
+                        )
                     item = ctx.builder.value(
                         ctx.storage.operand(
-                            base, physical, starts=starts, sizes=desired.shape, stem=f"{role}_view"
+                            base,
+                            physical,
+                            starts=starts,
+                            sizes=desired.shape,
+                            stem=f"{role}_view",
+                            instruction_origin=grouped,
                         ),
                         ctx=ctx,
                     )

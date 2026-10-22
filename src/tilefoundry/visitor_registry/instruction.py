@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
+from math import prod
 
 from tilefoundry.ir.core import (
     Call,
@@ -24,21 +25,21 @@ from tilefoundry.ir.pattern.utils import (
     declared_shape,
     selected_pattern,
 )
-from tilefoundry.ir.types import TensorType, UnitType
-from tilefoundry.ir.types.layout import resolve_layout
+from tilefoundry.ir.types import ComposedLayout, Layout, Split, TensorType, UnitType
+from tilefoundry.ir.types.int_tuple import flatten
+from tilefoundry.ir.types.layout import get, resolve_layout
+from tilefoundry.ir.types.layout_algebra import composition, zipped_divide
+from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.mesh import separate
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
     shard_layout_of,
 )
+from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import (
     _participant_frame,
-    local_type_of,
     participant_layout,
-    strip_broadcast_layout,
-    tile_inner_type,
-    tile_view_layout,
 )
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -116,6 +117,7 @@ class Projection:
     shape: tuple
     issued: tuple = ()
     bind: tuple = ()
+    repeat_layouts: tuple = ()
 
 
 def call_params(op, count):
@@ -155,6 +157,213 @@ def check_input_reachability(op, operand_types, mesh):
             raise ValueError(
                 f"input {index} is laid out more coarsely and kept in {type_.storage.name.lower()}, which does not reach the units this runs on; reshard it to smem or gmem first"
             )
+
+
+@dataclass
+class _AxisTile:
+    """One row-major axis split, with original mode positions for ownership."""
+
+    inner: Layout
+    repeat: Layout
+    logical: Layout
+    prefix: tuple
+    suffix: tuple
+    owners: tuple
+    bound: tuple = ()
+
+    def align(self, shape, bound, name):
+        if tuple(self.repeat.shape) != shape:
+            if any(self.owners):
+                raise ValueError(
+                    f"{name}: bound repeat modes {self.repeat.shape} do not match {shape}"
+                )
+            profile = Layout(shape, compact_row_major(shape))
+            try:
+                self.repeat = composition(self.repeat, profile, major="row")
+                self.logical = composition(self.logical, profile, major="row")
+            except (AssertionError, ValueError) as error:
+                raise ValueError(
+                    f"{name}: repeat mode {self.repeat.shape} cannot factor as {shape}"
+                ) from error
+            if self.repeat.shape != shape or self.logical.shape != shape:
+                raise ValueError(
+                    f"{name}: repeat mode {self.repeat.shape} cannot factor as {shape}"
+                )
+            self.prefix = (None,) * len(shape)
+            self.owners = (False,) * len(shape)
+        if any(owner and not shared for owner, shared in zip(self.owners, bound, strict=True)):
+            raise ValueError(f"{name}: repeat mode has a conflicting Split")
+        self.bound = bound
+
+
+def _axis_tile(layout, logical_extent, tile, positions, split, name):
+    """Divide using the authored row-major inner profile for TensorType readers."""
+    extents, strides = tuple(flatten(layout.shape)), tuple(flatten(layout.strides))
+    if logical_extent == tile:
+        unit = Layout((1,), (0,))
+        return _AxisTile(layout, unit, unit, (None,), tuple(positions), (False,))
+    count = logical_extent // tile
+    remaining, prefix, suffix, consumed = count, [], [], 0
+    prefix_widths, suffix_widths = [], []
+    for index, (position, width) in enumerate(zip(positions, extents, strict=True)):
+        if remaining == 1:
+            break
+        if remaining % width == 0:
+            prefix.append(position)
+            prefix_widths.append(width)
+            remaining //= width
+            consumed = index + 1
+        elif width % remaining == 0 and position not in split:
+            prefix.append(position)
+            prefix_widths.append(remaining)
+            suffix.append(position)
+            suffix_widths.append(width // remaining)
+            remaining = 1
+            consumed = index + 1
+        else:
+            raise ValueError(f"{name}: repeat is not leftmost at mode {position} (extent {width})")
+    if remaining != 1:
+        raise ValueError(f"{name}: leading modes do not contain repeat {count}")
+    suffix.extend(positions[consumed:])
+    suffix_widths.extend(extents[consumed:])
+    if not suffix_widths:
+        suffix, suffix_widths = [None], [1]
+    tiler = Layout(tuple(suffix_widths), compact_row_major(tuple(suffix_widths)))
+    divided = zipped_divide(layout, tiler, major="row")
+    inner = get(divided, 0)
+    if inner.shape != tuple(suffix_widths):
+        raise ValueError(
+            f"{name}: inner mode {inner.shape} does not preserve {tuple(suffix_widths)}"
+        )
+    original = dict(zip(positions, strides, strict=True))
+    inner = Layout(
+        inner.shape,
+        tuple(
+            original[position] if width == 1 and position is not None else stride
+            for position, width, stride in zip(suffix, inner.shape, inner.strides, strict=True)
+        ),
+    )
+    repeat_profile = Layout(tuple(prefix_widths), compact_row_major(tuple(prefix_widths)))
+    repeat = composition(get(divided, 1), repeat_profile, major="row")
+    logical = composition(
+        get(zipped_divide(Layout((logical_extent,), (1,)), tiler, major="row"), 1),
+        repeat_profile,
+        major="row",
+    )
+    if repeat.shape != tuple(prefix_widths) or logical.shape != tuple(prefix_widths):
+        raise ValueError(f"{name}: repeat mode cannot preserve prefix {tuple(prefix_widths)}")
+    return _AxisTile(
+        inner,
+        repeat,
+        logical,
+        tuple(prefix),
+        tuple(suffix),
+        tuple(position in split for position in prefix),
+    )
+
+
+class _OperandTile:
+    def __init__(self, type_, shape, participant, enclosing, attrs, name):
+        self.type, self.shape = type_, shape
+        self.participant, self.enclosing, self.attrs = participant, enclosing, attrs
+        self.top = type_.layout if isinstance(type_.layout, ComposedLayout) else None
+        outer = self.top.outer if self.top is not None else type_.layout
+        self.shard = outer if isinstance(outer, ShardLayout) else None
+        self.address = self.shard.layout if self.shard is not None else outer
+        primitive = self.address.outer if isinstance(self.address, ComposedLayout) else self.address
+        if not isinstance(primitive, Layout):
+            raise ValueError(f"{name}: cannot divide {type(primitive).__name__}")
+        self.grouped = any(isinstance(mode, tuple) for mode in primitive.shape)
+        correspondence = layout_correspondence(primitive.shape, type_.shape)
+        if correspondence.groups is None:
+            raise ValueError(f"{name}: modes cross logical axes {type_.shape}")
+        steps = tuple(flatten(primitive.strides))
+        split = (
+            {attr.axis for attr in self.shard.attrs if isinstance(attr, Split)}
+            if self.shard
+            else set()
+        )
+        self.axes = []
+        for axis, (group, extent, tile) in enumerate(
+            zip(correspondence.groups, type_.shape, shape, strict=True)
+        ):
+            if self.grouped and len(primitive.shape) == len(shape):
+                mode, stride = primitive.shape[axis], primitive.strides[axis]
+                layout = Layout(
+                    mode if isinstance(mode, tuple) else (mode,),
+                    stride if isinstance(stride, tuple) else (stride,),
+                )
+            else:
+                layout = Layout(
+                    tuple(correspondence.extents[position] for position in group),
+                    tuple(steps[position] for position in group),
+                )
+            self.axes.append(_axis_tile(layout, extent, tile, group, split, f"{name} axis {axis}"))
+
+    def build(self, *, issued=False):
+        shapes, strides, mapping, shape = [], [], {}, []
+        for axis, tile in enumerate(self.axes):
+            prefix = tuple(
+                index
+                for index, (width, bound) in enumerate(
+                    zip(tile.repeat.shape, tile.bound, strict=True)
+                )
+                if issued and (bound or (width == 1 and tile.prefix[index] is not None))
+            )
+            prefix_shape = tuple(tile.repeat.shape[index] for index in prefix)
+            part = tile.inner
+            if prefix:
+                part = Layout(
+                    prefix_shape + tuple(flatten(part.shape)),
+                    tuple(tile.repeat.strides[index] for index in prefix)
+                    + tuple(flatten(part.strides)),
+                )
+            origin = sum(len(tuple(flatten(mode))) for mode in shapes)
+            for index, selected in enumerate(prefix):
+                if tile.prefix[selected] is not None:
+                    mapping[tile.prefix[selected]] = origin + index
+            for index, position in enumerate(tile.suffix):
+                if position is not None:
+                    mapping[position] = origin + len(prefix) + index
+            if self.grouped:
+                shapes.append(part.shape if len(part.shape) > 1 else part.shape[0])
+                strides.append(part.strides if len(part.strides) > 1 else part.strides[0])
+            else:
+                shapes.extend(flatten(part.shape))
+                strides.extend(flatten(part.strides))
+            width = prod(prefix_shape)
+            shape.append(self.shape[axis] if width == 1 else self.shape[axis] * width)
+        layout = Layout(tuple(shapes), tuple(strides))
+        broadcast = self.shard is None or all(
+            isinstance(attr, Broadcast) for attr in self.shard.attrs
+        )
+        if isinstance(self.address, ComposedLayout):
+            layout = replace(
+                self.address,
+                outer=layout,
+                offset=0 if not issued and broadcast else self.address.offset,
+            )
+        if self.top is not None and self.top.inner is not None:
+            layout = ComposedLayout(self.top.inner, 0, layout)
+        if self.shard is not None and (issued or not broadcast):
+            source = self.shard if issued else participant_layout(self.shard, self.participant)
+            frame, dropped = (
+                (source.mesh, 0) if issued else _participant_frame(source.mesh, self.participant)
+            )
+            attrs = tuple(
+                Split(mapping[attr.axis]) if isinstance(attr, Split) else attr
+                for attr in source.attrs[dropped:]
+            )
+            layout = ShardLayout(layout, attrs, frame)
+        elif self.attrs is not None:
+            frame = separate(self.enclosing)[-1]
+            participant, dropped = _participant_frame(frame, self.participant)
+            layout = ShardLayout(
+                layout,
+                (Broadcast(),) * dropped + self.attrs if issued else self.attrs,
+                frame if issued else participant,
+            )
+        return TensorType(tuple(shape), self.type.dtype, layout, self.type.storage)
 
 
 def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, fragments=True):
@@ -234,74 +443,55 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
         if isinstance(atom, type)
         else getattr(atom, "required_execution_mesh", None)
     )
-    inner_types = []
-    for type_, shape, pattern, boundary in zip(
-        whole_types, shapes, patterns, single[: len(params)], strict=True
-    ):
-        if not fragments:
-            inner_types.append(TensorType(shape, type_.dtype, type_.layout, type_.storage))
-            continue
-        counts = tuple(1 if axis is None else repeat[axis] for axis in projected_axes(boundary))
-        shard_attrs = (
-            pattern.layout.attrs
-            if pattern is not None and isinstance(pattern.layout, ShardLayoutPattern)
-            else None
-        )
-        try:
-            inner = tile_inner_type(
-                replace(type_, layout=strip_broadcast_layout(type_.layout)),
-                shape,
-                counts=counts,
-                participant=participant,
-                enclosing=mesh,
-                shard_attrs=shard_attrs,
-            )
-        except ValueError as error:
-            raise ScheduleRefusal(str(error), path=bindings, op=op) from error
-        inner_types.append(inner)
-    inner_types = tuple(inner_types)
     if not fragments:
+        inner_types = tuple(
+            TensorType(shape, type_.dtype, type_.layout, type_.storage)
+            for shape, type_ in zip(shapes, whole_types, strict=True)
+        )
         return Projection(params, writes, patterns, inner_types, repeat, order, single_shape)
-    serial = list(repeat)
-    for whole, inner, boundary in zip(whole_types, inner_types, single[: len(params)], strict=True):
-        local, issue = local_type_of(whole), local_type_of(inner)
-        for size, tile, axis in zip(
-            local.shape, issue.shape, projected_axes(boundary), strict=True
+    tiles, axes = [], []
+    try:
+        for param, type_, shape, pattern, boundary in zip(
+            params, whole_types, shapes, patterns, single[: len(params)], strict=True
         ):
-            if axis is not None:
-                if tile < 1 or size < tile or size % tile:
-                    raise ScheduleRefusal(
-                        f"local extent {size} is not divisible by single-issue extent {tile}",
-                        path=bindings,
-                        op=op,
+            attrs = (
+                pattern.layout.attrs
+                if pattern is not None and isinstance(pattern.layout, ShardLayoutPattern)
+                else None
+            )
+            tiles.append(_OperandTile(type_, shape, participant, mesh, attrs, param.name))
+            axes.append(projected_axes(boundary))
+        shared = {}
+        for param, tile, mapped in zip(params, tiles, axes, strict=True):
+            for axis, one in zip(mapped, tile.axes, strict=True):
+                if axis is None or not any(one.owners):
+                    continue
+                value = (one.repeat.shape, one.owners)
+                if axis in shared and shared[axis] != value:
+                    raise ValueError(
+                        f"{param.name}: repeat mode on iteration axis {axis} has conflicting Split extents"
                     )
-                serial[axis] = min(serial[axis], size // tile)
-    if any(count % local for count, local in zip(repeat, serial, strict=True)):
-        raise ScheduleRefusal("local issue counts do not divide repeat", path=bindings, op=op)
-    bind = tuple(count // local for count, local in zip(repeat, serial, strict=True))
-    issued = []
-    for type_, pattern, boundary in zip(whole_types, patterns, single[: len(params)], strict=True):
-        axes = projected_axes(boundary)
-        counts = tuple(1 if axis is None else repeat[axis] // bind[axis] for axis in axes)
-        shape = tuple(extent // count for extent, count in zip(type_.shape, counts, strict=True))
-        attrs = (
-            pattern.layout.attrs
-            if pattern is not None and isinstance(pattern.layout, ShardLayoutPattern)
-            else None
-        )
-        layout = tile_view_layout(
-            type_,
-            shape,
-            counts=counts,
-            enclosing=mesh,
-            shard_attrs=attrs,
-            participant=None if shard_layout_of(type_.layout) is not None else participant,
-        )
-        if isinstance(layout, ShardLayout) and shard_layout_of(type_.layout) is None:
-            frame = separate(mesh)[-1]
-            _participant, dropped = _participant_frame(frame, participant)
-            layout = replace(layout, attrs=(Broadcast(),) * dropped + layout.attrs, mesh=frame)
-        issued.append(TensorType(shape, type_.dtype, layout, type_.storage))
+                shared[axis] = value
+        for param, tile, mapped in zip(params, tiles, axes, strict=True):
+            for axis, one in zip(mapped, tile.axes, strict=True):
+                if axis in shared:
+                    one.align(*shared[axis], f"{param.name} iteration axis {axis}")
+                else:
+                    one.bound = (False,) * len(one.repeat.shape)
+        inner_types = tuple(tile.build() for tile in tiles)
+        issued = tuple(tile.build(issued=True) for tile in tiles)
+    except ValueError as error:
+        raise ScheduleRefusal(str(error), path=bindings, op=op) from error
+    bind = tuple(
+        prod(width for width, bound in zip(*shared[axis], strict=True) if bound)
+        if axis in shared
+        else 1
+        for axis in range(len(repeat))
+    )
+    repeat_layouts = tuple(
+        tuple((axis, one.logical, one.bound) for axis, one in zip(mapped, tile.axes, strict=True))
+        for mapped, tile in zip(axes, tiles, strict=True)
+    )
     return Projection(
         params,
         writes,
@@ -310,8 +500,9 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
         repeat,
         order,
         single_shape,
-        tuple(issued),
+        issued,
         bind,
+        repeat_layouts,
     )
 
 

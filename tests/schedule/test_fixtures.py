@@ -106,6 +106,7 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.layout import apply, flatten, resolve_layout
 from tilefoundry.ir.types.layout_algebra import cosize
+from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.mesh import levels, make_mesh, starts
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
@@ -146,6 +147,7 @@ FINALIZE_REFUSED = {
     "duplicate_output_storage": "return leaf (2,) shares storage with another output",
 }
 CANDIDATES_REFUSED = {
+    "wgmma_n16_within_warpgroup_share": "source has no unscheduled candidate site",
     "wgmma_b_mn_major_one_atom_column_slice": "source has no unscheduled candidate site",
     "wgmma_b_mn_major_two_atom_column_slice": "source has no unscheduled candidate site",
     "smem_padded_stages": "source has no unscheduled candidate site",
@@ -320,6 +322,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "wgmma_n16_within_warpgroup_share": 61_440,
     "wgmma_b_mn_major_one_atom_column_slice": 49_152,
     "wgmma_b_mn_major_two_atom_column_slice": 49_152,
     "loop_bound_from_outer_induction": 0,
@@ -380,6 +383,12 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "wgmma_n16_within_warpgroup_share": {
+        "thread@128:256#0": _RmemExpectation(
+            24_576, "64x96 f32 accumulator across two warpgroups; MMA aliases acc"
+        ),
+        "thread@0:384#0": _RmemExpectation(24_576, "parent envelope of the accumulator"),
+    },
     "wgmma_b_mn_major_one_atom_column_slice": {
         "thread@128:128#0": _RmemExpectation(16384, "64x64 f32 accumulator; MMA aliases acc"),
         "thread@0:256#0": _RmemExpectation(16384, "parent envelope of the accumulator"),
@@ -2574,6 +2583,36 @@ def test_shared_projection_rejects_partial_atom_tiles() -> None:
         )
 
 
+@pytest.mark.parametrize("failure", ("leftmost", "factor"))
+def test_grouped_projection_names_incompatible_repeat_mode(failure):
+    source = next(path for path in HIR if path.stem == "wgmma_n16_within_warpgroup_share")
+    module = _module_in(source)
+    result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
+    schedule = next(
+        value
+        for value in collect_exprs(result.function.body)
+        if isinstance(value, Call)
+        and isinstance(value.target, ScheduleOp)
+        and isinstance(value.target.op, TiledMma)
+    )
+    acc, lhs, rhs = (arg.type for arg in schedule.args)
+    if failure == "leftmost":
+        layout = replace(
+            acc.layout, layout=Layout((4, 2, 8, 2, 2, 4, 6), (16, 8, 1, 3072, 1024, 128, 64))
+        )
+        operands = (replace(acc, layout=layout), lhs, rhs)
+        reason = "acc axis 1: repeat is not leftmost at mode 4"
+    else:
+        layout = replace(
+            rhs.layout,
+            outer=Layout(((3, 4, 16), (3, 2, 2, 8)), ((6144, 16, 1), (8192, 1024, 512, 64))),
+        )
+        operands = (acc, lhs, replace(rhs, layout=layout))
+        reason = "rhs iteration axis 1: repeat mode .* cannot factor as"
+    with pytest.raises(ScheduleRefusal, match=reason):
+        project(schedule.target.op, operands, None)
+
+
 @pytest.mark.parametrize(
     ("name", "issues"), (("wgmma_repeat_along_n_order", 4), ("wgmma_k_slices_of_wide_run", 2))
 )
@@ -2632,6 +2671,93 @@ class _RetainedStatements(StmtVisitor[None]):
         self.statements.append(stmt)
         if isinstance(stmt.callable, (PrimFunction, ModuleList, Call)):
             self.calls.append(stmt)
+
+
+
+def test_grouped_n16_issues_keep_source_addresses():
+    source = next(path for path in HIR if path.stem == "wgmma_n16_within_warpgroup_share")
+    module = _module_in(source)
+    checked = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
+    schedule = next(
+        value
+        for value in collect_exprs(checked.function.body)
+        if isinstance(value, Call)
+        and isinstance(value.target, ScheduleOp)
+        and isinstance(value.target.op, TiledMma)
+    )
+    original_c, _, original_b = (arg.type for arg in schedule.args)
+    lowered = finalize(module)
+    visitor = _RetainedStatements()
+    function = lowered.entry_function()
+    visitor.visit(function.body)
+    issues = [stmt for stmt in visitor.statements if isinstance(stmt.callable, TiledMma)]
+    assert len(issues) == 36
+
+    readers = {}
+
+    def address(type_, coordinates):
+        if id(type_) not in readers:
+            eb = type_.dtype.bit_width // 8
+
+            def reader(layout):
+                if isinstance(layout, ShardLayout):
+                    return reader(layout.layout)
+                if isinstance(layout, ComposedLayout):
+                    outer = reader(layout.outer)
+                    if isinstance(layout.inner, Swizzle):
+                        return lambda linear: layout.inner(outer(linear) + layout.offset * eb)
+                    return lambda linear: outer(linear) + layout.offset * eb
+                flat = flatten(layout)
+                correspondence = layout_correspondence(flat.shape, type_.shape)
+                return lambda linear: (
+                    sum(
+                        digit * stride
+                        for digit, stride in zip(
+                            correspondence.digits(linear), flat.strides, strict=True
+                        )
+                    )
+                    * eb
+                )
+
+            readers[id(type_)] = reader(type_.layout)
+        linear = sum(
+            coordinate * prod(type_.shape[axis + 1 :])
+            for axis, coordinate in enumerate(coordinates)
+        )
+        return readers[id(type_)](linear)
+
+    def pointer_root(value):
+        if isinstance(value, Var):
+            return pointer_root(visitor.bindings[id(value)])
+        if isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf)):
+            return pointer_root(value.args[0])
+        return value
+
+    c_root = pointer_root(issues[0].args[0])
+    b_root = pointer_root(issues[0].args[2])
+    copied_k = next(
+        stmt.args[1]
+        for stmt in visitor.statements
+        if isinstance(stmt.callable, CopyAsyncTensor) and stmt.args[0] is function.params[1]
+    )
+    assert isinstance(b_root, Constant)
+    assert b_root.value == pointer_root(copied_k).value
+    assert c_root.type.shape == original_c.shape
+    assert c_root.type.storage is StorageKind.RMEM
+    for ordinal, issue in enumerate(issues):
+        step, k = divmod(ordinal, 12)
+        c, _, b = issue.args
+        assert pointer_root(c) is c_root
+        assert pointer_root(b) is b_root
+        assert c.type.shape == (64, 32)
+        assert b.type.shape == (16, 32)
+        for column in range(32):
+            group, i = divmod(column, 16)
+            n = 48 * group + 16 * step + i
+            for row in range(64):
+                assert address(c.type, (row, column)) == address(original_c, (row, n))
+            for j in range(16):
+                assert address(b.type, (j, column)) == address(original_b, (16 * k + j, n))
 
 
 def test_authored_views_survive_region_forwarding_without_extra_wrappers():
