@@ -23,7 +23,7 @@ from tilefoundry.ir.pattern import (
     predicates as P,
 )
 from tilefoundry.ir.pattern.utils import declared_shape, selected_pattern
-from tilefoundry.ir.types import ComposedLayout, DType, Layout, Mesh, ShardLayout
+from tilefoundry.ir.types import ComposedLayout, DType, Layout, Mesh, ShardLayout, TensorType
 from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.types.storage import StorageKind
@@ -125,6 +125,10 @@ class MmaAtom(Printable):
 
     def role(self, role: str):
         return getattr(type(self), role)
+
+    def match_view(self, param_name: str, type_: TensorType) -> TensorType:
+        """Return a temporary pattern view; projection and emission keep the original type."""
+        return type_
 
     def operand_shapes(self) -> tuple[tuple[int, ...], ...]:
         """Return the declared C, A, and B shapes for one atom issue."""

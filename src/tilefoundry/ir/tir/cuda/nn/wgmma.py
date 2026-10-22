@@ -29,6 +29,7 @@ from tilefoundry.ir.types import (
     ShardLayout,
     Split,
     Swizzle,
+    TensorType,
     Topology,
 )
 from tilefoundry.ir.types.dim import DimVar
@@ -235,6 +236,21 @@ class Wgmma(MmaAtom):
     execution_mesh = WARPGROUP
     capability = "wgmma.mma_async"
     resource = "wgmma_engine"
+
+    def match_view(self, param_name: str, type_: TensorType) -> TensorType:
+        """Use descriptor modes only for shared-operand pattern matching."""
+        if type_.storage is not S.SMEM:
+            return type_
+        b_operand = param_name == "rhs"
+        return replace(
+            type_,
+            layout=canonical_smem_layout(
+                type_.layout,
+                type_.dtype.bit_width // 8,
+                self.bindings["b_major" if b_operand else "a_major"],
+                b_operand=b_operand,
+            ),
+        )
 
     n = ParamDef(
         kind="attribute",
