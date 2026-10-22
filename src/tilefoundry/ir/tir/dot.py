@@ -14,7 +14,6 @@ from tilefoundry.ir.isl_interop import layout_to_isl_map, shape_to_isl_set
 from tilefoundry.ir.pattern import is_ranked_tensor, utils
 from tilefoundry.ir.tir.reduce import _workspace_slots
 from tilefoundry.ir.types import Layout, Mesh, StorageKind, Topology, UnitType
-from tilefoundry.ir.types.layout import resolve_layout
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
@@ -111,7 +110,7 @@ def _dot_access(call, ctx):
     unit = Mesh((Topology("thread", 1),), Layout((1,), (1,)), ("unit",))
 
     def registers(type_):
-        layout = resolve_layout(type_.layout, type_.shape)
+        layout = type_.layout
         shard = (
             layout if isinstance(layout, ShardLayout) else ShardLayout(layout, (Broadcast(),), unit)
         )

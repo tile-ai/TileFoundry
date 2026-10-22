@@ -17,7 +17,6 @@ from tilefoundry.ir.hir._shard_checks import (
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.layout import default_layout
-from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -79,17 +78,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
     if layout is not None:
         require_uniform_partial_slices(ctx, call, types, layout, "Stack")
-        if getattr(layout.layout, "strides", None) is None:
-            first = next(
-                index
-                for index, type_ in enumerate(types)
-                if shard_layout_of(type_.layout) is not None
-            )
-            ctx.error(
-                call,
-                f"input {first} ownership produces an unrepresentable result "
-                "layout; use an explicit Reshard before Stack",
-            )
     else:
         layout = default_layout(new_shape)
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))

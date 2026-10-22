@@ -87,8 +87,6 @@ def _coalesce_profile(
         return filter(layout, major=major) if filtered else _coalesce_flat(layout, major=major)
 
     strides = layout.strides
-    if strides is None:
-        strides = compact_col_major(layout.shape)
     if not isinstance(strides, tuple) or len(layout.shape) != len(strides):
         raise ValueError(
             f"coalesce: layout shape has {len(layout.shape)} modes at "
@@ -307,10 +305,7 @@ def _make_layout(*layouts: Layout) -> Layout:
 
     return Layout(
         shape=tuple(mode(layout.shape) for layout in layouts),
-        strides=tuple(
-            mode(layout.strides if layout.strides is not None else compact_col_major(layout.shape))
-            for layout in layouts
-        ),
+        strides=tuple(mode(layout.strides) for layout in layouts),
     )
 
 
@@ -356,7 +351,7 @@ def _compose_layout(left: Layout, right, *, major: str) -> Layout:
             *(get(left, index) for index in range(len(right), len(left.shape))),
         )
     if isinstance(right, Layout):
-        strides = right.strides if right.strides is not None else compact_col_major(right.shape)
+        strides = right.strides
         if len(right.shape) == 1 and not isinstance(right.shape[0], tuple):
             return _compose_mode(left, right.shape[0], strides[0], major=major)
         return _make_layout(

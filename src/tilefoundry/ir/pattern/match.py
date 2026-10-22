@@ -353,7 +353,7 @@ class PatternMatcher:
         ):
             structural = structural.outer
         if pattern.shape is not None or pattern.strides is not None:
-            if not isinstance(structural, Layout) or structural.strides is None:
+            if not isinstance(structural, Layout):
                 return self._fail(pattern, subject)
             extents = tuple(flatten(structural.shape))
             strides = tuple(flatten(structural.strides))
@@ -449,11 +449,8 @@ class PatternMatcher:
             )
         ):
             return False
-        from tilefoundry.ir.types.layout import resolve_layout  # noqa: PLC0415
 
-        return pattern.layout is None or self.match(
-            pattern.layout, resolve_layout(subject.layout, subject.shape)
-        )
+        return pattern.layout is None or self.match(pattern.layout, subject.layout)
 
     def visit_ShardLayoutPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, ShardLayout):

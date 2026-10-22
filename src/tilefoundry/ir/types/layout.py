@@ -5,7 +5,6 @@ from typing import Optional
 
 from .int_tuple import flatten as _flat
 from .int_tuple import product
-from .stride import compact_col_major
 
 
 class LayoutBase:
@@ -141,10 +140,8 @@ def flat_shape(layout: Layout) -> tuple[int, ...]:
 
 
 def flat_stride(layout: Layout) -> tuple[int, ...]:
-    """Flatten stated strides, or synthesize the compact column-major default."""
-    if layout.strides is not None:
-        return _flat(layout.strides)
-    return compact_col_major(flat_shape(layout))
+    """Flatten a concrete layout's strides."""
+    return _flat(layout.strides)
 
 
 def apply(layout: Layout | ComposedLayout, coord: int) -> int:
@@ -194,10 +191,10 @@ def flatten(layout):
         return _flat(layout)
     if isinstance(layout, ComposedLayout):
         return flatten(layout.outer) if layout.outer is not None else Layout((), ())
-    strides = getattr(layout, "strides", None)
+    strides = layout.strides
     return Layout(
         shape=_flat(layout.shape),
-        strides=None if strides is None else _flat(strides),
+        strides=_flat(strides),
     )
 
 
@@ -205,10 +202,10 @@ def unflatten(layout: LayoutBase, profile) -> "Layout":
     """CuTe ``unflatten``: a flat arrangement nested to *profile*'s shape."""
     from .int_tuple import unflatten as unflatten_tuple  # noqa: PLC0415 - cycle guard
 
-    strides = getattr(layout, "strides", None)
+    strides = layout.strides
     return Layout(
         shape=unflatten_tuple(tuple(layout.shape), profile),
-        strides=None if strides is None else unflatten_tuple(tuple(strides), profile),
+        strides=unflatten_tuple(tuple(strides), profile),
     )
 
 
@@ -220,21 +217,19 @@ def rank(layout: LayoutBase) -> int:
 def get(layout: LayoutBase, index: int) -> "Layout":
     """CuTe ``get<I>``: one mode of a layout, as a layout of its own."""
     shape = layout.shape[index]
-    strides = layout.strides[index] if getattr(layout, "strides", None) is not None else None
+    strides = layout.strides[index]
     return Layout(
         shape=shape if isinstance(shape, tuple) else (shape,),
-        strides=None
-        if strides is None
-        else (strides if isinstance(strides, tuple) else (strides,)),
+        strides=strides if isinstance(strides, tuple) else (strides,),
     )
 
 
 def take(layout: LayoutBase, begin: int, end: int) -> "Layout":
     """CuTe ``take<B, E>``: the modes in ``[begin, end)``, as a layout."""
-    strides = getattr(layout, "strides", None)
+    strides = layout.strides
     return Layout(
         shape=tuple(layout.shape[begin:end]),
-        strides=None if strides is None else tuple(strides[begin:end]),
+        strides=tuple(strides[begin:end]),
     )
 
 
@@ -316,18 +311,10 @@ def default_layout(shape: tuple) -> Layout:
     return normalize_layout(Layout(shape, compact_row_major(shape, mul=multiply)))
 
 
-def resolve_layout(layout: LayoutBase | None, shape: tuple | None = None) -> LayoutBase:
-    """Read an omitted layout or stride as compact row-major, without mutating IR.
-
-    Concrete address functions, sharding, and nontrivial composition remain
-    explicit. Signature compatibility treats an omitted constraint separately.
-    """
+def resolve_layout(layout: LayoutBase, shape: tuple | None = None) -> LayoutBase:
+    """Resolve omitted strides in an authored annotation for signature comparison."""
     from dataclasses import replace  # noqa: PLC0415
 
-    if layout is None:
-        if shape is None:
-            raise ValueError("an omitted tensor layout needs its logical shape")
-        return default_layout(shape)
     if isinstance(layout, Layout):
         return (
             layout

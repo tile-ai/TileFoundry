@@ -82,15 +82,11 @@ def _layout_shape(type) -> tuple[int, ...] | None:
     """Layout shape.
 
     The element organisation of ``type.layout`` as a flat int tuple, or
-    ``None`` when there is no layout to project onto.
+    ``None`` when its shape is not statically projectable.
     """
-    layout = getattr(type, "layout", None)
-    if layout is None:
-        return None
+    layout = type.layout
     base = layout.layout if isinstance(layout, ShardLayout) else layout
-    shape = getattr(base, "shape", None)
-    if shape is None:
-        return None
+    shape = base.shape
     try:
         return _flatten_ints(shape)
     except (TypeError, ValueError):

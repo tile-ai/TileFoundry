@@ -35,6 +35,7 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     simplify_dim,
 )
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.visitor_registry.access_relation import broadcast_shapes
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
@@ -238,7 +239,12 @@ def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
     assert mixed.shape[0] is s
     assert mixed.shape[1] == 128 and isinstance(mixed.shape[1], int)
 
-    param = TensorType(shape=(1, 4, 32, 128), dtype=DType.bf16, layout=None, storage="gmem")
+    param = TensorType(
+        shape=(1, 4, 32, 128),
+        dtype=DType.bf16,
+        layout=default_layout((1, 4, 32, 128)),
+        storage="gmem",
+    )
     x = Constant(type=param, value=None)
     starts = Tuple(
         type=TupleType(fields=(TensorType.scalar(DType.i64),) * 4),

@@ -120,7 +120,7 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
                 if ci >= n_axis:
                     return None
                 cs = int(axis_shape[ci])
-                stride = axis_strides[ci] if axis_strides is not None else 0
+                stride = axis_strides[ci]
                 old_pos = ci
                 ci += 1
             new_prod = prod * cs
@@ -165,7 +165,7 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
             new_attrs.append(attr)
 
     out_shape = tuple(s for s, _, _ in new_positions)
-    out_strides = None if axis_strides is None else tuple(st for _, st, _ in new_positions)
+    out_strides = tuple(st for _, st, _ in new_positions)
     new_layout = Layout(shape=out_shape, strides=out_strides)
     return ShardLayout(layout=new_layout, attrs=tuple(new_attrs), mesh=layout.mesh)
 
@@ -197,12 +197,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             nonunit = tuple(axis for axis, extent in enumerate(layout.shape) if extent != 1)
             if (
                 len(nonunit) < len(layout.shape)
-                and layout.strides is not None
                 and new_shape == tuple(layout.shape[axis] for axis in nonunit)
             ):
                 return Layout(new_shape, tuple(layout.strides[axis] for axis in nonunit))
             expected = default_layout(layout.shape).strides
-            if layout.strides is not None and layout.strides != expected:
+            if layout.strides != expected:
                 return None
             return default_layout(new_shape)
 

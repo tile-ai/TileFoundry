@@ -63,8 +63,9 @@ IntTuple = ShapeDim | tuple[IntTuple, ...]    # entry: a static or symbolic exte
 
 A `shape` / `stride` entry is not restricted to a static `int`: it may be a
 symbolic / dynamic dim (a `DimVar` or dim `Expr` — a `ShapeDim`). `None` is not
-a shape extent; only the complete `Layout.strides` field may be `None` while
-strides are not materialized. Consumers that need a concrete integer —
+a shape extent. The complete `Layout.strides` field may be `None` in an
+annotation or before parser default materialization; typed values carry concrete
+strides. Consumers that need a concrete integer —
 `Mesh.__getitem__` and `T.sync` participation ([tir §1.5](./tir.md#15-sync)) —
 require static `int` entries and **fail closed** on a symbolic / dynamic one
 rather than guessing.
@@ -623,9 +624,9 @@ levels containing Split or Partial remain part of the distribution.
 | `where(layout=(_, _, dim) @ {cta @ B()})` | Broadcast constraint on the named topology `cta` |
 
 Placement covers the current composed mesh scope, or the function mesh in a
-signature; unstated axes are Broadcast. `None`, plain `Layout`, and an
-all-Broadcast `ShardLayout` are compatible forms without a split; when both
-layouts are stated, their written shape and stride constraints remain.
+signature; unstated axes are Broadcast. An annotation with `layout=None`
+imposes no layout constraint. Plain `Layout` and an all-Broadcast `ShardLayout`
+are compatible forms without a split; written shape and stride constraints remain.
 Shared-memory distribution belongs to CTA or coarser levels; author-written tiles
 in thread scope use plain layouts. A `where` clause constrains named topologies;
 acceptance rules are generated in [parser §2](./parser.md#2-syntax-and-rules).
@@ -697,7 +698,7 @@ Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
   as either factor yields its other factor. Integer quotients MUST be exact;
   undecidable divisions MUST be rejected. Thus `NC * 128` split over `(NC, 64)`
   becomes `(NC, 64, 2)`, with the residual `2` unbound. Symbolic factored shapes
-  keep `strides=None` until specialization.
+  use symbolic products in their concrete default strides until specialization.
 - `local_shape(sl)[k] = G[k] / sl.mesh.layout.shape[a] = 1` iff some mesh axis
   `a` has `sl.attrs[a] = Split(k)`.
 - `local_shape(sl)[k] = G[k]` otherwise.
@@ -710,19 +711,17 @@ Let `sl: ShardLayout`, `S = sl.layout.strides`, and let `engine(i)`
 denote the `ShardTensor.engine` seen by instance index `i` along the
 relevant mesh axis.
 
-- `S` MAY be `None`. `S is None` ⇒ "un-materialized": the layout
-  strides have not yet been fixed; the layout's `shape` /
-  partition is determined but the per-axis stride form is deferred
-  to `Reshard` typeinfer
-  ([hir.md §1.3](./hir.md#13-op)). Surface
-  sugar `(N @ m.a, ...)` always emits `S is None`; verbose
-  `((shape), (strides))` always emits a concrete `S`. After
-  `Reshard` typeinfer has run on a value, `S` reachable from that
-  value MUST be a concrete tuple (the un-materialized form is an
-  intermediate-only signal).
-- `S == ()` is a concrete rank-0 layout (`shape == ()`), not the
-  `None` sentinel; the empty tuple is never overloaded to mean
-  un-materialized.
+- A typed value MUST have a concrete `S`. An annotation MAY omit strides;
+  standalone binding fills a separate value type, preserving the annotation.
+  Placement sugar without strides MUST use `default_shard_layout` under the
+  target's storage owner rule. A Split at the owner level or a coarser level
+  has stride zero and drops its mesh factor when compact strides for the
+  remaining modes are computed; its local residual remains. A Split inside
+  the owner keeps its row-major stride. The owner comes from the target's
+  memory hierarchy (`umat` uses the rmem owner); a target with no memory
+  hierarchy uses shared strides. Source storage and source stride spelling do
+  not choose the default.
+- `S == ()` is a concrete rank-0 layout (`shape == ()`).
 - When `S` is a concrete tuple, `S[k]` is the element step along
   layout dim `k` on the physical storage held by
   `ShardTensor.engine`; it MUST NOT be an abstract global stride.
@@ -767,18 +766,17 @@ Logical tensor `(2, 1536)` reshards via surface sugar
 `(2 @ m.x, 12 @ m.y, 128 @ m.t)` with `mesh=(x=2, y=4, t=32)`. Parser
 canonicalization ([§7.1.1](#711-layoutshape), [parser §2.1](./parser.md#21-syntax)) expands `12 @ m.y` into
 `(4 @ m.y, 3)` and `128 @ m.t` into `(32 @ m.t, 4)` and emits
-`Layout(shape=(2, 4, 3, 32, 4), strides=None)` — un-materialized
-because the user wrote sugar ([§7.1.2](#712-layoutstrides)). Reshard typeinfer
-then materializes `strides` via the direction rule; the resulting
-form depends on the `(src.storage, dst.storage)` pair.
+`Layout(shape=(2, 4, 3, 32, 4), strides=...)`. The parser fills the strides
+using the destination storage owner ([§7.1.2](#712-layoutstrides)); symbolic
+shapes use symbolic products rather than an omitted tuple.
 
-For `reshard(a:gmem, ..., storage='rmem')` (high → low, per-instance
-default):
+For `storage='rmem'` on a target whose rmem owner is thread, all three
+thread-level Splits are per-instance, regardless of source storage:
 
 ```
 # example
 layout = Layout(shape=(2, 4, 3, 32, 4), strides=(0, 0, 4, 0, 1))
-attrs  = (Split(0), Split(1), Broadcast, Split(3), Broadcast)
+attrs  = (Split(0), Split(1), Split(3))
 mesh   = Mesh((Topology("thread", 256),), Layout(shape=(2, 4, 32), ...))
 ```
 
@@ -788,17 +786,14 @@ axis has `local_shape = 1` by construction, so
 reduces to `0` and every mesh instance receives its own engine
 holding `3 × 4 = 12` elements laid out in C-order.
 
-For `reshard(a:rmem, ..., storage='gmem')` (low → high, shared
-default), the same sugar materializes to C-order strides over the
-canonical global shape — `strides = (1536, 384, 128, 4, 1)` — so the
+For `storage='gmem'` with target-owned memory, all Splits are shared.
+The same sugar materializes to C-order strides over the canonical global shape — `strides = (1536, 384, 128, 4, 1)` — so the
 8 warps write to disjoint offsets of a single underlying gmem
 buffer.
 
-A reshard whose user-provided cute strides are non-default (e.g. an
-SM80 mma fragment) bypasses this materialization step: the layout
-already has a concrete `strides` tuple, so the `Reshard` typeinfer
-rule ([hir.md §1.3](./hir.md#13-op)) preserves
-it verbatim.
+Explicit non-default strides, such as an SM80 mma fragment, retain their
+address map. Parser normalization sets statically unit leaves to stride zero;
+it does not replace the other written strides with defaults.
 
 ### 7.6 `local_layout`
 

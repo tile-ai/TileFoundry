@@ -33,7 +33,7 @@ from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types import ComposedLayout
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub, DimVar
-from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten, resolve_layout
+from tilefoundry.ir.types.layout import Layout, LayoutBase, default_layout, flatten
 from tilefoundry.ir.types.mesh import flattened_levels
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
@@ -66,7 +66,6 @@ def _render_layout_type(layout: LayoutBase) -> str:
     affine form to fall back to. CuTe encodes the single rank-0 address as a
     singleton mode.
     """
-    layout = resolve_layout(layout)
     swizzle = get_swizzle_portion(layout)
     if swizzle is not None:
         return (
@@ -87,7 +86,6 @@ def _render_layout_value(layout: LayoutBase, dim, stride) -> str:
     where a runtime-provided extent reaches the emitted layout. CuTe encodes
     the single rank-0 address as a singleton mode.
     """
-    layout = resolve_layout(layout)
     swizzle = get_swizzle_portion(layout)
     if swizzle is not None:
         return (
@@ -194,7 +192,6 @@ def shard_engine_layout(shard: SL, storage: StorageKind) -> LayoutBase:
     Global memory and CTA-shared storage retain their declared address steps.
     Registers use the same local extents and numbering as the emitted shard.
     """
-    shard = resolve_layout(shard)
     physical = flatten(shard.layout)
     if storage is StorageKind.RMEM:
         return Layout(shard_layout_local_shape(shard), register_strides(shard))
@@ -219,7 +216,6 @@ def render_shard_layout_value(var_name: str, sl: SL, dynamic_extents=None, stora
     *storage* is the engine's storage class: ``rmem`` takes
     ``register_strides``, anything else the layout's own.
     """
-    sl = resolve_layout(sl)
     sll = sl.layout
     if storage is StorageKind.RMEM:
         if get_swizzle_portion(sll) is not None:
@@ -238,7 +234,7 @@ def render_shard_layout_value(var_name: str, sl: SL, dynamic_extents=None, stora
             )
         mesh_base = sl.mesh.layout.offset
         participation(sl.mesh)
-    stated = resolve_layout(sl.mesh.layout)
+    stated = sl.mesh.layout
     if isinstance(stated, ComposedLayout):
         stated = stated.outer
     topos = program_topologies(sl.mesh)
@@ -395,7 +391,7 @@ def _tensor_value_ref(element, ctx: CudaCodegenContext) -> str:
     """
     if isinstance(element, Call) and isinstance(element.target, TensorView):
         pointer_ref, _ = _pointer_ref(element.args[0], ctx)
-        layout = resolve_layout(element.target.layout, element.type.shape)
+        layout = element.target.layout
         if isinstance(layout, SL):
             raise NotImplementedError(
                 "CUDA TupleGetItem pointer: an inline shard-layout tensor_view "
@@ -439,7 +435,7 @@ def _pointer_ref(pointer, ctx: CudaCodegenContext) -> tuple[str, object | None]:
         source = pointer.args[0]
         if isinstance(source, Call) and isinstance(source.target, Slice):
             base = source.args[0]
-            layout = resolve_layout(base.type.layout, base.type.shape)
+            layout = base.type.layout
             if not isinstance(layout, Layout):
                 raise NotImplementedError("CUDA pointer slices require a plain source layout")
             origin = source.args[1]
@@ -485,7 +481,7 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
     pointer = call.args[0]
     pointer_ref, memory_var = _pointer_ref(pointer, ctx)
     var_name = ctx.name_for(let.var)
-    layout = resolve_layout(call.target.layout, let.var.type.shape)
+    layout = call.target.layout
 
     if len(call.args) > 1:
         if memory_var is None:
@@ -520,8 +516,7 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
             else:
                 tensor_ref = f"{mem_name}_tensor" if ctx.is_kernel_param(memory_var) else mem_name
                 source_shape = tuple(memory_var.type.shape)
-                source_strides = resolve_layout(
-                    None, tuple(int(upper_bound(dim)) for dim in source_shape)
+                source_strides = default_layout( tuple(int(upper_bound(dim)) for dim in source_shape)
                 ).strides
                 source_name = f"{var_name}__source"
                 ctx.emit(

@@ -113,7 +113,7 @@ def _flat(mesh: Mesh) -> Layout:
     strides = stated.strides
     return Layout(
         shape=tuple(flatten(stated.shape)),
-        strides=None if strides is None else tuple(flatten(strides)),
+        strides=tuple(flatten(strides)),
     )
 
 

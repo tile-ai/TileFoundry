@@ -33,7 +33,7 @@ from tilefoundry.ir.types import (
     TupleType,
 )
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.layout import flatten, resolve_layout
+from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import levels
 from tilefoundry.ir.types.utils import (
     bytes_by_storage,
@@ -1022,8 +1022,6 @@ def storage_bytes(held: TensorType, *, topology_level=None, topologies=()) -> in
         return 0
 
     def bounds(layout, low, high, shape=None):
-        if layout is None:
-            return low, high
         if isinstance(layout, ShardLayout):
             if topology_level is not None:
                 shape = local_type_of(
@@ -1033,13 +1031,16 @@ def storage_bytes(held: TensorType, *, topology_level=None, topologies=()) -> in
                 ).shape
             return bounds(layout.layout, low, high, shape)
         if isinstance(layout, ComposedLayout):
-            low, high = bounds(layout.outer, low, high, shape)
+            if layout.outer is not None:
+                low, high = bounds(layout.outer, low, high, shape)
             offset = static_dim_value(layout.offset)
             if offset is None:
                 raise AnalysisError(f"allocation: unresolved physical offset {layout.offset!r}")
+            if layout.inner is None:
+                return low + offset, high + offset
             return bounds(layout.inner, low + offset, high + offset)
         if isinstance(layout, Layout):
-            flat = flatten(resolve_layout(layout, layout.shape))
+            flat = flatten(layout)
             if not all(isinstance(value, int) for value in (*flat.shape, *flat.strides)):
                 raise AnalysisError(f"allocation: unresolved physical layout {layout!r}")
             contributions = tuple(

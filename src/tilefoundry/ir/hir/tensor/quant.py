@@ -69,7 +69,7 @@ def _logical_shard_attrs(call, ctx, x_ty, group: int):
             global_factors = []
             local_factors = []
             for physical_axis, logical_axis in enumerate(layout_axes):
-                if logical_axis != last_axis or strides is None:
+                if logical_axis != last_axis:
                     continue
                 size = static_dim_value(layout.layout.shape[physical_axis])
                 local_size = static_dim_value(local_shape[physical_axis])
@@ -138,8 +138,6 @@ def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
                 call,
                 f"cannot derive result sharding: {error}; use an explicit Reshard before Quant",
             )
-    if x_ty.layout is None:
-        return default_layout(x_ty.shape), default_layout(scale_shape)
     return (
         default_layout(x_ty.shape),
         default_layout(scale_shape),

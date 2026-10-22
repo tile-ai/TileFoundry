@@ -20,7 +20,7 @@ from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import TensorPattern
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.layout import default_layout, resolve_layout
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
@@ -61,19 +61,12 @@ class Binary(Op):
 def _merge_layout(a: object, b: object, out_shape: tuple, *, ctx=None, storage=None) -> object:
     """Merge two non-sharded operand layouts.
 
-    Merge two non-sharded operand layouts. Equal layouts or one ``None``
-    pass through. Two fully-replicated (all-``Broadcast``) ``ShardLayout``s are
-    mesh-agnostic (the data is replicated everywhere) so the first is kept.
+    Equal layouts pass through. Two fully-replicated (all-``Broadcast``)
+    ``ShardLayout``s are mesh-agnostic, so the first is kept.
     Any other genuine mismatch raises — there is no silent lhs pick; a real
     shard mismatch is propagated through the shard engine, not merged here.
     """
-    if resolve_layout(a, out_shape) == resolve_layout(b, out_shape):
-        if a is None:
-            return None
-        layout = a
-    elif a is None:
-        layout = b
-    elif b is None:
+    if a == b:
         layout = a
     elif not isinstance(a, ShardLayout) and not isinstance(b, ShardLayout):
         return None

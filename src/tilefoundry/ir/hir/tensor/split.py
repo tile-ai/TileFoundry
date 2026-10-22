@@ -103,8 +103,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             ctx=ctx,
             storage=x_ty.storage,
         )
-    elif x_ty.layout is None:
-        part_layout = default_layout(tuple(part_shape))
     else:
         part_layout = default_layout(part_shape)
     part_ty = TensorType(

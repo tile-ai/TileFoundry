@@ -168,6 +168,10 @@ def _nested(layout, topologies: tuple) -> "Layout | ComposedLayout":
             outer=_nested(layout.outer, topologies),
         )
     if _levelled(layout, topologies):
+        if layout.strides is None:
+            from .layout import default_layout  # noqa: PLC0415
+
+            return default_layout(layout.shape)
         return layout
 
     extents = tuple(flatten(layout.shape))

@@ -92,11 +92,10 @@ class TensorType:
     or strides; standalone inference fills a separate value type with the default.
     Function calls continue to compare arguments against the annotation.
     Verification reports an incomplete value type with its source location.
-    Concrete layout readers MUST use `resolve_layout(layout, logical_shape)`:
-    `None` and omitted strides use `default_layout`: compact row-major with
-    symbolic products and stride zero on statically unit leaves. The reader recursively
-    resolves ShardLayout and ComposedLayout while retaining mesh, attributes,
-    swizzle, offset, and explicit strides; it does not mutate the stored type.
+    Concrete layout readers MUST consume the stored layout directly: defaults
+    are materialized by producers or standalone annotation binding, never by
+    consumers. `default_layout` supplies compact row-major strides, symbolic
+    products, and stride zero on statically unit leaves.
     In signature compatibility, a declared `layout=None` instead imposes no
     layout constraint. This is a signature rule, not a physical layout.
   - `storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` / `tmem` /

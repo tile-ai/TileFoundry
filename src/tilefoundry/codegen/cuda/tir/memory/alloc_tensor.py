@@ -20,7 +20,6 @@ from tilefoundry.codegen.cuda.tir.memory.tensor_view import (
 )
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.stmts import LetStmt
-from tilefoundry.ir.types.layout import resolve_layout
 from tilefoundry.ir.types.layout_algebra import cosize
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
@@ -52,7 +51,6 @@ def _emit_plain_alloc(
             f"AllocTensor for {name!r} has unmaterialized storage (storage=umat); "
             "a memory-resident tensor must carry a concrete StorageKind"
         )
-    engine_layout = resolve_layout(engine_layout)
     total = int(upper_bound(cosize(engine_layout)))
 
     def literal(value):
@@ -86,7 +84,7 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
     var = let.var
     name = ctx.name_for(var)
     storage = var.type.storage
-    layout_obj = resolve_layout(var.type.layout, var.type.shape)
+    layout_obj = var.type.layout
 
     if isinstance(layout_obj, ShardLayout):
         engine_layout = shard_engine_layout(layout_obj, storage)

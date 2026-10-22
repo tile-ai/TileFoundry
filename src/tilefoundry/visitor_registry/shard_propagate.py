@@ -151,12 +151,7 @@ def _carrier_layout(
             new_pos_of[p] = len(new_shape)
             new_shape.append(1 if reduced else layout.shape[p])
             src_pos.append(None if reduced else p)
-    if layout.strides is None:
-        new_strides = None
-    else:
-        new_strides = [
-            0 if p is None else layout.strides[p] for p in src_pos
-        ]
+    new_strides = [0 if p is None else layout.strides[p] for p in src_pos]
 
     out_attrs: list = [Broadcast() for _ in range(mesh_rank)]
     for p_mesh, attr in enumerate(sl.attrs):
@@ -185,7 +180,7 @@ def _carrier_layout(
     carrier = ShardLayout(
         layout=Layout(
             shape=tuple(new_shape),
-            strides=None if new_strides is None else tuple(new_strides),
+            strides=tuple(new_strides),
         ),
         attrs=tuple(out_attrs),
         mesh=mesh,

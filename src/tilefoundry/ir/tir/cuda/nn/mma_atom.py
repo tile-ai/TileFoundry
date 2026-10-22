@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum
 
 from tilefoundry.ir.core.inspection import Printable, PrinterBase
@@ -242,14 +242,10 @@ def physical_frames_match(left: Mesh, right: Mesh) -> bool:
     def frame(mesh):
         if isinstance(mesh.layout, ComposedLayout) and mesh.layout.inner is not None:
             return None
-        from tilefoundry.ir.types.layout import resolve_layout  # noqa: PLC0415
 
-        mesh = replace(mesh, layout=resolve_layout(mesh.layout))
         try:
             arranged = levels(mesh)
         except (IndexError, TypeError, ValueError):
-            return None
-        if any(layout.strides is None for layout in arranged):
             return None
         return starts(mesh), tuple(coalesce(_reverse(layout)) for layout in arranged)
 

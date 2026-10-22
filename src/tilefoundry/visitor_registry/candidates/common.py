@@ -23,7 +23,6 @@ from tilefoundry.ir.tir.nn.relu import ReLU as TirReLU
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.tir.where import Where as TirWhere
 from tilefoundry.ir.types import Layout
-from tilefoundry.ir.types.layout import resolve_layout
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.visitor_registry.access_relation import relations_of
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -51,7 +50,6 @@ register_candidates(HirWhere, (TirWhere,))
 def _transpose_operands(call, instruction):
     """Read the permuted source view; Copy materializes its compact destination."""
     source = call.args[0].type
-    source = replace(source, layout=resolve_layout(source.layout, source.shape))
 
     class Types:
         @staticmethod
@@ -67,7 +65,7 @@ def _transpose_operands(call, instruction):
         def permuted(held):
             return Layout(
                 tuple(held.shape[p] for p in call.target.perm),
-                None if held.strides is None else tuple(held.strides[p] for p in call.target.perm),
+                tuple(held.strides[p] for p in call.target.perm),
             )
 
         layout = derive_view_layout(replace(source, layout=plain), tuple(call.type.shape), permuted)

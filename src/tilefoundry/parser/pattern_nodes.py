@@ -3889,15 +3889,13 @@ class SelectionSizeRule:
             message = "a mesh selection requires positive static extents"
         elif value.names and len(value.names) != len(layout.shape):
             message = "mesh selection names must have the rank of its shape"
-        elif layout.strides is not None and len(layout.strides) != len(layout.shape):
+        elif len(layout.strides) != len(layout.shape):
             message = "mesh selection strides must have the rank of its shape"
-        elif not all(isinstance(step, int) for step in (*(source.strides or ()), *(layout.strides or ()))):
+        elif not all(isinstance(step, int) for step in (*source.strides, *layout.strides)):
             message = "a mesh selection requires static strides"
         if message is not None:
             raise ParseError.from_node(match.node, context, message)
-        return dataclasses.replace(value, layout=Layout(
-            layout.shape, layout.strides if layout.strides is not None else compact_row_major(layout.shape)
-        ))
+        return value
 
 
 @dataclass(frozen=True)
@@ -4144,7 +4142,10 @@ class MeshContextPattern(ElementPattern):
         if context.function is None:
             raise ParseError.from_node(match.node, context, "Mesh requires function context")
         if match.branch_id == "mesh_selection":
-            layout = flatten(runtime.Layout(children["shape"], children.get("strides")))
+            shape, strides = children["shape"], children.get("strides")
+            layout = flatten(
+                runtime.Layout(shape, compact_row_major(shape) if strides is None else strides)
+            )
             return _MeshSelection(children["selection"], layout, children.get("names", ()))
         elif match.branch_id == "mesh_context":
             topology_names = children["topology_names"]

@@ -6,12 +6,10 @@ layout helpers while visiting a ``MeshScope``.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from tilefoundry.codegen.cuda.context import topology_scope_str
 from tilefoundry.codegen.cuda.tir.cute_layout import render_layout_type
 from tilefoundry.ir.tir.sync import participation
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten, resolve_layout
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
 from tilefoundry.ir.types.mesh import Mesh, Topology, flattened_levels
 from tilefoundry.target import validate_cuda_topology_levels
 
@@ -58,20 +56,17 @@ def _levelwise_layout(mesh: Mesh) -> str:
 
 def mesh_type(mesh: Mesh) -> str:
     """The C++ ``tilefoundry::Mesh`` type for *mesh*, offset included."""
-    mesh = replace(mesh, layout=resolve_layout(mesh.layout))
     topos = program_topologies(mesh)
     layout_value = mesh.layout
     if isinstance(layout_value, ComposedLayout):
         outer = layout_value.outer
-        if not isinstance(outer, Layout) or outer.strides is None:
+        if not isinstance(outer, Layout):
             raise NotImplementedError(
                 "CUDA mesh emission: a sliced mesh needs its participating box "
                 "as a strided Layout; this states an identity box, with no sub-box"
             )
         base = participation(mesh).base
     else:
-        if layout_value.strides is None:
-            raise NotImplementedError("CUDA mesh emission: mesh layout needs strides")
         base = 0
     if len(topos) == 1:
         shape, strides = flattened_levels(mesh)[0]

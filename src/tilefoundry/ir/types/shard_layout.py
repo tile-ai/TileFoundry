@@ -6,7 +6,7 @@ from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import flatten, rank
 from tilefoundry.ir.types.stride import idx2crd
 
-from .layout import ComposedLayout, Layout, LayoutBase, default_layout, get, resolve_layout
+from .layout import ComposedLayout, Layout, LayoutBase, default_layout, get
 from .layout_correspondence import layout_correspondence
 from .mesh import Mesh
 from .stride import compact_row_major
@@ -284,13 +284,10 @@ def _strides(shard: ShardLayout, tensor_shape: tuple) -> tuple[int, ...]:
     """Each tensor axis's own stride, read off the factored layout.
 
     A split axis is stated as mesh-sized positions plus a residual, so the
-    step of the tensor axis itself is the last of them; a layout that
-    materialized no strides is the C order its canonical form would have.
+    step of the tensor axis itself is the last of them.
     """
     fallback = compact_row_major(tuple(tensor_shape))
     stated = shard.layout.strides
-    if stated is None:
-        return fallback
     axes = layout_axis_to_tensor_axis(shard.layout.shape, tuple(tensor_shape))
     found = dict(zip(axes, stated, strict=False))
     return tuple(found.get(axis, fallback[axis]) for axis in range(len(tensor_shape)))
@@ -401,7 +398,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None,
 
 def _require_canonical_axes(shard: ShardLayout, tensor_shape: tuple, cutting: tuple) -> None:
     corresponding = layout_correspondence(shard.layout.shape, tensor_shape)
-    physical = flatten(resolve_layout(shard.layout))
+    physical = flatten(shard.layout)
     for axis, group in enumerate(corresponding.groups):
         modes = tuple(position for position in group if corresponding.extents[position] != 1)
         split = tuple(attr.axis for attr, target in zip(shard.attrs, cutting, strict=True)
@@ -477,7 +474,7 @@ def register_strides(sl: ShardLayout) -> tuple[int, ...]:
 
     local = shard_layout_local_shape(sl, require_static=False)
     split_axes = {int(a.axis) for a in sl.attrs if isinstance(a, Split)}
-    physical = flatten(resolve_layout(sl.layout))
+    physical = flatten(sl.layout)
     order = sorted(range(len(local)), key=lambda axis: int(upper_bound(physical.strides[axis])))
     strides: list[int] = [0] * len(local)
     step = 1

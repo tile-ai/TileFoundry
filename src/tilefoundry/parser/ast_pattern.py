@@ -78,7 +78,7 @@ from tilefoundry.ir.types import (
     TupleType,
     UnitType,
 )
-from tilefoundry.ir.types.callable_type import CallableType, callable_type_for
+from tilefoundry.ir.types.callable_type import CallableType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -98,7 +98,7 @@ from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor, infer_function
 
 T = TypeVar("T")
 _TYPE_INFER_CONTEXT = "<type_infer_context>"
@@ -1224,14 +1224,10 @@ class ModuleBuildContext:
 
         for function in functions:
             if isinstance(function, runtime.Function):
-                runtime.TypeInferVisitor(ranges=True).visit(
+                infer_function(
                     function,
                     runtime.TypeInferContext(module=result, function=function),
                 )
-                function.return_type = (
-                    function.body.type if function.body is not None else function.return_type
-                )
-                function.type = callable_type_for(function.params, function.return_type)
                 verify_function(function, module=result)
             elif isinstance(function, runtime.PrimFunction):
                 verify_prim_function(function, module_fns=result)

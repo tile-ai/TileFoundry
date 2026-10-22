@@ -17,7 +17,6 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub, simplify_dim
 from tilefoundry.ir.types.int_tuple import flatten, partition_modes
-from tilefoundry.ir.types.layout import default_layout, resolve_layout
 from tilefoundry.ir.types.layout_algebra import composition
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import Split
@@ -332,7 +331,7 @@ def window_layout(source, logical_shape, starts, sizes, strides, ctx):
     if correspondence.groups is None:
         raise ValueError(f"layout {primitive!r} crosses logical axes of {logical_shape}")
     split = {attr.axis for attr in shard.attrs if isinstance(attr, Split)} if shard else set()
-    resolved = resolve_layout(primitive)
+    resolved = primitive
     steps = tuple(flatten(resolved.strides))
     grouped = any(isinstance(mode, tuple) for mode in primitive.shape)
     shape_modes, stride_modes, tilers, positions = [], [], [], {}
@@ -398,10 +397,8 @@ def window_layout(source, logical_shape, starts, sizes, strides, ctx):
         positions.update((position, base + index) for index, (position, _width) in enumerate(kept))
         if _literal(start) == 0:
             continue
-        if (
-            primitive.strides is None
-            or any(_literal(walk) is None for walk in walks)
-            or (_literal(start) is None and not distributed)
+        if any(_literal(walk) is None for walk in walks) or (
+            _literal(start) is None and not distributed
         ):
             known_offset = False
             continue
@@ -495,8 +492,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             f"against that mapping, not against the outer strides",
         )
 
-    if source is None:
-        source = default_layout(x_ty.shape)
     try:
         new_layout, moved = window_layout(
             source, x_ty.shape, starts.elements, op.sizes, op.strides, ctx

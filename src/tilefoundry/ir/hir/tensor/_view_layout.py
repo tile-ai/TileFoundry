@@ -16,8 +16,6 @@ def derive_view_layout(
 ) -> LayoutBase | None:
     """Apply one view's primitive-layout transform without losing composition."""
     source = source_type.layout
-    if source is None:
-        source = default_layout(source_type.shape)
     if isinstance(source, Layout):
         return transform(source) or default_layout(result_shape)
     if isinstance(source, ComposedLayout) and isinstance(source.outer, Layout):

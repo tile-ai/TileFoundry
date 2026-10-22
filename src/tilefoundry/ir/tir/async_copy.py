@@ -74,14 +74,16 @@ def indexed_width(source, destination) -> int:
 
 def _indexed_layout(layout) -> bool:
     """Every issuer must see the complete table, destination, and index."""
-    if layout is None or isinstance(layout, Layout):
+    if isinstance(layout, Layout):
         return True
     if isinstance(layout, ShardLayout):
         return all(isinstance(attr, Broadcast) for attr in layout.attrs) and _indexed_layout(
             layout.layout
         )
     if isinstance(layout, ComposedLayout):
-        return _indexed_layout(layout.outer) and _indexed_layout(layout.inner)
+        return (layout.outer is None or _indexed_layout(layout.outer)) and (
+            layout.inner is None or _indexed_layout(layout.inner)
+        )
     return isinstance(layout, Swizzle)
 
 

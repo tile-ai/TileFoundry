@@ -159,17 +159,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
     if layout is not None:
         require_uniform_partial_slices(ctx, call, types, layout, "Concat")
-        if getattr(layout.layout, "strides", None) is None:
-            first = next(
-                index
-                for index, type_ in enumerate(types)
-                if shard_layout_of(type_.layout) is not None
-            )
-            ctx.error(
-                call,
-                f"input {first} ownership produces an unrepresentable result "
-                "layout; use an explicit Reshard before Concat",
-            )
     else:
         layout = default_layout(new_shape)
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))

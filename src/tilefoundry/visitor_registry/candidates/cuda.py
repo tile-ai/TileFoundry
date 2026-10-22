@@ -14,7 +14,6 @@ from tilefoundry.ir.tir.cuda.memory.stmatrix import StMatrix
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Split
 from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout import resolve_layout
 from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis
 
 from . import register_candidates
@@ -26,7 +25,6 @@ def _matrix_type(type_, reverse):
         return type_
 
     def permuted(layout):
-        layout = resolve_layout(layout, type_.shape)
         if isinstance(layout, ComposedLayout):
             return replace(layout, outer=permuted(layout.outer))
         shard = layout if isinstance(layout, ShardLayout) else None
@@ -42,7 +40,7 @@ def _matrix_type(type_, reverse):
         )
         result = Layout(
             tuple(local.shape[index] for index in order),
-            None if local.strides is None else tuple(local.strides[index] for index in order),
+            tuple(local.strides[index] for index in order),
         )
         if shard is None:
             return result

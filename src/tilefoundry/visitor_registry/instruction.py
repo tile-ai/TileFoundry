@@ -27,7 +27,7 @@ from tilefoundry.ir.pattern.utils import (
 )
 from tilefoundry.ir.types import ComposedLayout, Layout, Split, TensorType, UnitType
 from tilefoundry.ir.types.int_tuple import flatten, partition_modes
-from tilefoundry.ir.types.layout import get, resolve_layout
+from tilefoundry.ir.types.layout import get
 from tilefoundry.ir.types.layout_algebra import composition, zipped_divide
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.mesh import separate
@@ -342,10 +342,7 @@ class _OperandTile:
 
 
 def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, fragments=True):
-    operand_types = tuple(
-        replace(t, layout=resolve_layout(t.layout, t.shape)) if isinstance(t, TensorType) else t
-        for t in operand_types
-    )
+    operand_types = tuple(operand_types)
     params = call_params(op, len(operand_types))
     writes = tuple(param for param in params if param.effect and param.effect & MemoryEffect.WRITE)
     bindings = (
@@ -568,10 +565,6 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
             op=op,
         )
     whole = tuple(value.type if isinstance(value, Expr) else value for value in operands)
-    whole = tuple(
-        replace(t, layout=resolve_layout(t.layout, t.shape)) if isinstance(t, TensorType) else t
-        for t in whole
-    )
     atom = getattr(op, "atom", None)
     matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
     admit_fields(op, whole, mesh, matcher, target=None if frame is None else frame.target)

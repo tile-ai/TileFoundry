@@ -50,7 +50,7 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten, resolve_layout
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten
 from tilefoundry.ir.types.mesh import Mesh, make_mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
@@ -723,11 +723,6 @@ def _verify_call_arguments(stmt, params, label, ctx):
             raise VerifyError(
                 f"{label}: arg[{i}] type kind "
                 f"{type(arg_ty).__name__} != param type kind {type(param_ty).__name__}"
-            )
-        if isinstance(arg_ty, TensorType):
-            arg_ty = dataclasses.replace(arg_ty, layout=resolve_layout(arg_ty.layout, arg_ty.shape))
-            param_ty = dataclasses.replace(
-                param_ty, layout=resolve_layout(param_ty.layout, param_ty.shape)
             )
         if arg_ty != param_ty:
             raise VerifyError(

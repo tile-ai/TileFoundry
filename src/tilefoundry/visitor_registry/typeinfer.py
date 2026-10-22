@@ -142,7 +142,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         return default_type(var.annotation, target=ctx.target)
 
     def visit_leaf_Constant(self, c: Constant, _operands, ctx: TypeInferContext) -> Type:
-        return default_type(c.type, target=ctx.target)
+        return c.type
 
     def visit_leaf_Call(self, call: Call, arg_types, ctx: TypeInferContext) -> Type:
         target = call.target
@@ -390,6 +390,15 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         ctx.error(expr, f"no typeinfer rule for Expr subclass {type(expr).__name__}")
 
 
+def infer_function(fn: Function, ctx: TypeInferContext) -> Function:
+    """Refresh a standalone function's values and inferred result signature."""
+    TypeInferVisitor(ranges=True).visit(fn, ctx)
+    if fn.body is not None:
+        fn.return_type = fn.body.type
+    fn.type = callable_type_for(fn.params, fn.return_type)
+    return fn
+
+
 def inference_type(
     expr: Expr,
     ctx: TypeInferContext | None = None,
@@ -405,4 +414,5 @@ def inference_type(
 __all__ = [
     "TypeInferVisitor",
     "inference_type",
+    "infer_function",
 ]

@@ -20,14 +20,14 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError, dim_vars_reached, instantiate
-from tilefoundry.ir.types import Topology, callable_type_for
+from tilefoundry.ir.types import Topology
 from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
 from tilefoundry.visitor_registry.type_defaults import default_type
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import infer_function
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
 from .errors import AnalysisError
@@ -264,9 +264,7 @@ def check_program(
             current_mesh=mesh,
             memo=bindings,
         )
-        TypeInferVisitor(ranges=True).visit(definition, context)
-        definition.return_type = definition.body.type
-        definition.type = callable_type_for(definition.params, definition.return_type)
+        infer_function(definition, context)
         for value in (*definition.params, definition.body):
             verify_value_layouts(value)
         _CheckCalls(derive, label, definition).visit(definition.body, context)

@@ -25,7 +25,7 @@ def strided_arrangement(layout, *, allow_partial=False):
         if layout.inner is not None and not isinstance(layout.inner, Swizzle):
             return None
         layout = layout.outer
-    return layout if isinstance(layout, Layout) and layout.strides is not None else None
+    return layout if isinstance(layout, Layout) else None
 
 
 @dataclass(frozen=True)

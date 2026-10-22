@@ -156,8 +156,6 @@ def _collect(value: object, found: dict[str, "DimVar"]) -> None:
 
 
 def _collect_layout(layout: object, found: dict[str, "DimVar"]) -> None:
-    if layout is None:
-        return
     Layout, ComposedLayout, ShardLayout, _, _ = _shard_types()
     if isinstance(layout, ShardLayout):
         _collect_layout(layout.layout, found)
@@ -229,8 +227,6 @@ def canonicalize_dims(value: Type) -> Type:
 
 
 def _canonicalize_layout_dims(layout: object) -> object:
-    if layout is None:
-        return layout
     Layout, ComposedLayout, ShardLayout, _, _ = _shard_types()
     if isinstance(layout, ShardLayout):
         inner = _canonicalize_layout_dims(layout.layout)
@@ -300,8 +296,6 @@ def substitute_layout_dims(layout: object, bindings: Mapping[str, int]) -> objec
     A shard layout's Mesh is part of that geometry: its layout and topology
     extents may be derived from the same dimensions as the tensor shape.
     """
-    if layout is None:
-        return layout
     Layout, ComposedLayout, ShardLayout, _, _ = _shard_types()
     if isinstance(layout, ShardLayout):
         inner = substitute_layout_dims(layout.layout, bindings)

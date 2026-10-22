@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from functools import cache
 from itertools import product
 from math import prod
@@ -23,7 +22,7 @@ from tilefoundry.ir.types import (
     TensorType,
 )
 from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout import apply, resolve_layout
+from tilefoundry.ir.types.layout import apply, default_layout
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.types.shard_layout import (
@@ -59,12 +58,11 @@ def _address_points(layout, count: int, logical_shape: tuple):
     Both byte reinterpretation and storage aliasing read the same factored
     shard domain; their reducers decide whether repeated locations are legal.
     """
-    layout = resolve_layout(layout, logical_shape)
     shard = shard_layout_of(layout)
     base = shard.layout if shard is not None else layout
     whole = {}
     corresponding = layout_correspondence(base.shape, logical_shape)
-    logical_layout = resolve_layout(None, logical_shape)
+    logical_layout = default_layout(logical_shape)
     steps = compact_col_major(corresponding.extents)
     for coordinate in range(count):
         digits = corresponding.digits(apply(logical_layout, coordinate))
@@ -100,7 +98,6 @@ def _address_points(layout, count: int, logical_shape: tuple):
 
 def _addresses(layout, count: int, logical_shape: tuple):
     """Require one unique address per logical element for a Bitcast."""
-    layout = resolve_layout(layout, logical_shape)
     if not isinstance(layout, ShardLayout):
         return tuple(point[2] for point in _address_points(layout, count, logical_shape))
     layout = participant_layout(layout)
@@ -132,20 +129,11 @@ def _address_mapping(
     return tuple(source_at[address] for address in result_at)
 
 
-def _stated_strides(layout) -> bool:
-    if isinstance(layout, Layout):
-        return layout.strides is not None
-    if isinstance(layout, ComposedLayout):
-        return _stated_strides(layout.outer) and _stated_strides(layout.inner)
-    return True
-
-
 @register_typeinfer(Bitcast)
 def _(call: Call, ctx) -> TensorType:
     source = ctx.type_of(call.args[0])
-    source = replace(source, layout=resolve_layout(source.layout, source.shape))
     stated_layout = call.target.layout
-    layout = resolve_layout(stated_layout, source.shape)
+    layout = stated_layout
     if not is_literal_shape(source.shape):
         ctx.error(call, "source tensor shape must be literal")
     sharded = isinstance(source.layout, ShardLayout) or isinstance(layout, ShardLayout)
@@ -165,7 +153,6 @@ def _(call: Call, ctx) -> TensorType:
             inner = held.layout
             if (
                 not isinstance(inner, Layout)
-                or inner.strides is None
                 or any(isinstance(stride, tuple) for stride in inner.strides)
             ):
                 ctx.error(
@@ -193,8 +180,6 @@ def _(call: Call, ctx) -> TensorType:
             held = held.layout
         if not isinstance(held, (Layout, ComposedLayout)) or shard_layout_of(held) is not None:
             ctx.error(call, f"{end} layout must be plain (without ShardLayout): {held!r}")
-        if not _stated_strides(held):
-            ctx.error(call, f"{end} layout must have strides stated in every Layout component")
         if not is_literal_shape(flatten(held.shape)):
             ctx.error(call, f"{end} layout shape must be literal")
     shape = source.shape if sharded else tuple(prod(flatten(mode)) for mode in layout.shape)

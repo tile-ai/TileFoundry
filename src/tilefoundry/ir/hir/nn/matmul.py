@@ -152,8 +152,8 @@ def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tup
             layout = output_shard_layout(
                 out_shape, held.mesh, held.attrs, ctx=ctx, storage=lhs.storage
             )
-        elif held is None or tuple(held.shape) == tuple(out_shape):
-            layout = default_layout(out_shape) if held is None else held
+        elif tuple(held.shape) == tuple(out_shape):
+            layout = held
         else:
             layout = default_layout(out_shape)
     return out_shape, layout

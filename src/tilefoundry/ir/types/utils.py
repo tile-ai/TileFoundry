@@ -88,8 +88,6 @@ def _participant_frame(source: Mesh, required: Mesh) -> tuple[Mesh, int]:
     if not isinstance(source_layout, Layout) or not isinstance(required_layout, Layout):
         raise ValueError("tile participant meshes require concrete layouts")
     source_shape = tuple(source_layout.shape)
-    if source_layout.strides is None or required_layout.strides is None:
-        raise ValueError("tile participant meshes require strided layouts")
     source_strides = tuple(source_layout.strides)
     stated = {apply(required_layout, index) for index in range(size(required_layout))}
     dropped = next(
@@ -127,7 +125,7 @@ def is_unsharded_layout(layout: object) -> bool:
     shard = shard_layout_of(layout)
     if shard is not None:
         return all(isinstance(attr, Broadcast) for attr in shard.attrs)
-    return layout is None or isinstance(layout, (Layout, ComposedLayout))
+    return isinstance(layout, (Layout, ComposedLayout))
 
 
 def strip_broadcast_layout(layout):
@@ -175,18 +173,14 @@ def types_compatible(declared: Type, actual: Type) -> bool:
         if is_unsharded_layout(declared.layout) and is_unsharded_layout(actual.layout):
             declared_layout = strip_broadcast_layout(declared.layout)
             actual_layout = strip_broadcast_layout(actual.layout)
-            compatible_layout = (
-                declared_layout is None
-                or actual_layout is None
-                or layout_compatible(
-                    declared_layout,
-                    resolve_layout(actual_layout, actual.shape),
-                )
+            compatible_layout = declared_layout is None or layout_compatible(
+                declared_layout,
+                actual_layout,
             )
         else:
             compatible_layout = declared.layout is None or layout_compatible(
                 declared.layout,
-                resolve_layout(actual.layout, actual.shape),
+                actual.layout,
             )
         return (
             declared.shape == actual.shape
@@ -398,8 +392,6 @@ def local_type_of(
     if not isinstance(type, TensorType):
         return type
     layout = type.layout
-    if layout is None:
-        return type
     shard = shard_layout_of(layout)
     if shard is not None:
         return TensorType(
@@ -414,7 +406,7 @@ def local_type_of(
         return type
     raise ValueError(
         f"local_type_of: {type!r} has unresolved layout {layout!r}; local "
-        "projection requires None or a resolved ShardLayout"
+        "projection requires a concrete layout"
     )
 
 

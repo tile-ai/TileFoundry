@@ -46,7 +46,6 @@ from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import isl_to_dim
 from tilefoundry.ir.tir.arith import Binary as TirBinary
-from tilefoundry.ir.tir.async_copy import CopyAsync, is_indexed_copy
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, For, LetStmt, MeshScope, Sequential
@@ -73,7 +72,7 @@ from tilefoundry.ir.types.dim import (
     is_dim_op_call,
     simplify_dim,
 )
-from tilefoundry.ir.types.layout import default_layout, flatten, resolve_layout
+from tilefoundry.ir.types.layout import default_layout, flatten
 from tilefoundry.ir.types.layout_algebra import composition
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
@@ -169,9 +168,7 @@ class TirBuilder:
     def region(self, *, owner=None, mesh=None, binding=None, loop=None):
         if mesh is not None and owner is None:
             current = self.blocks[-1].mesh
-            if current is not None and replace(
-                current, layout=resolve_layout(current.layout)
-            ) == replace(mesh, layout=resolve_layout(mesh.layout)):
+            if current is not None and current == mesh:
                 mesh = None
         if mesh is not None or loop is not None:
             region = TirScope(mesh if mesh is not None else self.blocks[-1].mesh, owner)
@@ -829,7 +826,6 @@ class StoragePlan:
         ):
             starts = None
         if starts is None:
-            comparable = replace(desired, layout=resolve_layout(desired.layout, desired.shape))
             actual = (
                 held
                 if whole_tensor
@@ -837,8 +833,7 @@ class StoragePlan:
                 if isinstance(held.layout, ShardLayout)
                 else held
             )
-            actual = replace(actual, layout=resolve_layout(actual.layout, actual.shape))
-            if actual == comparable or (
+            if actual == desired or (
                 not whole_tensor
                 and not isinstance(desired.layout, ShardLayout)
                 and held.shape == desired.shape
@@ -864,12 +859,10 @@ class StoragePlan:
             raise LoweringError(
                 f"a rank-{len(held.shape)} buffer is windowed by {len(view.starts)} starts"
             )
-        if desired.layout is None:
-            desired = replace(desired, layout=resolve_layout(None, desired.shape))
         source = base
         if view.instruction_origin:
             layout = held.layout.layout if isinstance(held.layout, ShardLayout) else held.layout
-            flat = flatten(resolve_layout(layout, held.shape))
+            flat = flatten(layout)
             start = tuple(static_dim_value(value) for value in view.starts)
             if any(value is None for value in start):
                 raise LoweringError("an instruction origin needs static issue coordinates")
@@ -972,7 +965,7 @@ class StoragePlan:
             )
 
         def addresses(shape, layout):
-            flat = flatten(resolve_layout(layout, shape))
+            flat = flatten(layout)
             coordinates = [f"c{axis}" for axis in range(len(shape))]
             digits = layout_correspondence(flat.shape, tuple(shape)).coordinates(coordinates)
             linear = (
@@ -996,11 +989,10 @@ class StoragePlan:
             return View(
                 target, zeros, tuple(target.type.shape), desired, "value", whole_tensor=True
             )
-        layout = resolve_layout(
+        layout = (
             target.type.layout.layout
             if isinstance(target.type.layout, ShardLayout)
-            else target.type.layout,
-            target.type.shape,
+            else target.type.layout
         )
         placed = relation.apply_range(addresses(tuple(target.type.shape), layout))
         try:
@@ -1171,9 +1163,6 @@ class IssuePlan:
             return projection, types, owner
         except (ScheduleRefusal, ValueError) as error:
             raise LoweringError(str(error)) from error
-
-    def source_layout(self, type_):
-        return resolve_layout(type_.layout, type_.shape)
 
     def points(self, projection, op):
         serial = tuple(
@@ -1629,23 +1618,6 @@ class Lowering(ValuationVisitor[Expr | View]):
                 and operand.type != types[params.index(param)]
             ):
                 value = ctx.storage.operand(value, types[params.index(param)], whole_tensor=True)
-            if (
-                isinstance(op, CopyAsync)
-                and is_indexed_copy(call.args)
-                and param.name == "src"
-                and (
-                    value.type.layout is None
-                    or any(
-                        value is self._memo[id(argument)][1]
-                        for argument in ctx.function.params
-                    )
-                )
-            ):
-                type_ = replace(
-                    value.type,
-                    layout=ctx.issues.source_layout(value.type),
-                )
-                value = ctx.storage.operand(value, type_, stem="source", whole_tensor=True)
             if (
                 isinstance(value.type, TensorType)
                 and value.type.shape == ()

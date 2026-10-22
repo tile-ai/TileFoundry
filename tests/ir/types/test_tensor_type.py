@@ -247,7 +247,7 @@ def test_local_type_does_not_divide_replicated_or_partial_values(attr) -> None:
     ("declared_layout", "actual_layout", "expected"),
     [
         pytest.param(Layout((8, 16), (16, 1)), Layout((8, 16), (1, 8)), False, id="written-strides"),
-        pytest.param(Layout((8, 16), (16, 1)), None, True, id="plain-to-none"),
+        pytest.param(Layout((8, 16), (16, 1)), None, False, id="plain-to-none"),
         pytest.param(None, Layout((8, 16), (16, 1)), True, id="none-to-plain"),
         pytest.param(
             ShardLayout(Layout((8, 16), (16, 1)), (Broadcast(),), Mesh((Topology("thread", 8),), (8,), ("lane",))),
@@ -259,7 +259,7 @@ def test_local_type_does_not_divide_replicated_or_partial_values(attr) -> None:
         ),
         pytest.param(
             ComposedLayout(Swizzle(2, 4, 3), 0, Layout((8, 16), (16, 1))),
-            None, True, id="composed-to-none",
+            None, False, id="composed-to-none",
         ),
         pytest.param(
             ShardLayout(Layout((8, 16), (16, 1)), (Split(0),), Mesh((Topology("thread", 8),), (8,), ("lane",))),
