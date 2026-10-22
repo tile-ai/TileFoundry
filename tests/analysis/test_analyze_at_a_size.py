@@ -103,6 +103,7 @@ class _PersistentScheduleExpectation:
 
 
 EXPECTED_MEMORY_PEAKS = {
+    "hand_checked.CausalStartReuse.read[static]": {"gmem": 64, "rmem": 16},
     "cyclic_split_weight.CyclicSplitWeight.read[static]": {"gmem": 8 * 4 // 4},
     "cyclic_split_weight.MeshOrderWeight.read[static]": {"gmem": 32 * 4 // 32},
     "two_dimvar_reshape.TwoDimVarReshape.squeeze[C=128,T=128]": {"gmem": 128 * 128 * 4},

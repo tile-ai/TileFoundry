@@ -24,7 +24,6 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import participant_layout
-from tilefoundry.utils.isl_utils import as_multi_aff, equates, involved_dims
 
 
 def partial_reductions_by_axis(
@@ -45,31 +44,8 @@ def partial_reductions_by_axis(
     )
 
 
-def _tracked_anyway(m: "isl.map", out_axis: int) -> "int | None":
-    """Whether a constant-looking axis provably *is* its own domain dim.
-
-    An access map is restricted to the space its Op walks, and within a space
-    that gives a dim one value the coordinate and the constant it equals are the
-    same expression: isl prints whichever it likes. Only the axis's own dim is
-    accepted, so what is recovered is the projection that was written and never
-    some other dim that happens to hold the same value.
-    """
-    if out_axis >= m.dim(isl.dim_type.IN):
-        return None
-    return out_axis if equates(m, out_axis, out_axis) else None
-
-
-def _result_access(
-    m: "isl.map", *, folded: bool = False
-) -> dict[int, "tuple[str, int | None]"]:
-    """How each result axis of *m* reaches the domain: proj, const, or complex.
-
-    ``folded`` asks the relation rather than its spelling. A map restricted to
-    the space its Op walks prints an axis of extent one as either the coordinate
-    or the constant it equals, and a result axis has to be traced back to the
-    dim it came from.
-    """
-    ma = as_multi_aff(m)
+def _result_access(ma: isl.multi_aff) -> dict[int, tuple[str, int | None]]:
+    """How each result axis of the Op-written affine reads the domain."""
     n_in = ma.dim(isl.dim_type.IN)
     n_out = ma.dim(isl.dim_type.OUT)
     out: dict[int, tuple[str, int | None]] = {}
@@ -88,8 +64,7 @@ def _result_access(
         if has_div:
             out[o] = ("complex", None)
         elif not used:
-            tracked = _tracked_anyway(m, o) if folded else None
-            out[o] = ("const", None) if tracked is None else ("proj", tracked)
+            out[o] = ("const", None)
         elif has_offset:
             out[o] = ("complex", None)
         elif len(used) == 1 and used[0][1] == 1:
@@ -97,6 +72,20 @@ def _result_access(
         else:
             out[o] = ("complex", None)
     return out
+
+
+def involved_dims(access: "isl.multi_aff") -> "set[int]":
+    """Every domain dim any result axis of *access* reads.
+
+    Includes dims that appear only inside an access that is not a projection.
+    """
+    dims: set[int] = set()
+    for out_axis in range(access.dim(isl.dim_type.OUT)):
+        affine = access.get_at(out_axis)
+        for in_dim in range(access.dim(isl.dim_type.IN)):
+            if int(affine.get_coefficient_val(isl.dim_type.IN, in_dim).num_si()) != 0:
+                dims.add(in_dim)
+    return dims
 
 
 def _carrier_layout(
@@ -122,8 +111,8 @@ def _carrier_layout(
     sl = input_type.layout
     layout = sl.layout
     la2ta_in = layout_axis_to_tensor_axis(layout.shape, input_type.shape)
-    in_access = _result_access(input_map, folded=True)
-    out_access = _result_access(output_map, folded=True)
+    in_access = _result_access(input_map)
+    out_access = _result_access(output_map)
     dom_to_out = {d: o for o, (k, d) in out_access.items() if k == "proj"}
 
     pos_dom: list = []
@@ -141,9 +130,6 @@ def _carrier_layout(
         if ddim in dom_to_out:
             per_axis[dom_to_out[ddim]].append(p)
         elif ddim in complete_reduction_dims:
-
-
-
             if out_rank:
                 per_axis[out_rank - 1].append(p)
         else:
@@ -164,8 +150,6 @@ def _carrier_layout(
             new_shape.append(1 if reduced else layout.shape[p])
             src_pos.append(None if reduced else p)
     if fresh_strides:
-
-
         c = try_compact_major(tuple(new_shape)) or tuple(1 for _ in new_shape)
         new_strides = [
             0 if (isinstance(sz, int) and sz == 1) else cc
@@ -174,7 +158,6 @@ def _carrier_layout(
     elif layout.strides is None:
         new_strides = None
     else:
-
 
         new_strides = [
             0 if p is None else layout.strides[p] for p in src_pos
@@ -189,11 +172,7 @@ def _carrier_layout(
         ):
             out_attrs[p_mesh] = Split(new_pos_of[attr.axis])
         elif isinstance(attr, Partial):
-
-
             out_attrs[p_mesh] = Partial(attr.reduction)
-
-
 
     try:
         la2ta_out = layout_axis_to_tensor_axis(tuple(new_shape), tuple(output_shape))
@@ -256,8 +235,10 @@ def derive_output_shard_layout(
         raise ValueError("inputs distribute over different meshes; their mesh axes do not align")
     mesh_rank = len(flatten(mesh.layout).shape)
 
-    *input_maps, output_map = (access.relation for access in relations)
-    out_access = _result_access(output_map, folded=True)
+    if any(access.affine is None for access in relations):
+        raise ValueError("shard propagation requires a single Op-written affine per boundary")
+    *input_maps, output_map = (access.affine for access in relations)
+    out_access = _result_access(output_map)
     domain_to_out_axis = {
         d: o for o, (kind, d) in out_access.items() if kind == "proj"
     }
@@ -269,9 +250,6 @@ def derive_output_shard_layout(
         in_access = _result_access(input_maps[i])
         for p, attr in enumerate(sl.attrs):
             if isinstance(attr, Partial):
-
-
-
                 new_attr: object = Partial(attr.reduction)
                 if not isinstance(attrs[p], Broadcast) and attrs[p] != new_attr:
                     raise ValueError(
@@ -291,20 +269,15 @@ def derive_output_shard_layout(
                     "is not supported for shard propagation"
                 )
             if ddim in complete_reduction_dims:
-
-
                 new_attr = Broadcast()
             elif ddim in domain_to_out_axis:
                 new_attr = Split(domain_to_out_axis[ddim])
             elif ddim in out_all_dims:
-
-
                 raise ValueError(
                     f"input {i} mesh axis {p}: domain dim survives only via a "
                     "non-projection output access; cannot derive output layout axis"
                 )
             elif ddim in partial_reduction_dims:
-
                 new_attr = Partial("sum")
             else:
                 new_attr = Broadcast()
@@ -314,16 +287,6 @@ def derive_output_shard_layout(
                     f"{attrs[p]} vs {new_attr}"
                 )
             attrs[p] = new_attr
-
-
-
-
-
-
-
-
-
-
 
     carriers = [
         layout
@@ -345,16 +308,6 @@ def derive_output_shard_layout(
     ]
     if carriers and all(c == carriers[0] for c in carriers):
         return carriers[0]
-
-
-
-
-
-
-
-
-
-
 
     return canonical_shard_layout(output_shape, mesh, tuple(attrs))
 

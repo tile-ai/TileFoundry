@@ -311,7 +311,7 @@ class AccessAnalysis:
         if key not in cache:
             values = {}
             scope = self.scope.caller_scope if caller else self.scope
-            term = AccessRelation.affine(value, scope, values=values)
+            term = AccessRelation.affine_of(value, scope, values=values)
             cache[key] = (value, term, values)
         return cache[key][1:]
 

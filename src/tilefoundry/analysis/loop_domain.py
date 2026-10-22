@@ -46,8 +46,8 @@ def iteration_domain(owner, parent, *, first=False, loops=None):
     values = {}
     for loop in loops:
         try:
-            start = AccessRelation.affine(loop.start, parent, values=values)
-            stop = AccessRelation.affine(loop.extent, parent, values=values)
+            start = AccessRelation.affine_of(loop.start, parent, values=values)
+            stop = AccessRelation.affine_of(loop.extent, parent, values=values)
         except (TypeError, ValueError, NotImplementedError, isl.Error):
             refuse_runtime_bound(loop, "extent")
         step = static_dim_value(loop.step)

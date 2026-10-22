@@ -11,8 +11,9 @@ from tilefoundry.ir.pattern import SameConstraint, utils
 from tilefoundry.ir.types import DType, StorageKind, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
+    broadcast_access,
     broadcast_all,
-    broadcast_relations,
+    identity_access,
     iterating,
     register_access_relation,
 )
@@ -45,8 +46,11 @@ def _(call, ctx) -> UnitType:
 @register_access_relation(Where)
 def _(call, ctx):
     shapes = tuple(ctx.type_of(arg).shape for arg in call.args[:3])
-    boundaries = broadcast_relations(shapes)
-    return iterating(broadcast_all(shapes), (*boundaries, boundaries[-1]))
+    out_shape = broadcast_all(shapes)
+    output = identity_access(len(out_shape))
+    return iterating(out_shape, (
+        *(broadcast_access(out_shape, shape) for shape in shapes), output, output,
+    ))
 
 
 @register_verify_stmt(Where)

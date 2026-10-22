@@ -159,9 +159,10 @@ def derive_output_shard_layout(
 ```
 
 - constraints:
-  - `derive_output_shard_layout` reads only input types, forward-relation maps,
-    the requested output shape, and the explicit reduction/stride controls. It
-    MUST NOT read relation bounds or an already-derived output type.
+  - `derive_output_shard_layout` reads only input types, `AccessRelation.affine`
+    (the Op-written mapping before iteration-domain intersection), the requested
+    output shape, and the explicit reduction/stride controls. It MUST NOT read
+    the bounded `AccessRelation.relation` or an already-derived output type.
   - `partial_reductions_by_axis` returns one entry per mesh axis: the carried
     reduction name for `Partial`, `None` for any other attr, and an empty tuple
     for a non-sharded layout.

@@ -379,11 +379,13 @@ class AccessRelation:
         relation: attribute; The relation from the Op's iteration space to the coordinates of its own value it reaches.
         values: attribute; Each isl parameter name mapped to the operand element or dimension it is.
         may_access: attribute; Whether each coordinate accesses one data-dependent element of its image.
+        affine: attribute; The Op-written affine before intersection with its iteration domain, or None if no single affine exists.
     """
 
     relation: "isl.map"
     values: IslParamValues = {}
     may_access: bool = False
+    affine: isl.multi_aff | None = None
 
 def relations_of(call, ctx) -> tuple[AccessRelation, ...]: ...
 def local_relations_of(call, ctx) -> tuple[AccessRelation, ...]: ...

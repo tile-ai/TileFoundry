@@ -11,7 +11,6 @@ __all__ = [
     "cardinality",
     "equates",
     "has_unbounded_param",
-    "involved_dims",
     "PARAM_POINT_LIMIT",
     "ParameterBoxError",
     "ParameterBoxTooLarge",
@@ -192,18 +191,3 @@ def as_multi_aff(relation: "isl.map") -> "isl.multi_aff":
     if len(pieces) != 1:
         raise ValueError(f"expected one affine access piece, got {len(pieces)}")
     return pieces[0]
-
-
-def involved_dims(relation: "isl.map") -> "set[int]":
-    """Every domain dim any result axis of *relation* reads.
-
-    Includes dims that appear only inside an access that is not a projection.
-    """
-    access = as_multi_aff(relation)
-    dims: set[int] = set()
-    for out_axis in range(access.dim(isl.dim_type.OUT)):
-        affine = access.get_at(out_axis)
-        for in_dim in range(access.dim(isl.dim_type.IN)):
-            if int(affine.get_coefficient_val(isl.dim_type.IN, in_dim).num_si()) != 0:
-                dims.add(in_dim)
-    return dims

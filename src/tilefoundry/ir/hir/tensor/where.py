@@ -18,8 +18,9 @@ from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
+    broadcast_access,
     broadcast_all,
-    broadcast_relations,
+    identity_access,
     iterating,
     register_access_relation,
     relations_of,
@@ -41,7 +42,11 @@ class Where(Op):
 def _where_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     input_types = tuple(ctx.type_of(arg) for arg in call.args)
     shapes = tuple(type_.shape for type_ in input_types)
-    return iterating(broadcast_all(shapes), broadcast_relations(shapes))
+    out_shape = broadcast_all(shapes)
+    return iterating(out_shape, (
+        *(broadcast_access(out_shape, shape) for shape in shapes),
+        identity_access(len(out_shape)),
+    ))
 
 
 @register_typeinfer(Where)

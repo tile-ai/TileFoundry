@@ -14,6 +14,7 @@ from __future__ import annotations
 import isl
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry.ir.types import (
     Layout,
     Mesh,
@@ -23,6 +24,7 @@ from tilefoundry.ir.types import (
     make_tensor_type,
 )
 from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split
+from tilefoundry.utils.isl_utils import as_multi_aff
 from tilefoundry.visitor_registry.access_relation import AccessRelation
 from tilefoundry.visitor_registry.shard_propagate import (
     derive_output_shard_layout,
@@ -33,16 +35,21 @@ _GPU = Mesh((Topology("gpu", 8),), Layout((8,), (1,)), names=("g",))
 _GPU2 = Mesh((Topology("gpu", 4),), Layout((2, 2), (2, 1)), names=("a", "b"))
 
 
+def _access(source: str) -> AccessRelation:
+    relation = isl.map(source)
+    return AccessRelation(relation, affine=as_multi_aff(relation))
+
+
 def _matmul_relation() -> tuple[AccessRelation, ...]:
     return (
-        AccessRelation(isl.map("{ [m, n, k] -> [m, k] }")),
-        AccessRelation(isl.map("{ [m, n, k] -> [k, n] }")),
-        AccessRelation(isl.map("{ [m, n, k] -> [m, n] }")),
+        _access("{ [m, n, k] -> [m, k] }"),
+        _access("{ [m, n, k] -> [k, n] }"),
+        _access("{ [m, n, k] -> [m, n] }"),
     )
 
 
 def _elementwise_relation() -> tuple[AccessRelation, ...]:
-    ident = AccessRelation(isl.map("{ [m, n] -> [m, n] }"))
+    ident = _access("{ [m, n] -> [m, n] }")
     return (ident, ident, ident)
 
 
@@ -127,8 +134,8 @@ REFUSED = [
     pytest.param(
         (make_tensor_type((12,), layout=_shard((12,), Split(0))),),
         (
-            AccessRelation(isl.map("{ [m, n] -> [m + n] }")),
-            AccessRelation(isl.map("{ [m, n] -> [m, n] }")),
+            _access("{ [m, n] -> [m + n] }"),
+            _access("{ [m, n] -> [m, n] }"),
         ),
         (4, 8),
         "non-projection access",
@@ -137,8 +144,8 @@ REFUSED = [
     pytest.param(
         (make_tensor_type((4, 8), layout=_shard((4, 8), Split(0))),),
         (
-            AccessRelation(isl.map("{ [m, n] -> [m, n] }")),
-            AccessRelation(isl.map("{ [m, n] -> [m + n] }")),
+            _access("{ [m, n] -> [m, n] }"),
+            _access("{ [m, n] -> [m + n] }"),
         ),
         (12,),
         "non-projection output access",
@@ -174,7 +181,7 @@ def test_a_synthesised_layout_agrees_with_a_from_scratch_one():
     """
     lhs_t = make_tensor_type((8, 8), layout=_shard2((8, 8), Split(0), Broadcast()))
     rhs_t = make_tensor_type((8, 8), layout=_shard2((8, 8), Broadcast(), Split(1)))
-    ident = AccessRelation(isl.map("{ [m, n] -> [m, n] }"))
+    ident = _access("{ [m, n] -> [m, n] }")
     rel = (ident, ident, ident)
 
     out = derive_output_shard_layout((lhs_t, rhs_t), rel, (8, 8))
@@ -192,7 +199,7 @@ def test_an_input_partial_propagates_on_its_own_mesh_axis():
     reductions -- collapsing them would make a sum-partial and a max-partial
     indistinguishable, which is a wrong result rather than a wrong layout.
     """
-    ident = AccessRelation(isl.map("{ [m, n] -> [m, n] }"))
+    ident = _access("{ [m, n] -> [m, n] }")
     rel = (ident, ident)
     x_t = make_tensor_type((4, 8), layout=_shard2((4, 8), Partial("sum"), Broadcast()))
 
@@ -226,12 +233,30 @@ def test_an_input_whole_at_one_level_keeps_that_level_aligned():
         layout=ShardLayout(Layout((1, 16), (16, 1)), (Broadcast(), Split(1)), mesh),
     )
     relation = (
-        AccessRelation(isl.map("{ [m, n] -> [m, n] }")),
-        AccessRelation(isl.map("{ [m, n] -> [0, n] }")),
-        AccessRelation(isl.map("{ [m, n] -> [m, n] }")),
+        _access("{ [m, n] -> [m, n] }"),
+        _access("{ [m, n] -> [0, n] }"),
+        _access("{ [m, n] -> [m, n] }"),
     )
 
     out = derive_output_shard_layout((rows, gamma), relation, (2, 16))
 
     assert out.attrs == (Split(0), Split(1))
     assert out.mesh == mesh
+
+
+def test_two_extent_one_splits_survive_a_loop_carry() -> None:
+    module = import_dsl('''from tilefoundry.dsl import *
+from tilefoundry.target import CudaTarget
+
+@module(entry="accumulate", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2),))
+class UnitAxesCarry:
+    @func
+    def accumulate(x: Tensor[(1, 1, 64), "f32"]):
+        with Mesh(("cta",), layout=(1, 1, 2), names=("a", "b", "c")) as cta:
+            total = tf.zeros(Tensor[(1 @ cta.a, 1 @ cta.b, 64 @ cta.c), "f32", "rmem"])
+            for i in range(2):
+                part = tf.reshard(x, (1 @ cta.a, 1 @ cta.b, 64 @ cta.c), "rmem")
+                total = total + part
+            return tf.reshard(total, (1 @ cta.a, 1 @ cta.b, 64 @ cta.c), "gmem")
+''')
+    assert module.entry_function().return_type.layout.attrs == (Split(0), Split(1), Split(2))

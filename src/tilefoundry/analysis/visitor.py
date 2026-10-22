@@ -81,7 +81,7 @@ class AnalyzeContext(TypeInferContext):
             values = {}
             try:
                 relation = (
-                    AccessRelation.affine(index, self.scope, values=values)
+                    AccessRelation.affine_of(index, self.scope, values=values)
                     .insert_domain(isl.set("{ [] }").get_space())
                     .as_map()
                 )
