@@ -44,7 +44,7 @@ from tilefoundry.ir.hir.specialize import (
     origin_of,
 )
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice, window_base
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -642,13 +642,17 @@ def _emit_def(
 
     def _window_base(start, stride):
         """Recognize an induction window, optionally scaled and shifted by integers."""
-        window, offset = window_base(start)
-        window = _capture_root(window)
+        if (value := static_dim_value(start)) is not None:
+            return None, value, None
+        window, offset = _capture_root(start), 0
         while isinstance(window, Call) and isinstance(window.target, (DimAdd, DimSub)):
             left, right = window.args
             shift = static_dim_value(normalize_dim(_capture_root(right)))
             if shift is None:
-                break
+                shift = static_dim_value(normalize_dim(_capture_root(left)))
+                if shift is None or not isinstance(window.target, DimAdd):
+                    break
+                left = right
             offset += shift if isinstance(window.target, DimAdd) else -shift
             window = _capture_root(left)
         if isinstance(window, Var) and stride == 1:

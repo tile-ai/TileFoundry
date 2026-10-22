@@ -13,7 +13,7 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, TensorType
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
-from tilefoundry.ir.types.layout_algebra import coalesce
+from tilefoundry.ir.types.layout_algebra import coalesce, domain_offset
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
@@ -43,36 +43,6 @@ class Reshard(Op):
     storage = ParamDef(kind="attribute", default=None)
 
 
-def _view_offset(value):
-    """Read plain-view origins from starts rather than the value's layout."""
-    from tilefoundry.ir.hir.tensor.slice import Slice, window_layout  # noqa: PLC0415
-    from tilefoundry.visitor_registry.contexts import TypeInferContext  # noqa: PLC0415
-
-    physical = value.type.layout
-    if isinstance(physical, ShardLayout):
-        physical = physical.layout
-    if isinstance(physical, ComposedLayout) or not isinstance(value, Call):
-        return 0
-    position = aliased_operand(value)
-    if position is None:
-        return 0
-    source = value.args[position]
-    offset = _view_offset(source)
-    if isinstance(value.target, Slice):
-        starts = value.args[1].elements
-        if all(isinstance(static_dim_value(start), int) for start in starts):
-            _, moved = window_layout(
-                source.type.layout,
-                source.type.shape,
-                starts,
-                value.target.sizes,
-                value.target.strides,
-                TypeInferContext(),
-            )
-            offset += moved
-    return offset
-
-
 @register_buffer_alias(Reshard)
 def _buffer_alias(call: Call) -> int | None:
     source, result = call.args[0].type, call.type
@@ -86,7 +56,24 @@ def _buffer_alias(call: Call) -> int | None:
         )
     ):
         return None
-    offset = _view_offset(call.args[0])
+    from tilefoundry.ir.hir.tensor.slice import Slice  # noqa: PLC0415
+
+    offset, view = 0, call.args[0]
+    while isinstance(view, Call):
+        physical = view.type.layout
+        physical = physical.layout if isinstance(physical, ShardLayout) else physical
+        if isinstance(physical, ComposedLayout):
+            break
+        position = aliased_operand(view)
+        if position is None:
+            break
+        parent = view.args[position]
+        if isinstance(view.target, Slice):
+            starts = view.args[1].elements
+            if all(static_dim_value(start) is not None for start in starts):
+                _, moved = domain_offset(starts, parent.type.layout, parent.type.shape)
+                offset += moved
+        view = parent
     if offset != 0:
         source = replace(source, layout=ComposedLayout(None, offset, source.layout))
     boxes = []

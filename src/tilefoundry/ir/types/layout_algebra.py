@@ -27,6 +27,21 @@ from .stride import compact_col_major
 from .swizzle_layout import get_swizzle_portion
 
 
+def domain_offset(coord, layout, shape):
+    """CuTe domain_offset: move the pointer, or a composed layout's offset."""
+    from .int_tuple import compatible_profile  # noqa: PLC0415
+    from .layout import flatten, unflatten  # noqa: PLC0415
+    from .shard_layout import ShardLayout  # noqa: PLC0415
+    from .stride import crd2idx  # noqa: PLC0415
+
+    if isinstance(layout, ComposedLayout):
+        _, offset = domain_offset(coord, layout.outer, shape)
+        return ComposedLayout(layout.inner, layout.offset + offset, layout.outer), 0
+    primitive = layout.layout if isinstance(layout, ShardLayout) else layout
+    grouped = unflatten(flatten(primitive), compatible_profile(primitive.shape, shape))
+    return layout, crd2idx(tuple(coord), grouped.shape, grouped.strides)
+
+
 def cosize(layout: Union[Layout, ComposedLayout]) -> int:
     """The codomain extent.
 
@@ -471,6 +486,7 @@ def right_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
 
 __all__ = [
     "composition",
+    "domain_offset",
     "cosize",
     "coalesce",
     "filter",

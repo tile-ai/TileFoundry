@@ -122,6 +122,51 @@ def compatible_profile(flat_shape, shape):
     return tuple(group[0] if len(group) == 1 else group for group in groups)
 
 
+def axis_tiler(profile, sizes, *, steps=None, splits=()):
+    """Build row-major per-mode tiles without splitting a placement mode."""
+    from .layout import Layout  # noqa: PLC0415
+    from .utils import static_dim_value  # noqa: PLC0415
+
+    position = 0
+
+    def tile(mode, span, step):
+        nonlocal position
+        extents = flatten(mode)
+        tiles = [None] * len(extents)
+        for index in reversed(range(len(extents))):
+            extent = extents[index]
+            if index:
+                skipped = shape_div(extent, step)
+                mode_step = shape_div(extent, skipped)
+                width = shape_div(extent, shape_div(extent, span * step))
+                count = shape_div(width, mode_step)
+            else:
+                count, mode_step = span, step
+                n, c = static_dim_value(extent), static_dim_value(count)
+                if n is not None and c is not None and c and (c - 1) * mode_step >= n:
+                    raise ValueError(f"tile exceeds outermost mode {position} (extent {extent})")
+            if position + index in splits and not (compatible(count, 1) or compatible(count, extent)):
+                raise ValueError(f"tile splits placement mode {position + index} (extent {extent})")
+            tiles[index] = None if compatible(count, extent) and mode_step == 1 else Layout((count,), (mode_step,))
+            if index:
+                span = shape_div(span, count)
+                step = shape_div(step, extent)
+        position += len(extents)
+        return unflatten(tuple(tiles), mode)
+
+    result = []
+    for mode, count, step in zip(profile, sizes, steps or (1,) * len(profile), strict=True):
+        if count is None:
+            position += len(flatten(mode))
+            result.append(None)
+        elif static_dim_value(count) == 0:
+            position += len(flatten(mode))
+            result.append(Layout((0,), (step,)))
+        else:
+            result.append(tile(mode, count, step))
+    return tuple(result)
+
+
 def mode_axes(profile) -> tuple[int, ...]:
     """Each flat mode's logical axis, in authored order."""
     return flatten(tuple(repeat_like(mode, axis) for axis, mode in enumerate(profile)))
@@ -191,6 +236,7 @@ __all__ = [
     "IntTuple",
     "compatible",
     "compatible_profile",
+    "axis_tiler",
     "mode_axes",
     "shape_div",
     "congruent",

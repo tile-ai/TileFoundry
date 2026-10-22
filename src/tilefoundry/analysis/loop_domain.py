@@ -42,19 +42,35 @@ def iteration_domain(owner, parent, *, first=False, loops=None):
             loops = (*loops, owner)
     else:
         loops = tuple(s.owner for s in loops)
-    result = AccessRelation(isl.map("{ [] -> [] }"))
-    values = {}
     for loop in loops:
-        try:
-            start = AccessRelation.affine_of(loop.start, parent, values=values)
-            stop = AccessRelation.affine_of(loop.extent, parent, values=values)
-        except (TypeError, ValueError, NotImplementedError, isl.Error):
-            refuse_runtime_bound(loop, "extent")
-        step = static_dim_value(loop.step)
-        if step is None:
+        if static_dim_value(loop.step) is None:
             refuse_runtime_bound(loop, "step")
-        name = AccessRelation.param_name(loop.induction_var)
-        values[name] = loop.induction_var
+    try:
+        return loop_domain(
+            tuple((loop.induction_var, loop.start, loop.extent, loop.step) for loop in loops),
+            {}, first=first,
+        )
+    except (TypeError, ValueError, NotImplementedError, isl.Error):
+        for loop in loops:
+            try:
+                AccessRelation.affine_of(loop.start, parent)
+                AccessRelation.affine_of(loop.extent, parent)
+            except (TypeError, ValueError, NotImplementedError, isl.Error):
+                refuse_runtime_bound(loop, "extent")
+        raise
+
+
+def loop_domain(loops, values, *, first=False):
+    """Constrain named induction values by the shared half-open loop bounds."""
+    result = AccessRelation(isl.map("{ [] -> [] }"))
+    for induction_var, begin, end, stride in loops:
+        start = AccessRelation.affine_of(begin, values=values)
+        stop = AccessRelation.affine_of(end, values=values)
+        step = static_dim_value(stride)
+        if step is None:
+            raise ValueError("loop step must be static")
+        name = AccessRelation.param_name(induction_var)
+        values[name] = induction_var
         induction = isl.pw_aff(f"[{name}] -> {{ [{name}] }}")
         if first:
             domain = start.eq_set(induction)
@@ -66,4 +82,4 @@ def iteration_domain(owner, parent, *, first=False, loops=None):
     return result
 
 
-__all__ = ["induction_name", "iteration_domain", "refuse_runtime_bound"]
+__all__ = ["induction_name", "iteration_domain", "loop_domain", "refuse_runtime_bound"]

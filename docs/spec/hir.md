@@ -739,34 +739,28 @@ second presentation of the result.
   source already has a `ComposedLayout`, the result preserves it and updates its
   offset; a swizzle acts on the address including that offset. The window retains
   the source strides, multiplied by any slice step.
-- A source axis written as a group of modes has no single stride: its start
-  MUST be read through the group as a mixed-radix coordinate, and the window
-  MUST be the group's least-stepping modes, as many as its size takes, in the
-  order the group wrote them. A start that is not a multiple of the size, a
-  size landing on no mode boundary, and a step MUST each be refused.
-- `ShardLayout` slices and instruction projection MUST use one window derivation.
-  On a logical axis containing a Split mode, the window MUST be one complete
-  suffix block in the logical row-major mode order. A mode `(a*b):(d)` MAY be
-  factored as `(a,b):(b*d,d)`. Every Split mode MUST remain in the suffix,
-  with its stride and mesh attribute preserved, and the slice step MUST be 1.
-  The start MUST be a multiple of the block size: constants are checked directly,
-  and induction expressions MUST be proved aligned with isl over the enclosing
-  loop domain carried by type inference. Prefix coordinates contribute a
-  per-thread displacement; they MUST NOT change which thread owns an element.
-- On an axis without Split modes, the existing representable affine-window
-  rules remain: a primitive mode takes the window size and stepped stride.
-  This includes an unsplit `6 -> 4` QKV group window, non-unit steps, and runtime
-  starts. These starts move the address without adding an offset to the result
-  type of a plain or sharded source. A window crossing a Split mode or lacking
-  its required alignment proof MUST be refused.
+- A whole logical axis MUST keep its authored mode tree. A cut axis MUST use
+  `composition` with a tiler built from that axis's own modes, retaining authored
+  unit modes. Inner modes MUST divide; the outermost mode takes the remaining
+  count, which MUST fit its extent. A Split leaf MUST take either one element or
+  its full extent, and retained Splits MUST be remapped to the surviving modes.
+- For an axis with multiple modes or a Split, type inference MUST prove that
+  every source mode digit advances by the window digit times its step, without
+  carrying across a mode boundary or Split block. This proof uses the Slice
+  access relation and the shared enclosing loop domain; physical strides do
+  not enter the check. An unprovable window MUST fail with the Slice alignment
+  diagnostic. Single-mode axes without Splits need no digit proof and support
+  non-unit steps and runtime starts.
+- A start outside the affine subset MUST remain a parameter bounded by the
+  window's reach inside the source. Such a start is valid on a single-mode axis
+  without Splits; a multi-mode or Split axis still requires the digit proof.
+  Runtime starts move the address without adding an offset to the result type
+  of a plain or sharded source.
 - `ComposedLayout(inner=None, outer=ShardLayout(...))` is a sharded view.
   Relation-driven consumers, local projection, execution-domain discovery, and
   Partial checks MUST read distribution from its outer layout. Its offset is
   input addressing and MUST NOT be copied to a consumer's newly produced value;
   another view MAY compose and preserve that offset.
-- Narrowing a logical axis targeted by any `Split` MUST fail type inference:
-  the window need not align with that mesh division. A narrowed axis represented
-  by more than one factored layout position MUST also fail rather than guess.
 - Runtime starts MUST remain ordinary Call operands. They move the view's base
   address, not its strides: a plain input therefore still produces a result
   `Layout`, while the runtime offset is not carried by that layout. A safe

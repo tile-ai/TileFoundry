@@ -10,9 +10,8 @@ from tilefoundry.ir.core import Call, Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, PointerType, StorageKind, TensorType
-from tilefoundry.ir.types.layout import Layout, LayoutBase
+from tilefoundry.ir.types.layout import LayoutBase
 from tilefoundry.ir.types.storage import resolve_storage
-from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
 
 
@@ -88,31 +87,3 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     return TensorType(
         shape=new_shape, dtype=pointer.dtype, layout=op.layout, storage=pointer.storage
     )
-
-
-def _c_order_strides(src_shape: tuple) -> list:
-    """C-order contiguous strides of the source buffer a slice view reads."""
-    return list(compact_row_major(tuple(src_shape)))
-
-
-def layout_for_slice(src_shape: tuple, axis: int, sliced_shape: tuple) -> Layout:
-    """Compute a plain Layout for a slice view."""
-    view_strides = _c_order_strides(src_shape)
-    view_strides.pop(axis)
-    return Layout(shape=sliced_shape, strides=tuple(view_strides))
-
-
-TensorView.layout_for_slice = staticmethod(layout_for_slice)
-
-
-def layout_for_slice_nd(src_shape: tuple, sliced_shape: tuple) -> Layout:
-    """Plain Layout for an N-D window: the sub-block keeps the source's C-order strides.
-
-    Plain Layout for an N-D window: the sub-block keeps the source's C-order
-    strides, so it is a strided view of the original buffer (all axes retained,
-    each shrunk to the window extent).
-    """
-    return Layout(shape=sliced_shape, strides=tuple(_c_order_strides(src_shape)))
-
-
-TensorView.layout_for_slice_nd = staticmethod(layout_for_slice_nd)

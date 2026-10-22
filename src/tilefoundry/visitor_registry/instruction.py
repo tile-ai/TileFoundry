@@ -174,9 +174,16 @@ class _AxisTile:
     def align(self, shape, bound, name):
         if tuple(self.repeat.shape) != shape:
             if any(self.owners):
-                raise ValueError(
-                    f"{name}: bound repeat modes {self.repeat.shape} do not match {shape}"
-                )
+                active = tuple(i for i, width in enumerate(self.repeat.shape) if width != 1)
+                if tuple(self.repeat.shape[i] for i in active) != shape:
+                    raise ValueError(
+                        f"{name}: bound repeat modes {self.repeat.shape} do not match {shape}"
+                    )
+                shared = dict(zip(active, bound, strict=True))
+                if any(self.owners[i] and not shared[i] for i in active):
+                    raise ValueError(f"{name}: repeat mode has a conflicting Split")
+                self.bound = tuple(shared.get(i, False) for i in range(len(self.repeat.shape)))
+                return
             profile = Layout(shape, compact_row_major(shape))
             try:
                 self.repeat = composition(self.repeat, profile, major="row")
@@ -443,7 +450,10 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
             for axis, one in zip(mapped, tile.axes, strict=True):
                 if axis is None or not any(one.owners):
                     continue
-                value = (one.repeat.shape, one.owners)
+                value = tuple(zip(*(
+                    (width, owner) for width, owner in zip(one.repeat.shape, one.owners, strict=True)
+                    if width != 1
+                ))) or ((), ())
                 if axis in shared and shared[axis] != value:
                     raise ValueError(
                         f"{param.name}: repeat mode on iteration axis {axis} has conflicting Split extents"
