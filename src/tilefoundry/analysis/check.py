@@ -21,12 +21,12 @@ from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError, dim_vars_reached, instantiate
 from tilefoundry.ir.types import Topology
+from tilefoundry.ir.types.callable_type import bind_annotation
 from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
-from tilefoundry.visitor_registry.type_defaults import default_type
 from tilefoundry.visitor_registry.typeinfer import infer_function
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
@@ -272,7 +272,7 @@ def check_program(
     root, module = bound_root, bound_module
     derive(
         initial,
-        tuple(default_type(p.annotation, target=initial.target) for p in root.params),
+        tuple(bind_annotation(p.type) for p in root.params),
         None,
         function.name,
     )

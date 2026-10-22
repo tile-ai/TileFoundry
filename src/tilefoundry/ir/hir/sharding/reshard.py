@@ -30,7 +30,6 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand, register_buffer_alias
 from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
-from tilefoundry.visitor_registry.type_defaults import default_type
 
 
 @register_op
@@ -173,15 +172,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
     new_storage = op.storage if op.storage is not None else x_ty.storage
     new_layout = op.layout
-    return default_type(
-        TensorType(
-            shape=x_ty.shape,
-            dtype=x_ty.dtype,
-            layout=new_layout,
-            storage=new_storage,
-        ),
-        target=ctx.target,
-    )
+    return TensorType(shape=x_ty.shape, dtype=x_ty.dtype, layout=new_layout, storage=new_storage)
 
 
 @register_eval(Reshard)

@@ -17,12 +17,14 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import (
+    ShardLayout,
     Split,
     shard_layout_of,
     split_target_axes,
 )
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -33,7 +35,6 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
-from tilefoundry.visitor_registry.type_defaults import output_shard_layout
 
 
 @register_op
@@ -68,7 +69,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             )
     reject_partials(ctx, call, "x", x_ty.layout)
     out_shape = tuple(d for i, d in enumerate(x_ty.shape) if i != axis)
-    new_layout = default_layout(out_shape)
+    new_layout = Layout(out_shape)
     if source_shard is not None:
         relation = relations_of(call, ctx)
         derived = derive_output_shard_layout(
@@ -83,12 +84,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         new_layout = (
             derived
             if derived is not None
-            else output_shard_layout(
+            else ShardLayout.default(
                 out_shape,
                 source_shard.mesh,
                 source_shard.attrs,
-                ctx=ctx,
                 storage=x_ty.storage,
+                owners=ctx.target.storage_owners
+                if ctx is not None and ctx.target is not None
+                else StorageOwners((), {}),
             )
         )
     return TensorType(

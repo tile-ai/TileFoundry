@@ -21,6 +21,7 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import residual_dims
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.isl_interop import normalize_dim
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
@@ -48,9 +49,7 @@ def _symbolic_arange(x: Tensor[(_N,), "f32"]):
 
 
 def test_arange_static_type_evaluation_and_cost():
-    type_ = TensorType(
-        shape=(3,), dtype=DType.i64, layout=default_layout((3,)), storage=StorageKind.GMEM
-    )
+    type_ = TensorType(shape=(3,), dtype=DType.i64, layout=Layout((3,)), storage=StorageKind.GMEM)
     op = Arange(type=type_, start=2, step=2)
 
     assert _infer(op) is type_
@@ -123,7 +122,7 @@ def test_a_bound_mesh_coordinate_is_one_number_without_placement() -> None:
     inferred = TypeInferVisitor().visit(_coord(), TypeInferContext(current_mesh=_COORD_MESH))
     assert inferred.shape == ()
     assert inferred.dtype == DType.i64
-    assert inferred.layout == default_layout(())
+    assert inferred.layout == Layout(())
     assert inferred.storage is StorageKind.RMEM
 
 

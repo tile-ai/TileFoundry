@@ -6,6 +6,7 @@ only the maps' affine structure (which domain dim each tensor axis uses), never
 the domain bounds, so it is size-agnostic and identical for static and dynamic
 shapes.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -15,16 +16,9 @@ import isl
 from tilefoundry.ir.types import Layout, ShardLayout
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
-    Partial,
-    Split,
-    default_shard_layout,
-    fill_shard_strides,
-    shard_layout_of,
-)
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split, shard_layout_of
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.utils import participant_layout
-from tilefoundry.target import instance_levels as storage_instance_levels
 
 
 def partial_reductions_by_axis(
@@ -99,7 +93,8 @@ def _carrier_layout(
     propagated_attrs,
     complete_reduction_dims,
     fresh_strides,
-    instance_levels,
+    storage,
+    owners,
 ):
     """Transform a covering input shard layout into the output layout.
 
@@ -177,6 +172,10 @@ def _carrier_layout(
     if mapped != propagated_attrs:
         return None
 
+    if fresh_strides:
+        return ShardLayout.from_modes(
+            tuple(new_shape), mesh, tuple(out_attrs), storage=storage, owners=owners
+        )
     carrier = ShardLayout(
         layout=Layout(
             shape=tuple(new_shape),
@@ -185,9 +184,7 @@ def _carrier_layout(
         attrs=tuple(out_attrs),
         mesh=mesh,
     )
-    return (
-        fill_shard_strides(carrier, instance_levels=instance_levels) if fresh_strides else carrier
-    )
+    return carrier
 
 
 def derive_output_shard_layout(
@@ -225,7 +222,8 @@ def derive_output_shard_layout(
     ]
     if not sharded:
         return None
-    instance_levels = storage_instance_levels(getattr(ctx, "target", None), storage)
+    target = getattr(ctx, "target", None)
+    owners = target.storage_owners if target else StorageOwners((), {})
     mesh = sharded[0][1].mesh
     if any(layout.mesh != mesh for _index, layout in sharded):
         raise ValueError("inputs distribute over different meshes; their mesh axes do not align")
@@ -298,7 +296,8 @@ def derive_output_shard_layout(
                 attrs,
                 complete_reduction_dims,
                 fresh_strides,
-                instance_levels,
+                storage,
+                owners,
             )
         )
         is not None
@@ -306,7 +305,7 @@ def derive_output_shard_layout(
     if carriers and all(c == carriers[0] for c in carriers):
         return carriers[0]
 
-    return default_shard_layout(output_shape, mesh, tuple(attrs), instance_levels=instance_levels)
+    return ShardLayout.default(output_shape, mesh, tuple(attrs), storage=storage, owners=owners)
 
 
 __all__ = ["derive_output_shard_layout", "partial_reductions_by_axis"]

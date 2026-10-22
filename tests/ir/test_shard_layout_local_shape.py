@@ -19,9 +19,9 @@ from tilefoundry.ir.types.shard_layout import (
     Partial,
     ShardLayout,
     Split,
-    default_shard_layout,
     shard_layout_local_shape,
 )
+from tilefoundry.ir.types.storage import StorageKind, StorageOwners
 
 DIVIDED = [
     pytest.param(
@@ -116,10 +116,24 @@ def test_matching_symbolic_split_has_decidable_local_extent(
             Layout(shape=(_N, 64), strides=(64, 1)),
         )
         if expected is None:
-            with pytest.raises(ValueError, match="dynamic; cannot factorize across multiple mesh axes"):
-                default_shard_layout((extent, 8), mesh, (Split(0), Split(0)))
+            with pytest.raises(
+                ValueError, match="dynamic; cannot factorize across multiple mesh axes"
+            ):
+                ShardLayout.default(
+                    (extent, 8),
+                    mesh,
+                    (Split(0), Split(0)),
+                    storage=StorageKind.GMEM,
+                    owners=StorageOwners((), {}),
+                )
             return
-        layout = default_shard_layout((extent, 8), mesh, (Split(0), Split(0)))
+        layout = ShardLayout.default(
+            (extent, 8),
+            mesh,
+            (Split(0), Split(0)),
+            storage=StorageKind.GMEM,
+            owners=StorageOwners((), {}),
+        )
     else:
         layout = _symbolic_layout(extent, _N, split=True)
 

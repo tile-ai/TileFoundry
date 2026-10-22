@@ -19,7 +19,6 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.type_defaults import default_type
 
 
 @register_op
@@ -59,7 +58,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"step must be a positive static integer, got {op.step!r}")
     if op.type.dtype not in (DType.i32, DType.i64):
         ctx.error(call, f"dtype must be i32 or i64, got {op.type.dtype}")
-    return default_type(op.type, target=ctx.target)
+    return op.type
 
 
 @register_eval(Arange)

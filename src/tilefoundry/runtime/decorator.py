@@ -3,6 +3,7 @@
 ``@runtime_func`` / ``@runtime_module`` — authoring surface for the runtime
 twin of a semantic ``Module``. See [runtime §1.1](docs/spec/runtime.md#11-runtimemodulepy).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -12,7 +13,7 @@ from typing import Callable
 
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.types import Placement, Topology
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.runtime.function import RuntimeFunction
@@ -21,7 +22,6 @@ from tilefoundry.runtime.resource import RuntimeResource
 from tilefoundry.runtime.tensor import ShardTensor
 
 _RUNTIME_FUNC_MARK = "_tilefoundry_runtime_func"
-
 
 
 _RESERVED = ("module",)
@@ -135,7 +135,7 @@ class _Twin(RuntimeModule):
             return value
         return ShardTensor(
             value,
-            replace(declared, shape=tuple(value.shape), layout=default_layout(tuple(value.shape))),
+            replace(declared, shape=tuple(value.shape), layout=Layout(tuple(value.shape))),
         )
 
     def _weight(self, name: str):

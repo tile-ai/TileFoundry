@@ -172,6 +172,7 @@ class InstantiateDimensionCloner(ExprCloner):
             params=params,
             body=body,
             return_type=result_type,
+            return_annotation=substitute_dims(chosen.return_annotation, self.dims),
             type=callable_type_for(params, result_type),
             variants=(),
             converters=(),

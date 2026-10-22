@@ -16,7 +16,7 @@ from tilefoundry.ir.hir._shard_checks import (
 )
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -79,7 +79,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if layout is not None:
         require_uniform_partial_slices(ctx, call, types, layout, "Stack")
     else:
-        layout = default_layout(new_shape)
+        layout = Layout(new_shape)
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))
     return TensorType(shape=new_shape, dtype=base.dtype, layout=layout, storage=storage)
 

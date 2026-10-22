@@ -50,7 +50,7 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten
+from tilefoundry.ir.types.layout import ComposedLayout, LayoutBase, flatten
 from tilefoundry.ir.types.mesh import Mesh, make_mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
@@ -93,11 +93,10 @@ def verify_value_layouts(expr):
     """Require concrete tensor layouts on values, independently of annotations."""
 
     def layout(value, node):
-        if value is None or isinstance(value, Layout) and value.strides is None:
-            reason = "no tensor layout" if value is None else "layout with no strides"
+        if value is None:
             where = diagnostic_location(node)
             raise VerifyError(
-                f"value {getattr(node, 'name', type(node).__name__)!r} has {reason}"
+                f"value {getattr(node, 'name', type(node).__name__)!r} has no tensor layout"
                 + (f"\n  at {where}" if where else "")
             )
         if isinstance(value, ShardLayout):
@@ -162,7 +161,7 @@ def _verify_variants(base: Function, *, module=None) -> None:
         if v.name != base.name:
             raise VerifyError(f"variant name {v.name!r} does not match base {base.name!r}")
         if tuple(p.annotation for p in v.params) != base_param_types or (
-            v.return_type != base.return_type
+            v.return_annotation != base.return_annotation
         ):
             raise VerifyError(
                 f"hir Function {base.name!r}: variant signature must match the base signature"

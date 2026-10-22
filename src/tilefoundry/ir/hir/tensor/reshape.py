@@ -10,7 +10,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import Layout, default_layout, flatten
+from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
@@ -35,6 +35,7 @@ from ._view_layout import derive_view_layout
 class Reshape(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     new_shape = ParamDef(kind="attribute", annotation=tuple)
+
 
 @register_access_relation(Reshape)
 def _reshape_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
@@ -191,8 +192,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 "not align with the input layout factorization",
             )
         if new_layout is None:
-            new_layout = replace(x_ty.layout, layout=default_layout(new_shape))
+            new_layout = replace(x_ty.layout, layout=Layout(new_shape))
     else:
+
         def reshaped(layout: Layout) -> Layout | None:
             nonunit = tuple(axis for axis, extent in enumerate(layout.shape) if extent != 1)
             if (
@@ -200,10 +202,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 and new_shape == tuple(layout.shape[axis] for axis in nonunit)
             ):
                 return Layout(new_shape, tuple(layout.strides[axis] for axis in nonunit))
-            expected = default_layout(layout.shape).strides
+            expected = Layout(layout.shape).strides
             if layout.strides != expected:
                 return None
-            return default_layout(new_shape)
+            return Layout(new_shape)
 
         new_layout = derive_view_layout(x_ty, new_shape, reshaped)
     if new_layout is None:

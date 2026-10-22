@@ -78,7 +78,7 @@ from tilefoundry.ir.types import (
     TupleType,
     UnitType,
 )
-from tilefoundry.ir.types.callable_type import CallableType
+from tilefoundry.ir.types.callable_type import CallableType, bind_annotation
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -89,9 +89,8 @@ from tilefoundry.ir.types.dim import (
     dim_expr,
     simplify_dim,
 )
-from tilefoundry.ir.types.layout import LayoutBase, default_layout
+from tilefoundry.ir.types.layout import LayoutBase
 from tilefoundry.ir.types.mesh import make_mesh
-from tilefoundry.ir.types.shard_layout import default_shard_layout
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import static_dim_value
@@ -300,6 +299,7 @@ runtime = SimpleNamespace(
     TypeInferContext=TypeInferContext,
     ValuationContext=ValuationContext,
     TypeInferVisitor=TypeInferVisitor,
+    bind_annotation=bind_annotation,
     TupleGetItem=TupleGetItem,
     Unary=Unary,
     UnaryKind=UnaryKind,
@@ -307,8 +307,6 @@ runtime = SimpleNamespace(
     Var=Var,
     DISPLAY_NAME=DISPLAY_NAME,
     compact_row_major=compact_row_major,
-    default_layout=default_layout,
-    default_shard_layout=default_shard_layout,
     make_mesh=make_mesh,
     dim_expr=dim_expr,
     normalize_dim=normalize_dim,
@@ -1523,7 +1521,14 @@ def parse_node(pattern: AstPattern[T], node: ast.AST, context: MatchContext) -> 
             situation=child.situation,
             role=child.role,
             binding_name=binding_name,
-            values=child.values,
+            values={
+                **child.values,
+                **(
+                    matched.pattern.child_values(matched, child, children, active_context)
+                    if hasattr(matched.pattern, "child_values")
+                    else {}
+                ),
+            },
             lexical_bindings=child.lexical_bindings,
             isolated_scope=child.isolated_scope,
             function=child.function_context,

@@ -14,7 +14,6 @@ from tilefoundry.ir.types.layout import Layout, LayoutBase
 from tilefoundry.ir.types.storage import resolve_storage
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.type_defaults import default_type
 
 
 @register_op(name="tensor_view")
@@ -86,14 +85,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = op.shape if op.shape is not None else inherited_shape
     if new_shape is None:
         ctx.error(call, "tensor_view shape is required unless pointer is T.ptr_of(tensor)")
-    return default_type(
-        TensorType(
-            shape=new_shape,
-            dtype=pointer.dtype,
-            layout=op.layout,
-            storage=pointer.storage,
-        ),
-        target=ctx.target,
+    return TensorType(
+        shape=new_shape, dtype=pointer.dtype, layout=op.layout, storage=pointer.storage
     )
 
 

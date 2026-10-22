@@ -5,18 +5,9 @@ from __future__ import annotations
 import dataclasses
 from typing import TypeVar
 
+from tilefoundry.ir.types.storage import TARGET_MEMORY_OWNER
+
 FactsT = TypeVar("FactsT")
-
-TARGET_MEMORY_OWNER = "target"
-
-
-def owner_levels(owner: str, topology_names: tuple[str, ...]) -> frozenset[str]:
-    """An owner and all coarser topology levels have independent instances."""
-    if owner == TARGET_MEMORY_OWNER:
-        return frozenset()
-    if not owner or owner not in topology_names:
-        raise ValueError(f"memory owner {owner!r} is not a target topology in {topology_names}")
-    return frozenset(topology_names[: topology_names.index(owner) + 1])
 
 
 @dataclasses.dataclass(frozen=True)
@@ -106,5 +97,4 @@ __all__ = [
     "TopologyLevelFacts",
     "MemoryExecutionFacts",
     "facts_result",
-    "owner_levels",
 ]

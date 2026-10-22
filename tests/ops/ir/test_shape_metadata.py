@@ -17,7 +17,7 @@ from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.rank import Rank
 from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
 from tilefoundry.ir.isl_interop import shape_to_isl_set
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
@@ -80,7 +80,7 @@ def test_shape_metadata_uses_runtime_shape_and_host_types() -> None:
     metadata_calls = [call for call in calls if isinstance(call.target, (Rank, ShapeOf))]
     assert metadata_calls
     assert all(call.type.storage is StorageKind.UMAT for call in metadata_calls)
-    assert all(call.type.layout == default_layout(call.type.shape) for call in metadata_calls)
+    assert all(call.type.layout == Layout(call.type.shape) for call in metadata_calls)
 
 
 @func

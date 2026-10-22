@@ -88,13 +88,14 @@ class TensorType:
     is no separate `Scalar` type.
   - After type inference, each tensor value MUST carry a concrete `LayoutBase`
     from [shard §2](./shard.md#2-layout-hierarchy), with no omitted Layout strides.
-    Parameter annotations retain the authored constraint, including omitted layouts
-    or strides; standalone inference fills a separate value type with the default.
+    Parameter annotations retain the authored constraint, including a completely omitted layout. Authored layouts receive concrete
+    strides at construction; standalone inference gives an omitted layout a
+    separate default value type.
     Function calls continue to compare arguments against the annotation.
     Verification reports an incomplete value type with its source location.
     Concrete layout readers MUST consume the stored layout directly: defaults
     are materialized by producers or standalone annotation binding, never by
-    consumers. `default_layout` supplies compact row-major strides, symbolic
+    consumers. `Layout(shape)` supplies compact row-major strides, symbolic
     products, and stride zero on statically unit leaves.
     In signature compatibility, a declared `layout=None` instead imposes no
     layout constraint. This is a signature rule, not a physical layout.
@@ -692,7 +693,7 @@ def make_shard_tensor_type(
     fields to `TensorType`.
   - `make_shard_tensor_type` MUST return a plain tensor type when `mesh` is
     `None` or `attrs` is empty; otherwise it MUST build the layout through
-    `default_shard_layout`.
+    `ShardLayout.default`.
 
 ## 9. Callable type projection
 

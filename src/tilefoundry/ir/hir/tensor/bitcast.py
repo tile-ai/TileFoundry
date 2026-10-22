@@ -41,7 +41,6 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
-from tilefoundry.visitor_registry.type_defaults import default_type
 
 
 @register_op(name="bitcast")
@@ -137,9 +136,7 @@ def _(call: Call, ctx) -> TensorType:
         ctx.error(call, "source tensor shape must be literal")
     sharded = isinstance(source.layout, ShardLayout) or isinstance(stated_layout, ShardLayout)
     shape = source.shape if sharded else tuple(prod(flatten(mode)) for mode in stated_layout.shape)
-    result = default_type(
-        TensorType(shape, source.dtype, stated_layout, source.storage), target=ctx.target
-    )
+    result = TensorType(shape, source.dtype, stated_layout, source.storage)
     layout = result.layout
     if sharded:
         if source.storage is not StorageKind.RMEM:

@@ -107,7 +107,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.int_tuple import compatible_profile
-from tilefoundry.ir.types.layout import apply, flatten, resolve_layout, unflatten
+from tilefoundry.ir.types.layout import apply, flatten, unflatten
 from tilefoundry.ir.types.layout_algebra import cosize
 from tilefoundry.ir.types.mesh import levels, make_mesh, starts
 from tilefoundry.ir.types.stride import crd2idx
@@ -2374,7 +2374,7 @@ class Window:
         and value.type.shape == (8, 8)
     ]
     assert any(
-        resolve_layout(view.type.layout, view.type.shape).strides == (8, 1)
+        view.type.layout.strides == (8, 1)
         and any(
             isinstance(expr, Call)
             and isinstance(expr.target, Slice)
@@ -2733,6 +2733,7 @@ def test_reduce_store_stays_in_its_warp_scope():
     visitor = Scope()
     visitor.visit(lowered.entry_function().body)
     assert visitor.found == 1
+
 
 def test_grouped_n16_issues_keep_source_addresses():
     source = next(path for path in HIR if path.stem == "wgmma_n16_within_warpgroup_share")

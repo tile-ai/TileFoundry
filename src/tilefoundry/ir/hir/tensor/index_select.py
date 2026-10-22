@@ -8,7 +8,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.layout import Layout, default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import (
     Partial,
     ShardLayout,
@@ -53,7 +53,7 @@ def _index_select_shard_layout(call, ctx, x_ty, dim: int, out_shape: tuple):
     """
     sl = x_ty.layout
     if isinstance(sl, Layout):
-        return default_layout(out_shape)
+        return Layout(out_shape)
     if not isinstance(sl, ShardLayout):
         return sl
     if not isinstance(sl.layout, Layout):

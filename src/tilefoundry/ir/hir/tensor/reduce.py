@@ -13,8 +13,9 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import default_layout
-from tilefoundry.ir.types.shard_layout import shard_layout_of
+from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_of
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -25,7 +26,6 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
-from tilefoundry.visitor_registry.type_defaults import output_shard_layout
 
 __all__ = ["ReduceKind", "Reduce"]
 
@@ -71,7 +71,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             new_shape.pop(a)
     out_shape = tuple(new_shape)
 
-    new_layout = default_layout(out_shape)
+    new_layout = Layout(out_shape)
     source_shard = shard_layout_of(x_ty.layout)
     if source_shard is not None:
         relation = relations_of(call, ctx)
@@ -87,12 +87,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         new_layout = (
             derived
             if derived is not None
-            else output_shard_layout(
+            else ShardLayout.default(
                 out_shape,
                 source_shard.mesh,
                 source_shard.attrs,
-                ctx=ctx,
                 storage=x_ty.storage,
+                owners=ctx.target.storage_owners
+                if ctx is not None and ctx.target is not None
+                else StorageOwners((), {}),
             )
         )
 

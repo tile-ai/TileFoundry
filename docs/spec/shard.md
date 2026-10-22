@@ -711,9 +711,9 @@ Let `sl: ShardLayout`, `S = sl.layout.strides`, and let `engine(i)`
 denote the `ShardTensor.engine` seen by instance index `i` along the
 relevant mesh axis.
 
-- A typed value MUST have a concrete `S`. An annotation MAY omit strides;
-  standalone binding fills a separate value type, preserving the annotation.
-  Placement sugar without strides MUST use `default_shard_layout` under the
+- A typed value MUST have a concrete `S`. An annotation MAY omit its layout entirely;
+  authored layouts always construct concrete strides.
+  Placement sugar without strides MUST use `ShardLayout.from_modes` under the
   target's storage owner rule. A Split at the owner level or a coarser level
   has stride zero and drops its mesh factor when compact strides for the
   remaining modes are computed; its local residual remains. A Split inside
@@ -873,7 +873,7 @@ Making the steps of a compact arrangement and reading an index back into the
 coordinate that reaches it are not operations on layouts, so they are filed
 apart from the algebra, as CuTe files `stride.hpp` apart from `layout.hpp`.
 
-`default_layout` is the tensor default constructor. It keeps the authored mode
+`Layout(shape)` is the tensor default constructor. It keeps the authored mode
 profile, uses compact row-major strides (including symbolic products), and
 normalizes each statically known extent-1 leaf to stride zero. Rank zero gives
 `Layout((), ())`. `normalize_layout` applies only that leaf rule to an existing
@@ -882,7 +882,8 @@ The parser uses it for explicit tensor layouts; mesh layouts and algebra
 intermediates retain their own coordinate conventions.
 
 ```python
-def default_layout(shape: tuple) -> Layout: ...
+class Layout:
+    def __init__(self, shape: tuple, strides: tuple | None = None): ...
 
 def normalize_layout(layout: LayoutBase) -> LayoutBase: ...
 ```
@@ -934,22 +935,23 @@ def try_c_order_strides(shape: tuple) -> tuple[int, ...] | None:
     ...
 
 
-def default_shard_layout(
-    logical_shape: tuple, mesh: Mesh, attrs: tuple[ShardAttr, ...],
-    *, instance_levels: frozenset[str] = frozenset(),
-) -> ShardLayout:
-    """Build the canonical factorized sharding layout.
+class StorageOwners:
+    order: tuple[str, ...]  # Target topologies, coarse to fine.
+    owner: Mapping[StorageKind, str]
 
-    Args:
-        logical_shape: Logical tensor shape.
-        mesh: Device mesh.
-        attrs: Shard attributes naming logical axes.
-        instance_levels: Topology levels owning independent allocations.
+    def private(self, storage, topology) -> bool: ...
 
-    Returns:
-        The canonical sharding layout.
-    """
-    ...
+
+class ShardLayout:
+    @classmethod
+    def default(cls, shape, mesh, attrs, *, storage, owners) -> ShardLayout:
+        """Factor logical axes by their mesh splits, then call from_modes."""
+        ...
+
+    @classmethod
+    def from_modes(cls, shape, mesh, attrs, *, storage, owners) -> ShardLayout:
+        """Keep authored modes and positional attrs; construct owner strides."""
+        ...
 
 
 def shard_layout_local_shape(
@@ -1040,20 +1042,29 @@ def right_inverse(layout: Layout | ComposedLayout):
 ```
 
 - constraints:
-  - Default strides come from `default_layout`: compact row-major, symbolic
-    products retained, and statically unit leaves zero. A Split at a level in
-    `instance_levels` gets stride zero. When compacting the remaining modes, it
+  - Default strides come from `Layout(shape)`: compact row-major, symbolic
+    products retained, and statically unit leaves zero. A Split whose topology is private under
+    `target.storage_owners` gets stride zero. When compacting the remaining modes, it
     drops only its mesh factor and keeps its local residual (extent one for a
     fully factored Split), so one instance has no holes. The target supplies the
-    memory owner's level and every coarser level; absent memory facts mean an
-    empty set. Explicit tensor layouts normalize only unit leaves; mesh layouts
+    storage owner and the coarse-to-fine topology order. The owner topology
+    and every coarser topology are private; the owner `target` is shared. Absent
+    memory facts mean an empty owner table. Explicit tensor layouts normalize only unit leaves; mesh layouts
     and layout-algebra intermediates are not normalized by this tensor rule.
-  - `default_shard_layout` MUST factor each logical axis split by one or more
+  - `ShardLayout.default` MUST factor each logical axis split by one or more
     mesh axes in mesh-axis order, remap each `Split` to its factor, and append
     a non-unit residual factor. Symbolic multi-axis splits MUST use successive
     exact integer or structural product quotients as specified in
     [shard §7.1.1](./shard.md#711-layoutshape).
     It MUST reject indivisible or undecidable dynamic multi-axis splits.
+    `ShardLayout.from_modes` MUST keep its input mode tree and positional attrs;
+    the owner stride algorithm exists only in this constructor. Authored mode trees,
+    raw IR producers and printer default comparison use it. Logical placement
+    sugar uses `default`. For an explicit `ShardLayout(Layout(shape), attrs, mesh)`
+    (also with an explicit `None` stride), the parser recognizes the omitted
+    inner strides before construction and calls `from_modes` with the enclosing
+    tensor or operation storage. `Target.storage_owners`
+    projects and validates the owner table once; `umat` uses the rmem owner.
   - `shard_layout_local_shape` MUST multiply the divisors of multiple `Split`
     attributes that name the same layout axis. Equal symbolic split and mesh
     extents produce local extent one. A `DimMul` with the mesh extent as either

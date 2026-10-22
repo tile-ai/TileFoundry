@@ -26,6 +26,35 @@ class Layout(LayoutBase):
     shape: tuple["ShapeDim", ...]
     strides: Optional[tuple["ShapeDim", ...]] = None
 
+    def __post_init__(self):
+        if self.strides is not None:
+            return
+        from .stride import compact_row_major  # noqa: PLC0415
+
+        def canonical(mode):
+            if isinstance(mode, tuple):
+                return tuple(canonical(child) for child in mode)
+            if isinstance(mode, int):
+                return mode
+            from .dim import Constant  # noqa: PLC0415
+
+            return (
+                mode.value if isinstance(mode, Constant) and isinstance(mode.value, int) else mode
+            )
+
+        def multiply(a, b):
+            if isinstance(a, int) and isinstance(b, int):
+                return a * b
+            from .dim import DimMul, simplify_dim  # noqa: PLC0415
+
+            return simplify_dim(DimMul, (a, b))
+
+        shape = canonical(tuple(self.shape))
+        object.__setattr__(self, "shape", shape)
+        object.__setattr__(
+            self, "strides", _normalize_strides(shape, compact_row_major(shape, mul=multiply))
+        )
+
 
 @dataclass(frozen=True)
 class Swizzle:
@@ -248,35 +277,30 @@ __all__ = [
     "get",
     "make_swizzle",
     "rank",
-    "resolve_layout",
-    "default_layout",
     "normalize_layout",
     "take",
 ]
+
+
+def _normalize_strides(shape, strides):
+    if isinstance(shape, tuple):
+        return tuple(
+            _normalize_strides(one, step) for one, step in zip(shape, strides, strict=True)
+        )
+    from .dim import Constant  # noqa: PLC0415
+
+    extent = shape.value if isinstance(shape, Constant) else shape
+    return (
+        0 if isinstance(extent, int) and not isinstance(extent, bool) and extent == 1 else strides
+    )
 
 
 def normalize_layout(layout: LayoutBase) -> LayoutBase:
     """Normalize unit leaves without changing modes, placement or addresses."""
     from dataclasses import replace  # noqa: PLC0415
 
-    from .dim import Constant  # noqa: PLC0415
-
-    def leaves(shape, strides):
-        if isinstance(shape, tuple):
-            return tuple(leaves(one, step) for one, step in zip(shape, strides, strict=True))
-        extent = shape.value if isinstance(shape, Constant) else shape
-        return (
-            0
-            if isinstance(extent, int) and not isinstance(extent, bool) and extent == 1
-            else strides
-        )
-
     if isinstance(layout, Layout):
-        return (
-            layout
-            if layout.strides is None
-            else replace(layout, strides=leaves(layout.shape, layout.strides))
-        )
+        return replace(layout, strides=_normalize_strides(layout.shape, layout.strides))
     if isinstance(layout, ComposedLayout):
         return replace(
             layout,
@@ -289,45 +313,4 @@ def normalize_layout(layout: LayoutBase) -> LayoutBase:
 
     if isinstance(layout, ShardLayout):
         return replace(layout, layout=normalize_layout(layout.layout))
-    raise TypeError(f"not a tensor layout: {type(layout).__name__}")
-
-
-def default_layout(shape: tuple) -> Layout:
-    """Compact row-major modes, with statically unit leaves normalized to zero."""
-    from .dim import Constant, DimMul, simplify_dim  # noqa: PLC0415
-    from .stride import compact_row_major  # noqa: PLC0415
-
-    def multiply(left, right):
-        if isinstance(left, int) and isinstance(right, int):
-            return left * right
-        return simplify_dim(DimMul, (left, right))
-
-    def canonical(mode):
-        if isinstance(mode, tuple):
-            return tuple(canonical(child) for child in mode)
-        return mode.value if isinstance(mode, Constant) and isinstance(mode.value, int) else mode
-
-    shape = canonical(tuple(shape))
-    return normalize_layout(Layout(shape, compact_row_major(shape, mul=multiply)))
-
-
-def resolve_layout(layout: LayoutBase, shape: tuple | None = None) -> LayoutBase:
-    """Resolve omitted strides in an authored annotation for signature comparison."""
-    from dataclasses import replace  # noqa: PLC0415
-
-    if isinstance(layout, Layout):
-        return (
-            layout
-            if layout.strides is not None
-            else replace(layout, strides=default_layout(layout.shape).strides)
-        )
-    if isinstance(layout, ComposedLayout):
-        inner = layout.inner
-        if isinstance(inner, LayoutBase):
-            inner = resolve_layout(inner)
-        return replace(layout, inner=inner, outer=resolve_layout(layout.outer))
-    from .shard_layout import ShardLayout  # noqa: PLC0415 - staged types
-
-    if isinstance(layout, ShardLayout):
-        return replace(layout, layout=resolve_layout(layout.layout))
     raise TypeError(f"not a tensor layout: {type(layout).__name__}")

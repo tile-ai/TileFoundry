@@ -20,12 +20,13 @@ from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import TensorPattern
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
     shard_layout_of,
 )
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     broadcast_shapes,
@@ -35,7 +36,6 @@ from tilefoundry.visitor_registry.access_relation import (
     shape_from_relation,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
-from tilefoundry.visitor_registry.type_defaults import output_shard_layout
 
 _COMPARE_KINDS = {
     BinaryKind.EQ,
@@ -75,8 +75,14 @@ def _merge_layout(a: object, b: object, out_shape: tuple, *, ctx=None, storage=N
     if layout is not None:
         if isinstance(layout, ShardLayout):
             if all(isinstance(attr, Broadcast) for attr in layout.attrs):
-                return output_shard_layout(
-                    out_shape, layout.mesh, layout.attrs, ctx=ctx, storage=storage
+                return ShardLayout.default(
+                    out_shape,
+                    layout.mesh,
+                    layout.attrs,
+                    storage=storage,
+                    owners=ctx.target.storage_owners
+                    if ctx is not None and ctx.target is not None
+                    else StorageOwners((), {}),
                 )
             return layout
         if tuple(layout.shape) == out_shape:
@@ -92,7 +98,15 @@ def _merge_layout(a: object, b: object, out_shape: tuple, *, ctx=None, storage=N
         not isinstance(layout, ShardLayout) or layout in replicated for layout in (a, b)
     ):
         first = replicated[0]
-        return output_shard_layout(out_shape, first.mesh, first.attrs, ctx=ctx, storage=storage)
+        return ShardLayout.default(
+            out_shape,
+            first.mesh,
+            first.attrs,
+            storage=storage,
+            owners=ctx.target.storage_owners
+            if ctx is not None and ctx.target is not None
+            else StorageOwners((), {}),
+        )
     raise ValueError(f"incompatible operand layouts {a!r} vs {b!r}")
 
 
@@ -163,7 +177,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     except ValueError as e:
         ctx.error(call, f"Binary {op.kind.name}: {e}")
     if layout is None:
-        layout = default_layout(out_shape)
+        layout = Layout(out_shape)
     return TensorType(
         shape=out_shape,
         dtype=out_dtype,

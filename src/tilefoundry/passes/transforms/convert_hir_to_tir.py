@@ -73,7 +73,7 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.int_tuple import compatible_profile
-from tilefoundry.ir.types.layout import default_layout, flatten, unflatten
+from tilefoundry.ir.types.layout import flatten, unflatten
 from tilefoundry.ir.types.layout_algebra import composition
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx
@@ -257,14 +257,14 @@ class TirBuilder:
                     type=TensorType(
                         (elements,),
                         storage_type.dtype,
-                        default_layout((elements,)),
+                        Layout((elements,)),
                         StorageKind.GMEM,
                     ),
                 )
                 ctx.scratch.append(scratch)
                 storage_type = replace(
                     storage_type,
-                    layout=default_layout(tuple(storage_type.shape)),
+                    layout=Layout(tuple(storage_type.shape)),
                 )
                 view = View(scratch, (i64_const(0),), (elements,), storage_type, stem)
                 return view
@@ -889,7 +889,7 @@ class StoragePlan:
                 Slice(sizes=tuple(view.sizes), strides=(1,) * len(view.sizes)),
                 (base, keys),
                 type=TensorType(
-                    tuple(view.sizes), held.dtype, default_layout(tuple(view.sizes)), held.storage
+                    tuple(view.sizes), held.dtype, Layout(tuple(view.sizes)), held.storage
                 ),
             )
             inferred = typeinfer_registry.lookup(Slice)(

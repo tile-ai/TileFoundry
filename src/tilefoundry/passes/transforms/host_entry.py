@@ -19,7 +19,7 @@ from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types import StorageKind, TensorType, TupleType, UnitType
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.target import CpuTarget, CudaTarget
@@ -171,7 +171,7 @@ def _entry_params(fn: Function) -> tuple[Var, ...]:
             yield Var(
                 _fresh_name("out", taken),
                 type=TensorType(
-                    tuple(ty.shape), ty.dtype, default_layout(tuple(ty.shape)), StorageKind.GMEM
+                    tuple(ty.shape), ty.dtype, Layout(tuple(ty.shape)), StorageKind.GMEM
                 ),
             )
         elif isinstance(ty, TupleType):

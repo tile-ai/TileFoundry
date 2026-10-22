@@ -11,12 +11,13 @@ from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, FloatDType, StorageKind, TensorType
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     shard_layout_of,
     split_target_axes,
 )
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -28,7 +29,6 @@ from tilefoundry.visitor_registry.access_relation import (
     shape_from_relation,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
-from tilefoundry.visitor_registry.type_defaults import output_shard_layout
 
 
 @register_op
@@ -149,13 +149,19 @@ def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tup
     if layout is None:
         held = shard_layout_of(lhs.layout) or lhs.layout
         if isinstance(held, ShardLayout):
-            layout = output_shard_layout(
-                out_shape, held.mesh, held.attrs, ctx=ctx, storage=lhs.storage
+            layout = ShardLayout.default(
+                out_shape,
+                held.mesh,
+                held.attrs,
+                storage=lhs.storage,
+                owners=ctx.target.storage_owners
+                if ctx is not None and ctx.target is not None
+                else StorageOwners((), {}),
             )
         elif tuple(held.shape) == tuple(out_shape):
             layout = held
         else:
-            layout = default_layout(out_shape)
+            layout = Layout(out_shape)
     return out_shape, layout
 
 

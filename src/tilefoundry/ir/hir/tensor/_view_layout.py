@@ -6,7 +6,6 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from tilefoundry.ir.types import ComposedLayout, Layout, LayoutBase, TensorType
-from tilefoundry.ir.types.layout import default_layout
 
 
 def derive_view_layout(
@@ -17,9 +16,9 @@ def derive_view_layout(
     """Apply one view's primitive-layout transform without losing composition."""
     source = source_type.layout
     if isinstance(source, Layout):
-        return transform(source) or default_layout(result_shape)
+        return transform(source) or Layout(result_shape)
     if isinstance(source, ComposedLayout) and isinstance(source.outer, Layout):
-        outer = transform(source.outer) or default_layout(result_shape)
+        outer = transform(source.outer) or Layout(result_shape)
         return replace(source, outer=outer)
     return None
 

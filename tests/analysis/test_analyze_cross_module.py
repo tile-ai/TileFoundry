@@ -481,7 +481,7 @@ def test_an_analyzer_cannot_write_records_on_a_shared_derived_callee():
 
 
 def test_repeated_callee_temporaries_require_one_shared_memory_placement():
-    type_ = TensorType((32,), DType.f32, None, StorageKind.GMEM)
+    type_ = TensorType((32,), DType.f32, Layout((32,)), StorageKind.GMEM)
     scalar = TensorType.scalar(DType.i32)
     zero = Constant(0, type=scalar)
     starts = Tuple((zero,), type=TupleType((scalar,)))
@@ -554,8 +554,8 @@ def test_partial_indexed_loop_counts_only_reached_persistent_weights():
 
 
 def test_repeated_callee_placement_compares_alias_even_at_the_same_offset():
-    type_ = TensorType((32,), DType.f32, None, StorageKind.GMEM)
-    short = replace(type_, shape=(16,))
+    type_ = TensorType((32,), DType.f32, Layout((32,)), StorageKind.GMEM)
+    short = replace(type_, shape=(16,), layout=Layout((16,)))
     scalar = TensorType.scalar(DType.i32)
     x, y = Var("x", type=type_), Var("y", type=short)
     offset = Var("offset", type=scalar)

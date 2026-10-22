@@ -33,7 +33,7 @@ from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types import ComposedLayout
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub, DimVar
-from tilefoundry.ir.types.layout import Layout, LayoutBase, default_layout, flatten
+from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
 from tilefoundry.ir.types.mesh import flattened_levels
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
@@ -516,7 +516,8 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
             else:
                 tensor_ref = f"{mem_name}_tensor" if ctx.is_kernel_param(memory_var) else mem_name
                 source_shape = tuple(memory_var.type.shape)
-                source_strides = default_layout( tuple(int(upper_bound(dim)) for dim in source_shape)
+                source_strides = Layout(
+                    tuple(int(upper_bound(dim)) for dim in source_shape)
                 ).strides
                 source_name = f"{var_name}__source"
                 ctx.emit(

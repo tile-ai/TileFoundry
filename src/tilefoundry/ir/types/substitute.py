@@ -168,8 +168,7 @@ def _collect_layout(layout: object, found: dict[str, "DimVar"]) -> None:
         return
     if isinstance(layout, Layout):
         _collect(layout.shape, found)
-        if layout.strides is not None:
-            _collect(layout.strides, found)
+        _collect(layout.strides, found)
 
 
 def substitute_dims(value: Type, bindings: Mapping[str, int]) -> Type:
@@ -243,7 +242,7 @@ def _canonicalize_layout_dims(layout: object) -> object:
         return ComposedLayout(inner=inner, offset=offset, outer=outer)
     if isinstance(layout, Layout):
         shape = _canonicalize_nested(layout.shape)
-        strides = None if layout.strides is None else _canonicalize_nested(layout.strides)
+        strides = _canonicalize_nested(layout.strides)
         if shape == layout.shape and strides == layout.strides:
             return layout
         return Layout(shape=shape, strides=strides)
@@ -312,7 +311,7 @@ def substitute_layout_dims(layout: object, bindings: Mapping[str, int]) -> objec
         return ComposedLayout(inner=inner, offset=offset, outer=outer)
     if isinstance(layout, Layout):
         shape = _substitute_nested(layout.shape, bindings)
-        strides = None if layout.strides is None else _substitute_nested(layout.strides, bindings)
+        strides = _substitute_nested(layout.strides, bindings)
         if shape == layout.shape and strides == layout.strides:
             return layout
         return Layout(shape=shape, strides=strides)

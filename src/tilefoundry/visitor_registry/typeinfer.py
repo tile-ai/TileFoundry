@@ -17,7 +17,7 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.types.callable_type import callable_type_for
+from tilefoundry.ir.types.callable_type import bind_annotation, callable_type_for
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.dtype import IntegerDType
 from tilefoundry.ir.types.int_tuple import compatible_profile
@@ -30,7 +30,6 @@ from tilefoundry.visitor_registry.valuation import ValuationVisitor
 from .contexts import TypeInferContext, TypeInferResults
 from .instruction import check_input_reachability
 from .registries import typeinfer_registry
-from .type_defaults import default_type
 
 
 def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
@@ -139,7 +138,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
             attach_metadata(expr, RangeMetadata(*results.value_range))
 
     def visit_leaf_Var(self, var: Var, _operands, ctx: TypeInferContext) -> Type:
-        return default_type(var.annotation, target=ctx.target)
+        return var.type
 
     def visit_leaf_Constant(self, c: Constant, _operands, ctx: TypeInferContext) -> Type:
         return c.type
@@ -208,7 +207,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         memo = {}
         for param in callee.params:
             if child and param.is_const:
-                memo[id(param)] = (param, default_type(param.annotation, target=ctx.target))
+                memo[id(param)] = (param, param.type)
                 continue
             index, arg_type = next(given)
             declared = param.annotation
@@ -221,7 +220,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
             memo[id(param)] = (param, arg_type)
 
         if callee.body is None or callee.variants:
-            return default_type(callee.return_type, target=(child_frame or ctx).target)
+            return callee.return_type
 
         inner = replace(child_frame or ctx, function=callee, owner=callee, parent=None, call_site=None, memo={})
         context = (
@@ -297,7 +296,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
                 f"{len(region.params)} params",
             )
         memo = self._region_memo(region, ctx)
-        induction_type = default_type(region.induction_var.annotation, target=ctx.target)
+        induction_type = region.induction_var.type
         memo[id(region.induction_var)] = (region.induction_var, induction_type)
         if self._owns_body:
             region.induction_var.type = induction_type
@@ -346,7 +345,11 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         produced, and what one unit costs is cost's question.
         """
         memo = self._region_memo(expr, ctx)
-        inner = TypeInferVisitor(memo=memo, owns_body=self._owns_body, ranges=self._ranges)
+        inner = TypeInferVisitor(
+            memo=memo,
+            owns_body=self._owns_body,
+            ranges=self._ranges,
+        )
         return inner.visit(expr.body, replace(ctx.enter_region(expr), memo=memo))
 
     def visit_Function(self, fn: Function, ctx: TypeInferContext) -> Type:
@@ -359,7 +362,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         memo = {
             id(param): ctx.memo[id(param)]
             if id(param) in ctx.memo
-            else (param, default_type(param.annotation, target=ctx.target))
+            else (param, bind_annotation(param.type))
             for param in fn.params
         }
         if self._owns_body:

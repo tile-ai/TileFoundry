@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from .tensor_type import Type, UnitType
+from .layout import Layout
+from .tensor_type import TensorType, TupleType, Type, UnitType
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,15 @@ class CallableType:
 
     return_type: Type
     parameters: tuple[Type, ...]
+
+
+def bind_annotation(annotation):
+    """Construct a value type at a standalone declaration binding."""
+    if isinstance(annotation, TensorType) and annotation.layout is None:
+        return replace(annotation, layout=Layout(annotation.shape))
+    if isinstance(annotation, TupleType):
+        return replace(annotation, fields=tuple(bind_annotation(t) for t in annotation.fields))
+    return annotation
 
 
 def callable_type_for(params, return_type: Type) -> CallableType:

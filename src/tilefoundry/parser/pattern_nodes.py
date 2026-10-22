@@ -9,7 +9,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import enum
-import operator
+import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, get_args, get_origin
@@ -50,12 +50,10 @@ from tilefoundry.ir.types.layout import flatten, normalize_layout
 from tilefoundry.ir.types.layout import size as layout_size
 from tilefoundry.ir.types.layout_algebra import composition
 from tilefoundry.ir.types.mesh import axis_keys, levels, starts
-from tilefoundry.ir.types.shard_layout import fill_shard_strides
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx, idx2crd
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
-from tilefoundry.target import instance_levels
-from tilefoundry.visitor_registry.type_defaults import default_type
 
 from .ast_pattern import (
     _BINARY_OPERATORS,
@@ -358,8 +356,8 @@ class PlainLayoutPattern(ElementPattern):
     def construct(match, children, context):
         shape = tuple(children.values())
         if context.situation == "mesh_layout":
-            return runtime.Layout(shape, runtime.compact_row_major(shape, mul=operator.mul))
-        return runtime.default_layout(shape)
+            return runtime.Layout(shape, compact_row_major(shape))
+        return runtime.Layout(shape)
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         LayoutShapeRule(),
@@ -730,23 +728,26 @@ class PlacementConstructionRule:
             return PlacedLayout(
                 shape=value.shape, layout=runtime.Layout(shape=value.shape, strides=value.strides)
             )
+        if value.strides is not None:
+            return PlacedLayout(
+                value.shape,
+                runtime.ShardLayout(
+                    runtime.Layout(value.shape, value.strides), value.attrs, value.mesh
+                ),
+            )
         try:
-            canonical = runtime.default_shard_layout(value.shape, value.mesh, value.attrs)
+            storage = context.values.get("layout_storage", runtime.StorageKind.GMEM)
+            target = None if context.function is None else context.function.target
+            layout = runtime.ShardLayout.default(
+                value.shape,
+                value.mesh,
+                value.attrs,
+                storage=storage,
+                owners=target.storage_owners if target else StorageOwners((), {}),
+            )
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
-        if value.strides is not None and len(canonical.layout.shape) != len(value.strides):
-            raise ParseError.from_node(match.node, context, "layout shape/stride rank mismatch")
-        strides = value.strides
-        if strides is None and not any(isinstance(attr, (Split, Partial)) for attr in canonical.attrs):
-            strides = runtime.default_layout(canonical.layout.shape).strides
-        return PlacedLayout(
-            shape=value.shape,
-            layout=runtime.ShardLayout(
-                layout=runtime.Layout(shape=canonical.layout.shape, strides=strides),
-                attrs=canonical.attrs,
-                mesh=canonical.mesh,
-            ),
-        )
+        return PlacedLayout(value.shape, layout)
 
 
 @dataclass(frozen=True)
@@ -1386,6 +1387,19 @@ class TensorPattern(ElementPattern):
     )
 
     @staticmethod
+    def child_values(match, child, children, context):
+        storage = next((c for c in match.children if c.name == "storage"), None)
+        return {
+            "layout_storage": runtime.StorageKind.GMEM
+            if storage is None
+            else parse_node(
+                storage.pattern,
+                storage.node,
+                context.child(situation=storage.situation, role=storage.role),
+            )
+        }
+
+    @staticmethod
     def construct(match, children, context):
         """One layout, from one slot.
 
@@ -1405,28 +1419,20 @@ class TensorPattern(ElementPattern):
         if isinstance(layout, PlacedLayout):
             layout = layout.layout
         storage = children.get("storage") or runtime.StorageKind.GMEM
-        if (
-            isinstance(layout, runtime.ShardLayout)
-            and isinstance(layout.layout, runtime.Layout)
-            and layout.layout.strides is None
-            and context.values.get("position")
-            not in {"hir_input", "hir_output", "tir_input", "tir_output"}
-        ):
-            layout = fill_shard_strides(
-                layout, instance_levels=instance_levels(context.function.target, storage)
-            )
         type_ = runtime.TensorType(
             shape=shape,
             dtype=children["dtype"],
             layout=normalize_layout(layout) if layout is not None else None,
             storage=storage,
         )
-        return (
-            type_
-            if context.values.get("position")
-            in {"hir_input", "hir_output", "tir_input", "tir_output"}
-            else default_type(type_, target=context.function.target)
-        )
+        if layout is None and context.values.get("position") not in {
+            "hir_input",
+            "hir_output",
+            "tir_input",
+            "tir_output",
+        }:
+            return dataclasses.replace(type_, layout=runtime.Layout(shape))
+        return type_
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         TensorLayoutStorageRule(),
@@ -1861,7 +1867,7 @@ class SignaturePattern(ElementPattern):
         constness = match.captures["constness"]
         params = tuple(
             runtime.Var(
-                type=default_type(children[f"parameter_{index}"], target=context.function.target),
+                type=runtime.bind_annotation(children[f"parameter_{index}"]),
                 annotation=children[f"parameter_{index}"],
                 name=name,
                 is_const=constness[index],
@@ -2166,6 +2172,16 @@ class StaticCallConstructionRule:
         args = tuple(value[f"arg_{index}"] for index in range(match.captures["arg_count"]))
         kwargs = {name: value[f"kw_{name}"] for name in match.captures["keywords"]}
         try:
+            if match.captures.get("default_shard_modes"):
+                arguments = inspect.signature(callee).bind(*args, **kwargs).arguments
+                target = None if context.function is None else context.function.target
+                return runtime.ShardLayout.from_modes(
+                    arguments["layout"],
+                    arguments["mesh"],
+                    arguments["attrs"],
+                    storage=context.values.get("layout_storage", runtime.StorageKind.GMEM),
+                    owners=target.storage_owners if target else StorageOwners((), {}),
+                )
             return callee(*args, **kwargs)
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
@@ -2247,12 +2263,37 @@ class StaticCallPattern(ElementPattern):
             isinstance(node.func, (ast.Name, ast.Attribute))
             and _resolve_reference(node.func, context) is runtime.ShardLayout
         )
+        default_shard_modes = False
+
+        def argument_node(argument, is_layout):
+            nonlocal default_shard_modes
+            if not (shard_layout and is_layout and isinstance(argument, ast.Call)):
+                return argument
+            if _resolve_reference(argument.func, context) is not runtime.Layout:
+                return argument
+            try:
+                arguments = (
+                    inspect.signature(runtime.Layout)
+                    .bind(
+                        *argument.args,
+                        **{keyword.arg: keyword.value for keyword in argument.keywords},
+                    )
+                    .arguments
+                )
+            except TypeError as error:
+                raise ParseError.from_node(argument, context, str(error)) from error
+            strides = arguments.get("strides")
+            if strides is None or isinstance(strides, ast.Constant) and strides.value is None:
+                default_shard_modes = True
+                return arguments["shape"]
+            return argument
+
         children = [AstChild("callee", StaticValuePattern(), node.func, "static_callee")]
         children.extend(
             AstChild(
                 f"arg_{index}",
                 StaticValuePattern(),
-                argument,
+                argument_node(argument, index == 0),
                 "static_argument",
                 values={"shard_layout_mesh": shard_layout and index == 2},
             )
@@ -2262,7 +2303,7 @@ class StaticCallPattern(ElementPattern):
             AstChild(
                 f"kw_{keyword.arg}",
                 StaticValuePattern(),
-                keyword.value,
+                argument_node(keyword.value, keyword.arg == "layout"),
                 "static_argument",
                 keyword.arg,
                 values={"shard_layout_mesh": shard_layout and keyword.arg == "mesh"},
@@ -2278,6 +2319,7 @@ class StaticCallPattern(ElementPattern):
                 **matched.captures,
                 "arg_count": len(node.args),
                 "keywords": tuple(keyword_names),
+                "default_shard_modes": default_shard_modes,
             },
             children=tuple(children),
         )
@@ -3121,6 +3163,25 @@ class CallPattern(ElementPattern):
         )
 
     @staticmethod
+    def child_values(match, child, children, context):
+        if match.branch_id != "operation_call" or child.role != "layout":
+            return {}
+        storage = next((c for c in match.children if c.name == "attr_storage"), None)
+        if storage is not None:
+            value = parse_node(
+                storage.pattern,
+                storage.node,
+                context.child(situation=storage.situation, role=storage.role),
+            )
+        else:
+            value = None
+        source = next((v for k, v in children.items() if k.startswith("input_")), None)
+        return {
+            "layout_storage": value
+            or (source.type.storage if source is not None else runtime.StorageKind.GMEM)
+        }
+
+    @staticmethod
     def construct(match, children, context):
         if match.branch_id == "operation_call":
             schema = match.captures["schema"]
@@ -3142,17 +3203,6 @@ class CallPattern(ElementPattern):
                 for name, value in tuple(attrs.items()):
                     if isinstance(value, runtime.LayoutBase):
                         attrs[name] = normalize_layout(value)
-            layout = attrs.get("layout")
-            if (
-                schema.op_class in {runtime.Reshard, runtime.TensorView, runtime.Bitcast}
-                and isinstance(layout, runtime.ShardLayout)
-                and isinstance(layout.layout, runtime.Layout)
-                and layout.layout.strides is None
-            ):
-                storage = attrs.get("storage") or inputs[0].type.storage
-                attrs["layout"] = fill_shard_strides(
-                    layout, instance_levels=instance_levels(context.function.target, storage)
-                )
             for name, value in tuple(attrs.items()):
                 parameter = next((item for item in schema.signature if item.name == name), None)
                 annotation = None if parameter is None else parameter.annotation
@@ -5685,7 +5735,6 @@ class FunctionDialectRule:
         return value
 
 
-_AUTHORED_RETURN_ANNOTATION = "_tilefoundry_authored_return_annotation"
 _AUTHORED_BODY_TYPE = "_tilefoundry_authored_body_type"
 
 
@@ -5702,7 +5751,7 @@ class FunctionReturnCompatibilityRule:
             raise ParseError.from_node(match.node, context, "function lacks parser context")
         if context.function.dialect != "hir":
             return value
-        declared = getattr(value, _AUTHORED_RETURN_ANNOTATION, None)
+        declared = value.return_annotation
         body_type = getattr(value, _AUTHORED_BODY_TYPE, None)
         try:
             if body_type is None:
@@ -5726,16 +5775,15 @@ class FunctionReturnCompatibilityRule:
                     raise ParseError.from_node(
                         match.node, context, "variant lacks a HIR dispatch prototype"
                     )
-                if not types_compatible(base.return_type, body_type):
+                if not types_compatible(base.return_annotation, body_type):
                     raise ParseError.from_node(
                         match.node,
                         context,
                         f"variant body type {body_type!r} is not compatible with "
-                        f"dispatch return contract {base.return_type!r}",
+                        f"dispatch return contract {base.return_annotation!r}",
                     )
             return value
         finally:
-            delattr(value, _AUTHORED_RETURN_ANNOTATION)
             delattr(value, _AUTHORED_BODY_TYPE)
 
 
@@ -5912,9 +5960,9 @@ class FunctionPattern(ElementPattern):
                 params=params,
                 body=body,
                 return_type=return_type,
+                return_annotation=declared_return,
                 specializations=specializations,
             )
-            setattr(function, _AUTHORED_RETURN_ANNOTATION, declared_return)
             setattr(function, _AUTHORED_BODY_TYPE, None if body is None else body.type)
             if context.function.role is FunctionRole.VARIANT:
                 setattr(function, runtime.DISPLAY_NAME, match.captures["name"])

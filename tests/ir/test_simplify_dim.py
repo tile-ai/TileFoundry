@@ -35,7 +35,6 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     simplify_dim,
 )
-from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.visitor_registry.access_relation import broadcast_shapes
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
@@ -242,7 +241,7 @@ def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
     param = TensorType(
         shape=(1, 4, 32, 128),
         dtype=DType.bf16,
-        layout=default_layout((1, 4, 32, 128)),
+        layout=Layout((1, 4, 32, 128)),
         storage="gmem",
     )
     x = Constant(type=param, value=None)

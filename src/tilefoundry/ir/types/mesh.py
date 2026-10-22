@@ -158,7 +158,7 @@ def _nested(layout, topologies: tuple) -> "Layout | ComposedLayout":
     """
     if not isinstance(layout, LayoutBase):
         extents = tuple(flatten(layout))
-        layout = Layout(shape=extents, strides=compact_row_major(extents))
+        layout = Layout(extents, compact_row_major(extents))
     if isinstance(layout, ComposedLayout):
         if layout.outer is None or _levelled(layout.outer, topologies):
             return layout
@@ -168,14 +168,10 @@ def _nested(layout, topologies: tuple) -> "Layout | ComposedLayout":
             outer=_nested(layout.outer, topologies),
         )
     if _levelled(layout, topologies):
-        if layout.strides is None:
-            from .layout import default_layout  # noqa: PLC0415
-
-            return default_layout(layout.shape)
         return layout
 
     extents = tuple(flatten(layout.shape))
-    stated = layout.strides if layout.strides is not None else compact_row_major(extents)
+    stated = layout.strides
     steps = tuple(flatten(stated))
     if len(topologies) == 1:
         return Layout(shape=(extents,), strides=(steps,))

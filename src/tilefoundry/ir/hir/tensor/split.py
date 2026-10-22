@@ -10,13 +10,14 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Broadcast, Partial, ShardLayout, TensorType, TupleType
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
-from tilefoundry.ir.types.layout import default_layout, flatten
+from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard_layout import (
     shard_layout_of,
     split_target_axes,
 )
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
@@ -26,7 +27,6 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.type_defaults import output_shard_layout
 
 
 @register_op
@@ -96,15 +96,17 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             else Broadcast()
             for attr in x_ty.layout.attrs
         )
-        part_layout = output_shard_layout(
+        part_layout = ShardLayout.default(
             part_shape,
             x_ty.layout.mesh,
             attrs,
-            ctx=ctx,
             storage=x_ty.storage,
+            owners=ctx.target.storage_owners
+            if ctx is not None and ctx.target is not None
+            else StorageOwners((), {}),
         )
     else:
-        part_layout = default_layout(part_shape)
+        part_layout = Layout(part_shape)
     part_ty = TensorType(
         shape=part_shape, dtype=x_ty.dtype, layout=part_layout, storage=x_ty.storage
     )

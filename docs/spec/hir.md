@@ -43,7 +43,8 @@ class Function(Expr):
         name: attribute; the function name; call sites resolve through Module's symbol table.
         params: attribute; each Var carries a type annotation.
         body: attribute; a single Expr — typically a Call DAG; None for a dispatch prototype.
-        return_type: attribute; TensorType for single output, TupleType for multi.
+        return_type: attribute; concrete TensorType for single output, TupleType for multi.
+        return_annotation: attribute; authored return declaration, or None.
         specializations: attribute; Dispatch patterns carried by a variant.
         variants: attribute; Shape-specialized implementations carried by a prototype.
         converters: attribute; Weight names paired with offline converter functions.
@@ -53,6 +54,7 @@ class Function(Expr):
     params: tuple[Var, ...]
     body: Expr | None
     return_type: Type
+    return_annotation: Type | None = None
     specializations: tuple[Pattern, ...] = field(default_factory=tuple)
     variants: tuple["Function", ...] = field(default_factory=tuple)
     converters: tuple[tuple[str, "Function"], ...] = field(default_factory=tuple)
@@ -120,7 +122,9 @@ declares, but it MUST NOT create a level or change one's extent.
 **Return type.** `Function.return_type` is the HIR result `Type`: a
 `TensorType` for one result or a `TupleType` for multiple results. It is part of
 the function signature and is the result component projected into
-`Function.type`.
+`Function.type`. `Function.return_annotation` retains the authored declaration,
+including an omitted tensor layout. Binding a standalone declaration constructs
+the concrete return type once; calls read that type without filling defaults.
 
 **Value type.** `Function.type` is the IR-level `CallableType`
 ([types §7](./types.md#7-callabletype)) projected from `params` +
@@ -199,13 +203,12 @@ separate operation that produces a derived `Function`; such a derived
 function records its origin and chosen dimensions as specified by the
 **Function specialization API** below.
 
-The placement sugar in a signature emits `Layout(strides=None)`
-([parser.md §2.1](./parser.md#21-syntax)). Under the recursive rule, this leaves
-only `strides` undecided: the layout's stated shape, mesh, and shard attributes
-remain constraints, while the argument's concrete strides bind into the
-callee. A verbose `Layout(strides=tuple)` states a concrete stride contract and
-MUST match exactly. Signature binding does not materialize either form into a
-different layout.
+A wholly omitted tensor layout remains `None` in a parameter or return
+annotation and imposes no layout constraint. A stated layout or placement is
+concrete when constructed and MUST match exactly; unwritten strides use the
+default constructor with the enclosing storage and target. Parameter `type`
+and function `return_type` store concrete value types, separately from their
+authored annotations.
 
 **SSA shape**. HIR is pure **SSA-as-DAG** — sharing of intermediate
 results is expressed by Python object identity:
@@ -282,7 +285,8 @@ freeze** below).
   MUST choose a valid source binding so the emitted definition remains
   importable.
 - Every variant of a base MUST share the base's `name`, `params`, and
-  `return_type`: a variant specializes the body, not the signature. A variant
+  parameter annotations and `return_annotation`: a variant specializes the body,
+  not the authored signature. A variant
   runs in the same execution domain as its base because both are owned by the
   same `Module`.
 - `.specialize(pattern, *, mesh=None)` accepts an explicit function mesh with

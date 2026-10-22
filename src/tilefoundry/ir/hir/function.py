@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field
 
 from tilefoundry import evaluator
 from tilefoundry.ir.core import Expr, Var
 from tilefoundry.ir.pattern import Pattern
 from tilefoundry.ir.types import Type, callable_type_for
+from tilefoundry.ir.types.callable_type import bind_annotation
 from tilefoundry.ir.types.substitute import canonicalize_dims
 
 
@@ -24,6 +25,7 @@ class Function(Expr):
     params: tuple[Var, ...]
     body: Expr | None
     return_type: Type = field(hash=False)
+    return_annotation: Type | None = field(default=None, hash=False)
     specializations: tuple[Pattern, ...] = field(default_factory=tuple)
     variants: tuple["Function", ...] = field(default_factory=tuple, hash=False)
     converters: tuple[tuple[str, "Function"], ...] = field(default_factory=tuple, hash=False)
@@ -50,6 +52,7 @@ class Function(Expr):
         params: tuple[Var, ...],
         body: Expr | None,
         return_type: Type,
+        return_annotation=MISSING,
         specializations: tuple[Pattern, ...] = (),
         variants: tuple["Function", ...] = (),
         converters: tuple[tuple[str, "Function"], ...] = (),
@@ -60,12 +63,16 @@ class Function(Expr):
             canonical = canonicalize_dims(param.type)
             if canonical is not param.type:
                 param.type = canonical
-        return_type = canonicalize_dims(return_type)
+        return_annotation = canonicalize_dims(
+            return_type if return_annotation is MISSING else return_annotation
+        )
+        return_type = bind_annotation(canonicalize_dims(return_type))
         return cls(
             name=name,
             params=params,
             body=body,
             return_type=return_type,
+            return_annotation=return_annotation,
             specializations=tuple(specializations),
             variants=tuple(variants),
             converters=tuple(converters),

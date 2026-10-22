@@ -19,7 +19,7 @@ from tilefoundry.ir.isl_interop import normalize_dim_entries
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Split, TensorType
 from tilefoundry.ir.types.dim import DimAdd, simplify_dim
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
@@ -160,7 +160,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if layout is not None:
         require_uniform_partial_slices(ctx, call, types, layout, "Concat")
     else:
-        layout = default_layout(new_shape)
+        layout = Layout(new_shape)
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))
     return TensorType(shape=new_shape, dtype=base.dtype, layout=layout, storage=storage)
 

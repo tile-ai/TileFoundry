@@ -28,7 +28,7 @@ from tilefoundry.ir.types.utils import (
     leaves_of,
     participant_layout,
 )
-from tilefoundry.target.facts import TopologyFacts, owner_levels
+from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.units import format_bytes
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
@@ -426,6 +426,7 @@ def values_in_region(
     exited_at: int,
     facts: MemoryHierarchyFacts,
     topology_names: tuple[str, ...],
+    owners,
 ) -> tuple[ValueLifetime, ...]:
     """Resident values whose lifetimes and ownership intersect one mesh region.
 
@@ -450,7 +451,7 @@ def values_in_region(
         if declared.owner == TARGET_MEMORY_OWNER:
             continue
         try:
-            owned = owner_levels(declared.owner, topology_names)
+            private = owners.private(lifetime.memory_level, topology_names[outermost_region])
         except ValueError:
             raise AnalysisError(
                 f"memory: level {lifetime.memory_level!r} owner {declared.owner!r} "
@@ -461,7 +462,7 @@ def values_in_region(
             if not entered_at < lifetime.defined_at < exited_at:
                 continue
         else:
-            if topology_names[outermost_region] not in owned:
+            if not private:
                 continue
             layout = shard_layout_of(getattr(held, "layout", None))
             if layout is None or not held_in_region(participant_layout(layout).mesh, region.mesh):
@@ -542,7 +543,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         if not level.owner:
             raise AnalysisError(f"memory: level {level.name!r} has no declared owner")
         try:
-            owner_levels(level.owner, owner_topologies)
+            context.target.storage_owners
         except ValueError:
             raise AnalysisError(
                 f"memory: level {level.name!r} owner {level.owner!r} is not a "
@@ -758,7 +759,13 @@ def _place(model, facts, topologies):
     names = tuple(level.name for level in model.context.target.get_facts(TopologyFacts).topologies)
     for window in model.liveness.regions:
         resident = values_in_region(
-            tuple(model.windows), window.region, window.entered_at, window.exited_at, facts, names
+            tuple(model.windows),
+            window.region,
+            window.entered_at,
+            window.exited_at,
+            facts,
+            names,
+            model.context.target.storage_owners,
         )
         levels = _resident_peaks(
             model, resident, offsets, facts, sizes, interval=(window.entered_at, window.exited_at)

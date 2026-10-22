@@ -18,13 +18,14 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, ShardLayout, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
-from tilefoundry.ir.types.layout import default_layout, flatten
+from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Split,
     shard_layout_local_shape,
     split_target_axes,
 )
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
@@ -33,7 +34,6 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.type_defaults import output_shard_layout
 
 
 @register_op
@@ -114,23 +114,27 @@ def _logical_shard_attrs(call, ctx, x_ty, group: int):
 def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
     if isinstance(x_ty.layout, ShardLayout):
         if all(isinstance(attr, Broadcast) for attr in x_ty.layout.attrs):
-            return default_layout(x_ty.shape), default_layout(scale_shape)
+            return Layout(x_ty.shape), Layout(scale_shape)
         attrs = _logical_shard_attrs(call, ctx, x_ty, group)
         try:
             return (
-                output_shard_layout(
+                ShardLayout.default(
                     x_ty.shape,
                     x_ty.layout.mesh,
                     attrs,
-                    ctx=ctx,
                     storage=x_ty.storage,
+                    owners=ctx.target.storage_owners
+                    if ctx is not None and ctx.target is not None
+                    else StorageOwners((), {}),
                 ),
-                output_shard_layout(
+                ShardLayout.default(
                     scale_shape,
                     x_ty.layout.mesh,
                     attrs,
-                    ctx=ctx,
                     storage=x_ty.storage,
+                    owners=ctx.target.storage_owners
+                    if ctx is not None and ctx.target is not None
+                    else StorageOwners((), {}),
                 ),
             )
         except ValueError as error:
@@ -139,8 +143,8 @@ def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
                 f"cannot derive result sharding: {error}; use an explicit Reshard before Quant",
             )
     return (
-        default_layout(x_ty.shape),
-        default_layout(scale_shape),
+        Layout(x_ty.shape),
+        Layout(scale_shape),
     )
 
 

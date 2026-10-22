@@ -4,21 +4,15 @@ import math
 from typing import Optional
 
 from tilefoundry.ir.types.int_tuple import repeat_like
-from tilefoundry.ir.types.layout import flatten, resolve_layout
-from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.layout import Layout, flatten
+from tilefoundry.ir.types.shard_layout import ShardLayout
+from tilefoundry.ir.types.storage import StorageKind, StorageOwners
 
 from .dtype import DType
-from .layout import ComposedLayout, Layout, apply, default_layout
+from .layout import ComposedLayout, apply
 from .layout_algebra import size
 from .mesh import Mesh, Topology, make_mesh, separate
-from .shard_layout import (
-    Broadcast,
-    ShardLayout,
-    Split,
-    default_shard_layout,
-    shard_layout_of,
-    split_target_axes,
-)
+from .shard_layout import Broadcast, Split, shard_layout_of, split_target_axes
 from .tensor_type import TensorType, TupleType, Type
 
 
@@ -165,7 +159,7 @@ def types_compatible(declared: Type, actual: Type) -> bool:
                 and field_compatible(declared_layout.attrs, actual_layout.attrs)
                 and layout_compatible(declared_layout.layout, actual_layout.layout)
             )
-        return actual_layout == resolve_layout(declared_layout)
+        return actual_layout == declared_layout
 
     if isinstance(declared, TensorType):
         if not isinstance(actual, TensorType):
@@ -289,7 +283,7 @@ def make_tensor_type(
     return TensorType(
         shape=tuple(shape),
         dtype=dtype,
-        layout=default_layout(tuple(shape)) if layout is None else layout,
+        layout=Layout(tuple(shape)) if layout is None else layout,
         storage=storage,
     )
 
@@ -304,15 +298,15 @@ def make_shard_tensor_type(
     """Build a canonical sharded ``TensorType`` from its logical description.
 
     ``attrs`` contains one entry per mesh axis. With no mesh or attributes the
-    result is unsharded; otherwise :func:`default_shard_layout` supplies the
+    result is unsharded; otherwise `ShardLayout.default` supplies the
     shared canonical representation.
 
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
     shape = tuple(shape)
     if mesh is None or not attrs:
-        return TensorType(shape=shape, dtype=dtype, layout=default_layout(shape), storage=storage)
-    layout = default_shard_layout(shape, mesh, attrs)
+        return TensorType(shape=shape, dtype=dtype, layout=Layout(shape), storage=storage)
+    layout = ShardLayout.default(shape, mesh, attrs, storage=storage, owners=StorageOwners((), {}))
     return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
 
 
@@ -348,7 +342,7 @@ def _all_split_local_type(type: Type, *, refuse_indivisible: bool) -> Type | Non
     return TensorType(
         shape=tuple(local),
         dtype=type.dtype,
-        layout=default_layout(tuple(local)),
+        layout=Layout(tuple(local)),
         storage=type.storage,
     )
 

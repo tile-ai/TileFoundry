@@ -82,7 +82,16 @@ CASES = [
     ),
     TypeInferCase(
         "high_to_low_sugar_materializes_per_instance",
-        Reshard(layout=_SL_H2L, storage=rmem),
+        Reshard(
+            layout=ShardLayout.from_modes(
+                _SL_H2L.shape,
+                _SL_H2L.mesh,
+                _SL_H2L.attrs,
+                storage=rmem,
+                owners=CudaTarget("nvidia.h200_sxm").storage_owners,
+            ),
+            storage=rmem,
+        ),
         (make_tensor_type((2, 4, 128)),),
         make_tensor_type(
             (2, 4, 128),
@@ -123,7 +132,16 @@ CASES = [
     ),
     TypeInferCase(
         "high_to_low_dynamic_bare_axis_materializes_per_instance",
-        Reshard(layout=_SL_DYN_BARE, storage=rmem),
+        Reshard(
+            layout=ShardLayout.from_modes(
+                _SL_DYN_BARE.shape,
+                _SL_DYN_BARE.mesh,
+                _SL_DYN_BARE.attrs,
+                storage=rmem,
+                owners=CudaTarget("nvidia.h200_sxm").storage_owners,
+            ),
+            storage=rmem,
+        ),
         (make_tensor_type((1, _S_DYN, 32, 128)),),
         make_tensor_type(
             (1, _S_DYN, 32, 128),

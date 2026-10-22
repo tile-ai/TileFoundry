@@ -8,7 +8,8 @@ See [parser §2.1](docs/spec/parser.md#21-syntax).
 
 from __future__ import annotations
 
-from tilefoundry.ir.types import DType, TensorType, default_layout
+from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 
 
@@ -34,7 +35,7 @@ def _tensor_type_getitem(args) -> TensorType:
     return TensorType(
         shape=shape,
         dtype=dtype_val,
-        layout=default_layout(shape) if layout is None else layout,
+        layout=Layout(shape) if layout is None else layout,
         storage=resolve_storage(storage),
     )
 

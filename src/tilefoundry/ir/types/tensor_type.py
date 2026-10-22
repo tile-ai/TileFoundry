@@ -65,12 +65,12 @@ class TensorType:
         layout: "LayoutBase | None" = None,
         storage: StorageKind = StorageKind.UMAT,
     ) -> "TensorType":
-        from .layout import default_layout  # noqa: PLC0415
+        from .layout import Layout  # noqa: PLC0415
 
         return TensorType(
             shape=(),
             dtype=dtype,
-            layout=default_layout(()) if layout is None else layout,
+            layout=Layout(()) if layout is None else layout,
             storage=storage,
         )
 
@@ -86,13 +86,13 @@ class TensorType:
     @staticmethod
     def umat_tensor(shape: tuple, dtype: DType = DType.i64) -> "TensorType":
         """Canonical ranked value whose residency is not decided."""
-        from .layout import default_layout  # noqa: PLC0415 - cycle guard
+        from .layout import Layout  # noqa: PLC0415
 
         shape = tuple(shape)
         return TensorType(
             shape=shape,
             dtype=dtype,
-            layout=default_layout(shape),
+            layout=Layout(shape),
             storage=StorageKind.UMAT,
         )
 

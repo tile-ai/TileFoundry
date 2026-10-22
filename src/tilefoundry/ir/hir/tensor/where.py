@@ -11,7 +11,7 @@ from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.hir.math.binary import _merge_layout
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import Broadcast, shard_layout_of
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
@@ -100,7 +100,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"Where: {error}")
 
     if layout is None:
-        layout = default_layout(out_shape)
+        layout = Layout(out_shape)
     return TensorType(
         shape=out_shape,
         dtype=input_.dtype,

@@ -30,11 +30,13 @@ from tilefoundry.ir.types.dim import (
     is_dim_expr,
 )
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import (
+    ShardLayout,
     Split,
     shard_layout_of,
 )
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.tensor_type import ShapeDim
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.lazy import torch
@@ -46,7 +48,6 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
-from tilefoundry.visitor_registry.type_defaults import output_shard_layout
 
 
 @register_op
@@ -181,7 +182,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     out_shape[axis] = k
     out_shape = tuple(out_shape)
 
-    new_layout = default_layout(out_shape)
+    new_layout = Layout(out_shape)
     if source_shard is not None:
         relation = relations_of(call, ctx)
         derived = derive_output_shard_layout(
@@ -196,12 +197,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         new_layout = (
             derived
             if derived is not None
-            else output_shard_layout(
+            else ShardLayout.default(
                 out_shape,
                 source_shard.mesh,
                 source_shard.attrs,
-                ctx=ctx,
                 storage=x_ty.storage,
+                owners=ctx.target.storage_owners
+                if ctx is not None and ctx.target is not None
+                else StorageOwners((), {}),
             )
         )
     values_ty = TensorType(

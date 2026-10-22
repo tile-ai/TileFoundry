@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes, repeat_like
-from tilefoundry.ir.types.layout import flatten, rank
+from tilefoundry.ir.types.layout import Layout, flatten, rank
 from tilefoundry.ir.types.stride import idx2crd
 
-from .layout import ComposedLayout, Layout, LayoutBase, default_layout, get
+from .layout import ComposedLayout, LayoutBase, get
 from .mesh import Mesh
 from .stride import compact_row_major
 
@@ -57,6 +57,107 @@ class ShardLayout(LayoutBase):
     attrs: tuple[ShardAttr, ...]
     mesh: Mesh
 
+    @classmethod
+    def default(cls, shape, mesh, attrs, *, storage, owners):
+        """Factor logical axes by their mesh splits, then construct default strides."""
+        from .dim import exact_quotient  # noqa: PLC0415
+
+        mesh_shape = flatten(mesh.layout).shape
+        bindings: dict[int, list[int]] = {}
+        for mesh_axis, attr in enumerate(attrs):
+            if isinstance(attr, Split):
+                if mesh_axis >= len(mesh_shape) or attr.axis >= len(shape):
+                    raise ValueError(f"Split({attr.axis}) has no matching mesh axis {mesh_axis}")
+                bindings.setdefault(attr.axis, []).append(mesh_axis)
+
+        layout_shape: list = []
+        factor_position: dict[int, int] = {}
+        for logical_axis, axis_size in enumerate(shape):
+            splitting_mesh_axes = bindings.get(logical_axis, [])
+            if not splitting_mesh_axes:
+                layout_shape.append(axis_size)
+                continue
+
+            axis_static = isinstance(axis_size, int) and not isinstance(axis_size, bool)
+            if len(splitting_mesh_axes) == 1 and not axis_static:
+                factor_position[splitting_mesh_axes[0]] = len(layout_shape)
+                layout_shape.append(axis_size)
+                continue
+            if not axis_static:
+                residual = axis_size
+                for mesh_axis in splitting_mesh_axes:
+                    extent = mesh_shape[mesh_axis]
+                    quotient = exact_quotient(residual, extent)
+                    if quotient is None:
+                        raise ValueError(
+                            f"default_shard_layout: logical axis {logical_axis} size "
+                            f"{axis_size!r} is dynamic; cannot factorize across multiple "
+                            f"mesh axes (undecidable division by axis {mesh_axis} "
+                            f"extent {extent!r})"
+                        )
+                    factor_position[mesh_axis] = len(layout_shape)
+                    layout_shape.append(extent)
+                    residual = quotient
+                if residual != 1:
+                    layout_shape.append(residual)
+                continue
+            extent_product = 1
+            for mesh_axis in splitting_mesh_axes:
+                extent = mesh_shape[mesh_axis]
+                if not (isinstance(extent, int) and not isinstance(extent, bool)):
+                    raise ValueError(
+                        f"default_shard_layout: mesh axis {mesh_axis} has a "
+                        f"dynamic extent {extent!r}; cannot factorize logical "
+                        f"axis {logical_axis}"
+                    )
+                factor_position[mesh_axis] = len(layout_shape)
+                layout_shape.append(extent)
+                extent_product *= extent
+            if axis_size % extent_product != 0:
+                raise ValueError(
+                    f"default_shard_layout: logical axis {logical_axis} size "
+                    f"{axis_size} is not divisible by mesh extent product "
+                    f"{extent_product}"
+                )
+            residual = axis_size // extent_product
+            if residual != 1:
+                layout_shape.append(residual)
+
+        remapped_attrs = tuple(
+            Split(factor_position[mesh_axis]) if isinstance(attr, Split) else attr
+            for mesh_axis, attr in enumerate(attrs)
+        )
+        layout_shape = tuple(layout_shape)
+
+        return cls.from_modes(layout_shape, mesh, remapped_attrs, storage=storage, owners=owners)
+
+    @classmethod
+    def from_modes(cls, shape, mesh, attrs, *, storage, owners):
+        """Construct authored modes with the owner's compact local strides."""
+        from .int_tuple import unflatten  # noqa: PLC0415
+        from .mesh import separate  # noqa: PLC0415
+
+        topologies = tuple(
+            part.topologies[0].name for part in separate(mesh) for _ in flatten(part.layout).shape
+        )
+        private = []
+        for axis, attr in enumerate(attrs):
+            if isinstance(attr, Split) and (
+                axis >= len(topologies) or attr.axis >= len(flatten(shape))
+            ):
+                raise ValueError(f"Split({attr.axis}) has no matching mesh axis {axis}")
+            private.append(
+                attr
+                if isinstance(attr, Split) and owners.private(storage, topologies[axis])
+                else Broadcast()
+            )
+        local = _local_shape(tuple(flatten(shape)), mesh, tuple(private), require_static=False)
+        strides = list(Layout(local).strides)
+        for attr in private:
+            if isinstance(attr, Split):
+                strides[attr.axis] = 0
+        return cls(Layout(shape, unflatten(tuple(strides), shape)), attrs, mesh)
+
     @property
     def shape(self) -> tuple:
         return self.layout.shape
@@ -75,129 +176,6 @@ def shard_layout_of(layout: object) -> "ShardLayout | None":
     return None
 
 
-def default_shard_layout(
-    logical_shape: tuple, mesh: Mesh, attrs: tuple, *, instance_levels=frozenset()
-) -> "ShardLayout":
-    """Bind logical axes to mesh axes in the canonical factored layout.
-
-    Static splits produce mesh positions plus a residual; dynamic single-axis
-    splits remain whole, while multi-axis splits divide structurally. Remap
-    attributes to factored positions and fill normalized row-major strides.
-    Splits in instance_levels address independent local allocations.
-
-    Defer exact_quotient: core.op loads types.storage and staged shard_layout
-    exports before core.expr defines Call, which dim needs during import.
-
-    See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
-    """
-    from .dim import exact_quotient  # noqa: PLC0415
-
-    mesh_shape = flatten(mesh.layout).shape
-    bindings: dict[int, list[int]] = {}
-    for mesh_axis, attr in enumerate(attrs):
-        if isinstance(attr, Split):
-            if mesh_axis >= len(mesh_shape) or attr.axis >= len(logical_shape):
-                raise ValueError(f"Split({attr.axis}) has no matching mesh axis {mesh_axis}")
-            bindings.setdefault(attr.axis, []).append(mesh_axis)
-
-    layout_shape: list = []
-    factor_position: dict[int, int] = {}
-    for logical_axis, axis_size in enumerate(logical_shape):
-        splitting_mesh_axes = bindings.get(logical_axis, [])
-        if not splitting_mesh_axes:
-            layout_shape.append(axis_size)
-            continue
-
-        axis_static = isinstance(axis_size, int) and not isinstance(axis_size, bool)
-        if len(splitting_mesh_axes) == 1 and not axis_static:
-            factor_position[splitting_mesh_axes[0]] = len(layout_shape)
-            layout_shape.append(axis_size)
-            continue
-        if not axis_static:
-            residual = axis_size
-            for mesh_axis in splitting_mesh_axes:
-                extent = mesh_shape[mesh_axis]
-                quotient = exact_quotient(residual, extent)
-                if quotient is None:
-                    raise ValueError(
-                        f"default_shard_layout: logical axis {logical_axis} size "
-                        f"{axis_size!r} is dynamic; cannot factorize across multiple "
-                        f"mesh axes (undecidable division by axis {mesh_axis} "
-                        f"extent {extent!r})"
-                    )
-                factor_position[mesh_axis] = len(layout_shape)
-                layout_shape.append(extent)
-                residual = quotient
-            if residual != 1:
-                layout_shape.append(residual)
-            continue
-        extent_product = 1
-        for mesh_axis in splitting_mesh_axes:
-            extent = mesh_shape[mesh_axis]
-            if not (isinstance(extent, int) and not isinstance(extent, bool)):
-                raise ValueError(
-                    f"default_shard_layout: mesh axis {mesh_axis} has a "
-                    f"dynamic extent {extent!r}; cannot factorize logical "
-                    f"axis {logical_axis}"
-                )
-            factor_position[mesh_axis] = len(layout_shape)
-            layout_shape.append(extent)
-            extent_product *= extent
-        if axis_size % extent_product != 0:
-            raise ValueError(
-                f"default_shard_layout: logical axis {logical_axis} size "
-                f"{axis_size} is not divisible by mesh extent product "
-                f"{extent_product}"
-            )
-        residual = axis_size // extent_product
-        if residual != 1:
-            layout_shape.append(residual)
-
-    remapped_attrs = tuple(
-        Split(factor_position[mesh_axis]) if isinstance(attr, Split) else attr
-        for mesh_axis, attr in enumerate(attrs)
-    )
-    layout_shape = tuple(layout_shape)
-    return fill_shard_strides(
-        ShardLayout(
-            layout=default_layout(layout_shape),
-            attrs=remapped_attrs,
-            mesh=mesh,
-        ),
-        instance_levels=instance_levels,
-    )
-
-
-def fill_shard_strides(shard: ShardLayout, *, instance_levels=frozenset()) -> ShardLayout:
-    """Fill default strides without changing the placement's authored mode tree."""
-    from dataclasses import replace  # noqa: PLC0415
-
-    from .mesh import separate  # noqa: PLC0415
-
-    levels = tuple(
-        level.topologies[0].name
-        for level in separate(shard.mesh)
-        for _ in flatten(level.layout).shape
-    )
-    local_attrs = []
-    for mesh_axis, attr in enumerate(shard.attrs):
-        if isinstance(attr, Split):
-            if mesh_axis >= len(levels) or attr.axis >= len(shard.layout.shape):
-                raise ValueError(f"Split({attr.axis}) has no matching mesh axis {mesh_axis}")
-            if levels[mesh_axis] in instance_levels:
-                local_attrs.append(attr)
-                continue
-        local_attrs.append(Broadcast())
-    local_shape = shard_layout_local_shape(
-        replace(shard, attrs=tuple(local_attrs)), require_static=False
-    )
-    strides = list(default_layout(local_shape).strides)
-    for attr in local_attrs:
-        if isinstance(attr, Split):
-            strides[attr.axis] = 0
-    return replace(shard, layout=Layout(shard.layout.shape, tuple(strides)))
-
-
 def shard_layout_local_shape(sl: "ShardLayout", *, require_static: bool = True) -> tuple:
     """Derive one shard's local shape from its global layout.
 
@@ -211,11 +189,15 @@ def shard_layout_local_shape(sl: "ShardLayout", *, require_static: bool = True) 
 
     See [shard §7](docs/spec/shard.md#7-shardlayout).
     """
+    return _local_shape(sl.layout.shape, sl.mesh, sl.attrs, require_static=require_static)
+
+
+def _local_shape(shape, mesh, attrs, *, require_static):
     from .dim import exact_quotient  # noqa: PLC0415
 
-    mesh_shape = flatten(sl.mesh.layout).shape
-    local = list(sl.layout.shape)
-    for mesh_axis_idx, attr in enumerate(sl.attrs):
+    mesh_shape = flatten(mesh.layout).shape
+    local = list(shape)
+    for mesh_axis_idx, attr in enumerate(attrs):
         if mesh_axis_idx >= len(mesh_shape):
             break
         if isinstance(attr, Split):
@@ -444,7 +426,6 @@ __all__ = [
     "B",
     "ShardLayout",
     "shard_layout_of",
-    "default_shard_layout",
     "shard_layout_local_shape",
     "split_target_axes",
     "register_strides",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass
+from functools import cached_property
 from importlib.resources import files
 from pathlib import Path
 from types import MappingProxyType
@@ -48,6 +49,7 @@ def _target_value_to_python(value: object) -> PythonExpr:
             f"{type(value).__name__}(" + ", ".join(f"{name}={item.text}" for name, item in rendered) + ")",
         )
     raise TypeError(f"cannot render {type(value).__name__} as target Python")
+
 
 FactsT = TypeVar("FactsT")
 SchemaBuilder = Callable[[HardwareDocument], Any]
@@ -199,6 +201,30 @@ class Target:
     """
 
     name: ClassVar[str]
+
+    @cached_property
+    def storage_owners(self):
+        """Project storage owners once from this target's immutable facts."""
+        from tilefoundry.analysis.facts import MemoryHierarchyFacts  # noqa: PLC0415
+        from tilefoundry.ir.types.storage import (  # noqa: PLC0415
+            TARGET_MEMORY_OWNER,
+            StorageOwners,
+            resolve_storage,
+        )
+
+        try:
+            hierarchy = self.get_facts(MemoryHierarchyFacts)
+        except UnsupportedCapabilityError:
+            return StorageOwners((), {})
+        order = tuple(item.name for item in self.get_facts(TopologyFacts).topologies)
+        owners = {}
+        for item in hierarchy.explicit_levels:
+            if item.owner != TARGET_MEMORY_OWNER and (not item.owner or item.owner not in order):
+                raise ValueError(
+                    f"storage {item.name!r}: memory owner {item.owner!r} is not a target topology in {order}"
+                )
+            owners[resolve_storage(item.name)] = item.owner
+        return StorageOwners(order, MappingProxyType(owners))
 
     @property
     def identity(self) -> str:

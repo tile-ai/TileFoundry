@@ -9,7 +9,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.ir.types.layout import Layout
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -26,6 +26,7 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 class Transpose(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     perm = ParamDef(kind="attribute", annotation=tuple)
+
 
 @register_access_relation(Transpose)
 def _transpose_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
@@ -67,7 +68,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         storage=x_ty.storage,
     )
     if new_layout is None:
-        new_layout = default_layout(new_shape)
+        new_layout = Layout(new_shape)
     return TensorType(shape=new_shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
 
 

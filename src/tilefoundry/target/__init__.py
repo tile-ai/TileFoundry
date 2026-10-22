@@ -15,13 +15,11 @@ from tilefoundry.target.cpu import CpuTarget
 from tilefoundry.target.cuda import CudaArchitecture, CudaDevice, CudaTarget
 from tilefoundry.target.cuda.spec import H200_SXM_ID
 from tilefoundry.target.facts import (
-    TARGET_MEMORY_OWNER,
     MemoryExecutionFacts,
     TargetFactsError,
     TopologyFacts,
     TopologyLevelFacts,
     facts_result,
-    owner_levels,
 )
 from tilefoundry.target.services import Analyzer
 
@@ -48,33 +46,6 @@ def _cuda_fallback() -> CudaTarget:
 def default_target() -> Target:
     """Return the normal compile-entry default target."""
     return _cuda_fallback()
-
-
-def instance_levels(target, storage) -> frozenset[str]:
-    """Topology levels owning separate instances of one explicit storage."""
-    if target is None:
-        return frozenset()
-    from tilefoundry.analysis.facts import MemoryHierarchyFacts  # noqa: PLC0415
-    from tilefoundry.ir.types.storage import StorageKind  # noqa: PLC0415
-
-    storage = StorageKind.RMEM if storage is StorageKind.UMAT else storage
-    name = str(storage)
-    try:
-        hierarchy = target.get_facts(MemoryHierarchyFacts)
-    except UnsupportedCapabilityError:
-        return frozenset()
-    level = hierarchy.explicit(name)
-    if level is None:
-        raise ValueError(f"storage {name!r} has no memory owner on {target!r}")
-    names = (
-        ()
-        if level.owner == TARGET_MEMORY_OWNER
-        else tuple(one.name for one in target.get_facts(TopologyFacts).topologies)
-    )
-    try:
-        return owner_levels(level.owner, names)
-    except ValueError as error:
-        raise ValueError(f"storage {name!r}: {error}") from None
 
 
 def validate_cuda_topology_levels(target: Target, names) -> None:
@@ -115,7 +86,6 @@ __all__ = [
     "UnsupportedCapabilityError",
     "default_target",
     "facts_result",
-    "instance_levels",
     "register_target",
     "registered_targets",
     "validate_cuda_topology_levels",

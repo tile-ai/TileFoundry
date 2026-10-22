@@ -37,27 +37,14 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     is_dim_expr,
 )
-from tilefoundry.ir.types.layout import (
-    ComposedLayout,
-    Layout,
-    LayoutBase,
-    Swizzle,
-    default_layout,
-    flatten,
-)
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, Swizzle, flatten
 from tilefoundry.ir.types.mesh import Mesh
-from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
-    Partial,
-    ShardLayout,
-    Split,
-    fill_shard_strides,
-)
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import participant_layout, static_dim_value
 from tilefoundry.ir.visitor import ExprFunctor, TypeFunctor
-from tilefoundry.target import Target, instance_levels
+from tilefoundry.target import Target
 from tilefoundry.utils.python_source import PythonExpr
 
 _DIM_INFIX_OPS: dict[type, str] = {
@@ -244,7 +231,7 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
         operand = None
         if isinstance(layout, ComposedLayout) and isinstance(layout.outer, Layout):
             operand = "(" + self.layout_surface(layout, ctx) + ")"
-        elif isinstance(layout, Layout) and layout.strides is not None:
+        elif isinstance(layout, Layout):
             operand = self.layout_surface(layout, ctx)
         if ctx is not None and all(isinstance(attr, Broadcast) for attr in value.attrs):
             current = ctx.current_mesh
@@ -288,10 +275,14 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
             return operand + " @ {" + ", ".join(partials) + "}"
         states = partials
 
-        explicit = layout.strides is not None
-        if explicit and storage is not None and ctx is not None and ctx.target is not None:
-            default = fill_shard_strides(
-                value, instance_levels=instance_levels(ctx.target, storage)
+        explicit = True
+        if storage is not None and ctx is not None and ctx.target is not None:
+            default = ShardLayout.from_modes(
+                value.layout.shape,
+                value.mesh,
+                value.attrs,
+                storage=storage,
+                owners=ctx.target.storage_owners,
             )
             explicit = layout != default.layout
         if explicit and any(
@@ -330,7 +321,7 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
             else:
                 with self.type_surface(indent=self._indent + "    "):
                     result += f",\n{self._indent}{self.visit(value.layout, ctx)}"
-        elif value.layout is not None and value.layout != default_layout(value.shape):
+        elif value.layout is not None and value.layout != Layout(value.shape):
             result += f", {self.layout_surface(value.layout, ctx)}"
         if value.storage is not StorageKind.GMEM:
             result += f', "{value.storage.name.lower()}"'
@@ -401,8 +392,9 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
         return "None"
 
     def visit_Layout(self, value: Layout, ctx=None) -> str:
-        strides = self.shape_tuple(value.strides, ctx) if value.strides is not None else "None"
-        return f"Layout({self.shape_tuple(value.shape, ctx)}, {strides})"
+        return (
+            f"Layout({self.shape_tuple(value.shape, ctx)}, {self.shape_tuple(value.strides, ctx)})"
+        )
 
     def visit_Swizzle(self, value: Swizzle, ctx=None) -> str:
         return f"Swizzle({value.bits}, {value.base}, {value.shift})"
@@ -411,9 +403,11 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
         """Use composition operators only where the parser expects a layout."""
         if isinstance(value, ShardLayout):
             return self.shard_surface(value, ctx, storage=storage) or self.visit(value, ctx)
-        if isinstance(value, Layout) and not any(isinstance(entry, tuple) for entry in (*value.shape, *(value.strides or ()))):
+        if isinstance(value, Layout) and not any(
+            isinstance(entry, tuple) for entry in (*value.shape, *value.strides)
+        ):
             shape = self.shape_tuple(value.shape, ctx)
-            if value.strides is None or value.strides == default_layout(value.shape).strides:
+            if value.strides == Layout(value.shape).strides:
                 return shape
             return f"({shape}, {self.shape_tuple(value.strides, ctx)})"
         if not isinstance(value, ComposedLayout) or not isinstance(value.outer, Layout):
