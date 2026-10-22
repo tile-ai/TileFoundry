@@ -24,7 +24,8 @@ from tilefoundry.ir.pattern.utils import (
     declared_shape,
     selected_pattern,
 )
-from tilefoundry.ir.types import TensorType, UnitType
+from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma, canonical_smem_layout
+from tilefoundry.ir.types import StorageKind, TensorType, UnitType
 from tilefoundry.ir.types.layout import resolve_layout
 from tilefoundry.ir.types.mesh import separate
 from tilefoundry.ir.types.shard_layout import (
@@ -424,6 +425,17 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
     except ValueError as error:
         raise ScheduleRefusal(str(error), path=matcher.bindings, op=op) from error
     for param, pattern, type_ in zip(params, tiles.patterns, tiles.operands, strict=True):
+        if isinstance(atom, Wgmma) and type_.storage is StorageKind.SMEM:
+            b_operand = param.name == "rhs"
+            type_ = replace(
+                type_,
+                layout=canonical_smem_layout(
+                    type_.layout,
+                    type_.dtype.bit_width // 8,
+                    atom.bindings["b_major" if b_operand else "a_major"],
+                    b_operand=b_operand,
+                ),
+            )
         if pattern is not None and not matcher.match(pattern, type_):
             raise _pattern_refusal(matcher, op, param.name)
     named = dict(zip((p.name for p in params), tiles.operands, strict=True))

@@ -146,6 +146,7 @@ FINALIZE_REFUSED = {
     "duplicate_output_storage": "return leaf (2,) shares storage with another output",
 }
 CANDIDATES_REFUSED = {
+    "wgmma_b_mn_major_one_atom_column_slice": "source has no unscheduled candidate site",
     "wgmma_b_mn_major_two_atom_column_slice": "source has no unscheduled candidate site",
     "smem_padded_stages": "source has no unscheduled candidate site",
     "zero_trip_insert_slice": "source has no unscheduled candidate site",
@@ -319,6 +320,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "wgmma_b_mn_major_one_atom_column_slice": 49_152,
     "wgmma_b_mn_major_two_atom_column_slice": 49_152,
     "loop_bound_from_outer_induction": 0,
     "finalize_footprint_mesh_offset": 0,
@@ -378,6 +380,10 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "wgmma_b_mn_major_one_atom_column_slice": {
+        "thread@128:128#0": _RmemExpectation(16384, "64x64 f32 accumulator; MMA aliases acc"),
+        "thread@0:256#0": _RmemExpectation(16384, "parent envelope of the accumulator"),
+    },
     "wgmma_b_mn_major_two_atom_column_slice": {
         "thread@128:128#0": _RmemExpectation(32768, "64x128 f32 accumulator; MMA aliases acc"),
         "thread@0:256#0": _RmemExpectation(32768, "parent envelope of the accumulator"),
@@ -1979,6 +1985,38 @@ def test_operand_match_refusal_names_the_failed_pattern() -> None:
     assert rejected is not None
     assert "gmem" in rejected
     assert "smem" in rejected
+
+
+@pytest.mark.parametrize(
+    "row_scale, leading, position", ((2, None, "a_stride_00"), (1, 1, "a_stride_11"))
+)
+def test_wgmma_stride_refusal_names_operand_and_descriptor_position(
+    row_scale, leading, position
+) -> None:
+    function = _prim_in(
+        Path(__file__).parents[1] / "fixtures" / "schedule" / "tir" / "wgmma_a_k_major.py"
+    )
+
+    class RejectOne(_OperandMatchVisitor):
+        rejected = False
+
+        def visit_Evaluate(self, stmt: Evaluate) -> None:
+            if self.rejected or not isinstance(getattr(stmt.callable, "atom", None), Wgmma):
+                return
+            lhs = stmt.args[1].type
+            shard = lhs.layout
+            outer = shard.layout
+            row, column = outer.strides
+            column = (column[0] if leading is None else leading, column[1])
+            bad = replace(outer, strides=((row[0], row[1] * row_scale), column))
+            operand = Var("bad_lhs", type=replace(lhs, layout=replace(shard, layout=bad)))
+            with pytest.raises(ScheduleRefusal, match=rf"lhs:.*{position}"):
+                super().visit_Evaluate(replace(stmt, args=(stmt.args[0], operand, stmt.args[2])))
+            self.rejected = True
+
+    visitor = RejectOne()
+    visitor.visit(function.body)
+    assert visitor.rejected
 
 
 def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path) -> None:

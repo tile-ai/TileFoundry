@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from enum import Enum
 
 from tilefoundry.ir.core.param_def import ParamDef
@@ -19,8 +20,19 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
-from tilefoundry.ir.types import Broadcast, DType, Layout, Mesh, Split, Topology
+from tilefoundry.ir.types import (
+    Broadcast,
+    ComposedLayout,
+    DType,
+    Layout,
+    Mesh,
+    ShardLayout,
+    Split,
+    Swizzle,
+    Topology,
+)
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.layout_algebra import logical_divide
 from tilefoundry.ir.types.storage import StorageKind as S
 
 from .mma_atom import MmaAtom, execution_mesh_pattern
@@ -51,8 +63,8 @@ n, b, W, p, r, l, s, c = (
     WildcardPattern(name) for name in ("n", "a_swizzle", "W", "k0", "r", "l", "s", "c")
 )
 n_extent = n
-bb, Wb, rb, lb, sb, pb, gb = (
-    WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb", "k0b", "gb")
+bb, Wb, rb, lb, sb, pb = (
+    WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb", "k0b")
 )
 SWIZZLE_BYTES = (16, 32, 64, 128)
 DTYPES = (DType.bf16, DType.f16, DType.fp8e4m3)
@@ -70,63 +82,84 @@ def _mma_k_elements(element_bytes: int) -> int:
     return 32 // element_bytes
 
 
-def _smem_fields(b_operand):
-    return (bb, Wb, rb, lb, sb, pb, gb, n_extent) if b_operand else (b, W, r, l, s, p, 8, 64)
+def canonical_smem_layout(layout, element_bytes: int, major: Major, *, b_operand=False):
+    """Return CuTe make_gmma_desc's mode tree, in element units, for matching.
+
+    Its (inner, repeat) coordinates are not logical-axis row-major digits;
+    the view must not flow into address analysis or emission.
+    """
+    if isinstance(layout, ShardLayout):
+        return replace(
+            layout,
+            layout=canonical_smem_layout(layout.layout, element_bytes, major, b_operand=b_operand),
+        )
+    if isinstance(layout, Layout):
+        outer, swizzle = layout, 0
+    elif (
+        isinstance(layout, ComposedLayout)
+        and isinstance(layout.outer, Layout)
+        and (layout.inner is None or isinstance(layout.inner, Swizzle))
+    ):
+        outer, swizzle = layout.outer, 0 if layout.inner is None else layout.inner.bits
+    else:
+        return layout
+    if not 0 <= swizzle < 4:
+        return layout
+    if b_operand:
+        outer = Layout(outer.shape[::-1], outer.strides[::-1])
+    width = SWIZZLE_BYTES[swizzle] // element_bytes
+    tiles = (width, 8) if major is Major.MN else (8, 16 // element_bytes)
+    outer = logical_divide(outer, tuple(Layout((tile,), (1,)) for tile in tiles), major="row")
+    if b_operand:
+        outer = Layout(outer.shape[::-1], outer.strides[::-1])
+    return replace(layout, outer=outer) if isinstance(layout, ComposedLayout) else outer
 
 
-def _smem_layout(shape, strides, b_operand):
-    return LayoutPattern(shape[::-1], strides[::-1]) if b_operand else LayoutPattern(shape, strides)
-
-
-def _a_mn_major_smem_pattern(element_bytes: int, b_operand=False) -> ComposedLayoutPattern:
-    sw, w, rows, leading, stride, _, _, extent = _smem_fields(b_operand)
-    return ComposedLayoutPattern(
-        SwizzlePattern(sw, 4, 3),
-        0,
-        _smem_layout(((rows, w), (2, 8)), ((leading, 1), (stride, w)), b_operand),
-        predicates=(
-            w == _swizzle_row_elements(sw, element_bytes),
+def _smem_pattern(element_bytes: int, major: Major, *, b_operand=False):
+    sw, w, rows, leading, stride, offset, extent = (
+        (bb, Wb, rb, lb, sb, pb, n_extent) if b_operand else (b, W, r, l, s, p, 64)
+    )
+    vector = 16 // element_bytes
+    prefix = "b" if b_operand else "a"
+    stride_00, stride_10 = (
+        WildcardPattern(f"{prefix}_stride_{position}") for position in ("00", "10")
+    )
+    if major is Major.MN:
+        shape = ((w, rows), (8, 2))
+        strides = (
+            (stride_00, SwitchPattern(sw.name, {0: stride, 1: leading, 2: leading, 3: leading})),
+            (stride_10, SwitchPattern(sw.name, {0: leading, 1: stride, 2: stride, 3: stride})),
+        )
+        origin = 0
+        predicates = (
             rows * w == extent,
-            leading % (8 * w) == 0,
-            stride % (8 * w) == 0,
-        ),
-    )
-
-
-def _a_k_major_whole_smem_pattern(element_bytes: int, b_operand=False) -> ComposedLayoutPattern:
-    """SW32 has rows == 1: its fixed LBO lies inside the contiguous w mode."""
-    sw, w, rows, leading, stride, _, groups, extent = _smem_fields(b_operand)
-    return ComposedLayoutPattern(
-        SwizzlePattern(sw, 4, 3),
-        0,
-        _smem_layout(((groups, 8), (rows, w)), ((leading, w), (stride, 1)), b_operand),
-        predicates=(
-            w == _swizzle_row_elements(sw, element_bytes),
-            sw <= 1,
-            rows * w == _mma_k_elements(element_bytes),
-            *((8 * groups == extent,) if b_operand else ()),
-            leading % (8 * w) == 0,
-            stride % (8 * w) == 0,
-        ),
-    )
-
-
-def _a_k_major_sliced_smem_pattern(element_bytes: int, b_operand=False) -> ComposedLayoutPattern:
-    sw, w, _, leading, _, offset, groups, extent = _smem_fields(b_operand)
-    k_elements = _mma_k_elements(element_bytes)
-    return ComposedLayoutPattern(
-        SwizzlePattern(sw, 4, 3),
-        offset,
-        _smem_layout(((groups, 8), k_elements), ((leading, w), 1), b_operand),
-        predicates=(
-            w == _swizzle_row_elements(sw, element_bytes),
-            sw >= 2,
-            *((8 * groups == extent,) if b_operand else ()),
-            leading % (8 * w) == 0,
-            offset % k_elements == 0,
+            stride_00 == 1,
+            stride_10 == w,
+            leading % vector == 0,
+            stride % vector == 0,
+        )
+    else:
+        leading = WildcardPattern(f"{prefix}_stride_11")
+        shape = ((8, rows), (vector, 2))
+        strides = ((stride_00, stride), (stride_10, leading))
+        origin = offset
+        predicates = (
+            8 * rows == extent,
+            stride_00 == _swizzle_row_elements(sw, element_bytes),
+            stride_10 == 1,
+            (sw == 0) | (leading == vector),
+            leading % vector == 0,
+            stride % vector == 0,
+            offset % _mma_k_elements(element_bytes) == 0,
             0 <= offset,
-            offset < w,
-        ),
+            offset < _swizzle_row_elements(sw, element_bytes),
+        )
+    return ComposedLayoutPattern(
+        SwizzlePattern(sw, 4, 3),
+        origin,
+        LayoutPattern(shape[::-1], strides[::-1]) if b_operand else LayoutPattern(shape, strides),
+        predicates=((w == _swizzle_row_elements(sw, element_bytes),) if major is Major.MN else ())
+        + predicates,
     )
 
 
@@ -138,29 +171,19 @@ def _a_register_fragment_pattern(element_bytes: int) -> LayoutPattern:
     )
 
 
-def _b_mn_major_smem_pattern(element_bytes: int) -> ComposedLayoutPattern:
-    return _a_mn_major_smem_pattern(element_bytes, True)
-
-
-def _b_k_major_whole_smem_pattern(element_bytes: int) -> ComposedLayoutPattern:
-    return _a_k_major_whole_smem_pattern(element_bytes, True)
-
-
-def _b_k_major_sliced_smem_pattern(element_bytes: int) -> ComposedLayoutPattern:
-    return _a_k_major_sliced_smem_pattern(element_bytes, True)
-
-
 fragment = LayoutPattern((4, 2, 8, c, 4, 2), (16, 8, 1, 512, 128, 64))
 
 
 N = DimVar("n", 8, 256)
 
 
-def _by_major(mn_major_pattern, k_major_patterns, element_bytes: int) -> dict:
-    """Shared-memory arrangements by major; only 16-bit operands may be MN-major."""
-    arrangements = {Major.MN: mn_major_pattern(element_bytes)} if element_bytes == 2 else {}
-    arrangements[Major.K] = OrPattern(*(pattern(element_bytes) for pattern in k_major_patterns))
-    return arrangements
+def _by_major(element_bytes: int, *, b_operand=False) -> dict:
+    """Descriptor modes by major; only 16-bit operands may be MN-major."""
+    return {
+        major: _smem_pattern(element_bytes, major, b_operand=b_operand)
+        for major in Major
+        if major is Major.K or element_bytes == 2
+    }
 
 
 def _a_layout(dtype: DType) -> SwitchPattern:
@@ -171,11 +194,7 @@ def _a_layout(dtype: DType) -> SwitchPattern:
             Form.SS: ShardLayoutPattern(
                 SwitchPattern(
                     "a_major",
-                    _by_major(
-                        _a_mn_major_smem_pattern,
-                        (_a_k_major_whole_smem_pattern, _a_k_major_sliced_smem_pattern),
-                        element_bytes,
-                    ),
+                    _by_major(element_bytes),
                 ),
                 BROADCAST,
                 execution_mesh_pattern(WARPGROUP),
@@ -193,11 +212,7 @@ def _b_layout(dtype: DType) -> ShardLayoutPattern:
     return ShardLayoutPattern(
         SwitchPattern(
             "b_major",
-            _by_major(
-                _b_mn_major_smem_pattern,
-                (_b_k_major_whole_smem_pattern, _b_k_major_sliced_smem_pattern),
-                dtype.bit_width // 8,
-            ),
+            _by_major(dtype.bit_width // 8, b_operand=True),
         ),
         BROADCAST,
         execution_mesh_pattern(WARPGROUP),
