@@ -8,7 +8,7 @@ from tilefoundry.ir.types.layout import flatten, resolve_layout
 from tilefoundry.ir.types.storage import StorageKind
 
 from .dtype import DType
-from .layout import ComposedLayout, Layout, apply
+from .layout import ComposedLayout, Layout, apply, default_layout
 from .layout_algebra import size
 from .mesh import Mesh, Topology, make_mesh, separate
 from .shard_layout import (
@@ -292,7 +292,12 @@ def make_tensor_type(
     layout: object = None,
 ) -> "TensorType":
     """Convenience constructor for a plain (unsharded) ``TensorType``."""
-    return TensorType(shape=tuple(shape), dtype=dtype, layout=layout, storage=storage)
+    return TensorType(
+        shape=tuple(shape),
+        dtype=dtype,
+        layout=default_layout(tuple(shape)) if layout is None else layout,
+        storage=storage,
+    )
 
 
 def make_shard_tensor_type(
@@ -312,7 +317,7 @@ def make_shard_tensor_type(
     """
     shape = tuple(shape)
     if mesh is None or not attrs:
-        return TensorType(shape=shape, dtype=dtype, layout=None, storage=storage)
+        return TensorType(shape=shape, dtype=dtype, layout=default_layout(shape), storage=storage)
     layout = default_shard_layout(shape, mesh, attrs)
     return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
 
@@ -346,7 +351,12 @@ def _all_split_local_type(type: Type, *, refuse_indivisible: bool) -> Type | Non
                 f"divisible by its mesh extent {extent}"
             )
         local[tensor_axis] = size // extent
-    return TensorType(shape=tuple(local), dtype=type.dtype, layout=None, storage=type.storage)
+    return TensorType(
+        shape=tuple(local),
+        dtype=type.dtype,
+        layout=default_layout(tuple(local)),
+        storage=type.storage,
+    )
 
 
 def try_local_type_of(type: Type) -> Type | None:

@@ -24,6 +24,7 @@ from tilefoundry.ir.types.shard_layout import (
     shard_layout_of,
 )
 from tilefoundry.ir.types.utils import participant_layout
+from tilefoundry.target import instance_levels as storage_instance_levels
 
 
 def partial_reductions_by_axis(
@@ -202,7 +203,8 @@ def derive_output_shard_layout(
     partial_reduction_dims: "frozenset[int]" = frozenset(),
     complete_reduction_dims: "frozenset[int]" = frozenset(),
     fresh_strides: bool = False,
-    instance_levels: frozenset[str] = frozenset(),
+    ctx=None,
+    storage=None,
 ):
     """Derive the output ``ShardLayout`` from the input shards and the Op's relations.
 
@@ -228,6 +230,7 @@ def derive_output_shard_layout(
     ]
     if not sharded:
         return None
+    instance_levels = storage_instance_levels(getattr(ctx, "target", None), storage)
     mesh = sharded[0][1].mesh
     if any(layout.mesh != mesh for _index, layout in sharded):
         raise ValueError("inputs distribute over different meshes; their mesh axes do not align")

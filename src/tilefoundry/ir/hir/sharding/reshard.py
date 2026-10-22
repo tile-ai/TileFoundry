@@ -18,13 +18,11 @@ from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
-    fill_shard_strides,
     shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
-from tilefoundry.ir.types.utils import is_literal_shape
-from tilefoundry.target import instance_levels
+from tilefoundry.ir.types.utils import is_literal_shape, static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -32,8 +30,9 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand, register_buffer_alias
 from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
+from tilefoundry.visitor_registry.type_defaults import default_type
 
 
 def _dim_mul(a, b):
@@ -134,21 +133,6 @@ def _src_form_is_per_instance(sl_src: "ShardLayout | None") -> bool:
     return all(strides[k] == 0 for k in split_axes if k < len(strides))
 
 
-def _materialize_reshard_strides(
-    layout: ShardLayout,
-    target,
-    new_storage: StorageKind,
-) -> ShardLayout:
-    """Materialize the sugar-default ``layout.layout.strides``.
-
-    Pre-condition: ``layout.layout.strides is None`` (sugar). For
-    verbose paths the caller short-circuits before this helper.
-    The target memory owner determines independent Split modes. The source
-    representation does not influence the default.
-    """
-    return fill_shard_strides(layout, instance_levels=instance_levels(target, new_storage))
-
-
 @register_op
 class Reshard(Op):
     """Convert *x* to a target layout / storage in place, preserving the logical shape."""
@@ -158,6 +142,36 @@ class Reshard(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     layout = ParamDef(kind="attribute", annotation=LayoutBase, default=None)
     storage = ParamDef(kind="attribute", default=None)
+
+
+def _view_offset(value):
+    """Read plain-view origins from starts rather than the value's layout."""
+    from tilefoundry.ir.hir.tensor.slice import Slice, window_layout  # noqa: PLC0415
+    from tilefoundry.visitor_registry.contexts import TypeInferContext  # noqa: PLC0415
+
+    physical = value.type.layout
+    if isinstance(physical, ShardLayout):
+        physical = physical.layout
+    if isinstance(physical, ComposedLayout) or not isinstance(value, Call):
+        return 0
+    position = aliased_operand(value)
+    if position is None:
+        return 0
+    source = value.args[position]
+    offset = _view_offset(source)
+    if isinstance(value.target, Slice):
+        starts = value.args[1].elements
+        if all(isinstance(static_dim_value(start), int) for start in starts):
+            _, moved = window_layout(
+                source.type.layout,
+                source.type.shape,
+                starts,
+                value.target.sizes,
+                value.target.strides,
+                TypeInferContext(),
+            )
+            offset += moved
+    return offset
 
 
 @register_buffer_alias(Reshard)
@@ -173,6 +187,9 @@ def _buffer_alias(call: Call) -> int | None:
         )
     ):
         return None
+    offset = _view_offset(call.args[0])
+    if offset != 0:
+        source = replace(source, layout=ComposedLayout(None, offset, source.layout))
     boxes = []
     for held in (source, result):
         layout = resolve_layout(held.layout, held.shape)
@@ -186,7 +203,11 @@ def _buffer_alias(call: Call) -> int | None:
         independent, splits = set(), []
         if shard is not None:
             for mesh_axis, attr in enumerate(shard.attrs):
-                if isinstance(attr, Split) and flat.strides[attr.axis] == 0:
+                if (
+                    isinstance(attr, Split)
+                    and static_dim_value(tuple(flatten(shard.mesh.layout.shape))[mesh_axis]) != 1
+                    and flat.strides[attr.axis] == 0
+                ):
                     position = attr.axis
                     group = correspondence.groups[axes[position]]
                     suffix = prod(flat.shape[index] for index in group if index > position)
@@ -252,17 +273,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
     new_storage = op.storage if op.storage is not None else x_ty.storage
     new_layout = op.layout
-    if (
-        isinstance(new_layout, ShardLayout)
-        and isinstance(new_layout.layout, Layout)
-        and new_layout.layout.strides is None
-    ):
-        new_layout = _materialize_reshard_strides(new_layout, ctx.target, new_storage)
-    return TensorType(
-        shape=x_ty.shape,
-        dtype=x_ty.dtype,
-        layout=new_layout,
-        storage=new_storage,
+    return default_type(
+        TensorType(
+            shape=x_ty.shape,
+            dtype=x_ty.dtype,
+            layout=new_layout,
+            storage=new_storage,
+        ),
+        target=ctx.target,
     )
 
 

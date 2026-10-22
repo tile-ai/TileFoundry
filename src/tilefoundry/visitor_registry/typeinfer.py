@@ -30,6 +30,7 @@ from tilefoundry.visitor_registry.valuation import ValuationVisitor
 from .contexts import TypeInferContext, TypeInferResults
 from .instruction import check_input_reachability
 from .registries import typeinfer_registry
+from .type_defaults import default_type
 
 
 def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
@@ -71,9 +72,7 @@ def _check_module_index(slot: ModuleList, index=MISSING, *, index_type=None):
 
 def _require_axis_groups(node, type_, ctx):
     for tensor in tensor_types(type_):
-        if tensor.layout is not None and tensor != TensorType.umat_tensor(
-            tensor.shape, tensor.dtype
-        ):
+        if tensor.layout is not None:
             try:
                 layout_correspondence(tensor.layout.shape, tensor.shape).tensor_axes()
             except ValueError as error:
@@ -140,10 +139,10 @@ class TypeInferVisitor(ValuationVisitor[Type]):
             attach_metadata(expr, RangeMetadata(*results.value_range))
 
     def visit_leaf_Var(self, var: Var, _operands, ctx: TypeInferContext) -> Type:
-        return var.annotation
+        return default_type(var.annotation, target=ctx.target)
 
     def visit_leaf_Constant(self, c: Constant, _operands, ctx: TypeInferContext) -> Type:
-        return c.type
+        return default_type(c.type, target=ctx.target)
 
     def visit_leaf_Call(self, call: Call, arg_types, ctx: TypeInferContext) -> Type:
         target = call.target
@@ -209,7 +208,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         memo = {}
         for param in callee.params:
             if child and param.is_const:
-                memo[id(param)] = (param, param.annotation)
+                memo[id(param)] = (param, default_type(param.annotation, target=ctx.target))
                 continue
             index, arg_type = next(given)
             declared = param.annotation
@@ -222,7 +221,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
             memo[id(param)] = (param, arg_type)
 
         if callee.body is None or callee.variants:
-            return callee.return_type
+            return default_type(callee.return_type, target=(child_frame or ctx).target)
 
         inner = replace(child_frame or ctx, function=callee, owner=callee, parent=None, call_site=None, memo={})
         context = (
@@ -298,7 +297,10 @@ class TypeInferVisitor(ValuationVisitor[Type]):
                 f"{len(region.params)} params",
             )
         memo = self._region_memo(region, ctx)
-        memo[id(region.induction_var)] = (region.induction_var, region.induction_var.annotation)
+        induction_type = default_type(region.induction_var.annotation, target=ctx.target)
+        memo[id(region.induction_var)] = (region.induction_var, induction_type)
+        if self._owns_body:
+            region.induction_var.type = induction_type
         if self._ranges:
             step = static_dim_value(region.step)
             bounds = None
@@ -311,7 +313,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
                     bounds = None
             self._record_range(
                 region.induction_var,
-                TypeInferResults(region.induction_var.annotation, value_range=bounds),
+                TypeInferResults(induction_type, value_range=bounds),
             )
         inner = TypeInferVisitor(
             memo=memo,
@@ -354,7 +356,15 @@ class TypeInferVisitor(ValuationVisitor[Type]):
             ctx = replace(ctx, function=fn)
         for param in fn.params:
             _require_axis_groups(param, param.annotation, ctx)
-        memo = {id(param): (param, param.annotation) for param in fn.params}
+        memo = {
+            id(param): ctx.memo[id(param)]
+            if id(param) in ctx.memo
+            else (param, default_type(param.annotation, target=ctx.target))
+            for param in fn.params
+        }
+        if self._owns_body:
+            for param in fn.params:
+                param.type = memo[id(param)][1]
         if fn.body is not None:
             TypeInferVisitor(
                 memo=memo,

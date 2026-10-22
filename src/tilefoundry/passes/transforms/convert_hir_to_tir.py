@@ -73,7 +73,7 @@ from tilefoundry.ir.types.dim import (
     is_dim_op_call,
     simplify_dim,
 )
-from tilefoundry.ir.types.layout import flatten, resolve_layout
+from tilefoundry.ir.types.layout import default_layout, flatten, resolve_layout
 from tilefoundry.ir.types.layout_algebra import composition
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
@@ -257,15 +257,17 @@ class TirBuilder:
                 elements = prod(tuple(storage_type.shape))
                 scratch = Var(
                     ctx.names.fresh("scratch"),
-                    type=TensorType((elements,), storage_type.dtype, None, StorageKind.GMEM),
+                    type=TensorType(
+                        (elements,),
+                        storage_type.dtype,
+                        default_layout((elements,)),
+                        StorageKind.GMEM,
+                    ),
                 )
                 ctx.scratch.append(scratch)
                 storage_type = replace(
                     storage_type,
-                    layout=Layout(
-                        tuple(storage_type.shape),
-                        tuple(compact_row_major(tuple(storage_type.shape))),
-                    ),
+                    layout=default_layout(tuple(storage_type.shape)),
                 )
                 view = View(scratch, (i64_const(0),), (elements,), storage_type, stem)
                 return view
@@ -897,7 +899,9 @@ class StoragePlan:
             source = Call(
                 Slice(sizes=tuple(view.sizes), strides=(1,) * len(view.sizes)),
                 (base, keys),
-                type=TensorType(tuple(view.sizes), held.dtype, None, held.storage),
+                type=TensorType(
+                    tuple(view.sizes), held.dtype, default_layout(tuple(view.sizes)), held.storage
+                ),
             )
             inferred = typeinfer_registry.lookup(Slice)(
                 source,

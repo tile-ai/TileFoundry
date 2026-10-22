@@ -389,9 +389,9 @@ def _definition_lines(fn: PrimFunction, name: str, ctx: TirPrintContext) -> list
         rendered = []
         for param in fn.params:
             type_ = (
-                printer.visit(param.type, ctx)
-                if isinstance(param.type, (TensorType, PointerType))
-                else repr(param.type)
+                printer.visit(param.annotation, ctx)
+                if isinstance(param.annotation, (TensorType, PointerType))
+                else repr(param.annotation)
             )
             if param.is_const and isinstance(param.type, TensorType):
                 type_ = type_.replace("Tensor[", "ConstTensor[", 1)

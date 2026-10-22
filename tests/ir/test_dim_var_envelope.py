@@ -16,12 +16,15 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.tensor_type import TupleType
 from tilefoundry.visitor_registry.verify import verify_function
 
 
 def _tensor(shape) -> TensorType:
-    return TensorType(shape=shape, dtype=DType.f32, layout=None, storage="gmem")
+    return TensorType(
+        shape=shape, dtype=DType.f32, layout=default_layout(tuple(shape)), storage="gmem"
+    )
 
 
 def _identity_fn(

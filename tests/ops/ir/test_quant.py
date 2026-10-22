@@ -31,6 +31,7 @@ from tilefoundry.ir.types import (
     make_tensor_type,
 )
 from tilefoundry.ir.types.dim import DimFloorDiv, DimVar
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
@@ -273,8 +274,8 @@ def test_quant_drops_fully_broadcast_mesh_ownership() -> None:
     )
     quantized, scale = infer_call(Quant(group=128), source).fields
 
-    assert quantized.layout is None
-    assert scale.layout is None
+    assert quantized.layout == default_layout(quantized.shape)
+    assert scale.layout == default_layout(scale.shape)
 
 
 _SYMBOLIC_LAST = DimVar("quant_symbolic_last", 1, 1024)

@@ -17,7 +17,7 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub, simplify_dim
 from tilefoundry.ir.types.int_tuple import flatten, partition_modes
-from tilefoundry.ir.types.layout import EMPTY_LAYOUT, default_layout, resolve_layout
+from tilefoundry.ir.types.layout import default_layout, resolve_layout
 from tilefoundry.ir.types.layout_algebra import composition
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import Split
@@ -315,12 +315,12 @@ def _aligned(start, size, loops, aliases):
         return False
 
 
-def _window_layout(source, logical_shape, starts, sizes, strides, ctx):
+def window_layout(source, logical_shape, starts, sizes, strides, ctx):
     """Compose logical-axis windows while retaining each surviving shard mode."""
     shard = source if isinstance(source, ShardLayout) else None
     primitive = shard.layout if shard is not None else source
     if shard is not None and isinstance(primitive, ComposedLayout):
-        window, moved = _window_layout(
+        window, moved = window_layout(
             replace(shard, layout=primitive.outer), logical_shape, starts, sizes, strides, ctx
         )
         if moved != 0:
@@ -426,8 +426,6 @@ def _window_layout(source, logical_shape, starts, sizes, strides, ctx):
     )
     if shard is not None and not grouped:
         window = Layout(tuple(flatten(window.shape)), tuple(flatten(window.strides)))
-    if primitive.strides is None:
-        window = replace(window, strides=None)
     if shard is not None:
         window = replace(
             shard,
@@ -497,14 +495,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             f"against that mapping, not against the outer strides",
         )
 
-    if source == EMPTY_LAYOUT:
-        return TensorType(
-            shape=shape, dtype=x_ty.dtype, layout=Layout(shape, None), storage=x_ty.storage
-        )
     if source is None:
         source = default_layout(x_ty.shape)
     try:
-        new_layout, moved = _window_layout(
+        new_layout, moved = window_layout(
             source, x_ty.shape, starts.elements, op.sizes, op.strides, ctx
         )
     except ValueError as error:
@@ -514,15 +508,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         if isinstance(inherited_offset, int) and isinstance(moved, int)
         else simplify_dim(DimAdd, (inherited_offset, moved))
     )
-    if x_ty.layout is not None and (
-        inherited_inner is not None
-        or offset != 0
-        or (
-            isinstance(x_ty.layout, (Layout, ComposedLayout))
-            and not isinstance(source, ShardLayout)
-            and all(_literal(start) is not None for start in starts.elements)
-        )
-    ):
+    if isinstance(x_ty.layout, ComposedLayout):
         new_layout = ComposedLayout(inherited_inner, offset, new_layout)
     return TensorType(shape=shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
 
@@ -554,4 +540,4 @@ def _eval_slice(ctx):
     return TensorValue(data=ctx.args[0].data[tuple(key)], type=ctx.result_type)
 
 
-__all__ = ["Slice", "slice_size", "window_base"]
+__all__ = ["Slice", "slice_size", "window_base", "window_layout"]

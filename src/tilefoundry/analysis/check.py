@@ -26,6 +26,7 @@ from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
+from tilefoundry.visitor_registry.type_defaults import default_type
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
@@ -232,6 +233,8 @@ def check_program(
         raise SpecializationError(
             f"{function.name!r} still states {sorted(residual)} as ranges after binding {sorted(dims or ())}; every dimension has to be given an extent"
         )
+    from tilefoundry.visitor_registry.verify import verify_value_layouts  # noqa: PLC0415
+
     signatures = {}
 
     def derive(frame, types, mesh, label):
@@ -247,18 +250,34 @@ def check_program(
                 )
             return
         signatures[identity] = signature, label
-        for param, type_ in zip(definition.params, types, strict=True):
-            param.type = type_
+        bindings = {
+            id(param): (param, type_) for param, type_ in zip(definition.params, types, strict=True)
+        }
         _prepare_function(definition)
         attach_metadata(definition, ExecutionMeshMetadata(mesh))
-        context = TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies, owner=definition, current_mesh=mesh)
+        context = TypeInferContext(
+            module=frame.module,
+            function=frame.function,
+            target=frame.target,
+            topologies=frame.topologies,
+            owner=definition,
+            current_mesh=mesh,
+            memo=bindings,
+        )
         TypeInferVisitor(ranges=True).visit(definition, context)
         definition.return_type = definition.body.type
         definition.type = callable_type_for(definition.params, definition.return_type)
+        for value in (*definition.params, definition.body):
+            verify_value_layouts(value)
         _CheckCalls(derive, label, definition).visit(definition.body, context)
 
     root, module = bound_root, bound_module
-    derive(initial, tuple(p.type for p in root.params), None, function.name)
+    derive(
+        initial,
+        tuple(default_type(p.annotation, target=initial.target) for p in root.params),
+        None,
+        function.name,
+    )
 
     frames = tuple(ValuationVisitor.definitions(ValuationContext(module, root)))
     functions = tuple(frame.function for frame in frames)

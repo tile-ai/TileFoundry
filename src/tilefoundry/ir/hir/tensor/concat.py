@@ -21,7 +21,6 @@ from tilefoundry.ir.types import Split, TensorType
 from tilefoundry.ir.types.dim import DimAdd, simplify_dim
 from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
-from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -150,7 +149,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             relation,
             new_shape,
             fresh_strides=True,
-            instance_levels=instance_levels(ctx.target, base.storage),
+            ctx=ctx,
+            storage=base.storage,
         )
     except ValueError as error:
         ctx.error(

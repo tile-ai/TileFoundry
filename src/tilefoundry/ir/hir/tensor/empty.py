@@ -17,6 +17,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.type_defaults import default_type
 
 
 @register_op
@@ -34,7 +35,7 @@ class Empty(Op):
 
 @register_typeinfer(Empty)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return call.target.type
+    return default_type(call.target.type, target=ctx.target)
 
 
 @register_eval(Empty)

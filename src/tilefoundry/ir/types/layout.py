@@ -135,9 +135,6 @@ class ComposedLayout(LayoutBase):
         return domain.shape
 
 
-EMPTY_LAYOUT = Layout(shape=(), strides=())
-
-
 def flat_shape(layout: Layout) -> tuple[int, ...]:
     """Return CuTe ``flatten(layout.shape())`` as a flat tuple."""
     return _flat(layout.shape)
@@ -196,7 +193,7 @@ def flatten(layout):
     if not isinstance(layout, LayoutBase):
         return _flat(layout)
     if isinstance(layout, ComposedLayout):
-        return flatten(layout.outer) if layout.outer is not None else EMPTY_LAYOUT
+        return flatten(layout.outer) if layout.outer is not None else Layout((), ())
     strides = getattr(layout, "strides", None)
     return Layout(
         shape=_flat(layout.shape),
@@ -251,7 +248,6 @@ __all__ = [
     "Layout",
     "Swizzle",
     "ComposedLayout",
-    "EMPTY_LAYOUT",
     "flat_shape",
     "flat_stride",
     "get",
@@ -303,7 +299,7 @@ def normalize_layout(layout: LayoutBase) -> LayoutBase:
 
 def default_layout(shape: tuple) -> Layout:
     """Compact row-major modes, with statically unit leaves normalized to zero."""
-    from .dim import DimMul, simplify_dim  # noqa: PLC0415
+    from .dim import Constant, DimMul, simplify_dim  # noqa: PLC0415
     from .stride import compact_row_major  # noqa: PLC0415
 
     def multiply(left, right):
@@ -311,7 +307,12 @@ def default_layout(shape: tuple) -> Layout:
             return left * right
         return simplify_dim(DimMul, (left, right))
 
-    shape = tuple(shape)
+    def canonical(mode):
+        if isinstance(mode, tuple):
+            return tuple(canonical(child) for child in mode)
+        return mode.value if isinstance(mode, Constant) and isinstance(mode.value, int) else mode
+
+    shape = canonical(tuple(shape))
     return normalize_layout(Layout(shape, compact_row_major(shape, mul=multiply)))
 
 

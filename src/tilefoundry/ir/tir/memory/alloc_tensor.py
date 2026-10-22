@@ -15,6 +15,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.type_defaults import default_type
 
 
 @register_op(name="alloc_tensor")
@@ -29,4 +30,4 @@ class AllocTensor(Op):
 
 @register_typeinfer(AllocTensor)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return call.target.tensor_type
+    return default_type(call.target.tensor_type, target=ctx.target)

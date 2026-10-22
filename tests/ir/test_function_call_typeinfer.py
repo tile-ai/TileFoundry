@@ -8,6 +8,8 @@ See [hir §1.1](docs/spec/hir.md#11-function).
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from tests.ops.ir.typeinfer_utils import infer_call
@@ -45,7 +47,11 @@ def _add_callee(param_type):
     A callee ``f(x) = x + x``; the body's output layout is whatever the
     Binary engine derives from the actual ``x`` type.
     """
-    x = Var(type=param_type, name="x")
+    x = Var(
+        type=param_type,
+        annotation=replace(param_type, layout=None) if param_type is _PLAIN else param_type,
+        name="x",
+    )
     body = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(x, x))
     return Function.build(
         name="f", params=(x,), body=body, return_type=make_tensor_type((4, 8), _F)
@@ -57,7 +63,7 @@ def test_plain_formal_specializes_per_call_site():
     f = _add_callee(_PLAIN)
     assert infer_call(f, _PLAIN) == _PLAIN
     assert infer_call(f, _SPLIT0) == _SPLIT0
-    assert infer_call(f, _PLAIN).layout is None
+    assert infer_call(f, _PLAIN).layout == _PLAIN.layout
 
 
 _PLAIN8 = make_tensor_type((8,), _F)
@@ -106,8 +112,18 @@ def test_carrying_loop_propagates_split(formal, actual, yielded, extent, yields,
     """
     stamped = make_tensor_type((8,), DType.i32)
     y_formal = formal if yielded is None else yielded
-    x = Var(type=formal, name="x")
-    y = Var(type=y_formal, name="y")
+    x = Var(
+        type=formal,
+        annotation=replace(formal, layout=None) if isinstance(formal.layout, Layout) else formal,
+        name="x",
+    )
+    y = Var(
+        type=y_formal,
+        annotation=replace(y_formal, layout=None)
+        if isinstance(y_formal.layout, Layout)
+        else y_formal,
+        name="y",
+    )
     init = Call(type=stamped, target=Binary(kind=BinaryKind.ADD), args=(x, x))
     acc = Var(type=stamped, name="acc")
     captured_x = Var(type=stamped, name="x")
@@ -209,7 +225,7 @@ def test_plain_formal_rejects_shape_or_dtype_mismatch():
 def test_function_call_preserves_partial_in_tuple_return():
     mesh_ab = Mesh((Topology("gpu", 8),), Layout((2, 4), (4, 1)), ("a", "b"))
     partial = make_shard_tensor_type((4, 8), mesh=mesh_ab, attrs=(Broadcast(), Partial("max")))
-    param = Var(type=_PLAIN, name="x")
+    param = Var(type=_PLAIN, annotation=replace(_PLAIN, layout=None), name="x")
     return_type = TupleType(fields=(_PLAIN, _PLAIN))
     body = Tuple(type=return_type, elements=(param, param))
     callee = Function.build(

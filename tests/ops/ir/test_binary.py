@@ -27,6 +27,7 @@ from tilefoundry.ir.types import (
     make_shard_tensor_type,
     make_tensor_type,
 )
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TrafficBytes
@@ -89,8 +90,8 @@ def test_broadcast_layout_fallback_does_not_weaken_shard_mismatch():
     wide = (1, 1, 16, 4, 128)
     lhs = make_tensor_type(narrow, _F, layout=Layout(narrow))
     rhs = make_tensor_type(wide, _F, layout=Layout(wide))
-    assert infer_call(_MUL, lhs, rhs).layout is None
-    assert infer_call(_MUL, lhs, make_tensor_type(wide, _F)).layout is None
+    assert infer_call(_MUL, lhs, rhs).layout == default_layout(wide)
+    assert infer_call(_MUL, lhs, make_tensor_type(wide, _F)).layout == default_layout(wide)
 
     replicated = make_shard_tensor_type(narrow, mesh=_M, attrs=(Broadcast(),))
     replicated_out = infer_call(_MUL, replicated, rhs)

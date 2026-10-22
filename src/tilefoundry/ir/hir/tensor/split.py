@@ -13,13 +13,11 @@ from tilefoundry.ir.types.layout import default_layout, flatten
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard_layout import (
-    default_shard_layout,
     layout_axis_to_tensor_axis,
     shard_layout_of,
     split_target_axes,
 )
 from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -28,6 +26,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.type_defaults import output_shard_layout
 
 
 @register_op
@@ -97,14 +96,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             else Broadcast()
             for attr in x_ty.layout.attrs
         )
-        part_layout = default_shard_layout(
+        part_layout = output_shard_layout(
             part_shape,
             x_ty.layout.mesh,
             attrs,
-            instance_levels=instance_levels(ctx.target, x_ty.storage),
+            ctx=ctx,
+            storage=x_ty.storage,
         )
     elif x_ty.layout is None:
-        part_layout = None
+        part_layout = default_layout(tuple(part_shape))
     else:
         part_layout = default_layout(part_shape)
     part_ty = TensorType(

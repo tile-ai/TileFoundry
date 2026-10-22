@@ -55,6 +55,7 @@ from tilefoundry.ir.types.stride import compact_row_major, crd2idx, idx2crd
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.target import instance_levels
+from tilefoundry.visitor_registry.type_defaults import default_type
 
 from .ast_pattern import (
     _BINARY_OPERATORS,
@@ -1414,11 +1415,17 @@ class TensorPattern(ElementPattern):
             layout = fill_shard_strides(
                 layout, instance_levels=instance_levels(context.function.target, storage)
             )
-        return runtime.TensorType(
+        type_ = runtime.TensorType(
             shape=shape,
             dtype=children["dtype"],
             layout=normalize_layout(layout) if layout is not None else None,
             storage=storage,
+        )
+        return (
+            type_
+            if context.values.get("position")
+            in {"hir_input", "hir_output", "tir_input", "tir_output"}
+            else default_type(type_, target=context.function.target)
         )
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
@@ -1854,7 +1861,8 @@ class SignaturePattern(ElementPattern):
         constness = match.captures["constness"]
         params = tuple(
             runtime.Var(
-                type=children[f"parameter_{index}"],
+                type=default_type(children[f"parameter_{index}"], target=context.function.target),
+                annotation=children[f"parameter_{index}"],
                 name=name,
                 is_const=constness[index],
             )

@@ -86,8 +86,12 @@ class TensorType:
 - constraints:
   - A *scalar* is `TensorType(shape=(), ...)` — a rank-0 tensor. There
     is no separate `Scalar` type.
-  - `layout` is either `None` or one member of the `LayoutBase` hierarchy
-    defined by [shard §2](./shard.md#2-layout-hierarchy).
+  - After type inference, each tensor value MUST carry a concrete `LayoutBase`
+    from [shard §2](./shard.md#2-layout-hierarchy), with no omitted Layout strides.
+    Parameter annotations retain the authored constraint, including omitted layouts
+    or strides; standalone inference fills a separate value type with the default.
+    Function calls continue to compare arguments against the annotation.
+    Verification reports an incomplete value type with its source location.
     Concrete layout readers MUST use `resolve_layout(layout, logical_shape)`:
     `None` and omitted strides use `default_layout`: compact row-major with
     symbolic products and stride zero on statically unit leaves. The reader recursively
@@ -346,7 +350,7 @@ The canonical descriptors are:
 - a `core_ir.dim.*` `Expr` (e.g. `DimAdd` / `DimMul`) for derived
   dim expressions, returning a rank-0 integer `Expr` of dtype
   `i64` and `storage=umat`. This rank-0 unmaterialized scalar type
-  (`shape=()`, `layout=EMPTY_LAYOUT`, `storage=umat`) has exactly one
+  (`shape=()`, `layout=Layout((), ())`, `storage=umat`) has exactly one
   constructor, `TensorType.umat_scalar(dtype)`.
 
 ```python

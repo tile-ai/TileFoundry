@@ -13,6 +13,7 @@ from typing import Iterable
 from tilefoundry.inspection.tir_printer import TirPrinter
 from tilefoundry.ir.core import Expr, Op, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
+from tilefoundry.ir.core.metadata import diagnostic_location
 from tilefoundry.ir.core.module import Module, ModuleList, resolve_symbol
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -49,12 +50,12 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
-from tilefoundry.ir.types.layout import flatten, resolve_layout
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten, resolve_layout
 from tilefoundry.ir.types.mesh import Mesh, make_mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.tensor_type import TupleType
-from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.ir.types.utils import static_dim_value, tensor_types
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
@@ -88,6 +89,33 @@ def verify_region_isolated(region: LoopRegion | MeshRegion, ctx=None) -> None:
     raise VerifyError(f"{type(region).__name__}: {message}")
 
 
+def verify_value_layouts(expr):
+    """Require concrete tensor layouts on values, independently of annotations."""
+
+    def layout(value, node):
+        if value is None or isinstance(value, Layout) and value.strides is None:
+            reason = "no tensor layout" if value is None else "layout with no strides"
+            where = diagnostic_location(node)
+            raise VerifyError(
+                f"value {getattr(node, 'name', type(node).__name__)!r} has {reason}"
+                + (f"\n  at {where}" if where else "")
+            )
+        if isinstance(value, ShardLayout):
+            layout(value.layout, node)
+        elif isinstance(value, ComposedLayout):
+            for child in (value.outer, value.inner):
+                if isinstance(child, LayoutBase):
+                    layout(child, node)
+
+    for value in (expr, *collect_exprs(expr)):
+        bound = value.params if isinstance(value, (LoopRegion, MeshRegion)) else ()
+        if isinstance(value, LoopRegion):
+            bound = (*bound, value.induction_var)
+        for node in (value, *bound):
+            for tensor in tensor_types(node.type):
+                layout(tensor.layout, node)
+
+
 def verify_function(fn: Function, *, module=None) -> None:
     """Verify HIR parameters, symbolic dimensions, body, and variants."""
     for p in fn.params:
@@ -109,11 +137,13 @@ def verify_function(fn: Function, *, module=None) -> None:
             f"hir Function {fn.name!r}: body must be an Expr or None, got {type(fn.body).__name__}"
         )
     _reject_stmt_nodes(fn.body)
+    for value in (*fn.params, fn.body):
+        verify_value_layouts(value)
 
 
 def _verify_variants(base: Function, *, module=None) -> None:
     """Verify a dispatch prototype's variants and their envelope partition."""
-    base_param_types = tuple(p.type for p in base.params)
+    base_param_types = tuple(p.annotation for p in base.params)
     sigs: dict[str, Function] = {}
     for v in base.variants:
         if v.variants:
@@ -131,7 +161,7 @@ def _verify_variants(base: Function, *, module=None) -> None:
             )
         if v.name != base.name:
             raise VerifyError(f"variant name {v.name!r} does not match base {base.name!r}")
-        if tuple(p.type for p in v.params) != base_param_types or (
+        if tuple(p.annotation for p in v.params) != base_param_types or (
             v.return_type != base.return_type
         ):
             raise VerifyError(
@@ -322,6 +352,8 @@ def verify_prim_function(
     fn: PrimFunction, *, module_fns: Iterable[PrimFunction] | Module = ()
 ) -> None:
     """Per [tir §1.3](docs/spec/tir.md#13-primfunction)'s rule list."""
+    for param in fn.params:
+        verify_value_layouts(param)
     _check_param_homogeneity(fn)
     module_context = module_fns if isinstance(module_fns, Module) else tuple(module_fns)
     for variant in fn.variants:
@@ -412,6 +444,9 @@ class _Binders:
 
 
 def _walk_stmt(stmt, ctx, scope, fn, module_context, binders: _Binders):
+    for _, value in _iter_stmt_expr_fields(stmt):
+        if isinstance(value, Expr):
+            verify_value_layouts(value)
     match stmt:
         case Sequential():
             with ExitStack() as bound:
@@ -966,4 +1001,5 @@ __all__ = [
     "verify_module",
     "verify_prim_function",
     "verify_region_isolated",
+    "verify_value_layouts",
 ]

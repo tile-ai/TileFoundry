@@ -21,13 +21,11 @@ from tilefoundry.ir.types.layout import default_layout, flatten
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Split,
-    default_shard_layout,
     layout_axis_to_tensor_axis,
     shard_layout_local_shape,
     split_target_axes,
 )
 from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -35,6 +33,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.type_defaults import output_shard_layout
 
 
 @register_op
@@ -115,21 +114,23 @@ def _logical_shard_attrs(call, ctx, x_ty, group: int):
 def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
     if isinstance(x_ty.layout, ShardLayout):
         if all(isinstance(attr, Broadcast) for attr in x_ty.layout.attrs):
-            return None, None
+            return default_layout(x_ty.shape), default_layout(scale_shape)
         attrs = _logical_shard_attrs(call, ctx, x_ty, group)
         try:
             return (
-                default_shard_layout(
+                output_shard_layout(
                     x_ty.shape,
                     x_ty.layout.mesh,
                     attrs,
-                    instance_levels=instance_levels(ctx.target, x_ty.storage),
+                    ctx=ctx,
+                    storage=x_ty.storage,
                 ),
-                default_shard_layout(
+                output_shard_layout(
                     scale_shape,
                     x_ty.layout.mesh,
                     attrs,
-                    instance_levels=instance_levels(ctx.target, x_ty.storage),
+                    ctx=ctx,
+                    storage=x_ty.storage,
                 ),
             )
         except ValueError as error:
@@ -138,7 +139,7 @@ def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
                 f"cannot derive result sharding: {error}; use an explicit Reshard before Quant",
             )
     if x_ty.layout is None:
-        return None, None
+        return default_layout(x_ty.shape), default_layout(scale_shape)
     return (
         default_layout(x_ty.shape),
         default_layout(scale_shape),

@@ -428,7 +428,7 @@ def test_one_definition_rejects_different_call_signatures(difference):
     type_ = TensorType((4, 8), DType.f32, None, StorageKind.UMAT)
     left = Var("left", type=type_)
     changed = {
-        "layout": replace(type_, layout=Layout((4, 8), (8, 1))),
+        "layout": replace(type_, layout=Layout((4, 8), (1, 4))),
         "storage": replace(type_, storage=StorageKind.SMEM),
         "mesh": type_,
     }[difference]

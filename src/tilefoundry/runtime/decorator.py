@@ -12,6 +12,7 @@ from typing import Callable
 
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.types import Placement, Topology
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.runtime.function import RuntimeFunction
@@ -124,7 +125,7 @@ class _Twin(RuntimeModule):
         one program's slice or the whole. Only a return type the mesh divides
         is a distributed value; anything else is one tensor and stays one. The
         type paired with it states the shape the body actually returned and
-        carries no layout: narrowing it again would take a shard of a shard.
+        carries its default local layout: narrowing it again would take a shard of a shard.
         """
         import torch  # noqa: PLC0415 -- optional runtime dep
 
@@ -132,7 +133,10 @@ class _Twin(RuntimeModule):
             return value
         if shard_layout_of(declared.layout) is None:
             return value
-        return ShardTensor(value, replace(declared, shape=tuple(value.shape), layout=None))
+        return ShardTensor(
+            value,
+            replace(declared, shape=tuple(value.shape), layout=default_layout(tuple(value.shape))),
+        )
 
     def _weight(self, name: str):
         """Read one declared weight, narrow it to this program, and memoize it.

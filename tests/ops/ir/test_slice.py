@@ -192,8 +192,8 @@ def test_fused_gqa_qkv_slices_keep_distribution_visible_to_consumers():
     )
 
     assert isinstance(q.type.layout, ShardLayout)
-    assert isinstance(k.type.layout, ComposedLayout) and k.type.layout.offset == 64
-    assert isinstance(v.type.layout, ComposedLayout) and v.type.layout.offset == 80
+    assert isinstance(k.type.layout, ShardLayout)
+    assert isinstance(v.type.layout, ShardLayout)
     assert shard_layout_of(k.type.layout) is not None
     assert shard_layout_of(v.type.layout) is not None
 
@@ -225,17 +225,13 @@ def test_slice_cost_charges_coordinates_but_not_the_view():
     )
 
 
-def test_static_slice_inherits_an_existing_sharded_view_offset():
+def test_nested_static_slices_keep_sharded_window_layouts():
     source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
     first = _slice_type(source, (0, 4), (16, 16), (1, 1))
 
     second = _slice_type(first, (0, 2), (16, 8), (1, 1))
 
-    assert second.layout == ComposedLayout(
-        inner=None,
-        offset=6,
-        outer=_windowed_shard(source, (4, 4, 8), (128, 32, 1)),
-    )
+    assert second.layout == _windowed_shard(source, (4, 4, 8), (128, 32, 1))
 
 
 def test_plain_row_and_column_slices_derive_subbox_layouts():
@@ -248,16 +244,8 @@ def test_plain_row_and_column_slices_derive_subbox_layouts():
     row = _slice_type(source, (0, 0), (256, 2048), (1, 1))
     column = _slice_type(source, (0, 0), (1024, 512), (1, 1))
 
-    assert row.layout == ComposedLayout(
-        inner=None,
-        offset=0,
-        outer=Layout(shape=(256, 2048), strides=(2048, 1)),
-    )
-    assert column.layout == ComposedLayout(
-        inner=None,
-        offset=0,
-        outer=Layout(shape=(1024, 512), strides=(2048, 1)),
-    )
+    assert row.layout == Layout(shape=(256, 2048), strides=(2048, 1))
+    assert column.layout == Layout(shape=(1024, 512), strides=(2048, 1))
 
 
 def test_runtime_start_slice_preserves_static_strides():

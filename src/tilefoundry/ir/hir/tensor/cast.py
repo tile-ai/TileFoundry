@@ -8,7 +8,6 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard_layout import shard_layout_of
-from tilefoundry.target import instance_levels
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
@@ -34,7 +33,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if shard_layout_of(x_ty.layout) is not None:
         relation = relations_of(call, ctx)
         derived = derive_output_shard_layout(
-            (x_ty,), relation, x_ty.shape, instance_levels=instance_levels(ctx.target, x_ty.storage)
+            (x_ty,), relation, x_ty.shape, ctx=ctx, storage=x_ty.storage
         )
         if derived is not None:
             new_layout = derived

@@ -727,10 +727,12 @@ second presentation of the result.
   loop's window by a compile-time offset. That start is an address computed where
   it is read, not a value some op produces, so a walk over compute ops MUST leave
   it alone.
-- A plain-layout `Slice` with static starts MUST produce a `ComposedLayout`: its
-  offset is the source offset plus the starts multiplied by the source strides,
-  and its outer layout carries the sliced shape and retained strides (multiplied
-  by any slice step).
+- A `Slice` of a plain `Layout` or `ShardLayout` MUST return the window layout
+  without introducing a `ComposedLayout` offset. Analysis and lowering derive
+  the address from the start operands, including through nested slices. If the
+  source already has a `ComposedLayout`, the result preserves it and updates its
+  offset; a swizzle acts on the address including that offset. The window retains
+  the source strides, multiplied by any slice step.
 - A source axis written as a group of modes has no single stride: its start
   MUST be read through the group as a mixed-radix coordinate, and the window
   MUST be the group's least-stepping modes, as many as its size takes, in the
@@ -748,10 +750,9 @@ second presentation of the result.
 - On an axis without Split modes, the existing representable affine-window
   rules remain: a primitive mode takes the window size and stepped stride.
   This includes an unsplit `6 -> 4` QKV group window, non-unit steps, and runtime
-  starts. Static nonzero offsets wrap the retained shard layout in a
-  `ComposedLayout`; runtime starts without a known displacement preserve the
-  bare distribution. A window crossing a Split mode or lacking its required
-  alignment proof MUST be refused.
+  starts. These starts move the address without adding an offset to the result
+  type of a plain or sharded source. A window crossing a Split mode or lacking
+  its required alignment proof MUST be refused.
 - `ComposedLayout(inner=None, outer=ShardLayout(...))` is a sharded view.
   Relation-driven consumers, local projection, execution-domain discovery, and
   Partial checks MUST read distribution from its outer layout. Its offset is
@@ -795,7 +796,7 @@ An output with no real sharding receives a fresh C-order `Layout`.
 
 - `Rank` produces a rank-0 `i64`; `ShapeOf` produces a rank-1 `i64` vector with
   one entry per input axis.
-- Both results are host shape metadata with `layout=EMPTY_LAYOUT` and
+- Both results are host shape metadata with `layout=default_layout(shape)` and
   `storage=umat`, not device-resident tensors.
 - Evaluation MUST read the concrete runtime tensor rank and extents. A symbolic
   input `TensorType.shape` is the result bound, not the value returned at
@@ -1623,10 +1624,13 @@ class Reshard(Op):
   - Memory analysis and lowering MUST treat a Reshard as a view iff storage
     is unchanged, the shape is literal, both structural address boxes agree,
     and the conversion does not change any mesh axis's `Partial` state.
-    A box records each zero-stride Split's mesh axis, logical tensor axis,
-    position within that axis, and extent. Its physical address layout is the
-    coalesced layout after removing these independent modes; swizzle and offset
-    are preserved. No element or participant enumeration is required.
+    A Split on a mesh axis of extent 1 places nothing: the box neither records
+    it nor treats its tensor mode as independent. A box records every other
+    zero-stride Split's mesh axis, logical tensor axis, position within that
+    axis, and extent. Its physical address layout is the coalesced layout after
+    removing these independent modes; swizzle and offset are preserved. Source
+    offsets are derived from starts along the registered view chain, independently
+    of the offset-free types of plain slices. No element or participant enumeration is required.
     The result MUST reuse the source buffer, lower to a view, and require no
     instruction candidate. Broadcast and nonzero-stride Split ownership do not
     change a shared address, including a device ownership change with the same

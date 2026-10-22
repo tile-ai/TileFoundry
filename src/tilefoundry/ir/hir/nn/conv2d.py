@@ -16,7 +16,6 @@ from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes
 from tilefoundry.ir.types.utils import i64_const, static_dim_value
-from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import F
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -277,11 +276,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     _require_exact_partial_state(call, ctx, x, w, bias)
     _require_group_aligned_output_split(call, ctx, w, bias, _groups)
-    levels = (
-        instance_levels(ctx.target, x.storage)
-        if any(shard_layout_of(t.layout) is not None for t in (x, w, bias))
-        else frozenset()
-    )
     relation = relations_of(call, ctx)
     try:
         shard = derive_output_shard_layout(
@@ -290,7 +284,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             out_shape,
             partial_reduction_dims=frozenset({4, 5, 6}),
             fresh_strides=True,
-            instance_levels=levels,
+            ctx=ctx,
+            storage=x.storage,
         )
     except ValueError as error:
         ctx.error(

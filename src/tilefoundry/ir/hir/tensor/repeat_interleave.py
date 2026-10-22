@@ -9,6 +9,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
@@ -48,7 +49,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"RepeatInterleave: axis {op.axis} out of range for rank {len(shape)}")
     shape[ax] = shape[ax] * op.repeats
 
-    new_layout = None
+    new_layout = default_layout(tuple(shape))
     if isinstance(x_ty.layout, ShardLayout) and any(
         not isinstance(a, Broadcast) for a in x_ty.layout.attrs
     ):

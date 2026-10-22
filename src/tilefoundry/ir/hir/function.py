@@ -56,6 +56,7 @@ class Function(Expr):
     ) -> "Function":
         """Construct a Function whose declarations and callable type are canonical."""
         for param in params:
+            param.annotation = canonicalize_dims(param.annotation)
             canonical = canonicalize_dims(param.type)
             if canonical is not param.type:
                 param.type = canonical

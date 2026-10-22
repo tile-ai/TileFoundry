@@ -838,7 +838,7 @@ def _emit_def(
         name = _names[id(param)]
         if isinstance(param.type, TensorType):
             with printer.type_surface(indent=indent, const=param.is_const):
-                annotation = printer.visit(param.type, ctx)
+                annotation = printer.visit(param.annotation, ctx)
             params.append(f"{indent}{name}: {annotation}")
         else:
             params.append(f"{indent}{name}")

@@ -20,7 +20,7 @@ from tilefoundry.visitor_registry.verify import verify_module
 
 def test_launch_rejects_forwarded_type_that_differs_from_device_param() -> None:
     device_type = Tensor[(8,), 'f32', None, 'gmem']
-    host_type = Tensor[(8,), 'f32', Layout(shape=(8,), strides=(1,)), 'gmem']
+    host_type = Tensor[(8,), "f32", Layout(shape=(8,), strides=(2,)), "gmem"]
     device_arg = Var(type=device_type, name="device_arg")
     device = PrimFunction(
         name="device",

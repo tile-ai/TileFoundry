@@ -29,7 +29,7 @@ from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 _N = DimVar("arange_n", 1, 16)
 
 _COORD_MESH = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("t",))
-_COORD_INDEX = TensorType(shape=(), dtype=DType.i64, layout=None, storage=StorageKind.RMEM)
+_COORD_INDEX = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
 
 
 def _coord(mesh: Mesh = _COORD_MESH) -> Call:
@@ -48,7 +48,9 @@ def _symbolic_arange(x: Tensor[(_N,), "f32"]):
 
 
 def test_arange_static_type_evaluation_and_cost():
-    type_ = TensorType(shape=(3,), dtype=DType.i64, layout=None, storage=StorageKind.GMEM)
+    type_ = TensorType(
+        shape=(3,), dtype=DType.i64, layout=default_layout((3,)), storage=StorageKind.GMEM
+    )
     op = Arange(type=type_, start=2, step=2)
 
     assert _infer(op) is type_
@@ -121,7 +123,7 @@ def test_a_bound_mesh_coordinate_is_one_number_without_placement() -> None:
     inferred = TypeInferVisitor().visit(_coord(), TypeInferContext(current_mesh=_COORD_MESH))
     assert inferred.shape == ()
     assert inferred.dtype == DType.i64
-    assert inferred.layout is None
+    assert inferred.layout == default_layout(())
     assert inferred.storage is StorageKind.RMEM
 
 

@@ -24,11 +24,8 @@ from tilefoundry.ir.types.layout import default_layout, resolve_layout
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
-    default_shard_layout,
     shard_layout_of,
 )
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.target import instance_levels
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     broadcast_shapes,
@@ -38,6 +35,7 @@ from tilefoundry.visitor_registry.access_relation import (
     shape_from_relation,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry.visitor_registry.type_defaults import output_shard_layout
 
 _COMPARE_KINDS = {
     BinaryKind.EQ,
@@ -60,7 +58,7 @@ class Binary(Op):
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
 
 
-def _merge_layout(a: object, b: object, out_shape: tuple, *, levels=frozenset()) -> object:
+def _merge_layout(a: object, b: object, out_shape: tuple, *, ctx=None, storage=None) -> object:
     """Merge two non-sharded operand layouts.
 
     Merge two non-sharded operand layouts. Equal layouts or one ``None``
@@ -84,8 +82,8 @@ def _merge_layout(a: object, b: object, out_shape: tuple, *, levels=frozenset())
     if layout is not None:
         if isinstance(layout, ShardLayout):
             if all(isinstance(attr, Broadcast) for attr in layout.attrs):
-                return default_shard_layout(
-                    out_shape, layout.mesh, layout.attrs, instance_levels=levels
+                return output_shard_layout(
+                    out_shape, layout.mesh, layout.attrs, ctx=ctx, storage=storage
                 )
             return layout
         if tuple(layout.shape) == out_shape:
@@ -101,7 +99,7 @@ def _merge_layout(a: object, b: object, out_shape: tuple, *, levels=frozenset())
         not isinstance(layout, ShardLayout) or layout in replicated for layout in (a, b)
     ):
         first = replicated[0]
-        return default_shard_layout(out_shape, first.mesh, first.attrs, instance_levels=levels)
+        return output_shard_layout(out_shape, first.mesh, first.attrs, ctx=ctx, storage=storage)
     raise ValueError(f"incompatible operand layouts {a!r} vs {b!r}")
 
 
@@ -148,11 +146,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         commutes_jointly=commutes_jointly,
     )
     storage = resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage)
-    levels = (
-        instance_levels(ctx.target, storage)
-        if any(shard_layout_of(t.layout) is not None for t in (lhs_ty, rhs_ty))
-        else frozenset()
-    )
     try:
         relation = relations_of(call, ctx)
         out_shape = shape_from_relation(
@@ -161,7 +154,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         shard = None
         if shard_layout_of(la) is not None or shard_layout_of(lb) is not None:
             shard = derive_output_shard_layout(
-                (lhs_ty, rhs_ty), relation, out_shape, instance_levels=levels
+                (lhs_ty, rhs_ty), relation, out_shape, ctx=ctx, storage=storage
             )
         layout = (
             shard
@@ -170,12 +163,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 shard_layout_of(la) or la,
                 shard_layout_of(lb) or lb,
                 out_shape,
-                levels=levels,
+                ctx=ctx,
+                storage=storage,
             )
         )
     except ValueError as e:
         ctx.error(call, f"Binary {op.kind.name}: {e}")
-    if layout is None and storage in (StorageKind.RMEM, StorageKind.SMEM) and out_shape:
+    if layout is None:
         layout = default_layout(out_shape)
     return TensorType(
         shape=out_shape,

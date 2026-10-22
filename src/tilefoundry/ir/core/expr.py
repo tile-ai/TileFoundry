@@ -71,10 +71,12 @@ class Var(Expr):
     name: str
     is_const: bool = False
 
-    @property
-    def annotation(self) -> Type:
-        """The authored type annotation used when no visitor binding exists."""
-        return self.type
+    annotation: Type | None = field(default=None, kw_only=True, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.annotation is None:
+            self.annotation = self.type
 
 
 @dataclass(unsafe_hash=True)

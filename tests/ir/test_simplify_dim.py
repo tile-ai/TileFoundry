@@ -198,7 +198,9 @@ def test_typeinfer_canonicalizes_equivalent_symbolic_shapes() -> None:
 def test_static_typeinfer_does_not_enter_dim_canonicalization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    static = TensorType(shape=(8, 128), dtype=DType.f32, layout=None, storage="gmem")
+    static = TensorType(
+        shape=(8, 128), dtype=DType.f32, layout=Layout((8, 128), (128, 1)), storage="gmem"
+    )
 
     def fail_if_called(_):
         raise AssertionError("static types must not enter isl canonicalization")

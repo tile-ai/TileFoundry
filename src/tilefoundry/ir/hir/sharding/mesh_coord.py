@@ -64,7 +64,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
         else None
     )
     return TypeInferResults(
-        TensorType(shape=(), dtype=DType.i64, layout=None, storage=StorageKind.RMEM),
+        TensorType.scalar(DType.i64, storage=StorageKind.RMEM),
         value_range=bounds,
     )
 

@@ -127,7 +127,7 @@ Both use the one `IslParamValues` dictionary, from isl parameter name to IR valu
   merging logical axes, MUST be rejected where the type is stated. Type
   inference MUST check function parameters and every Call result with the same
   axis-group rule and report the declaring source location. Canonical
-  `TensorType.umat_tensor` metadata has no physical positions and is exempt.
+  UMAT shape metadata uses the same `default_layout(shape)` as other tensor values.
 - A reader with no topology level addresses logical coordinates. A reader at a
   named topology level addresses the positions one unit of that level holds:
   a position cut by mesh axes at that level or coarser is split into digits,
@@ -155,7 +155,8 @@ def derive_output_shard_layout(
     partial_reduction_dims: frozenset[int] = frozenset(),
     complete_reduction_dims: frozenset[int] = frozenset(),
     fresh_strides: bool = False,
-    instance_levels: frozenset[str] = frozenset(),
+    ctx=None,
+    storage=None,
 ): ...
 ```
 
@@ -174,7 +175,8 @@ def derive_output_shard_layout(
     overlap.
   - `fresh_strides=True` uses `default_layout` for fresh row-major strides;
     statically unit leaves have stride zero, and symbolic strides remain symbolic.
-    Split modes in `instance_levels` also have stride zero. Compacting the remaining
+    Split modes owned per instance by `ctx.target` for the result `storage` also
+    have stride zero. Compacting the remaining
     modes drops only each Split's mesh factor and retains its local residual
     (extent one for a fully factored Split). The set comes from the target memory
     owner and every coarser topology level. With no memory hierarchy it is empty.

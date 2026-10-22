@@ -241,7 +241,7 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 0,
         "smem": 1_408,
     },
-    "mesh_slice_start.OutOfWindow.oob[static]": {"gmem": 4_096, "rmem": 0},
+    "mesh_slice_start.OutOfWindow.oob[static]": {"gmem": 5_120, "rmem": 0},
     "mesh_slice_start.Strided.scan[static]": {
         "gmem": 4_352,
         "rmem": 8,

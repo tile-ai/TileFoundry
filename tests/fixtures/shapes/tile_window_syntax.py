@@ -53,7 +53,7 @@ class MeshInsideTileWindow:
         for m in tf.tile(1, 5, 2):
             with Mesh(("cta",), layout=(1,), names=("unit",)) as mesh:
                 local = tf.reshard(x[m * 2 + 1, :], (2 @ mesh.unit, 8), "smem")
-            out = local
+                out = tf.reshard(local, (2, 8), "smem")
         return out
 
 
