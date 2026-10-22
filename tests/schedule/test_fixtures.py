@@ -106,10 +106,11 @@ from tilefoundry.ir.types import (
     Topology,
 )
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.layout import apply, flatten, resolve_layout
+from tilefoundry.ir.types.int_tuple import compatible_profile
+from tilefoundry.ir.types.layout import apply, flatten, resolve_layout, unflatten
 from tilefoundry.ir.types.layout_algebra import cosize
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.mesh import levels, make_mesh, starts
+from tilefoundry.ir.types.stride import crd2idx
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.schedule import finalize
@@ -2767,16 +2768,8 @@ def test_grouped_n16_issues_keep_source_addresses():
                         return lambda linear: layout.inner(outer(linear) + layout.offset * eb)
                     return lambda linear: outer(linear) + layout.offset * eb
                 flat = flatten(layout)
-                correspondence = layout_correspondence(flat.shape, type_.shape)
-                return lambda linear: (
-                    sum(
-                        digit * stride
-                        for digit, stride in zip(
-                            correspondence.digits(linear), flat.strides, strict=True
-                        )
-                    )
-                    * eb
-                )
+                grouped = unflatten(flat, compatible_profile(flat.shape, type_.shape))
+                return lambda linear: crd2idx(linear, grouped.shape, grouped.strides) * eb
 
             readers[id(type_)] = reader(type_.layout)
         linear = sum(

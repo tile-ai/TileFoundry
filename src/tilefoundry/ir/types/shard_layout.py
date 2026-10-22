@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types.int_tuple import repeat_like
+from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes, repeat_like
 from tilefoundry.ir.types.layout import flatten, rank
 from tilefoundry.ir.types.stride import idx2crd
 
 from .layout import ComposedLayout, Layout, LayoutBase, default_layout, get
-from .layout_correspondence import layout_correspondence
 from .mesh import Mesh
 from .stride import compact_row_major
 
@@ -249,22 +248,13 @@ def shard_layout_local_shape(sl: "ShardLayout", *, require_static: bool = True) 
     return tuple(local)
 
 
-def layout_axis_to_tensor_axis(layout_shape: tuple, tensor_shape: tuple) -> list[int]:
-    """Map modes to logical axes through the shared row-major correspondence.
-
-    A mode crossing a logical-axis boundary has no single target and is refused.
-    See [semantic-analysis §3.1](docs/spec/semantic-analysis.md#31-logical-shape-to-layout-domain).
-    """
-    return layout_correspondence(layout_shape, tensor_shape).tensor_axes()
-
-
 def split_target_axes(sl: "ShardLayout", tensor_shape: tuple) -> tuple:
     """Per mesh axis in ``sl.attrs``, the logical ``tensor_shape`` axis its ``Split`` targets.
 
     Per mesh axis in ``sl.attrs``, the logical ``tensor_shape`` axis its
     ``Split`` targets (``None`` for a non-``Split`` attr).
     """
-    la2ta = layout_axis_to_tensor_axis(sl.layout.shape, tensor_shape)
+    la2ta = mode_axes(compatible_profile(sl.layout.shape, tensor_shape))
     return tuple(la2ta[a.axis] if isinstance(a, Split) else None for a in sl.attrs)
 
 
@@ -288,7 +278,7 @@ def _strides(shard: ShardLayout, tensor_shape: tuple) -> tuple[int, ...]:
     """
     fallback = compact_row_major(tuple(tensor_shape))
     stated = shard.layout.strides
-    axes = layout_axis_to_tensor_axis(shard.layout.shape, tuple(tensor_shape))
+    axes = mode_axes(compatible_profile(shard.layout.shape, tuple(tensor_shape)))
     found = dict(zip(axes, stated, strict=False))
     return tuple(found.get(axis, fallback[axis]) for axis in range(len(tensor_shape)))
 
@@ -397,17 +387,19 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None,
 
 
 def _require_canonical_axes(shard: ShardLayout, tensor_shape: tuple, cutting: tuple) -> None:
-    corresponding = layout_correspondence(shard.layout.shape, tensor_shape)
+    profile = compatible_profile(shard.layout.shape, tensor_shape)
+    axes = mode_axes(profile)
     physical = flatten(shard.layout)
-    for axis, group in enumerate(corresponding.groups):
-        modes = tuple(position for position in group if corresponding.extents[position] != 1)
+    for axis in range(len(profile)):
+        modes = tuple(position for position, target in enumerate(axes)
+                      if target == axis and physical.shape[position] != 1)
         split = tuple(attr.axis for attr, target in zip(shard.attrs, cutting, strict=True)
                       if target == axis and attr.axis in modes)
         compact = tuple(mode for mode in modes if mode not in split or physical.strides[mode] != 0)
         if (
             modes[:len(split)] != split
             or len(modes) - len(split) > 1
-            or any(physical.strides[left] != physical.strides[right] * corresponding.extents[right]
+            or any(physical.strides[left] != physical.strides[right] * physical.shape[right]
                    for left, right in zip(compact, compact[1:]))
         ):
             raise ValueError(
@@ -454,7 +446,6 @@ __all__ = [
     "shard_layout_of",
     "default_shard_layout",
     "shard_layout_local_shape",
-    "layout_axis_to_tensor_axis",
     "split_target_axes",
     "register_strides",
 ]

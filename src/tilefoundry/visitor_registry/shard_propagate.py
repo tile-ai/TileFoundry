@@ -13,6 +13,7 @@ from dataclasses import replace
 import isl
 
 from tilefoundry.ir.types import Layout, ShardLayout
+from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
@@ -20,7 +21,6 @@ from tilefoundry.ir.types.shard_layout import (
     Split,
     default_shard_layout,
     fill_shard_strides,
-    layout_axis_to_tensor_axis,
     shard_layout_of,
 )
 from tilefoundry.ir.types.utils import participant_layout
@@ -112,7 +112,7 @@ def _carrier_layout(
     """
     sl = input_type.layout
     layout = sl.layout
-    la2ta_in = layout_axis_to_tensor_axis(layout.shape, input_type.shape)
+    la2ta_in = mode_axes(compatible_profile(layout.shape, input_type.shape))
     in_access = _result_access(input_map)
     out_access = _result_access(output_map)
     dom_to_out = {d: o for o, (k, d) in out_access.items() if k == "proj"}
@@ -165,7 +165,7 @@ def _carrier_layout(
             out_attrs[p_mesh] = Partial(attr.reduction)
 
     try:
-        la2ta_out = layout_axis_to_tensor_axis(tuple(new_shape), tuple(output_shape))
+        la2ta_out = mode_axes(compatible_profile(tuple(new_shape), tuple(output_shape)))
     except ValueError:
         return None
     mapped: list = [Broadcast() for _ in range(mesh_rank)]
@@ -242,7 +242,7 @@ def derive_output_shard_layout(
 
     attrs: list = [Broadcast() for _ in range(mesh_rank)]
     for i, sl in sharded:
-        la2ta = layout_axis_to_tensor_axis(sl.layout.shape, input_types[i].shape)
+        la2ta = mode_axes(compatible_profile(sl.layout.shape, input_types[i].shape))
         in_access = _result_access(input_maps[i])
         for p, attr in enumerate(sl.attrs):
             if isinstance(attr, Partial):

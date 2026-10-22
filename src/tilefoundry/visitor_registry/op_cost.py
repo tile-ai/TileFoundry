@@ -67,10 +67,9 @@ from tilefoundry.ir.types.dim import (
     DimMul,
     DimSub,
 )
-from tilefoundry.ir.types.int_tuple import repeat_like
+from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes, repeat_like
 from tilefoundry.ir.types.layout import ComposedLayout, flatten
 from tilefoundry.ir.types.shard_layout import (
-    layout_axis_to_tensor_axis,
     shard_layout_of,
     split_target_axes,
 )
@@ -128,9 +127,7 @@ def _conv2d(call: Call, ctx: CostContext) -> Cost:
     logical_weight_shape = weight.shape
     if isinstance(global_weight.layout, ShardLayout):
         logical_weight_shape = [1] * len(global_weight.shape)
-        axes = layout_axis_to_tensor_axis(
-            global_weight.layout.layout.shape, global_weight.shape
-        )
+        axes = mode_axes(compatible_profile(global_weight.layout.layout.shape, global_weight.shape))
         for extent, logical_axis in zip(weight.shape, axes):
             logical_weight_shape[logical_axis] *= extent
     flops = (

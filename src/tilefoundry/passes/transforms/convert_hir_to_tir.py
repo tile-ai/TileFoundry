@@ -44,7 +44,7 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.isl_interop import isl_to_dim
+from tilefoundry.ir.isl_interop import isl_to_dim, layout_to_isl_map
 from tilefoundry.ir.tir.arith import Binary as TirBinary
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -72,11 +72,11 @@ from tilefoundry.ir.types.dim import (
     is_dim_op_call,
     simplify_dim,
 )
-from tilefoundry.ir.types.layout import default_layout, flatten
+from tilefoundry.ir.types.int_tuple import compatible_profile
+from tilefoundry.ir.types.layout import default_layout, flatten, unflatten
 from tilefoundry.ir.types.layout_algebra import composition
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
-from tilefoundry.ir.types.stride import compact_row_major
+from tilefoundry.ir.types.stride import compact_row_major, crd2idx
 from tilefoundry.ir.types.utils import (
     i64_const,
     leaves_of,
@@ -866,12 +866,8 @@ class StoragePlan:
             start = tuple(static_dim_value(value) for value in view.starts)
             if any(value is None for value in start):
                 raise LoweringError("an instruction origin needs static issue coordinates")
-            linear = sum(
-                value * stride
-                for value, stride in zip(start, compact_row_major(held.shape), strict=True)
-            )
-            digits = layout_correspondence(flat.shape, held.shape).digits(linear)
-            offset = sum(value * stride for value, stride in zip(digits, flat.strides, strict=True))
+            grouped = unflatten(flat, compatible_profile(flat.shape, held.shape))
+            offset = crd2idx(start, grouped.shape, grouped.strides)
             if isinstance(layout, ComposedLayout):
                 offset += layout.offset
             issued = (
@@ -966,17 +962,11 @@ class StoragePlan:
 
         def addresses(shape, layout):
             flat = flatten(layout)
-            coordinates = [f"c{axis}" for axis in range(len(shape))]
-            digits = layout_correspondence(flat.shape, tuple(shape)).coordinates(coordinates)
-            linear = (
-                " + ".join(
-                    f"{stride} * ({digit})"
-                    for stride, digit in zip(flat.strides, digits, strict=True)
-                )
-                or "0"
-            )
+            coordinates = layout_to_isl_map(tuple(shape), flat, {}, divided=lambda _: ())
             offset = layout.offset if isinstance(layout, ComposedLayout) else 0
-            return isl.map(f"{{ [{', '.join(coordinates)}] -> [{offset} + {linear}] }}")
+            linear = " + ".join(f"{stride} * p{axis}" for axis, stride in enumerate(flat.strides)) or "0"
+            address = isl.map(f"{{ [{', '.join(f'p{i}' for i in range(len(flat.shape)))}] -> [{offset} + {linear}] }}")
+            return coordinates.apply_range(address)
 
         relation = address.relation
         if relation.is_identity() and tuple(desired.shape) == tuple(target.type.shape):
@@ -1183,15 +1173,7 @@ class IssuePlan:
                         if not owned
                     )
                     coordinate = 0 if axis is None else counters[axis]
-                    digits = layout_correspondence(shape, (prod(shape),)).digits(coordinate)
-                    starts.append(
-                        i64_const(
-                            sum(
-                                digit * stride
-                                for digit, stride in zip(digits, strides, strict=True)
-                            )
-                        )
-                    )
+                    starts.append(i64_const(crd2idx(coordinate, (shape,), (strides,))))
                 result.append(tuple(starts))
             yield tuple(result)
 

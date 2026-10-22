@@ -9,11 +9,11 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Broadcast, Partial, ShardLayout, TensorType, TupleType
+from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import default_layout, flatten
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard_layout import (
-    layout_axis_to_tensor_axis,
     shard_layout_of,
     split_target_axes,
 )
@@ -87,7 +87,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     part_shape[axis] = part_len
     part_shape = tuple(part_shape)
     if isinstance(x_ty.layout, ShardLayout):
-        layout_to_tensor = layout_axis_to_tensor_axis(x_ty.layout.layout.shape, x_ty.shape)
+        layout_to_tensor = mode_axes(compatible_profile(x_ty.layout.layout.shape, x_ty.shape))
         attrs = tuple(
             SplitAttr(layout_to_tensor[attr.axis])
             if isinstance(attr, SplitAttr)

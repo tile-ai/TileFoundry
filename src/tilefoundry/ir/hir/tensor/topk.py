@@ -29,10 +29,10 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     is_dim_expr,
 )
+from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import (
     Split,
-    layout_axis_to_tensor_axis,
     shard_layout_of,
 )
 from tilefoundry.ir.types.tensor_type import ShapeDim
@@ -172,7 +172,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             )
     source_shard = shard_layout_of(x_ty.layout)
     if source_shard is not None:
-        la2ta = layout_axis_to_tensor_axis(source_shard.layout.shape, x_ty.shape)
+        la2ta = mode_axes(compatible_profile(source_shard.layout.shape, x_ty.shape))
         if any(isinstance(a, Split) and la2ta[a.axis] == axis for a in source_shard.attrs):
             ctx.error(call, f"selected axis {axis} must not be Split-sharded")
 

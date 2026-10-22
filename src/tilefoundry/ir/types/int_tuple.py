@@ -44,6 +44,89 @@ def partition_modes(modes, count, indivisible=()):
     return tuple(prefix), ()
 
 
+def shape_div(a, b):
+    """CuTe ``shape_div``: divide shapes, folding a scalar over tuple modes."""
+    from .utils import static_dim_value  # noqa: PLC0415
+
+    if isinstance(a, tuple):
+        if isinstance(b, tuple):
+            return tuple(shape_div(x, y) for x, y in zip(a, b, strict=True))
+        result = []
+        for extent in a:
+            result.append(shape_div(extent, b))
+            b = shape_div(b, extent)
+        return tuple(result)
+    if isinstance(b, tuple):
+        return shape_div(a, product(b))
+    x, y = static_dim_value(a), static_dim_value(b)
+    if x is not None and y is not None:
+        if x % y and y % x:
+            raise ValueError(f"shape_div: {x} and {y} do not divide one another")
+        return (x + y - 1) // y
+    if compatible(a, b):
+        return 1
+    raise ValueError(f"shape_div: cannot divide symbolic extents {a!r} and {b!r}")
+
+
+def compatible(a, b) -> bool:
+    """CuTe ``compatible``: each leaf of a equals its corresponding size in b."""
+    if isinstance(a, tuple):
+        return isinstance(b, tuple) and len(a) == len(b) and all(
+            compatible(x, y) for x, y in zip(a, b, strict=True)
+        )
+    from ..isl_interop import normalize_dim  # noqa: PLC0415
+    from .dim import DimSub, simplify_dim  # noqa: PLC0415
+
+    b = product(b) if isinstance(b, tuple) else b
+    if a is b or a == b:
+        return True
+    try:
+        return normalize_dim(simplify_dim(DimSub, (a, b))) == 0
+    except (TypeError, ValueError, NotImplementedError):
+        return False
+
+
+def compatible_profile(flat_shape, shape):
+    """Nest authored modes into logical axes without splitting or coalescing."""
+    from .dim import DimMul, simplify_dim  # noqa: PLC0415
+    from .utils import static_dim_value  # noqa: PLC0415
+
+    if any(isinstance(mode, tuple) for mode in flat_shape) and compatible(shape, flat_shape):
+        return flat_shape
+    extents = flatten(flat_shape)
+    groups, cursor = [], 0
+    try:
+        for extent in shape:
+            group, accumulated = [], 1
+            if static_dim_value(extent) == 1 and cursor < len(extents) and static_dim_value(extents[cursor]) == 1:
+                group.append(extents[cursor])
+                cursor += 1
+            while not compatible(extent, accumulated):
+                mode = extents[cursor]
+                left, right = static_dim_value(accumulated), static_dim_value(mode)
+                accumulated = left * right if left is not None and right is not None else (
+                    mode if accumulated == 1 else simplify_dim(DimMul, (accumulated, mode))
+                )
+                a, b = static_dim_value(accumulated), static_dim_value(extent)
+                if a is not None and b is not None and a > b:
+                    raise ValueError("mode crosses a logical axis")
+                group.append(mode)
+                cursor += 1
+            groups.append(tuple(group))
+        if any(static_dim_value(mode) != 1 for mode in extents[cursor:]):
+            raise ValueError("unassigned layout modes")
+        if groups:
+            groups[-1] += extents[cursor:]
+    except (IndexError, ValueError) as error:
+        raise ValueError(f"layout positions {extents} cross logical axes of {tuple(shape)}") from error
+    return tuple(group[0] if len(group) == 1 else group for group in groups)
+
+
+def mode_axes(profile) -> tuple[int, ...]:
+    """Each flat mode's logical axis, in authored order."""
+    return flatten(tuple(repeat_like(mode, axis) for axis, mode in enumerate(profile)))
+
+
 def congruent(a, b) -> bool:
     """Whether two int tuples have the same nesting, ignoring their leaves."""
     if isinstance(a, tuple) != isinstance(b, tuple):
@@ -106,6 +189,10 @@ def unflatten(flat: tuple, profile) -> tuple:
 
 __all__ = [
     "IntTuple",
+    "compatible",
+    "compatible_profile",
+    "mode_axes",
+    "shape_div",
     "congruent",
     "flatten",
     "product",

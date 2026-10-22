@@ -21,12 +21,11 @@ from tilefoundry.ir.types import (
     StorageKind,
     TensorType,
 )
-from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout import apply, default_layout
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
+from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axes
+from tilefoundry.ir.types.layout import apply, unflatten
+from tilefoundry.ir.types.layout import flatten as flatten_layout
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.types.shard_layout import (
-    layout_axis_to_tensor_axis,
     local_layout_and_offset,
     shard_layout_of,
     split_target_axes,
@@ -62,13 +61,13 @@ def _address_points(layout, count: int, logical_shape: tuple):
     shard = shard_layout_of(layout)
     base = shard.layout if shard is not None else layout
     whole = {}
-    corresponding = layout_correspondence(base.shape, logical_shape)
-    logical_layout = default_layout(logical_shape)
-    steps = compact_col_major(corresponding.extents)
+    flat = flatten_layout(base)
+    grouped = unflatten(Layout(flat.shape, compact_col_major(flat.shape)),
+                        compatible_profile(base.shape, logical_shape))
+    logical_steps = compact_col_major(logical_shape)
     for coordinate in range(count):
-        digits = corresponding.digits(apply(logical_layout, coordinate))
-        mode_index = crd2idx(digits, corresponding.extents, steps)
-        address = apply(base, mode_index)
+        logical = idx2crd(coordinate, logical_shape, logical_steps)
+        address = apply(base, crd2idx(logical, grouped.shape, grouped.strides))
         if shard is None:
             yield coordinate, (), address, address
         else:
@@ -167,7 +166,7 @@ def _(call: Call, ctx) -> TensorType:
             if not all(isinstance(attr, Split) for attr in held.attrs):
                 ctx.error(call, f"{end} rmem layout must contain only Split attributes")
             try:
-                axes = layout_axis_to_tensor_axis(held.layout.shape, source.shape)
+                axes = mode_axes(compatible_profile(held.layout.shape, source.shape))
                 split_target_axes(held, source.shape)
                 extents = tuple(prod(flatten(mode)) for mode in held.layout.shape)
                 if any(

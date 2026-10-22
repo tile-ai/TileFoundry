@@ -23,10 +23,10 @@ from tilefoundry.ir.types import (
     make_shard_tensor_type,
     make_tensor_type,
 )
+from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.shard_layout import (
     Partial,
     Split,
-    layout_axis_to_tensor_axis,
 )
 
 _I64 = DType.i64
@@ -101,7 +101,7 @@ def test_argmax_layout_describes_result_and_preserves_surviving_split():
     result = infer_call(ArgMax(axis=-1), sharded)
     assert isinstance(result.layout, ShardLayout)
     assert result.layout.attrs == (Split(0),)
-    assert layout_axis_to_tensor_axis(result.layout.layout.shape, result.shape)[0] == 0
+    assert mode_axes(compatible_profile(result.layout.layout.shape, result.shape))[0] == 0
 
 
 def test_argmax_matches_torch_reference() -> None:

@@ -26,10 +26,10 @@ from tilefoundry.ir.pattern.utils import (
     selected_pattern,
 )
 from tilefoundry.ir.types import ComposedLayout, Layout, Split, TensorType, UnitType
-from tilefoundry.ir.types.int_tuple import flatten, partition_modes
-from tilefoundry.ir.types.layout import get
+from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axes, partition_modes
+from tilefoundry.ir.types.layout import flatten as flatten_layout
+from tilefoundry.ir.types.layout import get, unflatten
 from tilefoundry.ir.types.layout_algebra import composition, zipped_divide
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.mesh import separate
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
@@ -255,9 +255,14 @@ class _OperandTile:
         if not isinstance(primitive, Layout):
             raise ValueError(f"{name}: cannot divide {type(primitive).__name__}")
         self.grouped = any(isinstance(mode, tuple) for mode in primitive.shape)
-        correspondence = layout_correspondence(primitive.shape, type_.shape)
-        if correspondence.groups is None:
-            raise ValueError(f"{name}: modes cross logical axes {type_.shape}")
+        try:
+            profile = compatible_profile(primitive.shape, type_.shape)
+        except ValueError as error:
+            raise ValueError(f"{name}: modes cross logical axes {type_.shape}") from error
+        axes = mode_axes(profile)
+        groups = tuple(tuple(i for i, target in enumerate(axes) if target == axis)
+                       for axis in range(len(type_.shape)))
+        grouped = unflatten(flatten_layout(primitive), profile)
         split = (
             {attr.axis for attr in self.shard.attrs if isinstance(attr, Split)}
             if self.shard
@@ -265,10 +270,10 @@ class _OperandTile:
         )
         self.axes = []
         for axis, (group, extent, tile) in enumerate(
-            zip(correspondence.groups, type_.shape, shape, strict=True)
+            zip(groups, type_.shape, shape, strict=True)
         ):
-            mode = correspondence.axis_mode(primitive.shape, axis)
-            stride = correspondence.axis_mode(primitive.strides, axis)
+            mode = grouped.shape[axis]
+            stride = grouped.strides[axis]
             layout = Layout(
                 mode if isinstance(mode, tuple) else (mode,),
                 stride if isinstance(stride, tuple) else (stride,),

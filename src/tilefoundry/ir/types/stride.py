@@ -82,12 +82,42 @@ def idx2crd(idx: int, shape: tuple, stride: tuple) -> tuple:
     )
 
 
-def crd2idx(crd: tuple, shape: tuple, stride: tuple) -> int:
-    """CuTe ``crd2idx``: the index a coordinate in ``<shape, stride>`` reaches."""
-    total = 0
-    for value, one, step in zip(crd, shape, stride):
-        total += crd2idx(value, one, step) if isinstance(one, tuple) else value * step
-    return total
+def crd2idx(crd, shape, stride):
+    """CuTe ``crd2idx``, with integer coordinates read in row-major order.
+
+    Decompose from the innermost mode; the final, outermost digit is not
+    reduced modulo its extent. Static coordinates keep integer arithmetic.
+    """
+    if isinstance(crd, int) and isinstance(shape, int) and isinstance(stride, int):
+        return crd * stride
+    if isinstance(crd, tuple):
+        return sum(crd2idx(c, s, d) for c, s, d in zip(crd, shape, stride, strict=True))
+    from .utils import static_dim_value  # noqa: PLC0415
+
+    literal = static_dim_value(crd)
+    crd = literal if literal is not None else crd
+    if not isinstance(shape, tuple):
+        from .dim import DimMul, simplify_dim  # noqa: PLC0415
+
+        step = static_dim_value(stride)
+        if literal is not None and step is not None:
+            return literal * step
+        return simplify_dim(DimMul, (crd, stride))
+    if not shape:
+        return 0
+    if len(shape) == 1:
+        return crd2idx(crd, shape[0], stride[0])
+    if literal == 0:
+        return crd2idx((0,) * len(shape), shape, stride)
+    extent = _product(shape[-1], lambda a, b: a * b)
+    if isinstance(crd, int) and isinstance(extent, int):
+        quotient, remainder = divmod(crd, extent)
+    else:
+        from .dim import DimFloorDiv, DimMod, simplify_dim  # noqa: PLC0415
+
+        quotient = simplify_dim(DimFloorDiv, (crd, extent))
+        remainder = simplify_dim(DimMod, (crd, extent))
+    return crd2idx(quotient, shape[:-1], stride[:-1]) + crd2idx(remainder, shape[-1], stride[-1])
 
 
 __all__ = [

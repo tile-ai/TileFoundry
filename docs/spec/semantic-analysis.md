@@ -120,6 +120,9 @@ Both use the one `IslParamValues` dictionary, from isl parameter name to IR valu
   domains associate their top-level modes with the corresponding logical axes
   only when the number of top-level modes equals the logical rank and each
   mode's size equals its axis extent; otherwise, the flattened modes regroup.
+- Axis grouping uses `compatible_profile(layout.shape, shape)` to construct a
+  profile without splitting or coalescing authored modes. `unflatten` reads the
+  layout against that profile; `mode_axes` identifies each flat mode's logical axis.
 - `layout_to_isl_map` ([types §11](./types.md#11-isl-interoperability))
   implements this regroup for a `ShardLayout`. A logical axis whose extent is
   the product of consecutive flattened layout positions maps onto them, so a

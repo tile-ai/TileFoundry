@@ -27,8 +27,9 @@ from tilefoundry.ir.isl_interop import (
     shape_to_isl_set,
 )
 from tilefoundry.ir.types import TensorType, TupleType, Type
+from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis, shard_layout_of
+from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.utils import (
     divided_mesh_axes,
     is_literal_shape,
@@ -581,12 +582,12 @@ def logical_axes_of(local: "Type", logical: "Type") -> list[int]:
     """
     layout = getattr(local, "layout", None)
     if shard_layout_of(layout) is None and len(local.shape) == len(logical.shape):
-        return layout_axis_to_tensor_axis(tuple(logical.shape), tuple(logical.shape))
+        return mode_axes(compatible_profile(tuple(logical.shape), tuple(logical.shape)))
     inner = getattr(layout, "layout", None)
     shape = getattr(inner, "shape", None) or getattr(layout, "shape", None)
     if shape is None or len(shape) != len(local.shape):
         return list(range(len(local.shape)))
-    return layout_axis_to_tensor_axis(tuple(shape), tuple(logical.shape))
+    return mode_axes(compatible_profile(tuple(shape), tuple(logical.shape)))
 
 
 def logical_coordinates(local: "Type", logical: "Type") -> dict[int, str]:

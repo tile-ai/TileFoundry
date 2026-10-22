@@ -11,9 +11,9 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, TensorType
+from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
 from tilefoundry.ir.types.layout_algebra import coalesce
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
@@ -98,8 +98,8 @@ def _buffer_alias(call: Call) -> int | None:
         if shard is not None and isinstance(layout, ComposedLayout):
             physical = replace(layout, outer=physical)
         flat = flatten(physical)
-        correspondence = layout_correspondence(flat.shape, held.shape)
-        axes = correspondence.tensor_axes()
+        profile = compatible_profile(flat.shape, held.shape)
+        axes = mode_axes(profile)
         independent, splits = set(), []
         if shard is not None:
             for mesh_axis, attr in enumerate(shard.attrs):
@@ -109,8 +109,8 @@ def _buffer_alias(call: Call) -> int | None:
                     and flat.strides[attr.axis] == 0
                 ):
                     position = attr.axis
-                    group = correspondence.groups[axes[position]]
-                    suffix = prod(flat.shape[index] for index in group if index > position)
+                    suffix = prod(flat.shape[index] for index in range(position + 1, len(axes))
+                                  if axes[index] == axes[position])
                     splits.append((mesh_axis, axes[position], suffix, flat.shape[position]))
                     independent.add(position)
         kept = tuple(

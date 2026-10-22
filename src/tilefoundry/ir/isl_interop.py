@@ -32,7 +32,7 @@ from .types.dim import (
 )
 from .types.dtype import IntegerDType
 from .types.int_tuple import flatten as flatten_tuple
-from .types.layout import LayoutBase, flatten
+from .types.layout import Layout, LayoutBase, flatten
 from .types.shard_layout import ShardLayout, Split, shard_layout_of
 from .types.tensor_type import TensorType
 from .types.utils import i64_const, static_dim_value
@@ -536,10 +536,10 @@ def layout_to_isl_map(
     then the residual: a divided digit is that unit's ``MeshCoord``, a parameter
     named into *values*, and the rest is the position within.
     """
-    layers = [shard_layout_of(layout)]
-    if layers[0] is None:
-        raise TypeError(f"layout_to_isl_map places a ShardLayout, not {type(layout).__name__}")
-    while (inner := shard_layout_of(layers[-1].layout)) is not None:
+    layers = [shard_layout_of(layout) or layout]
+    if not isinstance(layers[0], (Layout, ShardLayout)):
+        raise TypeError(f"layout_to_isl_map places a Layout or ShardLayout, not {type(layout).__name__}")
+    while isinstance(layers[-1], ShardLayout) and (inner := shard_layout_of(layers[-1].layout)) is not None:
         layers.append(inner)
     extents = tuple(flatten_tuple(layers[0].shape))
     coords = [f"c{axis}" for axis in range(len(shape))]
@@ -558,11 +558,31 @@ def layout_to_isl_map(
         if logical == 0:
             positions = ", ".join(f"p{index}" for index in range(len(extents)))
             return isl.map(f"{{ [{domain}] -> [{positions}] : 1 = 0 }}")
-    from .types.layout_correspondence import layout_correspondence  # noqa: PLC0415
+    from .types.int_tuple import compatible_profile, mode_axes  # noqa: PLC0415
 
-    image = layout_correspondence(layers[0].shape, tuple(shape)).coordinates(coords)
+    axes = mode_axes(compatible_profile(layers[0].shape, tuple(shape)))
+    image = ["0"] * len(extents)
+    for axis, coord in enumerate(coords):
+        positions = [p for p, target in enumerate(axes)
+                     if target == axis and static_dim_value(extents[p]) != 1]
+        inner = 1
+        for position in reversed(positions):
+            term = coord if inner == 1 else f"floor({coord}/{inner})"
+            if position == positions[0]:
+                image[position] = term
+                break
+            extent = static_dim_value(extents[position])
+            if extent is None:
+                raise ValueError(
+                    f"layout position {position} has extent {extents[position]!r}; "
+                    "dividing a coordinate by it is not affine"
+                )
+            image[position] = f"({term}) mod {extent}"
+            inner *= extent
     cutting: dict[int, list[tuple[ShardLayout, int, bool]]] = {}
     for layer in reversed(layers):
+        if not isinstance(layer, ShardLayout):
+            continue
         mesh_extents = flatten(layer.mesh.layout).shape
         cuts = divided(layer)
         for mesh_axis, attr in enumerate(layer.attrs):

@@ -20,7 +20,7 @@ from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.types.callable_type import callable_type_for
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.dtype import IntegerDType
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
+from tilefoundry.ir.types.int_tuple import compatible_profile
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
 from tilefoundry.ir.types.utils import static_dim_value, tensor_types, types_compatible
@@ -74,7 +74,7 @@ def _require_axis_groups(node, type_, ctx):
     for tensor in tensor_types(type_):
         if tensor.layout is not None:
             try:
-                layout_correspondence(tensor.layout.shape, tensor.shape).tensor_axes()
+                compatible_profile(tensor.layout.shape, tensor.shape)
             except ValueError as error:
                 ctx.error(node, str(error))
 

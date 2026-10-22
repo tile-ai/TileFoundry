@@ -14,9 +14,11 @@ from pathlib import Path
 from tilefoundry.ir.pattern.utils import selected_pattern
 from tilefoundry.ir.tir.cuda.nn import wgmma
 from tilefoundry.ir.types import Layout
-from tilefoundry.ir.types.int_tuple import flatten, product
+from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axes, product
+from tilefoundry.ir.types.layout import flatten as flatten_layout
+from tilefoundry.ir.types.layout import unflatten
 from tilefoundry.ir.types.layout_algebra import coalesce
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
+from tilefoundry.ir.types.stride import crd2idx
 
 from ._operand_layout import _bound_fragment
 
@@ -148,20 +150,22 @@ def to_tv_layout(atom, role):
         return Layout(((threads,), shape), ((0,), (1, shape[0])))
 
     shard = _bound_fragment(atom, role)
-    corresponding = layout_correspondence(shard.layout.shape, shape)
-    steps = [0] * len(corresponding.extents)
-    for axis, group in enumerate(corresponding.groups):
+    axes = mode_axes(compatible_profile(shard.layout.shape, shape))
+    extents = flatten(shard.layout.shape)
+    steps = [0] * len(extents)
+    for axis in range(len(shape)):
+        group = tuple(i for i, target in enumerate(axes) if target == axis)
         step = (shape[1] if axis == 0 else 1) if role == "B" else (1 if axis == 0 else shape[0])
         for position in reversed(group):
             steps[position] = step
-            step *= corresponding.extents[position]
+            step *= extents[position]
     thread_axes = [attr.axis for attr in shard.attrs]
     mesh_steps = flatten(shard.mesh.layout.strides)
     thread_axes = [axis for _, axis in sorted(zip(mesh_steps, thread_axes, strict=True))]
     value_axes = [i for i in range(len(steps)) if i not in thread_axes]
     parts = [
         _canonical(
-            tuple(corresponding.extents[i] for i in axes),
+            tuple(extents[i] for i in axes),
             tuple(steps[i] for i in axes),
             values=index == 1,
         )
@@ -172,11 +176,9 @@ def to_tv_layout(atom, role):
 
 def to_byte_layout(layout, shape, element_bytes, region):
     """Enumerate a rectangular region; swizzle acts on bytes, including the offset."""
-    corresponding = layout_correspondence(layout.outer.shape, shape)
-    strides = flatten(layout.outer.strides)
+    grouped = unflatten(flatten_layout(layout.outer), compatible_profile(layout.outer.shape, shape))
     addresses = []
     for row, column in itertools.product(range(region[0]), range(region[1])):
-        digits = corresponding.digits(row * shape[1] + column)
-        offset = layout.offset + sum(x * d for x, d in zip(digits, strides, strict=True))
+        offset = layout.offset + crd2idx((row, column), grouped.shape, grouped.strides)
         addresses.append(layout.inner(offset * element_bytes))
     return tuple(addresses)

@@ -9,8 +9,9 @@ from tilefoundry.ir.tir.cuda.memory.stmatrix import StMatrix
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import WARPGROUP, Form, Wgmma
 from tilefoundry.ir.types import DType, Layout, Mesh, StorageKind, TensorType, Topology
-from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
+from tilefoundry.ir.types.int_tuple import compatible_profile
+from tilefoundry.ir.types.layout import flatten, unflatten
+from tilefoundry.ir.types.stride import crd2idx
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal, check_call
 
 from ._cute_reference import cute_reference
@@ -52,7 +53,11 @@ def test_stmatrix_matches_cute_per_lane(n, dtype):
         for value in range(0, 128, 16)
     }
     primitive = flatten(src.layout.layout)
-    coords = layout_correspondence(primitive.shape, src.shape)
+    coords = compatible_profile(primitive.shape, src.shape)
+    digit_layouts = tuple(
+        unflatten(Layout(primitive.shape, tuple(int(i == p) for i in range(len(primitive.shape)))), coords)
+        for p in range(len(primitive.shape))
+    )
     for warp in range(4):
         for issue in range(n // 16):
             for lane in range(32):
@@ -62,7 +67,10 @@ def test_stmatrix_matches_cute_per_lane(n, dtype):
                         row_lane, column = destination[address]
                         row = 16 * warp + row_lane % 8 + 8 * ((row_lane // 8) % 2)
                         column += 16 * issue + 8 * (row_lane // 16)
-                        digits = coords.digits(row * n + column)
+                        digits = tuple(
+                            crd2idx((row, column), layout.shape, layout.strides)
+                            for layout in digit_layouts
+                        )
                         assert tuple(digits[position] for position in (0, 2, 4)) == (
                             warp,
                             lane // 4,

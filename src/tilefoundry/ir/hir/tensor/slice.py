@@ -16,9 +16,10 @@ from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub, simplify_dim
-from tilefoundry.ir.types.int_tuple import flatten, partition_modes
+from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axes, partition_modes
+from tilefoundry.ir.types.layout import flatten as flat_layout
+from tilefoundry.ir.types.layout import unflatten
 from tilefoundry.ir.types.layout_algebra import composition
-from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx
 from tilefoundry.ir.types.substitute import dim_vars_by_name
@@ -327,20 +328,26 @@ def window_layout(source, logical_shape, starts, sizes, strides, ctx):
         return replace(shard, layout=replace(primitive, outer=window.layout)), 0
     if not isinstance(primitive, Layout):
         raise ValueError(f"Slice cannot preserve {type(primitive).__name__} layout")
-    correspondence = layout_correspondence(primitive.shape, logical_shape)
-    if correspondence.groups is None:
-        raise ValueError(f"layout {primitive!r} crosses logical axes of {logical_shape}")
+    try:
+        profile = compatible_profile(primitive.shape, logical_shape)
+    except ValueError as error:
+        raise ValueError(f"layout {primitive!r} crosses logical axes of {logical_shape}") from error
+    axes = mode_axes(profile)
+    by_axis = unflatten(flat_layout(primitive), profile)
+    groups = tuple(tuple(i for i, target in enumerate(axes) if target == axis)
+                   for axis in range(len(logical_shape)))
+    flat_extents = tuple(flatten(primitive.shape))
     split = {attr.axis for attr in shard.attrs if isinstance(attr, Split)} if shard else set()
     steps = tuple(flatten(primitive.strides))
     grouped = any(isinstance(mode, tuple) for mode in primitive.shape)
     shape_modes, stride_modes, tilers, positions = [], [], [], {}
     offset, known_offset = 0, True
 
-    for axis, group in enumerate(correspondence.groups):
-        extents = tuple(correspondence.extents[position] for position in group)
+    for axis, group in enumerate(groups):
+        extents = tuple(flat_extents[position] for position in group)
         walks = tuple(steps[position] for position in group)
-        shape_modes.append(correspondence.axis_mode(primitive.shape, axis))
-        stride_modes.append(correspondence.axis_mode(primitive.strides, axis))
+        shape_modes.append(by_axis.shape[axis])
+        stride_modes.append(by_axis.strides[axis])
         start, size, step = starts[axis], sizes[axis], strides[axis]
         distributed = bool(split.intersection(group))
         kept = list(zip(group, extents, strict=True))
@@ -407,12 +414,7 @@ def window_layout(source, logical_shape, starts, sizes, strides, ctx):
             for position, extent, walk in zip(group, extents, walks, strict=True)
         )
         if (literal := _literal(start)) is not None:
-            digits = (
-                (literal,)
-                if len(group) == 1
-                else layout_correspondence(extents, (logical_shape[axis],)).digits(literal)
-            )
-            offset += crd2idx(digits, extents, physical)
+            offset += crd2idx(literal, extents, physical)
         else:
             below = 1
             for index in reversed(range(len(extents))):

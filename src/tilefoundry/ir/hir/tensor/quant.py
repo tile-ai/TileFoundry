@@ -17,11 +17,11 @@ from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, ShardLayout, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim
+from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import default_layout, flatten
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Split,
-    layout_axis_to_tensor_axis,
     shard_layout_local_shape,
     split_target_axes,
 )
@@ -64,7 +64,7 @@ def _logical_shard_attrs(call, ctx, x_ty, group: int):
     if last_axis in targets:
         try:
             local_shape = shard_layout_local_shape(layout)
-            layout_axes = layout_axis_to_tensor_axis(layout.layout.shape, x_ty.shape)
+            layout_axes = mode_axes(compatible_profile(layout.layout.shape, x_ty.shape))
             strides = layout.layout.strides
             global_factors = []
             local_factors = []
