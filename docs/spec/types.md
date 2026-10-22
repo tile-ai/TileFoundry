@@ -89,7 +89,8 @@ class TensorType:
   - `layout` is either `None` or one member of the `LayoutBase` hierarchy
     defined by [shard §2](./shard.md#2-layout-hierarchy).
     Concrete layout readers MUST use `resolve_layout(layout, logical_shape)`:
-    `None` and omitted strides mean compact row-major. The reader recursively
+    `None` and omitted strides use `default_layout`: compact row-major with
+    symbolic products and stride zero on statically unit leaves. The reader recursively
     resolves ShardLayout and ComposedLayout while retaining mesh, attributes,
     swizzle, offset, and explicit strides; it does not mutate the stored type.
     In signature compatibility, a declared `layout=None` instead imposes no
@@ -688,7 +689,7 @@ def make_shard_tensor_type(
     fields to `TensorType`.
   - `make_shard_tensor_type` MUST return a plain tensor type when `mesh` is
     `None` or `attrs` is empty; otherwise it MUST build the layout through
-    `canonical_shard_layout`.
+    `default_shard_layout`.
 
 ## 9. Callable type projection
 

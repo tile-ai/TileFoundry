@@ -137,7 +137,9 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], ExprVisitor[str]):
                 if value is not None:
                     with self.type_surface(indent=self.indent + "    "):
                         rendered = (
-                            self.layout_surface(value, self.context)
+                            self.layout_surface(
+                                value, self.context, storage=getattr(expr.type, "storage", None)
+                            )
                             if isinstance(value, LayoutBase)
                             else self.print(value, self.context, self.indent + "    ")
                         )
@@ -411,6 +413,7 @@ def _function_block(
 ) -> list[str]:
     ctx = context or TirPrintContext()
     ctx.valuation = frame
+    ctx.target = fn.target
     target = ctx.use(fn.target.to_python())
     dim_vars = {
         d.name: d

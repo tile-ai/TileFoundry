@@ -6,10 +6,10 @@ from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import flatten, rank
 from tilefoundry.ir.types.stride import idx2crd
 
-from .layout import ComposedLayout, Layout, LayoutBase, get, resolve_layout
+from .layout import ComposedLayout, Layout, LayoutBase, default_layout, get, resolve_layout
 from .layout_correspondence import layout_correspondence
 from .mesh import Mesh
-from .stride import compact_row_major, try_compact_major
+from .stride import compact_row_major
 
 
 class ShardAttr:
@@ -76,12 +76,15 @@ def shard_layout_of(layout: object) -> "ShardLayout | None":
     return None
 
 
-def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "ShardLayout":
+def default_shard_layout(
+    logical_shape: tuple, mesh: Mesh, attrs: tuple, *, instance_levels=frozenset()
+) -> "ShardLayout":
     """Bind logical axes to mesh axes in the canonical factored layout.
 
     Static splits produce mesh positions plus a residual; dynamic single-axis
     splits remain whole, while multi-axis splits divide structurally. Remap
-    attributes to factored positions and rebuild static strides in C order.
+    attributes to factored positions and fill normalized row-major strides.
+    Splits in instance_levels address independent local allocations.
 
     Defer exact_quotient: core.op loads types.storage and staged shard_layout
     exports before core.expr defines Call, which dim needs during import.
@@ -94,6 +97,8 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
     bindings: dict[int, list[int]] = {}
     for mesh_axis, attr in enumerate(attrs):
         if isinstance(attr, Split):
+            if mesh_axis >= len(mesh_shape) or attr.axis >= len(logical_shape):
+                raise ValueError(f"Split({attr.axis}) has no matching mesh axis {mesh_axis}")
             bindings.setdefault(attr.axis, []).append(mesh_axis)
 
     layout_shape: list = []
@@ -116,7 +121,7 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
                 quotient = exact_quotient(residual, extent)
                 if quotient is None:
                     raise ValueError(
-                        f"canonical_shard_layout: logical axis {logical_axis} size "
+                        f"default_shard_layout: logical axis {logical_axis} size "
                         f"{axis_size!r} is dynamic; cannot factorize across multiple "
                         f"mesh axes (undecidable division by axis {mesh_axis} "
                         f"extent {extent!r})"
@@ -132,7 +137,7 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
             extent = mesh_shape[mesh_axis]
             if not (isinstance(extent, int) and not isinstance(extent, bool)):
                 raise ValueError(
-                    f"canonical_shard_layout: mesh axis {mesh_axis} has a "
+                    f"default_shard_layout: mesh axis {mesh_axis} has a "
                     f"dynamic extent {extent!r}; cannot factorize logical "
                     f"axis {logical_axis}"
                 )
@@ -141,7 +146,7 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
             extent_product *= extent
         if axis_size % extent_product != 0:
             raise ValueError(
-                f"canonical_shard_layout: logical axis {logical_axis} size "
+                f"default_shard_layout: logical axis {logical_axis} size "
                 f"{axis_size} is not divisible by mesh extent product "
                 f"{extent_product}"
             )
@@ -154,11 +159,36 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
         for mesh_axis, attr in enumerate(attrs)
     )
     layout_shape = tuple(layout_shape)
-    return ShardLayout(
-        layout=Layout(shape=layout_shape, strides=try_compact_major(layout_shape)),
-        attrs=remapped_attrs,
-        mesh=mesh,
+    return fill_shard_strides(
+        ShardLayout(
+            layout=default_layout(layout_shape),
+            attrs=remapped_attrs,
+            mesh=mesh,
+        ),
+        instance_levels=instance_levels,
     )
+
+
+def fill_shard_strides(shard: ShardLayout, *, instance_levels=frozenset()) -> ShardLayout:
+    """Fill default strides without changing the placement's authored mode tree."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from .mesh import separate  # noqa: PLC0415
+
+    levels = tuple(
+        level.topologies[0].name
+        for level in separate(shard.mesh)
+        for _ in flatten(level.layout).shape
+    )
+    local_shape = list(shard.layout.shape)
+    for mesh_axis, attr in enumerate(shard.attrs):
+        if isinstance(attr, Split):
+            if mesh_axis >= len(levels) or attr.axis >= len(local_shape):
+                raise ValueError(f"Split({attr.axis}) has no matching mesh axis {mesh_axis}")
+            if levels[mesh_axis] in instance_levels:
+                local_shape[attr.axis] = 1
+    strides = default_layout(tuple(local_shape)).strides
+    return replace(shard, layout=Layout(shard.layout.shape, strides))
 
 
 def shard_layout_local_shape(sl: "ShardLayout", *, require_static: bool = True) -> tuple:
@@ -417,7 +447,7 @@ __all__ = [
     "B",
     "ShardLayout",
     "shard_layout_of",
-    "canonical_shard_layout",
+    "default_shard_layout",
     "shard_layout_local_shape",
     "layout_axis_to_tensor_axis",
     "split_target_axes",

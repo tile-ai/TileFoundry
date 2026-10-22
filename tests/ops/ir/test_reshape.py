@@ -87,10 +87,10 @@ def test_plain_c_order_layout_is_derived_when_reshape_is_a_view(
     )
 
 
-def test_noncontiguous_plain_reshape_records_shape_with_unknown_strides():
+def test_noncontiguous_plain_reshape_uses_default_strides():
     source = make_tensor_type((8, 16), layout=Layout(shape=(8, 16), strides=(1, 8)))
 
-    assert infer_call(_reshape((128,)), source).layout == Layout(shape=(128,), strides=None)
+    assert infer_call(_reshape((128,)), source).layout == Layout(shape=(128,), strides=(1,))
 
 
 def test_straddling_split_fails_closed():

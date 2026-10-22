@@ -36,8 +36,8 @@ def gemm(
                     staged_dst = tf.empty(type=Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"])  # Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"]; memory footprint-precision=exact
                     staged = tf.schedule((tile_out, staged_dst), op=T.copy())  # Tensor[(128, 256), "bf16", Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3), "smem"]; memory traffic=rmem:r64.00KiB/w0@logical,r64.00KiB/w0@total,r64.00KiB/w0@cta,r256B/w0@thread;smem:r0/w64.00KiB@logical,r0/w64.00KiB@total,r0/w64.00KiB@cta,r0/w256B@thread footprint-precision=exact
                 with thread[:1, :32] as thread_6:  # memory peak=smem:64.00KiB
-                    tile_dst = tf.empty(type=Tensor[(128, 256), "bf16", (128, 256)])  # Tensor[(128, 256), "bf16", (128, 256)]; memory footprint-precision=exact
-                    tile = tf.schedule((staged, tile_dst), op=T.copy_async_tensor())  # Tensor[(128, 256), "bf16", (128, 256)]; memory traffic=gmem:r0/w64.00KiB@logical,r0/w64.00KiB@total,r0/w64.00KiB@cta,r0/w64.00KiB@thread;smem:r64.00KiB/w0@logical,r64.00KiB/w0@total,r64.00KiB/w0@cta,r64.00KiB/w0@thread footprint=tile_dst:64.00KiB footprint-precision=exact
+                    tile_dst = tf.empty(type=Tensor[(128, 256), "bf16"])  # Tensor[(128, 256), "bf16"]; memory footprint-precision=exact
+                    tile = tf.schedule((staged, tile_dst), op=T.copy_async_tensor())  # Tensor[(128, 256), "bf16"]; memory traffic=gmem:r0/w64.00KiB@logical,r0/w64.00KiB@total,r0/w64.00KiB@cta,r0/w64.00KiB@thread;smem:r64.00KiB/w0@logical,r64.00KiB/w0@total,r64.00KiB/w0@cta,r64.00KiB/w0@thread footprint=tile_dst:64.00KiB footprint-precision=exact
                     out_3 = tf.insert_slice(out, tile, (m, n))  # Tensor[(8192, 17408), "bf16"]; memory traffic=gmem:r64.00KiB/w64.00KiB@logical,r64.00KiB/w64.00KiB@total,r64.00KiB/w64.00KiB@cta,r64.00KiB/w64.00KiB@thread;rmem:r16B/w0@logical,r16B/w0@total,r16B/w0@cta,r16B/w0@thread footprint=tile_dst:64.00KiB;out_3:64.00KiB footprint-precision=exact
                 out = out_3
             out = out

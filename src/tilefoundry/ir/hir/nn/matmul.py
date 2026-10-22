@@ -10,14 +10,15 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, FloatDType, Layout, StorageKind, TensorType
+from tilefoundry.ir.types import DType, FloatDType, StorageKind, TensorType
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
-    canonical_shard_layout,
+    default_shard_layout,
     shard_layout_of,
     split_target_axes,
 )
-from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -133,6 +134,11 @@ def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tup
     out_shape = shape_from_relation(
         relation[len(call.args)], (*out_batch, lhs.shape[a_m], rhs.shape[b_n], lhs.shape[a_k])
     )
+    levels = (
+        instance_levels(ctx.target, lhs.storage)
+        if any(shard_layout_of(t.layout) is not None for t in (lhs, rhs))
+        else frozenset()
+    )
     k_domain_dim = len(out_shape)
     try:
         shard = derive_output_shard_layout(
@@ -140,6 +146,7 @@ def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tup
             relation,
             out_shape,
             partial_reduction_dims=frozenset({k_domain_dim}),
+            instance_levels=levels,
         )
     except ValueError as e:
         ctx.error(call, str(e))
@@ -147,11 +154,11 @@ def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tup
     if layout is None:
         held = shard_layout_of(lhs.layout) or lhs.layout
         if isinstance(held, ShardLayout):
-            layout = canonical_shard_layout(out_shape, held.mesh, held.attrs)
+            layout = default_shard_layout(out_shape, held.mesh, held.attrs, instance_levels=levels)
         elif held is None or tuple(held.shape) == tuple(out_shape):
             layout = held
         else:
-            layout = Layout(shape=out_shape, strides=try_compact_major(out_shape))
+            layout = default_layout(out_shape)
     return out_shape, layout
 
 

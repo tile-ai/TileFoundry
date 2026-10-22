@@ -15,12 +15,12 @@ class ScheduledScale:
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
                 T.fill(out, 0.0)
-                scaled_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
-                value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+                scaled_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", "rmem"])
+                value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", "rmem"])
                 value = T.tensor_view(T.ptr_of(x), layout=(32,), shape=(32,))
                 value_1 = T.tensor_view(T.ptr_of(value_dst), layout=(32,), shape=(32,))
                 T.copy(value, value_1)
-                weight_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+                weight_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", "rmem"])
                 value_2 = T.tensor_view(T.ptr_of(w), layout=(32,), shape=(32,))
                 value_3 = T.tensor_view(T.ptr_of(weight_dst), layout=(32,), shape=(32,))
                 T.copy(value_2, value_3)
@@ -44,7 +44,7 @@ class ModuleInstances:
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
                 T.fill(out, 0.0)
-                value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", (32,), "rmem"])
+                value_dst = T.alloc_tensor(tensor_type=Tensor[(32,), "f32", "rmem"])
                 value = T.tensor_view(T.ptr_of(x), layout=(32,), shape=(32,))
                 value_1 = T.tensor_view(T.ptr_of(value_dst), layout=(32,), shape=(32,))
                 T.copy(value, value_1)

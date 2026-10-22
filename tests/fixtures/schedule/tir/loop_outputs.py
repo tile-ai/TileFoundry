@@ -13,7 +13,7 @@ def gemm(
             T.fill(out, 0.0)
             for row in range(0, 2, 1):
                 value = T.tensor_view(
-                    T.ptr_of(x[row:row + 1, 0:0 + 1]), layout=((1, 4), (0, 1)), shape=(1, 4)
+                    T.ptr_of(x[row:row + 1, 0:0 + 1]), layout=(1, 4), shape=(1, 4)
                 )
                 landing = T.tensor_view(
                     0, dtype="bf16", storage="smem", layout=(1, 4), shape=(1, 4)
@@ -34,7 +34,7 @@ def gemm(
                 )
                 T.fill(temporary_1, 0.0)
                 value_5 = T.tensor_view(
-                    T.ptr_of(x[row_2:row_2 + 1, 0:0 + 1]), layout=((1, 4), (0, 1)), shape=(1, 4)
+                    T.ptr_of(x[row_2:row_2 + 1, 0:0 + 1]), layout=(1, 4), shape=(1, 4)
                 )
                 landing_1 = T.tensor_view(
                     0, dtype="bf16", storage="smem", layout=(1, 4), shape=(1, 4)

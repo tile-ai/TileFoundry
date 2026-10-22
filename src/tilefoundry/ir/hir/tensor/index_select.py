@@ -8,14 +8,14 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.layout import Layout, default_layout
 from tilefoundry.ir.types.shard_layout import (
     Partial,
     ShardLayout,
     Split,
     split_target_axes,
 )
-from tilefoundry.ir.types.stride import compact_col_major, compact_row_major
+from tilefoundry.ir.types.stride import compact_col_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -53,7 +53,7 @@ def _index_select_shard_layout(call, ctx, x_ty, dim: int, out_shape: tuple):
     """
     sl = x_ty.layout
     if isinstance(sl, Layout):
-        return Layout(shape=out_shape, strides=compact_row_major(out_shape))
+        return default_layout(out_shape)
     if not isinstance(sl, ShardLayout):
         return sl
     if not isinstance(sl.layout, Layout):

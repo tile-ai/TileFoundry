@@ -154,7 +154,7 @@ class PrefillDecodeAttention:
                 running_max = tf.full_like(template, value=-1e30)
                 running_sum = tf.full_like(template, value=0.0)
                 running_out = tf.zeros(
-                    Tensor[(1, HEADS, BLOCK, HEAD_DIM), "f32", ((1, HEADS @ cta.head, BLOCK, HEAD_DIM), (HEADS * BLOCK * HEAD_DIM, BLOCK * HEAD_DIM, HEAD_DIM, 1)), "smem"]
+                    Tensor[(1, HEADS @ cta.head, BLOCK, HEAD_DIM), "f32", "smem"]
                 )
 
                 for key_start in range(0, ceildiv(SEQ, BLOCK) * BLOCK, BLOCK):

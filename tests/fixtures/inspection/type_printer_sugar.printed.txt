@@ -43,7 +43,7 @@ class TypePrinterSugar:
         mine = tf.reshard(x, layout=(4 @ mesh.tile, 2, 16), storage="rmem")
         v1 = tf.reshard(mine, layout=(8, 16), storage="gmem")
         escaped = tf.reshard(x, layout=ShardLayout(
-            layout=Layout((2, 4, 16), None),
+            layout=Layout((2, 4, 16), (0, 16, 1)),
             attrs=(S(0), B()),
             mesh=Mesh((Topology("thread", 8),), layout=(2, 4), names=("warp", "lane")),
         ), storage="rmem")

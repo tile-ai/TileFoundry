@@ -1,8 +1,8 @@
 """Cover Reshard materialization strides and rejected destinations.
 
-Storage changes require explicit layouts and cannot target ``umat``. Direction
-selects shared C-order or per-instance strides; dynamic axes are accepted only
-where the chosen storage form can represent them.
+Storage changes require explicit layouts and cannot target ``umat``. The target
+memory owner selects shared or per-instance strides; without a target the default
+is shared. Dynamic axes have symbolic compact strides.
 
 See [hir §1.3](docs/spec/hir.md#13-op).
 """
@@ -20,7 +20,7 @@ from tilefoundry.dsl.storage import gmem, rmem
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import Broadcast, Layout, Mesh, ShardLayout, Topology, make_tensor_type
-from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
@@ -66,9 +66,6 @@ _SL_DYN_BARE = ShardLayout(
 )
 
 
-_DYN_OUTER_STRIDE = simplify_dim(DimMul, (32 * 128, _S_DYN))
-
-
 CASES = [
     TypeInferCase(
         "destination_umat_rejected",
@@ -83,13 +80,13 @@ CASES = [
         ExpectedError(match="storage change requires"),
     ),
     TypeInferCase(
-        "high_to_low_sugar_materializes_per_instance",
+        "unbound_target_rmem_defaults_to_shared",
         Reshard(layout=_SL_H2L, storage=rmem),
         (make_tensor_type((2, 4, 128)),),
         make_tensor_type(
             (2, 4, 128),
             storage=rmem,
-            layout=_materialized((2, 4, 128), (128, 0, 1), (Split(1),), _MESH_H2L),
+            layout=_materialized((2, 4, 128), (512, 128, 1), (Split(1),), _MESH_H2L),
         ),
     ),
     TypeInferCase(
@@ -118,18 +115,18 @@ CASES = [
             (1, _S_DYN, 32, 128),
             storage=gmem,
             layout=_materialized(
-                (1, _S_DYN, 32, 128), (_DYN_OUTER_STRIDE, 32 * 128, 128, 1), (Split(2),), _MESH_DYN
+                (1, _S_DYN, 32, 128), (0, 32 * 128, 128, 1), (Split(2),), _MESH_DYN
             ),
         ),
     ),
     TypeInferCase(
-        "high_to_low_dynamic_bare_axis_materializes_per_instance",
+        "unbound_target_dynamic_axis_defaults_to_shared",
         Reshard(layout=_SL_DYN_BARE, storage=rmem),
         (make_tensor_type((1, _S_DYN, 32, 128)),),
         make_tensor_type(
             (1, _S_DYN, 32, 128),
             storage=rmem,
-            layout=_materialized((1, _S_DYN, 32, 128), (0, 4 * 128, 0, 1), (Split(2),), _MESH_DYN),
+            layout=_materialized((1, _S_DYN, 32, 128), (0, 32 * 128, 128, 1), (Split(2),), _MESH_DYN),
         ),
     ),
 ]

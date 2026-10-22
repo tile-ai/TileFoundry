@@ -19,7 +19,7 @@ class TirSquare:
         with Mesh((Topology("thread", 128),), layout=(128,), names=("t",)) as thread:
             for index in range(thread.t, shape_of(x, axis=0), 128):
                 view = T.tensor_view(T.ptr_of(x[index:index + 1]), layout=(1,), shape=(1,))
-                reg = T.alloc_tensor(tensor_type=Tensor[(1,), "f32", (1,), "rmem"])
+                reg = T.alloc_tensor(tensor_type=Tensor[(1,), "f32", "rmem"])
                 for phase in range(0, 2, 1):
                     if phase < 1:
                         T.copy(view, reg)
@@ -33,7 +33,7 @@ class TirSquare:
         with Mesh((Topology("thread", 128),), layout=(128,), names=("t",)) as thread:
             for index in range(thread.t, shape_of(x, axis=0), 128):
                 view = T.tensor_view(T.ptr_of(x[index:index + 1]), layout=(1,), shape=(1,))
-                reg = T.alloc_tensor(tensor_type=Tensor[(1,), "f32", (1,), "rmem"])
+                reg = T.alloc_tensor(tensor_type=Tensor[(1,), "f32", "rmem"])
                 for phase in range(0, 2, 1):
                     if phase < 1:
                         T.copy(view, reg)

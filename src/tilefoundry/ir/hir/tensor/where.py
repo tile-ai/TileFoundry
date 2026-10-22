@@ -10,10 +10,11 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.hir.math.binary import _merge_layout
-from tilefoundry.ir.types import DType, Layout, TensorType
+from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import Broadcast, shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -62,13 +63,21 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     for name, type_ in (("condition", condition), ("input", input_), ("other", other)):
         reject_partials(ctx, call, name, type_.layout)
 
+    storage = resolve_anchor_storage(ctx, call, input_.storage, other.storage)
+    levels = (
+        instance_levels(ctx.target, storage)
+        if any(shard_layout_of(t.layout) is not None for t in (condition, input_, other))
+        else frozenset()
+    )
     try:
         relation = relations_of(call, ctx)
         out_shape = shape_from_relation(
             relation[len(call.args)],
             broadcast_all((condition.shape, input_.shape, other.shape)),
         )
-        data_shard = derive_output_shard_layout((input_, other), relation[1:], out_shape)
+        data_shard = derive_output_shard_layout(
+            (input_, other), relation[1:], out_shape, instance_levels=levels
+        )
         layout = (
             data_shard
             if data_shard is not None
@@ -76,6 +85,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 shard_layout_of(input_.layout) or input_.layout,
                 shard_layout_of(other.layout) or other.layout,
                 out_shape,
+                levels=levels,
             )
         )
 
@@ -83,7 +93,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         if condition_shard is not None and any(
             not isinstance(attr, Broadcast) for attr in condition_shard.attrs
         ):
-            combined = derive_output_shard_layout((condition, input_, other), relation, out_shape)
+            combined = derive_output_shard_layout(
+                (condition, input_, other), relation, out_shape, instance_levels=levels
+            )
             if combined != layout:
                 ctx.error(
                     call,
@@ -93,9 +105,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     except ValueError as error:
         ctx.error(call, f"Where: {error}")
 
-    storage = resolve_anchor_storage(ctx, call, input_.storage, other.storage)
     if layout is None and storage in (StorageKind.RMEM, StorageKind.SMEM) and out_shape:
-        layout = Layout(shape=out_shape, strides=try_compact_major(out_shape))
+        layout = default_layout(out_shape)
     return TensorType(
         shape=out_shape,
         dtype=input_.dtype,

@@ -298,7 +298,7 @@ EXPECTED_MEMORY_PEAKS = {
     "prefill_decode_attention.PrefillDecodeAttention.attend[ctx=128,seq=128]": {
         "gmem": 1_310_720,
         "rmem": 128 * 128 * 4,
-        "smem": 309376,
+        "smem": 231424,
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]": {
         "gmem": 152_184_080,

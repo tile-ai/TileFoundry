@@ -8,8 +8,9 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import Layout, TensorType
-from tilefoundry.ir.types.stride import compact_row_major
+from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.layout import default_layout
+from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -59,10 +60,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = tuple(x_ty.shape[p] for p in perm)
 
     new_layout = derive_output_shard_layout(
-        (x_ty,), relations_of(call, ctx), new_shape, fresh_strides=True
+        (x_ty,),
+        relations_of(call, ctx),
+        new_shape,
+        fresh_strides=True,
+        instance_levels=instance_levels(ctx.target, x_ty.storage),
     )
     if new_layout is None:
-        new_layout = Layout(new_shape, tuple(compact_row_major(new_shape)))
+        new_layout = default_layout(new_shape)
     return TensorType(shape=new_shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
 
 

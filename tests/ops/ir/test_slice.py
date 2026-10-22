@@ -149,7 +149,7 @@ def test_runtime_window_before_a_split_axis_preserves_the_split_target():
     actual = _slice_type(source, (0, start, 0, 0), (1, 128, 16, 128), (1, 1, 1, 1))
 
     assert actual.layout == ShardLayout(
-        layout=Layout(shape=(1, 128, 16, 128), strides=None),
+        layout=Layout(shape=(1, 128, 16, 128), strides=(0, 2048, 128, 1)),
         attrs=(Split(2),),
         mesh=mesh,
     )

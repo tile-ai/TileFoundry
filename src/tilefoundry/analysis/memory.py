@@ -28,7 +28,7 @@ from tilefoundry.ir.types.utils import (
     leaves_of,
     participant_layout,
 )
-from tilefoundry.target.facts import TopologyFacts
+from tilefoundry.target.facts import TopologyFacts, owner_levels
 from tilefoundry.utils.units import format_bytes
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
@@ -449,8 +449,9 @@ def values_in_region(
             raise AnalysisError(f"memory: level {lifetime.memory_level!r} has no declared owner")
         if declared.owner == TARGET_MEMORY_OWNER:
             continue
-        owner_position = positions.get(declared.owner)
-        if owner_position is None:
+        try:
+            owned = owner_levels(declared.owner, topology_names)
+        except ValueError:
             raise AnalysisError(
                 f"memory: level {lifetime.memory_level!r} owner {declared.owner!r} "
                 f"is not a declared topology in {topology_names}"
@@ -460,7 +461,7 @@ def values_in_region(
             if not entered_at < lifetime.defined_at < exited_at:
                 continue
         else:
-            if outermost_region > owner_position:
+            if topology_names[outermost_region] not in owned:
                 continue
             layout = shard_layout_of(getattr(held, "layout", None))
             if layout is None or not held_in_region(participant_layout(layout).mesh, region.mesh):
@@ -540,7 +541,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     for level in facts.explicit_levels:
         if not level.owner:
             raise AnalysisError(f"memory: level {level.name!r} has no declared owner")
-        if level.owner != TARGET_MEMORY_OWNER and level.owner not in owner_topologies:
+        try:
+            owner_levels(level.owner, owner_topologies)
+        except ValueError:
             raise AnalysisError(
                 f"memory: level {level.name!r} owner {level.owner!r} is not a "
                 f"target topology in {owner_topologies}"

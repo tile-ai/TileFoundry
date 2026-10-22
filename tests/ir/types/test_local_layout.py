@@ -156,7 +156,7 @@ def test_a_level_with_no_id_is_left_whole() -> None:
 def test_an_extent_its_mesh_axis_does_not_divide_is_refused() -> None:
     """A shard would not be one slice, so it is refused by name.
 
-    ``canonical_shard_layout`` refuses this when the layout is built, so the
+    ``default_shard_layout`` refuses this when the layout is built, so the
     shape asked about here is one the layout was not built for -- which is the
     only way the two can disagree, and worth naming rather than slicing.
     """

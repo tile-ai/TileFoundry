@@ -22,6 +22,7 @@ class PrintContext:
         self._mesh_bindings: list[tuple[Mesh, str]] = []
         self._used_scope_names: set[str] = set()
         self.topologies = ()
+        self.target = None
 
     def use(self, rendered: PythonExpr | str) -> str:
         if isinstance(rendered, PythonExpr):

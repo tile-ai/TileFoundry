@@ -15,19 +15,19 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, Layout, ShardLayout, TensorType, TupleType
+from tilefoundry.ir.types import DType, ShardLayout, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim
-from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.layout import default_layout, flatten
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Split,
-    canonical_shard_layout,
+    default_shard_layout,
     layout_axis_to_tensor_axis,
     shard_layout_local_shape,
     split_target_axes,
 )
-from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -119,8 +119,18 @@ def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
         attrs = _logical_shard_attrs(call, ctx, x_ty, group)
         try:
             return (
-                canonical_shard_layout(x_ty.shape, x_ty.layout.mesh, attrs),
-                canonical_shard_layout(scale_shape, x_ty.layout.mesh, attrs),
+                default_shard_layout(
+                    x_ty.shape,
+                    x_ty.layout.mesh,
+                    attrs,
+                    instance_levels=instance_levels(ctx.target, x_ty.storage),
+                ),
+                default_shard_layout(
+                    scale_shape,
+                    x_ty.layout.mesh,
+                    attrs,
+                    instance_levels=instance_levels(ctx.target, x_ty.storage),
+                ),
             )
         except ValueError as error:
             ctx.error(
@@ -130,8 +140,8 @@ def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
     if x_ty.layout is None:
         return None, None
     return (
-        Layout(shape=x_ty.shape, strides=try_compact_major(x_ty.shape)),
-        Layout(shape=scale_shape, strides=try_compact_major(scale_shape)),
+        default_layout(x_ty.shape),
+        default_layout(scale_shape),
     )
 
 

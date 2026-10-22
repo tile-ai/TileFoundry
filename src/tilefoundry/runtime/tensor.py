@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.types import Placement, Topology
+from tilefoundry.ir.types.layout import Layout, normalize_layout
 from tilefoundry.ir.types.shard_layout import local_layout_and_offset, shard_layout_of
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.utils.lazy import torch
@@ -58,7 +59,11 @@ class ShardTensor:
         layout, offset = local_layout_and_offset(
             shard, tuple(self.type.shape), tuple(ids[at[name]] for name in topology_levels)
         )
-        if tuple(self.tensor.stride()) != tuple(layout.strides):
+        written = normalize_layout(layout).strides
+        actual = normalize_layout(
+            Layout(tuple(self.tensor.shape), tuple(self.tensor.stride()))
+        ).strides
+        if actual != written:
             raise ValueError(
                 f"ShardTensor: the tensor is laid out {tuple(self.tensor.stride())} "
                 f"while its type says {tuple(layout.strides)}; the offset is counted "

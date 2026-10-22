@@ -17,7 +17,7 @@ def gemm(x: Tensor[(6, 8), "bf16"], out: Tensor[(6, 8), "bf16", "rmem"]):
                 for j in range(0, 3, 1):
                     value = T.tensor_view(
                         T.ptr_of(x[(3 * i) + j:(3 * i) + j + 1, 0:0 + 1]),
-                        layout=((1, 8), (0, 1)),
+                        layout=(1, 8),
                         shape=(1, 8),
                     )
                     value_1 = T.tensor_view(
@@ -26,7 +26,7 @@ def gemm(x: Tensor[(6, 8), "bf16"], out: Tensor[(6, 8), "bf16", "rmem"]):
                     T.copy_async(value, value_1)
                     value_2 = T.tensor_view(
                         T.ptr_of(out[(3 * i) + j:(3 * i) + j + 1, 0:0 + 1]),
-                        layout=((1, 8), (0, 1)),
+                        layout=(1, 8),
                         shape=(1, 8),
                     )
                     T.copy(value_1, value_2)

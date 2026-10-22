@@ -15,9 +15,10 @@ from tilefoundry.ir.hir._shard_checks import (
     require_uniform_partial_slices,
 )
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import Layout, TensorType
+from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import shard_layout_of
-from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -64,7 +65,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     reject_dynamic_shards(ctx, call, types, "Stack")
     try:
         relation = relations_of(call, ctx)
-        layout = derive_output_shard_layout(tuple(types), relation, new_shape, fresh_strides=True)
+        layout = derive_output_shard_layout(
+            tuple(types),
+            relation,
+            new_shape,
+            fresh_strides=True,
+            instance_levels=instance_levels(ctx.target, base.storage),
+        )
     except ValueError as error:
         ctx.error(
             call,
@@ -84,7 +91,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 "layout; use an explicit Reshard before Stack",
             )
     else:
-        layout = Layout(shape=new_shape, strides=try_compact_major(new_shape))
+        layout = default_layout(new_shape)
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))
     return TensorType(shape=new_shape, dtype=base.dtype, layout=layout, storage=storage)
 

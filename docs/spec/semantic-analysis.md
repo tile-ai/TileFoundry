@@ -155,6 +155,7 @@ def derive_output_shard_layout(
     partial_reduction_dims: frozenset[int] = frozenset(),
     complete_reduction_dims: frozenset[int] = frozenset(),
     fresh_strides: bool = False,
+    instance_levels: frozenset[str] = frozenset(),
 ): ...
 ```
 
@@ -171,8 +172,12 @@ def derive_output_shard_layout(
   - `partial_reduction_dims` turns a reduced split into `Partial("sum")`;
     `complete_reduction_dims` turns it into `Broadcast`. The sets MUST NOT
     overlap.
-  - `fresh_strides=True` requests fresh canonical strides; otherwise a
-    compatible propagated physical layout is preserved when possible.
+  - `fresh_strides=True` uses `default_layout` for fresh row-major strides;
+    statically unit leaves have stride zero, and symbolic strides remain symbolic.
+    Split modes in `instance_levels` also have stride zero and count as extent one
+    while compacting the remaining modes. The set comes from the target memory
+    owner and every coarser topology level. With no memory hierarchy it is empty.
+    Otherwise a compatible propagated physical layout is preserved when possible.
   - `ShardLayout.attrs` is indexed by mesh axis. A `Partial(reduction)` is a
     value state at that exact index, not an unordered collection of reductions
     and not a layout position. Every propagation decision MUST retain that

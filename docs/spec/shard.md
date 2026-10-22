@@ -878,6 +878,20 @@ Making the steps of a compact arrangement and reading an index back into the
 coordinate that reaches it are not operations on layouts, so they are filed
 apart from the algebra, as CuTe files `stride.hpp` apart from `layout.hpp`.
 
+`default_layout` is the tensor default constructor. It keeps the authored mode
+profile, uses compact row-major strides (including symbolic products), and
+normalizes each statically known extent-1 leaf to stride zero. Rank zero gives
+`Layout((), ())`. `normalize_layout` applies only that leaf rule to an existing
+tensor layout, preserving every other stride, mode, offset, swizzle and mesh.
+The parser uses it for explicit tensor layouts; mesh layouts and algebra
+intermediates retain their own coordinate conventions.
+
+```python
+def default_layout(shape: tuple) -> Layout: ...
+
+def normalize_layout(layout: LayoutBase) -> LayoutBase: ...
+```
+
 ```python
 class NotProjectable(ValueError):
     """Report that a layout cannot serve as a mesh execution scope."""
@@ -925,8 +939,9 @@ def try_c_order_strides(shape: tuple) -> tuple[int, ...] | None:
     ...
 
 
-def canonical_shard_layout(
-    logical_shape: tuple, mesh: Mesh, attrs: tuple[ShardAttr, ...]
+def default_shard_layout(
+    logical_shape: tuple, mesh: Mesh, attrs: tuple[ShardAttr, ...],
+    *, instance_levels: frozenset[str] = frozenset(),
 ) -> ShardLayout:
     """Build the canonical factorized sharding layout.
 
@@ -934,6 +949,7 @@ def canonical_shard_layout(
         logical_shape: Logical tensor shape.
         mesh: Device mesh.
         attrs: Shard attributes naming logical axes.
+        instance_levels: Topology levels owning independent allocations.
 
     Returns:
         The canonical sharding layout.
@@ -1029,7 +1045,14 @@ def right_inverse(layout: Layout | ComposedLayout):
 ```
 
 - constraints:
-  - `canonical_shard_layout` MUST factor each logical axis split by one or more
+  - Default strides come from `default_layout`: compact row-major, symbolic
+    products retained, and statically unit leaves zero. A Split at a level in
+    `instance_levels` gets stride zero and counts as extent one when compacting
+    the remaining modes, so one instance has no holes. The target supplies the
+    memory owner's level and every coarser level; absent memory facts mean an
+    empty set. Explicit tensor layouts normalize only unit leaves; mesh layouts
+    and layout-algebra intermediates are not normalized by this tensor rule.
+  - `default_shard_layout` MUST factor each logical axis split by one or more
     mesh axes in mesh-axis order, remap each `Split` to its factor, and append
     a non-unit residual factor. Symbolic multi-axis splits MUST use successive
     exact integer or structural product quotients as specified in

@@ -172,7 +172,7 @@ def test_local_type_projects_every_axis_of_a_single_topology_mesh(
 
 
 @pytest.mark.parametrize(("shape", "extent"), [(1024, 132), (64, 128)])
-def test_canonical_shard_layout_keeps_rejecting_non_divisible_splits(
+def test_default_shard_layout_keeps_rejecting_non_divisible_splits(
     shape: int, extent: int
 ) -> None:
     with pytest.raises(ValueError, match="logical axis 1 size .* is not divisible"):

@@ -218,7 +218,13 @@ class HirPrinter(PythonPrinter):
 
         alias_name = _kinded_alias_name(target)
         suppressed = frozenset({"kind"}) if alias_name is not None else frozenset()
-        attrs = self.op_attributes(target, ctx, self._indent + "    ", suppressed=suppressed)
+        attrs = self.op_attributes(
+            target,
+            ctx,
+            self._indent + "    ",
+            suppressed=suppressed,
+            storage=getattr(expr.type, "storage", None),
+        )
         schema = getattr(type(target), "_op_schema", None)
         inputs = tuple(param for param in schema.signature if param.kind == "input") if schema else ()
         arguments = (
@@ -1300,6 +1306,8 @@ def _emit_module_class(
     to and a class body binds in the order it is written.
     """
     previous_topologies = ctx.topologies
+    previous_target = ctx.target
+    ctx.target = mod.target or previous_target
     ctx.topologies = mod.topologies if mod.topologies is not None else previous_topologies
     lines = [_module_decorator_line(mod, mod.entry, ctx), f"class {module_name}:"]
     ordered = _emission_order(mod)
@@ -1320,6 +1328,7 @@ def _emit_module_class(
             lines.append("")
         lines.extend(f"{indent}{ln}" if ln else ln for ln in block)
     ctx.topologies = previous_topologies
+    ctx.target = previous_target
     return lines
 
 

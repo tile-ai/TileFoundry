@@ -8,18 +8,18 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import Broadcast, Layout, Partial, ShardLayout, TensorType, TupleType
-from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types import Broadcast, Partial, ShardLayout, TensorType, TupleType
+from tilefoundry.ir.types.layout import default_layout, flatten
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard_layout import (
-    canonical_shard_layout,
+    default_shard_layout,
     layout_axis_to_tensor_axis,
     shard_layout_of,
     split_target_axes,
 )
-from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -97,11 +97,16 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             else Broadcast()
             for attr in x_ty.layout.attrs
         )
-        part_layout = canonical_shard_layout(part_shape, x_ty.layout.mesh, attrs)
+        part_layout = default_shard_layout(
+            part_shape,
+            x_ty.layout.mesh,
+            attrs,
+            instance_levels=instance_levels(ctx.target, x_ty.storage),
+        )
     elif x_ty.layout is None:
         part_layout = None
     else:
-        part_layout = Layout(shape=part_shape, strides=try_compact_major(part_shape))
+        part_layout = default_layout(part_shape)
     part_ty = TensorType(
         shape=part_shape, dtype=x_ty.dtype, layout=part_layout, storage=x_ty.storage
     )

@@ -184,13 +184,9 @@ def gemm(
                         shape=(128, 128),
                     )
                     T.binary(value_9, value_7, value_8, kind=BinaryKind.MUL)
-                    tile_scale_dst = T.alloc_tensor(
-                        tensor_type=Tensor[(1, 1), "f32", (1, 1), "rmem"]
-                    )
+                    tile_scale_dst = T.alloc_tensor(tensor_type=Tensor[(1, 1), "f32", "rmem"])
                     value_10 = T.tensor_view(
-                        T.ptr_of(b_scale[kb:kb + 1, 0:0 + 1]),
-                        layout=((1, 1), (0, 0)),
-                        shape=(1, 1),
+                        T.ptr_of(b_scale[kb:kb + 1, 0:0 + 1]), layout=(1, 1), shape=(1, 1)
                     )
                     value_11 = T.tensor_view(
                         T.ptr_of(tile_scale_dst), layout=(1, 1), shape=(1, 1)

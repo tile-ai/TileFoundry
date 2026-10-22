@@ -148,7 +148,7 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
     rather than retain the stale input extent) must handle a dynamic (DimVar)
     dim on a non-selected axis: no int() on a ShapeDim, and — per the HIR
     invariant that every post-typeinfer ShardLayout has concrete strides — it
-    materializes explicit all-ones strides rather than leaving them None.
+    materializes symbolic row-major strides rather than leaving them None.
     """
     s = DimVar("S", 1, 63)
     x_ty = raw_shard_tensor_type(
@@ -165,7 +165,7 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
         assert isinstance(t.layout, ShardLayout)
         assert all(isinstance(a, Broadcast) for a in t.layout.attrs), "replication preserved"
         assert t.layout.layout.shape == (6, s), t.layout.layout.shape
-        assert t.layout.layout.strides == (1, 1), "concrete strides, never None"
+        assert t.layout.layout.strides == (s, 1), "symbolic row-major strides, never None"
 
 
 def test_topk_parser_preserves_largest_sorted():

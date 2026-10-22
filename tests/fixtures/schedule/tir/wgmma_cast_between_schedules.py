@@ -186,7 +186,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 1),
                         "f32",
-                        ((4 @ scope_5.d0, 8 @ scope_5.d1, 2, 1), (16, 2, 1, 1)),
+                        ((4 @ scope_5.d0, 8 @ scope_5.d1, 2, 1), (16, 2, 1, 0)),
                         "rmem",
                     ]
                 )
@@ -195,7 +195,7 @@ def gemm(
                     tensor_type=Tensor[
                         (64, 1),
                         "bf16",
-                        ((4 @ scope_5.d0, 8 @ scope_5.d1, 2, 1), (16, 2, 1, 1)),
+                        ((4 @ scope_5.d0, 8 @ scope_5.d1, 2, 1), (16, 2, 1, 0)),
                         "rmem",
                     ]
                 )

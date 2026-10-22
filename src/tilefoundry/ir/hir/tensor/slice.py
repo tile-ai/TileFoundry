@@ -17,11 +17,11 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub, simplify_dim
 from tilefoundry.ir.types.int_tuple import flatten, partition_modes
-from tilefoundry.ir.types.layout import EMPTY_LAYOUT, resolve_layout
+from tilefoundry.ir.types.layout import EMPTY_LAYOUT, default_layout, resolve_layout
 from tilefoundry.ir.types.layout_algebra import composition
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import Split
-from tilefoundry.ir.types.stride import compact_row_major, crd2idx, try_compact_major
+from tilefoundry.ir.types.stride import compact_row_major, crd2idx
 from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.types.utils import i64_const, static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor
@@ -502,7 +502,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             shape=shape, dtype=x_ty.dtype, layout=Layout(shape, None), storage=x_ty.storage
         )
     if source is None:
-        source = Layout(tuple(x_ty.shape), try_compact_major(tuple(x_ty.shape)))
+        source = default_layout(x_ty.shape)
     try:
         new_layout, moved = _window_layout(
             source, x_ty.shape, starts.elements, op.sizes, op.strides, ctx

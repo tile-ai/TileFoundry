@@ -19,7 +19,7 @@ from tilefoundry.ir.types.shard_layout import (
     Partial,
     ShardLayout,
     Split,
-    canonical_shard_layout,
+    default_shard_layout,
     shard_layout_local_shape,
 )
 
@@ -117,9 +117,9 @@ def test_matching_symbolic_split_has_decidable_local_extent(
         )
         if expected is None:
             with pytest.raises(ValueError, match="dynamic; cannot factorize across multiple mesh axes"):
-                canonical_shard_layout((extent, 8), mesh, (Split(0), Split(0)))
+                default_shard_layout((extent, 8), mesh, (Split(0), Split(0)))
             return
-        layout = canonical_shard_layout((extent, 8), mesh, (Split(0), Split(0)))
+        layout = default_shard_layout((extent, 8), mesh, (Split(0), Split(0)))
     else:
         layout = _symbolic_layout(extent, _N, split=True)
 

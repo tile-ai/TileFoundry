@@ -15,7 +15,7 @@ from .shard_layout import (
     Broadcast,
     ShardLayout,
     Split,
-    canonical_shard_layout,
+    default_shard_layout,
     shard_layout_of,
     split_target_axes,
 )
@@ -305,7 +305,7 @@ def make_shard_tensor_type(
     """Build a canonical sharded ``TensorType`` from its logical description.
 
     ``attrs`` contains one entry per mesh axis. With no mesh or attributes the
-    result is unsharded; otherwise :func:`canonical_shard_layout` supplies the
+    result is unsharded; otherwise :func:`default_shard_layout` supplies the
     shared canonical representation.
 
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
@@ -313,7 +313,7 @@ def make_shard_tensor_type(
     shape = tuple(shape)
     if mesh is None or not attrs:
         return TensorType(shape=shape, dtype=dtype, layout=None, storage=storage)
-    layout = canonical_shard_layout(shape, mesh, attrs)
+    layout = default_shard_layout(shape, mesh, attrs)
     return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
 
 

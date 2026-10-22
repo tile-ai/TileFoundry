@@ -18,12 +18,13 @@ from tilefoundry.ir.types.layout_correspondence import layout_correspondence
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
-    shard_layout_local_shape,
+    fill_shard_strides,
     shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import is_literal_shape
+from tilefoundry.target import instance_levels
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -135,35 +136,17 @@ def _src_form_is_per_instance(sl_src: "ShardLayout | None") -> bool:
 
 def _materialize_reshard_strides(
     layout: ShardLayout,
-    src_ty: TensorType,
+    target,
     new_storage: StorageKind,
 ) -> ShardLayout:
     """Materialize the sugar-default ``layout.layout.strides``.
 
     Pre-condition: ``layout.layout.strides is None`` (sugar). For
     verbose paths the caller short-circuits before this helper.
-    UMAT materializes in RMEM, so it uses that boundary when choosing sugar
-    strides.
+    The target memory owner determines independent Split modes. The source
+    representation does not influence the default.
     """
-    src_storage = StorageKind.RMEM if src_ty.storage is StorageKind.UMAT else src_ty.storage
-    src_layout = src_ty.layout if isinstance(src_ty.layout, ShardLayout) else None
-    if src_storage == new_storage:
-        if _src_form_is_per_instance(src_layout):
-            new_strides = _per_instance_strides(layout)
-        else:
-            new_strides = _shared_engine_strides(layout)
-    else:
-        src_lvl = _storage_level(src_storage)
-        dst_lvl = _storage_level(new_storage)
-        if dst_lvl > src_lvl:
-            new_strides = _shared_engine_strides(layout)
-        else:
-            new_strides = _per_instance_strides(layout)
-    return ShardLayout(
-        layout=Layout(shape=layout.layout.shape, strides=new_strides),
-        attrs=layout.attrs,
-        mesh=layout.mesh,
-    )
+    return fill_shard_strides(layout, instance_levels=instance_levels(target, new_storage))
 
 
 @register_op
@@ -274,7 +257,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         and isinstance(new_layout.layout, Layout)
         and new_layout.layout.strides is None
     ):
-        new_layout = _materialize_reshard_strides(new_layout, x_ty, new_storage)
+        new_layout = _materialize_reshard_strides(new_layout, ctx.target, new_storage)
     return TensorType(
         shape=x_ty.shape,
         dtype=x_ty.dtype,

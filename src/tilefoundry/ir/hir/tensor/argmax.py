@@ -16,14 +16,15 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, Layout, TensorType
+from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.ir.types.shard_layout import (
     Split,
-    canonical_shard_layout,
+    default_shard_layout,
     shard_layout_of,
     split_target_axes,
 )
-from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.target import instance_levels
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -68,11 +69,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             )
     reject_partials(ctx, call, "x", x_ty.layout)
     out_shape = tuple(d for i, d in enumerate(x_ty.shape) if i != axis)
-    new_layout = (
-        None
-        if x_ty.layout is None
-        else Layout(shape=out_shape, strides=try_compact_major(out_shape))
-    )
+    new_layout = None if x_ty.layout is None else default_layout(out_shape)
     if source_shard is not None:
         relation = relations_of(call, ctx)
         derived = derive_output_shard_layout(
@@ -81,11 +78,17 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             out_shape,
             complete_reduction_dims=frozenset({axis}),
             fresh_strides=True,
+            instance_levels=instance_levels(ctx.target, x_ty.storage),
         )
         new_layout = (
             derived
             if derived is not None
-            else canonical_shard_layout(out_shape, source_shard.mesh, source_shard.attrs)
+            else default_shard_layout(
+                out_shape,
+                source_shard.mesh,
+                source_shard.attrs,
+                instance_levels=instance_levels(ctx.target, x_ty.storage),
+            )
         )
     return TensorType(
         shape=out_shape,

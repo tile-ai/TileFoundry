@@ -13,12 +13,8 @@ class MmHandwritten:
         with Mesh(
             (Topology("thread", 32),), layout=((4, 8), (1, 4)), names=("warp", "lane")
         ) as _warp:
-            a_view = T.tensor_view(
-                T.ptr_of(a), layout=((2, 8 @ _warp.lane, 2, 4 @ _warp.warp, 2), (128, 16, 8, 2, 1))
-            )
-            b_view = T.tensor_view(
-                T.ptr_of(b), layout=((2, 4 @ _warp.warp, 2, 8 @ _warp.lane), (64, 16, 8, 1))
-            )
+            a_view = T.tensor_view(T.ptr_of(a), layout=(2, 8 @ _warp.lane, 2, 4 @ _warp.warp, 2))
+            b_view = T.tensor_view(T.ptr_of(b), layout=(2, 4 @ _warp.warp, 2, 8 @ _warp.lane))
             a_frag = T.alloc_tensor(
                 tensor_type=Tensor[
                     (16, 16),
@@ -44,9 +40,7 @@ class MmHandwritten:
             T.copy(b_view, b_frag)
             T.fill(acc, 0.0)
             T.tiled_mma(acc, a_frag, b_frag, atom=T.cuda.sm80.Mma())
-            c_view = T.tensor_view(
-                T.ptr_of(c), layout=((2, 8 @ _warp.lane, 4 @ _warp.warp, 2), (64, 8, 2, 1))
-            )
+            c_view = T.tensor_view(T.ptr_of(c), layout=(2, 8 @ _warp.lane, 4 @ _warp.warp, 2))
             T.copy(acc, c_view)
 
     @prim_func(target=CpuTarget())

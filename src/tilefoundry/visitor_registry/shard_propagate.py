@@ -18,11 +18,11 @@ from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
     Split,
-    canonical_shard_layout,
+    default_shard_layout,
+    fill_shard_strides,
     layout_axis_to_tensor_axis,
     shard_layout_of,
 )
-from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import participant_layout
 
 
@@ -98,6 +98,7 @@ def _carrier_layout(
     propagated_attrs,
     complete_reduction_dims,
     fresh_strides,
+    instance_levels,
 ):
     """Transform a covering input shard layout into the output layout.
 
@@ -149,13 +150,7 @@ def _carrier_layout(
             new_pos_of[p] = len(new_shape)
             new_shape.append(1 if reduced else layout.shape[p])
             src_pos.append(None if reduced else p)
-    if fresh_strides:
-        c = try_compact_major(tuple(new_shape)) or tuple(1 for _ in new_shape)
-        new_strides = [
-            0 if (isinstance(sz, int) and sz == 1) else cc
-            for sz, cc in zip(new_shape, c)
-        ]
-    elif layout.strides is None:
+    if layout.strides is None:
         new_strides = None
     else:
         new_strides = [
@@ -186,13 +181,16 @@ def _carrier_layout(
     if mapped != propagated_attrs:
         return None
 
-    return ShardLayout(
+    carrier = ShardLayout(
         layout=Layout(
             shape=tuple(new_shape),
             strides=None if new_strides is None else tuple(new_strides),
         ),
         attrs=tuple(out_attrs),
         mesh=mesh,
+    )
+    return (
+        fill_shard_strides(carrier, instance_levels=instance_levels) if fresh_strides else carrier
     )
 
 
@@ -204,6 +202,7 @@ def derive_output_shard_layout(
     partial_reduction_dims: "frozenset[int]" = frozenset(),
     complete_reduction_dims: "frozenset[int]" = frozenset(),
     fresh_strides: bool = False,
+    instance_levels: frozenset[str] = frozenset(),
 ):
     """Derive the output ``ShardLayout`` from the input shards and the Op's relations.
 
@@ -301,6 +300,7 @@ def derive_output_shard_layout(
                 attrs,
                 complete_reduction_dims,
                 fresh_strides,
+                instance_levels,
             )
         )
         is not None
@@ -308,7 +308,7 @@ def derive_output_shard_layout(
     if carriers and all(c == carriers[0] for c in carriers):
         return carriers[0]
 
-    return canonical_shard_layout(output_shape, mesh, tuple(attrs))
+    return default_shard_layout(output_shape, mesh, tuple(attrs), instance_levels=instance_levels)
 
 
 __all__ = ["derive_output_shard_layout", "partial_reductions_by_axis"]

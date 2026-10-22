@@ -19,16 +19,16 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import TensorPattern
-from tilefoundry.ir.types import DType, Layout, TensorType
-from tilefoundry.ir.types.layout import resolve_layout
+from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.layout import default_layout, resolve_layout
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
-    canonical_shard_layout,
+    default_shard_layout,
     shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.target import instance_levels
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     broadcast_shapes,
@@ -60,7 +60,7 @@ class Binary(Op):
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
 
 
-def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
+def _merge_layout(a: object, b: object, out_shape: tuple, *, levels=frozenset()) -> object:
     """Merge two non-sharded operand layouts.
 
     Merge two non-sharded operand layouts. Equal layouts or one ``None``
@@ -84,7 +84,9 @@ def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
     if layout is not None:
         if isinstance(layout, ShardLayout):
             if all(isinstance(attr, Broadcast) for attr in layout.attrs):
-                return canonical_shard_layout(out_shape, layout.mesh, layout.attrs)
+                return default_shard_layout(
+                    out_shape, layout.mesh, layout.attrs, instance_levels=levels
+                )
             return layout
         if tuple(layout.shape) == out_shape:
             return layout
@@ -99,7 +101,7 @@ def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
         not isinstance(layout, ShardLayout) or layout in replicated for layout in (a, b)
     ):
         first = replicated[0]
-        return canonical_shard_layout(out_shape, first.mesh, first.attrs)
+        return default_shard_layout(out_shape, first.mesh, first.attrs, instance_levels=levels)
     raise ValueError(f"incompatible operand layouts {a!r} vs {b!r}")
 
 
@@ -145,6 +147,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         allowed_reduction=allowed_reduction,
         commutes_jointly=commutes_jointly,
     )
+    storage = resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage)
+    levels = (
+        instance_levels(ctx.target, storage)
+        if any(shard_layout_of(t.layout) is not None for t in (lhs_ty, rhs_ty))
+        else frozenset()
+    )
     try:
         relation = relations_of(call, ctx)
         out_shape = shape_from_relation(
@@ -152,7 +160,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
         shard = None
         if shard_layout_of(la) is not None or shard_layout_of(lb) is not None:
-            shard = derive_output_shard_layout((lhs_ty, rhs_ty), relation, out_shape)
+            shard = derive_output_shard_layout(
+                (lhs_ty, rhs_ty), relation, out_shape, instance_levels=levels
+            )
         layout = (
             shard
             if shard is not None
@@ -160,13 +170,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 shard_layout_of(la) or la,
                 shard_layout_of(lb) or lb,
                 out_shape,
+                levels=levels,
             )
         )
     except ValueError as e:
         ctx.error(call, f"Binary {op.kind.name}: {e}")
-    storage = resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage)
     if layout is None and storage in (StorageKind.RMEM, StorageKind.SMEM) and out_shape:
-        layout = Layout(shape=out_shape, strides=try_compact_major(out_shape))
+        layout = default_layout(out_shape)
     return TensorType(
         shape=out_shape,
         dtype=out_dtype,

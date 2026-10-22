@@ -10,14 +10,13 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import Layout, flatten
+from tilefoundry.ir.types.layout import Layout, default_layout, flatten
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
     Split,
 )
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.substitute import dim_vars_in
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -192,7 +191,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 "not align with the input layout factorization",
             )
         if new_layout is None:
-            new_layout = replace(x_ty.layout, layout=Layout(new_shape, None))
+            new_layout = replace(x_ty.layout, layout=default_layout(new_shape))
     else:
         def reshaped(layout: Layout) -> Layout | None:
             nonunit = tuple(axis for axis, extent in enumerate(layout.shape) if extent != 1)
@@ -202,10 +201,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 and new_shape == tuple(layout.shape[axis] for axis in nonunit)
             ):
                 return Layout(new_shape, tuple(layout.strides[axis] for axis in nonunit))
-            expected = try_compact_major(layout.shape)
+            expected = default_layout(layout.shape).strides
             if layout.strides is not None and layout.strides != expected:
                 return None
-            return Layout(new_shape, try_compact_major(new_shape))
+            return default_layout(new_shape)
 
         new_layout = derive_view_layout(x_ty, new_shape, reshaped)
     if new_layout is None:

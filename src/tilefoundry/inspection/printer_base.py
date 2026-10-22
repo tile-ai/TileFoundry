@@ -20,6 +20,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.param_def import MISSING
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.pattern import Pattern, RangePattern
@@ -36,14 +37,27 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     is_dim_expr,
 )
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, Swizzle, flatten
+from tilefoundry.ir.types.layout import (
+    ComposedLayout,
+    Layout,
+    LayoutBase,
+    Swizzle,
+    default_layout,
+    flatten,
+)
 from tilefoundry.ir.types.mesh import Mesh
-from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
+from tilefoundry.ir.types.shard_layout import (
+    Broadcast,
+    Partial,
+    ShardLayout,
+    Split,
+    fill_shard_strides,
+)
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import participant_layout, static_dim_value
 from tilefoundry.ir.visitor import ExprFunctor, TypeFunctor
-from tilefoundry.target import Target
+from tilefoundry.target import Target, instance_levels
 from tilefoundry.utils.python_source import PythonExpr
 
 _DIM_INFIX_OPS: dict[type, str] = {
@@ -218,7 +232,7 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
             return None
         return added.args[0], divisor
 
-    def shard_surface(self, value: ShardLayout, ctx=None) -> str | None:
+    def shard_surface(self, value: ShardLayout, ctx=None, *, storage=None) -> str | None:
         """Render placement sugar only when every mesh axis has a scope binding.
 
         The sugar states one extent per tensor axis, each a dimension
@@ -275,6 +289,11 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
         states = partials
 
         explicit = layout.strides is not None
+        if explicit and storage is not None and ctx is not None:
+            default = fill_shard_strides(
+                value, instance_levels=instance_levels(ctx.target, storage)
+            )
+            explicit = layout != default.layout
         if explicit and any(
             axis in splits and self.dim_entry(dim, ctx, nested=True) != self.dim_entry(dim, ctx)
             for axis, dim in enumerate(layout.shape)
@@ -305,13 +324,13 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
             f'{self.shape_tuple(value.shape, ctx)}, "{self.dtype_str(value.dtype, ctx)}"'
         )
         if isinstance(value.layout, ShardLayout):
-            surface = self.shard_surface(value.layout, ctx)
+            surface = self.shard_surface(value.layout, ctx, storage=value.storage)
             if surface is not None:
                 result += f", {surface}"
             else:
                 with self.type_surface(indent=self._indent + "    "):
                     result += f",\n{self._indent}{self.visit(value.layout, ctx)}"
-        elif value.layout is not None:
+        elif value.layout is not None and value.layout != default_layout(value.shape):
             result += f", {self.layout_surface(value.layout, ctx)}"
         if value.storage is not StorageKind.GMEM:
             result += f', "{value.storage.name.lower()}"'
@@ -388,13 +407,13 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
     def visit_Swizzle(self, value: Swizzle, ctx=None) -> str:
         return f"Swizzle({value.bits}, {value.base}, {value.shift})"
 
-    def layout_surface(self, value: LayoutBase, ctx=None) -> str:
+    def layout_surface(self, value: LayoutBase, ctx=None, *, storage=None) -> str:
         """Use composition operators only where the parser expects a layout."""
         if isinstance(value, ShardLayout):
-            return self.shard_surface(value, ctx) or self.visit(value, ctx)
+            return self.shard_surface(value, ctx, storage=storage) or self.visit(value, ctx)
         if isinstance(value, Layout) and not any(isinstance(entry, tuple) for entry in (*value.shape, *(value.strides or ()))):
             shape = self.shape_tuple(value.shape, ctx)
-            if value.strides is None or value.strides == compact_row_major(value.shape):
+            if value.strides is None or value.strides == default_layout(value.shape).strides:
                 return shape
             return f"({shape}, {self.shape_tuple(value.strides, ctx)})"
         if not isinstance(value, ComposedLayout) or not isinstance(value.outer, Layout):
@@ -413,6 +432,7 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
         indent: str = "",
         *,
         suppressed: frozenset[str] = frozenset(),
+        storage=None,
     ) -> list[str]:
         """Render attribute ParamDefs in declaration order, omitting defaults."""
         attrs = []
@@ -423,11 +443,16 @@ class PythonPrinter(CommentPrinter, PrinterBase, ExprFunctor[str], TypeFunctor[s
             if param.default is not MISSING and attr == param.default:
                 continue
             with self.type_surface(indent=indent):
-                rendered = (
-                    self.layout_surface(attr, ctx)
-                    if isinstance(attr, LayoutBase)
-                    else self.print(attr, ctx, indent)
-                )
+                if isinstance(value, Reshard) and isinstance(attr, ShardLayout):
+                    rendered = self.shard_surface(
+                        attr, ctx, storage=storage or value.storage
+                    ) or self.visit(attr, ctx)
+                else:
+                    rendered = (
+                        self.layout_surface(attr, ctx)
+                        if isinstance(attr, LayoutBase)
+                        else self.print(attr, ctx, indent)
+                    )
             attrs.append(f"{param.name}={rendered}")
         return attrs
 

@@ -174,7 +174,7 @@ def test_two_mesh_axes_on_same_output_axis_factorize():
 def test_a_synthesised_layout_agrees_with_a_from_scratch_one():
     """Test a synthesised layout agrees with a from scratch one.
 
-    From-scratch and propagated sharding both use ``canonical_shard_layout``
+    From-scratch and propagated sharding both use ``default_shard_layout``
     ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)), so equal logical
     distributions must compare equal. Neither operand carries both splits here,
     so synthesis factors each size-8 axis into mesh extent 2 and residual 4.

@@ -46,13 +46,15 @@ from tilefoundry.ir.types import (
     TensorType,
 )
 from tilefoundry.ir.types.dim import DimVar, ceildiv
-from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.layout import flatten, normalize_layout
 from tilefoundry.ir.types.layout import size as layout_size
 from tilefoundry.ir.types.layout_algebra import composition
 from tilefoundry.ir.types.mesh import axis_keys, levels, starts
+from tilefoundry.ir.types.shard_layout import fill_shard_strides
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx, idx2crd
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
+from tilefoundry.target import instance_levels
 
 from .ast_pattern import (
     _BINARY_OPERATORS,
@@ -354,11 +356,9 @@ class PlainLayoutPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         shape = tuple(children.values())
-        layout = runtime.Layout(
-            shape=shape,
-            strides=runtime.compact_row_major(shape, mul=operator.mul),
-        )
-        return layout
+        if context.situation == "mesh_layout":
+            return runtime.Layout(shape, runtime.compact_row_major(shape, mul=operator.mul))
+        return runtime.default_layout(shape)
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         LayoutShapeRule(),
@@ -730,14 +730,14 @@ class PlacementConstructionRule:
                 shape=value.shape, layout=runtime.Layout(shape=value.shape, strides=value.strides)
             )
         try:
-            canonical = runtime.canonical_shard_layout(value.shape, value.mesh, value.attrs)
+            canonical = runtime.default_shard_layout(value.shape, value.mesh, value.attrs)
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
         if value.strides is not None and len(canonical.layout.shape) != len(value.strides):
             raise ParseError.from_node(match.node, context, "layout shape/stride rank mismatch")
         strides = value.strides
         if strides is None and not any(isinstance(attr, (Split, Partial)) for attr in canonical.attrs):
-            strides = runtime.compact_row_major(canonical.layout.shape, mul=operator.mul)
+            strides = runtime.default_layout(canonical.layout.shape).strides
         return PlacedLayout(
             shape=value.shape,
             layout=runtime.ShardLayout(
@@ -1403,12 +1403,22 @@ class TensorPattern(ElementPattern):
             shape, layout = children["shape"], children["layout"]
         if isinstance(layout, PlacedLayout):
             layout = layout.layout
-        storage = children.get("storage")
+        storage = children.get("storage") or runtime.StorageKind.GMEM
+        if (
+            isinstance(layout, runtime.ShardLayout)
+            and isinstance(layout.layout, runtime.Layout)
+            and layout.layout.strides is None
+            and context.values.get("position")
+            not in {"hir_input", "hir_output", "tir_input", "tir_output"}
+        ):
+            layout = fill_shard_strides(
+                layout, instance_levels=instance_levels(context.function.target, storage)
+            )
         return runtime.TensorType(
             shape=shape,
             dtype=children["dtype"],
-            layout=layout,
-            storage=runtime.StorageKind.GMEM if storage is None else storage,
+            layout=normalize_layout(layout) if layout is not None else None,
+            storage=storage,
         )
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
@@ -3120,6 +3130,21 @@ class CallPattern(ElementPattern):
                 for name, value in children.items()
                 if name.startswith("attr_")
             }
+            if schema.op_class in {runtime.Reshard, runtime.TensorView, runtime.Bitcast}:
+                for name, value in tuple(attrs.items()):
+                    if isinstance(value, runtime.LayoutBase):
+                        attrs[name] = normalize_layout(value)
+            layout = attrs.get("layout")
+            if (
+                schema.op_class in {runtime.Reshard, runtime.TensorView, runtime.Bitcast}
+                and isinstance(layout, runtime.ShardLayout)
+                and isinstance(layout.layout, runtime.Layout)
+                and layout.layout.strides is None
+            ):
+                storage = attrs.get("storage") or inputs[0].type.storage
+                attrs["layout"] = fill_shard_strides(
+                    layout, instance_levels=instance_levels(context.function.target, storage)
+                )
             for name, value in tuple(attrs.items()):
                 parameter = next((item for item in schema.signature if item.name == name), None)
                 annotation = None if parameter is None else parameter.annotation

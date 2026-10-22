@@ -5,7 +5,7 @@ from tilefoundry.target import CudaTarget
 
 
 @prim_func(target=CudaTarget("nvidia.h200_sxm"))
-def gemm(x: Tensor[(64,), "f32"], out: Tensor[(8,), "f32", (8,), "rmem"]):
+def gemm(x: Tensor[(64,), "f32"], out: Tensor[(8,), "f32", "rmem"]):
     with Mesh((Topology("cta", 4),), layout=(4,), names=("d0",)) as cta:
         with Mesh((Topology("thread", 1),), layout=(1,), names=("d0",)) as scope:
             value = T.tensor_view(

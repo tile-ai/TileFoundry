@@ -6,7 +6,7 @@ from tilefoundry.target import CudaTarget
 
 @prim_func(target=CudaTarget("nvidia.h200_sxm"))
 def gemm(
-    x: Tensor[(4, 4), "bf16"], idx: Tensor[(2,), "i64"], out: Tensor[(2, 4), "bf16", (2, 4), "smem"]
+    x: Tensor[(4, 4), "bf16"], idx: Tensor[(2,), "i64"], out: Tensor[(2, 4), "bf16", "smem"]
 ):
     with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
         with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
@@ -18,7 +18,7 @@ def gemm(
                     16, dtype="bf16", storage="smem", layout=(1, 4), shape=(1, 4)
                 )
                 value_1 = T.tensor_view(T.ptr_of(row_dst), layout=(1, 4), shape=(1, 4))
-                value_2 = T.tensor_view(T.ptr_of(idx[r:r + 1]), layout=((1,), (0,)), shape=(1,))
+                value_2 = T.tensor_view(T.ptr_of(idx[r:r + 1]), layout=(1,), shape=(1,))
                 T.copy_async(source, value_1, value_2, fill=0)
                 with scope[:] as scope_1:
                     row_dst_2 = T.tensor_view(
