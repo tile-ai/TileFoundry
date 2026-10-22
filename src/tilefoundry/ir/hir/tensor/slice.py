@@ -406,7 +406,9 @@ def window_layout(source, logical_shape, starts, sizes, strides, ctx):
             0 if position in split or (distributed and widths.get(position) == extent) else walk
             for position, extent, walk in zip(group, extents, walks, strict=True)
         )
-        if _literal(start) is not None:
+        if len(group) == 1:
+            offset = simplify_dim(DimAdd, (offset, _dim_mul(start, physical[0])))
+        elif _literal(start) is not None:
             digits = layout_correspondence(extents, (logical_shape[axis],)).digits(_literal(start))
             offset += crd2idx(digits, extents, physical)
         else:

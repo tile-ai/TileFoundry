@@ -19,6 +19,7 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
+from tilefoundry.ir.types.layout import default_layout
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
@@ -148,7 +149,7 @@ def _launch_entry_with_grid_x(extent):
     A CPU host entry whose single launch uses *extent* as ``grid_x`` — for
     exercising the grid/block extent verifier on constructed IR.
     """
-    t = TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="gmem")
+    t = TensorType(shape=(8,), dtype=DType.f32, layout=default_layout((8,)), storage="gmem")
     a = Var(type=t, name="a")
     i64 = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
     one = Constant(type=i64, value=1)
@@ -176,7 +177,7 @@ def test_launch_extent_rejects_external_shapeof() -> None:
     parameter; a ShapeOf of an unrelated Var is rejected by verify.
     """
     external = Var(
-        type=TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="gmem"),
+        type=TensorType(shape=(8,), dtype=DType.f32, layout=default_layout((8,)), storage="gmem"),
         name="y_external",
     )
     bad = ShapeOf(

@@ -183,7 +183,7 @@ sed -n '/tf.matmul/,+4p; /refused.*T.binary/,+1p; /refused.*T.cast/,+1p' candida
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
     refused     T.binary
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
-  part:31  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", (128, 64), "smem"]  rhs=Tensor[(64, 256), "bf16", (64, 256), "smem"]  result=Tensor[(128, 256), "f32", (128, 256), "rmem"]
+  part:31  tf.matmul  per cta  lhs=Tensor[(128, 64), "bf16", "smem"]  rhs=Tensor[(64, 256), "bf16", "smem"]  result=Tensor[(128, 256), "f32", "rmem"]
     refused     T.cuda.sm90.Wgmma  dtype=f16, form=SS, a_major=MN, b_major=MN
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8, 4),), ((*gs, 32, 4, 1),))))
     refused     T.cuda.sm80.Mma
