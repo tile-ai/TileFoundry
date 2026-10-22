@@ -209,9 +209,13 @@ class CommentPrinter:
                 ("holds", format_bytes(record.holds_bytes)),
                 ("time", record.time or "none"),
                 ("space", record.space or "none"),
-                ("reuse", format_bytes(record.reuse_bytes)),
+                (
+                    "reuse",
+                    "unknown" if record.reuse_bytes is None else format_bytes(record.reuse_bytes),
+                ),
                 ("fits", "yes" if record.fits else "no"),
                 ("precision", record.precision),
+                ("reason", Prose(record.reason), ""),
             ),
         )
 

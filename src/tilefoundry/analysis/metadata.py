@@ -256,9 +256,10 @@ class ReuseWindow:
     time: str = ""
     space: str = ""
     holds_bytes: int = 0
-    reuse_bytes: int = 0
+    reuse_bytes: int | None = 0
     fits: bool = True
     precision: AnalysisPrecision = AnalysisPrecision.EXACT
+    reason: str = ""
 
 
 @dataclass(frozen=True)

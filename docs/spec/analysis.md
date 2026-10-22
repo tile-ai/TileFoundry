@@ -891,20 +891,30 @@ A cache holds data because it will be read again, and whether it still holds it
 is decided by what was touched in between. This analysis states one row per
 buffer that is read again, naming the two axes a second read can come from: the
 loop whose next iteration reads it, and the mesh axis whose units read it at
-once. A buffer with neither states no row.
+once. A buffer whose units partially overlap also states a row even when
+neither exact reuse axis exists; its savings are unknown. A buffer with none
+of these reuse relations states no row.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `ReuseWindow.buffer` | The source buffer identity, rendered by the expression printer. | No |
 | `ReuseWindow.time` | The outermost enclosing loop whose different iterations reach the same addresses, named by its induction variable; empty when no loop supplies a second read. | No |
-| `ReuseWindow.space` | The mesh axis whose different coordinates reach the same addresses; empty when no mesh axis supplies a second read. | No |
+| `ReuseWindow.space` | The mesh axes whose different coordinates reach the same or partially overlapping addresses; empty when no mesh axis supplies a second read. | No |
 | `ReuseWindow.holds_bytes` | Unique bytes of every buffer the whole wave touches while this buffer must remain resident. | `MemoryHierarchyFacts` selects the backed level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
-| `ReuseWindow.reuse_bytes` | `(time trips * space units - 1)` times this buffer's unique bytes in the window; an absent axis contributes one. | As above |
+| `ReuseWindow.reuse_bytes` | `(time trips * space units - 1)` times this buffer's unique bytes in the window; an absent axis contributes one. Unknown (`None`, JSON `null`) for partial overlap whose savings are not modelled. | As above |
+| `ReuseWindow.reason` | Explanation when partial overlap has unknown savings; empty otherwise. | No |
 | `ReuseWindow.fits` | True exactly when `holds_bytes` is less than the cache capacity. | `MemoryHierarchyFacts.implicit_levels[]` |
-| `ReuseWindow.precision` | The precision of the footprint supplying `holds_bytes`, without mixing in the trip upper bound used for `reuse_bytes`. | No |
-| `RegionMemoryMetadata.reuse_windows` | One row for every buffer with a time or space reuse axis and nonzero savings. | As above |
+| `ReuseWindow.precision` | The precision of the footprint supplying `holds_bytes`, without mixing in the trip upper bound used for `reuse_bytes`; a partial-overlap row instead has `unknown` precision. | No |
+| `RegionMemoryMetadata.reuse_windows` | One row for every buffer with a time or space reuse axis and nonzero savings, or with partial overlap and unknown savings. | As above |
 
 - constraints:
+  - Partial-overlap detection MUST run only when time and space reuse supply no
+    axis. Such a row MUST retain its holds bytes, report `reuse=unknown` and
+    `precision=unknown`, and include a nonempty reason; JSON MUST use `null`
+    for its reuse bytes. Existing exact reuse rows MUST remain unchanged.
+  - An unknown-precision row exceeding capacity is an advisory. It suppresses
+    the first-iteration working-set finding only when their precision reliability matches,
+    so that finding MAY coexist with the row's advisory.
   - The stated bytes are everything the whole wave touches while that buffer
     must stay resident, every buffer included, not only the one read again:
     the others are what evict it.
