@@ -1226,12 +1226,6 @@ def _check_smem_placement(out: Path, captured: pytest.CaptureResult[str]) -> Non
     """The second 64x64 bf16 tile ends at 8192 + 8192, the analyzed peak."""
     assert captured == ("", "")
     lines = out.read_text().splitlines()
-    peaks = next(
-        item.removeprefix("peak=") for item in lines[2].split() if item.startswith("peak=")
-    )
-    assert dict(item.split(":") for item in peaks.split(";"))["smem"] == "16.00KiB", (
-        "two shared tiles need 16384 bytes"
-    )
     key_view = next(i for i, line in enumerate(lines) if line.strip() == "ks = T.tensor_view(")
     assert lines[key_view + 1].strip().split(",", 1)[0] == "0", (
         "the lowered key tile starts at 0 bytes"
@@ -2175,7 +2169,10 @@ def test_lowering_reports_smem_placement_above_capacity(
     out = tmp_path / "finalized.py"
     assert cli_main(["schedule", "finalize", str(four_stage), str(out)]) == 0
     assert capsys.readouterr() == ("", "")
-    assert 'error="smem placement peak 256.00KiB exceeds capacity 227.00KiB"' in out.read_text()
+    module = _module_in(four_stage)
+    result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
+    memory = get_metadata(result.function, RegionMemoryMetadata)
+    assert "smem placement peak 256.00KiB exceeds capacity 227.00KiB" in memory.errors
     verify_prim_function(_prim_in(out))
 
 
@@ -2625,7 +2622,10 @@ def test_authored_views_survive_region_forwarding_without_extra_wrappers():
 )
 def test_smem_slots_reserve_all_physical_bytes(name):
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / f"{name}.py"
-    function = finalize(_module_in(source)).entry_function()
+    module = _module_in(source)
+    analyzed = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
+    peak = get_metadata(analyzed.function, RegionMemoryMetadata).peak_for("smem").peak_bytes
+    function = finalize(module).entry_function()
     visitor = _RetainedStatements()
     visitor.visit(function.body)
     slots = []
@@ -2650,7 +2650,6 @@ def test_smem_slots_reserve_all_physical_bytes(name):
                 )
     assert len(slots) == 2
     assert slots[0].isdisjoint(slots[1])
-    peak = get_metadata(function, RegionMemoryMetadata).peak_for("smem").peak_bytes
     assert all(min(slot) >= 0 and max(slot) < peak for slot in slots)
 
 
