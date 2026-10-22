@@ -2733,7 +2733,6 @@ def test_reduce_store_stays_in_its_warp_scope():
     visitor.visit(lowered.entry_function().body)
     assert visitor.found == 1
 
-
 def test_grouped_n16_issues_keep_source_addresses():
     source = next(path for path in HIR if path.stem == "wgmma_n16_within_warpgroup_share")
     module = _module_in(source)

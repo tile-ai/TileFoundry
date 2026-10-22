@@ -12,6 +12,22 @@ from tilefoundry.ir.types.tensor_type import TensorType
 from .match import _named
 
 
+def strided_arrangement(layout, *, allow_partial=False):
+    """Read a strided address layout beneath permitted value-state wrappers."""
+    if isinstance(layout, ShardLayout):
+        if not all(
+            isinstance(attr, Broadcast) or (allow_partial and isinstance(attr, Partial))
+            for attr in layout.attrs
+        ):
+            return None
+        layout = layout.layout
+    if isinstance(layout, ComposedLayout):
+        if layout.inner is not None and not isinstance(layout.inner, Swizzle):
+            return None
+        layout = layout.outer
+    return layout if isinstance(layout, Layout) and layout.strides is not None else None
+
+
 @dataclass(frozen=True)
 class Constraint:
     """One relation between two named operands."""
@@ -82,21 +98,10 @@ class SameModesConstraint(Constraint):
 
     @staticmethod
     def reading(tensor: TensorType, arrangement=None, *, allow_partial=False):
-        layout = tensor.layout if arrangement is None else arrangement
-        if isinstance(layout, ShardLayout):
-            if not all(
-                isinstance(attr, Broadcast) or (allow_partial and isinstance(attr, Partial))
-                for attr in layout.attrs
-            ):
-                layout = None
-            else:
-                layout = layout.layout
-        if isinstance(layout, ComposedLayout):
-            if layout.inner is not None and not isinstance(layout.inner, Swizzle):
-                layout = None
-            else:
-                layout = layout.outer
-        if not isinstance(layout, Layout) or layout.strides is None:
+        layout = strided_arrangement(
+            tensor.layout if arrangement is None else arrangement, allow_partial=allow_partial
+        )
+        if layout is None:
             return None, f"{tensor.layout!r} is no strided arrangement"
         shape, strides = tuple(layout.shape), tuple(layout.strides)
         extents = tuple(tensor.shape)

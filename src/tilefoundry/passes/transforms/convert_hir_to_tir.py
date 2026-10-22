@@ -1106,6 +1106,18 @@ class StoragePlan:
         return View(target, starts, tuple(sizes), desired, "value", whole_tensor=whole)
 
 
+def noncontiguous_bind(repeats):
+    """Whether a bound repeat mode precedes a nontrivial serial mode."""
+    for _axis, repeat, bound in repeats:
+        serial = False
+        for width, owner in reversed(tuple(zip(repeat.shape, bound, strict=True))):
+            if width > 1:
+                if owner and serial:
+                    return True
+                serial |= not owner
+    return False
+
+
 @dataclass
 class IssuePlan:
     """Instruction selection and one shared geometric projection, without admission."""
@@ -1698,22 +1710,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             for (role, value), desired, starts, repeats in zip(
                 issued_operands, plan.issued, windows, plan.repeat_layouts, strict=True
             ):
-                grouped = any(
-                    any(
-                        owner
-                        and extent > 1
-                        and any(
-                            not other and width > 1
-                            for width, other in zip(
-                                repeat.shape[index + 1 :], bound[index + 1 :], strict=True
-                            )
-                        )
-                        for index, (extent, owner) in enumerate(
-                            zip(repeat.shape, bound, strict=True)
-                        )
-                    )
-                    for _, repeat, bound in repeats
-                )
+                grouped = noncontiguous_bind(repeats)
                 logical_type = types[
                     next(index for index, param in enumerate(params) if param.name == role)
                 ]

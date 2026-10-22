@@ -7,17 +7,15 @@ from itertools import count
 from typing import Callable, Iterable
 
 from tilefoundry.ir.types import (
-    Broadcast,
     ComposedLayout,
     Layout,
-    Partial,
     ShardLayout,
-    Swizzle,
     TensorType,
 )
 from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.layout_algebra import coalesce, is_inverse_projectable
 
+from .constraint import strided_arrangement
 from .match import Unknown, matched
 from .pattern import Pattern, SequencePattern, TensorPattern, WildcardPattern
 
@@ -123,18 +121,8 @@ class Predicate(Pattern):
     @staticmethod
     def arrangement(subject, *, allow_partial=False) -> Layout | None:
         """Read the static strided layout beneath shard and composition wrappers."""
-        if isinstance(subject, ShardLayout):
-            if not all(
-                isinstance(attr, Broadcast) or (allow_partial and isinstance(attr, Partial))
-                for attr in subject.attrs
-            ):
-                return None
-            subject = subject.layout
-        if isinstance(subject, ComposedLayout):
-            if subject.inner is not None and not isinstance(subject.inner, Swizzle):
-                return None
-            subject = subject.outer
-        if not isinstance(subject, Layout) or subject.strides is None:
+        subject = strided_arrangement(subject, allow_partial=allow_partial)
+        if subject is None:
             return None
         extents = tuple(flatten(subject.shape))
         strides = tuple(flatten(subject.strides))

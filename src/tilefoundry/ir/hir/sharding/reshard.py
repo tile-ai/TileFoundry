@@ -182,7 +182,6 @@ def _buffer_alias(call: Call) -> int | None:
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage or not is_literal_shape(result.shape):
         return None
-
     if any(
         before != after
         for before, after in zip_longest(

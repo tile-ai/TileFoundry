@@ -23,6 +23,27 @@ def flatten(t: object) -> tuple[object, ...]:
     return tuple(value for item in t for value in flatten(item))
 
 
+def partition_modes(modes, count, indivisible=()):
+    """Split indexed modes at a prefix product, retaining original positions."""
+    modes, prefix, remaining = tuple(modes), [], count
+    for index, (position, width) in enumerate(modes):
+        if remaining == 1:
+            return tuple(prefix), modes[index:]
+        if remaining % width == 0:
+            prefix.append((position, width))
+            remaining //= width
+        elif width % remaining == 0 and position not in indivisible:
+            return (*prefix, (position, remaining)), (
+                (position, width // remaining),
+                *modes[index + 1 :],
+            )
+        else:
+            raise ValueError(f"repeat is not leftmost at mode {position} (extent {width})")
+    if remaining != 1:
+        raise ValueError(f"leading modes do not contain repeat {count}")
+    return tuple(prefix), ()
+
+
 def congruent(a, b) -> bool:
     """Whether two int tuples have the same nesting, ignoring their leaves."""
     if isinstance(a, tuple) != isinstance(b, tuple):
@@ -83,4 +104,12 @@ def unflatten(flat: tuple, profile) -> tuple:
     return nested
 
 
-__all__ = ["IntTuple", "congruent", "flatten", "product", "repeat_like", "unflatten"]
+__all__ = [
+    "IntTuple",
+    "congruent",
+    "flatten",
+    "product",
+    "partition_modes",
+    "repeat_like",
+    "unflatten",
+]

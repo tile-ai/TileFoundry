@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from math import prod
 
 import isl
 
@@ -15,7 +16,7 @@ from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub, simplify_dim
-from tilefoundry.ir.types.int_tuple import flatten
+from tilefoundry.ir.types.int_tuple import flatten, partition_modes
 from tilefoundry.ir.types.layout import EMPTY_LAYOUT, resolve_layout
 from tilefoundry.ir.types.layout_algebra import composition
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
@@ -337,22 +338,11 @@ def _window_layout(source, logical_shape, starts, sizes, strides, ctx):
     shape_modes, stride_modes, tilers, positions = [], [], [], {}
     offset, known_offset = 0, True
 
-    def mode(items):
-        return items[0] if len(items) == 1 else tuple(items)
-
     for axis, group in enumerate(correspondence.groups):
         extents = tuple(correspondence.extents[position] for position in group)
         walks = tuple(steps[position] for position in group)
-        shape_modes.append(
-            primitive.shape[axis]
-            if grouped and len(primitive.shape) == len(logical_shape)
-            else mode(extents)
-        )
-        stride_modes.append(
-            resolved.strides[axis]
-            if grouped and len(primitive.shape) == len(logical_shape)
-            else mode(walks)
-        )
+        shape_modes.append(correspondence.axis_mode(primitive.shape, axis))
+        stride_modes.append(correspondence.axis_mode(resolved.strides, axis))
         start, size, step = starts[axis], sizes[axis], strides[axis]
         distributed = bool(split.intersection(group))
         kept = list(zip(group, extents, strict=True))
@@ -385,27 +375,20 @@ def _window_layout(source, logical_shape, starts, sizes, strides, ctx):
                 )
             ):
                 raise ValueError(refusal)
-            kept = []
-            for position in reversed(group):
-                extent = _literal(correspondence.extents[position])
-                if extent is None or extent <= 0:
-                    raise ValueError(refusal)
-                if remaining == 1:
-                    if position in split and extent != 1:
-                        raise ValueError(refusal)
-                    if position in split or extent == 1:
-                        kept.append((position, extent))
-                elif remaining >= extent and remaining % extent == 0:
-                    kept.append((position, extent))
-                    remaining //= extent
-                elif extent % remaining == 0 and position not in split:
-                    kept.append((position, remaining))
-                    remaining = 1
-                else:
-                    raise ValueError(refusal)
-            if remaining != 1:
+            widths = tuple(_literal(extent) for extent in extents)
+            if any(width is None or width <= 0 for width in widths) or prod(widths) % remaining:
                 raise ValueError(refusal)
-            kept.reverse()
+            try:
+                leading, trailing = partition_modes(
+                    zip(group, widths, strict=True), prod(widths) // remaining, split
+                )
+            except ValueError as error:
+                raise ValueError(refusal) from error
+            if any(position in split and width != 1 for position, width in leading):
+                raise ValueError(refusal)
+            kept = sorted(
+                (*((position, width) for position, width in leading if width == 1), *trailing)
+            )
             tile_shape = tuple(width for _position, width in kept) or (1,)
             tilers.append(Layout(tile_shape, compact_row_major(tile_shape)))
         else:

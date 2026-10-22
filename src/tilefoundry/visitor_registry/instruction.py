@@ -26,7 +26,7 @@ from tilefoundry.ir.pattern.utils import (
     selected_pattern,
 )
 from tilefoundry.ir.types import ComposedLayout, Layout, Split, TensorType, UnitType
-from tilefoundry.ir.types.int_tuple import flatten
+from tilefoundry.ir.types.int_tuple import flatten, partition_modes
 from tilefoundry.ir.types.layout import get, resolve_layout
 from tilefoundry.ir.types.layout_algebra import composition, zipped_divide
 from tilefoundry.ir.types.layout_correspondence import layout_correspondence
@@ -203,31 +203,12 @@ def _axis_tile(layout, logical_extent, tile, positions, split, name):
         unit = Layout((1,), (0,))
         return _AxisTile(layout, unit, unit, (None,), tuple(positions), (False,))
     count = logical_extent // tile
-    remaining, prefix, suffix, consumed = count, [], [], 0
-    prefix_widths, suffix_widths = [], []
-    for index, (position, width) in enumerate(zip(positions, extents, strict=True)):
-        if remaining == 1:
-            break
-        if remaining % width == 0:
-            prefix.append(position)
-            prefix_widths.append(width)
-            remaining //= width
-            consumed = index + 1
-        elif width % remaining == 0 and position not in split:
-            prefix.append(position)
-            prefix_widths.append(remaining)
-            suffix.append(position)
-            suffix_widths.append(width // remaining)
-            remaining = 1
-            consumed = index + 1
-        else:
-            raise ValueError(f"{name}: repeat is not leftmost at mode {position} (extent {width})")
-    if remaining != 1:
-        raise ValueError(f"{name}: leading modes do not contain repeat {count}")
-    suffix.extend(positions[consumed:])
-    suffix_widths.extend(extents[consumed:])
-    if not suffix_widths:
-        suffix, suffix_widths = [None], [1]
+    try:
+        leading, trailing = partition_modes(zip(positions, extents, strict=True), count, split)
+    except ValueError as error:
+        raise ValueError(f"{name}: {error}") from error
+    prefix, prefix_widths = zip(*leading)
+    suffix, suffix_widths = zip(*(trailing or ((None, 1),)))
     tiler = Layout(tuple(suffix_widths), compact_row_major(tuple(suffix_widths)))
     divided = zipped_divide(layout, tiler, major="row")
     inner = get(divided, 0)
@@ -277,7 +258,6 @@ class _OperandTile:
         correspondence = layout_correspondence(primitive.shape, type_.shape)
         if correspondence.groups is None:
             raise ValueError(f"{name}: modes cross logical axes {type_.shape}")
-        steps = tuple(flatten(primitive.strides))
         split = (
             {attr.axis for attr in self.shard.attrs if isinstance(attr, Split)}
             if self.shard
@@ -287,17 +267,12 @@ class _OperandTile:
         for axis, (group, extent, tile) in enumerate(
             zip(correspondence.groups, type_.shape, shape, strict=True)
         ):
-            if self.grouped and len(primitive.shape) == len(shape):
-                mode, stride = primitive.shape[axis], primitive.strides[axis]
-                layout = Layout(
-                    mode if isinstance(mode, tuple) else (mode,),
-                    stride if isinstance(stride, tuple) else (stride,),
-                )
-            else:
-                layout = Layout(
-                    tuple(correspondence.extents[position] for position in group),
-                    tuple(steps[position] for position in group),
-                )
+            mode = correspondence.axis_mode(primitive.shape, axis)
+            stride = correspondence.axis_mode(primitive.strides, axis)
+            layout = Layout(
+                mode if isinstance(mode, tuple) else (mode,),
+                stride if isinstance(stride, tuple) else (stride,),
+            )
             self.axes.append(_axis_tile(layout, extent, tile, group, split, f"{name} axis {axis}"))
 
     def build(self, *, issued=False):

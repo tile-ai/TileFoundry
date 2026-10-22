@@ -8,18 +8,19 @@ Load / Store too. The Op is placed in Stmt position as
 
 from __future__ import annotations
 
-from tilefoundry.evaluator.registry import register_schedule_eval
+from tilefoundry.evaluator.registry import register_schedule_eval, schedule_eval_registry
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import SameConstraint, utils
 from tilefoundry.ir.types import UnitType
-from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.registries import typeinfer_registry, verify_stmt_registry
 
 
 @register_op
@@ -55,3 +56,13 @@ register_access_relation(Copy)(identity_relations)
 @register_schedule_eval(Copy)
 def _eval_scheduled_copy(ctx):
     return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
+
+
+def register_copy_semantics(op, *, verify=True):
+    """Reuse Copy's value, type and access rules for a transfer declaration."""
+    register_typeinfer(op)(typeinfer_registry.lookup(Copy))
+    register_access_relation(op)(identity_relations)
+    register_schedule_eval(op)(schedule_eval_registry.lookup(Copy))
+    if verify:
+        register_verify_stmt(op)(verify_stmt_registry.lookup(Copy))
+    return op

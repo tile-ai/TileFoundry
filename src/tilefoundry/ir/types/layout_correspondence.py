@@ -48,6 +48,16 @@ class LayoutCorrespondence:
                 axes[position] = axis
         return [len(self.shape) - 1 if axis is None else axis for axis in axes]
 
+    def axis_mode(self, values, axis):
+        """Read one logical axis's authored shape or stride mode tree."""
+        if any(isinstance(mode, tuple) for mode in self.layout_shape) and len(values) == len(
+            self.shape
+        ):
+            return values[axis]
+        flat = tuple(flatten(values))
+        mode = tuple(flat[position] for position in self.groups[axis])
+        return mode[0] if len(mode) == 1 else mode
+
     def digits(self, linear: int) -> tuple[int, ...]:
         """Mode digits of a static logical row-major index, for concrete readers."""
         from .utils import static_dim_value  # noqa: PLC0415
