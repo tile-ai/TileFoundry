@@ -370,10 +370,9 @@ def _compose_layout(left: Layout, right, *, major: str) -> Layout:
 def composition(left, right, offset: int = 0, *, major: str = "col"):
     """CuTe ``composition``, dispatched to the supported overloads.
 
-    The general Layout overload has no consumers in this round. Future
-    consumers include ``utils._inner_layout`` and ``utils.tile_view_layout``;
-    their currently pre-grouped tiles require a separate refactor. ``offset``
-    belongs to the existing swizzle overload.
+    Slice composes logical-axis windows with this overload. Instruction tile
+    views still use their pre-grouped representation. ``offset`` belongs to
+    the existing swizzle overload.
     """
     if swizzle_layout.supports_composition(left, right):
         return swizzle_layout.composition(left, right, offset)
@@ -387,9 +386,8 @@ def composition(left, right, offset: int = 0, *, major: str = "col"):
 def logical_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
     """CuTe ``logical_divide``: compose the integer tile and its complement.
 
-    No consumers are connected in this round. ``utils._inner_layout`` and
-    ``utils.tile_view_layout`` are future consumers after their pre-grouped
-    tile representation is refactored. Symbolic tiles are unsupported.
+    Instruction tile views remain future consumers after their pre-grouped
+    representation is refactored. Symbolic tiles are unsupported.
     """
     if tile is None:
         return layout
@@ -415,9 +413,8 @@ def logical_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
 def zipped_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
     """CuTe ``zipped_divide``: gather the divided tile and remainder modes.
 
-    No consumers are connected in this round. ``utils._inner_layout`` and
-    ``utils.tile_view_layout`` are future consumers after their pre-grouped
-    tile representation is refactored. Symbolic tiles are unsupported.
+    Instruction tile views remain future consumers after their pre-grouped
+    representation is refactored. Symbolic tiles are unsupported.
     """
     if tile is None:
         return _make_layout(Layout((1,), (0,)), layout)

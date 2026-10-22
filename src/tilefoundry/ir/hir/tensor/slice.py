@@ -14,8 +14,13 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
-from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMul, DimSub, simplify_dim
+from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub, simplify_dim
 from tilefoundry.ir.types.int_tuple import flatten
+from tilefoundry.ir.types.layout import EMPTY_LAYOUT, resolve_layout
+from tilefoundry.ir.types.layout_algebra import composition
+from tilefoundry.ir.types.layout_correspondence import layout_correspondence
+from tilefoundry.ir.types.shard_layout import Split
+from tilefoundry.ir.types.stride import compact_row_major, crd2idx, try_compact_major
 from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.types.utils import i64_const
 from tilefoundry.ir.visitor import ExprVisitor
@@ -29,8 +34,6 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 
-from ._view_layout import derive_view_layout
-
 
 @register_op
 class Slice(Op):
@@ -41,6 +44,7 @@ class Slice(Op):
 
     def __init__(self, **attrs):
         super().__init__(**attrs)
+
 
 class _Unbounded(ValueError):
     """A relation would have a parameter nothing can bound."""
@@ -282,60 +286,151 @@ def _dim_mul(left, right):
     return simplify_dim(DimMul, (left, right))
 
 
-def window_image(layout, starts: tuple, sizes: tuple, steps: tuple) -> "tuple[int, Layout] | None":
-    """Where a window of *layout* starts and how it lies, at static starts.
+def _window_layout(source, logical_shape, starts, sizes, strides, ctx):
+    """Compose logical-axis windows while retaining each surviving shard mode."""
+    shard = source if isinstance(source, ShardLayout) else None
+    primitive = shard.layout if shard is not None else source
+    if shard is not None and isinstance(primitive, ComposedLayout):
+        window, moved = _window_layout(
+            replace(shard, layout=primitive.outer), logical_shape, starts, sizes, strides, ctx
+        )
+        if moved != 0:
+            return ComposedLayout(primitive.inner, primitive.offset + moved, window), 0
+        return replace(shard, layout=replace(primitive, outer=window.layout)), 0
+    if not isinstance(primitive, Layout):
+        raise ValueError(f"Slice cannot preserve {type(primitive).__name__} layout")
+    correspondence = layout_correspondence(primitive.shape, logical_shape)
+    if correspondence.groups is None:
+        raise ValueError(f"layout {primitive!r} crosses logical axes of {logical_shape}")
+    split = {attr.axis for attr in shard.attrs if isinstance(attr, Split)} if shard else set()
+    resolved = resolve_layout(primitive)
+    steps = tuple(flatten(resolved.strides))
+    grouped = any(isinstance(mode, tuple) for mode in primitive.shape)
+    shape_modes, stride_modes, tilers, positions = [], [], [], {}
+    offset, known_offset = 0, True
 
-    One axis at a time, in the tensor's own order. An axis written as a single
-    mode is a run: its start walks its stride into the offset and the window
-    keeps that stride, stepped. An axis written as a group has no single stride
-    to walk, so its start is read through the group as the mixed-radix
-    coordinate it is and the window is the modes the group steps the least by,
-    as many as its size takes, in the order the group wrote them. A grouped
-    axis straddling modes is refused; ``None`` is no window at all.
-    """
-    if not isinstance(layout, Layout) or layout.strides is None:
-        return None
-    shape, strides = tuple(layout.shape), tuple(layout.strides)
-    if not len(shape) == len(strides) == len(starts) == len(sizes) == len(steps):
-        return None
+    def mode(items):
+        return items[0] if len(items) == 1 else tuple(items)
 
-    offset = 0
-    window_shape: list = []
-    window_strides: list = []
-    for group, walk, start, size, step in zip(shape, strides, starts, sizes, steps):
-        if not isinstance(group, tuple) and not isinstance(walk, tuple):
-            if any(_literal(value) is None for value in (walk, start, step)):
-                return None
-            offset += _literal(start) * _literal(walk)
-            window_shape.append(size)
-            window_strides.append(_literal(walk) * _literal(step))
+    for axis, group in enumerate(correspondence.groups):
+        extents = tuple(correspondence.extents[position] for position in group)
+        walks = tuple(steps[position] for position in group)
+        shape_modes.append(
+            primitive.shape[axis]
+            if grouped and len(primitive.shape) == len(logical_shape)
+            else mode(extents)
+        )
+        stride_modes.append(
+            resolved.strides[axis]
+            if grouped and len(primitive.shape) == len(logical_shape)
+            else mode(walks)
+        )
+        start, size, step = starts[axis], sizes[axis], strides[axis]
+        distributed = bool(split.intersection(group))
+        kept = list(zip(group, extents, strict=True))
+        if _literal(start) == 0 and size == logical_shape[axis] and step == 1:
+            tilers.append(None)
+        elif shard is not None and (distributed or len(group) > 1):
+            from tilefoundry.ir.types.window import _aligned  # noqa: PLC0415
+
+            mesh_axis = next(
+                (
+                    i
+                    for i, attr in enumerate(shard.attrs)
+                    if isinstance(attr, Split) and attr.axis in group
+                ),
+                0,
+            )
+            refusal = (
+                f"Slice narrows axis {axis}, which mesh axis {mesh_axis} splits; "
+                "a window need not align with the mesh division. Slice before placing, "
+                f"or reshard to a layout that leaves axis {axis} whole."
+            )
+            remaining = _literal(size)
+            if (
+                step != 1
+                or remaining is None
+                or remaining <= 0
+                or not _aligned(
+                    start,
+                    remaining,
+                    ctx.loops,
+                    {key: id(value) for key, value in ctx.loop_aliases.items()},
+                )
+            ):
+                raise ValueError(refusal)
+            kept = []
+            for position in reversed(group):
+                extent = _literal(correspondence.extents[position])
+                if extent is None or extent <= 0:
+                    raise ValueError(refusal)
+                if remaining == 1:
+                    if position in split and extent != 1:
+                        raise ValueError(refusal)
+                    if position in split or extent == 1:
+                        kept.append((position, extent))
+                elif remaining >= extent and remaining % extent == 0:
+                    kept.append((position, extent))
+                    remaining //= extent
+                elif extent % remaining == 0 and position not in split:
+                    kept.append((position, remaining))
+                    remaining = 1
+                else:
+                    raise ValueError(refusal)
+            if remaining != 1:
+                raise ValueError(refusal)
+            kept.reverse()
+            tile_shape = tuple(width for _position, width in kept) or (1,)
+            tilers.append(Layout(tile_shape, compact_row_major(tile_shape)))
+        else:
+            kept = [(group[0], size)]
+            tilers.append(Layout((size,), (step,)))
+        base = len(positions)
+        positions.update((position, base + index) for index, (position, _width) in enumerate(kept))
+        if _literal(start) == 0:
             continue
-
-        extents, walked = flatten(group), flatten(walk)
-        numbers = (*extents, *walked, start, size, step)
-        if len(extents) != len(walked) or any(_literal(value) is None for value in numbers):
-            return None
-        extents = tuple(_literal(value) for value in extents)
-        walked = tuple(_literal(value) for value in walked)
-        start, size, step = _literal(start), _literal(size), _literal(step)
-        if step != 1 or size < 1 or start % size:
-            return None
-
-        below, reach = 1, 1
-        kept: list[int] = []
-        for index in sorted(range(len(extents)), key=lambda axis: walked[axis]):
-            offset += ((start // below) % extents[index]) * walked[index]
-            if below < size:
-                kept.append(index)
-                reach *= extents[index]
-            below *= extents[index]
-        if reach != size:
-            return None
-        kept.sort()
-        window_shape.append(tuple(extents[index] for index in kept))
-        window_strides.append(tuple(walked[index] for index in kept))
-
-    return offset, Layout(shape=tuple(window_shape), strides=tuple(window_strides))
+        if (
+            primitive.strides is None
+            or any(_literal(walk) is None for walk in walks)
+            or (_literal(start) is None and not distributed)
+        ):
+            known_offset = False
+            continue
+        widths = dict(kept)
+        physical = tuple(
+            0 if position in split or (distributed and widths.get(position) == extent) else walk
+            for position, extent, walk in zip(group, extents, walks, strict=True)
+        )
+        if _literal(start) is not None:
+            digits = layout_correspondence(extents, (logical_shape[axis],)).digits(_literal(start))
+            offset += crd2idx(digits, extents, physical)
+        else:
+            below = 1
+            for index in reversed(range(len(extents))):
+                digit = simplify_dim(DimFloorDiv, (start, below))
+                if index:
+                    digit = simplify_dim(DimMod, (digit, extents[index]))
+                offset = simplify_dim(DimAdd, (offset, _dim_mul(digit, physical[index])))
+                below = _dim_mul(below, extents[index])
+    window = composition(
+        Layout(tuple(shape_modes), tuple(stride_modes)), tuple(tilers), major="row"
+    )
+    if shard is not None and not grouped:
+        window = Layout(tuple(flatten(window.shape)), tuple(flatten(window.strides)))
+    if primitive.strides is None:
+        window = replace(window, strides=None)
+    if shard is not None:
+        window = replace(
+            shard,
+            layout=window,
+            attrs=tuple(
+                Split(positions[attr.axis]) if isinstance(attr, Split) else attr
+                for attr in shard.attrs
+            ),
+        )
+    return window, (
+        _literal(offset) if _literal(offset) is not None else offset
+    ) if known_offset else 0
 
 
 @register_typeinfer(Slice)
@@ -369,7 +464,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         if isinstance(stride, int) and (isinstance(stride, bool) or stride <= 0):
             ctx.error(call, f"Slice stride for axis {axis} must be positive")
     shape = tuple(op.sizes)
-    layout_shape = shape
     source = x_ty.layout
     inherited_offset = 0
     inherited_inner = None
@@ -394,69 +488,33 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             f"against that mapping, not against the outer strides",
         )
 
-    new_layout = None
-    if isinstance(source, ShardLayout):
-        from tilefoundry.ir.types.window import shard_window_layout  # noqa: PLC0415
-
-        try:
-            new_layout = shard_window_layout(
-                source,
-                x_ty.shape,
-                starts.elements,
-                op.sizes,
-                op.strides,
-                loops=ctx.loops,
-                aliases={key: id(value) for key, value in ctx.loop_aliases.items()},
-            )
-        except ValueError as error:
-            ctx.error(call, str(error))
-        if inherited_offset != 0:
-            if isinstance(new_layout, ComposedLayout):
-                offset = (
-                    inherited_offset + new_layout.offset
-                    if isinstance(inherited_offset, int) and isinstance(new_layout.offset, int)
-                    else simplify_dim(DimAdd, (inherited_offset, new_layout.offset))
-                )
-                new_layout = replace(new_layout, offset=offset)
-            else:
-                new_layout = ComposedLayout(None, inherited_offset, new_layout)
-    elif isinstance(source, Layout) and source.strides is not None:
-        static_starts = []
-        steps = []
-        for start, stride in zip(starts.elements, op.strides):
-            if not (
-                isinstance(start, Constant)
-                and isinstance(start.value, int)
-                and isinstance(stride, int)
-                and not isinstance(stride, bool)
-            ):
-                break
-            static_starts.append(int(start.value))
-            steps.append(stride)
-        else:
-            found = window_image(source, tuple(static_starts), tuple(layout_shape), tuple(steps))
-            if found is not None:
-                moved, window = found
-                new_layout = ComposedLayout(
-                    inner=inherited_inner,
-                    offset=inherited_offset + moved,
-                    outer=window,
-                )
-    if new_layout is None:
-        def sliced(layout: Layout) -> Layout:
-            strides = None
-            if layout.strides is not None and len(layout.strides) == rank:
-                strides = tuple(
-                    source_stride * slice_stride
-                    for source_stride, slice_stride in zip(
-                        layout.strides, op.strides, strict=True
-                    )
-                )
-            return Layout(shape, strides)
-
-        new_layout = derive_view_layout(x_ty, shape, sliced)
-    if new_layout is None:
-        ctx.error(call, f"Slice cannot preserve {type(x_ty.layout).__name__} layout")
+    if source == EMPTY_LAYOUT:
+        return TensorType(
+            shape=shape, dtype=x_ty.dtype, layout=Layout(shape, None), storage=x_ty.storage
+        )
+    if source is None:
+        source = Layout(tuple(x_ty.shape), try_compact_major(tuple(x_ty.shape)))
+    try:
+        new_layout, moved = _window_layout(
+            source, x_ty.shape, starts.elements, op.sizes, op.strides, ctx
+        )
+    except ValueError as error:
+        ctx.error(call, str(error))
+    offset = (
+        inherited_offset + moved
+        if isinstance(inherited_offset, int) and isinstance(moved, int)
+        else simplify_dim(DimAdd, (inherited_offset, moved))
+    )
+    if x_ty.layout is not None and (
+        inherited_inner is not None
+        or offset != 0
+        or (
+            isinstance(x_ty.layout, (Layout, ComposedLayout))
+            and not isinstance(source, ShardLayout)
+            and all(_literal(start) is not None for start in starts.elements)
+        )
+    ):
+        new_layout = ComposedLayout(inherited_inner, offset, new_layout)
     return TensorType(shape=shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
 
 
@@ -487,4 +545,4 @@ def _eval_slice(ctx):
     return TensorValue(data=ctx.args[0].data[tuple(key)], type=ctx.result_type)
 
 
-__all__ = ["Slice", "slice_size", "window_base", "window_image"]
+__all__ = ["Slice", "slice_size", "window_base"]

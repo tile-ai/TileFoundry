@@ -158,7 +158,6 @@ def _carrier_layout(
     elif layout.strides is None:
         new_strides = None
     else:
-
         new_strides = [
             0 if p is None else layout.strides[p] for p in src_pos
         ]

@@ -146,6 +146,7 @@ FINALIZE_REFUSED = {
     "duplicate_output_storage": "return leaf (2,) shares storage with another output",
 }
 CANDIDATES_REFUSED = {
+    "wgmma_b_mn_major_two_atom_column_slice": "source has no unscheduled candidate site",
     "smem_padded_stages": "source has no unscheduled candidate site",
     "zero_trip_insert_slice": "source has no unscheduled candidate site",
     "strided_return_window": "source has no unscheduled candidate site",
@@ -318,6 +319,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "wgmma_b_mn_major_two_atom_column_slice": 49_152,
     "loop_bound_from_outer_induction": 0,
     "finalize_footprint_mesh_offset": 0,
     "smem_padded_stages": 96,
@@ -376,6 +378,10 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "wgmma_b_mn_major_two_atom_column_slice": {
+        "thread@128:128#0": _RmemExpectation(32768, "64x128 f32 accumulator; MMA aliases acc"),
+        "thread@0:256#0": _RmemExpectation(32768, "parent envelope of the accumulator"),
+    },
     "loop_bound_from_outer_induction": {
         "thread@0:32#0": _RmemExpectation(256, "32 f32 accumulator and loaded row elements"),
     },
