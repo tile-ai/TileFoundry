@@ -287,7 +287,7 @@ An instruction declaration keeps two independent names:
 | `capability` | May this architecture select the instruction family? | Emitted ISA name |
 | `resource` | Which execution engine performs it? | An `_engine` name |
 
-CUDA declarations use `mma.sync`, `wgmma.mma_async`, `ldmatrix`, `cp.async`,
+CUDA declarations use `mma.sync`, `wgmma.mma_async`, `ldmatrix`, `stmatrix`, `cp.async`,
 `cp.async.bulk`, `cp.async.bulk.tensor`, `mbarrier.expect_tx` and
 `mbarrier.try_wait` as capabilities. Admission MUST refuse an instruction whose
 declared capability the target's architecture does not list, naming the
@@ -295,7 +295,7 @@ capability and the target; where an attribute selects one of several
 declarations (an MMA atom), only the selected declaration's capability applies.
 A target without an architecture lists none, and admission without a target
 checks nothing. The resource-bearing declarations
-map the two MMA families, matrix load, and tensor-map copy respectively to
+map the two MMA families, matrix load/store, and tensor-map copy respectively to
 `tensor_core_engine`, `wgmma_engine`, `tensor_core_engine`, and `tma_engine`;
 the current model gives `cp.async` no separately priced engine. The capability
 and resource vocabularies MUST be disjoint. Architecture documents list only
@@ -343,7 +343,7 @@ class CudaArchitecture(Architecture):
   - A CUDA architecture MUST own supported compute DTypes, instruction
     capabilities, and the thread/CTA structural limits. `capabilities` MUST use
     instruction-family names from the emitted ISA, such as `mma.sync`,
-    `wgmma.mma_async`, `ldmatrix`, `cp.async`, and `cp.async.bulk.tensor`.
+    `wgmma.mma_async`, `ldmatrix`, `stmatrix`, `cp.async`, and `cp.async.bulk.tensor`.
   - It MUST own the per-SM resource limits: resident CTAs, shared-memory
     capacity per SM and per CTA, and register-file capacity per SM. These are
     properties of the microarchitecture, so every product built on it shares

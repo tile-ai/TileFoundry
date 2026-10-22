@@ -9,6 +9,7 @@ from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.cuda.memory.copy_async_tensor import CopyAsyncTensor
 from tilefoundry.ir.tir.cuda.memory.ldmatrix import LdMatrix
+from tilefoundry.ir.tir.cuda.memory.stmatrix import StMatrix
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Split
 from tilefoundry.ir.types.int_tuple import flatten
@@ -62,7 +63,7 @@ def _matmul_operands(call, instruction):
     return {}, (call.type, lhs, rhs)
 
 
-register_candidates(Reshard, (CopyAsync, CopyAsyncTensor, LdMatrix))
+register_candidates(Reshard, (CopyAsync, CopyAsyncTensor, LdMatrix, StMatrix))
 
 
 @register_candidates(IndexSelect, (CopyAsync,))

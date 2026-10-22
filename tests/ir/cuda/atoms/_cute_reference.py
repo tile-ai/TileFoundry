@@ -70,7 +70,7 @@ def cute_reference():
     assert cuda and (cuda / "cuda_runtime_api.h").is_file(), (
         f"Missing CUDA headers: searched CUDA_HOME/include and nvcc/../include ({cuda})"
     )
-    requests = {"mma-bf16": "mma bf16 - 0 - 0", "mma-fp8e4m3": "mma fp8e4m3 - 0 - 0"}
+    requests = {"mma-bf16": "mma bf16 - 0 - 0", "mma-fp8e4m3": "mma fp8e4m3 - 0 - 0", "stmatrix": "stmatrix bf16 - 0 - 0"}
     requests.update(
         {
             tv_key(dtype, form, n): f"tv {dtype.name} {form.value} {n} K 0"

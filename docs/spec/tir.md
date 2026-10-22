@@ -1315,10 +1315,30 @@ class LdMatrix(Op):
 - constraints:
   - `src` is a shared-memory `(16, 16)` bf16 tile and `dst` is exactly the
     register A fragment declared by `T.cuda.sm80.Mma()`; their dtype and shape
-    agree under the ordinary `Copy` verifier.
+    agree through explicit between-operand constraints.
   - One canonical SM80 warp issues the operation. It requires the target's
     `ldmatrix` capability and lowers to `tilefoundry::ops::ldmatrix`.
   - The destination layout is the atom's declaration.
+
+##### StMatrix
+
+```python
+class StMatrix(Op):
+    src: Tensor
+    dst: Tensor
+    execution_mesh: Mesh | None = None
+```
+
+- constraints:
+  - `src` is a bf16 or f16 WGMMA C fragment of shape `(64, n)` with
+    `n = 8c` and even `c`. Its mode structure and per-thread ownership match
+    the WGMMA fragment declaration.
+  - `dst` is shared memory with whole contiguous 16-byte vectors. Source and
+    destination shape and dtype MUST agree.
+  - Exactly one canonical warpgroup participates; each warp issues `c/2`
+    x4 stores of a 16-by-16 tile. The capability is `stmatrix` and the resource
+    is `tensor_core_engine`.
+  - CUDA codegen MUST reject it until stmatrix runtime support exists.
 
 #### Barrier object Ops (`tir.sync.mbarrier_*`)
 

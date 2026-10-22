@@ -231,7 +231,7 @@ tuples because it does not materialize an aggregate. The codegen context records
 the structural tuple by its fresh SSA `Var` identity so consumers can recover
 its elements without target-side storage.
 
-Effect Ops (`Copy`, `Fill`, `TiledMma`, `CopyAsyncBulk`, `LdMatrix`,
+Effect Ops (`Copy`, `Fill`, `TiledMma`, `CopyAsyncBulk`, `LdMatrix`, `StMatrix`,
 `tir.nn.*`, ...) appear in Stmt
 position as `Evaluate(op, args)` rather than as Stmt subclasses. The
 walker matches `Evaluate` and dispatches on `type(callable)` through
@@ -243,7 +243,8 @@ CUDA emits `CopyAsyncBulk` and `LdMatrix` as the uniform runtime calls
 `tilefoundry::ops::ldmatrix(...)`. `CopyAsyncTensor` is nevertheless a public
 TIR declaration, but CUDA emission MUST fail explicitly until the host can
 construct and pass encoded tensor maps; it MUST NOT substitute a bulk or
-thread-issued copy.
+thread-issued copy. `StMatrix` likewise MUST fail explicitly until stmatrix
+runtime support exists.
 
 ## 3. Runtime-owned op dispatch
 

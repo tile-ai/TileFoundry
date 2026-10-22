@@ -6,7 +6,7 @@ from tilefoundry.evaluator.registry import register_schedule_eval, schedule_eval
 from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import utils
+from tilefoundry.ir.pattern import SameConstraint, utils
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.memory.copy import Copy
 from tilefoundry.ir.types import Mesh
@@ -35,6 +35,8 @@ class LdMatrix(Op):
         optional=True,
         default=None,
     )
+
+    between = (SameConstraint("shape", "src", "dst"), SameConstraint("dtype", "src", "dst"))
 
 
 register_typeinfer(LdMatrix)(typeinfer_registry.lookup(Copy))

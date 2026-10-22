@@ -201,6 +201,7 @@ instructions
   T.copy_async_tensor          cp.async.bulk.tensor
   T.copy                       all targets
   T.ldmatrix                   ldmatrix
+  T.stmatrix                   stmatrix
   T.relu                       all targets
   T.tiled_mma                  wgmma.mma_async, mma.sync
   T.mbarrier_arrive_expect_tx  mbarrier.expect_tx
@@ -221,6 +222,7 @@ _H200_FACTS_JSON = {
         {"id": "T.copy_async_tensor", "capability": "cp.async.bulk.tensor"},
         {"id": "T.copy", "capability": None},
         {"id": "T.ldmatrix", "capability": "ldmatrix"},
+        {"id": "T.stmatrix", "capability": "stmatrix"},
         {"id": "T.relu", "capability": None},
         {"id": "T.tiled_mma", "capability": ["wgmma.mma_async", "mma.sync"]},
         {"id": "T.mbarrier_arrive_expect_tx", "capability": "mbarrier.expect_tx"},
@@ -322,6 +324,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "wgmma_accumulator_stmatrix": 6_144,
     "wgmma_n16_within_warpgroup_share": 61_440,
     "wgmma_b_mn_major_one_atom_column_slice": 49_152,
     "wgmma_b_mn_major_two_atom_column_slice": 49_152,
@@ -383,6 +386,11 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "wgmma_accumulator_stmatrix": {
+        "thread@0:128#0": _RmemExpectation(
+            12_288, "64x48 f32 accumulator; bf16 cast aliases the fragment"
+        ),
+    },
     "wgmma_n16_within_warpgroup_share": {
         "thread@128:256#0": _RmemExpectation(
             24_576, "64x96 f32 accumulator across two warpgroups; MMA aliases acc"
