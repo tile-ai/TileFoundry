@@ -644,8 +644,6 @@ def test_mesh_started_loop_keeps_an_unknown_reuse_row() -> None:
     row = rows[0]
     assert row["reuse_bytes"] is None
     assert row["precision"] == "unknown"
-    assert "cta.t" in row["reason"]
-    assert "overlap is not modelled" in row["reason"]
 
 
 def test_runtime_loop_start_names_the_unbounded_value() -> None:

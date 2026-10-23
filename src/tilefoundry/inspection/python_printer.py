@@ -61,10 +61,9 @@ from tilefoundry.utils.python_source import PythonExpr
 from tilefoundry.visitor_registry.contexts import ValuationContext
 
 from .print_context import HirPrintContext
-from .printer_base import PythonPrinter
+from .printer_base import PARTS, PythonPrinter
 from .tir_printer import _function_block as _tir_function_block
 from .tir_printer import tir_function_to_python, tir_module_to_python
-from .values import PARTS
 
 
 class HirPrinter(PythonPrinter):

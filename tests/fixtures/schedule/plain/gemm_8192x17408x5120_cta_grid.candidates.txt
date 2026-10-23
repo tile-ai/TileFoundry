@@ -17,7 +17,7 @@ target nvidia.h200_sxm
     refused     T.ldmatrix
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8),), ((1, 4),))))
     refused     T.stmatrix
-                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),))))
+                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 8, 4),), ((*gs, 4, 1),))))
   bt:33  tf.reshard  per cta  x=Tensor[(64, 17408), "bf16"]  result=Tensor[(64, 17408), "bf16",
     ShardLayout(
         layout=Layout((64, 68, 256), (256, 0, 1)),
@@ -35,7 +35,7 @@ target nvidia.h200_sxm
     refused     T.ldmatrix
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8),), ((1, 4),))))
     refused     T.stmatrix
-                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),))))
+                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 8, 4),), ((*gs, 4, 1),))))
   part:34  tf.matmul  per cta  lhs=Tensor[(8192, 64), "bf16",
     ShardLayout(
         layout=Layout((64, 128, 64), (0, 64, 1)),
@@ -106,4 +106,4 @@ target nvidia.h200_sxm
     refused     T.ldmatrix
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8),), ((1, 4),))))
     refused     T.stmatrix
-                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),))))
+                  mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 8, 4),), ((*gs, 4, 1),))))

@@ -5,10 +5,10 @@ from __future__ import annotations
 from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import SameConstraint, utils
+from tilefoundry.ir.pattern import OrPattern, SameConstraint, TensorPattern, WildcardPattern, utils
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.memory.copy import register_copy_semantics
-from tilefoundry.ir.types import Mesh
+from tilefoundry.ir.types import DType, Mesh
 from tilefoundry.ir.types.storage import StorageKind as S
 
 
@@ -19,8 +19,19 @@ class LdMatrix(Op):
 
     capability = OpCapability("ldmatrix")
     resource = "tensor_core_engine"
+    roles = ("src", "dst")
+    required_execution_mesh = Mma.execution_mesh
 
-    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=utils.operand_tile(0, S.SMEM))
+    src = ParamDef(
+        kind="input",
+        effect=MemoryEffect.READ,
+        pattern=TensorPattern(
+            shape=(16, 16),
+            dtype=WildcardPattern("dtype0", predicates=(OrPattern(DType.bf16, DType.f16),)),
+            storage=S.SMEM,
+            layout=utils.whole_vectors(0, (16,)),
+        ),
+    )
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=Mma.A)
     execution_mesh = ParamDef(
         kind="attribute",

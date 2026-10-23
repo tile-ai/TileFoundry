@@ -1579,8 +1579,13 @@ class Lowering(ValuationVisitor[Expr | View]):
             else type_
             for type_ in types
         )
-        atom = getattr(op, "atom", None)
-        if atom is None:
+        declaration = getattr(op, "atom", op)
+        required = (
+            declaration.execution_mesh
+            if isinstance(declaration, type)
+            else getattr(declaration, "required_execution_mesh", None)
+        )
+        if required is None:
             if mesh is None:
                 raise LoweringError(f"{_label(call)} instruction issue has no lexical mesh")
             with ctx.builder.region(
@@ -1611,7 +1616,6 @@ class Lowering(ValuationVisitor[Expr | View]):
                 if result_param.effect & MemoryEffect.READ
                 else written
             )
-        required = atom.execution_mesh if isinstance(atom, type) else atom.required_execution_mesh
         for region in ctx.builder.blocks[:-1]:
             for key, value in region.views.items():
                 ctx.builder.blocks[-1].views.setdefault(key, value)

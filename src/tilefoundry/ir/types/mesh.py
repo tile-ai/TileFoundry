@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten, get, size
+from tilefoundry.ir.types.int_tuple import compatible_profile
+from tilefoundry.ir.types.layout import (
+    ComposedLayout,
+    Layout,
+    LayoutBase,
+    flatten,
+    get,
+    size,
+    unflatten,
+)
 from tilefoundry.ir.types.layout import rank as _rank
 from tilefoundry.ir.types.layout_algebra import filter, is_contiguous
 from tilefoundry.ir.types.stride import compact_major, compact_row_major, crd2idx, idx2crd
@@ -138,13 +147,6 @@ class Mesh:
         )
 
 
-def _levelled(layout, topologies: tuple) -> bool:
-    """Whether *layout* already states one mode per level the mesh names."""
-    return _rank(layout) == len(topologies) and all(
-        isinstance(mode, tuple) for mode in layout.shape
-    )
-
-
 def _nested(layout, topologies: tuple) -> "Layout | ComposedLayout":
     """What a mesh was written as, with every level's axes under its own mode.
 
@@ -160,73 +162,54 @@ def _nested(layout, topologies: tuple) -> "Layout | ComposedLayout":
         extents = tuple(flatten(layout))
         layout = Layout(extents, compact_row_major(extents))
     if isinstance(layout, ComposedLayout):
-        if layout.outer is None or _levelled(layout.outer, topologies):
+        if layout.outer is None or (
+            len(layout.outer.shape) == len(topologies)
+            and all(isinstance(mode, tuple) for mode in layout.outer.shape)
+        ):
             return layout
         return ComposedLayout(
             inner=layout.inner,
             offset=layout.offset,
             outer=_nested(layout.outer, topologies),
         )
-    if _levelled(layout, topologies):
+    if len(layout.shape) == len(topologies) and all(
+        isinstance(mode, tuple) for mode in layout.shape
+    ):
         return layout
 
     extents = tuple(flatten(layout.shape))
     stated = layout.strides
     steps = tuple(flatten(stated))
+    layout_flat = Layout(extents, steps)
     if len(topologies) == 1:
         return Layout(shape=(extents,), strides=(steps,))
     units: list[int] = []
     below = 1
     for topology in reversed(topologies):
         units.insert(0, below)
-        size = topology.size
-        if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+        count = topology.size
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise ValueError(
                 f"mesh level {topology.name!r} states extent "
-                f"{size!r}; cutting one arrangement at the level boundaries needs "
+                f"{count!r}; cutting one arrangement at the level boundaries needs "
                 "each of their position counts"
             )
-        below *= size
+        below *= count
 
-    shape: list = []
-    strides: list = []
-    axis = 0
-    for topology, unit in zip(topologies, units):
-        size = topology.size
-        taken_extents: list = []
-        taken_steps: list = []
-        reach = 1
-        while axis < len(extents) and (reach < size or extents[axis] == 1):
-            extent, step = extents[axis], steps[axis]
-            if not isinstance(extent, int) or isinstance(extent, bool):
-                raise ValueError(
-                    f"mesh layout axis {axis} states extent {extent!r}; cutting one "
-                    "arrangement at the level boundaries needs concrete axis extents"
-                )
+    grouped = unflatten(layout_flat, compatible_profile(extents, tuple(t.size for t in topologies)))
+    strides = []
+    for topology, unit, steps in zip(topologies, units, grouped.strides, strict=True):
+        normalized = []
+        for step in flatten(steps):
             if not isinstance(step, int) or isinstance(step, bool) or step % unit:
                 raise ValueError(
-                    f"mesh axis {axis} steps by {step!r}, which the {unit} positions "
+                    f"mesh steps by {step!r}, which the {unit} positions "
                     f"below {topology.name!r} do not divide; its positions are not "
                     "that level's"
                 )
-            reach *= extent
-            taken_extents.append(extent)
-            taken_steps.append(step // unit)
-            axis += 1
-        if reach != size:
-            raise ValueError(
-                f"mesh axes {extents} do not land on the boundary of level "
-                f"{topology.name!r} at {size}: the axes up to there multiply to "
-                f"{reach}. Write the axis that straddles it as the two axes it is"
-            )
-        shape.append(tuple(taken_extents))
-        strides.append(tuple(taken_steps))
-    if axis != len(extents):
-        raise ValueError(
-            f"mesh layout has {len(extents)} axes but the levels it names account "
-            f"for {axis}; every axis belongs to one of them"
-        )
-    return Layout(shape=tuple(shape), strides=tuple(strides))
+            normalized.append(step // unit)
+        strides.append(tuple(normalized))
+    return Layout(grouped.shape, tuple(strides))
 
 
 def levels(mesh: Mesh) -> tuple[Layout, ...]:

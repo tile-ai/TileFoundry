@@ -229,14 +229,14 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
         raise ScheduleRefusal(
             f"order {order} is not a permutation of iteration dimensions", path=bindings, op=op
         )
-    if getattr(op, "atom", None) is None:
-        return Projection(params, writes, patterns, whole_types, (), repeat, order, single_shape)
-    atom = getattr(op, "atom", None)
+    declaration = getattr(op, "atom", op)
     participant = (
-        atom.execution_mesh
-        if isinstance(atom, type)
-        else getattr(atom, "required_execution_mesh", None)
+        declaration.execution_mesh
+        if isinstance(declaration, type)
+        else getattr(declaration, "required_execution_mesh", None)
     )
+    if participant is None:
+        return Projection(params, writes, patterns, whole_types, (), repeat, order, single_shape)
     if not fragments:
         inner_types = tuple(
             TensorType(shape, type_.dtype, type_.layout, type_.storage)

@@ -1,5 +1,6 @@
 #include <cute/arch/mma_sm90.hpp>
 #include <cute/atom/copy_traits_sm90.hpp>
+#include <cute/atom/copy_traits_sm75.hpp>
 #include <cute/atom/mma_traits_sm80.hpp>
 #include <cute/atom/mma_traits_sm89.hpp>
 #include <cute/atom/mma_traits_sm90_gmma.hpp>
@@ -42,6 +43,19 @@ template <class Op> void emit_tv() {
     json_layout(typename Tr::BLayout{});
     std::cout << ",\"C\":";
     json_layout(typename Tr::CLayout{});
+    std::cout << ",\"ThrID\":";
+    json_layout(typename Tr::ThrID{});
+    std::cout << '}';
+}
+
+template <class Op> void emit_copy() {
+    using Tr = Copy_Traits<Op>;
+    std::cout << "{\"src\":";
+    json_layout(typename Tr::SrcLayout{});
+    std::cout << ",\"dst\":";
+    json_layout(typename Tr::DstLayout{});
+    std::cout << ",\"ThrID\":";
+    json_layout(typename Tr::ThrID{});
     std::cout << '}';
 }
 
@@ -114,12 +128,9 @@ int main() {
         } else if (kind == "mma" && dtype == "fp8e4m3") {
             emit_tv<SM89_16x8x32_F32E4M3E4M3F32_TN>();
         } else if (kind == "stmatrix") {
-            using Tr = Copy_Traits<SM90_U32x4_STSM_N>;
-            std::cout << "{\"src\":";
-            json_layout(typename Tr::SrcLayout{});
-            std::cout << ",\"dst\":";
-            json_layout(typename Tr::DstLayout{});
-            std::cout << '}';
+            emit_copy<SM90_U32x4_STSM_N>();
+        } else if (kind == "ldmatrix") {
+            emit_copy<SM75_U32x4_LDSM_N>();
         } else if (dtype == "bf16") {
             dispatch<bfloat16_t>(kind, form, n, major, swizzle);
         } else if (dtype == "f16") {

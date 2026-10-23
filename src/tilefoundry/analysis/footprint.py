@@ -316,13 +316,16 @@ def time_axis(boundary: MovingBoundary) -> int | None:
     return None
 
 
-def space_axes(boundary: MovingBoundary, wave: tuple[int, int]) -> tuple[int, ...]:
+def space_axes(
+    boundary: MovingBoundary, wave: tuple[int, int]
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
     """Return mesh axes where one unit reaches the wave-unioned addresses."""
     if boundary.mesh is None or wave[0] <= 1:
-        return ()
+        return (), ()
     window = boundary.depth - 1
     wave_reached = boundary.view("wave", window)
-    shared = []
+    shared, partial = [], []
+    reached = boundary.view("relation", -1).range()
     shape = flatten(flatten(boundary.mesh.layout).shape)
     for axis, parameter_name in enumerate(boundary.axis_parameters):
         extent = static_dim_value(shape[axis])
@@ -330,19 +333,9 @@ def space_axes(boundary: MovingBoundary, wave: tuple[int, int]) -> tuple[int, ..
         if extent is not None and extent > 1 and unit_reached is not None:
             if wave_reached.is_equal(unit_reached):
                 shared.append(axis)
-    return tuple(shared)
-
-
-def partial_axes(boundary: MovingBoundary, wave: tuple[int, int]) -> tuple[int, ...]:
-    """Find units differing on one axis that reach a common address over all iterations."""
-    if boundary.mesh is None or wave[0] <= 1:
-        return ()
-    reached = boundary.view("relation", -1).range()
-    shared = []
-    for axis, name in enumerate(boundary.axis_parameters):
-        if name is None:
+        if parameter_name is None:
             continue
-        parameter = reached.find_dim_by_name(isl.dim_type.PARAM, name)
+        parameter = reached.find_dim_by_name(isl.dim_type.PARAM, parameter_name)
         if parameter < 0:
             continue
         by_unit = isl.map.from_range(reached).move_dims(
@@ -350,8 +343,8 @@ def partial_axes(boundary: MovingBoundary, wave: tuple[int, int]) -> tuple[int, 
         )
         deltas = by_unit.apply_range(by_unit.reverse()).deltas()
         if not deltas.is_subset(deltas.fix_val(isl.dim_type.SET, 0, 0)):
-            shared.append(axis)
-    return tuple(shared)
+            partial.append(axis)
+    return tuple(shared), tuple(partial)
 
 
 def axis_label(mesh: Mesh, axis: int) -> str:
@@ -405,11 +398,11 @@ def shared_units(mesh: Mesh, axes: tuple[int, ...], wave: tuple[int, int]) -> in
 def reuse_axes(boundary: MovingBoundary, wave: tuple[int, int]) -> ReuseAxes:
     """Name reuse axes and how many units share this boundary's addresses."""
     time = time_axis(boundary)
-    axes = space_axes(boundary, wave)
+    axes, partial = space_axes(boundary, wave)
     units = shared_units(boundary.mesh, axes, wave) if boundary.mesh and axes else 1
     if units <= 1:
         axes = ()
-    partial = partial_axes(boundary, wave) if time is None and not axes else ()
+    partial = partial if time is None and not axes else ()
     return ReuseAxes(
         partial=tuple(axis_label(boundary.mesh, axis) for axis in partial),
         time=time,
@@ -934,15 +927,10 @@ def _reuse_rows(
         holds = sum(amounts.values())
         repeats = (1 if item.time_scope is None else item.time_scope.trips()) * item.space_units
         reuse = max(0, repeats - 1) * amounts.get(key, 0)
-        reason = ""
         if reuse == 0:
             if not item.partial:
                 continue
             reuse, precision = None, AnalysisPrecision.UNKNOWN
-            reason = (
-                f"units along {','.join(item.partial)} read some of the same addresses; "
-                "this overlap is not modelled"
-            )
         rows.append(
             ReuseWindow(
                 buffer=key[0],
@@ -955,7 +943,6 @@ def _reuse_rows(
                 space=",".join(item.space or item.partial),
                 holds_bytes=holds,
                 reuse_bytes=reuse,
-                reason=reason,
                 fits=holds < capacity,
                 precision=precision,
             )
@@ -1135,7 +1122,6 @@ __all__ = [
     "footprint_of",
     "merged",
     "moving_boundaries",
-    "partial_axes",
     "reached_by",
     "reuse_axes",
     "shared_units",

@@ -6,10 +6,12 @@ from tilefoundry.ir.types import ComposedLayout, Layout, Swizzle
 
 from ._cute_reference import (
     cute_reference,
+    reference_threads,
     reference_tv,
     smem_atoms,
     smem_key,
     to_byte_layout,
+    to_thread_layout,
     to_tv_layout,
     tv_configs,
     tv_key,
@@ -94,6 +96,7 @@ def test_wgmma_atom():
             a_major=wgmma.Major.K,
             b_major=wgmma.Major.K,
         )
+        assert to_thread_layout(atom) == reference_threads(reference[key]["ThrID"])
         for role in ("A", "B", "C"):
             broadcast = role == "B" or role == "A" and form == wgmma.Form.SS
             if not broadcast:

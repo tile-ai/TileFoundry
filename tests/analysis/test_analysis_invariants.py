@@ -21,7 +21,7 @@ from tilefoundry.analysis.memory import (
     call_traffic,
 )
 from tilefoundry.dsl import *
-from tilefoundry.inspection.values import (
+from tilefoundry.inspection.printer_base import (
     ENTRIES,
     ENTRY,
     FIELD,
@@ -29,8 +29,8 @@ from tilefoundry.inspection.values import (
     PAIR,
     PER_UNIT,
     TRIPS,
-    Prose,
 )
+from tilefoundry.inspection.values import Prose
 from tilefoundry.ir.core import (
     Call,
     Constant,

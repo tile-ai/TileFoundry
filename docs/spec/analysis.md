@@ -902,7 +902,6 @@ of these reuse relations states no row.
 | `ReuseWindow.space` | The mesh axes whose different coordinates reach the same or partially overlapping addresses; empty when no mesh axis supplies a second read. | No |
 | `ReuseWindow.holds_bytes` | Unique bytes of every buffer the whole wave touches while this buffer must remain resident. | `MemoryHierarchyFacts` selects the backed level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
 | `ReuseWindow.reuse_bytes` | `(time trips * space units - 1)` times this buffer's unique bytes in the window; an absent axis contributes one. Unknown (`None`, JSON `null`) for partial overlap whose savings are not modelled. | As above |
-| `ReuseWindow.reason` | Explanation when partial overlap has unknown savings; empty otherwise. | No |
 | `ReuseWindow.fits` | True exactly when `holds_bytes` is less than the cache capacity. | `MemoryHierarchyFacts.implicit_levels[]` |
 | `ReuseWindow.precision` | The precision of the footprint supplying `holds_bytes`, without mixing in the trip upper bound used for `reuse_bytes`; a partial-overlap row instead has `unknown` precision. | No |
 | `RegionMemoryMetadata.reuse_windows` | One row for every buffer with a time or space reuse axis and nonzero savings, or with partial overlap and unknown savings. | As above |
@@ -910,7 +909,7 @@ of these reuse relations states no row.
 - constraints:
   - Partial-overlap detection MUST run only when time and space reuse supply no
     axis. Such a row MUST retain its holds bytes, report `reuse=unknown` and
-    `precision=unknown`, and include a nonempty reason; JSON MUST use `null`
+    `precision=unknown`; JSON MUST use `null`
     for its reuse bytes. Existing exact reuse rows MUST remain unchanged.
   - An unknown-precision row exceeding capacity is an advisory. It suppresses
     the first-iteration working-set finding only when their precision reliability matches,

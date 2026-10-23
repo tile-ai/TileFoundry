@@ -1344,7 +1344,7 @@ class LdMatrix(Op):
     agree through explicit between-operand constraints.
   - One canonical SM80 warp issues the operation. It requires the target's
     `ldmatrix` capability and lowers to `tilefoundry::ops::ldmatrix`.
-  - The destination layout is the atom's declaration.
+  - The source and destination TV layouts follow CuTe `SM75_U32x4_LDSM_N`.
 
 ##### StMatrix
 
@@ -1356,14 +1356,13 @@ class StMatrix(Op):
 ```
 
 - constraints:
-  - `src` is a bf16 or f16 WGMMA C fragment of shape `(64, n)` with
-    `n = 8c` and even `c`. Its mode structure and per-thread ownership match
-    the WGMMA fragment declaration.
+  - `src` is a bf16 or f16 `(16, 16)` register fragment with the per-thread
+    ownership of CuTe `SM90_U32x4_STSM_N`: four 32-bit registers per thread.
   - `dst` is shared memory with whole contiguous 16-byte vectors. Source and
     destination shape and dtype MUST agree.
-  - Exactly one canonical warpgroup participates; each warp issues `c/2`
-    x4 stores of a 16-by-16 tile. The capability is `stmatrix` and the resource
-    is `tensor_core_engine`.
+  - One warp (32 threads) issues the CuTe `SM90_U32x4_STSM_N` transfer
+    of a 16-by-16 b16 tile. Larger scheduled operands are projected into warp
+    issues. The capability is `stmatrix` and the resource is `tensor_core_engine`.
   - CUDA codegen MUST reject it until stmatrix runtime support exists.
 
 #### Barrier object Ops (`tir.sync.mbarrier_*`)

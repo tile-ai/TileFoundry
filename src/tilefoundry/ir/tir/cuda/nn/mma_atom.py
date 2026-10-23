@@ -76,6 +76,7 @@ class MmaAtom(Printable):
     A: object
     B: object
 
+    roles = ("C", "A", "B")
     parameters: tuple[ParamDef, ...] = ()
     reference_name: str = ""
 
@@ -134,7 +135,7 @@ class MmaAtom(Printable):
         """Return the declared C, A, and B shapes for one atom issue."""
         shapes = tuple(
             declared_shape(selected_pattern(self.role(role), self.bindings), self.bindings)
-            for role in ("C", "A", "B")
+            for role in self.roles
         )
         if any(shape is None for shape in shapes):
             raise ValueError(f"{self.reference_name} does not declare fixed operand shapes")
