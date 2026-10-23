@@ -28,8 +28,8 @@ flowchart LR
 - `CodegenOptions.emit` is `"full"` (default) or `"skeleton"` and lives in the
   compile-wide `CodegenContext`. Emitters read it through
   `ctx.codegen_context.options`; a missing compile context is an error.
-  Skeleton emission retains CUDA signatures, parameter views, specialization
-  dispatch and launchers, replacing body statements with `// TODO: <fn>`.
+  Skeleton emission retains callable signatures and replaces body statements
+  with editable placeholders; target packages own their wrapper conventions.
 - Program emission and linking are owned by [§4.3](#43-linkedmodule);
   runtime compilation entry points and loading are owned by
   [runtime §1.6](./runtime.md#16-compilepy).
@@ -41,18 +41,12 @@ flowchart LR
   host-visible metadata the loader needs.
 - Codegen does not run passes, does not load or launch device code, and does
   not own the user-facing entry points (`compile` / `build` / `jit`).
-- **Host / device boundary.** A host `LinkableModule` MUST NOT reference CUDA or
-  CuTe symbols or types. A CUDA `LinkableModule` owns the kernels and their
-  C-ABI launchers. The host module invokes device code only through that
-  C-ABI launcher. The launcher MUST read the launch status right after the
-  launch and return the CUDA error text when the device refuses the launch, or
-  null otherwise. The host entry MUST raise when a launcher returns an error,
-  so a refused launch never returns as though the kernel ran and no exception
-  crosses the C ABI.
+- **Host / device boundary.** A host unit invokes device code through its
+  exported C ABI and MUST NOT depend on device-only types. The target-owned
+  launcher reports refused launches to the host; no exception crosses that ABI.
 
-The target-specific generator behavior — how a CPU vs CUDA function emits,
-program-shape / dynamic-CTA accessors, and the `ShardLayout` runtime mapping —
-is owned by [target](./target.md).
+Target packages own generator behavior, runtime type mappings and device
+accessors.
 
 ## 2. Resolved code generation
 
@@ -82,12 +76,12 @@ class LinkableModule:
   - `LinkableModule.create` MUST report `<target summary>: no code generator`
     when a Target has no bound implementation. Concrete factories MUST check
     their class's `emits` before emission and raise `UnsupportedCapabilityError`
-    naming the Target and requested granularity when unsupported. CPU and CUDA
-    factories support `"full"` and `"skeleton"`; CUDA skeleton emission MUST
-    reject targets with `device_count` with its existing diagnostic.
+    naming the Target and requested granularity when unsupported. The CPU
+    factory supports `"full"` and `"skeleton"`; device factories declare their
+    supported granularities.
   - CPU MUST bind `EmitContext` to `CpuCodegenContext` and `LinkableModule` to
-    `HostLinkableModule`. CUDA MUST bind these bases to `CudaCodegenContext`
-    and `CudaLinkableModule`. Bindings select classes, never strings.
+    `HostLinkableModule`. Device packages bind their own implementations.
+    Bindings select classes, never strings.
   - A factory writes each function twice: once as the declaration a caller sees,
     without entering the body, and once as the definition, by walking it.
   - A second unequal device Target group MUST fail before any factory emits;
@@ -144,20 +138,6 @@ class EmitContext:
     def local_extent(self, signature, axis: int) -> str: ...
 
 
-class CudaCodegenContext(EmitContext):
-    """A compile writing CUDA: the shared context plus what only CUDA states."""
-
-    launches: Mapping[int, Geometry]
-    dynamic_extents: dict[str, str]
-
-    def bind_extents(self, params) -> None: ...
-    def reset_barrier_ids(self) -> None: ...
-    def alloc_barrier_id(self) -> int: ...
-    def reset_smem_base(self) -> None: ...
-    def smem_base(self) -> str: ...
-    def dtype_to_cpp(self, dtype_name: str) -> str: ...
-
-
 class CpuCodegenContext(EmitContext):
     """A compile writing the host unit: the shared context plus what a tensor is here."""
 ```
@@ -174,14 +154,13 @@ class CpuCodegenContext(EmitContext):
   - `source` returns accumulated source text, and `capture` temporarily isolates
     only the output buffer while preserving indentation and symbol bindings.
   - `declare` and `parameters` MUST use this context's own Target. Cross-target
-    ABI selection MUST NOT occur in core: CUDA registers the CPU host writer
-    for shared `Launch` at `(CpuTarget, Role.EMIT, Launch)` and directly invokes
-    CUDA's CALLEE and CALLER writers using the host's local names.
+    ABI selection MUST NOT occur in core: device packages register writers
+    for cross-target calls using the caller's local names.
   - Core statement traversal MUST use one `CppEmitter`. A registered
     `(target, Role.EMIT, statement type)` writer overrides core traversal;
     otherwise core uses its own statement visitor or reports a missing handler
     naming the node type and Target. Target-specific scalar calls use the same
-    registry. CUDA registers `MeshScope` and `MeshCoord` there.
+    registry.
   - `exported` is set while a parameter list another translation unit will read
     is being written. A target whose types are its own MUST answer with what
     plain C states while it is set, because that is all the reading unit can
@@ -190,61 +169,23 @@ class CpuCodegenContext(EmitContext):
     and the extent it passes; a scope that holds something richer than a plain
     parameter — a host entry holding a runtime tensor — states so by overriding
     them. They are the only place a caller's own vocabulary enters a call.
-  - `dynamic_extents` says where the kernel being written reads each open
-    dimension's extent, and is filled by `bind_extents` from the parameter
-    types alone. `launches` is the geometry each device function is called at,
-    keyed by `id(fn)`, settled where the `Launch` was written
-    ([passes §7.3](./passes.md#73-insert_default_host_entry)).
-  - `smem_base` declares and returns one byte-addressed dynamic shared-memory
-    base per kernel. A numeric `TensorView` address adds its byte offset before
-    converting the result to a CuTe shared-memory pointer.
   - A target subclass owns the type strings and hardware counters only it can
     state; a handler MUST reach them through the context rather than reading
     the IR for them. Other helpers MAY be added per target.
 
 ### 2.4 Effect Op dispatch
 
-CUDA value emission lowers `TupleGetItem` according to its index form. A constant
-index names the selected tuple element directly. A dynamic index requires the
-homogeneous tuple established by type inference and emits
-`cute::array{a, b, c}[index]`; dimension arithmetic in the index remains runtime
-C++ arithmetic.
-
-An IR `Tuple` is structural and has no target-side storage. A `LetStmt` binding
-one emits no C++ variable and continues with its body; its authored name (for
-example `lhs_stages`) therefore does not appear in generated C++. Each dynamic
-`TupleGetItem` use constructs its own `cute::array`, so indexing the same tuple
-N times constructs N arrays. Constant selection remains valid for heterogeneous
-tuples because it does not materialize an aggregate. The codegen context records
-the structural tuple by its fresh SSA `Var` identity so consumers can recover
-its elements without target-side storage.
-
-Effect Ops (`Copy`, `Fill`, `TiledMma`, `CopyAsyncBulk`, `CopyReduceAsyncTensor`, `LdMatrix`, `StMatrix`,
-`tir.nn.*`, ...) appear in Stmt
+Effect Ops such as `Copy` and `Fill` appear in Stmt
 position as `Evaluate(op, args)` rather than as Stmt subclasses. The
 walker matches `Evaluate` and dispatches on `type(callable)` through
 the handler registry. Handlers stay small; the runtime function they
 call carries the semantic load.
 
-CUDA emits `CopyAsyncBulk` and `LdMatrix` as the uniform runtime calls
-`tilefoundry::ops::copy_async_bulk(...)` and
-`tilefoundry::ops::ldmatrix(...)`. `CopyAsyncTensor` is nevertheless a public
-TIR declaration, but CUDA emission MUST fail explicitly until the host can
-construct and pass encoded tensor maps; it MUST NOT substitute a bulk or
-thread-issued copy. `CopyReduceAsyncTensor` has the same explicit unsupported
-boundary; it MUST NOT substitute a copy that drops the reduction. `StMatrix` likewise MUST fail explicitly until stmatrix
-runtime support exists.
-
 ## 3. Runtime-owned op dispatch
 
-Where more than one runtime template implements an op, codegen emits **one
-uniform runtime op call**, passing the operand `ShardLayout`s (and any
-codegen-static participant geometry) as compile-time template parameters. The
-runtime template dispatches on those layouts at compile time; codegen does not
-select a tier, compute a per-tier parameter, or carry the selection on the TIR
-op. This is the codegen side of the runtime-owned dispatch principle, whose
-contract lives in [runtime §2.6](./runtime.md#26-cudaops). The target-side
-emission that produces these calls is owned by [target](./target.md).
+Target runtime contracts own dispatch between their layout-specific
+implementations. Core only dispatches IR nodes to registered target handlers;
+it MUST NOT select a target's runtime implementation tier.
 
 ## 4. Codegen products
 
@@ -300,10 +241,9 @@ class LinkableModule:
 ```
 
 - constraints:
-  - `target` MUST be the generator/linker backend label (`"cuda"` or `"cpu"`
-    for the built-ins), never an external Target registration name.
-  - MUST be the source language: `cu` for a CUDA translation unit, `cpp` for a
-    host translation unit.
+  - `target` MUST be the generator/linker backend label, never an external
+    Target registration name.
+  - `language` MUST be the source-language extension; host units use `cpp`.
   - `LinkableModule` MAY be subclassed to override `link(project)`. The default
     implementation MUST add its source to the shared project as
     `<target>_<index>.<language>`. `HostLinkableModule.link` MUST name its output
@@ -413,14 +353,8 @@ class CMakeProject:
     Compiler launcher settings such as ccache MUST remain effective. Backend
     `LinkableModule` subclasses own compiler flags and include directories;
     the resolution path MUST use class implementations, not callback fields.
-  - CPU sources MUST include the packaged CPU runtime header directly. CUDA
-    sources MUST include their packaged runtime header directly. Runtime include
-    directories MUST be located through `importlib.resources`.
-  - `CudaLinkableModule.link` MUST resolve CUTLASS from
-    `TILEFOUNDRY_CUTLASS_INCLUDE` first; an explicitly invalid directory MUST
-    fail naming the variable and value. Without the variable it MUST search
-    source ancestors for `third_party/cutlass/include`, then fail naming the
-    variable and searched paths if none exists.
+  - Each target MUST directly include its packaged runtime header. Runtime
+    include directories MUST be located through `importlib.resources`.
 
 `link_program` emits and links without loading. `entries=None` selects the
 root entry; an explicit sequence selects those CPU entries, with launcher
@@ -527,9 +461,9 @@ class CallableSignature(Signature):
     traversal emits each definition once using its first DFS call path,
     including index segments. These naming functions live in
     `codegen/context_builder.py`, which produces FunctionSymbol
-    identities. Target conventions supply suffixes: CUDA derives `_launch` and
-    `_kernel`, while CPU functions use the mangled root. Conventions receive
-    the resolved symbol and target rather than reconstructing them.
+    identities. Target conventions receive the resolved symbol and target;
+    they MAY append target-owned suffixes but MUST NOT reconstruct paths.
+    CPU functions use the mangled root.
   - parameters codegen inserts (`tilefoundry_meta`,
     `tilefoundry_<level>_program_id`) and unit-owned state MUST carry the
     `tilefoundry_` prefix. Their spellings belong to their respective targets.
@@ -576,27 +510,6 @@ def symbol_table(module: Module, target: Target) -> Mapping[int, CallableSignatu
     produced. A device function appears as its launcher, because that is
     the only convention a caller can reach; the kernel's own convention is not
     in the table.
-
-`codegen/cuda/hir/function.py` owns HIR skeleton emission. An HIR function
-enters codegen only as the callee a `Launch` names; Python wraps any other
-function and calls the exported entries. Each launched function gets one
-editable `__device__` body taking cute parameter views, one `__global__` entry
-and one launcher.
-Device bodies (including variants) precede all global entries, ordered stably
-by increasing reachable-function count so callees precede callers. Prototypes
-have empty bodies and variants receive their display-name path segment or
-`v<index>` fallback. Global entries wrap parameters and dispatch by the same
-range rules as TIR, trapping outside the specialization ranges.
-
-HIR functions with equal effective topology hierarchies share a device unit,
-including children that explicitly redeclare the same hierarchy; TIR grouping
-is unchanged. HIR same-kernel context rules are owned by
-[hir §1.1](./hir.md#11-function). An HIR function's parameters are the
-arguments its `Launch` binds
-([passes §7.3](./passes.md#73-insert_default_host_entry)), and its variants
-take the same ones; generated names follow [§4.4](#44-signatures).
-A synthesized host entry launching HIR uses that HIR function's symbol and
-registration name; its own IR name does not add another path segment.
 
 ## 5. Specialization dispatch
 

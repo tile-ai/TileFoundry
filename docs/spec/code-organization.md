@@ -27,7 +27,7 @@ truth for the directory's structure and invariants.
 | `ir/isl_interop.py` | [types §11](./types.md#11-isl-interoperability) | Interoperation between dimension and shape IR values and isl: expression rendering and decoding, normalization, value ranges, and shape-domain construction. Pure isl operations remain in `utils/isl_utils.py`. |
 | `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per multi-operation category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`), with the standalone scheduling carrier in `schedule.py`. One real Op per `.py` ([§2](#2-file-naming-and-content-rules) rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` ([§2](#2-file-naming-and-content-rules) rule 5). |
 | `schedule/` | [schedule](./schedule.md) | Schedule finalization, instruction facts, and candidate discovery over HIR. |
-| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the general TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes live in `targets/<target>/tilefoundry_<target>/ir/tir/<category>/` (e.g. `targets/cuda/tilefoundry_cuda/ir/tir/nn/mma.py`) per [§2](#2-file-naming-and-content-rules) Rule 1c. |
+| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the general TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes live in `targets/<target>/tilefoundry_<target>/ir/tir/<category>/` per [§2](#2-file-naming-and-content-rules) Rule 1c. |
 | `parser/` | [parser](./parser.md) | DSL → IR parsing: `base.py` (shared visitor base + dispatch), `hir_parser.py` (`@func` body), `tir_parser.py` (`@prim_func` body), layout sugar / range-slice / dispatch modules. **Not under `ir/`** — the parser is a producer of IR, not an IR sublayer. |
 | `analysis/` | [analysis](./analysis.md) | Fact layer over typed HIR: one module per analysis family. The compact public surface lives in `analysis/__init__.py`; per-target Facts projections live with their owning Target. |
 | `passes/` | [passes](./passes.md) | Pass framework (`pass_base.py` / `pass_manager.py`) plus concrete transforms (`transforms/<pass_name>.py`, [§2](#2-file-naming-and-content-rules) rule 6). |
@@ -89,12 +89,11 @@ physical directory layout reflects that boundary directly.
   rather than defining an IR layer. It reads the IR and the `Target` and
   decides nothing over what it measures
   ([architecture §5](./architecture.md#5-analysis--optimization)).
-- `codegen/<target>/` consumes TIR; an HIR `Function` enters only for
-  skeleton emission. Its TIR subtree mirrors `ir/tir/`: `prim_function` lives
-  in `tir/`, Stmt emitters in `tir/stmts/`, and `memory/` / `nn/` / `arith/` /
-  `reduce/` / `tensor/` each have their own subdirectory. `codegen/<target>/hir/`
-  holds only the skeleton emission of an HIR `Function`.
-- Authored launch attributes belong to `ir/tir/launch.py`; the geometry a
+- A target package's `codegen/` consumes TIR; an HIR `Function` enters only
+  for skeleton emission. Its TIR subtree mirrors `ir/tir/`, while `hir/`
+  holds the skeleton emission of an HIR `Function`.
+- Shared launch descriptors belong to `ir/tir/launch.py`; target-specific
+  launch attributes live in their target package. The geometry a
   kernel is launched at is settled where the `Launch` is written
   ([passes §7.3](./passes.md#73-insert_default_host_entry)) and read back off
   it by `codegen/topology.py`, rather than derived a second time inside
@@ -147,19 +146,15 @@ Rule 1: "one Op = one file" means **one IR class** per file; aliases
 are not IR classes, so they go through Rule 1a.
 
 **Rule 1c — target-specific code lives in a plugin package.** A backend lives
-under `targets/<name>/tilefoundry_<name>/`, with its own `pyproject.toml`.
+under `targets/<name>/tilefoundry_<name>/`.
 Its internal paths preserve the core categories: `target/`, `ir/hir/`,
 `ir/tir/`, `codegen/`, `passes/` and `visitor_registry/`. Target-owned IR
 nodes nest as `ir/{dialect}/{category}/<name>.py` within that package;
-target-neutral abstractions stay in core at `ir/{dialect}/{category}/`. For
-example the whole MMA surface is target-owned — `mma.py` defines the `TiledMma`
-op, `mma_atom.py` defines `MmaAtom` / `AtomPattern`, and `sm80_mma.py` /
-`sm89_mma.py` / `wgmma.py` define the CUDA instruction declarations. All five
-live under `targets/cuda/tilefoundry_cuda/ir/tir/nn/`. A target-specific rule for a target-neutral Op nests the
-same way: the CUDA `MatMul` type rule lives in `targets/cuda/tilefoundry_cuda/ir/hir/nn/matmul.py`
-beside no Op class of its own.
+target-neutral abstractions stay in core at `ir/{dialect}/{category}/`. A
+target-specific rule for a target-neutral Op follows the same dialect and
+category path, without redefining the Op class.
 The backend-bound construction stays in TIR: HIR is the checking reference
-side, and carrying the instruction name in that reference would make two GPU
+side, and carrying the instruction name in that reference would make two
 targets require different HIR references. (`codegen/` and `runtime/` are
 **target-first** instead — their primary axis is the target — so each tree is
 organized by its own primary axis.)
@@ -227,26 +222,26 @@ themselves to the owning directory.
 
 ## 4. DSL package layout
 
-The author-facing surface is delivered as a namespace package. The two
-sub-packages (`tf` and `T`) use the OpSchema registry for their corresponding
-dialect and return an Op class or alias builder; unknown names raise `AttributeError`.
+The author-facing `tf` and `T` modules delegate attribute lookup to one
+`Dialect` instance each. Each level exposes registered operations, alias
+builders, types and child namespaces; unknown names raise `AttributeError`.
 
 ### 4.1 Built-in op-class location convention
 
-For `@register_op` to auto-derive `dialect` + `category`, an Op class MUST live
-under `src/tilefoundry/ir/<hir|tir>/<category>/<file>.py`, with its module name
-matching that path. Outside it the decorator requires explicit values; the standalone
-`ir/hir/schedule.py` carrier therefore declares `dialect="tf"` and `category="schedule"`.
+Core operations live under `src/tilefoundry/ir/<hir|tir>/<category>/`;
+plugin operations use the same layout within their package. `@register_op`
+requires explicit `dialect` and `category` arguments regardless of location.
+Its optional `namespace` selects the DSL path independently of that category.
 
 ### 4.2 `.pyi` stub regeneration
 
-The `.pyi` stubs reflect registered schemas only. After adding a new
-`@register_op` / `@register_alias`, regenerate them with
+The `.pyi` stubs reflect the dialect registry, including exported types and
+nested namespaces. After changing registrations, regenerate them with
 `python -m tilefoundry.dsl regen`.
 
 A plugin's import is its registration boundary. Its package root exports target
 values and imports every module that registers operations or implementations.
 Hardware TOML, templates, runtime headers and `docs/spec/*.md` are package data;
 core locates plugin resources through `importlib.resources`, without repository
-path fallbacks. A plugin's separate wheel contains only its own package and
-metadata. The main distribution bundles core and the in-tree plugin packages.
+path fallbacks. The distribution bundles core and the in-tree plugin packages
+in one wheel; plugin packages are not distributed as separate wheels.

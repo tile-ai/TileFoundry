@@ -23,7 +23,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op
+@register_op(dialect='tf', category='math')
 class Unary(Op):
     """Value-form pointwise unary operation."""
 

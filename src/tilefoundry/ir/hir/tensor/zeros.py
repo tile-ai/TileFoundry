@@ -19,7 +19,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op
+@register_op(dialect='tf', category='tensor')
 class Zeros(Op):
     """Allocate a zero-initialised tensor with the given complete type."""
 

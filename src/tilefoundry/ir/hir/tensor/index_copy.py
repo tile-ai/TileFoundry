@@ -22,7 +22,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(name="index_copy")
+@register_op(name="index_copy", dialect='tf', category='tensor')
 class IndexCopy(Op):
     """Return ``dst`` with ``src`` slices copied to ``index`` along ``dim``."""
 

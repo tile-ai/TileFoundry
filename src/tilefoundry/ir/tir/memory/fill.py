@@ -18,7 +18,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op
+@register_op(dialect='T', category='memory')
 class Fill(Op):
     """Fills ``tensor`` element-wise with ``value`` (rank-0 scalar)."""
 

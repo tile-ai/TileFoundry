@@ -1,104 +1,73 @@
-"""Index callable Ops by ``(dialect, name)`` and ordered ``OpSchema`` list."""
+"""Index dialect operations and exported types by namespace path and name."""
 
 from __future__ import annotations
 
 from typing import Iterable
 
-_VALID_DIALECTS: tuple[str, ...] = ("tf", "T")
+from tilefoundry.ir.core.op_schema import OpSchema
+
+_VALID_DIALECTS = ("tf", "T")
+_REGISTRY: dict[tuple[str, tuple[str, ...], str], OpSchema | type] = {}
 
 
-_schemas_by_dialect_name: "dict[tuple[str, str], list[OpSchema]]" = {}
+def lookup(dialect: str, path: tuple[str, ...], name: str) -> OpSchema | type | None:
+    """Return the single record at a dialect path."""
+    return _REGISTRY.get((dialect, path, name))
 
 
-def _register_schema(schema: "OpSchema", *, prepend: bool = False) -> None:
-    """Register a schema once in its ordered overload bucket.
-
-    Ops append; aliases prepend and therefore win first-match resolution.
-    Concrete-class lookup skips aliases whose ``op_class`` is ``None``.
-
-    See [parser §3](docs/spec/parser.md#3-implementation-overview).
-    """
-    key = (schema.dialect, schema.name)
-    bucket = _schemas_by_dialect_name.setdefault(key, [])
-    if schema in bucket:
-        return
-    if prepend:
-        bucket.insert(0, schema)
-    else:
-        bucket.append(schema)
+def children(dialect: str, path: tuple[str, ...]) -> list[str]:
+    """List records and child namespaces immediately under a dialect path."""
+    return sorted({
+        namespace[len(path)] if len(namespace) > len(path) else name
+        for (d, namespace, name) in _REGISTRY
+        if d == dialect and namespace[:len(path)] == path
+    })
 
 
-def get_schemas(dialect: str, name: str) -> "list[OpSchema]":
-    """Return the list of OpSchema candidates for ``(dialect, name)``."""
-    return list(_schemas_by_dialect_name.get((dialect, name), ()))
+def _register(dialect: str, path: tuple[str, ...], name: str, entry: OpSchema | type) -> None:
+    if dialect not in _VALID_DIALECTS:
+        raise ValueError(f"dialect must be one of {_VALID_DIALECTS!r}, got {dialect!r}")
+    if not isinstance(name, str) or not name or any(not part for part in path):
+        raise ValueError("registry names and namespace components must be non-empty")
+    for depth, part in enumerate((*path, name)):
+        existing = lookup(dialect, path[:depth], part)
+        if existing is not None:
+            owner = existing.builder if isinstance(existing, OpSchema) else existing
+            raise ValueError(
+                f"{'.'.join((dialect, *path[:depth], part))} is already owned by "
+                f"{owner.__module__}.{owner.__qualname__}"
+            )
+    prefix = (*path, name)
+    for (d, namespace, _), existing in _REGISTRY.items():
+        if d == dialect and namespace[:len(prefix)] == prefix:
+            owner = existing.builder if isinstance(existing, OpSchema) else existing
+            raise ValueError(
+                f"{'.'.join((dialect, *prefix))} is already owned by namespace of "
+                f"{owner.__module__}.{owner.__qualname__}"
+            )
+    _REGISTRY[dialect, path, name] = entry
 
 
-def iter_schemas() -> "Iterable[OpSchema]":
-    """Iterate every registered schema in stable order."""
-    for bucket in _schemas_by_dialect_name.values():
-        yield from bucket
+def iter_schemas() -> Iterable[OpSchema]:
+    """Iterate callable schemas in registration order, excluding exported types."""
+    return (entry for entry in _REGISTRY.values() if isinstance(entry, OpSchema))
 
 
-def iter_schema_names(dialect: str) -> "Iterable[str]":
-    """Yield distinct ``name`` values registered under ``dialect``."""
-    seen: set[str] = set()
-    for d, n in _schemas_by_dialect_name:
-        if d == dialect and n not in seen:
-            seen.add(n)
-            yield n
-
-
-def _first_op_class(dialect: str, name: str) -> type | None:
-    """Return the first **real-Op** class for ``(dialect, name)``.
-
-    Surface-alias schemas (``schema.op_class is None``) are skipped so
-    legacy callers that need a concrete IR class continue to see one
-    even when an alias has been prepended for the same name.
-    """
-    bucket = _schemas_by_dialect_name.get((dialect, name))
-    if not bucket:
-        return None
-    for s in bucket:
-        if s.op_class is not None:
-            return s.op_class
-    return None
-
-
-def _first_schema(dialect: str, name: str) -> "OpSchema | None":
-    """Return the first registered ``OpSchema`` for ``(dialect, name)``.
-
-    Unlike :func:`_first_op_class`, this honours alias prepend order —
-    an alias schema (if any) wins over the legacy real-Op schema. Used
-    by parser dispatch where the goal is the **schema**, not the IR
-    class, so that ``schema.builder`` can construct the right target.
-    """
-    bucket = _schemas_by_dialect_name.get((dialect, name))
-    if not bucket:
-        return None
-    return bucket[0]
+def _first_schema(dialect: str, name: str) -> OpSchema | None:
+    entry = lookup(dialect, (), name)
+    return entry if isinstance(entry, OpSchema) else None
 
 
 def get_op_by_name(name: str) -> type | None:
-    """Return the HIR (``tf``-dialect) Op class for ``name``, or None."""
-    return _first_op_class("tf", name)
+    """Return the HIR operation class for a top-level name, excluding aliases."""
+    schema = _first_schema("tf", name)
+    return schema.op_class if schema is not None else None
 
 
 def get_stmt_by_name(name: str) -> type | None:
-    """Return the TIR (``T``-dialect) Op class for ``name``, or None.
-
-    Despite the legacy "stmt" suffix, ``T``-dialect callable units are
-    Ops (effect-ful ones placed in Stmt position via
-    ``Evaluate(op, args)``).
-    """
-    return _first_op_class("T", name)
+    """Return the TIR operation class for a top-level name, excluding aliases."""
+    schema = _first_schema("T", name)
+    return schema.op_class if schema is not None else None
 
 
-__all__ = [
-    "get_op_by_name",
-    "get_stmt_by_name",
-    "_register_schema",
-    "_first_schema",
-    "get_schemas",
-    "iter_schemas",
-    "iter_schema_names",
-]
+__all__ = ["lookup", "children", "iter_schemas", "get_op_by_name", "get_stmt_by_name"]

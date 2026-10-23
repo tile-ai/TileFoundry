@@ -21,7 +21,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(name="repeat_interleave")
+@register_op(name="repeat_interleave", dialect='tf', category='tensor')
 class RepeatInterleave(Op):
     """Repeat each element of ``x`` along ``axis`` ``repeats`` times, interleaved.
 

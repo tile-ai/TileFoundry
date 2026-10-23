@@ -20,7 +20,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op
+@register_op(dialect='tf', category='nn')
 class SoftMax(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     axis = ParamDef(kind="attribute", annotation=int)

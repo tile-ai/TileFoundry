@@ -32,7 +32,7 @@ from tilefoundry.visitor_registry.buffer_alias import aliased_operand, register_
 from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
-@register_op
+@register_op(dialect='tf', category='sharding')
 class Reshard(Op):
     """Convert *x* to a target layout / storage in place, preserving the logical shape."""
 

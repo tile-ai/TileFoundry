@@ -26,7 +26,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(name="full_like")
+@register_op(name="full_like", dialect='tf', category='tensor')
 class FullLike(Op):
     """Allocate a tensor shaped/typed like ``x``, filled with constant ``value``."""
 

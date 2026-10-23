@@ -3,7 +3,8 @@
 The SM80 and SM89 declarations each emit one ``tilefoundry::ops::mma`` call,
 which picks the instruction from the operands' element type. Other
 declarations need their own runtime mapping; in particular, WGMMA has no
-emitter in this stage ([runtime §2.6](docs/spec/runtime.md#26-cudaops)).
+emitter in this stage
+([runtime §2.6](targets/cuda/tilefoundry_cuda/docs/spec/runtime.md#26-cudaops)).
 """
 from __future__ import annotations
 

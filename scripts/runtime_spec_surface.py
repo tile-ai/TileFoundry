@@ -27,7 +27,7 @@ HEADERS = {
     "cuda": ROOT / "targets/cuda/tilefoundry_cuda/codegen/include/tilefoundry/runtime",
 }
 PACKAGE = ROOT / "src/tilefoundry"
-SPEC = ROOT / "docs/spec/runtime.md"
+SPECS = (ROOT / "docs/spec/runtime.md", *sorted(ROOT.glob("targets/*/tilefoundry_*/docs/spec/runtime.md")))
 LIBCLANG = ("/usr/lib/x86_64-linux-gnu/libclang-18.so.1", "/usr/lib/llvm-18/lib/libclang.so.1")
 """Where a system install puts it; the ``libclang`` wheel is asked first."""
 
@@ -385,7 +385,7 @@ def _python_block(target: str) -> str:
 def _formatted(source: str) -> str:
     """*source* as the repository formats Python, so a block reads like the code."""
     done = subprocess.run(
-        ["ruff", "format", "--stdin-filename", str(SPEC.with_suffix(".py")), "-"],
+        ["ruff", "format", "--stdin-filename", str(SPECS[0].with_suffix(".py")), "-"],
         input=source, capture_output=True, text=True, check=False,
     )
     if done.returncode:
@@ -476,24 +476,24 @@ def render(spec: str) -> str:
 
 def main(argv: list[str]) -> int:
     _configure()
-    current = SPEC.read_text()
-    updated = render(current)
-    if "--check" in argv:
-        if current != updated:
-            print(f"{SPEC.relative_to(ROOT)}: stale; run scripts/runtime_spec_surface.py")
-            sys.stdout.writelines(
-                difflib.unified_diff(
-                    current.splitlines(keepends=True),
-                    updated.splitlines(keepends=True),
-                    "spec", "generated",
-                )
-            )
-            return 1
-        return 0
-    if current != updated:
-        SPEC.write_text(updated)
-        print(f"{SPEC.relative_to(ROOT)}: updated")
-    return 0
+    stale = False
+    for spec in SPECS:
+        current = spec.read_text()
+        updated = render(current)
+        if current == updated:
+            continue
+        if "--check" in argv:
+            stale = True
+            print(f"{spec.relative_to(ROOT)}: stale; run scripts/runtime_spec_surface.py")
+            sys.stdout.writelines(difflib.unified_diff(
+                current.splitlines(keepends=True), updated.splitlines(keepends=True),
+                "spec", "generated",
+            ))
+        else:
+            spec.write_text(updated)
+            print(f"{spec.relative_to(ROOT)}: updated")
+    return int(stale)
+
 
 
 if __name__ == "__main__":

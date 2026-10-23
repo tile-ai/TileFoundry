@@ -17,7 +17,7 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 
 
-@register_op(name="alloc_tensor")
+@register_op(name="alloc_tensor", dialect='T', category='memory')
 class AllocTensor(Op):
     """Allocate a tensor; the result type is carried on ``tensor_type``.
 

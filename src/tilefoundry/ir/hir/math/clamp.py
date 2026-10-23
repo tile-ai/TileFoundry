@@ -23,7 +23,7 @@ from tilefoundry.visitor_registry.access_relation import (
 _COMMUTES_WITH = frozenset({"max", "min"})
 
 
-@register_op
+@register_op(dialect='tf', category='math')
 class Clamp(Op):
     """Element-wise clamp: y = min(max(x, min_val), max_val)."""
 

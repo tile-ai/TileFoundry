@@ -1,7 +1,7 @@
 """Generate self-contained DSL namespace stubs from registered schemas.
 
 Inputs use ``Expr`` while attributes retain declared types and required imports.
-Overloads preserve registration order and include a runtime fallback signature.
+Namespace classes mirror the registered dialect tree.
 Generated files are gitignored and rebuilt through the DSL CLI. See
 [parser §2](docs/spec/parser.md#2-syntax-and-rules) and
 [parser §2.1](docs/spec/parser.md#21-syntax).
@@ -11,17 +11,17 @@ from __future__ import annotations
 
 import argparse
 import enum
+import inspect
+import textwrap
 from pathlib import Path
-from typing import Iterable, Literal, get_args, get_origin
+from typing import Iterable, Literal, get_args, get_origin, get_type_hints
 
 import tilefoundry.ir  # noqa: F401  (populates schema registry as a side effect)
 from tilefoundry.ir.core.expr import Expr
-from tilefoundry.ir.core.op_registry import _schemas_by_dialect_name
+from tilefoundry.ir.core.op_registry import _REGISTRY, children, lookup
 from tilefoundry.ir.core.op_schema import OpSchema
-from tilefoundry.ir.core.param_def import MISSING, ParamDef
-from tilefoundry.ir.core.register import registered_namespaces
+from tilefoundry.ir.core.param_def import MISSING, ParamDef, collect_param_defs
 from tilefoundry.ir.types import DType
-from tilefoundry.target.base import load_targets
 
 _BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
     {
@@ -115,8 +115,6 @@ def _param_signature(pd: ParamDef) -> tuple[str, str]:
 def _function_stub(
     schema: OpSchema,
     types_seen: set[str],
-    *,
-    decorator: str | None = None,
 ) -> str:
     """Render a single ``def <name>(...) -> Expr: ...`` line block.
 
@@ -135,8 +133,6 @@ def _function_stub(
         parts.append(rendered)
     sig = ", ".join(parts)
     head = f"def {schema.name}({sig}) -> Expr: ..."
-    if decorator:
-        return f"{decorator}\n{head}"
     return head
 
 
@@ -152,11 +148,11 @@ def _resolve_type_modules(dialect: str, type_names: Iterable[str]) -> list[tuple
     """
     wanted = set(type_names)
     found: dict[str, str] = {}
-    for (d, _), bucket in _schemas_by_dialect_name.items():
+    for (d, _, _), entry in _REGISTRY.items():
         if d != dialect:
             continue
-        for schema in bucket:
-            for pd in schema.signature:
+        if isinstance(entry, OpSchema):
+            for pd in entry.signature:
                 if pd.kind == "input":
                     cls = Expr
                 else:
@@ -208,41 +204,88 @@ _DIALECT_INTRINSICS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _namespace_stub(
+    dialect: str, path: tuple[str, ...], types_seen: set[str], names: tuple[str, ...] | None = None,
+) -> str:
+    """Render nested namespace classes and constructors for exported types."""
+    imports: set[str] = set()
+
+    def annotation(ann) -> str:
+        if ann is type(None):
+            return "None"
+        args = get_args(ann)
+        if args:
+            return " | ".join(annotation(arg) for arg in args)
+        name = getattr(ann, "__name__", "Any")
+        module = getattr(ann, "__module__", "builtins")
+        if module != "builtins" and name not in _BUILTIN_TYPE_NAMES:
+            imports.add(f"from {module} import {name} as {name}")
+        return name
+
+    def render(current: tuple[str, ...], selected=None) -> str:
+        lines = [f"class {current[-1]}:"] if current else []
+        indent = "    " if current else ""
+        for name in children(dialect, current) if selected is None else selected:
+            entry = lookup(dialect, current, name)
+            if entry is None:
+                lines.append(textwrap.indent(render((*current, name)), indent))
+            elif isinstance(entry, OpSchema):
+                if current:
+                    lines.append(indent + "@staticmethod")
+                lines.append(textwrap.indent(_function_stub(entry, types_seen), indent))
+            else:
+                alias = "_" + "_".join((*current, name))
+                imports.add(f"from {entry.__module__} import {entry.__name__} as {alias}")
+                if issubclass(entry, enum.Enum):
+                    lines.append(f"{indent}{name}: type[{alias}]")
+                    continue
+                params = []
+                declared = collect_param_defs(entry)
+                for param in declared:
+                    typ = _annotation_type(param)[0] if param.annotation is DType else annotation(param.annotation)
+                    if param.annotation is DType:
+                        annotation(DType)
+                    default = " = ..." if param.has_default else ""
+                    params.append(f"{param.name}: {typ}{default}")
+                signature = inspect.signature(entry.__init__)
+                hints = get_type_hints(entry.__init__)
+                for param in signature.parameters.values():
+                    if param.kind == inspect.Parameter.KEYWORD_ONLY and param.name not in {p.name for p in declared}:
+                        typ = annotation(hints.get(param.name, object))
+                        default = " = ..." if param.default is not inspect.Parameter.empty else ""
+                        params.append(f"{param.name}: {typ}{default}")
+                args = "*, " + ", ".join(params) if params else ""
+                if current:
+                    lines.append(indent + "@staticmethod")
+                lines.append(f"{indent}def {name}({args}) -> {alias}: ...")
+        return "\n".join(lines)
+
+    body = render(path, names)
+    return "\n".join(sorted(imports)) + "\n\n" + body
+
+
 def _render_dialect(dialect: str) -> str:
     """Render the entire stub file for a single dialect."""
-    load_targets()
-    by_name: dict[str, list[OpSchema]] = {}
-    for (d, n), bucket in _schemas_by_dialect_name.items():
-        if d != dialect:
-            continue
-        by_name[n] = list(bucket)
-
     body_lines: list[str] = []
-    for _, entry in sorted(registered_namespaces(dialect).items()):
-        body_lines.append(entry.stub(lambda param: _annotation_type(param)[0]))
-        body_lines.append("")
+    types_seen: set[str] = set()
+    for name in children(dialect, ()):
+        if lookup(dialect, (), name) is None:
+            body_lines.extend((_namespace_stub(dialect, (name,), types_seen), ""))
     intrinsics = _DIALECT_INTRINSICS.get(dialect, ())
     if intrinsics:
         body_lines.append("# Parser intrinsics (not OpSchema-backed).")
         body_lines.extend(intrinsics)
         body_lines.append("")
-    types_seen: set[str] = set()
-    for name in sorted(by_name):
-        bucket = by_name[name]
-        if len(bucket) == 1:
-            body_lines.append(_function_stub(bucket[0], types_seen))
-        else:
-            for s in bucket:
-                body_lines.append(_function_stub(s, types_seen, decorator="@overload"))
-
-            body_lines.append(_function_stub(bucket[0], types_seen))
-        body_lines.append("")
+    for name in children(dialect, ()):
+        entry = lookup(dialect, (), name)
+        if isinstance(entry, OpSchema):
+            body_lines.extend((_function_stub(entry, types_seen), ""))
+        elif isinstance(entry, type):
+            body_lines.extend((_namespace_stub(dialect, (), types_seen, (name,)), ""))
 
     header = _module_header(dialect, types_seen)
     body = "\n".join(body_lines).rstrip()
-    if not body:
-        return header
-    return header + "\n" + body + "\n"
+    return header + "\n" + body + "\n" if body else header
 
 
 def regen_stubs(root: Path | None = None) -> dict[str, Path]:

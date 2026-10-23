@@ -34,7 +34,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op
+@register_op(dialect='tf', category='nn')
 class RoPE(Op):
     """Rotary position embedding on Q and K. ``head_dim`` must be even."""
 

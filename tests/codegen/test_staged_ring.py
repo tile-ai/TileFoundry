@@ -7,7 +7,7 @@ re-authored with what execution needs and the corpus does not state --
 the dynamic-smem carve-out, the cp.async commit/wait before read-back,
 and trip counts uniform across the warp.
 
-See [runtime §2.6.2](docs/spec/runtime.md#262-opscopycuh).
+See [runtime §2.6.2](targets/cuda/tilefoundry_cuda/docs/spec/runtime.md#262-opscopycuh).
 """
 
 from __future__ import annotations

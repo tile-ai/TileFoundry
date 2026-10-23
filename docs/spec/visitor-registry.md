@@ -626,11 +626,11 @@ Handler signatures:
 ```python
 # example
 # one handler per (target, position, class):
-@register_codegen(CudaTarget, Role.EMIT, ReLU)
-def _(call: Call, ctx: CudaCodegenContext) -> None: ...
-@register_codegen(CudaTarget, Role.EMIT, For)
-def _(node: For, ctx: CudaCodegenContext) -> None: ...
-@register_codegen(CudaTarget, Role.CALLEE, TensorSignature)
+@register_codegen(Target, Role.EMIT, ReLU)
+def _(call: Call, ctx: EmitContext) -> None: ...
+@register_codegen(Target, Role.EMIT, For)
+def _(node: For, ctx: EmitContext) -> None: ...
+@register_codegen(Target, Role.CALLEE, TensorSignature)
 def _(sig: TensorSignature, ctx: CodegenContext) -> tuple[str, ...]: ...
 ```
 
@@ -654,10 +654,10 @@ User extension path — adding a new Stmt `MyIntrinsic`:
 
 1. `ir/tir/<cat>/my_intrinsic.py`: define `MyIntrinsic(Stmt)` and
    `@register_verify_stmt(MyIntrinsic)`.
-2. `codegen/cuda/tir/<cat>/my_intrinsic.py`:
-   `@register_codegen(CudaTarget, Role.EMIT, MyIntrinsic)`.
-3. For a new target (cpu, …): register the same class against that target in
-   `codegen/cpu/tir/<cat>/my_intrinsic.py`.
+2. In a target package, add `codegen/tir/<cat>/my_intrinsic.py` and register
+   `@register_codegen(MyTarget, Role.EMIT, MyIntrinsic)`.
+3. For another target, register the same class against its concrete Target
+   subclass in that target package.
 
 The visitor / pass pipeline / parser do not change.
 

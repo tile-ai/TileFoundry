@@ -19,7 +19,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op
+@register_op(dialect='tf', category='tensor')
 class Empty(Op):
     """Declare tensor storage with undefined contents and the given complete type."""
 

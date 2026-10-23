@@ -14,7 +14,7 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 
 
-@register_op(name="memory_span")
+@register_op(name="memory_span", dialect='T', category='memory')
 class MemorySpan(Op):
     """Re-interpret a memory region as a typed tensor (value form)."""
 

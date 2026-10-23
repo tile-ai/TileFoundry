@@ -1,7 +1,7 @@
 """OpSchema: normalized registry data structure for a callable Op.
 
 is the single source of metadata that parser, surface generator, error
-formatter, and overload resolver consume.
+formatter consume.
 
 Per A3.6 (Path-B) the same OpSchema covers HIR Ops (``dialect="tf"``)
 and TIR Ops (``dialect="t"``); HIR/TIR distinction is dialect-only.

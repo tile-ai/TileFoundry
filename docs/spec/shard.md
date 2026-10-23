@@ -782,16 +782,16 @@ mesh   = Mesh((Topology("thread", 256),), Layout(shape=(2, 4, 32), ...))
 
 `shard_layout_local_shape(sl)` yields `(1, 1, 3, 1, 4)`. Each `Split`
 axis has `local_shape = 1` by construction, so
-[runtime §2.4.1](./runtime.md#241-tensor_viewshard_tensorcuh)'s offset sum
+the local offset sum
 reduces to `0` and every mesh instance receives its own engine
 holding `3 × 4 = 12` elements laid out in C-order.
 
 For `storage='gmem'` with target-owned memory, all Splits are shared.
 The same sugar materializes to C-order strides over the canonical global shape — `strides = (1536, 384, 128, 4, 1)` — so the
-8 warps write to disjoint offsets of a single underlying gmem
+mesh instances write to disjoint offsets of a single underlying gmem
 buffer.
 
-Explicit non-default strides, such as an SM80 mma fragment, retain their
+Explicit non-default strides, such as an instruction fragment, retain their
 address map. Parser normalization sets statically unit leaves to stride zero;
 it does not replace the other written strides with defaults.
 
@@ -836,8 +836,7 @@ def local_layout_and_offset(shard, tensor_shape, ids) -> tuple[Layout, int]: ...
     own layout and its hardware: [§7.1.1](#711-layoutshape) factors a split
     axis, so the layout's rank is not the tensor's, and a `Placement` may leave
     `cta` / `thread` for the device to divide.
-  - both halves MUST answer under the same two names
-    ([runtime §2.3.3](runtime.md#233-layoutshard_layoutcuh)). Naming the host's
+  - both halves MUST answer under the same two names. Naming the host's
     answer a window rather than a layout and an offset stated one stopped-short
     arithmetic as though it were a second algorithm: both sides compute
     `coord x local_extent x inner`, and only the host's last multiplication by

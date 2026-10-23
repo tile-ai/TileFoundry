@@ -161,7 +161,7 @@ by the visitor from the callee declaration or the inherited caller context.
     [hir §1.1](./hir.md#11-function).
   - A root Module with no target declaration MUST be refused
     when its target is resolved. Its root Module MUST declare one, for example
-    with `target=CudaTarget("nvidia.h200_sxm")`.
+    with `target=CpuTarget()`.
   - A Target declaration MUST be a constructed Target instance.
     A string MUST be refused rather than resolved or constructed.
   - `resolve_target()` MUST return the exact instance this Module declared; it MUST
@@ -548,17 +548,47 @@ class ParamDef:
     either or both. `None` means undeclared, while the zero flag is invalid.
     Attributes cannot carry a memory effect.
 
+Registration assigns one owner to each `(dialect, namespace, name)` in the
+DSL tree. Documentation category is independent of the namespace path.
+
+```python
+def register_op(
+    cls: type | None = None,
+    *,
+    dialect: str,
+    category: str,
+    name: str | None = None,
+    namespace: str = "",
+) -> Any:
+    """Expose an operation at a unique dialect namespace and name."""
+    ...
+
+
+def register_type(*, dialect: str, namespace: str) -> Callable[[type], type]:
+    """Expose a declaration type without attaching operation metadata."""
+    ...
+```
+
+- constraints:
+  - `register_op` MUST require explicit `dialect` and `category`; a module path
+    MUST NOT supply either. `namespace` is a dot-separated path, empty at the
+    dialect root; an omitted `name` uses the lowercase class name.
+  - `register_type` MUST place the class under its exact class name without
+    building an `OpSchema` or setting `_op_schema`.
+  - A duplicate key or a record/namespace collision MUST raise `ValueError`
+    naming the existing owner. Each key MUST have exactly one record.
+
 Example:
 
 ```python
 # example
-@register_op
+@register_op(dialect="tf", category="math")
 class Binary(Op):
     lhs  = ParamDef(kind="input", pattern=is_ranked_tensor())
     rhs  = ParamDef(kind="input", pattern=is_ranked_tensor())
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
 
-@register_op
+@register_op(dialect="tf", category="tensor")
 class ReduceSum(Op):
     input    = ParamDef(kind="input", pattern=is_ranked_tensor())
     axis     = ParamDef(kind="attribute", annotation=int)
@@ -590,8 +620,9 @@ def builder() -> Op:
 ```
 
 - constraints:
-  - alias schemas have no IR class (`OpSchema.op_class is None`) and prepend to the
-    schema bucket so they win first-match resolution.
+  - Alias schemas MUST have no IR class (`OpSchema.op_class is None`) and MUST
+    occupy their own unique name in the dialect root, under the same collision
+    rules as other registrations.
 
 Properties:
 
@@ -601,10 +632,6 @@ Properties:
   `Call.args` via the parser. For a value-form alias whose builder
   fixes every attribute (e.g. `add` fixes `kind`), the builder takes
   zero kwargs.
-- Aliases prepend to the schema bucket so they win first-match
-  resolution. `_first_op_class` skips alias entries so any
-  ``op_class``-keyed legacy lookup transparently sees the real class
-  registered for the same name (or `None` when there is none).
 
 ```python
 # example
@@ -623,7 +650,7 @@ from `op.params()`.
 An Op is **value-form** when its `Call` produces an observable
 result the IR consumes — `Call.type` is then `TensorType` or
 `TupleType`. An Op is **effect-form** when it performs an in-place
-effect (e.g. `tir.memory.Copy` / `tir.cuda.nn.TiledMma`) and produces no
+effect (e.g. `tir.memory.Copy`) and produces no
 readable value (`UnitType`, [types §6](./types.md#6-unittype)); in Stmt position
 it appears as `Evaluate(op, args)`
 ([tir §1.4](./tir.md#14-evaluate)).
@@ -771,7 +798,7 @@ equivalence above when stating sliced forms.
 Two consumer surfaces:
 
 - **Parser dispatch** — `ParamDef.pattern` ([§2.3](#23-op)) is matched against an
-  argument's `Expr.type` during overload resolution. Subclasses used:
+  argument's `Expr.type` during parameter checking. Subclasses used:
   `TensorPattern(shape?, dtype?, storage?, layout?)` (any rank), and
   `AndPattern(parts)` (conjunction). Two factories construct
   convenience patterns: `is_scalar_tensor(**fields)` returns

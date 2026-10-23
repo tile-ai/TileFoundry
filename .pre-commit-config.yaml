@@ -27,14 +27,14 @@ repos:
         name: spec-rules-lint
         entry: python scripts/spec_rules_lint.py
         language: system
-        files: ^docs/(spec|tutorial)/.*\.md$
+        files: ^(docs/(spec|tutorial)/.*|targets/[^/]+/tilefoundry_[^/]+/docs/spec/.*)\.md$
       # Every place a reference is written. Kept off `docs/SPEC-RULES.md`, which
       # states the forbidden forms as examples and would report itself.
       - id: spec-refs-lint
         name: spec-refs-lint
         entry: python scripts/spec_refs_lint.py
         language: system
-        files: ^(docs/spec/.*\.md|src/.*\.py|tests/.*\.py|include/.*\.(h|cuh))$
+        files: ^(docs/spec/.*\.md|src/.*\.py|tests/.*\.py|targets/.*\.(py|md|h|cuh))$
       # The spec states the runtime surface by reading it; this reports a spec
       # that no longer matches the headers and files it is read from.
       - id: runtime-spec-surface
@@ -42,12 +42,12 @@ repos:
         entry: python scripts/runtime_spec_surface.py --check
         language: system
         pass_filenames: false
-        files: ^(docs/spec/runtime\.md|include/tilefoundry/runtime/.*|targets/cuda/tilefoundry_cuda/codegen/include/.*|src/tilefoundry/(runtime/include/.*|(runtime/.*|compile)\.py))$
+        files: ^(docs/spec/runtime\.md|targets/[^/]+/tilefoundry_[^/]+/(docs/spec/runtime\.md|(codegen/)?include/.*)|src/tilefoundry/(runtime/include/.*|(runtime/.*|compile)\.py))$
       - id: spec-entropy-lint
         name: spec-entropy-lint
         entry: python scripts/spec_entropy_lint.py
         language: system
-        files: ^src/.*\.py$
+        files: ^(src|targets)/.*\.py$
       - id: forward-references
         name: forward-references
         entry: python scripts/forward_references_lint.py

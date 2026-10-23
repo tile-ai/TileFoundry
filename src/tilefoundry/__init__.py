@@ -144,3 +144,7 @@ __all__ = [
     "CompilerOptions",
     "view",
 ]
+
+from tilefoundry.target.base import load_targets  # noqa: E402
+
+load_targets()

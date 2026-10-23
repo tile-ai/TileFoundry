@@ -89,7 +89,7 @@ def test_refuses_a_shape_change() -> None:
 def test_admits_a_transfer_off_the_sixteen_byte_grain(n, dtype) -> None:
     """The grain belongs to one instruction, and the op does not name one.
 
-    See [runtime §2.6](docs/spec/runtime.md#26-cudaops).
+    See [runtime §2.6](targets/cuda/tilefoundry_cuda/docs/spec/runtime.md#26-cudaops).
     """
     verify_prim_function(_pf(_ty(n, dtype), _ty(n, dtype, storage="smem")))
 

@@ -27,7 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(name="cache_update")
+@register_op(name="cache_update", dialect='tf', category='tensor')
 class CacheUpdate(Op):
     """Cache-update HIR operation; see `spec hir § CacheUpdate`."""
 

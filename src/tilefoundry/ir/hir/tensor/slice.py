@@ -37,7 +37,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 
 
-@register_op
+@register_op(dialect='tf', category='tensor')
 class Slice(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     starts = ParamDef(kind="input")

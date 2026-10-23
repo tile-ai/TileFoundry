@@ -186,9 +186,12 @@ def load_targets() -> Mapping[str, type[Target]]: ...
   - Core MUST NOT import or re-export plugin implementations. CPU MUST remain
     available from `tilefoundry.target`; another backend MUST export its target
     values from `tilefoundry_<name>`.
-  - CLI startup MUST load targets before persistent user registrations. Dialect
-    namespace lookup MUST load targets for public names; probing a name beginning
-    with `__` MUST NOT trigger loading during package initialization.
+  - Importing `tilefoundry` MUST call `load_targets()` once at the end of core
+    initialization. CLI, DSL lookup, stub generation and spec discovery MUST
+    use the registrations established by that import, without loading again.
+    A plugin package already present in `sys.modules` MUST be skipped: when a
+    user imports a plugin first, that partially initialized package completes
+    its own registrations after core initialization returns.
   - A plugin MUST install its specifications as package data under `docs/spec/`.
     After loading targets, `tilefoundry spec` MUST discover those files through
     `importlib.resources.files(entry_point.value)` in source and installed modes,
@@ -212,13 +215,14 @@ class CpuTarget(Target):
 
 - constraints:
   - `name` MUST be `"cpu"`.
-  - CPU host Functions MAY coexist with CUDA Functions in one module and are
-    exempt from CUDA hardware-fact equality checks.
+  - CPU host Functions MAY coexist with device Functions in one module and are
+    exempt from device hardware-fact equality checks.
 
 ## 6. Target ownership and compile resolution
 
-- `tilefoundry.target` MUST be the sole Target implementation package. The IR
-  package MUST NOT own Target classes or Target imports.
+- `tilefoundry.target` MUST own the Target abstraction and CPU implementation;
+  plugins MUST own their concrete targets. The IR package MUST NOT own Target
+  classes.
 - `default_target()` MUST return a new `CpuTarget()`. It is the omitted-target
   policy for `PrimFunction` / `@prim_func` and `jit()`, not a string lookup.
 - There MUST be no global string-to-Target resolver. A registered name returns
@@ -244,8 +248,8 @@ class CpuTarget(Target):
   instance resolved from its Module, and no later stage rewrites it. It selects
   the bound emission classes that emit it. A synthesized host entry carries a
   `CpuTarget()`.
-- CUDA Functions are grouped by equal Target values in source order. More than
-  one unequal CUDA Target group MUST fail before any generator runs.
+- Device Functions MUST be grouped by equal Target values in source order.
+  More than one unequal device Target group MUST fail before any generator runs.
 
 ## 10. Installed hardware resources
 
@@ -263,21 +267,14 @@ cross-backend hardware registry.
 
 ```toml
 [spec]
-schema = "tilefoundry.cuda.device/v3"
+schema = "example.device/v1"
 kind = "device"
-id = "nvidia.h200_sxm"
+id = "example.device"
 
 [compatibility]
-architectures = ["nvidia.sm90"]
+architectures = ["example.architecture"]
 
-[facts.memory.hbm.bandwidth]
-value = 4800000000000
-unit = "byte/s"
-origin = "vendor"
-source = "https://www.nvidia.com/en-us/data-center/h200/"
-conditions = "4.8 TB/s peak HBM3e bandwidth, decimal"
-
-[facts.memory.l2.bandwidth]
+[facts.memory.main.bandwidth]
 status = "unavailable"
 conditions = "No validated number."
 ```

@@ -21,7 +21,7 @@ from tilefoundry.visitor_registry.access_relation import (
 _IN_RMEM = utils.tensor_in(StorageKind.RMEM)
 
 
-@register_op
+@register_op(dialect='T', category='nn')
 class ReLU(Op):
     """Tensor-level pointwise ReLU writing into ``dst``."""
 

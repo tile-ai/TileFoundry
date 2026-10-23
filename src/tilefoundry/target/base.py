@@ -394,6 +394,8 @@ def load_targets() -> Mapping[str, type[Target]]:
     global _LOADED
     if not _LOADED:
         for ep in entry_points(group="tilefoundry.targets"):
+            if ep.value in sys.modules:
+                continue
             package = f"tilefoundry_{ep.name}"
             distribution = ep.dist.name if ep.dist is not None else "<unknown distribution>"
             if ep.value != package:

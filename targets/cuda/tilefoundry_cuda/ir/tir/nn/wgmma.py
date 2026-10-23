@@ -6,6 +6,7 @@ from dataclasses import replace
 from enum import Enum
 
 from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.register import register_type
 from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
     LayoutPattern,
@@ -45,6 +46,7 @@ WARPGROUP = Mesh(
 )
 
 
+@register_type(dialect="T", namespace="cuda.sm90")
 class Major(Enum):
     """Which of a shared descriptor's axes runs contiguously."""
 
@@ -52,6 +54,7 @@ class Major(Enum):
     K = "K-major"
 
 
+@register_type(dialect="T", namespace="cuda.sm90")
 class Form(Enum):
     """Whether WGMMA reads A from shared memory or registers."""
 

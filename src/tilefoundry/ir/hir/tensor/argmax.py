@@ -37,7 +37,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
-@register_op
+@register_op(dialect='tf', category='tensor')
 class ArgMax(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     axis = ParamDef(kind="attribute", annotation=int, default=-1)

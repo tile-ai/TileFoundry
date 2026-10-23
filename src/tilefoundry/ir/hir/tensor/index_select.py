@@ -24,7 +24,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(name="index_select")
+@register_op(name="index_select", dialect='tf', category='tensor')
 class IndexSelect(Op):
     """Select whole slices along ``dim`` using a 1-D integer ``index``."""
 

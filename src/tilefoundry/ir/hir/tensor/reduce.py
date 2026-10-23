@@ -30,7 +30,7 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 __all__ = ["ReduceKind", "Reduce"]
 
 
-@register_op
+@register_op(dialect='tf', category='tensor')
 class Reduce(Op):
     """Axis reduction over ``x``, one ``ReduceKind`` per runtime reduce tag."""
 

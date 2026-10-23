@@ -130,12 +130,20 @@ lowered from, so a bound naming a mesh coordinate reads back as it was printed.
 
 ## 2. Syntax and Rules
 
-The DSL resolves `T.<name>` (and `tf.<name>`) through a registered namespace
-first, then the dialect's OpSchema registry. Namespace names MUST be unique
-within a dialect and MUST NOT collide with an OpSchema name. If neither owns
-the name, the DSL loads installed targets once and repeats the lookup before
-raising `AttributeError`, including the installed target names. Dunder probes
-such as `__path__` MUST NOT trigger target loading.
+`T` and `tf` each expose a `Dialect` instance through their module hooks.
+Lookup MUST consult one tree keyed by `(dialect, namespace, name)`: a record
+at the current path returns its operation builder or exported type; a deeper
+path returns the next `Dialect`; otherwise lookup MUST raise `AttributeError`.
+`dir()` and `__all__` MUST list only the current layer's records and immediate
+child namespaces.
+
+`register_op` MUST receive explicit `dialect` and `category`; `namespace=""`
+places the operation at the root. Category organizes documentation, not lookup.
+`register_type(dialect=..., namespace=...)` MUST expose a type in the same tree
+without creating an `OpSchema` or attaching `_op_schema`. Aliases occupy a
+single record like operations. A duplicate path MUST raise `ValueError` naming
+the existing owner; a record MUST NOT occupy a namespace prefix, in either
+registration order. Missing required decorator arguments MUST raise `TypeError`.
 
 Negative integer and floating-point literals are single `Constant` values.
 Negating a name or a runtime expression constructs a `Unary(NEG)` Call.

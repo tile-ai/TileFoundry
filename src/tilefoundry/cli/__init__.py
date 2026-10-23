@@ -28,7 +28,6 @@ from tilefoundry.cli.target import run_remove as run_target_remove
 from tilefoundry.cli.target import run_show as run_target_show
 from tilefoundry.cli.tutorial import PAGES, page_lines, render_page, run_tutorial
 from tilefoundry.ir.core import VerifyError
-from tilefoundry.target import TargetLoadError, load_targets
 
 _ANALYSES = ANALYSES
 _COMMANDS = {
@@ -307,11 +306,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--json requires at least one analysis flag: "
                 + ", ".join(f"--{name}" for name in _ANALYSES)
             )
-    try:
-        load_targets()
-    except TargetLoadError as error:
-        print(f"tilefoundry: error: {error}", file=sys.stderr)
-        return 1
     try:
         registrations = load_registrations(registry_path(args.registry))
     except (OSError, TypeError, ValueError) as error:

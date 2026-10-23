@@ -1,14 +1,4 @@
-"""The op registry as a table: what a name resolves to.
-
-The op registry as a table: what a name resolves to, and how many things it
-may resolve to.
-
-Kinded sugar names (``add`` / ``sub`` / ...) resolve to a single alias schema;
-there are no per-name legacy Op classes. Each kinded sugar name has *exactly
-one* schema in the registry — the alias — while a genuinely overloaded name may
-hold several. These are the boundaries a parse error cannot tell apart from a
-missing registration, so they are asserted on the table directly.
-"""
+"""Assert the unique alias schema and the duplicate-name rejection contract."""
 
 from __future__ import annotations
 
@@ -19,11 +9,11 @@ from tilefoundry.dsl.tf import add as _tf_add  # noqa: F401  -- closure capture
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.op_registry import (
+    _REGISTRY,
     _first_schema,
-    _schemas_by_dialect_name,
+    children,
     get_op_by_name,
-    get_schemas,
-    iter_schema_names,
+    lookup,
 )
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
@@ -35,10 +25,10 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 @pytest.fixture
 def clean_schema_registry():
     """Registering into the process-wide table must not leak into other tests."""
-    snapshot = {k: list(v) for k, v in _schemas_by_dialect_name.items()}
+    snapshot = dict(_REGISTRY)
     yield
-    _schemas_by_dialect_name.clear()
-    _schemas_by_dialect_name.update(snapshot)
+    _REGISTRY.clear()
+    _REGISTRY.update(snapshot)
 
 
 def test_kinded_alias_registers_one_schema_no_legacy_op() -> None:
@@ -49,9 +39,8 @@ def test_kinded_alias_registers_one_schema_no_legacy_op() -> None:
     constructs the kinded op and reuses the static ParamDef references for its
     signature; a binary and a unary name stand for their whole families.
     """
-    schemas = get_schemas("tf", "add")
-    assert len(schemas) == 1
-    assert schemas[0].op_class is None
+    schema = lookup("tf", (), "add")
+    assert schema.op_class is None
     assert get_op_by_name("add") is None
 
     binary = _first_schema("tf", "add")
@@ -70,25 +59,21 @@ def test_kinded_alias_registers_one_schema_no_legacy_op() -> None:
     assert neg_inst.kind is UnaryKind.NEG
 
 
-def test_register_op_overload_and_iter_dedupe(clean_schema_registry) -> None:
-    """Multi-schema overloads append in registration order; iter dedupes names."""
-
-    class _DummyBase:
-        pass
+def test_register_op_rejects_duplicate_name(clean_schema_registry) -> None:
+    """Each path has one owner; a duplicate identifies the existing owner."""
 
     @register_op(dialect="T", category="nn", name="testdup_relu")
-    class _A(_DummyBase):
+    class _A:
         x = ParamDef(kind="input")
 
-    @register_op(dialect="T", category="nn", name="testdup_relu")
-    class _B(_DummyBase):
-        src = ParamDef(kind="input", pattern=is_ranked_tensor())
-        dst = ParamDef(kind="input", pattern=is_ranked_tensor())
+    with pytest.raises(ValueError, match="already owned by .*_A"):
+        @register_op(dialect="T", category="nn", name="testdup_relu")
+        class _B:
+            src = ParamDef(kind="input", pattern=is_ranked_tensor())
+            dst = ParamDef(kind="input", pattern=is_ranked_tensor())
 
-    bucket = get_schemas("T", "testdup_relu")
-    assert [s.op_class for s in bucket] == [_A, _B]
-    names = list(iter_schema_names("T"))
-    assert names.count("testdup_relu") == 1
+    assert lookup("T", (), "testdup_relu").op_class is _A
+    assert children("T", ()).count("testdup_relu") == 1
 
 
 @func

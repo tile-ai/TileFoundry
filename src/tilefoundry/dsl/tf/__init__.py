@@ -1,16 +1,8 @@
-"""``tilefoundry.dsl.tf`` — HIR op surface (``dialect='tf'``).
-
-Names are resolved on demand against the OpSchema registry; calling
-``tf.<name>(*args, **kw)`` runs first-match overload resolution and
-constructs the corresponding IR node via the schema's ``builder``.
-
-For static type completion in editors, generated ``.pyi`` stubs live
-alongside this module (gitignored). Run ``tilefoundry stub regen`` to
-refresh them after registering new ops.
-"""
+"""The tf dialect surface, resolved by registered namespace and name."""
 
 from __future__ import annotations
 
-from .._namespace import make_dialect_namespace
+from .._namespace import make_dialect
 
-__getattr__, __dir__ = make_dialect_namespace("tf")
+_DIALECT = make_dialect("tf")
+__getattr__, __dir__ = _DIALECT.__getattr__, _DIALECT.__dir__

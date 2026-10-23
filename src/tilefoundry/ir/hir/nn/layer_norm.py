@@ -22,7 +22,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(name="layer_norm")
+@register_op(name="layer_norm", dialect='tf', category='nn')
 class LayerNorm(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     weight = ParamDef(kind="input", pattern=is_ranked_tensor())

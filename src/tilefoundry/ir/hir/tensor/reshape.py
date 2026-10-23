@@ -31,7 +31,7 @@ from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 from ._view_layout import derive_view_layout
 
 
-@register_op
+@register_op(dialect='tf', category='tensor')
 class Reshape(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     new_shape = ParamDef(kind="attribute", annotation=tuple)

@@ -132,17 +132,17 @@ The project is determined by the generator of the Target resolved by the selecte
 `SOURCE` uses the shared authored-Module selector syntax described under
 [Commands](#commands). The command accepts HIR or TIR and delegates Target
 capability checks to codegen ([codegen §2.1](./codegen.md#21-target-resolution)).
-Currently, CUDA Targets without `device_count` can generate skeleton projects.
 `OUT_DIR` MUST be absent or an empty directory; existing nonempty output MUST
 be rejected without overwriting files.
 
 The command runs host-entry normalization
 ([passes §7.3](./passes.md#73-insert_default_host_entry)), selects all CPU entries,
 and calls skeleton `codegen/link_module.py:link_program`
-([codegen §4.3](./codegen.md#43-linkedmodule)). It writes `CMakeLists.txt`,
-`host.cpp` and `device_<i>.cu` directly in `OUT_DIR`, compiles the project and
-returns zero on success. The library is `OUT_DIR/build/lib<root Module name>.so`. Generated
-CUDA bodies are editable placeholders; signatures, views, variant dispatch,
+([codegen §4.3](./codegen.md#43-linkedmodule)). It writes `CMakeLists.txt` and
+the target-selected source files directly in `OUT_DIR`, compiles the project
+and returns zero on success. The library is
+`OUT_DIR/build/lib<root Module name>.so`. Generated device bodies are editable
+placeholders; signatures, views, variant dispatch,
 launchers and host registrations remain intact. The project can be rebuilt with
 `cmake -G Ninja -S OUT_DIR -B BUILD_DIR` followed by `cmake --build BUILD_DIR`. Load the
 library with `tvm_ffi.load_module`, then bind its dotted registrations with
@@ -204,8 +204,8 @@ bounds the caller stated.
     shape tree each input file supplied.
   - `--device DEVICE` names where inputs and weights are built, and so where the
     run happens. Omitted, it is the device the selection's Target declares. Given,
-    it is honoured as stated: a Target declaring CUDA no longer refuses a machine
-    without one, because the caller has said where to run. The evaluator picks no
+    it is honoured as stated even when the declared hardware is unavailable,
+    because the caller has said where to run. The evaluator picks no
     device of its own ([evaluator §2](./evaluator.md#2-parameters-and-inputs)).
   - A FAIL with `--inputs random` MUST state that the draw makes each activation
     independently; a target that relies on semantic relationships between
@@ -491,7 +491,7 @@ With one name, `facts` reports that declaration's capability, execution mesh,
 parameters, operands, and cross-operand constraints; the parameter and operand
 sections are canonical `PatternPrinter.declaration` text. A carrier with an
 associated attribute reports execution meshes as alternatives selected by each
-declaration, for example `atom=T.cuda.sm90.Wgmma` and `atom=T.cuda.sm80.Mma`.
+declaration.
 `candidates` reports the instructions whose access relation and operand
 patterns can implement each unscheduled registered HIR site. A target-neutral
 pairing registry decides which TIR carrier families are relevant to each HIR

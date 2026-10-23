@@ -18,7 +18,7 @@ from tilefoundry.visitor_registry.access_relation import (
 _COMMUTES_WITH = frozenset()
 
 
-@register_op
+@register_op(dialect='tf', category='nn')
 class Gelu(Op):
     """Gaussian Error Linear Unit.
 

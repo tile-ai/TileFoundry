@@ -36,7 +36,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op
+@register_op(dialect='tf', category='tensor')
 class Quant(Op):
     """Per-token-group FP8 quantize. Multi-output (x_q, x_scale)."""
 

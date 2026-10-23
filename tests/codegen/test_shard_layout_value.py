@@ -1,6 +1,6 @@
 """Render a sharded operand's ``ShardLayout`` value for a sliced mesh.
 
-See [runtime §2.3.2](docs/spec/runtime.md#232-layoutmeshcuh).
+See [runtime §2.3.2](targets/cuda/tilefoundry_cuda/docs/spec/runtime.md#232-layoutmeshcuh).
 """
 
 from __future__ import annotations

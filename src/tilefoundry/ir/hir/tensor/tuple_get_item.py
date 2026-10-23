@@ -20,7 +20,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(name="tuple_get_item")
+@register_op(name="tuple_get_item", dialect='tf', category='tensor')
 class TupleGetItem(Op):
     """Extract a field of a tuple-typed expression by scalar index.
 

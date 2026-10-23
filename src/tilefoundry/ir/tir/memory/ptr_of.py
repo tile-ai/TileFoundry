@@ -13,7 +13,7 @@ from tilefoundry.ir.types import PointerType
 from tilefoundry.visitor_registry import register_typeinfer
 
 
-@register_op(name="ptr_of")
+@register_op(name="ptr_of", dialect='T', category='memory')
 class PtrOf(Op):
     """Take the device address of a tensor for downstream view ops (value form)."""
 

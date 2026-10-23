@@ -22,7 +22,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.contexts import TypeInferResults
 
 
-@register_op
+@register_op(dialect='tf', category='sharding')
 class MeshCoord(Op):
     """This unit's coordinate along one axis of *mesh*.
 

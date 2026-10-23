@@ -19,14 +19,13 @@ from pathlib import Path
 import pytest
 
 from tilefoundry.dump import DumpFlags, DumpScope, FileDumper, NullDumper
-from tilefoundry.target.base import _TARGET_CLASSES, _TARGET_PROVIDERS, load_targets
+from tilefoundry.target.base import _TARGET_CLASSES, _TARGET_PROVIDERS
 
 _RESULTS_ROOT = Path(__file__).resolve().parents[1] / "test_results"
 _SANITIZE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def pytest_configure(config) -> None:
-    load_targets()
     cache = os.environ.get("TILEFOUNDRY_CACHE_DIR")
     if cache:
         _use_shared_caches(Path(cache), main=not hasattr(config, "workerinput"))

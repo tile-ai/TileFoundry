@@ -15,7 +15,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op
+@register_op(dialect='tf', category='tensor')
 class Rank(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
 

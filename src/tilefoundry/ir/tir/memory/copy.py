@@ -23,7 +23,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.registries import typeinfer_registry, verify_stmt_registry
 
 
-@register_op
+@register_op(dialect='T', category='memory')
 class Copy(Op):
     """Copies ``src`` into ``dst`` (in-place memory write)."""
 

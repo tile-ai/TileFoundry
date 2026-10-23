@@ -1435,15 +1435,6 @@ Consensus torch.nn.functional ops.
     to the operand dtype and an operand that is not an 8-bit float is
     `torch.matmul` on the operands; otherwise it is `torch.matmul` on the
     operands widened to `f32`, then cast once to the result dtype.
-  - Under a CUDA Target, a `MatMul` with an operand in `smem` or `rmem` takes
-    its result storage from the MMA instructions the Target supports for it:
-    each declaration's A, B and C are read in every configuration its patterns
-    admit, and a configuration whose A and B admit the operand dtypes and
-    storages and whose C admits the result dtype contributes C's storage. One
-    storage is the result storage; several are `umat`, for the author to
-    resolve; none MUST be refused, naming the Target, both operands and the
-    result dtype. Operands in `gmem` or `umat` keep the target-neutral rule,
-    and so does every other Target.
   - Where no Target is in reach (`ctx.resolve_target()` is `None`), a `MatMul`
     with an operand in `smem` or `rmem` has `umat` result storage: which
     instruction computes it, and so where it lands, is decided once a Target
@@ -1668,7 +1659,7 @@ dispatches on `(layout, storage)`:
   for every `Split` axis `k`; non-`Split` axes follow C-order over
   `shard_layout_local_shape(layout)` with size-1 → 0 (per-instance form).
 - `layout=Layout(strides=tuple)` (verbose) → dest strides are taken verbatim;
-  typeinfer MUST NOT rewrite them (e.g. SM80 MMA fragment layouts).
+  typeinfer MUST NOT rewrite them.
 
 **Cost classification.** A Reshard is a zero-copy view with zero traffic
 only when no element moves under the alias rule above, including the

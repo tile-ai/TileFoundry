@@ -1,6 +1,6 @@
 """The runtime's compile-time refusals, read as diagnostics.
 
-See [runtime §2.6](docs/spec/runtime.md#26-cudaops).
+See [runtime §2.6](targets/cuda/tilefoundry_cuda/docs/spec/runtime.md#26-cudaops).
 """
 
 from __future__ import annotations

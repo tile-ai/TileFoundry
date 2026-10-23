@@ -6,7 +6,7 @@ import pytest
 
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core.op_registry import _schemas_by_dialect_name
+from tilefoundry.ir.core.op_registry import _REGISTRY
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.specialize import display_name
@@ -17,10 +17,10 @@ IrDimVar = DimVar
 
 @pytest.fixture(autouse=True)
 def _clean_schema_registry():
-    snapshot = {k: list(v) for k, v in _schemas_by_dialect_name.items()}
+    snapshot = dict(_REGISTRY)
     yield
-    _schemas_by_dialect_name.clear()
-    _schemas_by_dialect_name.update(snapshot)
+    _REGISTRY.clear()
+    _REGISTRY.update(snapshot)
 
 
 def test_a_dialect_namespace_resolves_only_its_own_ops() -> None:

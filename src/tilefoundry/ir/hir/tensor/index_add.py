@@ -22,7 +22,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(name="index_add")
+@register_op(name="index_add", dialect='tf', category='tensor')
 class IndexAdd(Op):
     """Return ``dst`` with ``src`` slices accumulated at ``index`` along ``dim``."""
 

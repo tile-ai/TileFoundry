@@ -17,7 +17,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op
+@register_op(dialect='tf', category='sharding')
 class Local(Op):
     """The current device's local view of a ``ShardLayout`` tensor."""
 

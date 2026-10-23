@@ -9,7 +9,6 @@ from importlib.resources import files
 from pathlib import Path
 
 from tilefoundry.cli import data
-from tilefoundry.target import load_targets
 from tilefoundry.utils.markdown import headings
 
 _SPEC_TOPICS = {
@@ -44,7 +43,6 @@ def spec_directory() -> Path:
 
 def topics() -> dict[str, Path]:
     """Every document that can be asked for, by the name it is asked for under."""
-    load_targets()
     found = {path.stem: path for path in sorted(spec_directory().glob("*.md"))}
     for ep in entry_points(group="tilefoundry.targets"):
         directory = files(ep.value).joinpath("docs", "spec")

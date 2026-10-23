@@ -43,7 +43,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 
 
-@register_op(name="bitcast")
+@register_op(name="bitcast", dialect='tf', category='tensor')
 class Bitcast(Op):
     """Reinterpret a tensor's bytes under a new shape and layout."""
 

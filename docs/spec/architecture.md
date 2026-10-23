@@ -149,7 +149,7 @@ contract lives in [visitor-mutator](./visitor-mutator.md).
 ## 6. Target / codegen
 
 Codegen is the back end. **TIR is the lowest IR**, and each target
-(CUDA, LLVM IR, …) walks the verified TIR tree and emits the final
+walks the verified TIR tree and emits the final
 target code string directly; there is no intermediate per-target IR
 layer. HIR Ops do not reach codegen — any HIR Op participating in
 final emission must first be lowered into TIR-owned forms.

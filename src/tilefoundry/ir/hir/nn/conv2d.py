@@ -30,7 +30,7 @@ from tilefoundry.visitor_registry.shard_propagate import (
 )
 
 
-@register_op
+@register_op(dialect='tf', category='nn')
 class Conv2D(Op):
     input = ParamDef(kind="input", pattern=is_ranked_tensor())
     weight = ParamDef(kind="input", pattern=is_ranked_tensor())

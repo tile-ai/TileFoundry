@@ -1,6 +1,6 @@
 """Effect-form TIR Ops for the CUDA shared-memory barrier object (mbarrier).
 
-See [tir §2.3](docs/spec/tir.md#23-tir-ops).
+See [tir](targets/cuda/tilefoundry_cuda/docs/spec/tir.md#barrier-object-ops-tirsyncmbarrier_).
 """
 
 from __future__ import annotations

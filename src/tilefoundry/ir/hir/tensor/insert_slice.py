@@ -23,7 +23,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(name="insert_slice")
+@register_op(name="insert_slice", dialect='tf', category='tensor')
 class InsertSlice(Op):
     """Return ``dst`` with ``update`` written into the window at ``offsets``."""
 

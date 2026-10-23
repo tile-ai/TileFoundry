@@ -15,7 +15,7 @@ from tilefoundry.ir.types.storage import resolve_storage
 from tilefoundry.visitor_registry import register_typeinfer
 
 
-@register_op(name="tensor_view")
+@register_op(name="tensor_view", dialect='T', category='memory')
 class TensorView(Op):
     """Derive a sub-view of a tensor (value form).
 

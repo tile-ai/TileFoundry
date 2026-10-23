@@ -29,7 +29,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
-@register_op
+@register_op(dialect='tf', category='tensor')
 class Stack(Op):
     """Variadic input op. See Concat for encoding rationale."""
 

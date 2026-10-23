@@ -21,7 +21,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op
+@register_op(dialect='tf', category='tensor')
 class Arange(Op):
     """Generate a typed one-dimensional sequence from ``start`` and ``step``."""
 

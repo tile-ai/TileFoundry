@@ -7,6 +7,7 @@ from enum import Enum
 
 from tilefoundry.ir.core.inspection import Printable, PrinterBase
 from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.register import register_type
 from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
     LayoutPattern,
@@ -84,6 +85,7 @@ class MmaAtom(Printable):
         super().__init_subclass__(**kwargs)
         cls.parameters = tuple(value for value in vars(cls).values() if isinstance(value, ParamDef))
         cls.reference_name = f"{cls.namespace}.{cls.__name__}"
+        register_type(dialect="T", namespace=cls.namespace.removeprefix("T."))(cls)
 
     def __init__(self, *, mesh: Mesh | None = None, **bindings):
         unknown = set(bindings) - {param.name for param in self.parameters}

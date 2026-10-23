@@ -16,7 +16,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(name="shape_of")
+@register_op(name="shape_of", dialect='tf', category='tensor')
 class ShapeOf(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
 

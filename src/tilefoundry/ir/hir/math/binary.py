@@ -49,7 +49,7 @@ _LOGICAL_KINDS = {BinaryKind.AND, BinaryKind.OR}
 _INT_ONLY_KINDS = {BinaryKind.FLOOR_DIV, BinaryKind.MOD}
 
 
-@register_op
+@register_op(dialect='tf', category='math')
 class Binary(Op):
     """Value-form pointwise binary operation."""
 

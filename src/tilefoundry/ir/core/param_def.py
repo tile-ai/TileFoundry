@@ -1,6 +1,6 @@
 """Describe one input or attribute in an ``OpSchema`` signature.
 
-Annotations drive surface typing, sugar, and coarse overload selection;
+Annotations drive surface typing and sugar;
 patterns further filter IR values. ``optional`` permits ``None`` while a
 non-``MISSING`` default permits omission. ``__set_name__`` supplies the
 canonical parameter name.

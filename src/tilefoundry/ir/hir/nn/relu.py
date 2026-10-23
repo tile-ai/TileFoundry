@@ -18,7 +18,7 @@ from tilefoundry.visitor_registry.access_relation import (
 _COMMUTES_WITH = frozenset({"max", "min"})
 
 
-@register_op
+@register_op(dialect='tf', category='nn')
 class ReLU(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
 

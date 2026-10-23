@@ -18,7 +18,7 @@ from tilefoundry.visitor_registry.access_relation import (
 _COMMUTES_WITH = frozenset({"max", "min"})
 
 
-@register_op
+@register_op(dialect='tf', category='math')
 class Softplus(Op):
     """Pointwise softplus ``log(1 + e**x)``."""
 

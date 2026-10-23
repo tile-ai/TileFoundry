@@ -36,7 +36,7 @@ def _identity(rank: int) -> "isl.multi_aff":
     return AccessRelation(isl.map(f"{{ [{dims}] -> [{dims}] }}"))
 
 
-@register_op(name="rms_norm")
+@register_op(name="rms_norm", dialect='tf', category='nn')
 class RMSNorm(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
     weight = ParamDef(kind="input", pattern=is_ranked_tensor())

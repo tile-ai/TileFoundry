@@ -1,193 +1,53 @@
-"""Register operation classes and surface aliases as ``OpSchema`` entries.
+"""Register callable operations, aliases and exported types in a dialect tree.
 
-Builtin module paths derive dialect and category; external operations provide
-them explicitly. Names default to the lowercase class name. Registration is
-the only route into the callable schema registry.
-
+Dialect and documentation category are explicit; namespace controls the DSL
+path independently of the documentation category.
 See [parser §2](docs/spec/parser.md#2-syntax-and-rules).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from types import MappingProxyType
-from typing import Any, Callable, Mapping, overload
+from typing import Any, Callable
 
-from tilefoundry.ir.core.op_registry import _VALID_DIALECTS, _register_schema, get_schemas
+from tilefoundry.ir.core.op_registry import _VALID_DIALECTS, _register
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.param_def import ParamDef, collect_param_defs
-
-
-@dataclass(frozen=True)
-class RegisteredNamespace:
-    namespace: object
-    stub: Callable[[Callable[[ParamDef], str]], str]
-
-
-_NAMESPACES: dict[str, dict[str, RegisteredNamespace]] = {}
-
-
-def registered_namespaces(dialect: str) -> Mapping[str, RegisteredNamespace]:
-    """Return a read-only view of a dialect's registered namespaces."""
-    return MappingProxyType(_NAMESPACES.get(dialect, {}))
-
-
-def _check_namespace(dialect: str, name: str) -> None:
-    entry = registered_namespaces(dialect).get(name)
-    if entry is not None:
-        owner = type(entry.namespace)
-        raise ValueError(
-            f"{dialect}.{name} is already owned by namespace "
-            f"{owner.__module__}.{owner.__qualname__}"
-        )
-
-
-def register_namespace(
-    dialect: str, name: str, namespace: object,
-    *, stub: Callable[[Callable[[ParamDef], str]], str],
-) -> object:
-    """Expose a namespace and its stub renderer under a unique dialect name.
-
-    The stub callback receives core's ParamDef annotation renderer. Namespace
-    and operation registrations reject names already owned by the other surface.
-    """
-    if dialect not in _VALID_DIALECTS:
-        raise ValueError(f"register_namespace: invalid dialect {dialect!r}")
-    if not isinstance(name, str) or not name:
-        raise ValueError(f"register_namespace: name must be a non-empty string, got {name!r}")
-    _check_namespace(dialect, name)
-    schemas = get_schemas(dialect, name)
-    if schemas:
-        owner = schemas[0].builder
-        raise ValueError(
-            f"{dialect}.{name} is already owned by op "
-            f"{owner.__module__}.{owner.__qualname__}"
-        )
-    _NAMESPACES.setdefault(dialect, {})[name] = RegisteredNamespace(namespace, stub)
-    return namespace
-
-
-def _derive_dialect_and_category(module: str) -> tuple[str | None, str | None]:
-    """Try to derive ``(dialect, category)`` from ``cls.__module__``.
-
-    Returns ``(None, None)`` if the path doesn't match the builtin
-    convention ``tilefoundry.ir.<hir|tir>.<category>.*``.
-    """
-    if not module:
-        return None, None
-    parts = module.split(".")
-
-    if len(parts) < 5:
-        return None, None
-    if parts[0] != "tilefoundry" or parts[1] != "ir":
-        return None, None
-    seg = parts[2]
-    if seg == "hir":
-        return "tf", parts[3]
-    if seg == "tir":
-        return "T", parts[3]
-    return None, None
-
-
-def _validate_args(
-    cls: type, dialect: str | None, category: str | None, name: str | None
-) -> tuple[str, str, str]:
-    """Resolve and validate the (dialect, category, name) triple.
-
-    Auto-derives missing pieces from the module path; raises if the
-    builtin path doesn't apply and explicit args weren't supplied.
-    """
-    derived_dialect, derived_category = _derive_dialect_and_category(getattr(cls, "__module__", ""))
-
-    final_dialect = dialect if dialect is not None else derived_dialect
-    final_category = category if category is not None else derived_category
-    final_name = name if name is not None else cls.__name__.lower()
-
-    if final_dialect is None:
-        raise ValueError(
-            f"@register_op({cls.__module__}.{cls.__name__}): cannot auto-derive "
-            f"dialect from module path; pass `dialect='tf'` or `dialect='T'` "
-            f"explicitly."
-        )
-    if final_dialect not in _VALID_DIALECTS:
-        raise ValueError(
-            f"@register_op: dialect must be one of {_VALID_DIALECTS!r}, got {final_dialect!r}"
-        )
-
-    if not final_category or not isinstance(final_category, str):
-        raise ValueError(
-            f"@register_op({cls.__module__}.{cls.__name__}): cannot auto-derive "
-            f"category from module path; pass `category=...` explicitly."
-        )
-
-    if not final_name or not isinstance(final_name, str):
-        raise ValueError(
-            f"@register_op({cls.__module__}.{cls.__name__}): name must be a "
-            f"non-empty string, got {final_name!r}"
-        )
-
-    return final_dialect, final_category, final_name
-
-
-def _build_schema(
-    cls: type,
-    *,
-    dialect: str | None = None,
-    category: str | None = None,
-    name: str | None = None,
-) -> OpSchema:
-    """Build an OpSchema for ``cls`` (no registration side-effect)."""
-    final_dialect, final_category, final_name = _validate_args(cls, dialect, category, name)
-    signature = collect_param_defs(cls)
-    return OpSchema(
-        name=final_name,
-        dialect=final_dialect,
-        category=final_category,
-        signature=signature,
-        builder=cls,
-        op_class=cls,
-    )
-
-
-@overload
-def register_op(cls: type) -> type: ...
-@overload
-def register_op(
-    *,
-    dialect: str | None = None,
-    category: str | None = None,
-    name: str | None = None,
-) -> Callable[[type], type]: ...
 
 
 def register_op(
     cls: type | None = None,
     *,
-    dialect: str | None = None,
-    category: str | None = None,
+    dialect: str,
+    category: str,
     name: str | None = None,
+    namespace: str = "",
 ) -> Any:
-    """Register ``cls`` as a callable Op into the OpSchema registry.
+    """Expose an operation at a unique dialect namespace and name."""
+    if not isinstance(category, str) or not category:
+        raise ValueError("register_op: category must be a non-empty string")
 
-    Two call styles, mirroring ``dataclass``:
-
-    - Bare: ``@register_op`` — builtin path; auto-derive everything.
-    - With args: ``@register_op(dialect=..., category=..., name=...)`` —
-      explicit overrides for non-builtin / overload disambiguation.
-    """
-
-    def _apply(target_cls: type) -> type:
-        schema = _build_schema(target_cls, dialect=dialect, category=category, name=name)
-
-        _check_namespace(schema.dialect, schema.name)
-        setattr(target_cls, "_op_schema", schema)
-        _register_schema(schema)
+    def apply(target_cls: type) -> type:
+        schema = OpSchema(
+            name=name if name is not None else target_cls.__name__.lower(),
+            dialect=dialect,
+            category=category,
+            signature=collect_param_defs(target_cls),
+            builder=target_cls,
+            op_class=target_cls,
+        )
+        _register(dialect, tuple(namespace.split(".")) if namespace else (), schema.name, schema)
+        target_cls._op_schema = schema
         return target_cls
 
-    if cls is not None:
-        return _apply(cls)
+    return apply(cls) if cls is not None else apply
 
-    return _apply
+
+def register_type(*, dialect: str, namespace: str) -> Callable[[type], type]:
+    """Expose a declaration type without attaching operation metadata."""
+    def apply(cls: type) -> type:
+        _register(dialect, tuple(namespace.split(".")) if namespace else (), cls.__name__, cls)
+        return cls
+    return apply
 
 
 def register_alias(
@@ -201,7 +61,7 @@ def register_alias(
 
     ``params`` reuses static ``ParamDef`` descriptors from the target operation.
     The builder accepts attributes and returns the concrete operation. Aliases
-    prepend to their bucket and therefore win first-match resolution.
+    occupy their own unique name in the dialect tree.
 
     See [core-ir §2.3](docs/spec/core-ir.md#23-op).
     """
@@ -235,8 +95,7 @@ def register_alias(
             builder=builder_fn,
             op_class=None,
         )
-        _check_namespace(dialect, name)
-        _register_schema(schema, prepend=True)
+        _register(dialect, (), name, schema)
 
         setattr(builder_fn, "_op_schema", schema)
         return builder_fn
@@ -244,12 +103,4 @@ def register_alias(
     return _apply
 
 
-__all__ = [
-    "RegisteredNamespace",
-    "register_namespace",
-    "registered_namespaces",
-    "register_op",
-    "register_alias",
-    "_build_schema",
-    "_derive_dialect_and_category",
-]
+__all__ = ["register_op", "register_alias", "register_type"]

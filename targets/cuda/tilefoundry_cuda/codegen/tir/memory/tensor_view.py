@@ -180,7 +180,7 @@ def _render_shard_layout_type(sl: SL, ctx=None) -> str:
 def _composed_mesh_layout(positions: str, base: int) -> str:
     """A mesh layout value expression, its slice origin folded in.
 
-    See [runtime §2.3.2](docs/spec/runtime.md#232-layoutmeshcuh).
+    See [runtime §2.3.2](targets/cuda/tilefoundry_cuda/docs/spec/runtime.md#232-layoutmeshcuh).
     """
     if not base:
         return positions
