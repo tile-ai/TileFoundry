@@ -196,7 +196,10 @@ def _nested(layout, topologies: tuple) -> "Layout | ComposedLayout":
             )
         below *= count
 
-    grouped = unflatten(layout_flat, compatible_profile(extents, tuple(t.size for t in topologies)))
+    profile = compatible_profile(extents, tuple(t.size for t in topologies))
+    grouped = unflatten(
+        layout_flat, tuple(mode if isinstance(mode, tuple) else (mode,) for mode in profile)
+    )
     strides = []
     for topology, unit, steps in zip(topologies, units, grouped.strides, strict=True):
         normalized = []
