@@ -13,14 +13,9 @@ from tilefoundry.analysis.facts import (
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType, Topology
-from tilefoundry.target import (
-    AmxTarget,
-    Target,
-    TopologyFacts,
-    TopologyLevelFacts,
-    UnsupportedCapabilityError,
-)
+from tilefoundry.target import Target, TopologyFacts, TopologyLevelFacts, UnsupportedCapabilityError
 from tilefoundry.target.facts import TargetFactsError, facts_result
+from tilefoundry_amx import AmxTarget
 from tilefoundry_cuda import CudaTarget
 
 

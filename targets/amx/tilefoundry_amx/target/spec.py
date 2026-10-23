@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from tilefoundry.ir.types import DType
-from tilefoundry.target.amx.architecture import AppleAmx
-from tilefoundry.target.amx.device import AppleM2Pro
 from tilefoundry.target.facts import TARGET_MEMORY_OWNER
 from tilefoundry.target.hardware.envelope import (
     HardwareDocument,
     SchemaValidationError,
 )
 from tilefoundry.target.hardware.schema import SchemaReader
+from tilefoundry_amx.target.architecture import AppleAmx
+from tilefoundry_amx.target.device import AppleM2Pro
 
 ARCHITECTURE_SCHEMA = "tilefoundry.amx.architecture/v2"
 DEVICE_SCHEMA = "tilefoundry.amx.device/v2"

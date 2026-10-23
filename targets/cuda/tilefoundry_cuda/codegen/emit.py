@@ -1,9 +1,8 @@
 """CUDA emitter handler autodiscovery.
 
-Importing this module loads every registered per-Op emitter under ``cuda/tir/`` and ``cuda/hir/``
-so its handler is registered against this target before codegen runs. What a
-function is called and what it takes are answered in ``codegen.signature`` and
-``codegen.cuda.abi``, not here.
+Importing this module loads per-Op emitters under ``codegen/tir/`` and ``codegen/hir/``
+before codegen runs. What a function is called and what it takes are answered in
+``codegen.signature`` and ``tilefoundry_cuda.codegen.abi``, not here.
 """
 
 from __future__ import annotations

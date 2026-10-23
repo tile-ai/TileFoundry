@@ -11,12 +11,8 @@ import pytest
 
 from tilefoundry.ir.types import DType, Topology
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.target import (
-    AmxTarget,
-    TopologyFacts,
-    TopologyLevelFacts,
-    UnsupportedCapabilityError,
-)
+from tilefoundry.target import TopologyFacts, TopologyLevelFacts, UnsupportedCapabilityError
+from tilefoundry_amx import AmxTarget
 
 
 def test_amx_target_reports_and_validates_its_own_topology_levels():

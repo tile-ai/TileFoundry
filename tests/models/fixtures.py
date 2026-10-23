@@ -20,7 +20,7 @@ from tests.models.corpus import TargetFixture
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import TopologyFacts, TopologyLevelFacts
 from tilefoundry_cuda import CudaTarget
-from tilefoundry.target.amx.target import AmxTarget
+from tilefoundry_amx.target.target import AmxTarget
 from tilefoundry.target.base import Target
 
 

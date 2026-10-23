@@ -6,14 +6,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
-from tilefoundry.target.amx.architecture import AppleAmx
-from tilefoundry.target.amx.device import AppleM2Pro
-from tilefoundry.target.amx.spec import (
-    ARCHITECTURE_SCHEMA,
-    DEVICE_SCHEMA,
-    build_apple_amx,
-    build_apple_m2_pro,
-)
 from tilefoundry.target.base import (
     Architecture,
     Device,
@@ -33,6 +25,14 @@ from tilefoundry.target.facts import (
 )
 from tilefoundry.target.hardware.envelope import HardwareDocument
 from tilefoundry.utils.python_source import PythonExpr
+from tilefoundry_amx.target.architecture import AppleAmx
+from tilefoundry_amx.target.device import AppleM2Pro
+from tilefoundry_amx.target.spec import (
+    ARCHITECTURE_SCHEMA,
+    DEVICE_SCHEMA,
+    build_apple_amx,
+    build_apple_m2_pro,
+)
 
 
 @register_target
@@ -42,7 +42,7 @@ class AmxTarget(Target):
 
     name: ClassVar[str] = "amx"
     hardware: ClassVar[HardwareSpec] = HardwareSpec(
-        package="tilefoundry.target.amx.hardware",
+        package="tilefoundry_amx.target.hardware",
         schemas={
             ARCHITECTURE_SCHEMA: build_apple_amx,
             DEVICE_SCHEMA: build_apple_m2_pro,
@@ -153,7 +153,7 @@ class AmxTarget(Target):
             PerformanceServiceFacts,
             ThroughputFacts,
         )
-        from tilefoundry.target.amx.facts import (  # noqa: PLC0415
+        from tilefoundry_amx.target.facts import (  # noqa: PLC0415
             memory_hierarchy,
             performance_service,
             throughput,
@@ -170,7 +170,7 @@ class AmxTarget(Target):
     def to_python(self) -> PythonExpr:
         if type(self) is AmxTarget and self.architecture_id and self.device_id:
             return PythonExpr(
-                ("from tilefoundry.target import AmxTarget",),
+                ("from tilefoundry_amx import AmxTarget",),
                 f'AmxTarget("{self.device_id}")',
             )
         return super().to_python()

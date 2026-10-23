@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tilefoundry-amx"
+dynamic = ["version"]
+requires-python = ">=3.12"
+dependencies = ["tilefoundry"]
+
+[project.entry-points."tilefoundry.targets"]
+amx = "tilefoundry_amx"
+
+[tool.setuptools_scm]
+root = "../.."
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tilefoundry_amx*"]
+
+[tool.setuptools.package-data]
+"tilefoundry_amx" = ["include/tilefoundry/runtime/amx/*.h", "docs/spec/*.md"]
+"tilefoundry_amx.target.hardware" = ["*.toml"]

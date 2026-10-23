@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from tilefoundry.target.amx import AmxTarget, AppleAmx, AppleM2Pro
 from tilefoundry.target.base import (
     Architecture,
     Device,
@@ -45,10 +44,7 @@ def default_target() -> Target:
 
 
 __all__ = [
-    "AmxTarget",
     "Analyzer",
-    "AppleAmx",
-    "AppleM2Pro",
     "Architecture",
     "CpuTarget",
     "Device",

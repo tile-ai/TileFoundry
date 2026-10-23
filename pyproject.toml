@@ -36,6 +36,7 @@ tilefoundry = "tilefoundry.cli:main"
 
 [project.entry-points."tilefoundry.targets"]
 cuda = "tilefoundry_cuda"
+amx = "tilefoundry_amx"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-xdist>=3", "pytest-cov>=7"]
@@ -59,7 +60,7 @@ skip_empty = true
 [tool.setuptools_scm]
 
 [tool.setuptools.packages.find]
-where = ["src", "targets/cuda"]
+where = ["src", "targets/cuda", "targets/amx"]
 
 [tool.setuptools.package-data]
 "tilefoundry.runtime" = ["include/tilefoundry/runtime/cpu/*.h"]
@@ -69,10 +70,10 @@ where = ["src", "targets/cuda"]
 "tilefoundry_cuda.codegen.templates" = ["*.j2"]
 "tilefoundry.codegen.cpu.templates" = ["*.j2"]
 "tilefoundry_cuda.target.hardware" = ["*.toml"]
-"tilefoundry.target.amx.hardware" = ["*.toml"]
+"tilefoundry_amx.target.hardware" = ["*.toml"]
+"tilefoundry_amx" = ["include/tilefoundry/runtime/amx/*.h", "docs/spec/*.md"]
 
 [tool.setuptools.data-files]
-"include/tilefoundry/runtime/amx" = ["include/tilefoundry/runtime/amx/*.h"]
 "share/tilefoundry/spec" = ["docs/spec/*.md"]
 # Tutorial pages have distinct filenames, so one destination is sufficient.
 "share/tilefoundry/tutorial" = ["docs/tutorial/*.md"]
@@ -99,7 +100,7 @@ markers = [
 ]
 
 [tool.ruff]
-src = [".", "src", "targets/cuda"]
+src = [".", "src", "targets/cuda", "targets/amx"]
 # Snapshot examples, shipped model sources, and recorded parser and printer output are
 # evidence; formatting them changes that evidence.
 extend-exclude = ["examples", "tests/models", "tests/parser/golden", "tests/fixtures/schedule/tir"]

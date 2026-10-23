@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import AmxTarget
+from tilefoundry_amx import AmxTarget
 from tilefoundry_cuda import CudaTarget
 
 DYNAMIC_M = DimVar("seq", 1, 127)
