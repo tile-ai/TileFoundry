@@ -231,7 +231,8 @@ class HirPrinter(PythonPrinter):
             if len(inputs) == 1 and variadic_item_annotation(inputs[0]) is not None
             else [self.reference(arg) for arg in expr.args]
         )
-        return f"tf.{_op_name(target)}({', '.join([*arguments, *attrs])})"
+        dialect = schema.dialect if schema is not None else "tf"
+        return f"{dialect}.{_op_name(target)}({', '.join([*arguments, *attrs])})"
 
 
 @dataclass(frozen=True)
@@ -351,7 +352,7 @@ def _op_name(target) -> str:
         return alias_name
     schema = getattr(target, "_op_schema", None)
     if schema is not None:
-        return schema.name
+        return ".".join((*schema.namespace, schema.name))
     cls_name = type(target).__name__
     s1 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cls_name)
     name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s1).lower()
@@ -372,6 +373,9 @@ def _kinded_alias_name(target) -> str | None:
     must emit the alias surface name so importing the regenerated DSL source
     uses the same alias schema.
     """
+    schema = getattr(target, "_op_schema", None)
+    if schema is not None and schema.namespace:
+        return None
     if isinstance(target, Binary):
         kind = getattr(target, "kind", None)
         return _BINARY_KIND_TO_ALIAS.get(kind)

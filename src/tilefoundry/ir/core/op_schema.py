@@ -32,6 +32,7 @@ class OpSchema:
     signature: tuple[ParamDef, ...]
     builder: Callable[..., Any]
     op_class: type | None = None
+    namespace: tuple[str, ...] = ()
 
     @property
     def is_alias(self) -> bool:

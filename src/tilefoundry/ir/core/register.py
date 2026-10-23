@@ -34,8 +34,9 @@ def register_op(
             signature=collect_param_defs(target_cls),
             builder=target_cls,
             op_class=target_cls,
+            namespace=tuple(namespace.split(".")) if namespace else (),
         )
-        _register(dialect, tuple(namespace.split(".")) if namespace else (), schema.name, schema)
+        _register(dialect, schema.namespace, schema.name, schema)
         target_cls._op_schema = schema
         return target_cls
 

@@ -573,6 +573,8 @@ def register_type(*, dialect: str, namespace: str) -> Callable[[type], type]:
   - `register_op` MUST require explicit `dialect` and `category`; a module path
     MUST NOT supply either. `namespace` is a dot-separated path, empty at the
     dialect root; an omitted `name` uses the lowercase class name.
+    The schema MUST retain the namespace path; printers MUST emit the full
+    dialect, namespace and name so the printed call resolves to that record.
   - `register_type` MUST place the class under its exact class name without
     building an `OpSchema` or setting `_op_schema`.
   - A duplicate key or a record/namespace collision MUST raise `ValueError`

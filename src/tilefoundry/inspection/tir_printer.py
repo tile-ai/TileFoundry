@@ -107,8 +107,10 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], ExprVisitor[str]):
         return f"shape_of({self.visit(expr.param, ctx)}, axis={expr.axis})"
 
     def visit_Op(self, expr: Op, ctx=None) -> str:
-        name = getattr(getattr(expr, "_op_schema", None), "name", type(expr).__name__.lower())
-        return f"T.{name}"
+        schema = getattr(expr, "_op_schema", None)
+        if schema is not None:
+            return ".".join((schema.dialect, *schema.namespace, schema.name))
+        return f"T.{type(expr).__name__.lower()}"
 
     def visit_program_call(self, expr: Call, ctx=None) -> str:
         target = expr.target
