@@ -14,6 +14,8 @@ target_include_directories({{ name }} PRIVATE
   "{{ include }}"
 {%- endfor %}
 )
+# Static libstdc++ keeps the library independent of the host's GLIBCXX version.
+# The final link uses the host compiler, so pass its flag directly.
 target_link_options({{ name }} PRIVATE -static-libstdc++)
 {% for fragment in fragments %}
 {{ fragment.text }}

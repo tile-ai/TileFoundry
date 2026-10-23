@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from dataclasses import replace
 from importlib.resources import files
 from pathlib import Path
 
-from tilefoundry.codegen.context_builder import build_codegen_context
+from tilefoundry.codegen.context_builder import EmissionGroup, build_codegen_context
 from tilefoundry.codegen.link_function import link_function
 from tilefoundry.codegen.linked_function import LinkedFunction
 from tilefoundry.codegen.linked_module import LinkedModule
@@ -24,7 +23,7 @@ from tilefoundry.target.services import CMakeFragment
 def _default_cmake(target, units, workdir) -> CMakeFragment:
     sources = []
     for index, unit in enumerate(units):
-        name = ("host" if index == 0 else f"host_{index}") if isinstance(target, CpuTarget) else f"{target.name}_{index}"
+        name = "host" if isinstance(target, CpuTarget) else f"{target.name}_{index}"
         source = f"{name}.{unit.language}"
         (workdir / source).write_text(unit.source)
         sources.append(source)
@@ -111,12 +110,10 @@ def link_program(
     for entry in entries:
         if not (isinstance(entry, PrimFunction) and isinstance(entry.target, CpuTarget)):
             raise ValueError(f"link_program: entry {entry.name!r} is not a CPU host entry")
-    groups = tuple(
-        replace(group, functions=tuple(fn for fn in entries if id(fn) in {id(member) for member in group.functions}))
-        if isinstance(group.target, CpuTarget) else group
-        for group in codegen.groups
+    groups = (
+        *(group for group in codegen.groups if not isinstance(group.target, CpuTarget)),
+        EmissionGroup(mod, entries[0].target, entries),
     )
-    groups = tuple(group for group in groups if group.functions)
     generators = {group.target: group.target.get_code_generator() for group in groups}
     for target, generator in generators.items():
         if options.emit not in generator.emits:

@@ -410,8 +410,9 @@ def link_function(symbol: FunctionSymbol) -> LinkedFunction: ...
 ```
 
 - constraints:
-  - `link_program` MUST emit one `LinkableModule` per selected context group,
-    including CPU host groups, using the same callback shape for every group.
+  - `link_program` MUST emit one `LinkableModule` per device context group and
+    combine all selected CPU entries into one host group and one `host.cpp`.
+    Every group MUST use the same emission callback shape.
   - `link_modules` MUST collect a CMake fragment
     per Target. A `cmake` callback MUST write its source files and return the
     additional languages, relative source names, and CMake commands. The default

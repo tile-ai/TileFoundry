@@ -40,6 +40,8 @@ def cuda_cmake(target, units, workdir: Path) -> CMakeFragment:
         f'  CUDA_ARCHITECTURES "{target.arch.removeprefix("sm_")}"\n'
         '  CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON CUDA_EXTENSIONS OFF)\n'
         f'set_source_files_properties({" ".join(sources)} PROPERTIES\n'
+        '  # Device headers need C++20; older CMake rejects the CUDA20 dialect.\n'
+        '  # A per-source option follows the standard flag; nvcc uses the last -std.\n'
         '  COMPILE_OPTIONS "-std=c++20;-Wno-deprecated-gpu-targets")\n'
         'target_include_directories(${PROJECT_NAME} PRIVATE\n'
         + "".join(f'  "{path}"\n' for path in includes) + ')\n'
