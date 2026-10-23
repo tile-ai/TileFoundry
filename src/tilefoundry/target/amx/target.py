@@ -19,8 +19,8 @@ from tilefoundry.target.base import (
     Device,
     HardwareSpec,
     Target,
-    _architecture_of,
-    _available_device_ids,
+    architecture_of,
+    available_device_ids,
     check_compatible,
     register_target,
     select,
@@ -71,7 +71,7 @@ class AmxTarget(Target):
 
     @classmethod
     def available(cls) -> tuple[AmxTarget, ...]:
-        return tuple(cls(device_id) for device_id in _available_device_ids(cls.hardware))
+        return tuple(cls(device_id) for device_id in available_device_ids(cls.hardware))
 
     def __init__(
         self,
@@ -82,7 +82,7 @@ class AmxTarget(Target):
 
         device = APPLE_M2_PRO_ID if device is None else device
         if architecture is None:
-            architecture = _architecture_of(
+            architecture = architecture_of(
                 device,
                 device_type=AppleM2Pro,
                 role="AmxTarget.device",

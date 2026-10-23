@@ -26,6 +26,7 @@ def _pf(src, dst, bar=_BAR) -> PrimFunction:
     args = tuple(Var(type=t, name=n) for t, n in ((src, "src"), (dst, "dst"), (bar, "bar")))
     mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
     return PrimFunction(
+        target=CudaTarget("nvidia.h200_sxm"),
         name="fn",
         params=args,
         body=Sequential(

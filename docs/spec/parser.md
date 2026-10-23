@@ -130,6 +130,13 @@ lowered from, so a bound naming a mesh coordinate reads back as it was printed.
 
 ## 2. Syntax and Rules
 
+The DSL resolves `T.<name>` (and `tf.<name>`) through a registered namespace
+first, then the dialect's OpSchema registry. Namespace names MUST be unique
+within a dialect and MUST NOT collide with an OpSchema name. If neither owns
+the name, the DSL loads installed targets once and repeats the lookup before
+raising `AttributeError`, including the installed target names. Dunder probes
+such as `__path__` MUST NOT trigger target loading.
+
 Negative integer and floating-point literals are single `Constant` values.
 Negating a name or a runtime expression constructs a `Unary(NEG)` Call.
 

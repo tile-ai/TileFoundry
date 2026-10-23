@@ -9,11 +9,62 @@ See [parser §2](docs/spec/parser.md#2-syntax-and-rules).
 
 from __future__ import annotations
 
-from typing import Any, Callable, overload
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, Callable, Mapping, overload
 
-from tilefoundry.ir.core.op_registry import _VALID_DIALECTS, _register_schema
+from tilefoundry.ir.core.op_registry import _VALID_DIALECTS, _register_schema, get_schemas
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.param_def import ParamDef, collect_param_defs
+
+
+@dataclass(frozen=True)
+class RegisteredNamespace:
+    namespace: object
+    stub: Callable[[Callable[[ParamDef], str]], str]
+
+
+_NAMESPACES: dict[str, dict[str, RegisteredNamespace]] = {}
+
+
+def registered_namespaces(dialect: str) -> Mapping[str, RegisteredNamespace]:
+    """Return a read-only view of a dialect's registered namespaces."""
+    return MappingProxyType(_NAMESPACES.get(dialect, {}))
+
+
+def _check_namespace(dialect: str, name: str) -> None:
+    entry = registered_namespaces(dialect).get(name)
+    if entry is not None:
+        owner = type(entry.namespace)
+        raise ValueError(
+            f"{dialect}.{name} is already owned by namespace "
+            f"{owner.__module__}.{owner.__qualname__}"
+        )
+
+
+def register_namespace(
+    dialect: str, name: str, namespace: object,
+    *, stub: Callable[[Callable[[ParamDef], str]], str],
+) -> object:
+    """Expose a namespace and its stub renderer under a unique dialect name.
+
+    The stub callback receives core's ParamDef annotation renderer. Namespace
+    and operation registrations reject names already owned by the other surface.
+    """
+    if dialect not in _VALID_DIALECTS:
+        raise ValueError(f"register_namespace: invalid dialect {dialect!r}")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"register_namespace: name must be a non-empty string, got {name!r}")
+    _check_namespace(dialect, name)
+    schemas = get_schemas(dialect, name)
+    if schemas:
+        owner = schemas[0].builder
+        raise ValueError(
+            f"{dialect}.{name} is already owned by op "
+            f"{owner.__module__}.{owner.__qualname__}"
+        )
+    _NAMESPACES.setdefault(dialect, {})[name] = RegisteredNamespace(namespace, stub)
+    return namespace
 
 
 def _derive_dialect_and_category(module: str) -> tuple[str | None, str | None]:
@@ -128,6 +179,7 @@ def register_op(
     def _apply(target_cls: type) -> type:
         schema = _build_schema(target_cls, dialect=dialect, category=category, name=name)
 
+        _check_namespace(schema.dialect, schema.name)
         setattr(target_cls, "_op_schema", schema)
         _register_schema(schema)
         return target_cls
@@ -183,6 +235,7 @@ def register_alias(
             builder=builder_fn,
             op_class=None,
         )
+        _check_namespace(dialect, name)
         _register_schema(schema, prepend=True)
 
         setattr(builder_fn, "_op_schema", schema)
@@ -192,6 +245,9 @@ def register_alias(
 
 
 __all__ = [
+    "RegisteredNamespace",
+    "register_namespace",
+    "registered_namespaces",
     "register_op",
     "register_alias",
     "_build_schema",

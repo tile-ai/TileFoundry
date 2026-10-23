@@ -566,9 +566,8 @@ class CpuTarget(Target):
 
 - `tilefoundry.target` MUST be the sole Target implementation package. The IR
   package MUST NOT own Target classes or Target imports.
-- `default_target()` MUST return a new `CudaTarget` on the installed
-  `nvidia.h200_sxm` device. It is a compiler-owned omitted-target policy, not a
-  string lookup and not a default offered by the `CudaTarget` constructor.
+- `default_target()` MUST return a new `CpuTarget()`. It is the omitted-target
+  policy for `PrimFunction` / `@prim_func` and `jit()`, not a string lookup.
 - There MUST be no global string-to-Target resolver. A registered name returns
   class identity only through `registered_targets()` and never constructs a
   value.

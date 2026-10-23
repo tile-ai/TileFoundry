@@ -42,6 +42,7 @@ def _one_call(op, *types, level: str = "thread", size: int = 32) -> PrimFunction
     args = tuple(Var(type=t, name=f"a{i}") for i, t in enumerate(types))
     mesh = Mesh((Topology(level, size),), Layout((size,), (1,)))
     return PrimFunction(
+        target=CudaTarget("nvidia.h200_sxm"),
         name="fn",
         params=args,
         body=Sequential(

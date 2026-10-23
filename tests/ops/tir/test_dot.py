@@ -23,6 +23,7 @@ from tilefoundry.visitor_registry.verify import verify_prim_function
 def _pf(*types) -> PrimFunction:
     args = tuple(Var(type=t, name=f"a{i}") for i, t in enumerate(types))
     return PrimFunction(
+        target=CudaTarget("nvidia.h200_sxm"),
         name="fn",
         params=args,
         body=Sequential(

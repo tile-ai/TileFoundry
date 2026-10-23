@@ -11,8 +11,8 @@ from tilefoundry.target.base import (
     Device,
     HardwareSpec,
     Target,
-    _architecture_of,
-    _available_device_ids,
+    architecture_of,
+    available_device_ids,
     check_compatible,
     register_target,
     select,
@@ -75,7 +75,7 @@ class CudaTarget(Target):
 
     @classmethod
     def available(cls) -> tuple[CudaTarget, ...]:
-        return tuple(cls(device_id) for device_id in _available_device_ids(cls.hardware))
+        return tuple(cls(device_id) for device_id in available_device_ids(cls.hardware))
 
     def __init__(
         self,
@@ -95,7 +95,7 @@ class CudaTarget(Target):
                 f"or None, which admits any extent at the gpu level"
             )
         if architecture is None:
-            architecture = _architecture_of(
+            architecture = architecture_of(
                 device,
                 device_type=CudaDevice,
                 role="CudaTarget.device",

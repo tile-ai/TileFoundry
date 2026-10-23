@@ -17,7 +17,7 @@ from tilefoundry.passes.pass_manager import PassManager
 from tilefoundry.passes.transforms import InsertHostEntryPass
 from tilefoundry.runtime.loader import load_linked_module
 from tilefoundry.target import Target, default_target
-from tilefoundry.target.base import _target_summary, target_instance
+from tilefoundry.target.base import target_instance, target_summary
 
 
 @dataclass(frozen=True)
@@ -92,8 +92,8 @@ def build(
         ) from error
     if target is not None and target != module_target:
         raise ValueError(
-            f"tilefoundry.build: explicit target {_target_summary(target)} "
-            f"conflicts with the Module Target {_target_summary(module_target)}"
+            f"tilefoundry.build: explicit target {target_summary(target)} "
+            f"conflicts with the Module Target {target_summary(module_target)}"
         )
 
     workdir = tempfile.mkdtemp(prefix=f"tilefoundry_build_{mod.entry}_split_")
@@ -171,8 +171,8 @@ def jit(
         options = CompilerOptions(target=target)
     elif options.target != target:
         raise ValueError(
-            f"tilefoundry.jit: options target {_target_summary(options.target)} "
-            f"conflicts with the resolved Target {_target_summary(target)}"
+            f"tilefoundry.jit: options target {target_summary(options.target)} "
+            f"conflicts with the resolved Target {target_summary(target)}"
         )
 
     canonical_text = _canonical_module_text(mod)

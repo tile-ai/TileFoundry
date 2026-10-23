@@ -2,25 +2,22 @@
 
 Shared ``__getattr__`` / ``__dir__`` factory for the ``tf`` and ``T`` modules.
 
-Both dialect namespaces resolve names on demand against the OpSchema
-registry with the same algorithm; this module ships that algorithm once so
-``dsl.tf`` / ``dsl.T`` shrink to a dialect string (and, for ``T``, a
-platform-sub-namespace pre-resolver, [parser §2](docs/spec/parser.md#2-syntax-and-rules)).
+Both dialects resolve registered namespaces and operations on demand.
+See [parser §2](docs/spec/parser.md#2-syntax-and-rules).
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 from tilefoundry.ir.core.op_registry import get_schemas, iter_schema_names
 from tilefoundry.ir.core.overload import resolve
-
-PreResolver = Callable[[str], Any]
+from tilefoundry.ir.core.register import registered_namespaces
+from tilefoundry.target.base import load_targets, registered_targets
 
 
 def make_dialect_namespace(
     dialect: str,
-    pre_resolvers: Iterable[PreResolver] = (),
 ) -> tuple[Callable[[str], Any], Callable[[], list[str]]]:
     """Build dynamic attribute and directory hooks for one dialect namespace.
 
@@ -34,15 +31,19 @@ def make_dialect_namespace(
     def __getattr__(name: str) -> Any:
         if name == "__all__":
             return sorted(iter_schema_names(dialect))
-        for pre_resolve in pre_resolvers:
-            resolved = pre_resolve(name)
-            if resolved is not None:
-                return resolved
+        entry = registered_namespaces(dialect).get(name)
         schemas = get_schemas(dialect, name)
+        if entry is None and not schemas and not name.startswith("__"):
+            load_targets()
+            entry = registered_namespaces(dialect).get(name)
+            schemas = get_schemas(dialect, name)
+        if entry is not None:
+            return entry.namespace
         if not schemas:
             raise AttributeError(
                 f"tilefoundry.dsl.{dialect} has no op named {name!r} "
-                f"(did you forget to import the module that defines it?)"
+                f"(did you forget to import the module that defines it?) "
+                f"(installed targets: {', '.join(sorted(registered_targets()))})"
             )
 
         first = schemas[0]

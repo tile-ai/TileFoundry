@@ -19,7 +19,9 @@ from tilefoundry.ir.core.expr import Expr
 from tilefoundry.ir.core.op_registry import _schemas_by_dialect_name
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.param_def import MISSING, ParamDef
+from tilefoundry.ir.core.register import registered_namespaces
 from tilefoundry.ir.types import DType
+from tilefoundry.target.base import load_targets
 
 _BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
     {
@@ -206,82 +208,9 @@ _DIALECT_INTRINSICS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _platform_namespace_stub(dialect: str) -> str | None:
-    """Typed stubs for declarative ``T.cuda.sm80`` / ``T.cuda.sm90`` atoms.
-
-    These are compile-time descriptor surfaces, not OpSchema-backed ops, so the
-    schema walk never sees them. Each constructor signature is reflected from
-    the declaration's ``ParamDef`` fields. A ``DType`` parameter reuses the
-    schema walk's annotation renderer, ``Literal[<dtype names>] | DType``,
-    because the atom resolves a dtype name at construction; which dtypes it
-    takes is still its pattern's answer. Other Enum parameters stay their Enum
-    type, since no string spelling of them is accepted.
-    """
-    if dialect != "T":
-        return None
-    from tilefoundry.dsl.T._platforms import cuda  # noqa: PLC0415
-    from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom  # noqa: PLC0415
-
-    def constructor(name: str, declaration: type[MmaAtom]) -> str:
-        params = []
-        for param in declaration.parameters:
-            if param.annotation is DType:
-                annotation, _name = _annotation_type(param)
-            else:
-                annotation = getattr(param.annotation, "__name__", "Any")
-            rendered = f"{param.name}: {annotation}"
-            if param.has_default:
-                rendered += " = ..."
-            params.append(rendered)
-        params.append("mesh: Mesh | None = ...")
-        return (
-            "    @staticmethod\n"
-            f"    def {name}(*, {', '.join(params)}) -> MmaAtom: ..."
-        )
-
-    namespaces = []
-    for namespace_name in ("sm80", "sm89", "sm90"):
-        namespace = getattr(cuda, namespace_name)
-        declarations = sorted(
-            (name, value)
-            for name, value in vars(type(namespace)).items()
-            if isinstance(value, type) and issubclass(value, MmaAtom)
-        )
-        namespaces.append((namespace_name, namespace, declarations))
-
-    lines = [
-        "# Platform sub-namespaces (not OpSchema-backed).",
-        "from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom as MmaAtom",
-        "from tilefoundry.ir.tir.cuda.nn.wgmma import Form as Form, Major as Major",
-        "from tilefoundry.ir.types import Mesh as Mesh",
-        "",
-    ]
-    for namespace_name, namespace, declarations in namespaces:
-        class_name = f"_Cuda{namespace_name.title()}"
-        lines.append(f"class {class_name}:")
-        enum_names = sorted(
-            name
-            for name, value in vars(type(namespace)).items()
-            if isinstance(value, type) and issubclass(value, enum.Enum)
-        )
-        lines.extend(f"    {name}: type[{name}]" for name in enum_names)
-        lines.extend(constructor(name, declaration) for name, declaration in declarations)
-        lines.append("")
-    lines.extend(
-        [
-            "class _Cuda:",
-            "    sm80: _CudaSm80",
-            "    sm89: _CudaSm89",
-            "    sm90: _CudaSm90",
-            "",
-            "cuda: _Cuda",
-        ]
-    )
-    return "\n".join(lines)
-
-
 def _render_dialect(dialect: str) -> str:
     """Render the entire stub file for a single dialect."""
+    load_targets()
     by_name: dict[str, list[OpSchema]] = {}
     for (d, n), bucket in _schemas_by_dialect_name.items():
         if d != dialect:
@@ -289,9 +218,8 @@ def _render_dialect(dialect: str) -> str:
         by_name[n] = list(bucket)
 
     body_lines: list[str] = []
-    platform_block = _platform_namespace_stub(dialect)
-    if platform_block:
-        body_lines.append(platform_block)
+    for _, entry in sorted(registered_namespaces(dialect).items()):
+        body_lines.append(entry.stub(lambda param: _annotation_type(param)[0]))
         body_lines.append("")
     intrinsics = _DIALECT_INTRINSICS.get(dialect, ())
     if intrinsics:

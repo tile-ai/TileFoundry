@@ -33,6 +33,7 @@ def _copy_async_pf(src_ty: TensorType, dst_ty: TensorType) -> PrimFunction:
     dst = Var(type=dst_ty, name="dst")
     mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
     return PrimFunction(
+        target=CudaTarget("nvidia.h200_sxm"),
         name="fn",
         params=(src, dst),
         body=Sequential(
@@ -51,6 +52,7 @@ def _copy_async_pf(src_ty: TensorType, dst_ty: TensorType) -> PrimFunction:
 def _wait_pf(n: int) -> PrimFunction:
     mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
     return PrimFunction(
+        target=CudaTarget("nvidia.h200_sxm"),
         name="fn",
         params=(),
         body=Sequential(

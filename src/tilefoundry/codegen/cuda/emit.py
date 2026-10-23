@@ -9,11 +9,9 @@ function is called and what it takes are answered in ``codegen.signature`` and
 from __future__ import annotations
 
 import importlib
-import logging
 import os
 import pkgutil
 
-_log = logging.getLogger(__name__)
 _tir_path = os.path.dirname(__file__)
 
 
@@ -22,10 +20,7 @@ def _discover(subdir: str, prefix: str) -> None:
     if not os.path.isdir(full):
         return
     for _finder, _name, _ispkg in pkgutil.iter_modules([full], prefix=prefix):
-        try:
-            importlib.import_module(_name)
-        except Exception:
-            _log.debug("codegen autodiscovery: skip %s", _name, exc_info=True)
+        importlib.import_module(_name)
 
 
 _discover("tir/stmts", "tilefoundry.codegen.cuda.tir.stmts.")

@@ -62,7 +62,7 @@ truth for the directory's structure and invariants.
 | `runtime/` | [runtime](./runtime.md) | Runtime support (per-target headers, function templates, launch helpers). |
 | `inspection/` | [inspection](./inspection.md) | IR visualisation: DOT, Python printer, web viewer. |
 | `dump/` | [inspection](./inspection.md) | Dump flags, dynamically scoped dump contexts, and file/null dump sinks used by inspection and test integration. |
-| `dsl/` | [parser](./parser.md) (authoring namespace) | User-facing import surface: `tf/` (HIR namespace) / `T/` (TIR namespace, including `_platforms.py`) / `_namespace.py` / `_stub_gen.py` / `storage.py` / `__main__.py`. The `tf/__init__.pyi` and `T/__init__.pyi` stubs are produced by `python -m tilefoundry.dsl regen` and are gitignored. |
+| `dsl/` | [parser](./parser.md) (authoring namespace) | User-facing import surface: `tf/` (HIR namespace) / `T/` (TIR namespace) / `_namespace.py` / `_stub_gen.py` / `storage.py` / `__main__.py`. The `tf/__init__.pyi` and `T/__init__.pyi` stubs are produced by `python -m tilefoundry.dsl regen` and are gitignored. |
 | `compile.py` | [architecture](./architecture.md) | `tilefoundry.build` / `compile` / `jit` top-level public verbs. |
 | `module.py` | [parser](./parser.md) | The `@module` decorator entry point and module-level topology authoring constants. |
 | `script.py` | [parser](./parser.md) | `@func` / `@prim_func` / `@intrinsic` decorator entry points. |

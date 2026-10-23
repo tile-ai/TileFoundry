@@ -22,7 +22,7 @@ from tilefoundry.dump import DumpFlags, DumpScope, dump
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.target import CpuTarget, CudaTarget
-from tilefoundry.target.base import UnsupportedCapabilityError, _target_summary
+from tilefoundry.target.base import UnsupportedCapabilityError, target_summary
 
 _TILEFOUNDRY_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_INCLUDE = _TILEFOUNDRY_ROOT / "include"
@@ -196,7 +196,7 @@ def link_program(
     for group in codegen.groups:
         if options.emit not in generators[group.target].emits:
             raise UnsupportedCapabilityError(
-                f"{_target_summary(group.target)}: code generator does not support "
+                f"{target_summary(group.target)}: code generator does not support "
                 f"emit={options.emit!r}"
             )
 

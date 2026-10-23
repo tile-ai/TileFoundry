@@ -28,7 +28,7 @@ from tilefoundry.codegen.signature import CallableSignature
 from tilefoundry.ir.core.module import Module, ModuleFunction
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target import Target
-from tilefoundry.target.base import UnsupportedCapabilityError, _target_summary
+from tilefoundry.target.base import UnsupportedCapabilityError, target_summary
 
 Geometry = tuple[tuple[object, object, object], tuple[object, object, object]]
 
@@ -165,7 +165,7 @@ def emit_cuda_module(
         raise ValueError("CUDA module emission requires a CodegenContext")
     if ctx.codegen_context.options.emit == "skeleton" and target.device_count is not None:
         raise UnsupportedCapabilityError(
-            f"{_target_summary(target)}: skeleton emission supports only single-device CUDA "
+            f"{target_summary(target)}: skeleton emission supports only single-device CUDA "
             "targets without device_count"
         )
     kernels = tuple(fn for fn in cuda_fns if ctx.codegen_context.targets[id(fn)] == target)

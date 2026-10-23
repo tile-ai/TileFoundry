@@ -7,13 +7,15 @@ from tilefoundry.target.base import (
     Architecture,
     Device,
     Target,
+    TargetLoadError,
     UnsupportedCapabilityError,
+    load_targets,
     register_target,
     registered_targets,
 )
 from tilefoundry.target.cpu import CpuTarget
 from tilefoundry.target.cuda import CudaArchitecture, CudaDevice, CudaTarget
-from tilefoundry.target.cuda.spec import H200_SXM_ID
+from tilefoundry.target.cuda.spec import H200_SXM_ID as H200_SXM_ID
 from tilefoundry.target.facts import (
     MemoryExecutionFacts,
     TargetFactsError,
@@ -38,14 +40,9 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def _cuda_fallback() -> CudaTarget:
-    """Construct the built-in value used at compiler-owned omitted boundaries."""
-    return CudaTarget(H200_SXM_ID)
-
-
 def default_target() -> Target:
     """Return the normal compile-entry default target."""
-    return _cuda_fallback()
+    return CpuTarget()
 
 
 def validate_cuda_topology_levels(target: Target, names) -> None:
@@ -79,6 +76,7 @@ __all__ = [
     "MemoryExecutionFacts",
     "PerformanceServiceFacts",
     "Target",
+    "TargetLoadError",
     "TargetFactsError",
     "TopologyFacts",
     "TopologyLevelFacts",
@@ -86,6 +84,7 @@ __all__ = [
     "UnsupportedCapabilityError",
     "default_target",
     "facts_result",
+    "load_targets",
     "register_target",
     "registered_targets",
     "validate_cuda_topology_levels",

@@ -164,6 +164,7 @@ def test_binary_refuses_an_operand_outside_register_memory() -> None:
     args = tuple(Var(type=type_, name=f"a{index}") for index, type_ in enumerate(types))
     mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
     fn = PrimFunction(
+        target=CudaTarget("nvidia.h200_sxm"),
         name="fn",
         params=args,
         body=Sequential(

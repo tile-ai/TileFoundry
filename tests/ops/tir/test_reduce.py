@@ -50,6 +50,7 @@ def _pf(*types, axes: tuple = (0,)) -> PrimFunction:
     layout = getattr(types[0], "layout", None)
     mesh = layout.mesh if isinstance(layout, ShardLayout) else _MESH
     return PrimFunction(
+        target=CudaTarget("nvidia.h200_sxm"),
         name="fn",
         params=args,
         body=Sequential(
