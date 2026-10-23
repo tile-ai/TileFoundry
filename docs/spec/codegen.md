@@ -64,9 +64,24 @@ metadata the link step needs.
 ```python
 class CodeGenerator:
     emit: Callable[
-        [Module, tuple[PrimFunction, ...], Target, EmissionView | EmitContext], LinkableModule
+        [Module, tuple[PrimFunction, ...], Target, EmissionView], LinkableModule
     ]
     emits: frozenset[EmitGranularity] = frozenset({"full"})
+    cmake: Callable[[Target, tuple[LinkableModule, ...], Path], CMakeFragment] | None = None
+
+
+class CMakeFragment:
+    """One target's sources, languages, and additions to a shared CMake project.
+
+    Attributes:
+        languages: attribute; Additional CMake project languages.
+        sources: attribute; Source files written relative to the project directory.
+        text: attribute; CMake commands appended after the library definition.
+    """
+
+    languages: tuple[str, ...]
+    sources: tuple[str, ...]
+    text: str = ""
 
 
 class Target:
@@ -92,9 +107,9 @@ def emit_cuda_module(
     Target capability admission to codegen. CUDA skeleton emission MUST reject
     targets with `device_count` through `UnsupportedCapabilityError` in its
     generator; those targets require a different project implementation.
-  - Device generators MUST receive `(module, functions, target, view)` and
-    construct their own emission context from that `EmissionView`. CPU host
-    emission receives its `CpuCodegenContext` from core. The shared compile
+  - All generators, including CPU host generation, MUST receive
+    `(module, functions, target, view)` and construct their own emission context
+    from that `EmissionView`. The shared compile
     context is built once ([§2.3](#23-codegencontext)); generators MUST NOT
     independently settle its symbols, ownership, or launch geometry.
   - A generator writes each function twice and no more: once as the
@@ -367,8 +382,7 @@ class LinkedModule:
 - constraints:
   - `LinkedFunction.name` MUST be the dotted registration name;
     `signature` MUST retain the host C++ calling convention and its C++ name
-    ([§4.4](#44-signatures)). `codegen/link_function.py:link_function(symbol)`
-    creates this pair from a resolved `FunctionSymbol`.
+    ([§4.4](#44-signatures)). `link_function` creates this pair from a resolved `FunctionSymbol`.
   - `LinkedModule.functions` MUST list every emitted host export, in emission
     order. Compilation supplies one entry; scaffold projects supply every
     synthesized or selected CPU entry. The compiled runtime loader requires one
@@ -376,13 +390,8 @@ class LinkedModule:
   - MUST carry the assembled host + device source — the diagnostic source the
     runtime exposes as `RuntimeModule.source` ([runtime](./runtime.md)).
 
-`codegen/link_function.py` owns `link_function`:
-
-```python
-def link_function(symbol: FunctionSymbol) -> LinkedFunction: ...
-```
-
-`codegen/link_module.py` owns `link_program` and `link_modules`:
+`codegen/link_function.py` retains the per-function export helper;
+`codegen/link_module.py` exposes the whole-program and translation-unit entries:
 
 ```python
 def link_program(
@@ -390,8 +399,34 @@ def link_program(
     options: CodegenOptions = CodegenOptions(), entries=None,
 ) -> LinkedModule: ...
 
-def link_modules(modules, *, workdir, lib_name, functions, **toolchain) -> LinkedModule: ...
+
+def link_modules(
+    units: tuple[tuple[Target, LinkableModule], ...], *, workdir: str | Path,
+    lib_name: str, functions: tuple[LinkedFunction, ...], host_cxx: str = "g++",
+) -> LinkedModule: ...
+
+
+def link_function(symbol: FunctionSymbol) -> LinkedFunction: ...
 ```
+
+- constraints:
+  - `link_program` MUST emit one `LinkableModule` per selected context group,
+    including CPU host groups, using the same callback shape for every group.
+  - `link_modules` MUST collect a CMake fragment
+    per Target. A `cmake` callback MUST write its source files and return the
+    additional languages, relative source names, and CMake commands. The default
+    callback writes sources without additional languages or commands.
+  - Core MUST assemble one CMake project and run one configure/build sequence.
+    Compiler launcher settings such as ccache MUST remain effective. Target
+    fragments own backend compiler flags and include directories.
+  - CPU sources MUST include the packaged CPU runtime header directly. CUDA
+    sources MUST include their packaged runtime header directly. Runtime include
+    directories MUST be located through `importlib.resources`.
+  - CUDA's CMake callback MUST resolve CUTLASS from
+    `TILEFOUNDRY_CUTLASS_INCLUDE` first; an explicitly invalid directory MUST
+    fail naming the variable and value. Without the variable it MUST search
+    source ancestors for `third_party/cutlass/include`, then fail naming the
+    variable and searched paths if none exists.
 
 `link_program` emits and links without loading. `entries=None` selects the
 root entry; an explicit sequence selects those CPU entries, with launcher

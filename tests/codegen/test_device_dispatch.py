@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from tests.fixtures.tir.square import TirSquare
 from tilefoundry.codegen.context_builder import build_codegen_context, mangle
-from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.cuda.abi import launcher_symbol
 from tilefoundry.codegen.cuda.module import emit_cuda_module
@@ -33,13 +32,7 @@ def _device_source() -> str:
 def _host_source() -> str:
     entry = TirSquare.entry_function()
     _root, group, view = _view(entry.target)
-    ctx = CpuCodegenContext(
-        symbols=view.symbols,
-        codegen_context=view.codegen,
-        target=entry.target,
-        resolved_launches=view.resolved_launches,
-    )
-    return emit_host_module(TirSquare, (entry,), entry.target, ctx).source
+    return emit_host_module(TirSquare, (entry,), entry.target, view).source
 
 
 def test_a_prototype_becomes_one_kernel_and_one_shim() -> None:

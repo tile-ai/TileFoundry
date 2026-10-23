@@ -59,6 +59,9 @@ skip_empty = true
 where = ["src"]
 
 [tool.setuptools.package-data]
+"tilefoundry.runtime" = ["include/tilefoundry/runtime/cpu/*.h"]
+"tilefoundry.codegen.cuda" = ["include/tilefoundry/runtime/cuda/**/*"]
+"tilefoundry.codegen" = ["templates/cmake/*.j2"]
 "tilefoundry.codegen.cuda.templates" = ["*.j2"]
 "tilefoundry.codegen.cpu.templates" = ["*.j2"]
 "tilefoundry.target.cuda.hardware" = ["*.toml"]

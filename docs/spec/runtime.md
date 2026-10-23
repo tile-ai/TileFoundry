@@ -838,8 +838,11 @@ class ShardTensor:
 
 ## 2. C++ Runtime Surface
 
-The sections follow `include/tilefoundry/runtime/`, one per header. Each
-declaration block is read out of that header by
+CPU headers live under `src/tilefoundry/runtime/include/tilefoundry/runtime/cpu/`;
+CUDA headers live under
+`src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/`.
+They are package data, located through `importlib.resources`, and retain their
+include-relative paths. Each declaration block is read out of its header by
 `scripts/runtime_spec_surface.py` and written into its `<!-- generated -->`
 region, so a signature is stated once, where it is compiled. What follows a
 region is written by hand: the terms the declarations are spelled in, and the
@@ -851,7 +854,7 @@ decisions two reasonable implementations would differ on.
 
 <!-- generated: cpu-runtime -->
 ```text
-// include/tilefoundry/runtime/cpu/runtime.h
+// src/tilefoundry/runtime/include/tilefoundry/runtime/cpu/runtime.h
 // This header declares no surface of its own.
 ```
 <!-- /generated -->
@@ -867,7 +870,7 @@ decisions two reasonable implementations would differ on.
 
 <!-- generated: cuda-runtime -->
 ```cpp
-// include/tilefoundry/runtime/cuda/runtime.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/runtime.cuh
 inline constexpr int kWarpSize;
 
 template <class...> inline constexpr bool dependent_false_v;
@@ -947,7 +950,7 @@ CUTE_HOST_DEVICE auto program_ids() noexcept;
 
 <!-- generated: layout-cute-ext -->
 ```cpp
-// include/tilefoundry/runtime/cuda/layout/cute_ext.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/layout/cute_ext.cuh
 template <class Shape, class Stride>
 CUTE_HOST_DEVICE constexpr auto reverse(cute::Layout<Shape, Stride> const &l);
 
@@ -966,7 +969,7 @@ reverse(cute::ComposedLayout<A, O, B> const &l);
 
 <!-- generated: layout-mesh -->
 ```cpp
-// include/tilefoundry/runtime/cuda/layout/mesh.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/layout/mesh.cuh
 template <class TLayout, TopologyScope... Topos> struct Mesh {
     using layout_type = TLayout;
     static constexpr int level_count;
@@ -1021,7 +1024,7 @@ CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents);
 
 <!-- generated: layout-shard-layout -->
 ```cpp
-// include/tilefoundry/runtime/cuda/layout/shard_layout.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/layout/shard_layout.cuh
 template <class TLayout, class TAttrs, class TMesh> struct ShardLayout {
     using layout = TLayout;
     using attrs = TAttrs;
@@ -1071,7 +1074,7 @@ make_shard_layout(TLayout const &layout, TMesh const &mesh, Attrs const &);
 
 <!-- generated: tensor-view-shard-tensor -->
 ```cpp
-// include/tilefoundry/runtime/cuda/tensor_view/shard_tensor.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/tensor_view/shard_tensor.cuh
 template <class TEngine, class TGlobalLayout, class TShardLayout>
 struct ShardTensor {
     using engine_type = TEngine;
@@ -1123,7 +1126,7 @@ template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_instances();
 
 <!-- generated: primitive-unary -->
 ```cpp
-// include/tilefoundry/runtime/cuda/primitive/unary.h
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/primitive/unary.h
 struct rsqrt_op {
     template <class T> __device__ T operator()(T x) const;
 };
@@ -1180,7 +1183,7 @@ struct clamp_op {
 
 <!-- generated: primitive-binary -->
 ```cpp
-// include/tilefoundry/runtime/cuda/primitive/binary.h
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/primitive/binary.h
 struct mul_op {
     template <class T> __device__ T operator()(T a, T b) const;
 };
@@ -1291,7 +1294,7 @@ helpers genuinely capable of host compilation (e.g. `local_tensor`,
 
 <!-- generated: ops-detail -->
 ```text
-// include/tilefoundry/runtime/cuda/ops/detail.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/ops/detail.cuh
 // This header declares no surface of its own.
 ```
 <!-- /generated -->
@@ -1306,7 +1309,7 @@ helpers genuinely capable of host compilation (e.g. `local_tensor`,
 
 <!-- generated: ops-copy -->
 ```cpp
-// include/tilefoundry/runtime/cuda/ops/copy.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/ops/copy.cuh
 template <class TPointer, class TLayout>
 CUTE_HOST_DEVICE auto tensor_view(TPointer pointer, TLayout layout);
 
@@ -1382,7 +1385,7 @@ types, the share this instance owns and the move width all read off the operand
 
 <!-- generated: ops-dot -->
 ```cpp
-// include/tilefoundry/runtime/cuda/ops/dot.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/ops/dot.cuh
 template <class Lhs, class Rhs, class Dst,
           class Ws = reduce_impl::no_workspace_t>
 __device__ inline void dot(Lhs const &lhs, Rhs const &rhs, Dst &dst,
@@ -1420,7 +1423,7 @@ pair the wrong spelling here.
 
 <!-- generated: ops-elementwise -->
 ```cpp
-// include/tilefoundry/runtime/cuda/ops/elementwise.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/ops/elementwise.cuh
 template <class Fn, class TOut, class... TIn>
 __device__ void elementwise(TOut &dst, Fn fn, TIn const &...src);
 ```
@@ -1458,7 +1461,7 @@ is a stride-0 mode on that operand's layout.
 
 <!-- generated: ops-mma -->
 ```cpp
-// include/tilefoundry/runtime/cuda/ops/mma.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/ops/mma.cuh
 template <class TA, class TB, class TC>
 __device__ void mma(TA const &a, TB const &b, TC &c);
 ```
@@ -1486,7 +1489,7 @@ fragments, and the entry issues one instruction.
 
 <!-- generated: ops-reduce -->
 ```cpp
-// include/tilefoundry/runtime/cuda/ops/reduce.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/ops/reduce.cuh
 struct mean_op {};
 
 struct absmax_op {};
@@ -1520,7 +1523,7 @@ __device__ inline void reduce(Src const &src, Dst &dst, Ws &&ws = {});
 
 <!-- generated: ops-sync -->
 ```cpp
-// include/tilefoundry/runtime/cuda/ops/sync.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/ops/sync.cuh
 template <int Id> struct BarrierId {
     static constexpr int value;
 };
@@ -1584,7 +1587,7 @@ __device__ inline void sync(Mesh<TMesh, Topos...> const &mesh,
 
 <!-- generated: ops-copy-async-bulk -->
 ```cpp
-// include/tilefoundry/runtime/cuda/ops/copy_async_bulk.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/ops/copy_async_bulk.cuh
 template <class Src, class Dst>
 __device__ inline void copy_async_bulk(Src const &src, Dst &dst,
                                        uint64_t *bar);
@@ -1645,7 +1648,7 @@ tile it did not fetch.
 
 <!-- generated: ops-ldmatrix -->
 ```cpp
-// include/tilefoundry/runtime/cuda/ops/ldmatrix.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/ops/ldmatrix.cuh
 template <class Src, class Dst>
 __device__ inline void ldmatrix(Src const &src, Dst &dst);
 ```
@@ -1709,7 +1712,7 @@ layout describes them and no tier is read off anything.
 
 <!-- generated: utility-warp -->
 ```cpp
-// include/tilefoundry/runtime/cuda/utility/warp.cuh
+// src/tilefoundry/codegen/cuda/include/tilefoundry/runtime/cuda/utility/warp.cuh
 template <class T>
 inline constexpr bool is_shuffle_native_v;
 

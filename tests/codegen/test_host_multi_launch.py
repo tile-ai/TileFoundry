@@ -7,7 +7,6 @@ import torch
 
 import tilefoundry
 from tilefoundry.codegen.context_builder import build_codegen_context, mangle
-from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.cuda.abi import launcher_symbol
 from tilefoundry.dsl import *
@@ -129,13 +128,7 @@ def _source(devices, launches, params) -> str:
     root = build_codegen_context(mod)
     group = next(group for group in root.groups if host in group.functions)
     view = root.for_group(group)
-    ctx = CpuCodegenContext(
-        symbols=view.symbols,
-        codegen_context=view.codegen,
-        target=host.target,
-        resolved_launches=view.resolved_launches,
-    )
-    return emit_host_module(mod, (host,), host.target, ctx).source
+    return emit_host_module(mod, (host,), host.target, view).source
 
 
 def test_two_launches_keep_order_and_each_block_size() -> None:

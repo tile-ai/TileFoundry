@@ -16,7 +16,7 @@ from tilefoundry.target import CudaTarget
 _ROOT = Path(__file__).resolve().parents[2]
 _SOURCE = Path(__file__).resolve().parent / "cuda" / "static_asserts.cu"
 
-_INCLUDES = ("-I", str(_ROOT / "include"), "-I", str(_ROOT / "third_party" / "cutlass" / "include"))
+_INCLUDES = ("-I", str(_ROOT / "src/tilefoundry/codegen/cuda/include"), "-I", str(_ROOT / "third_party" / "cutlass" / "include"))
 
 CASES: dict[int, str | None] = {
     0: None,

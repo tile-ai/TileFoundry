@@ -19,6 +19,7 @@ from tilefoundry.codegen.cuda.abi import (
     kernel_arguments,
     kernel_signature,
 )
+from tilefoundry.codegen.cuda.build import cuda_cmake
 from tilefoundry.codegen.cuda.context import CudaCodegenContext, topology_scope_str
 from tilefoundry.codegen.cuda.hir.function import device_functions
 from tilefoundry.codegen.cuda.templates import render
@@ -195,7 +196,7 @@ def emit_cuda_module(
     return LinkableModule(target="cuda", language="cu", preamble=preamble, functions=functions)
 
 
-CUDA_CODE_GENERATOR = CodeGenerator(emit_cuda_module, emits=frozenset({"full", "skeleton"}))
+CUDA_CODE_GENERATOR = CodeGenerator(emit_cuda_module, emits=frozenset({"full", "skeleton"}), cmake=cuda_cmake)
 
 
 __all__ = ["CUDA_CODE_GENERATOR", "emit_cuda_module"]

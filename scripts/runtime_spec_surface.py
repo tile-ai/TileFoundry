@@ -22,7 +22,10 @@ from pathlib import Path
 import clang.cindex as CI
 
 ROOT = Path(__file__).resolve().parent.parent
-HEADERS = ROOT / "include/tilefoundry/runtime"
+HEADERS = {
+    "cpu": ROOT / "src/tilefoundry/runtime/include/tilefoundry/runtime",
+    "cuda": ROOT / "src/tilefoundry/codegen/cuda/include/tilefoundry/runtime",
+}
 PACKAGE = ROOT / "src/tilefoundry"
 SPEC = ROOT / "docs/spec/runtime.md"
 LIBCLANG = ("/usr/lib/x86_64-linux-gnu/libclang-18.so.1", "/usr/lib/llvm-18/lib/libclang.so.1")
@@ -205,7 +208,7 @@ def _declarations(header: str) -> list[str]:
     """
     source = ROOT / "build" / "spec_surface_tu.cpp"
     source.parent.mkdir(exist_ok=True)
-    source.write_text(f'{PRELUDE}#include "{(HEADERS / header).resolve()}"\n}}\n')
+    source.write_text(f'{PRELUDE}#include "{(HEADERS[header.split("/")[0]] / header).resolve()}"\n}}\n')
     index = CI.Index.create()
     _check_prelude(index)
     unit = index.parse(
@@ -213,7 +216,7 @@ def _declarations(header: str) -> list[str]:
         args=PARSE_ARGS,
         options=CI.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES,
     )
-    text = (HEADERS / header).read_bytes()
+    text = (HEADERS[header.split("/")[0]] / header).read_bytes()
     out: list[str] = []
     seen: set[tuple[int, int]] = set()
 
@@ -449,7 +452,7 @@ def _block(region: str) -> str:
     if target.endswith(".py") or ".py::" in target:
         return _python_block(target)
     header = target
-    path = (HEADERS / header).resolve().relative_to(ROOT)
+    path = (HEADERS[header.split("/")[0]] / header).resolve().relative_to(ROOT)
     decls = _declarations(header)
     if not decls:
         return f"```text\n// {path}\n// This header declares no surface of its own.\n```"

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from tests.fixtures.tir.square import TirSquare
 from tilefoundry.codegen.context_builder import build_codegen_context
-from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.linkable_function import LinkableFunction
 from tilefoundry.codegen.linkable_module import LinkableModule
@@ -30,13 +29,7 @@ def _host_unit() -> LinkableModule:
     root = build_codegen_context(TirSquare)
     group = next(group for group in root.groups if entry in group.functions)
     view = root.for_group(group)
-    ctx = CpuCodegenContext(
-        symbols=view.symbols,
-        codegen_context=view.codegen,
-        target=entry.target,
-        resolved_launches=view.resolved_launches,
-    )
-    return emit_host_module(TirSquare, (entry,), entry.target, ctx)
+    return emit_host_module(TirSquare, (entry,), entry.target, view)
 
 
 def test_a_unit_is_its_preamble_then_every_declaration_then_every_definition() -> None:

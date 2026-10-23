@@ -91,6 +91,9 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     positive or exceeds that level's finite `max_logical_units`. The shared
     program check MUST use this method rather than reproduce a backend's
     topology limits.
+  - `get_code_generator()` MAY provide `cmake` to contribute sources and build
+    settings to the shared CMake project; the callback contract is defined
+    by [codegen §4](./codegen.md#4-codegen-products).
   - A provider MAY import `Analyzer` from `tilefoundry.target` to construct
     getter results. That package MUST NOT expose `CodeGenerator`
     or `LinkableModule` as provider API.

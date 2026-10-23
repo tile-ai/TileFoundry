@@ -38,13 +38,17 @@ def emit_host_module(
     module: Module,
     functions: tuple[PrimFunction, ...],
     target: Target,
-    ctx: CpuCodegenContext,
+    view,
 ) -> LinkableModule:
     """Emit the host ``.cpp`` linkable module for a CPU *entry*.
 
     Registered statement writers supply foreign declarations and body lines.
     The FFI export is written with each definition.
     """
+    ctx = CpuCodegenContext(
+        symbols=view.symbols, target=view.target, resolved_launches=view.resolved_launches,
+        codegen_context=view.codegen,
+    )
     if not functions:
         raise ValueError("emit_host_module: expected at least one CPU host entry")
     if ctx.codegen_context is None:
