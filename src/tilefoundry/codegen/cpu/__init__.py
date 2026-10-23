@@ -3,3 +3,4 @@
 from __future__ import annotations
 
 from tilefoundry.codegen.cpu import abi as _abi  # noqa: F401 -- registers the host side
+from tilefoundry.codegen.cpu import module as _module  # noqa: F401

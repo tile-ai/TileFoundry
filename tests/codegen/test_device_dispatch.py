@@ -9,10 +9,10 @@ one branch on the extent the call already carries.
 from __future__ import annotations
 
 from tests.fixtures.tir.square import TirSquare
+from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.context_builder import build_codegen_context, mangle
-from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.cuda.abi import launcher_symbol
-from tilefoundry.codegen.cuda.module import emit_cuda_module
+from tilefoundry.codegen.linkable_module import LinkableModule
 from tilefoundry.target import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
@@ -26,13 +26,13 @@ def _view(target):
 
 def _device_source() -> str:
     _root, group, view = _view(_CUDA)
-    return emit_cuda_module(TirSquare, group.functions, _CUDA, view).source
+    return _CUDA.resolve(LinkableModule, TirSquare, group.functions, _CUDA.resolve(EmitContext, view)).source
 
 
 def _host_source() -> str:
     entry = TirSquare.entry_function()
     _root, group, view = _view(entry.target)
-    return emit_host_module(TirSquare, (entry,), entry.target, view).source
+    return entry.target.resolve(LinkableModule, TirSquare, (entry,), entry.target.resolve(EmitContext, view)).source
 
 
 def test_a_prototype_becomes_one_kernel_and_one_shim() -> None:

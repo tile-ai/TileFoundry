@@ -11,6 +11,7 @@ answers only by projecting the facts an asking algorithm declared.
 ```python
 TargetT = TypeVar("TargetT", bound="Target")
 FactsT = TypeVar("FactsT")
+T = TypeVar("T")
 
 
 class Target:
@@ -25,7 +26,7 @@ class Target:
     def available(cls) -> tuple[Target, ...]: ...
 
     def get_analyzer(self, selector: str) -> Analyzer: ...
-    def get_code_generator(self) -> CodeGenerator: ...
+    def resolve(self, base: type[T], *args) -> T: ...
     def torch_device_type(self) -> str: ...
     def validate_program_topology(self, topology: Topology) -> None: ...
     def get_facts(
@@ -39,6 +40,9 @@ def register_target(cls: type[TargetT]) -> type[TargetT]: ...
 
 
 def registered_targets() -> Mapping[str, type[Target]]: ...
+
+
+def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
 ```
 
 - constraints:
@@ -51,6 +55,14 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     existing document-backed Target is not a supported custom Target mode. It
     bypasses both document schema validation and the `facts_result` projection
     boundary.
+  - `bind(target, base)` MUST register a subclass implementation under the exact
+    `(Target class, base class)` pair. A second binding for the pair MUST raise
+    `ValueError` naming the Target, base, and existing implementation.
+  - `resolve(base, *args)` MUST call `create(self, *args)` on the implementation
+    bound to `(type(self), base)`, or on `base` when unbound. Bindings MUST live
+    at implementation class definitions; the Target layer MUST NOT import
+    codegen implementations. Target subclasses do not inherit another class's
+    bindings implicitly.
   - `Target.get_analyzer` MUST select the standard compute-cost, memory,
     roofline, and performance analyzers for every Target. Those algorithms consume
     only requested Facts, so a backend reuses them by answering `get_facts`, not
@@ -91,12 +103,9 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     positive or exceeds that level's finite `max_logical_units`. The shared
     program check MUST use this method rather than reproduce a backend's
     topology limits.
-  - `get_code_generator()` MAY provide `cmake` to contribute sources and build
-    settings to the shared CMake project; the callback contract is defined
-    by [codegen §4](./codegen.md#4-codegen-products).
   - A provider MAY import `Analyzer` from `tilefoundry.target` to construct
-    getter results. That package MUST NOT expose `CodeGenerator`
-    or `LinkableModule` as provider API.
+    getter results. Codegen base classes MUST be imported from their owning
+    `codegen` modules.
   - `torch_device_type()` MUST return the torch device type holding the
     program's tensor arguments. The base implementation returns `"cpu"`,
     inherited by CPU and AMX; CUDA returns `"cuda"`. CLI input generation MUST
@@ -184,7 +193,6 @@ class CudaTarget(Target):
     def validate_program_topology(self, topology: Topology) -> None: ...
     def topology_limit(self, name: str) -> int: ...
     def get_analyzer(self, selector: str) -> Analyzer: ...
-    def get_code_generator(self) -> CodeGenerator: ...
     def torch_device_type(self) -> str: ...
     def get_facts(self, facts_type: type[FactsT], query=None) -> FactsT: ...
     def __repr__(self) -> str: ...
@@ -218,8 +226,8 @@ class CudaTarget(Target):
   - `CudaTarget.available()` MUST contain one value per device document whose
     sole compatible architecture document is available. Its `identity` MUST be
     that device document's ID.
-  - CUDA MUST select its standard Analyzer, Facts, and CodeGenerator services
-    through the corresponding getters. These selections MUST NOT use
+  - CUDA MUST select its standard Analyzer and Facts through the corresponding
+    getters. These selections MUST NOT use
     `Target.name`, an exact-concrete-type table, or a second extension
     registration.
   - CUDA's `ThroughputFacts` and `PerformanceServiceFacts` MUST both read
@@ -598,7 +606,7 @@ class CpuTarget(Target):
   takes — not a Target the compile supplies.
 - A TIR `PrimFunction` retains its own `target`: it MUST be the exact Target
   instance resolved from its Module, and no later stage rewrites it. It selects
-  the CodeGenerator service that emits it. A synthesized host entry carries a
+  the bound emission classes that emit it. A synthesized host entry carries a
   `CpuTarget()`.
 - CUDA Functions are grouped by equal Target values in source order. More than
   one unequal CUDA Target group MUST fail before any generator runs.

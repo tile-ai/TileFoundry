@@ -25,8 +25,24 @@ from tilefoundry.target.hardware.envelope import (
     UnknownSchemaError,
     parse_document,
 )
-from tilefoundry.target.services import Analyzer, CodeGenerator
+from tilefoundry.target.services import Analyzer
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
+
+T = TypeVar("T")
+_BINDINGS: dict[tuple[type[Target], type], type] = {}
+
+
+def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]:
+    """Bind a Target's implementation of a base class, refusing a second owner."""
+    def register(implementation: type[T]) -> type[T]:
+        if not issubclass(implementation, base):
+            raise TypeError(f"{implementation.__name__} must inherit {base.__name__}")
+        key = (target, base)
+        if key in _BINDINGS:
+            raise ValueError(f"{target.__name__}: {base.__name__} already bound to {_BINDINGS[key].__name__}")
+        _BINDINGS[key] = implementation
+        return implementation
+    return register
 
 
 def _exporting_module(cls: type) -> str:
@@ -266,11 +282,9 @@ class Target:
             f"{target_summary(self)}: no analyzer for {selector!r}"
         )
 
-    def get_code_generator(self) -> CodeGenerator:
-        """Return the code-generation service selected by this Target."""
-        raise UnsupportedCapabilityError(
-            f"{target_summary(self)}: no code generator"
-        )
+    def resolve(self, base: type[T], *args) -> T:
+        """Create the bound implementation, or the base class's default."""
+        return _BINDINGS.get((type(self), base), base).create(self, *args)
 
     def get_facts(
         self, facts_type: type[FactsT], query: object | None = None
@@ -538,6 +552,7 @@ __all__ = [
     "UnsupportedCapabilityError",
     "architecture_of",
     "available_device_ids",
+    "bind",
     "check_compatible",
     "load_targets",
     "register_target",

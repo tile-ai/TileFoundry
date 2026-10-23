@@ -6,9 +6,10 @@ import pytest
 import torch
 
 import tilefoundry
+from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.context_builder import build_codegen_context, mangle
-from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.cuda.abi import launcher_symbol
+from tilefoundry.codegen.linkable_module import LinkableModule
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Constant, Var
 from tilefoundry.ir.core.module import Module
@@ -128,7 +129,7 @@ def _source(devices, launches, params) -> str:
     root = build_codegen_context(mod)
     group = next(group for group in root.groups if host in group.functions)
     view = root.for_group(group)
-    return emit_host_module(mod, (host,), host.target, view).source
+    return host.target.resolve(LinkableModule, mod, (host,), host.target.resolve(EmitContext, view)).source
 
 
 def test_two_launches_keep_order_and_each_block_size() -> None:

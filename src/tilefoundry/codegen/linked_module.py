@@ -14,5 +14,10 @@ class LinkedModule:
     source: str
     functions: tuple[LinkedFunction, ...]
 
+    @classmethod
+    def create(cls, target, project, functions) -> "LinkedModule":
+        """Build the shared project with its selected export metadata."""
+        return project.build(functions)
+
 
 __all__ = ["LinkedModule"]

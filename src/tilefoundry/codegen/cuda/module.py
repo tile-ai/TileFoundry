@@ -15,22 +15,14 @@ import math
 from tilefoundry.codegen.cuda.abi import (
     PROGRAM_META,
     PROGRAM_META_CTYPE,
-    check_parameter_names,
     kernel_arguments,
     kernel_signature,
 )
-from tilefoundry.codegen.cuda.build import cuda_cmake
 from tilefoundry.codegen.cuda.context import CudaCodegenContext, topology_scope_str
-from tilefoundry.codegen.cuda.hir.function import device_functions
-from tilefoundry.codegen.cuda.templates import render
 from tilefoundry.codegen.linkable_function import LinkableFunction
-from tilefoundry.codegen.linkable_module import LinkableModule
-from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.codegen.signature import CallableSignature
-from tilefoundry.ir.core.module import Module, ModuleFunction
+from tilefoundry.ir.core.module import ModuleFunction
 from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.target import Target
-from tilefoundry.target.base import UnsupportedCapabilityError, target_summary
 
 Geometry = tuple[tuple[object, object, object], tuple[object, object, object]]
 
@@ -157,46 +149,3 @@ def _program_dims(geometry: Geometry) -> list[dict[str, str]]:
         raise ValueError("codegen: thread topology extents must be compile-time constants")
     dims.append({"scope": topology_scope_str("thread"), "count": str(math.prod(static_block))})
     return dims
-
-
-def emit_cuda_module(
-    module: Module, cuda_fns: tuple[ModuleFunction, ...], target: Target, view
-) -> LinkableModule:
-    """Emit the device ``.cu`` linkable module for one topology domain."""
-    ctx = CudaCodegenContext(
-        symbols=view.symbols, target=view.target, launches=view.launches,
-        codegen_context=view.codegen,
-    )
-    for symbol in view.codegen.symbols.by_function.values():
-        if symbol.target == target:
-            check_parameter_names(symbol.export_name, symbol.callable.params)
-    if ctx.codegen_context.options.emit == "skeleton" and target.device_count is not None:
-        raise UnsupportedCapabilityError(
-            f"{target_summary(target)}: skeleton emission supports only single-device CUDA "
-            "targets without device_count"
-        )
-    kernels = tuple(fn for fn in cuda_fns if ctx.codegen_context.targets[id(fn)] == target)
-    if not kernels:
-        raise ValueError(f"emit_cuda_module: module {module.name!r} has no CUDA device kernels")
-    functions = (
-        *device_functions(kernels, ctx),
-        *(_emit_function(fn, ctx) for fn in kernels),
-    )
-    geometry = _one_geometry(kernels, ctx)
-    preamble = render(
-        "cuda_preamble.cu.j2",
-        program_topology=topology_scope_str(
-            ctx.codegen_context.topology_domains[id(kernels[0])].topologies[0].name
-            if ctx.codegen_context.topology_domains[id(kernels[0])].topologies else "cta"
-        ),
-        program_dims=_program_dims(geometry),
-        dynamic_cta=static_dim_value(geometry[0][0]) is None,
-        grid_barrier_state=ctx.needs_grid_barrier_state,
-    )
-    return LinkableModule(target="cuda", language="cu", preamble=preamble, functions=functions)
-
-
-CUDA_CODE_GENERATOR = CodeGenerator(emit_cuda_module, emits=frozenset({"full", "skeleton"}), cmake=cuda_cmake)
-
-
-__all__ = ["CUDA_CODE_GENERATOR", "emit_cuda_module"]

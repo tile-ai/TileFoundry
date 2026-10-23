@@ -13,14 +13,23 @@ from collections.abc import Mapping
 from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.signature import CallableSignature, Signature, TensorSignature
 from tilefoundry.target import CpuTarget
-from tilefoundry.target.base import Target
+from tilefoundry.target.base import Target, bind
 from tilefoundry.visitor_registry.registries import codegen_registry
 
 
+@bind(CpuTarget, EmitContext)
 class CpuCodegenContext(EmitContext):
     """A compile writing the host unit: the shared context plus what a tensor is here."""
 
     target_kind = CpuTarget
+
+    @classmethod
+    def create(cls, target, view):
+        """Create target-owned emission state from a group view."""
+        return cls(
+            symbols=view.symbols, target=target, resolved_launches=view.resolved_launches,
+            codegen_context=view.codegen,
+        )
 
     def __init__(
         self,

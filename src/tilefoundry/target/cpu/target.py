@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.target.base import Target, register_target
-from tilefoundry.target.services import CodeGenerator
 from tilefoundry.utils.python_source import PythonExpr
 
 
@@ -26,10 +25,6 @@ class CpuTarget(Target):
             return "tilefoundry.target"
         return super()._python_import_module()
 
-    def get_code_generator(self) -> CodeGenerator:
-        from tilefoundry.codegen.cpu.module import CPU_CODE_GENERATOR  # noqa: PLC0415
-
-        return CPU_CODE_GENERATOR
 
 
 __all__ = ["CpuTarget"]

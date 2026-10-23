@@ -15,7 +15,12 @@ from tilefoundry.codegen.signature import CallableSignature, Signature, TensorSi
 from tilefoundry.ir.core import Tuple
 from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.target.base import Target, target_summary
-from tilefoundry.visitor_registry.registries import DispatchRegistry, Role, spelled
+from tilefoundry.visitor_registry.registries import (
+    DispatchRegistry,
+    Role,
+    codegen_registry,
+    spelled,
+)
 
 
 class EmitContext:
@@ -52,6 +57,16 @@ class EmitContext:
         self._tuple_values: dict[int, Tuple] = {}
         self._counter = 0
         self._kernel_param_ids: set[int] = set()
+
+    @classmethod
+    def create(cls, target, view) -> EmitContext:
+        """Create generic emission state from the compile-wide group view."""
+        context = cls(
+            codegen_registry, symbols=view.symbols, target=target,
+            resolved_launches=view.resolved_launches, codegen_context=view.codegen,
+        )
+        context.target_kind = type(target)
+        return context
 
     def callee_of(self, launch):
         """The callee root context resolved for one Launch statement."""

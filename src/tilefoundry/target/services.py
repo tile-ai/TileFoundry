@@ -61,30 +61,8 @@ class Analyzer:
         return None
 
 
-@dataclass(frozen=True)
-class CMakeFragment:
-    """One target's sources, languages, and additions to a shared CMake project."""
-
-    languages: tuple[str, ...]
-    sources: tuple[str, ...]
-    text: str = ""
-
-
-@dataclass(frozen=True)
-class CodeGenerator:
-    """One immutable Target-owned code-generation service."""
-
-    emit: Callable[
-        ["Module", tuple["PrimFunction", ...], "Target", "EmitContext"], "LinkableModule"
-    ]
-    emits: frozenset["EmitGranularity"] = frozenset({"full"})
-    cmake: Callable[["Target", tuple["LinkableModule", ...], "Path"], CMakeFragment] | None = None
-
-
 __all__ = [
     "AnalysisCallable",
     "AnalysisChecker",
     "Analyzer",
-    "CMakeFragment",
-    "CodeGenerator",
 ]

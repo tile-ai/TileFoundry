@@ -22,6 +22,7 @@ from tilefoundry import CompilerOptions, build, jit
 from tilefoundry.analysis import AnalysisError, analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import validate_cuda_topology_levels
+from tilefoundry.codegen.linkable_module import LinkableModule
 from tilefoundry.dsl import *
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -41,8 +42,8 @@ from tilefoundry.target import (
     register_target,
     registered_targets,
 )
+from tilefoundry.target.base import bind
 from tilefoundry.target.cuda.spec import SM90_ID
-from tilefoundry.target.services import CodeGenerator
 
 
 class ExternalCudaTarget(CudaTarget):
@@ -111,7 +112,8 @@ def test_target_registration_and_service_annotations_resolve() -> None:
     assert typing.get_type_hints(PrimFunction)
     for getter in (
         Target.get_analyzer,
-        Target.get_code_generator,
+        Target.resolve,
+        bind,
     ):
         assert typing.get_type_hints(getter)
 
@@ -183,7 +185,7 @@ def test_document_free_target_enforces_projection_and_capability_boundaries() ->
     ):
         BrokenFactsTarget().get_facts(ThroughputFacts)
     with pytest.raises(UnsupportedCapabilityError) as error:
-        target.get_code_generator()
+        target.resolve(LinkableModule, None, (), None)
     assert str(error.value) == "VendorNpuTarget (vendor.npu): no code generator"
 
 
@@ -285,14 +287,15 @@ def test_build_rejects_unequal_device_targets_before_emitting() -> None:
     class FirstDeviceTarget(CudaTarget):
         name = "tests.target.first_device"
 
-        def get_code_generator(self) -> CodeGenerator:
-            return CodeGenerator(unexpected_emit)
-
     class SecondDeviceTarget(CudaTarget):
         name = "tests.target.second_device"
 
-        def get_code_generator(self) -> CodeGenerator:
-            return CodeGenerator(unexpected_emit)
+    @bind(FirstDeviceTarget, LinkableModule)
+    @bind(SecondDeviceTarget, LinkableModule)
+    class UnexpectedModule(LinkableModule):
+        @classmethod
+        def create(cls, *args):
+            return unexpected_emit(*args)
 
     first_target = FirstDeviceTarget("nvidia.h200_sxm")
     second_target = SecondDeviceTarget("nvidia.h200_sxm")

@@ -32,7 +32,6 @@ from tilefoundry.target.facts import (
     facts_result,
 )
 from tilefoundry.target.hardware.envelope import HardwareDocument
-from tilefoundry.target.services import CodeGenerator
 from tilefoundry.utils.python_source import PythonExpr
 
 
@@ -191,12 +190,6 @@ class CudaTarget(Target):
         """The torch device type holding this program's tensor arguments."""
         return "cuda"
 
-    def get_code_generator(self) -> CodeGenerator:
-        from tilefoundry.codegen.cuda.module import (  # noqa: PLC0415
-            CUDA_CODE_GENERATOR,
-        )
-
-        return CUDA_CODE_GENERATOR
 
     def _python_import_module(self) -> str:
         if type(self) is CudaTarget:

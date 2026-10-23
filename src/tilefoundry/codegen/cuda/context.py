@@ -15,7 +15,7 @@ from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.signature import CallableSignature, TensorSignature
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.target import CudaTarget
-from tilefoundry.target.base import Target
+from tilefoundry.target.base import Target, bind
 from tilefoundry.visitor_registry.registries import codegen_registry
 
 Geometry = tuple[tuple[object, object, object], tuple[object, object, object]]
@@ -59,10 +59,19 @@ def scalar_read(var, ctx: "CudaCodegenContext") -> str:
     return f"{name}_tensor(0)" if ctx.is_kernel_param(var) else f"{name}(0)"
 
 
+@bind(CudaTarget, EmitContext)
 class CudaCodegenContext(EmitContext):
     """A compile writing CUDA: the shared context plus what only CUDA states."""
 
     target_kind = CudaTarget
+
+    @classmethod
+    def create(cls, target, view):
+        """Create target-owned emission state from a group view."""
+        return cls(
+            symbols=view.symbols, target=target, launches=view.launches,
+            codegen_context=view.codegen,
+        )
 
     def __init__(
         self,

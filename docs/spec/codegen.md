@@ -9,7 +9,7 @@ host-callable shared library. Loading that artifact and exposing it as a
 ```mermaid
 flowchart LR
     TIR["verified <b>tir.PrimFunction</b>s"]
-    Emit["Target-selected <b>CodeGenerator</b>"]
+    Emit["Target-resolved <b>LinkableModule</b>"]
     LM["<b>LinkableModule</b><br/>(per target)"]
     Link["<b>link</b>"]
     Linked["<b>LinkedModule</b><br/>artifact + metadata"]
@@ -34,7 +34,7 @@ flowchart LR
   runtime compilation entry points and loading are owned by
   [runtime §1.6](./runtime.md#16-compilepy).
 - A module's functions are grouped by equal Target values in source order. Each
-  group is emitted by the exact Target's CodeGenerator into one
+  group is emitted by the exact Target's resolved implementation into one
   `LinkableModule`.
 - The link step compiles every `LinkableModule` with its own toolchain and
   links them into one `LinkedModule` — a host-callable shared library plus the
@@ -54,77 +54,47 @@ The target-specific generator behavior — how a CPU vs CUDA function emits,
 program-shape / dynamic-CTA accessors, and the `ShardLayout` runtime mapping —
 is owned by [target](./target.md).
 
-## 2. CodeGenerator
+## 2. Resolved code generation
 
-A generator walks verified `tir.PrimFunction`s and produces source plus the
-metadata the link step needs.
+Codegen base classes provide default `create` implementations; concrete Targets
+bind their implementations through [target §1](./target.md#1-target).
 
-### 2.1 Target-selected service
+### 2.1 Target resolution
 
 ```python
-class CodeGenerator:
-    emit: Callable[
-        [Module, tuple[PrimFunction, ...], Target, EmissionView], LinkableModule
-    ]
-    emits: frozenset[EmitGranularity] = frozenset({"full"})
-    cmake: Callable[[Target, tuple[LinkableModule, ...], Path], CMakeFragment] | None = None
+class EmitContext:
+    @classmethod
+    def create(cls, target: Target, view) -> EmitContext: ...
 
 
-class CMakeFragment:
-    """One target's sources, languages, and additions to a shared CMake project.
+class LinkableModule:
+    emits: ClassVar[frozenset[EmitGranularity]] = frozenset({"full"})
 
-    Attributes:
-        languages: attribute; Additional CMake project languages.
-        sources: attribute; Source files written relative to the project directory.
-        text: attribute; CMake commands appended after the library definition.
-    """
-
-    languages: tuple[str, ...]
-    sources: tuple[str, ...]
-    text: str = ""
-
-
-class Target:
-    def get_code_generator(self) -> CodeGenerator: ...
-
-
-def emit_cuda_module(
-    module: Module,
-    functions: tuple[PrimFunction, ...],
-    target: Target,
-    view: EmissionView,
-) -> LinkableModule: ...
+    @classmethod
+    def create(cls, target: Target, owner: Module, functions, ctx) -> LinkableModule: ...
 ```
 
 - constraints:
-  - A Target MUST return one immutable CodeGenerator descriptor. A subclass MAY
-    inherit its base generator without another registration step.
-  - `emits` MUST state the source emission granularities the generator supports;
-    its default is `{"full"}`. Built-in CPU and CUDA generators support both
-    `"full"` and `"skeleton"`. Before any group emits, `link_program` MUST check
-    each group's generator and raise `UnsupportedCapabilityError` naming the
-    Target and requested granularity when unsupported. The CLI MUST delegate
-    Target capability admission to codegen. CUDA skeleton emission MUST reject
-    targets with `device_count` through `UnsupportedCapabilityError` in its
-    generator; those targets require a different project implementation.
-  - All generators, including CPU host generation, MUST receive
-    `(module, functions, target, view)` and construct their own emission context
-    from that `EmissionView`. The shared compile
-    context is built once ([§2.3](#23-codegencontext)); generators MUST NOT
-    independently settle its symbols, ownership, or launch geometry.
-  - A generator writes each function twice and no more: once as the
-    declaration a caller sees, without entering the body, and once as the
-    definition, by walking it.
-  - Generator selection MUST NOT branch on `Target.name`. There MUST be no
-    emitter registry or string-to-emitter lookup.
-  - A second unequal CUDA Target group MUST fail before any generator emits;
-    multiple device translation units or architectures in one linked artifact
-    are unsupported.
-
-A generator MUST consume only TIR and MUST return a `LinkableModule` for its
-backend. The emitter file layout mirrors the IR file layout
-(`codegen/<target>/tir/...` parallels `ir/tir/...`); the mirror rule is owned
-by [code-organization](./code-organization.md).
+  - `link_program` MUST obtain each group's emission context through
+    `target.resolve(EmitContext, view)`, then its translation unit through
+    `target.resolve(LinkableModule, owner, functions, ctx)`. Factories MUST NOT
+    independently settle the compile-wide symbols, ownership, or launch geometry.
+  - `LinkableModule.create` MUST report `<target summary>: no code generator`
+    when a Target has no bound implementation. Concrete factories MUST check
+    their class's `emits` before emission and raise `UnsupportedCapabilityError`
+    naming the Target and requested granularity when unsupported. CPU and CUDA
+    factories support `"full"` and `"skeleton"`; CUDA skeleton emission MUST
+    reject targets with `device_count` with its existing diagnostic.
+  - CPU MUST bind `EmitContext` to `CpuCodegenContext` and `LinkableModule` to
+    `HostLinkableModule`. CUDA MUST bind these bases to `CudaCodegenContext`
+    and `CudaLinkableModule`. Bindings select classes, never strings.
+  - A factory writes each function twice: once as the declaration a caller sees,
+    without entering the body, and once as the definition, by walking it.
+  - A second unequal device Target group MUST fail before any factory emits;
+    multiple device architectures in one linked artifact are unsupported.
+  - EmitContext and Linkable/Linked products MAY be subclassed through bindings.
+    The compile-wide `CodegenContext` and `LinkableFunction` have no resolution
+    hook in this interface.
 
 ### 2.2 Per-Op handler registry
 
@@ -146,7 +116,7 @@ prohibited.
 ### 2.3 `CodegenContext`
 
 ```python
-class CodegenContext:
+class EmitContext:
     """The context one compile writes through, whatever targets it writes for."""
 
     symbols: Mapping[int, CallableSignature]
@@ -161,6 +131,7 @@ class CodegenContext:
     def dedent(self) -> None: ...
     def name_for(self, var) -> str: ...
     def source(self) -> str: ...
+    def link(self, project: CMakeProject) -> None: ...
     def capture(self, fn) -> str: ...
     def emit_node(self, node) -> None: ...
     def declare(
@@ -173,7 +144,7 @@ class CodegenContext:
     def local_extent(self, signature, axis: int) -> str: ...
 
 
-class CudaCodegenContext(CodegenContext):
+class CudaCodegenContext(EmitContext):
     """A compile writing CUDA: the shared context plus what only CUDA states."""
 
     launches: Mapping[int, Geometry]
@@ -187,7 +158,7 @@ class CudaCodegenContext(CodegenContext):
     def dtype_to_cpp(self, dtype_name: str) -> str: ...
 
 
-class CpuCodegenContext(CodegenContext):
+class CpuCodegenContext(EmitContext):
     """A compile writing the host unit: the shared context plus what a tensor is here."""
 ```
 
@@ -333,6 +304,10 @@ class LinkableModule:
     for the built-ins), never an external Target registration name.
   - MUST be the source language: `cu` for a CUDA translation unit, `cpp` for a
     host translation unit.
+  - `LinkableModule` MAY be subclassed to override `link(project)`. The default
+    implementation MUST add its source to the shared project, naming CPU output
+    `host.cpp` and other output `<target>_<index>.<language>`. Backend subclasses
+    MUST own their language, compiler options, and runtime include paths.
   - MUST list the module's constituent `LinkableFunction`s, in emission order.
   - `preamble` MUST carry what the unit states outside any function: includes,
     macros, unit-level template specializations, and device state emitted only
@@ -401,29 +376,46 @@ def link_program(
 
 
 def link_modules(
-    units: tuple[tuple[Target, LinkableModule], ...], *, workdir: str | Path,
-    lib_name: str, functions: tuple[LinkedFunction, ...], host_cxx: str = "g++",
+    modules: tuple[LinkableModule, ...], *, workdir: str | Path,
+    lib_name: str, functions: tuple[LinkedFunction, ...], host: Target, host_cxx: str = "g++",
 ) -> LinkedModule: ...
 
 
 def link_function(symbol: FunctionSymbol) -> LinkedFunction: ...
+
+
+class CMakeProject:
+    def __init__(self, workdir: str | Path, lib_name: str, host_cxx: str = "g++") -> None: ...
+    def add_source(self, name: str, text: str) -> None: ...
+    def enable_language(self, language: str) -> None: ...
+    def include(self, *dirs) -> None: ...
+    def append(self, cmake_text: str) -> None: ...
+    def build(self, functions: tuple[LinkedFunction, ...]) -> LinkedModule: ...
 ```
 
 - constraints:
   - `link_program` MUST emit one `LinkableModule` per device context group and
     combine all selected CPU entries into one host group and one `host.cpp`.
     Every group MUST use the same emission callback shape.
-  - `link_modules` MUST collect a CMake fragment
-    per Target. A `cmake` callback MUST write its source files and return the
-    additional languages, relative source names, and CMake commands. The default
-    callback writes sources without additional languages or commands.
+  - `link_modules` MUST create one `CMakeProject`, invoke each module's
+    `link(project)`, then call `host.resolve(LinkedModule, project, functions)`.
+    The default `LinkedModule.create` MUST call `project.build(functions)`.
+    It MUST NOT select a
+    backend's toolchain by Target type. `link_function` retains per-export
+    metadata construction as the default `LinkedFunction.create`, reached through
+    the entry Target's `resolve(LinkedFunction, symbol)`.
+  - `CMakeProject` MUST write unique source names, collect enabled languages and
+    include directories, and append target-owned CMake commands. Its `sources`
+    mapping MUST preserve source insertion order. Reusing a source name MUST
+    fail rather than overwrite the previous unit.
   - Core MUST assemble one CMake project and run one configure/build sequence.
-    Compiler launcher settings such as ccache MUST remain effective. Target
-    fragments own backend compiler flags and include directories.
+    Compiler launcher settings such as ccache MUST remain effective. Backend
+    `LinkableModule` subclasses own compiler flags and include directories;
+    the resolution path MUST use class implementations, not callback fields.
   - CPU sources MUST include the packaged CPU runtime header directly. CUDA
     sources MUST include their packaged runtime header directly. Runtime include
     directories MUST be located through `importlib.resources`.
-  - CUDA's CMake callback MUST resolve CUTLASS from
+  - `CudaLinkableModule.link` MUST resolve CUTLASS from
     `TILEFOUNDRY_CUTLASS_INCLUDE` first; an explicitly invalid directory MUST
     fail naming the variable and value. Without the variable it MUST search
     source ancestors for `third_party/cutlass/include`, then fail naming the
