@@ -40,7 +40,7 @@ pair and each row of the pair to one group of 128 threads.
 """The step from the migrate page, placed two ways: with a boundary, and without."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 PAIR = 2  # rows one CTA normalizes
 CTAS = 132  # one CTA per SM of the H200, so the grid is one wave

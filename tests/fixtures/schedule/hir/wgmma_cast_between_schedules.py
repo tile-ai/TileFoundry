@@ -9,7 +9,7 @@ an explicit reduction, producing an ``(M, 1)`` result.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 64
 N = 32

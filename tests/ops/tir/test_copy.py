@@ -9,10 +9,11 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
+import tilefoundry_cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
 from tests.fixtures.tir.layouts import split_pairs, split_rows, split_short_rows
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.target import CpuTarget
+from tilefoundry_cuda import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 

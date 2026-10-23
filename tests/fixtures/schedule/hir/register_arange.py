@@ -1,6 +1,6 @@
 """Materialize a register Arange before copying it to its output."""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),

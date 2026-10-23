@@ -1,6 +1,6 @@
 """Own a staged ring outside both HIR loops and index by linear iteration."""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),

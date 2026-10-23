@@ -1,6 +1,6 @@
 from tilefoundry import func, module
 from tilefoundry.dsl import DimVar, Tensor, Topology, tf
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 T = DimVar("T", 1, 4096)
 C = DimVar("C", 1, 4096)

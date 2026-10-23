@@ -1,7 +1,7 @@
 """Retain a callee update whose result shares its input output buffer."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 @module(

@@ -27,7 +27,7 @@ truth for the directory's structure and invariants.
 | `ir/isl_interop.py` | [types §11](./types.md#11-isl-interoperability) | Interoperation between dimension and shape IR values and isl: expression rendering and decoding, normalization, value ranges, and shape-domain construction. Pure isl operations remain in `utils/isl_utils.py`. |
 | `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per multi-operation category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`), with the standalone scheduling carrier in `schedule.py`. One real Op per `.py` ([§2](#2-file-naming-and-content-rules) rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` ([§2](#2-file-naming-and-content-rules) rule 5). |
 | `schedule/` | [schedule](./schedule.md) | Schedule finalization, instruction facts, and candidate discovery over HIR. |
-| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the general TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes nest under `ir/tir/<target>/<category>/` (e.g. `ir/tir/cuda/nn/mma.py`) per [§2](#2-file-naming-and-content-rules) Rule 1c. |
+| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the general TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes live in `targets/<target>/tilefoundry_<target>/ir/tir/<category>/` (e.g. `targets/cuda/tilefoundry_cuda/ir/tir/nn/mma.py`) per [§2](#2-file-naming-and-content-rules) Rule 1c. |
 | `parser/` | [parser](./parser.md) | DSL → IR parsing: `base.py` (shared visitor base + dispatch), `hir_parser.py` (`@func` body), `tir_parser.py` (`@prim_func` body), layout sugar / range-slice / dispatch modules. **Not under `ir/`** — the parser is a producer of IR, not an IR sublayer. |
 | `analysis/` | [analysis](./analysis.md) | Fact layer over typed HIR: one module per analysis family. The compact public surface lives in `analysis/__init__.py`; per-target Facts projections live with their owning Target. |
 | `passes/` | [passes](./passes.md) | Pass framework (`pass_base.py` / `pass_manager.py`) plus concrete transforms (`transforms/<pass_name>.py`, [§2](#2-file-naming-and-content-rules) rule 6). |
@@ -154,8 +154,8 @@ target-neutral abstractions stay at `ir/{dialect}/{category}/`. For
 example the whole MMA surface is target-owned — `mma.py` defines the `TiledMma`
 op, `mma_atom.py` defines `MmaAtom` / `AtomPattern`, and `sm80_mma.py` /
 `sm89_mma.py` / `wgmma.py` define the CUDA instruction declarations. All five
-live under `ir/tir/cuda/nn/`. A target-specific rule for a target-neutral Op nests the
-same way: the CUDA `MatMul` type rule lives in `ir/hir/cuda/nn/matmul.py`
+live under `targets/cuda/tilefoundry_cuda/ir/tir/nn/`. A target-specific rule for a target-neutral Op nests the
+same way: the CUDA `MatMul` type rule lives in `targets/cuda/tilefoundry_cuda/ir/hir/nn/matmul.py`
 beside no Op class of its own.
 The backend-bound construction stays in TIR: HIR is the checking reference
 side, and carrying the instruction name in that reference would make two GPU

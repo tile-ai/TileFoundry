@@ -20,7 +20,8 @@ from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.target import CpuTarget
+from tilefoundry_cuda import CudaTarget
 
 _CTA = context_fixture.CONTEXT_CTA
 _WARP = context_fixture.CONTEXT_WARP
@@ -171,7 +172,7 @@ _MEMBER_CONTEXT_SOURCE = """
 import tilefoundry
 from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.ir.types import Topology
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 @tilefoundry.module(
     entry="attention",

@@ -84,7 +84,7 @@ from tilefoundry.analysis import analyze as run_analysis
 
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
 
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 HIDDEN = 256
 QUERY_HEADS = 8

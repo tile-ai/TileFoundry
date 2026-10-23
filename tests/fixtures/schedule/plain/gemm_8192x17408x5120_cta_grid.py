@@ -8,7 +8,7 @@ candidates`` about before writing the schedule, so what it states is each
 CTA's tiles and the storage they move between.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 8192
 K = 5120

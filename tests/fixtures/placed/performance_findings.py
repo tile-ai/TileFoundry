@@ -10,7 +10,7 @@ for two of these and each pair differs in exactly one respect.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")
 

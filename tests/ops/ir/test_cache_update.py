@@ -31,10 +31,10 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.types.shard_layout import Partial
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 from tilefoundry.visitor_registry.visitors import CostEvaluator
+from tilefoundry_cuda import CudaTarget
 
 
 def _ref(cache, cur_pos, s, new):

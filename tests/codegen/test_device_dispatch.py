@@ -11,9 +11,9 @@ from __future__ import annotations
 from tests.fixtures.tir.square import TirSquare
 from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.context_builder import build_codegen_context, mangle
-from tilefoundry.codegen.cuda.abi import launcher_symbol
 from tilefoundry.codegen.linkable_module import LinkableModule
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
+from tilefoundry_cuda.codegen.abi import launcher_symbol
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 

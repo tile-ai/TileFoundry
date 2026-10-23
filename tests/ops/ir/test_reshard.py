@@ -23,8 +23,8 @@ from tilefoundry.ir.types import Broadcast, Layout, Mesh, ShardLayout, Topology,
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
+from tilefoundry_cuda import CudaTarget
 
 
 def _shard_layout(shape) -> ShardLayout:

@@ -1,6 +1,6 @@
 """Materialize a register FullLike consumed by Where and a copy."""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),

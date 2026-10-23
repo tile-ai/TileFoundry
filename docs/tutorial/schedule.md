@@ -33,7 +33,7 @@ but names no TIR instruction.
 """One 128 by 256 output tile per CTA on a 64 by 68 grid."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 8192
 K = 5120
@@ -91,7 +91,7 @@ this is the same 4352-tile GEMM, covered exactly once.
 """The same GEMM assigned to 132 persistent CTAs."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 8192
 K = 5120
@@ -264,7 +264,7 @@ issue SS WGMMA, then stage each result in separate SW128 memory for a TMA store.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 8192
 K = 5120
@@ -378,7 +378,7 @@ sed -n '1,104p' optimal_tir.py
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 @prim_func(target=CudaTarget("nvidia.h200_sxm"))

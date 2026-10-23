@@ -39,8 +39,9 @@ from tilefoundry.ir.types.shard_layout import (
     Partial,
     Split,
 )
-from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry_cuda import CudaTarget
 
 _MM = MatMul()
 _H200 = CudaTarget("nvidia.h200_sxm")

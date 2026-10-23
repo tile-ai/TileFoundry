@@ -1,7 +1,7 @@
 """Keep a continuous staged ordinal when the inner loop depends on its thread."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 @module(

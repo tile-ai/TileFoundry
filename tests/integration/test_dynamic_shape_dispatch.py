@@ -13,7 +13,7 @@ import torch
 
 import tilefoundry
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 _S = DimVar("S", 1, 7)
 

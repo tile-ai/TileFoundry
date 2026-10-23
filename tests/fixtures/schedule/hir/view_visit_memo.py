@@ -1,7 +1,7 @@
 """Keep authored identity views while forwarding region operands without wrappers."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),

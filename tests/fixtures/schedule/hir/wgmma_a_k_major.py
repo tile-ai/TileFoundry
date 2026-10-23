@@ -8,7 +8,7 @@ of K: the 64x32 A and 32x32 B fragments each use two core-matrix offsets.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 64
 N = 32

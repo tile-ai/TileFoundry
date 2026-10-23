@@ -474,7 +474,8 @@ def placed_cases(level: str = "cta") -> tuple[ConcreteCase, ...]:
     named by the inventory guard instead: a CPU program is not a CTA program
     that failed.
     """
-    from tilefoundry.target import CudaTarget, TopologyFacts
+    from tilefoundry.target import TopologyFacts
+    from tilefoundry_cuda import CudaTarget
 
     cases: list[ConcreteCase] = []
     for file, name, published in placed_fixture_roots():

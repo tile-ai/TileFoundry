@@ -1,6 +1,6 @@
 """Keep a cropped 24x512 row's 512 stride when returning 24x256 elements."""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 32), Topology("thread", 1)))

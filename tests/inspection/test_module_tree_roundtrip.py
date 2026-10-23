@@ -31,7 +31,7 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 _CTA = context_fixture.CONTEXT_CTA
 _WARP = context_fixture.CONTEXT_WARP

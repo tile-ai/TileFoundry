@@ -10,7 +10,7 @@ import pytest
 
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry import jit
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 def test_jit_rejects_non_ir_inputs_and_string_targets() -> None:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 S = 1
 C = 4096

@@ -5,7 +5,7 @@ weight tiles exercise the union of mesh-parameter fibers without quantifiers.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 4224
 K = 512

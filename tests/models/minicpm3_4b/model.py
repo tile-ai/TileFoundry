@@ -98,7 +98,7 @@ from transformers import MiniCPM3Config
 from transformers.models.minicpm3.modeling_minicpm3 import MiniCPM3RMSNorm
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 def published(path: Path | None = None) -> MiniCPM3Config:

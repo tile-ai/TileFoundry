@@ -1,0 +1,129 @@
+"""CUDA tiled matrix-multiply-accumulate operation."""
+
+from __future__ import annotations
+
+from tilefoundry.evaluator.registry import register_schedule_eval
+from tilefoundry.evaluator.value import TensorValue
+from tilefoundry.ir.core import Call, Op, OpCapability
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
+from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.types import DType, Mesh, UnitType
+from tilefoundry.utils.lazy import torch
+from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelation,
+    matmul_relations,
+    register_access_relation,
+)
+from tilefoundry.visitor_registry.contexts import TypeInferContext
+
+from .mma_atom import AtomPattern, FromAtom, MmaAtom
+from .sm80_mma import Mma as _Sm80Mma
+from .sm89_mma import Mma as _Sm89Mma
+from .wgmma import Wgmma
+
+_FP_ACC_WIDEN = {
+    (DType.fp8e4m3, DType.f32),
+    (DType.f16, DType.f32),
+    (DType.bf16, DType.f32),
+    (DType.f16, DType.f16),
+    (DType.bf16, DType.bf16),
+    (DType.f32, DType.f32),
+}
+
+
+@register_op(dialect="T", category="nn", name="tiled_mma")
+class TiledMma(Op):
+    """Execute one tiled MMA; the atom declares its operand contracts."""
+
+    capability = (
+        OpCapability(
+            Wgmma.capability,
+            declaration=Wgmma,
+            attribute="atom",
+        ),
+        OpCapability(
+            _Sm80Mma.capability,
+            declaration=_Sm80Mma,
+            attribute="atom",
+        ),
+        OpCapability(
+            _Sm89Mma.capability,
+            declaration=_Sm89Mma,
+            attribute="atom",
+        ),
+    )
+
+    @property
+    def resource(self):
+        return self.atom.resource
+
+    acc = ParamDef(
+        kind="input",
+        effect=MemoryEffect.READ | MemoryEffect.WRITE,
+        pattern=FromAtom("C"),
+    )
+    lhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=FromAtom("A"))
+    rhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=FromAtom("B"))
+    atom = ParamDef(
+        kind="attribute",
+        annotation=MmaAtom,
+        pattern=AtomPattern(Wgmma, _Sm80Mma, _Sm89Mma),
+    )
+    execution_mesh = ParamDef(
+        kind="attribute",
+        annotation=Mesh,
+        optional=True,
+        default=None,
+    )
+
+    def execution_mesh_pattern(self):
+        """The atom's lane frame, preceded by independent group modes."""
+        return self.atom.execution_mesh_pattern(groups=True)
+
+
+@register_typeinfer(TiledMma)
+def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
+    return UnitType()
+
+
+@register_access_relation(TiledMma)
+def _tiled_mma_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+    acc, lhs, rhs = (ctx.type_of(arg) for arg in call.args)
+    *operands, accumulated = matmul_relations(lhs.shape, rhs.shape, (-2, -1, -1, -2))
+    return (accumulated, *operands, accumulated)
+
+
+@register_schedule_eval(TiledMma)
+def _eval_scheduled_mma(ctx):
+    acc, lhs, rhs = (arg.data for arg in ctx.args)
+    return TensorValue(
+        data=acc + torch.matmul(lhs.to(acc.dtype), rhs.to(acc.dtype)), type=ctx.result_type
+    )
+
+
+@register_verify_stmt(TiledMma)
+def verify_operand_shapes(call: "Call", ctx: "VerifyContext") -> None:
+    """Check A (M,K), B (K,N), and C (M,N) shapes and dtypes."""
+    acc_ty, lhs_ty, rhs_ty = (ctx.type_of(arg) for arg in call.args[:3])
+    if len(lhs_ty.shape) == 2 and len(rhs_ty.shape) == 2 and len(acc_ty.shape) == 2:
+        m, k_l = lhs_ty.shape[-2], lhs_ty.shape[-1]
+        k_r, n = rhs_ty.shape[-2], rhs_ty.shape[-1]
+        if k_l != k_r:
+            ctx.error(call, f"Mma K-dim mismatch: {k_l} vs {k_r}")
+        if acc_ty.shape[-2] != m or acc_ty.shape[-1] != n:
+            ctx.error(
+                call,
+                f"Mma acc shape mismatch: expected (...,{m},{n}), got "
+                f"(...,{acc_ty.shape[-2]},{acc_ty.shape[-1]})",
+            )
+    if lhs_ty.dtype != rhs_ty.dtype:
+        ctx.error(call, f"Mma lhs/rhs dtype mismatch: {lhs_ty.dtype} vs {rhs_ty.dtype}")
+    if (lhs_ty.dtype, acc_ty.dtype) not in _FP_ACC_WIDEN:
+        ctx.error(
+            call,
+            f"Mma unsupported dtype combo: input {lhs_ty.dtype} acc {acc_ty.dtype}",
+        )
+
+
+__all__ = ["TiledMma", "verify_operand_shapes"]

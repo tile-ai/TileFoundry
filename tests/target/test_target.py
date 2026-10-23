@@ -21,7 +21,6 @@ from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
 from tilefoundry import CompilerOptions, build, jit
 from tilefoundry.analysis import AnalysisError, analyze
 from tilefoundry.analysis.check import check_program
-from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import validate_cuda_topology_levels
 from tilefoundry.codegen.linkable_module import LinkableModule
 from tilefoundry.dsl import *
 from tilefoundry.ir.core.module import Module
@@ -29,7 +28,6 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.target import (
     CpuTarget,
-    CudaTarget,
     MemoryHierarchyFacts,
     PerformanceServiceFacts,
     Target,
@@ -43,7 +41,9 @@ from tilefoundry.target import (
     registered_targets,
 )
 from tilefoundry.target.base import bind
-from tilefoundry.target.cuda.spec import SM90_ID
+from tilefoundry_cuda import CudaTarget
+from tilefoundry_cuda.codegen.tir.stmts.mesh_scope import validate_cuda_topology_levels
+from tilefoundry_cuda.target.spec import SM90_ID
 
 
 class ExternalCudaTarget(CudaTarget):

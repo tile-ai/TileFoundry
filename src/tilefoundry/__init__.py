@@ -144,6 +144,3 @@ __all__ = [
     "CompilerOptions",
     "view",
 ]
-
-import tilefoundry.codegen.cuda  # noqa: E402,F401
-import tilefoundry.passes.transforms.cuda  # noqa: E402,F401

@@ -96,9 +96,6 @@ class Architecture:
     name: str
     max_threads_per_cta: int
 
-    def _python_import_module(self) -> str:
-        return type(self).__module__
-
     def to_python(self) -> PythonExpr:
         return _target_value_to_python(self)
 
@@ -108,9 +105,6 @@ class Device:
 
     name: str
     sm_count: int
-
-    def _python_import_module(self) -> str:
-        return type(self).__module__
 
     def to_python(self) -> PythonExpr:
         return _target_value_to_python(self)
@@ -264,9 +258,6 @@ class Target:
     def available(cls) -> tuple[Target, ...]:
         """Return the values this Target class can currently construct."""
         return (cls(),)
-
-    def _python_import_module(self) -> str:
-        return type(self).__module__
 
     def to_python(self) -> PythonExpr:
         return _target_value_to_python(self)

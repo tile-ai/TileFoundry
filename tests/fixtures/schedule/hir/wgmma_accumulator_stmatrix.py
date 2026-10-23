@@ -1,7 +1,7 @@
 """Store a narrowed WGMMA accumulator into SW32 shared memory."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 P_SMEM = ComposedLayout(Swizzle(1, 4, 3), 0, Layout(((4, 2, 8), (3, 16)), ((256, 128, 16), (1024, 1))))
 

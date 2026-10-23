@@ -167,11 +167,6 @@ class AmxTarget(Target):
             return facts_result(self, facts_type, throughput(self, query))
         return super().get_facts(facts_type, query)
 
-    def _python_import_module(self) -> str:
-        if type(self) is AmxTarget:
-            return "tilefoundry.target.amx"
-        return super()._python_import_module()
-
     def to_python(self) -> PythonExpr:
         if type(self) is AmxTarget and self.architecture_id and self.device_id:
             return PythonExpr(

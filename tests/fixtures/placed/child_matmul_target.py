@@ -7,7 +7,7 @@ that tile straight back, so the root's own call is typed by the same rule;
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 64
 N = 32

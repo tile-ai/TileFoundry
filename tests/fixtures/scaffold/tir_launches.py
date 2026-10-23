@@ -5,7 +5,8 @@ import tvm_ffi
 
 from tilefoundry.dsl import *
 from tilefoundry.runtime.module import RuntimeModule
-from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.target import CpuTarget
+from tilefoundry_cuda import CudaTarget
 
 S = DimVar("S", 1, 16)
 CUDA = CudaTarget("nvidia.h200_sxm")

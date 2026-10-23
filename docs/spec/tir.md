@@ -908,7 +908,7 @@ the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
 the non-grid/block launch config through the Op attributes.
 
 The shared `LaunchAttrs` descriptor is owned by `tilefoundry.ir.tir.launch`;
-`CudaLaunchAttr` is owned by `tilefoundry.ir.tir.cuda.launch`:
+`CudaLaunchAttr` is owned by `tilefoundry_cuda.ir.tir.launch`:
 
 ```python
 class CudaLaunchAttr(IntEnum):

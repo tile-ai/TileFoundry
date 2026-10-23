@@ -17,9 +17,9 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.visitor import collect_exprs, expr_children
 from tilefoundry.parser import ParseError
-from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry_cuda import CudaTarget
 
 _DIAGNOSTICS = Path(__file__).parents[1] / "fixtures" / "diagnostics"
 

@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
+import tilefoundry_cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
 from tests.fixtures.tir.layouts import bcast
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Var, VerifyError
@@ -21,8 +21,9 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.tir.arith import Binary
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
-from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
+from tilefoundry_cuda import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 

@@ -70,7 +70,8 @@ from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
+from tilefoundry.target import PerformanceServiceFacts, ThroughputFacts
+from tilefoundry_cuda import CudaTarget
 
 
 def _report(module, *, analysis=("memory",)) -> dict:
@@ -648,7 +649,7 @@ def test_mesh_started_loop_keeps_an_unknown_reuse_row() -> None:
 
 def test_runtime_loop_start_names_the_unbounded_value() -> None:
     module = import_dsl('''from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 @module(entry="read", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class RuntimeStart:
@@ -669,7 +670,7 @@ class RuntimeStart:
 
 def test_symbolic_divisor_loop_start_does_not_block_typing() -> None:
     module = import_dsl('''from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 NC = DimVar("chunks", 1, 32)
 

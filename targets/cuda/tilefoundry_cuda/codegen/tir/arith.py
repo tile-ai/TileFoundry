@@ -1,0 +1,228 @@
+"""Codegen for the generic Binary and Unary TIR effect-form Ops."""
+
+from __future__ import annotations
+
+from tilefoundry.ir.tir.arith import Binary, BinaryKind, Unary, UnaryKind
+from tilefoundry.ir.tir.cast import Cast
+from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_local_shape
+from tilefoundry.ir.types.utils import (
+    shape_has_dim_var,
+    shape_numel_upper_bound,
+    shape_runtime_total,
+    shape_upper_bound,
+)
+from tilefoundry.visitor_registry.registries import Role, register_codegen
+from tilefoundry_cuda import CudaTarget
+from tilefoundry_cuda.codegen.context import CudaCodegenContext
+from tilefoundry_cuda.codegen.tir.cute_layout import render_layout_value
+
+_BINARY_TAG = {
+    BinaryKind.MUL: "tilefoundry::primitive::mul_op",
+    BinaryKind.ADD: "tilefoundry::primitive::add_op",
+    BinaryKind.SUB: "tilefoundry::primitive::sub_op",
+    BinaryKind.DIV: "tilefoundry::primitive::div_op",
+}
+
+_UNARY_TAG = {
+    UnaryKind.RSQRT: "tilefoundry::primitive::rsqrt_op",
+    UnaryKind.NEG: "tilefoundry::primitive::neg_op",
+    UnaryKind.RELU: "tilefoundry::primitive::relu_op",
+    UnaryKind.SQUARE: "tilefoundry::primitive::square_op",
+    UnaryKind.CAST: "tilefoundry::primitive::identity_op",
+}
+
+
+def _materialised_shape(ty) -> tuple:
+    """Return the cute-side materialised shape for *ty*.
+
+    Sharded Tensors are materialised at the ``ShardLayout``'s
+    per-mesh-position local shape, not the logical
+    ``TensorType.shape``. Elementwise helpers must iterate by the
+    local count or they walk past the per-thread / per-CTA
+    allocation.
+    See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
+    """
+    layout = getattr(ty, "layout", None)
+    if isinstance(layout, ShardLayout):
+
+        return shard_layout_local_shape(layout)
+    return shape_upper_bound(ty.shape)
+
+
+def _materialised_shape_dyn(ty) -> tuple:
+    """Materialised shape dyn.
+
+    Like ``_materialised_shape`` but preserves ``DimVar`` entries so
+    the caller can ask for a runtime (string) iteration count.
+    See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
+    """
+    layout = getattr(ty, "layout", None)
+    if isinstance(layout, ShardLayout):
+        return shard_layout_local_shape(layout)
+    return tuple(ty.shape)
+
+
+def _runtime_total(ty, ctx: CudaCodegenContext) -> object:
+    """Runtime element count for *ty* — int or C++ expression string.
+
+    Uses the kernel's DimVar runtime scalars registered by the
+    PrimFunction emitter so dynamic dims drive loop counts at launch
+    time instead of the static envelope upper bound.
+    """
+    return shape_runtime_total(_materialised_shape_dyn(ty), ctx.dynamic_extents)
+
+
+def _tensor_expr(var, ctx: CudaCodegenContext) -> str:
+    """Tensor expr.
+
+    Kernel-param tensor operands are accessed through the cute wrap
+    (``<name>_tensor``) the PrimFunction emitter materialises at the
+    top of the body; non-param vars are referenced directly.
+    """
+    base = ctx.name_for(var)
+    return f"{base}_tensor" if ctx.is_kernel_param(var) else base
+
+
+def _extent(e) -> str:
+    """A cute shape entry: static extents stay in the type, dynamic ones do not."""
+    return f"cute::Int<{int(e)}>{{}}" if isinstance(e, int) else str(e)
+
+
+def _stride(e) -> str:
+    """A cute stride entry: broadcast modes are always static."""
+    return f"cute::Int<{int(e)}>{{}}"
+
+
+def _broadcast_modes(dst_shape, rhs_shape, n_dst_runtime) -> tuple | None:
+    """The destination-shaped layout *rhs* is read through, or ``None``.
+
+    Every shape relation the retired ``binary_bcast_*`` family named is one
+    ``(shape, stride)`` pair over the destination's domain -- 1 on an axis
+    ``rhs`` supplies, 0 on one it does not. ``None`` means it already spans the
+    domain. The tests keep the old family's order, so the same programs match
+    the same way; ``cell`` and ``col`` land on one layout because they were one
+    relation written twice. *n_dst_runtime* may be a C++ expression: a stride-0
+    mode does not care what its extent is.
+    """
+    n_dst = shape_numel_upper_bound(dst_shape) if dst_shape else 1
+    n_rhs = shape_numel_upper_bound(rhs_shape) if rhs_shape else 1
+    if n_rhs >= n_dst:
+        return None
+    if n_rhs == 1:
+        return (n_dst_runtime,), (0,)
+    if (
+        len(dst_shape) == 2
+        and len(rhs_shape) == 2
+        and rhs_shape[-1] == 1
+        and dst_shape[0] == rhs_shape[0]
+    ):
+        return tuple(int(d) for d in dst_shape), (1, 0)
+    if len(dst_shape) == 2 and len(rhs_shape) == 1 and dst_shape[-1] == rhs_shape[0]:
+        return tuple(int(d) for d in dst_shape), (0, 1)
+    if n_dst % n_rhs == 0:
+        return (n_rhs, n_dst // n_rhs), (1, 0)
+    return None
+
+
+def broadcast_view(rhs_n: str, modes, ctx: CudaCodegenContext) -> str:
+    """Bind *rhs_n* read through a stride-0 layout, and name the binding."""
+    shape, stride = modes
+    ctx._counter += 1
+    name = f"bcast_{ctx._counter}"
+    ctx.emit(
+        f"auto {name} = tilefoundry::local_tensor({rhs_n}).compose("
+        f"{render_layout_value(shape, stride, _extent, _stride)});"
+    )
+    return name
+
+
+def _dyn_clip(dst, operands, ctx: CudaCodegenContext) -> str | None:
+    """The run-time count a plain dynamic operand set has to be clipped to."""
+    if any(isinstance(getattr(v.type, "layout", None), ShardLayout)
+           for v in (dst, *operands)):
+        return None
+    if not shape_has_dim_var(dst.type.shape):
+        return None
+    return str(shape_runtime_total(dst.type.shape, ctx.dynamic_extents))
+
+
+def _binary_fn(tag: str, dst_t: str, in_ts: tuple[str, ...]) -> str:
+    """The ``fn`` a binary kind calls with: the op tag, or a lambda."""
+    if len({dst_t, *in_ts}) <= 1:
+        return f"{tag}{{}}"
+    return (
+        f"[](auto a, auto b) {{ return {tag}{{}}({dst_t}(a), {dst_t}(b)); }}"
+    )
+
+
+def _cpp_dtype(ty, ctx: CudaCodegenContext) -> str:
+    return ctx.dtype_to_cpp(ty.dtype.name)
+
+
+@register_codegen(CudaTarget, Role.EMIT, Binary)
+def _emit_binary(call, ctx: CudaCodegenContext) -> None:
+    lhs, rhs, dst = call.args
+    lhs_n = _tensor_expr(lhs, ctx)
+    rhs_n = _tensor_expr(rhs, ctx)
+    dst_n = _tensor_expr(dst, ctx)
+
+    lhs_modes = _broadcast_modes(
+        _materialised_shape(dst.type),
+        _materialised_shape(lhs.type),
+        _runtime_total(dst.type, ctx),
+    )
+    if lhs_modes is not None:
+        lhs_n = broadcast_view(lhs_n, lhs_modes, ctx)
+
+    modes = _broadcast_modes(
+        _materialised_shape(dst.type),
+        _materialised_shape(rhs.type),
+        _runtime_total(dst.type, ctx),
+    )
+    if modes is not None:
+        rhs_n = broadcast_view(rhs_n, modes, ctx)
+
+    fn = _binary_fn(
+        _BINARY_TAG[call.target.kind],
+        _cpp_dtype(dst.type, ctx),
+        (_cpp_dtype(lhs.type, ctx), _cpp_dtype(rhs.type, ctx)),
+    )
+    n = _dyn_clip(dst, (lhs, rhs), ctx)
+    if n is None:
+        ctx.emit(f"tilefoundry::ops::elementwise({dst_n}, {fn}, {lhs_n}, {rhs_n});")
+        return
+    ctx.emit("{")
+    ctx.indent()
+    ctx.emit(f"auto tilefoundry_elementwise_n = cute::make_layout({n});")
+    for view, base in (("tilefoundry_elementwise_dst", dst_n), ("tilefoundry_elementwise_a", lhs_n), ("tilefoundry_elementwise_b", rhs_n)):
+        ctx.emit(f"auto {view} = cute::make_tensor({base}.data(), tilefoundry_elementwise_n);")
+    ctx.emit(f"tilefoundry::ops::elementwise(tilefoundry_elementwise_dst, {fn}, tilefoundry_elementwise_a, tilefoundry_elementwise_b);")
+    ctx.dedent()
+    ctx.emit("}")
+
+
+@register_codegen(CudaTarget, Role.EMIT, Unary)
+@register_codegen(CudaTarget, Role.EMIT, Cast)
+def _emit_unary(call, ctx: CudaCodegenContext) -> None:
+    """One source, always the bare tag -- a unary needs no lambda.
+
+    An effect-form ``Cast`` is ``UnaryKind.CAST``: the store into the
+    destination converts, so its functor is the identity.
+    """
+    src, dst = call.args
+    src_n = _tensor_expr(src, ctx)
+    dst_n = _tensor_expr(dst, ctx)
+    kind = UnaryKind.CAST if isinstance(call.target, Cast) else call.target.kind
+    tag = _UNARY_TAG[kind]
+    n = _dyn_clip(dst, (src,), ctx)
+    if n is None:
+        ctx.emit(f"tilefoundry::ops::elementwise({dst_n}, {tag}{{}}, {src_n});")
+        return
+    ctx.emit("{")
+    ctx.indent()
+    ctx.emit(f"auto tilefoundry_elementwise_n = cute::make_layout({n});")
+    ctx.emit(f"auto tilefoundry_elementwise_dst = cute::make_tensor({dst_n}.data(), tilefoundry_elementwise_n);")
+    ctx.emit(f"auto tilefoundry_elementwise_src = cute::make_tensor({src_n}.data(), tilefoundry_elementwise_n);")
+    ctx.emit(f"tilefoundry::ops::elementwise(tilefoundry_elementwise_dst, {tag}{{}}, tilefoundry_elementwise_src);")
+    ctx.dedent()
+    ctx.emit("}")

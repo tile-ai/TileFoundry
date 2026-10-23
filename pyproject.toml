@@ -34,6 +34,9 @@ Repository = "https://github.com/tile-ai/TileFoundry"
 [project.scripts]
 tilefoundry = "tilefoundry.cli:main"
 
+[project.entry-points."tilefoundry.targets"]
+cuda = "tilefoundry_cuda"
+
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-xdist>=3", "pytest-cov>=7"]
 dev = [
@@ -56,15 +59,16 @@ skip_empty = true
 [tool.setuptools_scm]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "targets/cuda"]
 
 [tool.setuptools.package-data]
 "tilefoundry.runtime" = ["include/tilefoundry/runtime/cpu/*.h"]
-"tilefoundry.codegen.cuda" = ["include/tilefoundry/runtime/cuda/**/*"]
+"tilefoundry_cuda.codegen" = ["include/tilefoundry/runtime/cuda/**/*"]
+"tilefoundry_cuda" = ["docs/spec/*.md"]
 "tilefoundry.codegen" = ["templates/cmake/*.j2"]
-"tilefoundry.codegen.cuda.templates" = ["*.j2"]
+"tilefoundry_cuda.codegen.templates" = ["*.j2"]
 "tilefoundry.codegen.cpu.templates" = ["*.j2"]
-"tilefoundry.target.cuda.hardware" = ["*.toml"]
+"tilefoundry_cuda.target.hardware" = ["*.toml"]
 "tilefoundry.target.amx.hardware" = ["*.toml"]
 
 [tool.setuptools.data-files]
@@ -92,10 +96,10 @@ where = ["src"]
 # workflow states its own.
 markers = [
     "no_dump: opt out of the autouse DumpScope for tests that emit excessive dump output",
-    "sm89: run only where the local CUDA device is compute capability 8.9",
 ]
 
 [tool.ruff]
+src = [".", "src", "targets/cuda"]
 # Snapshot examples, shipped model sources, and recorded parser and printer output are
 # evidence; formatting them changes that evidence.
 extend-exclude = ["examples", "tests/models", "tests/parser/golden", "tests/fixtures/schedule/tir"]

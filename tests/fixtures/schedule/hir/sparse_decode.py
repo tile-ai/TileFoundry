@@ -8,7 +8,7 @@ checks TIR and evaluation, not the missing cross-thread shuffle codegen.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 NEG_INF = float("-inf")
 

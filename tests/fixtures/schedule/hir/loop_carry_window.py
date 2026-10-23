@@ -2,7 +2,7 @@
 
 from tilefoundry import func, module
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 
 @module(

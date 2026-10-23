@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import tilefoundry.codegen.cuda  # noqa: F401
+import tilefoundry_cuda.codegen  # noqa: F401
 from tests._source import import_dsl
-from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Constant, Var
@@ -17,6 +16,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.stmts import For, Sequential
 from tilefoundry.visitor_registry.verify import verify_module
+from tilefoundry_cuda.codegen.context import CudaCodegenContext
 
 
 def _module_functions(module):
@@ -125,7 +125,7 @@ def test_tir_for_if_and_sync_mesh_forms_roundtrip() -> None:
             "from tilefoundry.dsl import *\n"
             "\n"
             "\n"
-            "from tilefoundry.target import CudaTarget\n"
+            "from tilefoundry_cuda import CudaTarget\n"
             "\n"
             "@prim_func(target=CudaTarget('nvidia.h200_sxm'))\n"
             "def device(a: Tensor[(64,), 'f32'], out: Tensor[(64,), 'f32']):\n"
@@ -182,7 +182,7 @@ def test_long_statement_sequence_prints() -> None:
     )
     module = import_dsl(
         'from tilefoundry.dsl import *\n'
-        'from tilefoundry.target import CudaTarget\n'
+        'from tilefoundry_cuda import CudaTarget\n'
         '@module()\n'
         'class LongSequence:\n'
         '    @prim_func(target=CudaTarget("nvidia.h200_sxm"))\n'

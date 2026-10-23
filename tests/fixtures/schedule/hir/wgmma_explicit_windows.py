@@ -10,7 +10,7 @@ weight, so its windows have K at stride one and the atom states ``b_major=K``.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 128
 N = 64

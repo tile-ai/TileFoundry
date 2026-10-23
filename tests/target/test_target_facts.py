@@ -15,13 +15,13 @@ from tilefoundry.analysis.facts import (
 from tilefoundry.ir.types import DType, Topology
 from tilefoundry.target import (
     AmxTarget,
-    CudaTarget,
     Target,
     TopologyFacts,
     TopologyLevelFacts,
     UnsupportedCapabilityError,
 )
 from tilefoundry.target.facts import TargetFactsError, facts_result
+from tilefoundry_cuda import CudaTarget
 
 
 def test_builtin_targets_own_their_facts_projections() -> None:

@@ -53,9 +53,10 @@ from tilefoundry.ir.types.layout import ComposedLayout, flatten
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.utils import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import CudaTarget, Target
+from tilefoundry.target import Target
 from tilefoundry.visitor_registry.contexts import ValuationContext
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
+from tilefoundry_cuda import CudaTarget
 
 _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)

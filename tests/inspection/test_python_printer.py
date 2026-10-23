@@ -19,9 +19,9 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.target import Target, register_target
-from tilefoundry.target.cuda import CudaArchitecture
-from tilefoundry.target.cuda import CudaTarget as BuiltinCudaTarget
 from tilefoundry.utils.python_source import PythonExpr
+from tilefoundry_cuda.target import CudaArchitecture
+from tilefoundry_cuda.target import CudaTarget as BuiltinCudaTarget
 
 
 class CudaTarget(BuiltinCudaTarget):
@@ -127,7 +127,7 @@ def test_an_installed_target_reports_its_public_constructor():
     rendered = installed.to_python()
 
     assert rendered == PythonExpr(
-        imports=("from tilefoundry.target import CudaTarget",),
+        imports=("from tilefoundry_cuda import CudaTarget",),
         text='CudaTarget("nvidia.h200_sxm")',
     )
     assert _rebuild(rendered) == installed
@@ -152,7 +152,7 @@ def test_direct_hardware_values_keep_added_fields_in_canonical_source():
     assert rendered.imports == (
         "from tests.inspection.test_python_printer import ExtendedCudaArchitecture",
         "from tilefoundry.ir.types import DType",
-        "from tilefoundry.target import CudaDevice, CudaTarget",
+        "from tilefoundry_cuda import CudaDevice, CudaTarget",
     )
     rebuilt = _rebuild(rendered)
     assert rebuilt == target
@@ -167,7 +167,7 @@ def test_external_same_named_cuda_target_keeps_its_provider_in_module_source():
     canonical = as_script(module)
 
     assert "from tests.inspection.test_python_printer import CudaTarget" in canonical
-    assert "from tilefoundry.target.cuda import CudaTarget" not in canonical
+    assert "from tilefoundry_cuda.target import CudaTarget" not in canonical
     rebuilt = import_dsl(canonical)
     assert type(rebuilt.target) is CudaTarget
     assert rebuilt.target == target

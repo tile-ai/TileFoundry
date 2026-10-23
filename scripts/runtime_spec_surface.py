@@ -24,7 +24,7 @@ import clang.cindex as CI
 ROOT = Path(__file__).resolve().parent.parent
 HEADERS = {
     "cpu": ROOT / "src/tilefoundry/runtime/include/tilefoundry/runtime",
-    "cuda": ROOT / "src/tilefoundry/codegen/cuda/include/tilefoundry/runtime",
+    "cuda": ROOT / "targets/cuda/tilefoundry_cuda/codegen/include/tilefoundry/runtime",
 }
 PACKAGE = ROOT / "src/tilefoundry"
 SPEC = ROOT / "docs/spec/runtime.md"

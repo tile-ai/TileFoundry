@@ -37,11 +37,6 @@ class AppleM2Pro(Device):
     performance_amx_f16: int | None
     performance_host_lane_events: int | None
 
-    def _python_import_module(self) -> str:
-        if type(self) is AppleM2Pro:
-            return "tilefoundry.target.amx"
-        return super()._python_import_module()
-
     @property
     def unit_flops_per_second(self) -> dict[str, dict[DType, int]]:
         """Return the measured compute-throughput map of every execution unit."""

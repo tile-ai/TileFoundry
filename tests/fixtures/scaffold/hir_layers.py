@@ -5,7 +5,7 @@ import tvm_ffi
 
 from tilefoundry.dsl import *
 from tilefoundry.runtime.module import RuntimeModule
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 S = DimVar("S", 1, 16)
 HIERARCHY = (Topology("thread", 32),)

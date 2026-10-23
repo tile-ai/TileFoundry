@@ -18,8 +18,6 @@ import pytest
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
-from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -47,6 +45,8 @@ from tilefoundry.ir.visitor import (
     rewrite_prim_function,
     walk_prim_function,
 )
+from tilefoundry_cuda.ir.tir.nn.mma import TiledMma
+from tilefoundry_cuda.ir.tir.nn.sm80_mma import Mma
 
 
 def _t() -> TensorType:

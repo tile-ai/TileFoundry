@@ -20,10 +20,6 @@ class CpuTarget(Target):
             return super().to_python()
         return PythonExpr(("from tilefoundry.target import CpuTarget",), "CpuTarget()")
 
-    def _python_import_module(self) -> str:
-        if type(self) is CpuTarget:
-            return "tilefoundry.target"
-        return super()._python_import_module()
 
 
 

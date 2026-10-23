@@ -20,8 +20,8 @@ def _v100_qwen(tf, tmp_path: Path) -> Path:
     model.write_text(
         model.read_text(encoding="utf-8")
         .replace(
-            "from tilefoundry.target import CudaTarget",
-            "from pathlib import Path\nfrom tilefoundry.target import CudaTarget",
+            "from tilefoundry_cuda import CudaTarget",
+            "from pathlib import Path\nfrom tilefoundry_cuda import CudaTarget",
         )
         .replace(
             'CudaTarget("nvidia.h200_sxm")',

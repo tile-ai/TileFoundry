@@ -41,7 +41,6 @@ from tilefoundry.analysis.metadata import (
     RooflineMetadata,
 )
 from tilefoundry.cli import main as cli_main
-from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.emitter import CppEmitter
 from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.evaluator.value import to_torch_dtype
@@ -87,11 +86,6 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.arange import Arange as TirArange
 from tilefoundry.ir.tir.async_copy import CopyAsync
-from tilefoundry.ir.tir.cuda.memory.copy_async_tensor import CopyAsyncTensor
-from tilefoundry.ir.tir.cuda.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
-from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
-from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
-from tilefoundry.ir.tir.cuda.nn.wgmma import Form, Wgmma
 from tilefoundry.ir.tir.memory import Copy, PtrOf, TensorView
 from tilefoundry.ir.tir.stmts import Evaluate, For, If, LetStmt, MeshScope, Sequential, While
 from tilefoundry.ir.types import (
@@ -115,7 +109,6 @@ from tilefoundry.ir.types.stride import crd2idx
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.schedule import finalize
-from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
     access_relation_registry,
@@ -128,6 +121,13 @@ from tilefoundry.visitor_registry.contexts import TypeInferContext, VerifyContex
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal, check_call, project
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
+from tilefoundry_cuda import CudaTarget
+from tilefoundry_cuda.codegen.context import CudaCodegenContext
+from tilefoundry_cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensor
+from tilefoundry_cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
+from tilefoundry_cuda.ir.tir.nn.mma import TiledMma
+from tilefoundry_cuda.ir.tir.nn.sm80_mma import Mma
+from tilefoundry_cuda.ir.tir.nn.wgmma import Form, Wgmma
 
 PLAIN = (
     "unit_mesh_axis_loop_carry",
@@ -2268,7 +2268,7 @@ def test_lowering_rejects_instruction_without_access_relation(
 def test_lowering_rejects_nonidentity_inverse_for_a_written_return():
     module = import_dsl("""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 1)))
 class WrittenReturnWindow:
@@ -2288,7 +2288,7 @@ class WrittenReturnWindow:
 def test_zero_trip_carry_keeps_direct_address_proofs_and_the_loop():
     module = import_dsl("""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 1)))
 class ZeroTripCarry:
@@ -2331,7 +2331,7 @@ class ZeroTripCarry:
 def test_dynamic_window_keeps_a_mixed_scalar_and_constant_key():
     module = import_dsl("""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 1)))
 class Window:
@@ -2374,7 +2374,7 @@ class Window:
 def test_register_row_pointer_keeps_the_split_axis_whole():
     module = import_dsl("""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 16)))
 class RegisterRows:
@@ -2409,7 +2409,7 @@ def test_composed_view_keeps_its_layout_when_logical_rank_changes(start, offset)
     module = import_dsl(
         """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 1)))
 class ComposedReshape:
@@ -2456,7 +2456,7 @@ def test_composed_reshape_retains_non_affine_outer_modes(
     module = import_dsl(
         """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 1)))
 class ComposedReshape:
@@ -2488,7 +2488,7 @@ class ComposedReshape:
 def test_address_origin_can_divide_a_runtime_loop_index():
     module = import_dsl("""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 1)))
 class ModularWindow:

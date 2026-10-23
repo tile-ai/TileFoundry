@@ -16,7 +16,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.parser import ParseError
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 _FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures"
 _FIXTURES_THAT_REFUSE_TO_PARSE = {_FIXTURE_ROOT / "schedule" / "plain" / "gemm_relu_gemm_smem_staged.py"}

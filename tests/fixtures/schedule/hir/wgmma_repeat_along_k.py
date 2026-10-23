@@ -7,7 +7,7 @@ two M groups and four K slices into one accumulator before the next stage.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 128
 N = 16

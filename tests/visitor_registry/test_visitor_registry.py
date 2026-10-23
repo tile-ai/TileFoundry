@@ -28,7 +28,6 @@ from tilefoundry.ir.types import (
     Topology,
 )
 from tilefoundry.ir.types.shard_layout import Broadcast
-from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import CostContext, VerifyContext
 from tilefoundry.visitor_registry.registries import (
     codegen_registry,
@@ -40,6 +39,7 @@ from tilefoundry.visitor_registry.visitors import (
     CostEvaluator,
     VerifyVisitor,
 )
+from tilefoundry_cuda import CudaTarget
 
 
 def _t() -> TensorType:

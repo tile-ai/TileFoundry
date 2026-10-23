@@ -8,7 +8,7 @@ case witnesses zero traffic and source storage reuse under that contract.
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 GPUS, CTAS, R, C = 2, 4, 8, 8
 GPU, CTA = Topology("gpu", GPUS), Topology("cta", CTAS)

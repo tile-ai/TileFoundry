@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 SEQ = DimVar("seq", 1, 4096)
 CTX = DimVar("ctx", 1, 4096)

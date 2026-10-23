@@ -11,7 +11,7 @@ one binds its mesh for layout sugar, while the other keeps it in a signature.
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")
 _TOPOLOGIES = (Topology("cta", 4), Topology("thread", 8))

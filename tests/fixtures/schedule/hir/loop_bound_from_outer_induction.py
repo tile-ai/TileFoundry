@@ -1,7 +1,7 @@
 """Start an inner range with arithmetic on the outer induction variable."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 N = 8
 R = 32

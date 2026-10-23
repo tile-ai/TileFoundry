@@ -53,9 +53,9 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry_cuda import CudaTarget
 
 _ROUNDING_M = 14_593
 

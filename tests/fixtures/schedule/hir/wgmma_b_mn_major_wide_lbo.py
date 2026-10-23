@@ -1,6 +1,6 @@
 """Admit an MN-major B descriptor with a wide leading byte offset."""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 A_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), 16), ((512, 64), 1)))
 V_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0, Layout((32, (2, 64)), (64, (2048, 1))))

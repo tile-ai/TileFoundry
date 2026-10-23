@@ -76,7 +76,7 @@ def _target_document(source: Path, path: str) -> Path | None:
     """
     if not path:
         return source if source.suffix == ".md" else None
-    if path.startswith("docs/") and source.suffix != ".md":
+    if path.startswith(("docs/", "targets/")) and source.suffix != ".md":
         return (_ROOT / path).resolve()
     return (source.parent / path).resolve()
 
@@ -150,7 +150,7 @@ def _why(source: Path, display: str, target: str) -> str:
         return "names no heading; the target needs a `#<anchor>`"
     path, _, fragment = target.partition("#")
     path = path.strip()
-    if source.suffix == ".md" and path.startswith("docs/"):
+    if source.suffix == ".md" and path.startswith(("docs/", "targets/")):
         return f"{path!r} is a repository-root path; a page's links resolve beside the page"
     document = _target_document(source, path)
     if document is None or not document.is_file():

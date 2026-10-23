@@ -54,7 +54,7 @@ from pathlib import Path
 from transformers import AutoConfig
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 _MAIN_ROPE: "tuple | None" = None
 

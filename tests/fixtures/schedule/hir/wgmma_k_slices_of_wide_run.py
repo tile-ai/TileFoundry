@@ -10,7 +10,7 @@ where a slice starts is the view's, and the descriptor reads it there.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 64
 N = 32

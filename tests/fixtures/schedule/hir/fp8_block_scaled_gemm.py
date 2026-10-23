@@ -9,7 +9,7 @@ and the scaled block added to the f32 accumulator.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 128
 N = 128

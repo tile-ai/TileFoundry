@@ -29,7 +29,7 @@ from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Tuple
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 Hq, Hkv, D, G = NUM_Q_HEADS, NUM_KV_HEADS, HEAD_DIM, GQA_GROUP
 _SCALE = 1.0 / math.sqrt(D)

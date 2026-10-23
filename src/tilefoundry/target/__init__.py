@@ -15,7 +15,6 @@ from tilefoundry.target.base import (
     registered_targets,
 )
 from tilefoundry.target.cpu import CpuTarget
-from tilefoundry.target.cuda import CudaArchitecture, CudaDevice, CudaTarget
 from tilefoundry.target.facts import (
     MemoryExecutionFacts,
     TargetFactsError,
@@ -52,9 +51,6 @@ __all__ = [
     "AppleM2Pro",
     "Architecture",
     "CpuTarget",
-    "CudaArchitecture",
-    "CudaDevice",
-    "CudaTarget",
     "Device",
     "MemoryHierarchyFacts",
     "MemoryExecutionFacts",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 CONTEXT_CTA = Topology("cta", 132)
 CONTEXT_WARP = Topology("warp", 4)

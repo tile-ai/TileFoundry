@@ -19,9 +19,9 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry_cuda import CudaTarget
 
 _TARGET = CudaTarget("nvidia.h200_sxm")
 _TOPOLOGIES = (Topology("cta", 2), Topology("thread", 4))

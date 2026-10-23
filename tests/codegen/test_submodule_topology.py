@@ -7,7 +7,8 @@ import torch
 
 import tilefoundry
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.target import CpuTarget
+from tilefoundry_cuda import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 

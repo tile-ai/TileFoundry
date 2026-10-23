@@ -2,12 +2,12 @@
 
 import pytest
 
-from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.emitter import CppEmitter
-from tilefoundry.ir.tir.cuda.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
-from tilefoundry.ir.tir.cuda.memory.stmatrix import StMatrix
 from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
+from tilefoundry_cuda.codegen.context import CudaCodegenContext
+from tilefoundry_cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
+from tilefoundry_cuda.ir.tir.memory.stmatrix import StMatrix
 
 
 @pytest.mark.parametrize(

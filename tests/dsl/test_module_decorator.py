@@ -34,8 +34,9 @@ from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.runtime.resource import DictResource
-from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.target import CpuTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
+from tilefoundry_cuda import CudaTarget
 
 
 @module(entry="composed")

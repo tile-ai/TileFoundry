@@ -1,7 +1,7 @@
 """Finalize an explicitly scheduled copy after binding its row extent."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 ROWS = DimVar("rows", 1, 256)
 

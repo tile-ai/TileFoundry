@@ -2,8 +2,7 @@
 
 Each test gets a ``ContextVar``-backed ``DumpScope`` rooted by file, test, and
 xdist worker under gitignored ``test_results``; ``no_dump`` selects a null sink.
-Tests are never skipped for missing nvcc or CUDA; an ``sm89`` test runs only on
-a compute capability 8.9 device. On multi-GPU hosts, xdist workers select
+On multi-GPU hosts, xdist workers select
 devices round-robin before tests touch CUDA, so an unindexed ``"cuda"``
 consistently means that worker's device.
 """
@@ -20,13 +19,14 @@ from pathlib import Path
 import pytest
 
 from tilefoundry.dump import DumpFlags, DumpScope, FileDumper, NullDumper
-from tilefoundry.target.base import _TARGET_CLASSES, _TARGET_PROVIDERS
+from tilefoundry.target.base import _TARGET_CLASSES, _TARGET_PROVIDERS, load_targets
 
 _RESULTS_ROOT = Path(__file__).resolve().parents[1] / "test_results"
 _SANITIZE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def pytest_configure(config) -> None:
+    load_targets()
     cache = os.environ.get("TILEFOUNDRY_CACHE_DIR")
     if cache:
         _use_shared_caches(Path(cache), main=not hasattr(config, "workerinput"))
@@ -118,20 +118,6 @@ def _spread_workers_across_devices() -> None:
 
 
 _spread_workers_across_devices()
-
-
-def pytest_runtest_setup(item: pytest.Item) -> None:
-    """Skip an ``sm89`` test unless the local CUDA device is compute capability 8.9.
-
-    Such a test runs a kernel on the hardware the sm_89 documents describe,
-    which upstream CI does not have.
-    """
-    if item.get_closest_marker("sm89") is None:
-        return
-    import torch  # noqa: PLC0415
-
-    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (8, 9):
-        pytest.skip("needs a local compute capability 8.9 CUDA device")
 
 
 @pytest.fixture(autouse=True)

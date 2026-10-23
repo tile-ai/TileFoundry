@@ -66,7 +66,7 @@ def test_codegen_reports_unsupported_scaffold_targets(target, tmp_path, capsys):
     source = tmp_path / "model.py"
     source.write_text(
         "from tilefoundry.dsl import *\n"
-        "from tilefoundry.target import CpuTarget, CudaTarget\n"
+        "from tilefoundry.target import CpuTarget\nfrom tilefoundry_cuda import CudaTarget\n"
         f"TARGET = {target}\n"
         '@module(entry="run", target=TARGET)\n'
         "class Root:\n"

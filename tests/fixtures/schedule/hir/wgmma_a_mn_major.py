@@ -7,7 +7,7 @@ the atom's major-mode choice from the rest of the 64x32 schedule.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 M = 64
 N = 32

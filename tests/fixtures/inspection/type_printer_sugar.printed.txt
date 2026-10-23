@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_cuda import CudaTarget
 
 @module(entry="composed_mesh_pipeline", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4), Topology("thread", 8),))
 class TypePrinterSugar:
