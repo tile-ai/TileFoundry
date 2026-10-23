@@ -15,7 +15,6 @@ from tilefoundry.target.base import (
 )
 from tilefoundry.target.cpu import CpuTarget
 from tilefoundry.target.cuda import CudaArchitecture, CudaDevice, CudaTarget
-from tilefoundry.target.cuda.spec import H200_SXM_ID as H200_SXM_ID
 from tilefoundry.target.facts import (
     MemoryExecutionFacts,
     TargetFactsError,
