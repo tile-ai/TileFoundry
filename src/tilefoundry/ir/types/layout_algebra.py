@@ -56,6 +56,8 @@ def slice_and_offset(coord, layout):
 
 def domain_offset(coord, layout, shape):
     """CuTe domain_offset: move the pointer, or a composed layout's offset."""
+    from tilefoundry.ir.isl_interop import normalize_dim  # noqa: PLC0415
+
     from .int_tuple import compatible_profile  # noqa: PLC0415
     from .layout import flatten, unflatten  # noqa: PLC0415
     from .shard_layout import ShardLayout  # noqa: PLC0415
@@ -63,7 +65,7 @@ def domain_offset(coord, layout, shape):
 
     if isinstance(layout, ComposedLayout):
         _, offset = domain_offset(coord, layout.outer, shape)
-        return ComposedLayout(layout.inner, layout.offset + offset, layout.outer), 0
+        return ComposedLayout(layout.inner, normalize_dim(layout.offset + offset), layout.outer), 0
     primitive = layout.layout if isinstance(layout, ShardLayout) else layout
     grouped = unflatten(flatten(primitive), compatible_profile(primitive.shape, shape))
     return layout, crd2idx(tuple(coord), grouped.shape, grouped.strides)

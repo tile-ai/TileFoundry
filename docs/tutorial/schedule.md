@@ -371,7 +371,7 @@ persistent loops and buffer placements:
 ```bash
 set -euo pipefail
 tilefoundry schedule finalize optimal.py optimal_tir.py
-sed -n '1,109p' optimal_tir.py
+sed -n '1,104p' optimal_tir.py
 ```
 
 ```text
@@ -444,46 +444,41 @@ def gemm(
                     with Mesh(
                         scope[1:], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")
                     ) as scope_3:
-                        acc_view = T.tensor_view(
-                            T.ptr_of(acc[0:0 + 128, 0:0 + 256]),
-                            layout=((2 @ scope_3.group, 4 @ scope_3.warp, 2, 8 @ scope_3.lane8, 32, 4 @ scope_3.lane4, 2), (16384, 16, 8, 1, 512, 128, 64)),
-                            shape=(128, 256),
+                        acc_pointer = T.ptr_of(acc)
+                        unit = scope_3.group
+                        lhs_pointer = T.ptr_of(
+                            lhs_ring_stages[((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3],
                         )
-                        lhs_view = T.tensor_view(
-                            T.ptr_of(lhs_ring_stages[((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3][0:0 + 128, 0:0 + 16]),
-                            layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) | Swizzle(3, 4, 3)) @ {B()},
-                            shape=(128, 16),
-                        )
-                        rhs_view = T.tensor_view(
-                            T.ptr_of(rhs_ring_stages[((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3][0:0 + 16, 0:0 + 256]),
-                            layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ {B()},
-                            shape=(16, 256),
-                        )
-                        T.tiled_mma(
-                            acc_view,
-                            lhs_view,
-                            rhs_view,
-                            atom=T.cuda.sm90.Wgmma(n=256, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN),
-                        )
-                        acc_view_1 = T.tensor_view(
-                            T.ptr_of(acc[0:0 + 128, 0:0 + 256]),
-                            layout=((2 @ scope_3.group, 4 @ scope_3.warp, 2, 8 @ scope_3.lane8, 32, 4 @ scope_3.lane4, 2), (16384, 16, 8, 1, 512, 128, 64)),
-                            shape=(128, 256),
-                        )
-                        lhs_view_1 = T.tensor_view(
-                            T.ptr_of(lhs_ring_stages[((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3][0:0 + 128, 16:16 + 16]),
-                            layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ {B()},
-                            shape=(128, 16),
-                        )
-                        rhs_view_1 = T.tensor_view(
-                            T.ptr_of(rhs_ring_stages[((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3][16:16 + 16, 0:0 + 256]),
-                            layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ {B()},
-                            shape=(16, 256),
-                        )
-                        T.tiled_mma(
-                            acc_view_1,
-                            lhs_view_1,
-                            rhs_view_1,
+                        with Mesh(
+                            scope[1:2], layout=(4, 8, 4), names=("warp", "lane8", "lane4")
+                        ) as threads_4:
+                            acc_local = T.tensor_view(
+                                acc_pointer,
+                                layout=((4 @ threads_4.warp, 2, 8 @ threads_4.lane8, 32, 4 @ threads_4.lane4, 2), (16, 8, 1, 512, 128, 64)),
+                                shape=(64, 256),
+                            )
+                            lhs_local = T.tensor_view(
+                                lhs_pointer,
+                                layout=Layout(((8, 8), (4, 16)), ((512, 64), (16, 1))) + (4096 * unit) | Swizzle(3, 4, 3),
+                                shape=(64, 64),
+                            )
+                            acc_view = acc_local[0:0 + 64, 0:0 + 256]
+                            lhs_view = T.tensor_view(
+                                T.ptr_of(lhs_local[0:0 + 64, 0:0 + 16]),
+                                layout=(Layout(((8, 8), 16), ((512, 64), 1)) + (4096 * unit) | Swizzle(3, 4, 3)) @ {B()},
+                                shape=(64, 16),
+                            )
+                            rhs_view = T.tensor_view(
+                                T.ptr_of(rhs_ring_stages[((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3][0:0 + 16, 0:0 + 256]),
+                                layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ {B()},
+                                shape=(16, 256),
+                            )
+                            T.tiled_mma(
+                                acc_view,
+                                lhs_view,
+                                rhs_view,
+                                atom=T.cuda.sm90.Wgmma(n=256, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN),
+                            )
 ```
 
 The three `g / bn / mi` loops and `cta.d0` survive lowering. The three RHS slots
