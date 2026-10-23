@@ -591,16 +591,6 @@ These operations execute on the `amx` mesh and require `amx_outer_product`.
 Native wrappers for the corresponding loads, FMA and physical Z-row stores,
 plus AMX state enable/disable, live in `include/tilefoundry/runtime/amx/instructions.h`.
 
-CPU tensor kernels in `tilefoundry.ir.tir.cpu.tensor` explicitly select host
-implementations for the tensor operations used by hybrid CPU/AMX schedules.
-They execute in a single `core` participant scope, read tensor operands and
-write an explicit global-memory destination. Attributes and output types are
-checked against the corresponding HIR operation. Access relations, evaluation
-and arithmetic costs retain that operation's semantics; these are software
-kernel contracts rather than AMX ISA operations.
-These contracts require the Target's `cpu_tensor` capability; they MUST NOT
-appear among CUDA or topology-free CPU target instructions.
-
 Copy and Fill use a shared mesh wildcard, specialized from the Target's
 `MemoryExecutionFacts`. They require a contiguous run and sharded register
 operands on that same level. The module's Target Facts validate topology names

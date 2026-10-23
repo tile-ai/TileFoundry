@@ -11,11 +11,11 @@ source = "https://github.com/corsix/amx"
 conditions = "Apple publishes no AMX documentation, so the architecture is described from a reverse-engineered reference"
 
 [facts.capabilities]
-value = ["amx_outer_product", "amx_resident_accumulator", "cpu_tensor"]
+value = ["amx_outer_product", "amx_resident_accumulator"]
 unit = "name"
 origin = "reference"
 source = "https://github.com/corsix/amx"
-conditions = "instruction families the AMX code path may select; cpu_tensor identifies the host software contracts in src/tilefoundry/ir/tir/cpu/tensor.py"
+conditions = "instruction families the AMX code path may select"
 
 [facts.instruction.compute_dtypes]
 value = ["f16", "f32"]

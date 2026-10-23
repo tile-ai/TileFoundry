@@ -13,7 +13,6 @@ from tests.ops.tir.targets import retarget
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.schedule import match_instruction
-from tilefoundry.ir.tir.cpu.tensor import CpuCast1
 from tilefoundry.ir.tir.cuda.memory.copy_async_bulk import CopyAsyncBulk
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
@@ -23,7 +22,7 @@ from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.ir.types import DType, Layout, Mesh, Topology, make_tensor_type
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.visitor import StmtVisitor
-from tilefoundry.target import CpuTarget, CudaTarget, Target
+from tilefoundry.target import CudaTarget, Target
 from tilefoundry.visitor_registry.contexts import VerifyContext
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal
 from tilefoundry.visitor_registry.verify import verify_prim_function
@@ -33,7 +32,6 @@ SM89 = CudaTarget("nvidia.rtx_6000_ada")
 _SMEM_BAR = make_tensor_type((1,), DType.from_name("i64"), storage="smem")
 _PHASE = make_tensor_type((), DType.from_name("i32"), storage="rmem")
 _GMEM_TILE = make_tensor_type((32,), DType.f32, storage="gmem")
-_GMEM_HALF = make_tensor_type((32,), DType.f16, storage="gmem")
 _SMEM_TILE = make_tensor_type((32,), DType.f32, storage="smem")
 
 
@@ -102,15 +100,6 @@ def test_only_the_selected_atom_is_checked() -> None:
     module = retarget(MmHandwritten, SM89)
     for function in module.functions:
         verify_prim_function(function, module_fns=module)
-
-
-def test_a_plain_cpu_target_refuses_cpu_tensor_kernels() -> None:
-    """A target without an architecture lists no capability, so ``cpu_tensor`` is refused."""
-    cast = _one_call(
-        CpuCast1(dtype=DType.f16), _GMEM_TILE, _GMEM_HALF, level="core", size=1
-    )
-    with pytest.raises(VerifyError, match="needs cpu_tensor, which cpu does not list"):
-        _verify(cast, CpuTarget())
 
 
 class _MmaSite(StmtVisitor[None]):
