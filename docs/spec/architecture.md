@@ -179,9 +179,10 @@ execution support used by generated target code and by Python-side
 
 - the Python `RuntimeModule` / `RuntimeFunction` surface returned by
   `build(...)` / `compile(...)` / `jit(...)`;
-- the C++ runtime surface (`runtime.h` umbrella header,
-  `tilefoundry::Topology` / `Mesh` / `ShardLayout` primitives, the
-  `tilefoundry::ops::*` op free-function contract);
+- the C++ runtime surface: each target's preamble directly includes its own
+  package's runtime header, without an umbrella header or target-selection
+  macros; these headers provide `tilefoundry::Topology` / `Mesh` / `ShardLayout`
+  primitives and the `tilefoundry::ops::*` op free-function contract;
 - the load path that turns a `LinkedModule` ([codegen](./codegen.md))
   into a loadable, callable `RuntimeModule`.
 
@@ -211,7 +212,7 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[passes](./passes.md)** | Pass framework + implemented passes: `Pass` / `PassManager`, three pass granularities, per-pass subsections |
 | **[target](./target.md)** | Target capability descriptors, architecture/device facts, Facts projection, and admitted program topology levels |
 | **[codegen](./codegen.md)** | Target-resolved emission classes, emit / link products (`LinkableFunction` / `LinkableModule` in `linkable_function.py` / `linkable_module.py`, `LinkedFunction` / `LinkedModule` in `linked_function.py` / `linked_module.py`) and linking in `link_function.py` / `link_module.py`, the C++ signature family and calling conventions, program-shape / dynamic-CTA source contract, ShardLayout emission |
-| **[runtime](./runtime.md)** | `RuntimeModule` / launcher ABI, C++ runtime surface, `runtime.h` umbrella header, runtime op free-function contract |
+| **[runtime](./runtime.md)** | `RuntimeModule` / launcher ABI, C++ runtime surface in target-owned headers, runtime op free-function contract |
 | **[cli](./cli.md)** | Command-line grammar and behavior for models, spec, tutorial, check, analyze, and inspect |
 | **[code-organization](./code-organization.md)** | Implementation guide (not architectural): Python source tree layout |
 

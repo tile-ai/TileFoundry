@@ -175,10 +175,9 @@ short bullet list — keep it that way.
   (`program_shape`, `make_shard_tensor`); **template parameters** are
   `T`-prefixed `PascalCase` (`TLayout`, `TMesh`, `TAttrs`) — no trailing
   underscore.
-- Headers: the umbrella entry header is `<tilefoundry/runtime.h>`; cuda target
-  headers use `.cuh`, target-neutral / cpu headers use `.h`; exactly one
-  `TILEFOUNDRY_TARGET_*` macro is defined per translation unit and the build
-  injects it per target.
+- Headers: each target's preamble directly includes its package-owned runtime
+  header. There is no umbrella header or target-selection macro. Device headers
+  use `.cuh` where required by their compiler; ordinary C++ headers use `.h`.
 
 ## 6. Add a target
 

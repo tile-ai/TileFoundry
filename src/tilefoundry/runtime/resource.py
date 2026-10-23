@@ -49,7 +49,13 @@ AliasMap = Mapping[str, AliasValue]
 
 
 def _resolved_device(device: str) -> str:
-    """Pin a bare accelerator name to the current device before opening a shard."""
+    """Pin a bare accelerator name to the current device before opening a shard.
+
+    Safetensors reads a bare device name as index 0, while torch uses the device
+    currently selected by the process. On multiple devices those can differ, so
+    tensors loaded here cannot be compared with tensors computed elsewhere.
+    Resolve the name to torch's current index; leave an explicit index alone.
+    """
     if device == "cpu" or ":" in device:
         return device
     module = torch.get_device_module(device)
