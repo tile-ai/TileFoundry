@@ -7,7 +7,7 @@ without remapping.
 ``Binary`` / ``Unary`` are ``Op`` subclasses (not ``Stmt``); in Stmt
 position they are invoked as ``Evaluate(op, args)`` (unit-typed, no
 result value), matching the TIR convention shared with
-``tir.memory.Copy`` / ``tir.cuda.nn.Mma``.
+``tir.memory.Copy``.
 """
 
 from __future__ import annotations

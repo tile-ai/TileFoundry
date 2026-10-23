@@ -75,6 +75,50 @@ jobs:
         run: ccache --dir "$TILEFOUNDRY_CACHE_DIR/ccache" --show-log-stats
       - name: Build the wheel
         run: uv build --wheel --out-dir "$RUNNER_TEMP/wheel"
+      - name: Build and inspect target wheels
+        run: |
+          uv build --wheel targets/cuda --out-dir "$RUNNER_TEMP/target-wheels"
+          uv build --wheel targets/amx --out-dir "$RUNNER_TEMP/target-wheels"
+          python - <<'PYCODE'
+          import fnmatch
+          import os
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          for name in ("cuda", "amx"):
+              package = f"tilefoundry_{name}"
+              wheel, = (root / "target-wheels").glob(f"{package}-*.whl")
+              with ZipFile(wheel) as archive:
+                  names = archive.namelist()
+              print(f"{wheel.name}:")
+              print("\n".join(names))
+              extra = [path for path in names if not (
+                  path.startswith(f"{package}/") or
+                  fnmatch.fnmatch(path, f"{package}-*.dist-info/*")
+              )]
+              if extra:
+                  raise SystemExit("Files outside target package:\n" + "\n".join(extra))
+              print(f"PASS: {package} owns all {len(names)} files")
+          wheel, = (root / "wheel").glob("tilefoundry-*.whl")
+          with ZipFile(wheel) as archive:
+              names = archive.namelist()
+          required = (
+              "tilefoundry_cuda/target/hardware/*.toml",
+              "tilefoundry_cuda/codegen/templates/*.j2",
+              "tilefoundry_cuda/codegen/include/**/*.cuh",
+              "tilefoundry_cuda/codegen/include/**/*.h",
+              "tilefoundry_cuda/docs/spec/*.md",
+              "tilefoundry_amx/target/hardware/*.toml",
+              "tilefoundry_amx/include/**/*.h",
+              "tilefoundry_amx/docs/spec/*.md",
+          )
+          for pattern in required:
+              matches = [path for path in names if fnmatch.fnmatch(path, pattern)]
+              if not matches:
+                  raise SystemExit(f"{wheel.name}: missing {pattern}")
+              print(f"PASS: {pattern}: {len(matches)} files")
+          PYCODE
       - name: Install the wheel into a clean environment
         run: |
           uv venv --clear --no-project --python /usr/local/bin/python3.12 .wheel-venv

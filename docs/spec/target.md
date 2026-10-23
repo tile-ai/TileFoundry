@@ -108,7 +108,7 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
     `codegen` modules.
   - `torch_device_type()` MUST return the torch device type holding the
     program's tensor arguments. The base implementation returns `"cpu"`,
-    inherited by CPU and AMX; CUDA returns `"cuda"`. CLI input generation MUST
+    inherited by CPU. A backend MUST override it for another device type. CLI input generation MUST
     use this answer and reject an unavailable non-CPU device.
   - A missing getter capability MUST fail and name the concrete Target class,
     its registration name, and the requested selector, topology, or Facts type.
@@ -166,6 +166,40 @@ class Device:
     shares. A Device owns how many such units the product has, its memory
     system, and its measured or published throughput. A fact MUST be recorded on
     exactly one side, and the other side MUST NOT restate it.
+
+### 1.3 Target loading and extensions
+
+```python
+class TargetLoadError(RuntimeError): ...
+
+
+def load_targets() -> Mapping[str, type[Target]]: ...
+```
+
+- constraints:
+  - `load_targets()` MUST load the `tilefoundry.targets` entry points in name
+    order. Each entry point MUST name its plugin package; importing that package
+    MUST complete its target, operation, visitor, evaluator and pass registrations.
+  - A load failure MUST raise `TargetLoadError` naming the entry point and cause.
+    A failed load MUST NOT mark loading complete; a later call MAY retry it.
+    A successful call MUST make later calls no-ops.
+  - Core MUST NOT import or re-export plugin implementations. CPU MUST remain
+    available from `tilefoundry.target`; another backend MUST export its target
+    values from `tilefoundry_<name>`.
+  - CLI startup MUST load targets before persistent user registrations. Dialect
+    namespace lookup MUST load targets for public names; probing a name beginning
+    with `__` MUST NOT trigger loading during package initialization.
+  - A plugin MUST install its specifications as package data under `docs/spec/`.
+    After loading targets, `tilefoundry spec` MUST discover those files through
+    `importlib.resources.files(entry_point.value)` in source and installed modes,
+    naming each topic `<entry_point.name>/<filename stem>`.
+  - `EmitContext`, `LinkableModule`, `LinkedFunction` and `LinkedModule` MAY be
+    subclassed and bound with `@bind(TargetClass, BaseClass)`. The implementation's
+    `create(target, *args)` MUST provide the instance selected by `resolve`.
+    `LinkableModule.link(project)` MUST contribute source and build settings to
+    the shared `CMakeProject`; core MUST build the combined project once.
+    `LinkableFunction` and whole-program `CodegenContext` MAY be subclassed, but
+    MUST NOT be constructed through `Target.resolve` by core orchestration.
 
 ## 5. `CpuTarget`
 
@@ -385,14 +419,12 @@ class MemoryExecutionFacts:
 - constraints:
   - `MemoryExecutionFacts.topologies` MUST list the Target's execution levels
     admitted for synchronous Copy and Fill. Each name MUST occur in
-    `TopologyFacts.topologies`. CUDA admits its thread level; AMX admits its
-    core and coprocessor levels. An empty list admits no memory execution scope.
+    `TopologyFacts.topologies`. An empty list admits no memory execution scope.
     Shared instruction matching MUST specialize the memory mesh wildcard from
     this projection before checking operands.
   - `max_logical_units` is the program-side declaration limit.
     `max_physical_units` is the machine-side count of positions the level
-    divides over. For CUDA CTAs it counts one CTA per SM for this model; it is
-    not the hardware resident-CTA limit.
+    divides over, independently of hardware residency limits.
   - `parallel_level`, when present, MUST name an entry in `topologies`.
     `parallel()` MUST return that entry. An empty aggregate MUST use `None` and
     return `None` from `parallel()`.

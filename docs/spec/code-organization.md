@@ -118,7 +118,7 @@ respectively. Their internal file layout is not a per-Op contract.
 `ir/pattern/` MUST NOT import `inspection/`, not even inside a function: a failed
 match answers with the matcher's `Refusal`, and the consumer that reports it
 turns that data into text with `PatternPrinter.refusal`. `inspection/` may
-import `ir/pattern/`; the reverse edge does not exist. Likewise `ir/tir/cuda/`
+import `ir/pattern/`; the reverse edge does not exist. Likewise target-owned TIR
 atoms never import `inspection/`: an atom is a `Printable` from `ir/core/`, a
 printer hands itself to `atom.print(printer, ctx)`, and the printer does not
 import an atom class.
@@ -146,11 +146,12 @@ register in `ir/hir/math/aliases.py`).
 Rule 1: "one Op = one file" means **one IR class** per file; aliases
 are not IR classes, so they go through Rule 1a.
 
-**Rule 1c — target-specific IR nodes nest under the dialect.** IR is
-**dialect-first**: its primary organizing axis is the dialect, and most
-nodes are target-neutral. A node or descriptor that is specific to one
-compilation target nests as `ir/{dialect}/{target}/{category}/<name>.py`;
-target-neutral abstractions stay at `ir/{dialect}/{category}/`. For
+**Rule 1c — target-specific code lives in a plugin package.** A backend lives
+under `targets/<name>/tilefoundry_<name>/`, with its own `pyproject.toml`.
+Its internal paths preserve the core categories: `target/`, `ir/hir/`,
+`ir/tir/`, `codegen/`, `passes/` and `visitor_registry/`. Target-owned IR
+nodes nest as `ir/{dialect}/{category}/<name>.py` within that package;
+target-neutral abstractions stay in core at `ir/{dialect}/{category}/`. For
 example the whole MMA surface is target-owned — `mma.py` defines the `TiledMma`
 op, `mma_atom.py` defines `MmaAtom` / `AtomPattern`, and `sm80_mma.py` /
 `sm89_mma.py` / `wgmma.py` define the CUDA instruction declarations. All five
@@ -242,3 +243,10 @@ matching that path. Outside it the decorator requires explicit values; the stand
 The `.pyi` stubs reflect registered schemas only. After adding a new
 `@register_op` / `@register_alias`, regenerate them with
 `python -m tilefoundry.dsl regen`.
+
+A plugin's import is its registration boundary. Its package root exports target
+values and imports every module that registers operations or implementations.
+Hardware TOML, templates, runtime headers and `docs/spec/*.md` are package data;
+core locates plugin resources through `importlib.resources`, without repository
+path fallbacks. A plugin's separate wheel contains only its own package and
+metadata. The main distribution bundles core and the in-tree plugin packages.

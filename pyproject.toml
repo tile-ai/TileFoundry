@@ -61,6 +61,7 @@ skip_empty = true
 
 [tool.setuptools.packages.find]
 where = ["src", "targets/cuda", "targets/amx"]
+include = ["tilefoundry", "tilefoundry.*", "tilefoundry_*"]
 
 [tool.setuptools.package-data]
 "tilefoundry.runtime" = ["include/tilefoundry/runtime/cpu/*.h"]

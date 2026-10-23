@@ -8,7 +8,7 @@ EmitGranularity = Literal["full", "skeleton"]
 
 @dataclass(frozen=True)
 class CodegenOptions:
-    """Whether CUDA bodies contain statements or placeholders."""
+    """Whether emitted bodies contain statements or placeholders."""
 
     emit: EmitGranularity = "full"
 

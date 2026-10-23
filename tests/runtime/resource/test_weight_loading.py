@@ -71,7 +71,7 @@ def test_distributed_weight_loading(tmp_path) -> None:
         ),
         str(tmp_path),
     )
-    reads = _Counted(SafetensorsResource(str(tmp_path)))
+    reads = _Counted(SafetensorsResource(str(tmp_path), device="cuda"))
     failures: list[BaseException] = []
 
     def run(gpu: int) -> None:

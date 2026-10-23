@@ -116,6 +116,7 @@ def test_preprocessed_cannot_name_a_subtree_segment() -> None:
     """M2 validates leaf preprocessing, so this public invalid segment needs coverage here."""
     resource = SafetensorsResource(
         "unused",
+        device="cpu",
         alias={
             "layer": Preprocessed("model.layers.0", lambda value: value),
         },

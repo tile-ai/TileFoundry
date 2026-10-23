@@ -827,10 +827,7 @@ def _verify_launch_extent(extent, extent_params, ref_name) -> None:
 
 
 def _verify_launch(stmt: Evaluate, fn, module_context, ctx):
-    """Host-launch checks; full placement validation lands in CUDA lowering.
-
-    Host-launch checks; full placement validation lands in CUDA lowering
-    (a launch tensor arg's storage vs the runtime device type).
+    """Check host launches before target-specific placement validation.
 
     The launch is ``Evaluate(Launch(...), (SymbolRef(callee), grid_x, grid_y,
     grid_z, block_x, block_y, block_z, *forwarded))``. An HIR callee's arguments

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from importlib.metadata import entry_points
+from importlib.resources import files
 from pathlib import Path
 
 from tilefoundry.cli import data
+from tilefoundry.target import load_targets
 from tilefoundry.utils.markdown import headings
 
 _SPEC_TOPICS = {
@@ -20,11 +23,12 @@ _ADDRESSABLE = 2
 
 def spec_path(topic: str) -> Path:
     """The document a topic names, from this checkout or from the installation."""
+    found = topics()
     try:
-        return data.path("spec", f"{_SPEC_TOPICS.get(topic, topic)}.md")
-    except FileNotFoundError:
+        return found[topic]
+    except KeyError:
         raise FileNotFoundError(
-            f"no spec named {topic!r}; there are {', '.join(sorted(topics()))}"
+            f"no spec named {topic!r}; there are {', '.join(sorted(found))}"
         ) from None
 
 
@@ -40,7 +44,14 @@ def spec_directory() -> Path:
 
 def topics() -> dict[str, Path]:
     """Every document that can be asked for, by the name it is asked for under."""
+    load_targets()
     found = {path.stem: path for path in sorted(spec_directory().glob("*.md"))}
+    for ep in entry_points(group="tilefoundry.targets"):
+        directory = files(ep.value).joinpath("docs", "spec")
+        if directory.is_dir():
+            for path in sorted(directory.iterdir(), key=lambda path: path.name):
+                if path.is_file() and path.name.endswith(".md"):
+                    found[f"{ep.name}/{path.name[:-3]}"] = path
     for topic, name in _SPEC_TOPICS.items():
         if name in found:
             found.setdefault(topic, found[name])

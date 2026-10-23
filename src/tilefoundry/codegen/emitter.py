@@ -1,4 +1,4 @@
-"""C++ source emitters shared by CUDA and CPU code generation."""
+"""C++ source emitters shared by target code generators."""
 
 from __future__ import annotations
 

@@ -501,7 +501,7 @@ class DictResource:
 
 class SafetensorsResource:
     def __init__(
-        self, ckpt_dir: str, prefix: str = "", device: str = "cuda", alias: AliasMap | None = None
+        self, ckpt_dir: str, prefix: str = "", *, device: str, alias: AliasMap | None = None
     ) -> None: ...
 
     def load(self, name: str) -> torch.Tensor: ...
