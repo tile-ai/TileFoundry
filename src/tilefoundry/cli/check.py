@@ -31,6 +31,7 @@ from tilefoundry.runtime.resource import (
     SafetensorsResource,
     draw_tensor,
 )
+from tilefoundry.target import default_target
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry.contexts import ValuationContext
 
@@ -366,7 +367,7 @@ def _device(module: Module) -> str:
     try:
         target = module.resolve_target()
     except Exception:
-        return "cuda" if torch.cuda.is_available() else "cpu"
+        return default_target().torch_device_type()
     device = target.torch_device_type()
     if device != "cpu" and not getattr(torch, device).is_available():
         raise ValueError(
