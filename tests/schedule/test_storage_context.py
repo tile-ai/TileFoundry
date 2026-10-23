@@ -72,11 +72,10 @@ def test_captured_update_keeps_carry_ties_and_requires_its_window_copy():
     assert plan.answers[SSAValue(insert)].partner == SSAValue(loop.params[0])
 
 
-@pytest.mark.parametrize("instruction", (False, True), ids=("storage", "instruction"))
 @pytest.mark.parametrize(
     ("bits", "starts", "phase"), ((2, (8, 16), 16), (3, (16, 0), 0), (3, (0, 16), 16))
 )
-def test_swizzled_window_phase_is_relative_to_its_pointer(instruction, bits, starts, phase):
+def test_swizzled_window_phase_is_relative_to_its_pointer(bits, starts, phase):
     source_type = TensorType(
         (32, 64),
         DType.bf16,
@@ -93,7 +92,7 @@ def test_swizzled_window_phase_is_relative_to_its_pointer(instruction, bits, sta
         StorageKind.SMEM,
     )
     coordinates = tuple(i64_const(start) for start in starts)
-    actual_starts, actual = plan.window(source, desired, coordinates, instruction=instruction)
+    actual_starts, actual = plan.window(source, desired, coordinates)
     assert actual_starts == coordinates
     assert actual.layout.offset == phase
     assert actual.layout.inner == source_type.layout.inner

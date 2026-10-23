@@ -138,18 +138,25 @@ one and a larger count is rejected as `transfer tiling is not yet supported`.
 `order` is a permutation of the iteration dimension positions and defaults to
 the identity permutation. It does not change operand or result types. For an
 atom instruction, lowering writes each unit's serial issues in `order`, from
-outermost to innermost, with static integer operand starts. The operand's local
-ShardLayout type determines how many issues belong to each unit; the shared
-projection records the corresponding `bind` counts. Lowering emits no
+outermost to innermost, with static integer operand starts. A per-operand CuTe
+`zipped_divide` yields a tile and a rest. A rest mode Split outside the
+instruction's execution mesh binds that iteration axis for every operand;
+other rest modes are serial. Lowering emits no
 `For(o_<axis>)` loops and does not group issues by swizzle row. Existing view
 inference determines the swizzle phase at each static start. Transfer
 instructions issue once. Supporting non-identity `order` here is an intentional
 extension beyond the AtomSched reference, which rejects it.
 
 ScheduleOp operands follow the same Visit and memo path as other operations.
-Each serial issue uses those lowered operands, introducing a Slice/TensorView
-only for its required tile window. Storage forwarding does not introduce views;
-explicit HIR view operations remain represented, including identity operations.
+Before issuing, CuTe `slice_and_offset` fixes the bound modes once per unit.
+Shared storage uses MeshCoord; private storage uses coordinate zero, preserving
+the authored strides. The retained ShardLayout uses the execution frame.
+Each serial issue slices this local value at its logical rest coordinate.
+When that Slice already has the required type, it is used directly. Otherwise,
+a TensorView over PtrOf(Slice) replaces only the execution mesh and attrs;
+the Slice's shape, strides, swizzle and offset remain unchanged. Storage
+forwarding does not introduce views; explicit HIR view operations remain
+represented, including identity operations.
 
 For each operand layout, non-unit repeat counts name leading CuTe tile modes;
 the remaining inner modes are the instruction fragment matched against its

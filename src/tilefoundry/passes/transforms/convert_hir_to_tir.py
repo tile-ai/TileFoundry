@@ -58,6 +58,7 @@ from tilefoundry.ir.types import (
     Partial,
     PointerType,
     ShardLayout,
+    Split,
     StorageKind,
     Swizzle,
     TensorType,
@@ -72,12 +73,15 @@ from tilefoundry.ir.types.dim import (
     is_dim_op_call,
     simplify_dim,
 )
-from tilefoundry.ir.types.int_tuple import compatible_profile
-from tilefoundry.ir.types.layout import flatten, unflatten
+from tilefoundry.ir.types.int_tuple import flatten as flatten_tuple
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.layout import get as get_layout
 from tilefoundry.ir.types.layout_algebra import composition
-from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
+from tilefoundry.ir.types.mesh import axis_keys
+from tilefoundry.ir.types.shard_layout import local_layout, shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx
 from tilefoundry.ir.types.utils import (
+    _participant_frame,
     i64_const,
     leaves_of,
     participant_layout,
@@ -129,7 +133,6 @@ class View:
     type: TensorType
     stem: str = "tile"
     whole_tensor: bool = False
-    instruction_origin: bool = False
 
 
 @dataclass
@@ -813,7 +816,6 @@ class StoragePlan:
         sizes=None,
         stem="tile",
         whole_tensor=False,
-        instruction_origin=False,
     ):
         """Choose an existing operand or the window required at its use."""
         held = value.type
@@ -842,15 +844,10 @@ class StoragePlan:
             ):
                 return value
             starts, sizes = tuple(i64_const(0) for _ in held.shape), tuple(held.shape)
-        return View(value, starts, sizes, desired, stem, whole_tensor, instruction_origin)
+        return View(value, starts, sizes, desired, stem, whole_tensor)
 
     def materialization(self, view, base, loops):
-        """Describe one physical TIR view without adding any statements.
-
-        Gapped bind tiles retain their issued strides with a source-relative
-        origin. An affine origin surrounds ownership; a swizzled origin stays
-        inside the swizzle. Contiguous windows use Slice.
-        """
+        """Describe one physical TIR view without adding any statements."""
         desired = view.type
         if isinstance(base, Constant) and isinstance(base.type, PointerType):
             return self.view(base.value, None, desired)
@@ -860,30 +857,7 @@ class StoragePlan:
                 f"a rank-{len(held.shape)} buffer is windowed by {len(view.starts)} starts"
             )
         source = base
-        if view.instruction_origin:
-            layout = held.layout.layout if isinstance(held.layout, ShardLayout) else held.layout
-            flat = flatten(layout)
-            start = tuple(static_dim_value(value) for value in view.starts)
-            if any(value is None for value in start):
-                raise LoweringError("an instruction origin needs static issue coordinates")
-            grouped = unflatten(flat, compatible_profile(flat.shape, held.shape))
-            offset = crd2idx(start, grouped.shape, grouped.strides)
-            if isinstance(layout, ComposedLayout):
-                offset += layout.offset
-            issued = (
-                desired.layout.layout if isinstance(desired.layout, ShardLayout) else desired.layout
-            )
-            if isinstance(issued, ComposedLayout):
-                issued = replace(issued, offset=offset)
-                desired = replace(
-                    desired,
-                    layout=replace(desired.layout, layout=issued)
-                    if isinstance(desired.layout, ShardLayout)
-                    else issued,
-                )
-            else:
-                desired = replace(desired, layout=ComposedLayout(None, offset, desired.layout))
-        elif not view.whole_tensor:
+        if not view.whole_tensor:
             keys = Tuple(view.starts, type=TupleType(tuple(start.type for start in view.starts)))
             source = Call(
                 Slice(sizes=tuple(view.sizes), strides=(1,) * len(view.sizes)),
@@ -905,21 +879,12 @@ class StoragePlan:
             TensorView(layout=desired.layout, shape=tuple(desired.shape)), (pointer,), type=desired
         )
 
-    def window(self, target, desired, starts, *, instruction=False):
+    def window(self, target, desired, starts):
         """Derive a window at already lowered coordinates.
 
         The layout offset is relative to the sliced pointer: reduce the
         displacement modulo the swizzle period; the pointer holds its full offset.
         """
-        physical = (
-            desired.layout.layout if isinstance(desired.layout, ShardLayout) else desired.layout
-        )
-        if instruction and not (
-            target.type.storage is StorageKind.SMEM
-            and isinstance(physical, ComposedLayout)
-            and isinstance(physical.inner, Swizzle)
-        ):
-            return starts, desired
         keys = Tuple(starts, type=TupleType(tuple(value.type for value in starts)))
         cut = Call(
             Slice(sizes=tuple(desired.shape), strides=(1,) * len(desired.shape)),
@@ -935,12 +900,6 @@ class StoragePlan:
             swizzle = layout.inner
             period = 1 << (swizzle.bits + swizzle.base + swizzle.shift)
             layout = replace(layout, offset=layout.offset % period)
-        if instruction and isinstance(desired.layout, ShardLayout):
-            if isinstance(layout, ComposedLayout) and isinstance(
-                desired.layout.layout, ComposedLayout
-            ):
-                layout = replace(desired.layout.layout, offset=layout.offset)
-            return starts, replace(desired, layout=replace(desired.layout, layout=layout))
         if isinstance(type_.layout, ShardLayout):
             layout = replace(type_.layout, layout=layout)
         return starts, replace(desired, layout=layout, storage=target.type.storage)
@@ -1092,18 +1051,6 @@ class StoragePlan:
         return View(target, starts, tuple(sizes), desired, "value", whole_tensor=whole)
 
 
-def noncontiguous_bind(repeats):
-    """Whether a bound repeat mode precedes a nontrivial serial mode."""
-    for _axis, repeat, bound in repeats:
-        serial = False
-        for width, owner in reversed(tuple(zip(repeat.shape, bound, strict=True))):
-            if width > 1:
-                if owner and serial:
-                    return True
-                serial |= not owner
-    return False
-
-
 @dataclass
 class IssuePlan:
     """Instruction selection and one shared geometric projection, without admission."""
@@ -1154,29 +1101,30 @@ class IssuePlan:
         except (ScheduleRefusal, ValueError) as error:
             raise LoweringError(str(error)) from error
 
-    def points(self, projection, op):
-        serial = tuple(
-            count // bind for count, bind in zip(projection.repeat, projection.bind, strict=True)
-        )
-        for counters in product(*(range(serial[axis]) for axis in projection.order)):
-            counters = dict(zip(projection.order, counters, strict=True))
-            result = []
-            for operand in projection.repeat_layouts:
+    def points(self, plan):
+        for ordered in product(*(range(plan.serial[axis]) for axis in plan.order)):
+            point = dict(zip(plan.order, ordered, strict=True))
+            windows = []
+            for logical, masks, axes in zip(
+                plan.logical_rests, plan.bind_masks, plan.axes, strict=True
+            ):
                 starts = []
-                for axis, layout, bound in operand:
-                    shape = tuple(
-                        width for width, owned in zip(layout.shape, bound, strict=True) if not owned
+                for index, (axis, mask) in enumerate(zip(axes, masks, strict=True)):
+                    mode = get_layout(logical, index)
+                    selected = tuple(
+                        (width, stride)
+                        for width, stride, bound in zip(
+                            flatten_tuple(mode.shape),
+                            flatten_tuple(mode.strides),
+                            flatten_tuple(mask),
+                            strict=True,
+                        )
+                        if not bound
                     )
-                    strides = tuple(
-                        stride
-                        for stride, owned in zip(layout.strides, bound, strict=True)
-                        if not owned
-                    )
-                    coordinate = 0 if axis is None else counters[axis]
-                    starts.append(i64_const(crd2idx(coordinate, (shape,), (strides,))))
-                result.append(tuple(starts))
-            yield tuple(result)
-
+                    shape, strides = zip(*selected) if selected else ((), ())
+                    starts.append(i64_const(crd2idx(point.get(axis, 0), shape, strides)))
+                windows.append(tuple(starts))
+            yield tuple(windows)
 
 @dataclass(kw_only=True)
 class LoweringContext(TypeInferContext):
@@ -1663,40 +1611,122 @@ class Lowering(ValuationVisitor[Expr | View]):
                 if result_param.effect & MemoryEffect.READ
                 else written
             )
-        for windows in ctx.issues.points(plan, op):
-            issued = []
-            for (role, value), desired, starts, repeats in zip(
-                issued_operands, plan.issued, windows, plan.repeat_layouts, strict=True
-            ):
-                grouped = noncontiguous_bind(repeats)
-                logical_type = types[
-                    next(index for index, param in enumerate(params) if param.name == role)
-                ]
-                if tuple(logical_type.shape) == tuple(desired.shape):
-                    item = ctx.builder.value(
-                        ctx.storage.operand(value, desired, stem=f"{role}_view"), ctx=ctx
-                    )
-                else:
-                    base = ctx.builder.value(value, ctx=ctx)
-                    if grouped:
-                        physical = desired
-                    else:
-                        starts, physical = ctx.storage.window(
-                            base, desired, starts, instruction=True
+        required = atom.execution_mesh if isinstance(atom, type) else atom.required_execution_mesh
+        for region in ctx.builder.blocks[:-1]:
+            for key, value in region.views.items():
+                ctx.builder.blocks[-1].views.setdefault(key, value)
+        frame, _dropped = _participant_frame(owner or mesh, required)
+        locals_ = []
+        unit_coordinates = {}
+        for (role, value), type_, rest in zip(issued_operands, types, plan.rests, strict=True):
+            base = ctx.builder.value(ctx.storage.operand(value, type_, whole_tensor=True), ctx=ctx)
+            binding_mesh = rest.mesh if isinstance(rest, ShardLayout) else frame
+            _frame, dropped = _participant_frame(binding_mesh, required)
+            source = shard_layout_of(base.type.layout)
+            attrs = (
+                list(source.attrs)
+                if source is not None
+                else [Broadcast()] * len(axis_keys(binding_mesh))
+            )
+            coords = [None] * len(attrs)
+            for mesh_axis, (topology, _name) in enumerate(axis_keys(binding_mesh)[:dropped]):
+                attr = rest.attrs[mesh_axis]
+                attrs[mesh_axis] = attr
+                coordinate = 0
+                if isinstance(attr, Split) and not ctx.target.storage_owners.private(
+                    type_.storage, topology
+                ):
+                    key = id(binding_mesh), mesh_axis
+                    if key not in unit_coordinates:
+                        coord = Call(
+                            MeshCoord(mesh=binding_mesh), (i64_const(mesh_axis),), type=_BINDING
                         )
-                    item = ctx.builder.value(
-                        ctx.storage.operand(
-                            base,
-                            physical,
-                            starts=starts,
-                            sizes=desired.shape,
-                            stem=f"{role}_view",
-                            instruction_origin=grouped,
-                        ),
-                        ctx=ctx,
+                        unit_coordinates[key] = ctx.builder.bind(
+                            Var(ctx.names.fresh("unit"), type=_BINDING), coord
+                        )
+                    coordinate = unit_coordinates[key]
+                coords[mesh_axis] = coordinate
+            address = source.layout if source is not None else base.type.layout
+            local, offset = local_layout(
+                ShardLayout(address, tuple(attrs), binding_mesh), base.type.shape, tuple(coords)
+            )
+            if any(isinstance(attr, Split) for attr in attrs[:dropped]):
+                primitive = local.layout if isinstance(local, ShardLayout) else local
+                outer = primitive.outer if isinstance(primitive, ComposedLayout) else primitive
+                local_shape = tuple(prod(flatten_tuple(mode)) for mode in outer.shape)
+                original = address.outer if isinstance(address, ComposedLayout) else address
+                if not any(isinstance(mode, tuple) for mode in original.shape):
+                    flat = flatten(outer)
+                    primitive = (
+                        replace(primitive, outer=flat)
+                        if isinstance(primitive, ComposedLayout)
+                        else flat
                     )
-                issued.append(item)
-            ctx.builder.add(Evaluate(op, tuple(issued)))
+                if static_dim_value(offset) != 0:
+                    primitive = ComposedLayout(None, offset, primitive)
+                local = (
+                    replace(local, layout=primitive)
+                    if source is not None and isinstance(local, ShardLayout)
+                    else primitive
+                )
+                local_type = replace(base.type, shape=local_shape, layout=local)
+                pointer_type = PointerType(base.type.dtype, base.type.storage)
+                pointer = ctx.builder.bind(
+                    Var(ctx.names.fresh(f"{role}_pointer"), type=pointer_type),
+                    Call(PtrOf(), (base,), type=pointer_type),
+                )
+                base = Call(TensorView(layout=local, shape=local_shape), (pointer,), type=local_type)
+            locals_.append(base)
+        with ctx.builder.region(mesh=frame, binding=Var(ctx.names.fresh("threads"), type=_BINDING)):
+            locals_ = [
+                ctx.builder.bind(Var(ctx.names.fresh(f"{role}_local"), type=base.type), base)
+                if isinstance(base, Call) and isinstance(base.target, TensorView)
+                else base
+                for (role, _value), base in zip(issued_operands, locals_, strict=True)
+            ]
+            for windows in ctx.issues.points(plan):
+                issued = []
+                for (role, _value), base, desired, starts in zip(
+                    issued_operands, locals_, plan.tiles, windows, strict=True
+                ):
+                    keys = Tuple(starts, type=TupleType(tuple(start.type for start in starts)))
+                    window = Call(
+                        Slice(sizes=tuple(desired.shape), strides=(1,) * len(desired.shape)),
+                        (base, keys),
+                        type=desired,
+                    )
+                    inferred = typeinfer_registry.lookup(Slice)(
+                        window,
+                        TypeInferContext(
+                            memo={id(arg): (arg, arg.type) for arg in (base, *starts)},
+                            loops=ctx.builder.loops,
+                        ),
+                    )
+                    window.type = getattr(inferred, "type", inferred)
+                    item = window
+                    if window.type != desired:
+                        pointer = Call(
+                            PtrOf(), (window,), type=PointerType(desired.dtype, desired.storage)
+                        )
+                        address = (
+                            window.type.layout.layout
+                            if isinstance(window.type.layout, ShardLayout)
+                            else window.type.layout
+                        )
+                        placement = desired.layout
+                        layout = (
+                            replace(placement, layout=address)
+                            if isinstance(placement, ShardLayout)
+                            else address
+                        )
+                        type_ = replace(window.type, layout=layout)
+                        item = Call(
+                            TensorView(layout=layout, shape=tuple(type_.shape)), (pointer,), type=type_
+                        )
+                    issued.append(
+                        ctx.builder.bind(Var(ctx.names.fresh(f"{role}_view"), type=item.type), item)
+                    )
+                ctx.builder.add(Evaluate(op, tuple(issued)))
         result_param = next(param for param in params if param.effect & MemoryEffect.WRITE)
         if result_param.effect & MemoryEffect.READ:
             return read_values[result_param.name]

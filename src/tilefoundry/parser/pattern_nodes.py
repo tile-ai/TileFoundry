@@ -215,7 +215,18 @@ class DimExprPattern(ElementPattern):
             return _resolve_reference(match.node, context)
         if match.branch_id == "dim_binary":
             try:
-                return match.captures["operator"](children["left"], children["right"])
+                left, right = children["left"], children["right"]
+                if isinstance(left, runtime.Expr) or isinstance(right, runtime.Expr):
+                    dimension_op = {
+                        ast.Add: runtime.DimAdd,
+                        ast.Sub: runtime.DimSub,
+                        ast.Mult: runtime.DimMul,
+                        ast.FloorDiv: runtime.DimFloorDiv,
+                        ast.Mod: runtime.DimMod,
+                    }.get(type(match.node.op))
+                    if dimension_op is not None:
+                        return runtime.simplify_dim(dimension_op, (left, right))
+                return match.captures["operator"](left, right)
             except (TypeError, ValueError, ZeroDivisionError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
         if match.branch_id == "dim_call":

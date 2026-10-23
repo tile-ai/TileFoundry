@@ -164,7 +164,7 @@ def _schedule_access_relation(call: Call, ctx) -> tuple[AccessRelation, ...]:
         fragments=False,
     )
     scheduled = _outer_band(
-        operand_relations(schedule.op, tiles.operands), tiles.repeat, tiles.order, tiles.shape
+        operand_relations(schedule.op, tiles.tiles), tiles.repeat, tiles.order, tiles.shape
     )
     return scheduled
 

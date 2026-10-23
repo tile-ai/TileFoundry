@@ -114,5 +114,5 @@ def test_weight_loading_refuses_noncanonical_local_axes(tmp_path, case):
     program.prepare(DictResource({"weight": torch.arange(size, dtype=torch.float32)}), str(tmp_path))
     twin = twin_type()
     twin.load(SafetensorsResource(str(tmp_path), device="cpu"), placement=Placement({"gpu": 1}))
-    with pytest.raises(ValueError, match="not canonical.*not supported"):
+    with pytest.raises(ValueError, match="ShardTensor: the tensor is laid out .* while its type says"):
         twin.read()

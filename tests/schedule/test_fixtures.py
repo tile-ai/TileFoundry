@@ -68,6 +68,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp, operand_relations
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.arange import Arange as HirArange
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
 from tilefoundry.ir.hir.tensor.empty import Empty
@@ -105,7 +106,7 @@ from tilefoundry.ir.types import (
     TensorType,
     Topology,
 )
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim import DimAdd, DimMul, DimVar
 from tilefoundry.ir.types.int_tuple import compatible_profile
 from tilefoundry.ir.types.layout import apply, flatten, unflatten
 from tilefoundry.ir.types.layout_algebra import cosize
@@ -2753,11 +2754,26 @@ def test_grouped_n16_issues_keep_source_addresses():
     visitor.visit(function.body)
     issues = [stmt for stmt in visitor.statements if isinstance(stmt.callable, TiledMma)]
     assert len(issues) == 36
+    readers, pointers = {}, {}
 
-    readers = {}
+    def dimension(value, group):
+        if (literal := static_dim_value(value)) is not None:
+            return literal
+        if isinstance(value, Var):
+            return dimension(visitor.bindings[id(value)], group)
+        assert isinstance(value, Call)
+        if isinstance(value.target, MeshCoord):
+            assert value.target.mesh.names[static_dim_value(value.args[0])] == "group"
+            return group
+        a, b = (dimension(arg, group) for arg in value.args)
+        if isinstance(value.target, DimAdd):
+            return a + b
+        assert isinstance(value.target, DimMul)
+        return a * b
 
-    def address(type_, coordinates):
-        if id(type_) not in readers:
+    def address(type_, coordinates, group):
+        key = id(type_), group
+        if key not in readers:
             eb = type_.dtype.bit_width // 8
 
             def reader(layout):
@@ -2765,24 +2781,48 @@ def test_grouped_n16_issues_keep_source_addresses():
                     return reader(layout.layout)
                 if isinstance(layout, ComposedLayout):
                     outer = reader(layout.outer)
+                    offset = dimension(layout.offset, group) * eb
                     if isinstance(layout.inner, Swizzle):
-                        return lambda linear: layout.inner(outer(linear) + layout.offset * eb)
-                    return lambda linear: outer(linear) + layout.offset * eb
+                        return lambda linear: layout.inner(outer(linear) + offset)
+                    return lambda linear: outer(linear) + offset
                 flat = flatten(layout)
                 grouped = unflatten(flat, compatible_profile(flat.shape, type_.shape))
                 return lambda linear: crd2idx(linear, grouped.shape, grouped.strides) * eb
 
-            readers[id(type_)] = reader(type_.layout)
+            readers[key] = reader(type_.layout)
         linear = sum(
             coordinate * prod(type_.shape[axis + 1 :])
             for axis, coordinate in enumerate(coordinates)
         )
-        return readers[id(type_)](linear)
+        return readers[key](linear)
+
+    def pointer(value, group):
+        key = id(value), group
+        if key not in pointers:
+            if isinstance(value, Var):
+                result = pointer(visitor.bindings[id(value)], group)
+            elif isinstance(value, Constant):
+                result = value.value
+            elif isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf)):
+                result = pointer(value.args[0], group)
+            elif isinstance(value, Call) and isinstance(value.target, Slice):
+                base = value.args[0]
+                layout = base.type.layout
+                layout = layout.layout if isinstance(layout, ShardLayout) else layout
+                result = pointer(base, group)
+                if not isinstance(layout, ComposedLayout):
+                    starts = tuple(dimension(start, group) for start in value.args[1].elements)
+                    result += address(base.type, starts, group)
+            else:
+                assert isinstance(value, Call) and type(value.target).__name__ == "AllocTensor"
+                result = 0
+            pointers[key] = result
+        return pointers[key]
 
     def pointer_root(value):
         if isinstance(value, Var):
             return pointer_root(visitor.bindings[id(value)])
-        if isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf)):
+        if isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf, Slice)):
             return pointer_root(value.args[0])
         return value
 
@@ -2802,16 +2842,19 @@ def test_grouped_n16_issues_keep_source_addresses():
         c, _, b = issue.args
         assert pointer_root(c) is c_root
         assert pointer_root(b) is b_root
-        assert c.type.shape == (64, 32)
-        assert b.type.shape == (16, 32)
-        for column in range(32):
-            group, i = divmod(column, 16)
-            n = 48 * group + 16 * step + i
-            for row in range(64):
-                assert address(c.type, (row, column)) == address(original_c, (row, n))
-            for j in range(16):
-                assert address(b.type, (j, column)) == address(original_b, (16 * k + j, n))
-
+        assert c.type.shape == (64, 16)
+        assert b.type.shape == (16, 16)
+        for group in range(2):
+            for i in range(16):
+                n = 48 * group + 16 * step + i
+                for row in range(64):
+                    assert pointer(c, group) + address(c.type, (row, i), group) == address(
+                        original_c, (row, 16 * step + i), group
+                    )
+                for j in range(16):
+                    assert pointer(b, group) + address(
+                        b.type, (j, i), group
+                    ) == b_root.value + address(original_b, (16 * k + j, n), group)
 
 def test_authored_views_survive_region_forwarding_without_extra_wrappers():
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "view_visit_memo.py"

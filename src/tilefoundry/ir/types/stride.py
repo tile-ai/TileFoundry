@@ -88,6 +88,8 @@ def crd2idx(crd, shape, stride):
     Decompose from the innermost mode; the final, outermost digit is not
     reduced modulo its extent. Static coordinates keep integer arithmetic.
     """
+    if crd is None:
+        return 0
     if isinstance(crd, int) and isinstance(shape, int) and isinstance(stride, int):
         return crd * stride
     if isinstance(crd, tuple):

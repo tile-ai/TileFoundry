@@ -27,6 +27,33 @@ from .stride import compact_col_major
 from .swizzle_layout import get_swizzle_portion
 
 
+def slice(coord, layout):
+    """CuTe slice: keep underscore modes and remove coordinates that are given."""
+    if isinstance(layout, ComposedLayout):
+        return slice_and_offset(coord, layout)[0]
+    if isinstance(layout, Layout):
+        return Layout(slice(coord, layout.shape), slice(coord, layout.strides))
+    if coord is None:
+        return layout
+    if isinstance(coord, tuple):
+        return tuple(
+            value
+            for c, mode in zip(coord, layout, strict=True)
+            for value in ((mode,) if c is None else slice(c, mode))
+        )
+    return ()
+
+
+def slice_and_offset(coord, layout):
+    """CuTe slice_and_offset; composed offsets stay inside their mapping."""
+    from .stride import crd2idx  # noqa: PLC0415
+
+    if isinstance(layout, ComposedLayout):
+        sliced, offset = slice_and_offset(coord, layout.outer)
+        return ComposedLayout(layout.inner, layout.offset + offset, sliced), 0
+    return slice(coord, layout), crd2idx(coord, layout.shape, layout.strides)
+
+
 def domain_offset(coord, layout, shape):
     """CuTe domain_offset: move the pointer, or a composed layout's offset."""
     from .int_tuple import compatible_profile  # noqa: PLC0415
@@ -487,6 +514,8 @@ def right_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
 __all__ = [
     "composition",
     "domain_offset",
+    "slice",
+    "slice_and_offset",
     "cosize",
     "coalesce",
     "filter",

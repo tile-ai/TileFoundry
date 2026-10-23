@@ -9,7 +9,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard_layout import ShardLayout, Split, local_layout
+from tilefoundry.ir.types.shard_layout import ShardLayout, Split, _local_readback, local_layout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     readnone_relations,
@@ -25,7 +25,7 @@ class Local(Op):
 
 
 def _local_layout(x_ty: TensorType):
-    return local_layout(x_ty.layout, x_ty.shape, (0,) * len(x_ty.layout.mesh.topologies))
+    return _local_readback(local_layout(x_ty.layout, x_ty.shape, (0,) * len(x_ty.layout.attrs))[0])
 
 
 @register_typeinfer(Local)

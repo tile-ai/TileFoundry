@@ -17,14 +17,16 @@ import pytest
 
 from tilefoundry.ir.types import DType, Layout, Mesh, Topology, make_shard_tensor_type
 from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.mesh import levels
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Split,
+    _local_readback,
     local_layout,
     local_layout_and_offset,
     shard_layout_of,
 )
-from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.ir.types.stride import idx2crd, try_compact_major
 from tilefoundry.ir.types.utils import local_type_of
 
 _GPU, _THREAD = Topology("gpu", 2), Topology("thread", 32)
@@ -82,7 +84,15 @@ def test_the_layout_and_the_type_narrow_the_same_way(case: str) -> None:
     want = tuple(local_type_of(held).shape)
 
     for program_id in range(_instances(mesh)):
-        layout = local_layout(shard, shape, (program_id,))
+        coordinates = tuple(
+            value
+            for arrangement in levels(mesh)
+            for value in idx2crd(
+                program_id, flatten(arrangement).shape, flatten(arrangement).strides
+            )
+        )
+        layout, _offset = local_layout(shard, shape, coordinates)
+        layout = _local_readback(layout)
         assert tuple(layout.shape) == want, (
             f"{case}: instance {program_id} holds {tuple(layout.shape)}, "
             f"while one shard of {shape} is {want}"
