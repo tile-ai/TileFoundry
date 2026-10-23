@@ -94,9 +94,6 @@ def _is_dynamic_mesh(mesh: Mesh) -> bool:
     return any(s is None for s in flatten(mesh.layout).shape)
 
 
-__all__ = ["mesh_type", "program_topologies"]
-
-
 def validate_cuda_topology_levels(target: Target, names) -> None:
     """Validate names at the CUDA lowering boundary.
 
@@ -111,7 +108,6 @@ def validate_cuda_topology_levels(target: Target, names) -> None:
                 f"cuda target supports {{{', '.join(supported)}}} "
                 f"topology levels; got {name!r}"
             )
-
 
 
 @register_codegen(CudaTarget, Role.EMIT, MeshScope)
@@ -146,3 +142,6 @@ def emit_mesh_scope(node: MeshScope, emitter) -> None:
         ctx._mesh_aliases = outer_aliases
     ctx.dedent()
     ctx.emit("}")
+
+
+__all__ = ["emit_mesh_scope", "mesh_type", "program_topologies", "validate_cuda_topology_levels"]

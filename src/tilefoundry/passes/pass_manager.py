@@ -53,10 +53,11 @@ def register_pass(target: type[Target], point: PassPoint) -> Callable[[type[Modu
 
 def target_passes(module: Module, point: PassPoint) -> list[ModulePass]:
     """Instantiate the module targets' passes, ordered by target name."""
-    targets = {
-        type(frame.function.target if isinstance(frame.function, PrimFunction) else frame.target)
-        for frame in list_call_paths(module).values()
-    }
+    targets = set()
+    for frame in list_call_paths(module).values():
+        target = frame.function.target if isinstance(frame.function, PrimFunction) else frame.target
+        if target is not None:
+            targets.add(type(target))
     return [pass_type() for target in sorted(targets, key=lambda target: target.name)
             for pass_type in _TARGET_PASSES.get((target, point), ())]
 

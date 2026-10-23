@@ -5,20 +5,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
-from tilefoundry.codegen.cuda.abi import (
-    _declare_launch,
-    _declare_program_id,
-    _declare_program_meta,
-    _declare_tensor,
-    _pass_tensor,
-    _pass_value,
-)
 from tilefoundry.codegen.signature import (
     CallableSignature,
     LaunchSignature,
-    ProgramIdSignature,
-    ProgramMetaSignature,
-    TensorSignature,
     tensor_signature_of,
 )
 from tilefoundry.ir.core import Call, Constant, Var
@@ -30,8 +19,8 @@ from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMax, DimMin, DimMod
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.target import CpuTarget
-from tilefoundry.visitor_registry.registries import Role, register_codegen
+from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.visitor_registry.registries import Role, codegen_registry, register_codegen
 
 _STORAGE_DEVICE_TYPE = {
     StorageKind.GMEM: "kDLCUDA",
@@ -215,17 +204,11 @@ def _declare_callee(callee: PrimFunction, ctx: CpuCodegenContext) -> str:
 
 
 def _parameters(signature: CallableSignature, ctx: CpuCodegenContext) -> str:
-    handlers = {
-        TensorSignature: _declare_tensor,
-        LaunchSignature: _declare_launch,
-        ProgramIdSignature: _declare_program_id,
-        ProgramMetaSignature: _declare_program_meta,
-    }
     outer, ctx.exported = ctx.exported, True
     try:
         return ", ".join(
             token for param in signature.all_params
-            for token in handlers[type(param)](param, ctx)
+            for token in codegen_registry.lookup((CudaTarget, Role.CALLEE, type(param)))(param, ctx)
         )
     finally:
         ctx.exported = outer
@@ -234,8 +217,7 @@ def _parameters(signature: CallableSignature, ctx: CpuCodegenContext) -> str:
 def _arguments(signature: CallableSignature, ctx: CpuCodegenContext) -> str:
     return ", ".join(
         token for param in signature.all_params
-        for token in (_pass_tensor(param, ctx) if isinstance(param, TensorSignature)
-                      else _pass_value(param, ctx))
+        for token in codegen_registry.lookup((CudaTarget, Role.CALLER, type(param)))(param, ctx)
     )
 
 

@@ -152,7 +152,7 @@ def test_direct_hardware_values_keep_added_fields_in_canonical_source():
     assert rendered.imports == (
         "from tests.inspection.test_python_printer import ExtendedCudaArchitecture",
         "from tilefoundry.ir.types import DType",
-        "from tilefoundry.target.cuda import CudaDevice, CudaTarget",
+        "from tilefoundry.target import CudaDevice, CudaTarget",
     )
     rebuilt = _rebuild(rendered)
     assert rebuilt == target
