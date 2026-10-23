@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import (
-    _is_dynamic_mesh,
-    _validate_topology,
-    mesh_type,
-    program_topologies,
-)
-from tilefoundry.codegen.cuda.tir.stmts.scalar_expr import render_scalar_expr
+from tilefoundry.codegen.scalar_expr import render_scalar_expr
 from tilefoundry.ir.core import Call, Tuple
 from tilefoundry.ir.core.module import ModuleList
 from tilefoundry.ir.tir.abort import Abort
@@ -18,13 +12,13 @@ from tilefoundry.ir.tir.stmts import (
     For,
     If,
     LetStmt,
-    MeshScope,
     Return,
     Sequential,
     While,
 )
-from tilefoundry.ir.types import ComposedLayout, UnitType
+from tilefoundry.ir.types import UnitType
 from tilefoundry.ir.visitor import StmtVisitor
+from tilefoundry.target.base import target_summary
 
 
 class CppEmitter(StmtVisitor[None]):
@@ -32,6 +26,10 @@ class CppEmitter(StmtVisitor[None]):
 
     def __init__(self, *, context) -> None:
         self.context = context
+
+    def visit(self, node):
+        handler = self.context.stmt_handler(type(node))
+        return handler(node, self) if handler is not None else super().visit(node)
 
     def emit(self, line: str) -> None:
         self.context.emit(line)
@@ -46,7 +44,7 @@ class CppEmitter(StmtVisitor[None]):
         self.emit(f"{text};")
 
     def generic_visit(self, node) -> None:
-        raise RuntimeError(f"no emitter for {type(node).__name__}")
+        raise RuntimeError(f"no codegen handler for {type(node).__name__} on {target_summary(self.context.target)}")
 
     def visit_Sequential(self, node: Sequential) -> None:
         for stmt in node.body:
@@ -108,62 +106,19 @@ class CppEmitter(StmtVisitor[None]):
     def visit_Evaluate(self, node: Evaluate) -> None:
         op = node.callable
         if isinstance(op, (PrimFunction, ModuleList, Call)):
-            raise RuntimeError(f"no codegen handler for Op {type(op).__name__}")
+            raise RuntimeError(f"no codegen handler for Op {type(op).__name__} on {target_summary(self.context.target)}")
         self.emit_evaluate_op(Call(type=UnitType(), target=op, args=node.args))
-
-    def visit_MeshScope(self, node: MeshScope) -> None:
-        raise NotImplementedError
 
     def emit_evaluate_op(self, call: Call) -> None:
         handler = self.context.handler_for(type(call.target))
-        if handler is None:
-            raise RuntimeError(f"no codegen handler for Op {type(call.target).__name__}")
         handler(call, self.context)
 
     def emit_let_op(self, call: Call, stmt: LetStmt) -> None:
         handler = self.context.handler_for(type(call.target))
-        if handler is None:
-            raise RuntimeError(f"no codegen handler for Op {type(call.target).__name__}")
         handler(stmt, self.context)
 
     def render_scalar(self, expr) -> str:
         return render_scalar_expr(expr, self.context)
 
 
-class CudaEmitter(CppEmitter):
-    """CUDA C++ emitter, including mesh scope lowering."""
-
-    def visit_MeshScope(self, node: MeshScope) -> None:
-        ctx = self.context
-        if ctx.target is None:
-            raise RuntimeError("CUDA MeshScope emission requires its Target")
-        _validate_topology(node.mesh, ctx.target)
-        name = ctx.name_for(node.binding)
-        ctx.emit(f"// mesh scope: {program_topologies(node.mesh)[0].name}")
-
-        is_slice = isinstance(node.mesh.layout, ComposedLayout)
-        ctx.emit("{")
-        ctx.indent()
-        outer_aliases = ctx._mesh_aliases
-        ctx._mesh_aliases = dict(outer_aliases)
-        try:
-            if not _is_dynamic_mesh(node.mesh):
-                alias = f"{name}_mesh_t"
-                mesh_type_str = mesh_type(node.mesh)
-                ctx._mesh_aliases[id(node.mesh)] = (alias, mesh_type_str)
-                ctx.emit(f"using {alias} = {mesh_type_str};")
-                ctx.emit(f"constexpr {alias} {name}_mesh{{}};")
-            if is_slice:
-                ctx.emit(f"if (tilefoundry::contains({name}_mesh, tilefoundry::program_ids())) {{")
-                ctx.indent()
-            self.visit(node.body)
-            if is_slice:
-                ctx.dedent()
-                ctx.emit("}")
-        finally:
-            ctx._mesh_aliases = outer_aliases
-        ctx.dedent()
-        ctx.emit("}")
-
-
-__all__ = ["CppEmitter", "CudaEmitter"]
+__all__ = ["CppEmitter"]

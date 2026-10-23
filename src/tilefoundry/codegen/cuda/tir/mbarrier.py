@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
-from tilefoundry.codegen.cuda.tir.stmts.scalar_expr import render_scalar_expr
+from tilefoundry.codegen.scalar_expr import render_scalar_expr
 from tilefoundry.ir.tir.cuda.sync.mbarrier import (
     MBarrierArriveExpectTx,
     MBarrierInit,

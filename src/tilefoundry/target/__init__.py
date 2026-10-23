@@ -44,22 +44,6 @@ def default_target() -> Target:
     return CpuTarget()
 
 
-def validate_cuda_topology_levels(target: Target, names) -> None:
-    """Validate names at the CUDA lowering boundary.
-
-    See docs/spec/target.md § Topology levels.
-    """
-    supported = tuple(
-        level.name for level in target.get_facts(TopologyFacts).topologies
-    )
-    for name in names:
-        if name not in supported:
-            raise ValueError(
-                f"cuda target supports {{{', '.join(supported)}}} "
-                f"topology levels; got {name!r}"
-            )
-
-
 __all__ = [
     "AmxTarget",
     "Analyzer",
@@ -86,5 +70,4 @@ __all__ = [
     "load_targets",
     "register_target",
     "registered_targets",
-    "validate_cuda_topology_levels",
 ]

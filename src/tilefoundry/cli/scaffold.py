@@ -7,8 +7,7 @@ from tilefoundry.codegen.link_module import link_program
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.passes.pass_manager import PassManager
-from tilefoundry.passes.transforms import InsertHostEntryPass
+from tilefoundry.passes.pass_manager import PassManager, PassPoint, target_passes
 from tilefoundry.target import CpuTarget
 
 
@@ -18,7 +17,7 @@ def run_scaffold(source: str, out_dir: str) -> int:
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise ValueError(f"scaffold: output directory {destination} must be empty")
     module = load_authored_ir(source)
-    prepared = PassManager().add(InsertHostEntryPass()).run(module)
+    prepared = PassManager(target_passes(module, PassPoint.BEFORE_CODEGEN)).run(module)
     entries = tuple(
         fn
         for frame in list_call_paths(prepared).values() for fn in (frame.function,)

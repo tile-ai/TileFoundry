@@ -57,7 +57,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.tensor_type import TupleType
 from tilefoundry.ir.types.utils import static_dim_value, tensor_types
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
-from tilefoundry.target import CudaTarget
+from tilefoundry.target import CpuTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
 from tilefoundry.visitor_registry.contexts import TypeInferContext, VerifyContext
@@ -862,8 +862,8 @@ def _verify_launch(stmt: Evaluate, fn, module_context, ctx):
     callee = _resolve_symbol_ref(ref, module_context, fn, ctx)
     if isinstance(callee, Function):
         return
-    if not isinstance(callee.target, CudaTarget):
-        raise VerifyError(f"Launch callee {callee.name!r} must target a CUDA device")
+    if isinstance(callee.target, CpuTarget):
+        raise VerifyError(f"Launch callee {callee.name!r} must target a device, not the CPU")
     expected = callable_type_for_prim_function(callee)
     if ref.type != expected:
         raise VerifyError(

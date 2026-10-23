@@ -187,6 +187,10 @@ class CudaTarget(Target):
             return facts_result(self, facts_type, performance_service(self, query))
         return super().get_facts(facts_type, query)
 
+    def torch_device_type(self) -> str:
+        """The torch device type holding this program's tensor arguments."""
+        return "cuda"
+
     def get_code_generator(self) -> CodeGenerator:
         from tilefoundry.codegen.cuda.module import (  # noqa: PLC0415
             CUDA_CODE_GENERATOR,

@@ -15,6 +15,7 @@ import math
 from tilefoundry.codegen.cuda.abi import (
     PROGRAM_META,
     PROGRAM_META_CTYPE,
+    check_parameter_names,
     kernel_arguments,
     kernel_signature,
 )
@@ -158,11 +159,16 @@ def _program_dims(geometry: Geometry) -> list[dict[str, str]]:
 
 
 def emit_cuda_module(
-    module: Module, cuda_fns: tuple[ModuleFunction, ...], target: Target, ctx: CudaCodegenContext
+    module: Module, cuda_fns: tuple[ModuleFunction, ...], target: Target, view
 ) -> LinkableModule:
     """Emit the device ``.cu`` linkable module for one topology domain."""
-    if ctx.codegen_context is None:
-        raise ValueError("CUDA module emission requires a CodegenContext")
+    ctx = CudaCodegenContext(
+        symbols=view.symbols, target=view.target, launches=view.launches,
+        codegen_context=view.codegen,
+    )
+    for symbol in view.codegen.symbols.by_function.values():
+        if symbol.target == target:
+            check_parameter_names(symbol.export_name, symbol.callable.params)
     if ctx.codegen_context.options.emit == "skeleton" and target.device_count is not None:
         raise UnsupportedCapabilityError(
             f"{target_summary(target)}: skeleton emission supports only single-device CUDA "

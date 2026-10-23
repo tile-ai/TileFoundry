@@ -390,6 +390,32 @@ unchanged. Codegen does not support these retained TIR calls and MUST refuse the
 with `no codegen handler for Op <type>` when emission reaches one.
 
 
+The target pass registry in `passes/pass_manager.py` exposes these fixed points:
+
+```python
+class PassPoint(Enum):
+    BEFORE_LOWER = "before_lower"
+    AFTER_LOWER = "after_lower"
+    BEFORE_CODEGEN = "before_codegen"
+
+
+def register_pass(
+    target: type[Target], point: PassPoint
+) -> Callable[[type[ModulePass]], type[ModulePass]]: ...
+
+
+def target_passes(module: Module, point: PassPoint) -> list[ModulePass]: ...
+```
+
+- constraints:
+  - `target_passes` MUST collect PrimFunction targets from each function and
+    HIR targets from the corresponding `list_call_paths` frame. It MUST order
+    targets by registered name and preserve registration order within a target.
+  - A pass class MUST be registered at most once per point; a duplicate MUST
+    raise `ValueError` naming the Target and pass.
+  - Finalization MUST run target passes before and after HIR-to-TIR lowering.
+    Compile and scaffold MUST run target passes at `BEFORE_CODEGEN`.
+
 ### 7.3 `insert_default_host_entry`
 
 ```python
@@ -421,7 +447,8 @@ def insert_default_host_entry(module: Module) -> Module:
 
 - constraints:
   - The pass is the scheduled form of the transform and states no rule of its
-    own. It is the one pass `build` ([§6](#6-top-level-api)) registers.
+    own. CUDA registers it at `PassPoint.BEFORE_CODEGEN`; compile and scaffold
+    select it through `target_passes`.
   - A CPU entry MUST pass through unchanged.
   - With no CPU entry, an all-HIR tree MUST gain one CPU entry per Module
     whose `entry` is set, root and children alike: Python begins a kernel

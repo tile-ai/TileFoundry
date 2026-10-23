@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass
 from functools import cached_property
@@ -28,6 +29,16 @@ from tilefoundry.target.services import Analyzer, CodeGenerator
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
 
 
+def _exporting_module(cls: type) -> str:
+    parts = cls.__module__.split(".")
+    for size in range(1, len(parts) + 1):
+        name = ".".join(parts[:size])
+        module = sys.modules.get(name)
+        if module is not None and vars(module).get(cls.__name__) is cls:
+            return name
+    return cls.__module__
+
+
 def _target_value_to_python(value: object) -> PythonExpr:
     if isinstance(value, DType):
         return PythonExpr(("from tilefoundry.ir.types import DType",), f"DType.{value.name}")
@@ -40,11 +51,7 @@ def _target_value_to_python(value: object) -> PythonExpr:
     if isinstance(value, (str, int, float, bool, type(None))):
         return PythonExpr((), repr(value))
     if is_dataclass(value):
-        module = type(value).__module__
-        if module.startswith("tilefoundry.target.cuda."):
-            module = "tilefoundry.target.cuda"
-        elif module.startswith("tilefoundry.target.amx."):
-            module = "tilefoundry.target.amx"
+        module = _exporting_module(type(value))
         rendered = tuple((field.name, _target_value_to_python(getattr(value, field.name))) for field in fields(value) if field.init or field.compare)
         return PythonExpr(
             _merge_imports((f"from {module} import {type(value).__name__}",), *(item.imports for _, item in rendered)),
@@ -203,6 +210,10 @@ class Target:
     """
 
     name: ClassVar[str]
+
+    def torch_device_type(self) -> str:
+        """The torch device type holding this program's tensor arguments."""
+        return "cpu"
 
     @cached_property
     def storage_owners(self):

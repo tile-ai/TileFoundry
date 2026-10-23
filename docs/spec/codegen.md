@@ -64,7 +64,7 @@ metadata the link step needs.
 ```python
 class CodeGenerator:
     emit: Callable[
-        [Module, tuple[PrimFunction, ...], Target, CodegenContext], LinkableModule
+        [Module, tuple[PrimFunction, ...], Target, EmissionView | EmitContext], LinkableModule
     ]
     emits: frozenset[EmitGranularity] = frozenset({"full"})
 
@@ -77,7 +77,7 @@ def emit_cuda_module(
     module: Module,
     functions: tuple[PrimFunction, ...],
     target: Target,
-    ctx: CodegenContext,
+    view: EmissionView,
 ) -> LinkableModule: ...
 ```
 
@@ -92,10 +92,11 @@ def emit_cuda_module(
     Target capability admission to codegen. CUDA skeleton emission MUST reject
     targets with `device_count` through `UnsupportedCapabilityError` in its
     generator; those targets require a different project implementation.
-  - All generators MUST share the `(module, functions, target, ctx)` callable
-    shape. The context is built once per compile and carries what every
-    generator has to agree on ([§2.3](#23-codegencontext)); a generator MUST
-    NOT settle any of it for itself.
+  - Device generators MUST receive `(module, functions, target, view)` and
+    construct their own emission context from that `EmissionView`. CPU host
+    emission receives its `CpuCodegenContext` from core. The shared compile
+    context is built once ([§2.3](#23-codegencontext)); generators MUST NOT
+    independently settle its symbols, ownership, or launch geometry.
   - A generator writes each function twice and no more: once as the
     declaration a caller sees, without entering the body, and once as the
     definition, by walking it.
@@ -148,13 +149,11 @@ class CodegenContext:
     def capture(self, fn) -> str: ...
     def emit_node(self, node) -> None: ...
     def declare(
-        self, signature, callee_target=None, *, exported: bool = False
+        self, signature, *, exported: bool = False
     ) -> tuple[str, ...]: ...
     def parameters(
-        self, signature, callee_target=None, *, exported: bool = False
+        self, signature, *, exported: bool = False
     ) -> str: ...
-    def argument(self, signature, callee_target) -> tuple[str, ...]: ...
-    def arguments(self, signature, callee_target) -> str: ...
     def local_value(self, signature) -> str: ...
     def local_extent(self, signature, axis: int) -> str: ...
 
@@ -188,12 +187,15 @@ class CpuCodegenContext(CodegenContext):
     other nodes dispatch by their own class.
   - `source` returns accumulated source text, and `capture` temporarily isolates
     only the output buffer while preserving indentation and symbol bindings.
-  - `declare` and `argument` are the two sides of one call and key on the
-    callee's target ([visitor-registry §6](./visitor-registry.md#6-instance-3--codegen)):
-    `declare` states the parameters the callee takes, `argument` the values
-    this scope passes for them. `declare` defaults to this context's own
-    target, so a unit declaring a foreign symbol and the unit defining it
-    reach the one handler and cannot come to disagree.
+  - `declare` and `parameters` MUST use this context's own Target. Cross-target
+    ABI selection MUST NOT occur in core: CUDA registers the CPU host writer
+    for shared `Launch` at `(CpuTarget, Role.EMIT, Launch)` and directly invokes
+    CUDA's CALLEE and CALLER writers using the host's local names.
+  - Core statement traversal MUST use one `CppEmitter`. A registered
+    `(target, Role.EMIT, statement type)` writer overrides core traversal;
+    otherwise core uses its own statement visitor or reports a missing handler
+    naming the node type and Target. Target-specific scalar calls use the same
+    registry. CUDA registers `MeshScope` and `MeshCoord` there.
   - `exported` is set while a parameter list another translation unit will read
     is being written. A target whose types are its own MUST answer with what
     plain C states while it is set, because that is all the reading unit can

@@ -13,8 +13,7 @@ from tilefoundry.codegen.link_module import link_program
 from tilefoundry.inspection import as_script as _as_script
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.passes.pass_manager import PassManager
-from tilefoundry.passes.transforms import InsertHostEntryPass
+from tilefoundry.passes.pass_manager import PassManager, PassPoint, target_passes
 from tilefoundry.runtime.loader import load_linked_module
 from tilefoundry.target import Target, default_target
 from tilefoundry.target.base import target_instance, target_summary
@@ -63,10 +62,8 @@ def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module:
     )
 
 
-def _build_default_pipeline() -> PassManager:
-    pm = PassManager()
-    pm.add(InsertHostEntryPass())
-    return pm
+def _build_default_pipeline(module: Module) -> PassManager:
+    return PassManager(target_passes(module, PassPoint.BEFORE_CODEGEN))
 
 
 def build(
@@ -110,7 +107,7 @@ def compile(
 
     *mod* must be a ``Module``.  Meshes are derived from the IR body.
     """
-    prepared = _build_default_pipeline().run(mod)
+    prepared = _build_default_pipeline(mod).run(mod)
     return build(prepared, target=target)
 
 

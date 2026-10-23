@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from tilefoundry.codegen.signature import CallableSignature, Signature, TensorSignature
 from tilefoundry.ir.core import Tuple
 from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.target.base import Target
+from tilefoundry.target.base import Target, target_summary
 from tilefoundry.visitor_registry.registries import DispatchRegistry, Role, spelled
 
 
@@ -148,33 +148,33 @@ class EmitContext:
         if isinstance(
             node, (Abort, Evaluate, For, If, LetStmt, MeshScope, Return, Sequential, While)
         ):
-            from tilefoundry.codegen.emitter import CudaEmitter  # noqa: PLC0415
+            from tilefoundry.codegen.emitter import CppEmitter  # noqa: PLC0415
 
-            CudaEmitter(context=self).visit(node)
+            CppEmitter(context=self).visit(node)
             return
         self.handler_for(type(node))(node, self)
 
+    def stmt_handler(self, node_type: type) -> Callable | None:
+        """Return the optional target-specific statement writer."""
+        return self.registry.lookup((self.target_kind, Role.EMIT, node_type))
+
     def handler_for(self, node_type: type) -> Callable:
         """The handler that writes *node_type* here, for a caller that dispatches itself."""
-        return self._handler((self.target_kind, Role.EMIT, node_type))
+        handler = self.stmt_handler(node_type)
+        if handler is None:
+            raise RuntimeError(
+                f"no codegen handler for {node_type.__name__} on {target_summary(self.target)}"
+            )
+        return handler
 
     def declare(
         self,
         signature: Signature,
-        callee_target: Target | None = None,
         *,
         exported: bool = False,
     ) -> tuple[str, ...]:
-        """The C++ parameters *signature* contributes where *callee_target* declares it.
-
-        One signature is one logical parameter; how many parameters that is in
-        C++ is the declaring target's answer, and a derived name it invents
-        there is never read back anywhere else. *callee_target* defaults to
-        this context's own, so declaring a foreign symbol and defining it reach
-        the one handler and cannot come to disagree.
-        """
-        kind = self.target_kind if callee_target is None else type(callee_target)
-        handler = self._handler((kind, Role.CALLEE, type(signature)))
+        """The C++ parameters this target declares for one logical signature."""
+        handler = self._handler((self.target_kind, Role.CALLEE, type(signature)))
         outer, self.exported = self.exported, exported
         try:
             return handler(signature, self)
@@ -184,7 +184,6 @@ class EmitContext:
     def parameters(
         self,
         signature: CallableSignature,
-        callee_target: Target | None = None,
         *,
         exported: bool = False,
     ) -> str:
@@ -192,23 +191,7 @@ class EmitContext:
         return ", ".join(
             token
             for param in signature.all_params
-            for token in self.declare(param, callee_target, exported=exported)
-        )
-
-    def argument(self, signature: Signature, callee_target: Target) -> tuple[str, ...]:
-        """What this scope passes for *signature* in a call to a *callee_target* function.
-
-        The callee's target answers, because how a call to it is written is its
-        convention; this scope fills in only names it already holds. That is
-        what lets a host entry call a device function it knows nothing about.
-        """
-        key = (type(callee_target), Role.CALLER, type(signature))
-        return self._handler(key)(signature, self)
-
-    def arguments(self, signature: CallableSignature, callee_target: Target) -> str:
-        """The whole argument list of one call, in the order the callee declared."""
-        return ", ".join(
-            token for param in signature.all_params for token in self.argument(param, callee_target)
+            for token in self.declare(param, exported=exported)
         )
 
     def local_value(self, signature: Signature) -> str:

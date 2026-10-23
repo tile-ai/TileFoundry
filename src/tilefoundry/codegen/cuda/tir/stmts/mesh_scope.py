@@ -1,17 +1,16 @@
-"""Helpers for CUDA ``MeshScope`` lowering.
-
-The ``CudaEmitter`` owns Stmt traversal and invokes these stateless mesh
-layout helpers while visiting a ``MeshScope``.
-"""
+"""CUDA MeshScope lowering and its layout helpers."""
 
 from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import topology_scope_str
 from tilefoundry.codegen.cuda.tir.cute_layout import render_layout_type
+from tilefoundry.ir.tir.stmts import MeshScope
 from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
 from tilefoundry.ir.types.mesh import Mesh, Topology, flattened_levels
-from tilefoundry.target import validate_cuda_topology_levels
+from tilefoundry.target import CudaTarget, Target
+from tilefoundry.target.facts import TopologyFacts
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
 def _resolved(topology: Topology | str) -> Topology:
@@ -96,3 +95,54 @@ def _is_dynamic_mesh(mesh: Mesh) -> bool:
 
 
 __all__ = ["mesh_type", "program_topologies"]
+
+
+def validate_cuda_topology_levels(target: Target, names) -> None:
+    """Validate names at the CUDA lowering boundary.
+
+    See docs/spec/target.md § Topology levels.
+    """
+    supported = tuple(
+        level.name for level in target.get_facts(TopologyFacts).topologies
+    )
+    for name in names:
+        if name not in supported:
+            raise ValueError(
+                f"cuda target supports {{{', '.join(supported)}}} "
+                f"topology levels; got {name!r}"
+            )
+
+
+
+@register_codegen(CudaTarget, Role.EMIT, MeshScope)
+def emit_mesh_scope(node: MeshScope, emitter) -> None:
+    ctx = emitter.context
+    if ctx.target is None:
+        raise RuntimeError("CUDA MeshScope emission requires its Target")
+    _validate_topology(node.mesh, ctx.target)
+    name = ctx.name_for(node.binding)
+    ctx.emit(f"// mesh scope: {program_topologies(node.mesh)[0].name}")
+
+    is_slice = isinstance(node.mesh.layout, ComposedLayout)
+    ctx.emit("{")
+    ctx.indent()
+    outer_aliases = ctx._mesh_aliases
+    ctx._mesh_aliases = dict(outer_aliases)
+    try:
+        if not _is_dynamic_mesh(node.mesh):
+            alias = f"{name}_mesh_t"
+            mesh_type_str = mesh_type(node.mesh)
+            ctx._mesh_aliases[id(node.mesh)] = (alias, mesh_type_str)
+            ctx.emit(f"using {alias} = {mesh_type_str};")
+            ctx.emit(f"constexpr {alias} {name}_mesh{{}};")
+        if is_slice:
+            ctx.emit(f"if (tilefoundry::contains({name}_mesh, tilefoundry::program_ids())) {{")
+            ctx.indent()
+        emitter.visit(node.body)
+        if is_slice:
+            ctx.dedent()
+            ctx.emit("}")
+    finally:
+        ctx._mesh_aliases = outer_aliases
+    ctx.dedent()
+    ctx.emit("}")

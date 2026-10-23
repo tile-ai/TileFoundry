@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
-from tilefoundry.codegen.emitter import CudaEmitter
+from tilefoundry.codegen.emitter import CppEmitter
 from tilefoundry.codegen.signature import TensorSignature, tensor_signature_of
 from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -113,4 +113,4 @@ def _emit(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
     if ctx.codegen_context.options.emit == "skeleton":
         ctx.emit(f"// TODO: {fn.name}")
     else:
-        CudaEmitter(context=ctx).visit(fn.body)
+        CppEmitter(context=ctx).visit(fn.body)

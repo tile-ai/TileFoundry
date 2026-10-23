@@ -13,7 +13,6 @@ from pathlib import Path
 
 from tilefoundry.codegen.context_builder import EmissionGroup, build_codegen_context
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
-from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.link_function import link_function
 from tilefoundry.codegen.linked_function import LinkedFunction
 from tilefoundry.codegen.linked_module import LinkedModule
@@ -21,7 +20,7 @@ from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.dump import DumpFlags, DumpScope, dump
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.target import CpuTarget
 from tilefoundry.target.base import UnsupportedCapabilityError, target_summary
 
 _TILEFOUNDRY_ROOT = Path(__file__).resolve().parents[3]
@@ -203,15 +202,9 @@ def link_program(
     device_modules = []
     for group in codegen.groups:
         view = codegen.for_group(group)
-        if isinstance(group.target, CudaTarget):
-            context = CudaCodegenContext(
-                symbols=view.symbols,
-                target=view.target,
-                launches=view.launches,
-                codegen_context=view.codegen,
-            )
+        if not isinstance(group.target, CpuTarget):
             device_modules.append(
-                generators[group.target].emit(group.owner, group.functions, group.target, context)
+                generators[group.target].emit(group.owner, group.functions, group.target, view)
             )
     view = codegen.for_group(EmissionGroup(mod, entries[0].target, entries))
     context = CpuCodegenContext(
@@ -225,7 +218,7 @@ def link_program(
     units = (*device_modules, host_module)
     functions = tuple(link_function(codegen.symbols.by_function[id(entry)]) for entry in entries)
     device_targets = tuple(
-        group.target for group in codegen.groups if isinstance(group.target, CudaTarget)
+        group.target for group in codegen.groups if not isinstance(group.target, CpuTarget)
     )
     if not device_targets:
         raise ValueError(f"link_program: module {mod.name!r} has no CUDA device functions")

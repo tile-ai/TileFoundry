@@ -115,6 +115,7 @@ def _scope_mesh_value(mesh, ctx) -> "str | None":
     return alias[: -len("_mesh_t")] + "_mesh" if alias.endswith("_mesh_t") else None
 
 
+@register_codegen(CudaTarget, Role.EMIT, MeshCoord)
 def _mesh_coord_value(call: Call, ctx) -> str:
     """This unit's coordinate along one static axis of its enclosing mesh."""
     axis = static_dim_value(call.args[0])

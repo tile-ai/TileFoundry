@@ -13,7 +13,7 @@ from tests.fixtures.tir.square import TirSquare
 from tilefoundry.dsl import *
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.passes.transforms import insert_default_host_entry
+from tilefoundry.passes.transforms.cuda import insert_default_host_entry
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")

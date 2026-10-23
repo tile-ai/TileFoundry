@@ -917,8 +917,8 @@ Effect Op for a host-side launch of a device kernel (CPU entry only, no value);
 the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
 the non-grid/block launch config through the Op attributes.
 
-The authored launch-attribute descriptors are owned by
-`tilefoundry.ir.tir.launch`:
+The shared `LaunchAttrs` descriptor is owned by `tilefoundry.ir.tir.launch`;
+`CudaLaunchAttr` is owned by `tilefoundry.ir.tir.cuda.launch`:
 
 ```python
 class CudaLaunchAttr(IntEnum):
@@ -933,7 +933,7 @@ class LaunchAttrs:
         entries: attribute; Selector/value pairs interpreted by target lowering.
     """
 
-    entries: tuple[tuple[CudaLaunchAttr, object], ...] = ()
+    entries: tuple[tuple[Enum, object], ...] = ()
 ```
 
 `CudaLaunchAttr` identifies the CUDA launch-attribute values carried by
@@ -971,7 +971,7 @@ args)` with `args = (SymbolRef(callee), grid_x, grid_y, grid_z, block_x,
 block_y, block_z, *forwarded_args)`:
 
 - **callee**: `args[0]` MUST be a `SymbolRef` ([§2.1](#21-symbolref)) resolving to
-  a device `PrimFunction` with a CUDA target, or a HIR `Function` by its
+  a device `PrimFunction` whose target is not CPU, or a HIR `Function` by its
   root-relative selector ([core-ir §1](./core-ir.md#1-module)).
   The host-entry pass writes and checks a HIR callee's forwarded args
   ([passes §7.3](./passes.md#73-insert_default_host_entry)); verification

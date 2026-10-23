@@ -13,7 +13,6 @@ from tilefoundry.codegen.context_builder import build_codegen_context, mangle
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.cuda.abi import launcher_symbol
-from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.module import emit_cuda_module
 from tilefoundry.target import CudaTarget
 
@@ -28,13 +27,7 @@ def _view(target):
 
 def _device_source() -> str:
     _root, group, view = _view(_CUDA)
-    ctx = CudaCodegenContext(
-        symbols=view.symbols,
-        codegen_context=view.codegen,
-        target=_CUDA,
-        launches=view.launches,
-    )
-    return emit_cuda_module(TirSquare, group.functions, _CUDA, ctx).source
+    return emit_cuda_module(TirSquare, group.functions, _CUDA, view).source
 
 
 def _host_source() -> str:

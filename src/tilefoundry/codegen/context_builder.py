@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 
-from tilefoundry.codegen.cuda.abi import check_parameter_names
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.codegen.signature import (
     LAUNCH_ABI,
@@ -321,7 +320,6 @@ def build_codegen_context(
             target=targets[id(function)],
             params=launch_args.get(id(function)),
         )
-        check_parameter_names(registered_name, signature.params)
         symbol = FunctionSymbol(
             function=function,
             symbol=mangled,

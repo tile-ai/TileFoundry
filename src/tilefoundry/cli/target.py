@@ -423,7 +423,7 @@ def run_list(registrations: LoadedRegistrations) -> int:
     lines.extend(
         (
             "What one of them states, and where each number came from:",
-            "  tilefoundry target show nvidia.h200_sxm",
+            "  tilefoundry target show <device id>",
         )
     )
     sys.stdout.write("\n".join(lines) + "\n")

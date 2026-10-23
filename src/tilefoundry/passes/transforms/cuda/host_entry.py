@@ -22,6 +22,7 @@ from tilefoundry.ir.types import StorageKind, TensorType, TupleType, UnitType
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.passes.pass_base import ModulePass
+from tilefoundry.passes.pass_manager import PassPoint, register_pass
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _DEFAULT_ENTRY_NAME = "main"
@@ -222,6 +223,7 @@ def entries_for_hir_functions(module: Module) -> Module:
     return replace(module, functions=(*module.functions, *entries))
 
 
+@register_pass(CudaTarget, PassPoint.BEFORE_CODEGEN)
 class InsertHostEntryPass(ModulePass):
     """Give a device-only module a host-callable entry.
 
