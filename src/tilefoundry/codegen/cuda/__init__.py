@@ -6,6 +6,6 @@ from tilefoundry.codegen.cuda import abi as _abi  # noqa: F401 -- registers CUDA
 from tilefoundry.codegen.cuda import emit as _emit  # noqa: F401 -- emitter autodiscovery
 from tilefoundry.codegen.cuda import host_launch as _host_launch  # noqa: F401
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
-from tilefoundry.codegen.cuda.linkable_module import CudaLinkableModule
+from tilefoundry.codegen.cuda.module import CudaLinkableModule
 
 __all__ = ["CudaCodegenContext", "CudaLinkableModule"]

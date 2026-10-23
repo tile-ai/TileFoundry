@@ -42,12 +42,9 @@ class LinkableModule:
 
     def link(self, project: "CMakeProject") -> None:
         """Add this translation unit to the shared CMake project."""
-        if self.target == "cpu":
-            name = "host.cpp"
-        else:
-            prefix = f"{self.target}_"
-            index = sum(name.startswith(prefix) for name in project.sources)
-            name = f"{prefix}{index}.{self.language}"
+        prefix = f"{self.target}_"
+        index = sum(name.startswith(prefix) for name in project.sources)
+        name = f"{prefix}{index}.{self.language}"
         project.add_source(name, self.source)
 
 

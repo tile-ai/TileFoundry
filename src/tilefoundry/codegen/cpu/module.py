@@ -72,5 +72,9 @@ class HostLinkableModule(LinkableModule):
             functions=tuple(emitted),
         )
 
+    def link(self, project: "CMakeProject") -> None:
+        """Keep all selected CPU host entries in the scaffold's host.cpp."""
+        project.add_source("host.cpp", self.source)
+
 
 __all__ = ["HostLinkableModule"]

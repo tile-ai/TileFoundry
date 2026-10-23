@@ -305,8 +305,9 @@ class LinkableModule:
   - MUST be the source language: `cu` for a CUDA translation unit, `cpp` for a
     host translation unit.
   - `LinkableModule` MAY be subclassed to override `link(project)`. The default
-    implementation MUST add its source to the shared project, naming CPU output
-    `host.cpp` and other output `<target>_<index>.<language>`. Backend subclasses
+    implementation MUST add its source to the shared project as
+    `<target>_<index>.<language>`. `HostLinkableModule.link` MUST name its output
+    `host.cpp`. Backend subclasses
     MUST own their language, compiler options, and runtime include paths.
   - MUST list the module's constituent `LinkableFunction`s, in emission order.
   - `preamble` MUST carry what the unit states outside any function: includes,
