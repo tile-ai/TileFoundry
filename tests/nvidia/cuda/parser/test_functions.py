@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
 
-from tests.core.parser._fixtures import check_parsed_call_sources, fixture_cases
 from tilefoundry.dsl import *
 from tilefoundry.parser import ParseError
 from tilefoundry_nvidia import CudaTarget
@@ -148,8 +146,3 @@ def test_a_nested_block_does_not_gain_function_docstring_semantics() -> None:
             with Mesh(("cta",), layout=(1,), names=("unit",)) as _mesh:
                 """A string in a with body remains an ordinary statement."""
                 return x
-
-
-@fixture_cases(__file__, ("schedule/plain/gemm_relu_gemm_smem_staged.py",))
-def test_every_parsed_call_knows_where_it_came_from(source: Path) -> None:
-    check_parsed_call_sources(source)

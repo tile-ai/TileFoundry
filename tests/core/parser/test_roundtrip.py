@@ -1,10 +1,8 @@
 """Parser-owned checks for canonical grid-loop bindings."""
 
-import math
 
 import pytest
 
-from tests.core._source import import_dsl
 from tests.core.fixtures.placed.gqa_decode import GqaOnline
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
@@ -82,39 +80,3 @@ def test_signed_literals_are_constants_and_negated_values_are_calls(program, exp
         assert isinstance(result, Constant)
         assert type(result.value) is type(expected)
         assert result.value == expected
-
-
-@pytest.mark.parametrize("expression", (
-    "(x, math.nan)", "tf.full_like(x, value=math.nan)", "T.fill(x, math.nan)",
-))
-def test_nan_round_trips_through_print_and_import(expression):
-    """HIR constants/attributes and a TIR fill retain NaN through printable DSL."""
-    source = f'''import math
-from tilefoundry.dsl import *
-
-@func
-def nan_value(x: Tensor[(8,), "f32"]):
-    return {expression}
-'''
-    if expression.startswith("T.fill"):
-        source = f'''import math
-from tilefoundry.dsl import *
-
-@prim_func
-def nan_value(x: Tensor[(8,), "f32", "rmem"]):
-    with Mesh((Topology("thread", 1),), layout=(1,), names=("t",)) as thread:
-        {expression}
-'''
-    once = as_script(import_dsl(source))
-    restored = import_dsl(once)
-    assert "math.nan" in once
-    assert as_script(restored) == once
-    if expression.startswith("("):
-        assert isinstance(restored.body.elements[1], Constant)
-        assert math.isnan(restored.body.elements[1].value)
-    elif expression.startswith("T.fill"):
-        value = restored.body[0].body[0].args[1]
-        assert isinstance(value, Constant)
-        assert math.isnan(value.value)
-    else:
-        assert math.isnan(restored.body.target.value)

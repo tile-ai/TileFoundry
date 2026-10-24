@@ -429,7 +429,6 @@ EXPECTED = {
             "rmem": 128 * 4 + 8,
             "smem": 34084,
         },
-        api=True,
         internal=True,
     ),
     "fused_boundary.Inner.run[static]": dict(memory_peaks={"rmem": 8 * 2 + 8 * 2}),
@@ -487,7 +486,6 @@ EXPECTED = {
             "rmem": 49152,
             "smem": 64 * 32 * 2 + 32 * 128 * 2,
         },
-        api=True,
         internal=True,
         hooks=(_wave_w12x11,),
     ),
@@ -544,7 +542,6 @@ EXPECTED = {
     ),
     "hand_checked.SiblingLoopReuse.read[static]": dict(
         memory_peaks={"gmem": 32, "rmem": 32},
-        api=True,
         internal=True,
         hooks=(_time_window_excludes_a_buffer_in_a_sibling_loop,),
     ),
@@ -665,7 +662,6 @@ EXPECTED = {
             "rmem": 32768,
             "smem": 64 * 32 * 2 + 32 * 64 * 2,
         },
-        api=True,
         internal=True,
         persistent=PersistentSchedule(
             loop_trips=(("t", 30), ("ki", 128)),
@@ -681,7 +677,6 @@ EXPECTED = {
             "rmem": 32768,
             "smem": 64 * 32 * 2 + 32 * 64 * 2,
         },
-        api=True,
         internal=True,
         persistent=PersistentSchedule(
             loop_trips=(("mi", 5), ("ni", 6), ("ki", 128)),
@@ -704,7 +699,6 @@ EXPECTED = {
             "rmem": 1552,
             "smem": 65_792,
         },
-        api=True,
         internal=True,
         hooks=(
             _decode_scopes,
@@ -717,7 +711,6 @@ EXPECTED = {
             "rmem": 198656,
             "smem": 3 * 128 * 128 * 2,
         },
-        api=True,
         internal=True,
         hooks=(_prefill_writes,),
     ),
@@ -767,7 +760,6 @@ EXPECTED = {
             "gmem": 9_312,
             "rmem": 24_584,
         },
-        api=True,
         internal=True,
         hooks=(_reshape_liveness,),
     ),
@@ -800,7 +792,7 @@ def test_analysis_case(
     problems = Problems(case)
     result = None
     scopes = None
-    if case.api:
+    if case.api or case.internal:
         program = problems.run("program", case.program)
         checked = problems.run("check", lambda pair: check_program(*pair, dims=case.dims), program)
         result = problems.run("analyze", lambda pair: analyze(*pair, analysis=FAMILIES), checked)

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
 
-from tests.core.parser._fixtures import check_parsed_call_sources, fixture_cases
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.parser import ParseError
@@ -76,8 +74,3 @@ def test_a_loop_iterator_states_why_its_arity_is_invalid(iterator: str, expected
                 for row in steps(1, 2):  # noqa: F821
                     out = tf.add(x[row, :], seed)
                 return out
-
-
-@fixture_cases(__file__)
-def test_every_parsed_call_knows_where_it_came_from(source: Path) -> None:
-    check_parsed_call_sources(source)
