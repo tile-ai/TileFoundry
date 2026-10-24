@@ -8,4 +8,4 @@ pip install "tilefoundry[apple]"
 ```
 
 For development and third-party target packaging, see
-[Writing a target](https://github.com/tile-ai/TileFoundry/blob/main/docs/develop.md#writing-a-target).
+[Writing a target](https://github.com/tile-ai/TileFoundry/blob/main/docs/develop.md#6-writing-a-target).
