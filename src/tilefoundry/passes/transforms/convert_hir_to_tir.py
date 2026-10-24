@@ -1,13 +1,12 @@
 """Lower scheduled HIR to effect-form TIR.
 
-The pass analyzes a checked program and lowers each retained definition once.
+The pass consumes a memory analysis and lowers each retained definition once.
 StoragePlan interprets raw allocation decisions and registered access
 relations; the visitor writes the resulting declarations and statements.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from functools import cached_property
@@ -16,10 +15,9 @@ from math import prod
 
 import isl
 
-from tilefoundry.analysis import MemoryMetadata, analyze
+from tilefoundry.analysis import AnalysisResult, MemoryMetadata
 from tilefoundry.analysis.access import AliasKind, buffer_alias, forwarded_leaves
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
-from tilefoundry.analysis.check import check_program
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
@@ -1743,23 +1741,24 @@ class Lowering(ValuationVisitor[Expr | View]):
 class ConvertHIRToTIR(ModulePass):
     """Replace one selected HIR entry with its scheduled TIR function."""
 
-    entry: str | None = None
-    dims: Mapping[str, int] | None = None
+    analyzed: AnalysisResult
+    authored: Function
 
     name = "convert-hir-to-tir"
     requires = ()
 
     def run(self, module: Module) -> Module:
-        authored = module.entry_function() if self.entry is None else module.lookup(self.entry)
-        if not isinstance(authored, Function):
-            raise LoweringError(f"{getattr(authored, 'name', self.entry)!r} is not an HIR function")
-        result = analyze(*check_program(module, authored, dims=self.dims), analysis=("memory",))
+        result = self.analyzed
+        if "memory" not in result.executed or module is not result.module:
+            raise LoweringError(
+                "finalize needs the result of analyze(..., analysis=('memory',)) on a checked program"
+            )
         lowered = {}
         lowering = Lowering(
             TypeInferContext(
                 module=result.module, function=result.function, owner=result.function
             ),
-            authored,
+            self.authored,
             lowered,
         )
         lowering.lowered = lowering.run()

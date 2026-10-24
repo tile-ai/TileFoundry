@@ -74,21 +74,21 @@ class PassManager:
         self._check_requires()
         for seq, p in enumerate(self.passes):
             prev = module
+            previous = {id(frame.function) for frame in list_call_paths(prev).values()}
             with DumpScope(f"{seq:02d}_{p.name}"):
                 dump("before.txt", lambda: repr(prev), DumpFlags.PASS_IR)
                 module = p.run(module)
-                self._post_pass_recheck(prev, module)
+                self._post_pass_recheck(previous, module)
                 dump("after.txt", lambda: repr(module), DumpFlags.PASS_IR)
         return module
 
-    def _post_pass_recheck(self, prev: Module, curr: Module) -> None:
+    def _post_pass_recheck(self, previous: set[int], curr: Module) -> None:
         """Post pass recheck.
 
         Re-run typeinfer (HIR) / verify (TIR) on every function whose
-        object identity changed between ``prev`` and ``curr``. Whole-
+        object identity is absent from the pre-pass ``previous`` set. Whole-
         function fallback per [passes §7](docs/spec/passes.md#7-implemented-passes).
         """
-        previous = {id(frame.function) for frame in list_call_paths(prev).values()}
         for frame in list_call_paths(curr).values():
             fn = frame.function
             if id(fn) in previous:

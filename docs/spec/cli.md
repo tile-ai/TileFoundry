@@ -471,7 +471,9 @@ tilefoundry schedule facts [INSTRUCTION] --target TARGET PATH [--json]
 tilefoundry schedule candidates SOURCE PATH [--json] [--dim NAME=EXTENT ...]
 ```
 
-`finalize` checks the selected entry, runs memory analysis, and writes canonical
+`analyze`, `candidates` and `finalize` share one front end: load the source, bind
+one extent per `--dim`, and check the entry. `finalize` then runs memory analysis
+and writes canonical
 TIR following [passes §7.1](./passes.md#71-converthirtotir). With `--json`, `PATH` instead contains an object whose `source`
 field is that same canonical TIR. `facts` describes the instructions admitted
 by the exact `TARGET` identity, optionally narrowed to one fully-qualified

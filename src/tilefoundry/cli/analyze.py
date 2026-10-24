@@ -7,17 +7,16 @@ import sys
 import textwrap
 import threading
 from pathlib import Path
-from typing import Mapping
+from typing import Sequence
 
-from tilefoundry.analysis import analyze, check_program
-from tilefoundry.cli.source import load_authored_ir, require_bound_dims
+from tilefoundry.analysis import analyze
+from tilefoundry.cli.source import checked_program
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import (
     render_analysis,
     render_json,
     render_text,
 )
-from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry.visitor_registry.contexts import ValuationContext
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
@@ -115,7 +114,7 @@ def run_authored_analysis(
     topology: str | None = None,
     as_json: bool = False,
     operands: bool = False,
-    dims: Mapping[str, int] | None = None,
+    dims: Sequence[str] | None = None,
 ) -> int:
     """Analyse one authored HIR selection and print what was found.
 
@@ -125,15 +124,10 @@ def run_authored_analysis(
     """
     disarmed = _watch(_ANALYSIS_TIMEOUT_SECONDS)
     try:
-        module = load_authored_ir(source)
-        function = module.entry_function()
-        require_bound_dims(module, function, dims, command="analyze")
-        try:
-            checked, root = check_program(
-                module, function, topology_level=topology if analyses else None, dims=dims
-            )
-        except SpecializationError as error:
-            raise ValueError(f"analyze: {error}") from None
+        program = checked_program(
+            source, dims, command="analyze", topology_level=topology if analyses else None
+        )
+        checked, root = program.module, program.entry
         if not analyses:
             annotated = "\n".join(
                 as_script(frame.function, options=PythonPrintOptions(show_types=True))

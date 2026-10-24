@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any
 
-from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.metadata import ExecutionMeshMetadata
 from tilefoundry.inspection import PatternPrinter, PythonPrinter
 from tilefoundry.ir.core import Call, OpCapability, get_metadata, op_identifier, value_label
@@ -37,10 +36,9 @@ def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
 
 
 def candidates(
-    module, entry, *, source: str | None = None, dims: Mapping[str, int] | None = None
+    module, entry, *, source: str | None = None
 ) -> dict[str, Any]:
-    """Report instructions using the same acceptance boundary as explicit schedule inference."""
-    module, entry = check_program(module, entry, dims=dims)
+    """Report instructions for a program ``check_program`` returned."""
     target = module.resolve_target()
     contexts = {}
     frames = tuple(ValuationVisitor.definitions(ValuationContext(module, entry)))

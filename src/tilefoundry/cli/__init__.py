@@ -18,7 +18,7 @@ from tilefoundry.cli.scaffold import run_scaffold
 from tilefoundry.cli.schedule import run_candidates as run_schedule_candidates
 from tilefoundry.cli.schedule import run_facts as run_schedule_facts
 from tilefoundry.cli.schedule import run_finalize as run_schedule_finalize
-from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim, parse_dims
+from tilefoundry.cli.source import load_authored_ir, parse_dims
 from tilefoundry.cli.spec import read_spec, run_spec, spec_path
 from tilefoundry.cli.target import load_registrations, registry_path
 from tilefoundry.cli.target import run_add_document as run_target_add_document
@@ -387,7 +387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             topology=args.topology,
             as_json=args.json,
             operands=args.operands,
-            dims=one_extent_per_dim(parse_dims(args.dim)),
+            dims=args.dim,
         )
     except (AnalysisError, VerifyError, OSError, TypeError, ValueError) as error:
         print(f"tilefoundry: error: {error}", file=sys.stderr)

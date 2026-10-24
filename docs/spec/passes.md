@@ -231,7 +231,8 @@ unified retype / verify is scheduled by `PassManager`.
 class ConvertHIRToTIR(ModulePass):
     """Replace one selected scheduled HIR entry with verified TIR."""
 
-    entry: str | None
+    analyzed: AnalysisResult
+    authored: Function
     name: str = "convert-hir-to-tir"
     requires: tuple[str, ...] = ()
 
@@ -239,9 +240,12 @@ class ConvertHIRToTIR(ModulePass):
 ```
 
 - constraints:
-  - The pass derives the entry with `check_program`, runs
-    `analyze(..., analysis=("memory",))` on that checked result,
-    and lowers the checked Module and its retained calls. The authored function is
+  - The pass receives the result of `analyze(..., analysis=("memory",))` on a
+    checked program and never checks or analyzes again; it lowers that result's
+    Module, in place, and its retained calls. A result whose `executed` lacks
+    `memory`, or whose Module is not the one the pass receives, raises
+    `LoweringError`. `PassPoint.BEFORE_LOWER` passes run after that analysis and
+    before this pass. The authored function is
     retained separately so `BindingMetadata`, keyed by `SourceSpanMetadata`,
     remains the source of user-facing names after analysis has assigned its own
     internal bindings.

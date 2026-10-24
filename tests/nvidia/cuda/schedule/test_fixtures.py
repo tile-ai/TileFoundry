@@ -22,6 +22,7 @@ import isl
 import pytest
 import torch
 
+import tilefoundry.cli.schedule as schedule_cli
 import tilefoundry.ir.hir.schedule as schedules
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 import tilefoundry.visitor_registry.instruction as instructions
@@ -680,6 +681,12 @@ RMEM_EXPECTED = {
         "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one accumulator chain"),
     },
 }
+
+
+def _finalized(module):
+    authored = module.entry_function()
+    result = analyze(*check_program(module, authored), analysis=("memory",))
+    return finalize(result, authored=authored)
 
 
 def _region_key(region: MeshRegion, occurrences: dict[str, int]) -> str:
@@ -2240,7 +2247,7 @@ def test_lowering_rejects_instruction_without_access_relation(
         and not isinstance(expr.target.op, TiledMma)
     )
     monkeypatch.delitem(access_relation_registry._map, type(transfer.target.op))
-    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(schedule_cli, "analyze", lambda *_args, **_kwargs: result)
 
     _assert_cli_lowering_error(source, "states no access relations", tmp_path, capsys)
 
@@ -2262,7 +2269,7 @@ class WrittenReturnWindow:
     with pytest.raises(
         lowering_module.LoweringError, match="requires a non-identity inverse relation"
     ):
-        finalize(module)
+        _finalized(module)
 
 
 def test_zero_trip_carry_keeps_direct_address_proofs_and_the_loop():
@@ -2291,7 +2298,7 @@ class ZeroTripCarry:
     ]
     assert {proof.kind for proof in carry} == {AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD}
     assert all(proof.relation.relation.is_identity() for proof in carry)
-    lowered = finalize(module)
+    lowered = _finalized(module)
     verify_module(lowered)
     verify_module(import_dsl(as_script(lowered)))
     visitor = _RetainedStatements()
@@ -2324,7 +2331,7 @@ class Window:
                 window = x[start + 1:start + 9, 0:8]
                 return tf.schedule((window, tf.empty(Tensor[(8, 8), "f32", (8, 8), "rmem"])), op=T.copy())
 """)
-    lowered = finalize(module)
+    lowered = _finalized(module)
     verify_module(lowered)
     printed = as_script(lowered)
     verify_module(import_dsl(printed))
@@ -2368,7 +2375,7 @@ class RegisterRows:
                     out = tf.insert_slice(out, held[i:i+1, :], (i,0))
                 return out
 """)
-    lowered = finalize(module)
+    lowered = _finalized(module)
     verify_module(lowered)
     verify_module(import_dsl(as_script(lowered)))
     visitor = _RetainedStatements()
@@ -2403,7 +2410,7 @@ class ComposedReshape:
                 return tf.schedule((reshaped, tf.empty(Tensor[(8,8,16,4), "bf16", "rmem"])), op=T.copy())
 """.replace("START", str(start))
     )
-    lowered = finalize(module)
+    lowered = _finalized(module)
     verify_module(lowered)
     verify_module(import_dsl(as_script(lowered)))
     visitor = _RetainedStatements()
@@ -2452,7 +2459,7 @@ class ComposedReshape:
         .replace("START", str(start))
         .replace("SHAPE", repr(shape))
     )
-    lowered = finalize(module)
+    lowered = _finalized(module)
     verify_module(import_dsl(as_script(lowered)))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
@@ -2482,7 +2489,7 @@ class ModularWindow:
                     out = tf.schedule((x[start:start+8], tf.empty(Tensor[(8,), "f32", "rmem"])), op=T.copy())
                 return out
 """)
-    verify_module(import_dsl(as_script(finalize(module))))
+    verify_module(import_dsl(as_script(_finalized(module))))
 
 
 @pytest.mark.parametrize("coordinate_division", [False, True])
@@ -2518,7 +2525,7 @@ def test_lowering_rejects_addressable_result_without_offsets(
         and expr.type.storage is StorageKind.SMEM
     )
     detach_metadata(addressable, MemoryMetadata)
-    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(schedule_cli, "analyze", lambda *_args, **_kwargs: result)
 
     _assert_cli_lowering_error(source, "addressable smem result but no offsets", tmp_path, capsys)
 
@@ -2533,7 +2540,7 @@ def test_lowering_rejects_unknown_hir_call(
         if isinstance(expr, Call) and type(expr.target).__name__ == "Slice"
     )
     view.target = _UnstatedInstruction()
-    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(schedule_cli, "analyze", lambda *_args, **_kwargs: result)
 
     _assert_cli_lowering_error(
         source, "_UnstatedInstruction states no access relations", tmp_path, capsys
@@ -2550,7 +2557,7 @@ def test_lowering_rejects_unscheduled_gmem_cast(
         if isinstance(expr, Call) and isinstance(expr.target, HirCast)
     )
     cast.type = replace(cast.type, storage=StorageKind.GMEM)
-    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(schedule_cli, "analyze", lambda *_args, **_kwargs: result)
 
     _assert_cli_lowering_error(
         source,
@@ -2674,7 +2681,7 @@ class _RetainedStatements(StmtVisitor[None]):
 
 def test_reduce_store_stays_in_its_warp_scope():
     source = next(path for path in HIR if path.stem == "bulk_reduce_store")
-    lowered = finalize(_module_in(source))
+    lowered = _finalized(_module_in(source))
 
     class Scope(StmtVisitor[None]):
         def __init__(self):
@@ -2711,7 +2718,7 @@ def test_grouped_n16_issues_keep_source_addresses():
         and isinstance(value.target.op, TiledMma)
     )
     original_c, _, original_b = (arg.type for arg in schedule.args)
-    lowered = finalize(module)
+    lowered = _finalized(module)
     visitor = _RetainedStatements()
     function = lowered.entry_function()
     visitor.visit(function.body)
@@ -2822,7 +2829,7 @@ def test_grouped_n16_issues_keep_source_addresses():
 
 def test_authored_views_survive_region_forwarding_without_extra_wrappers():
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "view_visit_memo.py"
-    lowered = finalize(_module_in(source))
+    lowered = _finalized(_module_in(source))
     verify_module(lowered)
     function = lowered.entry_function()
     visitor = _RetainedStatements()
@@ -2855,7 +2862,7 @@ def test_smem_slots_reserve_all_physical_bytes(name):
     module = _module_in(source)
     analyzed = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
     peak = get_metadata(analyzed.function, RegionMemoryMetadata).peak_for("smem").peak_bytes
-    function = finalize(module).entry_function()
+    function = _finalized(module).entry_function()
     visitor = _RetainedStatements()
     visitor.visit(function.body)
     slots = []
@@ -2885,7 +2892,7 @@ def test_smem_slots_reserve_all_physical_bytes(name):
 
 def test_lowering_retains_all_four_instance_and_local_call_shapes():
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py"
-    lowered = finalize(_module_in(source))
+    lowered = _finalized(_module_in(source))
     verify_module(lowered)
     frames = list_call_paths(lowered)
     assert len(frames) == 3
@@ -2942,7 +2949,7 @@ def _returned_view(storage, chain=False):
 @pytest.mark.parametrize("storage", [StorageKind.GMEM, StorageKind.SMEM])
 @pytest.mark.parametrize("chain", [False, True])
 def test_a_returned_view_passes_its_analyzed_storage_to_the_callee(storage, chain):
-    lowered = finalize(_returned_view(storage, chain))
+    lowered = _finalized(_returned_view(storage, chain))
     verify_module(lowered)
     function = lowered.entry_function()
     visitor = _RetainedStatements()
@@ -2982,9 +2989,9 @@ def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(
         with pytest.raises(
             lowering_module.LoweringError, match="requires a non-identity inverse relation"
         ):
-            finalize(_module_in(source))
+            _finalized(_module_in(source))
         return
-    lowered = finalize(_module_in(source))
+    lowered = _finalized(_module_in(source))
     verify_module(lowered)
     function = lowered.entry_function()
     visitor = _RetainedStatements()
@@ -3020,7 +3027,7 @@ def test_read_only_call_before_an_update_keeps_the_input_storage(tmp_path):
     )
     path = tmp_path / source.name
     path.write_text(text)
-    lowered = finalize(_module_in(path))
+    lowered = _finalized(_module_in(path))
     verify_module(lowered)
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
@@ -3056,7 +3063,7 @@ def test_verifier_rejects_malformed_retained_tir_calls(wrong, refused):
 
 
 def test_verifier_rejects_non_integer_indexed_tir_target():
-    lowered = finalize(
+    lowered = _finalized(
         _module_in(Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py")
     )
     slot = lowered.children["layers"]

@@ -121,7 +121,7 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_u
             TirBuilder, "transfer", autospec=True, side_effect=TirBuilder.transfer
         ) as copy:
             with pytest.raises(LoweringError, match="cannot be placed"):
-                finalize(module)
+                finalize(result, authored=module.entry_function())
         copy.assert_not_called()
 
 
@@ -194,7 +194,7 @@ class SequentialCarries:
         assert link.relation.relation.is_identity()
         assert link.target.expr is insert.args[0]
         assert memory.buffer_bytes is None and memory.offsets == ()
-    verify_module(finalize(module))
+    verify_module(finalize(result, authored=module.entry_function()))
 
 
 @pytest.mark.parametrize("returned", ["out", "out[1:2, :]"])

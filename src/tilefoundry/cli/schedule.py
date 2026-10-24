@@ -6,12 +6,8 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from tilefoundry.cli.source import (
-    load_authored_ir,
-    one_extent_per_dim,
-    parse_dims,
-    require_bound_dims,
-)
+from tilefoundry.analysis import analyze
+from tilefoundry.cli.source import checked_program
 from tilefoundry.cli.target import target_by_identity
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.module_utils import list_call_paths
@@ -37,10 +33,9 @@ def run_finalize(
     source: str, out: str, *, as_json: bool = False, dims: Sequence[str] | None = None
 ) -> int:
     """Finalize ``source`` and write the sole requested representation."""
-    module = load_authored_ir(source)
-    stated = one_extent_per_dim(parse_dims(dims))
-    require_bound_dims(module, module.entry_function(), stated, command="schedule finalize")
-    module = finalize(module, dims=stated)
+    program = checked_program(source, dims, command="schedule finalize")
+    analyzed = analyze(program.module, program.entry, analysis=("memory",))
+    module = finalize(analyzed, authored=program.authored)
     functions = tuple(fn for frame in list_call_paths(module).values() for fn in (frame.function,) if isinstance(fn, PrimFunction))
     function = module.entry_function() if len(functions) == 1 else module
     rendered = as_script(function)
@@ -72,11 +67,8 @@ def run_candidates(
     dims: Sequence[str] | None = None,
 ) -> int:
     """Write instruction candidates for the unscheduled sites in ``source``."""
-    module = load_authored_ir(source)
-    function = module.entry_function()
-    stated = one_extent_per_dim(parse_dims(dims))
-    require_bound_dims(module, function, stated, command="schedule candidates")
-    report = candidates(module, function, source=source, dims=stated)
+    program = checked_program(source, dims, command="schedule candidates")
+    report = candidates(program.module, program.entry, source=source)
     text = json.dumps(report, indent=2) if as_json else render_candidates(report)
     _write(out, text)
     return 0

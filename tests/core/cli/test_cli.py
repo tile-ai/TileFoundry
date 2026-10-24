@@ -6,8 +6,8 @@ import pytest
 
 from tilefoundry import cli
 from tilefoundry.cli.source import (
+    _one_extent_per_dim,
     load_authored_ir,
-    one_extent_per_dim,
 )
 from tilefoundry.target import registered_targets
 
@@ -20,11 +20,11 @@ def test_parse_dims_reads_one_extent_per_dimension() -> None:
     assert cli.parse_dims(["ctx_len=8", "seq_len=1"]) == {"ctx_len": (8,), "seq_len": (1,)}
     assert cli.parse_dims(["ctx_len=0,1,37"]) == {"ctx_len": (0, 1, 37)}
 
-    assert one_extent_per_dim(cli.parse_dims(None)) is None
-    assert one_extent_per_dim(cli.parse_dims([])) == {}
-    assert one_extent_per_dim(cli.parse_dims(["ctx_len=1024"])) == {"ctx_len": 1024}
+    assert _one_extent_per_dim(cli.parse_dims(None)) is None
+    assert _one_extent_per_dim(cli.parse_dims([])) == {}
+    assert _one_extent_per_dim(cli.parse_dims(["ctx_len=1024"])) == {"ctx_len": 1024}
     with pytest.raises(ValueError, match="asking several EXTENTs together is for check"):
-        one_extent_per_dim(cli.parse_dims(["ctx_len=0,1,37"]))
+        _one_extent_per_dim(cli.parse_dims(["ctx_len=0,1,37"]))
 
 
 @pytest.mark.parametrize(
