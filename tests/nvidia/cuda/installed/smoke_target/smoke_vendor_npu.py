@@ -9,7 +9,10 @@ from pathlib import Path
 
 def _vendor_npu_model(cmine: Path, tmp_path: Path) -> Path:
     provider = tmp_path / "vendor_npu"
-    shutil.copytree(Path(__file__).parent / "vendor_npu", provider)
+    provider_fixture = (
+        Path(__file__).parents[4] / "core" / "installed" / "smoke_target" / "vendor_npu"
+    )
+    shutil.copytree(provider_fixture, provider)
     model = tmp_path / "vendor_npu_model.py"
     model.write_text(
         cmine.read_text(encoding="utf-8")

@@ -33,7 +33,10 @@ def test_added_documents_and_provider_drive_installed_commands(
     provider = tmp_path / "vendor_npu.py"
     shutil.copyfile(fixtures / "hw" / architecture.name, architecture)
     shutil.copyfile(fixtures / "hw" / device.name, device)
-    shutil.copyfile(fixtures / "vendor_npu" / "__init__.py", provider)
+    provider_fixture = (
+        Path(__file__).parents[4] / "core" / "installed" / "smoke_target" / "vendor_npu"
+    )
+    shutil.copyfile(provider_fixture / "__init__.py", provider)
 
     for source, document in ((architecture, True), (device, True), (provider, False)):
         arguments = ["--registry", registry, "target", "add"]
