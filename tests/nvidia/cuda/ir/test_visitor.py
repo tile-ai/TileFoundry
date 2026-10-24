@@ -1,4 +1,4 @@
-"""``tilefoundry.ir.visitor`` — Expr / Stmt visitor + mutator contract."""
+"""Identity mutation across CUDA statement subclasses."""
 
 from __future__ import annotations
 

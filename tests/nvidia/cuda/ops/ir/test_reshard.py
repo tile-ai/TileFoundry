@@ -1,4 +1,4 @@
-"""Cover Reshard materialization strides and rejected destinations."""
+"""CUDA Reshard materialization for target-owned memory."""
 
 from __future__ import annotations
 

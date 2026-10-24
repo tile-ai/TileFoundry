@@ -1,4 +1,4 @@
-"""``tilefoundry.visitor_registry`` — dispatch on the Op class."""
+"""Closed failure of missing CUDA operation visitors."""
 
 from __future__ import annotations
 

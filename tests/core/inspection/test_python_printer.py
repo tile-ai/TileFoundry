@@ -1,4 +1,4 @@
-"""Inspection printer: what the emitted source carries besides the program."""
+"""Binding metadata and unmaterialized types in printed programs."""
 
 from tests.core._source import import_dsl
 from tilefoundry.dsl import *

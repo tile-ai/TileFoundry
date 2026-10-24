@@ -1,4 +1,4 @@
-"""Evaluator core mechanics."""
+"""Core scalar, call, and loop evaluation semantics."""
 
 from __future__ import annotations
 

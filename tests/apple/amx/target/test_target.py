@@ -1,4 +1,4 @@
-"""What a Target validates about a program, and how codegen groups by one."""
+"""Idempotent AMX target registration across module reloads."""
 
 from __future__ import annotations
 

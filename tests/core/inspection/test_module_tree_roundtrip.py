@@ -1,4 +1,4 @@
-"""Canonical round trip of a Module tree through the printer and product import."""
+"""Round trips of sibling calls in a module tree."""
 
 from __future__ import annotations
 

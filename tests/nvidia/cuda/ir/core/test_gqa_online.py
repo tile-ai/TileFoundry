@@ -1,4 +1,4 @@
-"""Cover online GQA specialization and CTA distribution strategies."""
+"""Structure of the fixed CUDA online-softmax fixture."""
 
 from __future__ import annotations
 

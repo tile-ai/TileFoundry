@@ -1,4 +1,4 @@
-"""The scheduling corpus's plain programs, read the way a scheduler reads them."""
+"""AMX scheduling facts and instruction declarations."""
 
 from __future__ import annotations
 

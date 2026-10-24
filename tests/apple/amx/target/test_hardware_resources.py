@@ -1,4 +1,4 @@
-"""Pin schemas and identities for independent installed hardware documents."""
+"""AMX document-backed values, fact evidence, and instruction capabilities."""
 
 from __future__ import annotations
 

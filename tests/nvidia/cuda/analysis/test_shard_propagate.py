@@ -1,4 +1,4 @@
-"""Generic shard propagation engine over a matmul-shaped relation."""
+"""Loop-carried extent-one splits in CUDA shard propagation."""
 
 from __future__ import annotations
 

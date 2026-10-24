@@ -1,4 +1,4 @@
-"""Pin schemas and identities for independent installed hardware documents."""
+"""Hardware schema diagnostics and target-neutral capability boundaries."""
 
 from __future__ import annotations
 

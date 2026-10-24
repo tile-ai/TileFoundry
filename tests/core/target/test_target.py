@@ -1,4 +1,4 @@
-"""What a Target validates about a program, and how codegen groups by one."""
+"""Core target registration, facts projections, and authored boundaries."""
 
 from __future__ import annotations
 

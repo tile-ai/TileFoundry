@@ -1,4 +1,4 @@
-"""Cover print-import-print fixed points beyond the model corpus."""
+"""Round trips of authored CUDA scheduling fixtures."""
 
 from pathlib import Path
 

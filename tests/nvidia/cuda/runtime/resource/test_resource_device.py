@@ -1,4 +1,4 @@
-"""Pin checkpoint loading to the process-selected CUDA device."""
+"""CUDA resource drawing and process-selected device handling."""
 
 from __future__ import annotations
 

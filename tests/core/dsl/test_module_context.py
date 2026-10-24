@@ -1,4 +1,4 @@
-"""Module-owned execution context: Target and the ordered Topology hierarchy."""
+"""Cleanup of module context after class-body failures."""
 
 from __future__ import annotations
 

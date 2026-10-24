@@ -1,4 +1,4 @@
-"""``@module(entry=...)`` decorator: collect class-body DSL functions into a Module."""
+"""Module collection and validation of class-body declarations."""
 
 from __future__ import annotations
 

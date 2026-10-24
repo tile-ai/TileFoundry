@@ -1,4 +1,4 @@
-"""CacheUpdate's value oracle, runtime bounds and Partial cache contract."""
+"""CUDA CacheUpdate analysis costs at program and CTA scope."""
 
 from __future__ import annotations
 

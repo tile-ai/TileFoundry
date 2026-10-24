@@ -1,4 +1,4 @@
-"""The scheduling corpus's plain programs, read the way a scheduler reads them."""
+"""CPU scheduling facts for target-neutral instructions."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""MatMul's sharding invariants."""
+"""CUDA MatMul type inference across storage and architecture cases."""
 
 from __future__ import annotations
 

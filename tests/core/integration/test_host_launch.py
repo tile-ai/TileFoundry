@@ -1,4 +1,4 @@
-"""End-to-end checks for the explicit host/device boundary."""
+"""Invalid symbolic launch extents at the host boundary."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""`check` through the command line, on targets the corpus already declares."""
+"""Target-neutral command-line checks and dimension-binding diagnostics."""
 
 from __future__ import annotations
 
