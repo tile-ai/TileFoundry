@@ -37,6 +37,27 @@ data and registration entry point. After this `import tilefoundry` resolves to
 **Do not set `PYTHONPATH`** — in particular `PYTHONPATH=tests:src`
 shadows stdlib `types` via `tests/types/__init__.py`.
 
+## Writing a target
+
+Start with [targets/apple](../targets/apple) as a small working example; use
+[targets/nvidia](../targets/nvidia) for a complete compiler and runtime reference.
+The Apple project keeps its `pyproject.toml`, `setup.py`, and `README.md` beside
+`tilefoundry_apple/`. Its top-level `__init__.py` exports the public target values,
+while the implementation lives in the `amx/` subpackage. The packaging entry point
+is `amx = "tilefoundry_apple.amx"`.
+
+Importing the target subpackage loads its registrations. Follow the existing
+`register_target` and `register_op` usage, and use `register_codegen`,
+`register_pass` for the compiler extensions your target provides.
+Keep tests in `tests/<vendor>/<target>/` and specifications in the
+target subpackage's `docs/spec/` directory.
+
+Use [Target loading and extensions](spec/target.md#13-target-loading-and-extensions)
+(§1.3) as the contract for package boundaries, entry points, registration, and
+loading metadata. The Apple example publishes `tilefoundry-apple`; its `setup.py`
+pins `tilefoundry==V` to the version `V` being built. Follow the same project
+structure when adding a vendor distribution.
+
 ## 3. Tests
 
 `pytest tests/` runs the **entire** suite — unit, codegen, nvcc-compiled,

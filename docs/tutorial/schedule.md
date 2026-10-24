@@ -1,5 +1,7 @@
 # Choosing schedules and instructions for a backend
 
+This page requires the NVIDIA target. Install it with `pip install "tilefoundry[nvidia]"`.
+
 `analyze` compares structures before a kernel exists. `schedule candidates` and
 `schedule facts` then show which instructions can implement that structure, and
 `tf.schedule` records the choices that `schedule finalize` lowers to TIR. This page

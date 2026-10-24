@@ -51,7 +51,7 @@
 ### 1 · Install
 
 ```sh
-pip install tilefoundry    # needs Python 3.12 or newer
+pip install "tilefoundry[all]"    # needs Python 3.12 or newer; [nvidia] or [apple] installs one vendor
 tilefoundry                # check the install: the commands an agent will ask
 ```
 

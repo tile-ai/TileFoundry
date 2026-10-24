@@ -1,5 +1,7 @@
 # Making one step fast
 
+This page requires the NVIDIA target. Install it with `pip install "tilefoundry[nvidia]"`.
+
 `analyze` says what a program costs before any kernel exists, so a placement decision can
 be priced before anyone writes a kernel for it. This page takes the step from
 `tilefoundry tutorial migrate` and makes it fast, measuring after each change instead of

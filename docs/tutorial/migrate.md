@@ -1,5 +1,7 @@
 # Describing a published step
 
+This page requires the NVIDIA target. Install it with `pip install "tilefoundry[nvidia]"`.
+
 The first step of a migration has one criterion: the program you author must agree with
 the published implementation. `check` is what says so, and it says it about one output at
 a time -- so the answer is never "close enough", it is a predicate per output with a bound
