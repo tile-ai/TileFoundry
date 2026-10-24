@@ -1,4 +1,12 @@
-"""Tests and helpers for the owning target."""
+"""What a Target validates about a program, and how codegen groups by one.
+
+What a Target validates about a program, and how codegen groups by one.
+
+The composed hardware facts themselves -- which documents a default target
+resolves, and which limits belong to the architecture rather than the device --
+are asserted where those facts are installed. What is left here is what a Target
+is asked during a compilation.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,10 @@
-"""Target-neutral tests and helpers."""
+"""CacheUpdate's value oracle, runtime bounds and Partial cache contract.
+
+No corpus model calls ``cache_update``, so the oracle stays here; the GPU witness
+for the same op is the decode step in ``test_insert_slice.py``. The bounds are
+runtime, not static: ``cur_pos`` and ``s`` arrive as scalar tensors, so typeinfer
+cannot see them and the guard has to be in the evaluator.
+"""
 
 from __future__ import annotations
 

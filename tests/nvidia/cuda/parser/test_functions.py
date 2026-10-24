@@ -13,7 +13,9 @@ from tilefoundry.parser import ParseError
 from tilefoundry_nvidia import CudaTarget
 
 _FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures"
-_FIXTURES_THAT_REFUSE_TO_PARSE = {_FIXTURE_ROOT / "schedule" / "plain" / "gemm_relu_gemm_smem_staged.py"}
+_FIXTURES_THAT_REFUSE_TO_PARSE = {
+    _FIXTURE_ROOT / "schedule" / "plain" / "gemm_relu_gemm_smem_staged.py"
+}
 _FIXTURE_SOURCES = tuple(
     path
     for path in sorted(_FIXTURE_ROOT.rglob("*.py"))
@@ -158,6 +160,8 @@ def test_a_nested_block_does_not_gain_function_docstring_semantics() -> None:
                 return x
 
 
-@pytest.mark.parametrize("source", _FIXTURE_SOURCES, ids=lambda source: str(source.relative_to(_FIXTURE_ROOT)))
-def test_every_parsed_call_knows_where_it_came_from(source):
+@pytest.mark.parametrize(
+    "source", _FIXTURE_SOURCES, ids=lambda source: str(source.relative_to(_FIXTURE_ROOT))
+)
+def test_every_parsed_call_knows_where_it_came_from(source: Path) -> None:
     check_parsed_call_sources(source)

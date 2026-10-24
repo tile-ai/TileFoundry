@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""Bare hardware value markers used by document-backed target tests."""
 
 from __future__ import annotations
 

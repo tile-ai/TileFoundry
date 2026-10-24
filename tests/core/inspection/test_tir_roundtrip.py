@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Canonical fixture contracts for the authored HIR and TIR surfaces."""
 
 from __future__ import annotations
 

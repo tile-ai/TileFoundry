@@ -21,57 +21,57 @@ Base: upstream `aaa8054d` (#238). Full verification commands use `RUN=issue237-m
 
 | File | Cause |
 |---|---|
-| `tests/nvidia/cuda/fixtures/inspection/type_printer_sugar.analyzed.txt` | M6: printer round-trip |
-| `tests/nvidia/cuda/fixtures/schedule/Wgmma.facts.txt` | M5 / D18-D31: Wgmma facts/admission and candidate pruning |
-| `tests/nvidia/cuda/fixtures/schedule/plain/gemm_8192x17408x5120_cta_grid.candidates.txt` | M5 / D18-D31: Wgmma facts/admission and candidate pruning |
-| `tests/nvidia/cuda/fixtures/schedule/tir/captured_insert_update.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/child_weight.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/cta_submesh_thread_scope.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/fp8_block_scaled_gemm.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/gemm_8192x17408x5120_register_store.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/gemm_8192x17408x5120_tma_store.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/inplace_output_update.py` | D50-D52, D58, D66: output-param writes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/loop_carry_from_param.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/loop_carry_rebind.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/loop_carry_window.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/loop_outputs.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/loop_variable_rebound.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/mesh_capture_outside.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/mesh_views.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/mesh_zeros_submesh.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/module_instances.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/register_arange.py` | M4 / D10: T.arange |
-| `tests/nvidia/cuda/fixtures/schedule/tir/register_full_like.py` | M4: typed fill |
-| `tests/nvidia/cuda/fixtures/schedule/tir/register_index_window.py` | M4 / D33, D60: register window origin |
-| `tests/nvidia/cuda/fixtures/schedule/tir/register_index_window_offset.py` | M4 / D33, D60: offset register window |
-| `tests/nvidia/cuda/fixtures/schedule/tir/reshard_views.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/scalar_binary.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/scalar_ceildiv_gate.py` | M6 / D32: value ceildiv |
-| `tests/nvidia/cuda/fixtures/schedule/tir/sm80_mma_ldmatrix.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/sparse_decode.py` | D62/D63: row-major mapping and canonical fixture |
-| `tests/nvidia/cuda/fixtures/schedule/tir/staged_dynamic_inner.py` | D68: dynamic stage counter |
-| `tests/nvidia/cuda/fixtures/schedule/tir/staged_nested.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/strided_return_window.py` | D61: exact strided view |
-| `tests/nvidia/cuda/fixtures/schedule/tir/submesh_slice_in_sibling.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_a_k_major.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_a_mn_major.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_b_mn_major_grouped_n64.py` | D47: preserve broadcast operand mode structure |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_b_mn_major_wide_lbo.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_b_nk.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_cast_between_schedules.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_cp_async_loads.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_cta_grid_4x17.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_explicit_windows.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_k_slices_of_wide_run.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_one_tile_of_larger_output.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_repeat_along_k.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_repeat_along_n_order.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_rs_a_from_accumulator.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_rs_a_from_smem.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_swizzled_smem.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_tma_3stage.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/wgmma_two_schedules.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
-| `tests/nvidia/cuda/fixtures/schedule/tir/zero_trip_insert_slice.py` | D64: accepted direct address proof |
+| `tests/fixtures/inspection/type_printer_sugar.analyzed.txt` | M6: printer round-trip |
+| `tests/fixtures/schedule/Wgmma.facts.txt` | M5 / D18-D31: Wgmma facts/admission and candidate pruning |
+| `tests/fixtures/schedule/plain/gemm_8192x17408x5120_cta_grid.candidates.txt` | M5 / D18-D31: Wgmma facts/admission and candidate pruning |
+| `tests/fixtures/schedule/tir/captured_insert_update.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/child_weight.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/cta_submesh_thread_scope.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/fp8_block_scaled_gemm.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/gemm_8192x17408x5120_register_store.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/gemm_8192x17408x5120_tma_store.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/inplace_output_update.py` | D50-D52, D58, D66: output-param writes |
+| `tests/fixtures/schedule/tir/loop_carry_from_param.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/loop_carry_rebind.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/loop_carry_window.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/loop_outputs.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/loop_variable_rebound.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/mesh_capture_outside.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/mesh_views.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/mesh_zeros_submesh.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/module_instances.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/register_arange.py` | M4 / D10: T.arange |
+| `tests/fixtures/schedule/tir/register_full_like.py` | M4: typed fill |
+| `tests/fixtures/schedule/tir/register_index_window.py` | M4 / D33, D60: register window origin |
+| `tests/fixtures/schedule/tir/register_index_window_offset.py` | M4 / D33, D60: offset register window |
+| `tests/fixtures/schedule/tir/reshard_views.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/scalar_binary.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/scalar_ceildiv_gate.py` | M6 / D32: value ceildiv |
+| `tests/fixtures/schedule/tir/sm80_mma_ldmatrix.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/sparse_decode.py` | D62/D63: row-major mapping and canonical fixture |
+| `tests/fixtures/schedule/tir/staged_dynamic_inner.py` | D68: dynamic stage counter |
+| `tests/fixtures/schedule/tir/staged_nested.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/strided_return_window.py` | D61: exact strided view |
+| `tests/fixtures/schedule/tir/submesh_slice_in_sibling.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_a_k_major.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_a_mn_major.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_b_mn_major_grouped_n64.py` | D47: preserve broadcast operand mode structure |
+| `tests/fixtures/schedule/tir/wgmma_b_mn_major_wide_lbo.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_b_nk.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_cast_between_schedules.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_cp_async_loads.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_cta_grid_4x17.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_explicit_windows.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_k_slices_of_wide_run.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_one_tile_of_larger_output.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_repeat_along_k.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_repeat_along_n_order.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_rs_a_from_accumulator.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_rs_a_from_smem.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_swizzled_smem.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_tma_3stage.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/wgmma_two_schedules.py` | D58-D66: distinct SSA views at analyzed storage; declaration/naming changes |
+| `tests/fixtures/schedule/tir/zero_trip_insert_slice.py` | D64: accepted direct address proof |
 
 ## Changed example artifacts
 

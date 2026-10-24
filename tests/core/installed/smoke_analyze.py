@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""`analyze` against a file of one's own."""
 
 from __future__ import annotations
 

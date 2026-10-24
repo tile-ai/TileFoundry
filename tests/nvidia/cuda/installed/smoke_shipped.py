@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""What the wheel put on disk, and where the commands find it."""
 
 from __future__ import annotations
 

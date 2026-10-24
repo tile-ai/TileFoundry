@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""The specs the wheel ships, read back through the command."""
 
 from __future__ import annotations
 

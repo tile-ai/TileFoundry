@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Facts are selected by the exact Target value, not a global registry."""
 
 from __future__ import annotations
 

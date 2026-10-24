@@ -269,8 +269,6 @@ def test_resolution_failures_are_each_distinguishable() -> None:
             "or a CudaDevice; got _BareDevice",
             id="cuda-device",
         ),
-
-
     ],
 )
 def test_document_backends_reject_bare_projection_value_markers(construct, message: str) -> None:
@@ -368,8 +366,17 @@ def test_cuda_sm_clocks_are_the_typed_floor_of_existing_device_facts() -> None:
 
 
 def test_instruction_capabilities_and_execution_resources_are_separate_axes() -> None:
-    instructions = tuple((op_type, capability) for op_type, capability in instruction_declarations() if op_type.__module__.startswith("tilefoundry_nvidia."))
+    """Enumerate instruction declarations and reconcile only their capability side."""
+    instructions = tuple(
+        (op_type, capability)
+        for op_type, capability in instruction_declarations()
+        if op_type.__module__.startswith("tilefoundry_nvidia.")
+    )
     capabilities = {capability.name for _op_type, capability in instructions}
-    architecture_capabilities = {capability for target in CudaTarget.available() for capability in target.architecture.capabilities}
+    architecture_capabilities = {
+        capability
+        for target in CudaTarget.available()
+        for capability in target.architecture.capabilities
+    }
     assert capabilities <= architecture_capabilities
     assert all("cp.async" in target.architecture.capabilities for target in CudaTarget.available())

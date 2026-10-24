@@ -26,7 +26,7 @@ import tilefoundry.ir.hir.schedule as schedules
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 import tilefoundry.visitor_registry.instruction as instructions
 from tests.core._source import import_dsl
-from tests.core.schedule._fixtures import FixtureCase, _check_facts, _quiet_json, check_fixture
+from tests.core.schedule._fixtures import FixtureCase, _quiet_json, check_facts, check_fixture
 from tilefoundry.analysis.access import AliasKind
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.api import analyze
@@ -1566,7 +1566,7 @@ FIXTURES = (
         FixtureCase(
             name,
             ("schedule", "facts", "--target", target, "{out}", *options),
-            partial(_check_facts, expected=expected),
+            partial(check_facts, expected=expected),
         )
         for name, target, options, expected in (
             ("facts list CUDA instructions as text", "nvidia.h200_sxm", (), _H200_FACTS_TEXT),
@@ -2814,6 +2814,7 @@ def test_grouped_n16_issues_keep_source_addresses():
                         b.type, (j, i), group
                     ) == b_root.value + address(original_b, (16 * k + j, n), group)
 
+
 def test_authored_views_survive_region_forwarding_without_extra_wrappers():
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "view_visit_memo.py"
     lowered = finalize(_module_in(source))
@@ -3069,5 +3070,7 @@ def test_verifier_rejects_non_integer_indexed_tir_target():
 
 
 @pytest.mark.parametrize("case", FIXTURES, ids=lambda case: case.name)
-def test_fixture(case, tmp_path, capsys):
+def test_fixture(
+    case: FixtureCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     check_fixture(case, tmp_path, capsys)

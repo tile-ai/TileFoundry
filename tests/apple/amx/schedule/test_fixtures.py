@@ -1,12 +1,20 @@
-"""Tests and helpers for the owning target."""
+"""The scheduling corpus's plain programs, read the way a scheduler reads them.
+
+These are the programs an author states before choosing an instruction: a tiled
+matmul chain, the same chain with both operand windows staged, its untiled
+baseline, and the real matmul over a CTA grid. What each one is here to witness
+is that it parses, holds together, and can be measured -- the three questions
+anything downstream asks before it offers a schedule at all.
+"""
 
 from __future__ import annotations
 
 from functools import partial
+from pathlib import Path
 
 import pytest
 
-from tests.core.schedule._fixtures import FixtureCase, _check_facts, check_fixture
+from tests.core.schedule._fixtures import FixtureCase, check_facts, check_fixture
 
 _AMX_FACTS_TEXT = """\
 target apple.m2_pro
@@ -27,8 +35,17 @@ instructions
 """
 
 
-FIXTURES = (FixtureCase("Apple facts list AMX and shared instructions", ("schedule", "facts", "--target", "apple.m2_pro", "{out}"), partial(_check_facts, expected=_AMX_FACTS_TEXT)),)
+FIXTURES = (
+    FixtureCase(
+        "Apple facts list AMX and shared instructions",
+        ("schedule", "facts", "--target", "apple.m2_pro", "{out}"),
+        partial(check_facts, expected=_AMX_FACTS_TEXT),
+    ),
+)
+
 
 @pytest.mark.parametrize("case", FIXTURES, ids=lambda case: case.name)
-def test_fixture(case, tmp_path, capsys):
+def test_fixture(
+    case: FixtureCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     check_fixture(case, tmp_path, capsys)

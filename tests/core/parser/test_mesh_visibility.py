@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Placed values are consumed only where their positions and storage reach."""
 
 from __future__ import annotations
 

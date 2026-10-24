@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""isl_interop — range queries and conversion between IR dimensions and isl."""
 
 from __future__ import annotations
 

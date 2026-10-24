@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Physical placement, semantic aliases, and call-boundary proofs."""
 
 from math import prod
 

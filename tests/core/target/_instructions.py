@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""Instruction capability declarations shared by target tests."""
 
 from __future__ import annotations
 

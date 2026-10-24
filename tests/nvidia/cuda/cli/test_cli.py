@@ -11,7 +11,7 @@ import pytest
 
 import tilefoundry.cli.analyze as analyze_cli
 import tilefoundry.cli.target as target_cli
-from tests.core.cli._targets import ListedCpuTarget
+from tests.core.cli._targets import listed_identities
 from tests.nvidia.cuda.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tilefoundry import cli
 from tilefoundry.utils.units import format_bytes
@@ -148,43 +148,12 @@ def test_models_source_labels_checkout_manifest(capsys) -> None:
 def test_target_list_expressions_execute_and_show_accepts_their_identities(
     capsys, monkeypatch
 ) -> None:
-    builtins = target_cli.available_targets()
-    monkeypatch.setattr(
-        target_cli,
-        "available_targets",
-        lambda: (*builtins, ListedCpuTarget()),
-    )
-    assert cli.main(["target", "list"]) == 0
-    listed = capsys.readouterr()
-    namespace: dict[str, object] = {}
-    for import_line in (line for line in listed.out.splitlines() if line.startswith("from ")):
-        exec(import_line, namespace)
-
-    rows = [line.strip() for line in listed.out.splitlines() if "  identity: " in line]
-    identities = []
-    for row in rows:
-        expression, identity = row.rsplit("  identity: ", 1)
-        target = eval(expression.rstrip(), namespace)
-        assert target.identity == identity
-        identities.append(identity)
-
-        assert cli.main(["target", "show", identity]) == 0
-        shown = capsys.readouterr()
-        assert shown.err == ""
-        if "device:" in shown.out:
-            assert f"device: {identity}\n" in shown.out
-            assert shown.out.count("  digest: ") == 2
-        else:
-            assert shown.out == (
-                f"identity: {identity}\n{expression.rstrip()}\nfacts: unavailable\n"
-            )
-
+    identities = listed_identities(capsys, monkeypatch)
     assert {
         "cpu",
         "nvidia.b200_sxm",
         "nvidia.h200_sxm",
     } < set(identities)
-    assert "tests.cli.listed_cpu" in identities
 
 
 def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
@@ -239,7 +208,12 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
         tmp_path / "vendor_v100_sxm2_32gb.toml",
     )
     provider = _copy(
-        Path(__file__).parents[3] / "core" / "installed" / "smoke_target" / "vendor_npu" / "__init__.py",
+        Path(__file__).parents[3]
+        / "core"
+        / "installed"
+        / "smoke_target"
+        / "vendor_npu"
+        / "__init__.py",
         tmp_path / "vendor_npu.py",
     )
 

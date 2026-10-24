@@ -1,4 +1,8 @@
-"""Target-neutral tests and helpers."""
+"""`check` through the command line, on targets the corpus already declares.
+
+The command is the workflow: nothing else compares an implementation against a
+reference, so every behaviour here is reached the way an agent reaches it.
+"""
 
 from __future__ import annotations
 

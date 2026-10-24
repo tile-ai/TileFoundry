@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Where's broadcast, placement-anchor, and causal-selection semantics."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Standalone projects preserve authored sources and reject unsuitable HIR."""
 
 from pathlib import Path
 

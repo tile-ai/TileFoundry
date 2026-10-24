@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Parser diagnostics for authored tile-window slices."""
 
 from __future__ import annotations
 

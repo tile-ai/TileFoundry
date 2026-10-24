@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Execution regions turn one unit's work into whole-scope cost."""
 
 from __future__ import annotations
 

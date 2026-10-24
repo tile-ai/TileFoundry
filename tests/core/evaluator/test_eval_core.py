@@ -1,4 +1,13 @@
-"""Target-neutral tests and helpers."""
+"""Evaluator core mechanics.
+
+Evaluator core mechanics: function-call binding, SSA identity, loop carry and
+scalar-constant materialization.
+
+Op-level value oracles live in the model References, which run whole decoders
+through this same walker; what a real model's shape cannot make visible is kept
+here on small parsed programs -- two params that are structurally equal, and a
+carry whose init comes from the IR rather than from a first iteration.
+"""
 
 from __future__ import annotations
 

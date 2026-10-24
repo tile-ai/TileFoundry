@@ -1,4 +1,10 @@
-"""Tests and helpers for the owning target."""
+"""Pin schemas and identities for independent installed hardware documents.
+
+A wrong hardware number silently prices a plan for a nonexistent machine. These
+tests reject malformed documents, unmodelled facts, counterfeit measurements,
+and numbers outside documents. Each failure retains a diagnostic useful to the
+TOML author.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +15,7 @@ from tilefoundry.target.hardware import DocumentFormatError, EvidenceFormatError
 
 
 def test_instruction_capabilities_and_execution_resources_are_separate_axes() -> None:
+    """Enumerate instruction declarations and reconcile only their capability side."""
     instructions = instruction_declarations()
     capabilities = {capability.name for _op_type, capability in instructions}
     resources = {
@@ -21,7 +28,6 @@ def test_instruction_capabilities_and_execution_resources_are_separate_axes() ->
     assert instructions
     assert capabilities.isdisjoint(resources)
     assert all(resource.endswith("_engine") for resource in resources)
-
 
 _MINIMAL_DEVICE = """
 [spec]

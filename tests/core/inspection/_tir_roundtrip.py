@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""TIR fixture loading and canonical source roundtrip checks."""
 
 from __future__ import annotations
 

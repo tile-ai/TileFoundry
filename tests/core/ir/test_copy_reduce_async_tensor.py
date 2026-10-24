@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Partial stores retain reduction semantics and charge only the hardware transfer."""
 
 from dataclasses import replace
 

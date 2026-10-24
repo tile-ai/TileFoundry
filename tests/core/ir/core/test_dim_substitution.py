@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Choosing an extent for a dimension that was declared as a range."""
 
 from __future__ import annotations
 

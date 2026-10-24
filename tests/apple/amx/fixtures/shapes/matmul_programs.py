@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""AMX matmul programs for analysis and target-boundary checks."""
 
 from __future__ import annotations
 
@@ -13,13 +13,11 @@ def amx_f32_gemm(
     return tf.matmul(x, w)
 
 
-
 @func(target=AmxTarget())
 def amx_register_sized_f32_gemm(
     x: Tensor[(16, 8), "f32"], w: Tensor[(8, 16), "f32"]
 ) -> Tensor[(16, 16), "f32"]:
     return tf.matmul(x, w)
-
 
 
 @func(target=AmxTarget())
@@ -29,7 +27,6 @@ def amx_coarse_m_f32_gemm(
     return tf.matmul(x, w)
 
 
-
 @func(target=AmxTarget())
 def amx_odd_m_f32_gemm(
     x: Tensor[(18, 128), "f32"], w: Tensor[(128, 64), "f32"]
@@ -37,13 +34,11 @@ def amx_odd_m_f32_gemm(
     return tf.matmul(x, w)
 
 
-
 @func(target=AmxTarget())
 def amx_odd_n_f32_gemm(
     x: Tensor[(64, 128), "f32"], w: Tensor[(128, 18), "f32"]
 ) -> Tensor[(64, 18), "f32"]:
     return tf.matmul(x, w)
-
 
 
 @func(target=AmxTarget())

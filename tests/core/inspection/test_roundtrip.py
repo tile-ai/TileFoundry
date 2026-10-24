@@ -1,4 +1,10 @@
-"""Target-neutral tests and helpers."""
+"""Cover print-import-print fixed points beyond the model corpus.
+
+Cases include literal tuples, shadowed names, low-precision dtypes, nested mesh
+declarations, and composed layouts. Reprinting must reproduce source exactly.
+
+See [inspection §2.7](docs/spec/inspection.md#27-round-trip-contract).
+"""
 
 import torch
 

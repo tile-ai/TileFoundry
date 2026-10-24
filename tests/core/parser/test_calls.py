@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Parser contracts for explicit variadic input sequences."""
 
 from __future__ import annotations
 

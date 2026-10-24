@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Parser-owned checks for canonical grid-loop bindings."""
 
 import math
 

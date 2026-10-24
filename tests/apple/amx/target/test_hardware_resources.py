@@ -1,4 +1,10 @@
-"""Tests and helpers for the owning target."""
+"""Pin schemas and identities for independent installed hardware documents.
+
+A wrong hardware number silently prices a plan for a nonexistent machine. These
+tests reject malformed documents, unmodelled facts, counterfeit measurements,
+and numbers outside documents. Each failure retains a diagnostic useful to the
+TOML author.
+"""
 
 from __future__ import annotations
 
@@ -13,8 +19,6 @@ from tilefoundry_apple.amx.target import spec as amx_spec
 @pytest.mark.parametrize(
     ("construct", "message"),
     [
-
-
         pytest.param(
             lambda: AmxTarget(architecture=_BareArchitecture()),
             "AmxTarget.architecture must be an installed ID string, a document "
@@ -67,7 +71,16 @@ def test_architecture_bandwidth_evidence_distinguishes_known_from_unavailable() 
 
 
 def test_instruction_capabilities_and_execution_resources_are_separate_axes() -> None:
-    instructions = tuple((op_type, capability) for op_type, capability in instruction_declarations() if op_type.__module__.startswith("tilefoundry_apple."))
+    """Enumerate instruction declarations and reconcile only their capability side."""
+    instructions = tuple(
+        (op_type, capability)
+        for op_type, capability in instruction_declarations()
+        if op_type.__module__.startswith("tilefoundry_apple.")
+    )
     capabilities = {capability.name for _op_type, capability in instructions}
-    architecture_capabilities = {capability for target in AmxTarget.available() for capability in target.architecture.capabilities}
+    architecture_capabilities = {
+        capability
+        for target in AmxTarget.available()
+        for capability in target.architecture.capabilities
+    }
     assert capabilities <= architecture_capabilities

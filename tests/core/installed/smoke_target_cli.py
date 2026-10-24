@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""`target`: constructible target values and their retained documents."""
 
 from __future__ import annotations
 

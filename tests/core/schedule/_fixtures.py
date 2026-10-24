@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""Schedule CLI fixture cases, execution, and facts report checks."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def _quiet_json(out: Path, captured: pytest.CaptureResult[str]) -> dict:
     return json.loads(out.read_text())
 
 
-def _check_facts(
+def check_facts(
     out: Path,
     captured: pytest.CaptureResult[str],
     *,

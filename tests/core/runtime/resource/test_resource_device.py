@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Checkpoint loading preserves cached values, stored dtypes, and caller-authored indexes."""
 
 from __future__ import annotations
 

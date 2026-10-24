@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""Authored tile-window syntax shared by parser and printer tests."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ def scan_copy(x: Tensor[(4, 4), "f32"]):
     return out
 
 
-
 @func
 def nested_scan_copy(x: Tensor[(4, 4), "f32"]):
     out = tf.zeros(Tensor[(4, 4), "f32"])
@@ -21,7 +20,6 @@ def nested_scan_copy(x: Tensor[(4, 4), "f32"]):
         for col in tf.tile(4, 2):
             out = tf.insert_slice(out, x[row, col], (row, col))
     return out
-
 
 
 @func

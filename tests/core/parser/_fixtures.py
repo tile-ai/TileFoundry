@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""Source-span checks for every function in a parsed fixture."""
 
 from __future__ import annotations
 

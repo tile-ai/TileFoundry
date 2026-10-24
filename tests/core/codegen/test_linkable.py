@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""A translation unit is assembled from its functions, in one place."""
 
 from __future__ import annotations
 

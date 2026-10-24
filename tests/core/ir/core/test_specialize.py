@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Resolving a decode function to one implementation at one size."""
 
 from __future__ import annotations
 

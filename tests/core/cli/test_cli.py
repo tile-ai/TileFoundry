@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""CLI target listing reconstructs each advertised target value."""
 
 from __future__ import annotations
 

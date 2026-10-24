@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""`check` on models the installation never shipped."""
 
 from __future__ import annotations
 

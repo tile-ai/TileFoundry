@@ -1,4 +1,13 @@
-"""Target-neutral tests and helpers."""
+"""MatMul's sharding invariants.
+
+MatMul derives its output shape and ``ShardLayout`` from a forward access
+relation (iteration domain ``[batch..., M, N, K]``; lhs ``[batch.., M, K]``, rhs
+``[batch.., K, N]``, output ``[batch.., M, N]`` with K reduced). These cases pin
+where each mesh axis lands: an rhs N-split becomes an output ``Split`` on N; a
+K-split on both operands becomes an output ``Partial``; an lhs M-split passes
+through; and a K-split with nothing to contract against, two splits competing for
+one mesh axis, or a non-commuting ``Partial`` are errors rather than a pick.
+"""
 
 from __future__ import annotations
 

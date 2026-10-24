@@ -122,6 +122,11 @@ def test_long_statement_sequence_prints() -> None:
     assert context.source()
 
 
-@pytest.mark.parametrize("path", sorted(path for path in CANONICAL if path.name != "__init__.py") + sorted((FIXTURES / "scaffold").glob("tir_*.py")), ids=lambda path: path.stem)
-def test_tir_roundtrip(path):
+@pytest.mark.parametrize(
+    "path",
+    sorted(path for path in CANONICAL if path.name != "__init__.py")
+    + sorted((FIXTURES / "scaffold").glob("tir_*.py")),
+    ids=lambda path: path.stem,
+)
+def test_tir_roundtrip(path: Path) -> None:
     check_tir_roundtrip(path, CANONICAL)

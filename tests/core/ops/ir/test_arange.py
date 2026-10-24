@@ -1,4 +1,4 @@
-"""Target-neutral tests and helpers."""
+"""Arange's typed coordinate contract."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Tests and helpers for the owning target."""
+"""The tutorial pages, reproduced the way a reader reproduces them."""
 
 from __future__ import annotations
 

@@ -1,4 +1,12 @@
-"""Target-neutral tests and helpers."""
+"""Canonical round trip of a Module tree through the printer and product import.
+
+``as_script`` renders the selected Module as ``@module`` source: its declared
+execution context, its entry, every function it owns, and each shared Module
+definition with its instance slot bindings. Importing that file runs the
+authoring decorators to build
+an equal tree, so a declared context stays declared and an inherited one stays
+absent.
+"""
 
 from __future__ import annotations
 

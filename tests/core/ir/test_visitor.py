@@ -1,4 +1,13 @@
-"""Target-neutral tests and helpers."""
+"""``tilefoundry.ir.visitor`` — Expr / Stmt visitor + mutator contract.
+
+Every pass is written against these six guarantees, and a break in any of them
+shows up in a pass's output rather than at its cause: class-name dispatch, an
+untouched child stays *the same object* (so a pass rewriting one node cannot
+silently deep-copy the tree), binding-site Vars are never handed to a generic
+mutator, and a Stmt subclass missing from the rebuild tables is caught here
+instead of dropping statements downstream; Expr dispatch and memoization are
+separate, and unhandled Expr nodes fail explicitly.
+"""
 
 from __future__ import annotations
 
