@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tilefoundry-nvidia"
+dynamic = ["version", "dependencies"]
+description = "NVIDIA targets for TileFoundry."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.entry-points."tilefoundry.targets"]
+cuda = "tilefoundry_nvidia.cuda"
+
+[tool.setuptools_scm]
+root = "../.."
+
+[tool.setuptools.packages.find]
+include = ["tilefoundry_nvidia", "tilefoundry_nvidia.*"]
+
+[tool.setuptools.package-data]
+"tilefoundry_nvidia.cuda.codegen" = [
+    "include/tilefoundry/runtime/cuda/**/*",
+]
+"tilefoundry_nvidia.cuda" = [
+    "docs/spec/*.md",
+    "models/catalog.json",
+    "models/*/*.py",
+    "models/*/*.json",
+]
+"tilefoundry_nvidia.cuda.codegen.templates" = [
+    "*.j2",
+]
+"tilefoundry_nvidia.cuda.target.hardware" = [
+    "*.toml",
+]

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tilefoundry"
-dynamic = ["version"]
+dynamic = ["version", "optional-dependencies"]
 description = "A tile-based, agentic platform for automatic high-performance program generation across hardware."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -34,25 +34,9 @@ Repository = "https://github.com/tile-ai/TileFoundry"
 [project.scripts]
 tilefoundry = "tilefoundry.cli:main"
 
-[project.entry-points."tilefoundry.targets"]
-cuda = "tilefoundry_nvidia.cuda"
-amx = "tilefoundry_apple.amx"
-
-[project.optional-dependencies]
-test = ["pytest>=8", "pytest-xdist>=3", "pytest-cov>=7"]
-dev = [
-    "pre-commit>=3",
-    "ruff>=0.14",
-    "clang-format==18.1.8",
-    # scripts/runtime_spec_surface.py reads the C++ surface for the spec
-    "libclang>=18",
-    "setuptools>=68",
-    "setuptools-scm>=8",
-]
-
 [tool.coverage.run]
 branch = true
-source = ["tilefoundry"]
+source = ["src", "targets"]
 
 [tool.coverage.report]
 skip_empty = true
@@ -60,25 +44,14 @@ skip_empty = true
 [tool.setuptools_scm]
 
 [tool.setuptools.packages.find]
-where = ["src", "targets/nvidia", "targets/apple"]
-include = ["tilefoundry", "tilefoundry.*", "tilefoundry_*"]
+where = ["src"]
+include = ["tilefoundry", "tilefoundry.*"]
 
 [tool.setuptools.package-data]
 "tilefoundry.runtime" = ["include/tilefoundry/runtime/cpu/*.h"]
-"tilefoundry_nvidia.cuda.codegen" = ["include/tilefoundry/runtime/cuda/**/*"]
-"tilefoundry_nvidia.cuda" = [
-    "docs/spec/*.md",
-    "models/catalog.json",
-    "models/*/*.py",
-    "models/*/*.json",
-]
 "tilefoundry" = ["orchestrator/*/*.py"]
 "tilefoundry.codegen" = ["templates/cmake/*.j2"]
-"tilefoundry_nvidia.cuda.codegen.templates" = ["*.j2"]
 "tilefoundry.codegen.cpu.templates" = ["*.j2"]
-"tilefoundry_nvidia.cuda.target.hardware" = ["*.toml"]
-"tilefoundry_apple.amx.target.hardware" = ["*.toml"]
-"tilefoundry_apple.amx" = ["include/tilefoundry/runtime/amx/*.h", "docs/spec/*.md"]
 
 [tool.setuptools.data-files]
 "share/tilefoundry/spec" = ["docs/spec/*.md"]
@@ -94,7 +67,7 @@ markers = [
 ]
 
 [tool.ruff]
-src = [".", "src", "targets/nvidia", "targets/apple"]
+src = [".", "src", "targets/*"]
 # Snapshot examples, shipped model sources, and recorded parser and printer output are
 # evidence; formatting them changes that evidence.
 extend-exclude = [

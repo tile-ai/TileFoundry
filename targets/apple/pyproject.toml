@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tilefoundry-apple"
+dynamic = ["version", "dependencies"]
+description = "Apple targets for TileFoundry."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.entry-points."tilefoundry.targets"]
+amx = "tilefoundry_apple.amx"
+
+[tool.setuptools_scm]
+root = "../.."
+
+[tool.setuptools.packages.find]
+include = ["tilefoundry_apple", "tilefoundry_apple.*"]
+
+[tool.setuptools.package-data]
+"tilefoundry_apple.amx" = [
+    "docs/spec/*.md",
+    "include/tilefoundry/runtime/amx/*.h",
+]
+"tilefoundry_apple.amx.target.hardware" = [
+    "*.toml",
+]
