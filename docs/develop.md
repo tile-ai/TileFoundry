@@ -46,11 +46,18 @@ The Apple project keeps its `pyproject.toml`, `setup.py`, and `README.md` beside
 while the implementation lives in the `amx/` subpackage. The packaging entry point
 is `amx = "tilefoundry_apple.amx"`.
 
-Importing the target subpackage loads its registrations. Follow the existing
-`register_target` and `register_op` usage, and use `register_codegen`,
-`register_pass` for the compiler extensions your target provides.
-Keep tests in `tests/<vendor>/<target>/` and specifications in the
-target subpackage's `docs/spec/` directory.
+Importing the target subpackage loads its registrations. The Apple example uses
+`register_target` for its target class, `register_op` for instructions,
+`register_typeinfer` for their inference rules, and `register_candidates` to offer
+AMX instructions for a generic operation. For exported DSL types, use
+`register_type`; its `namespace` parameter, like that of `register_op`, determines
+the path under `T`. For example, NVIDIA's
+[wgmma.py](../targets/nvidia/tilefoundry_nvidia/cuda/ir/tir/nn/wgmma.py) uses
+`namespace="cuda.sm90"` to expose types under `T.cuda.sm90`. Use `register_codegen`
+and `register_pass` when adding code generation and compiler passes.
+
+Keep tests in `tests/<vendor>/<target>/` and specifications in the target
+subpackage's `docs/spec/` directory.
 
 Use [Target loading and extensions](spec/target.md#13-target-loading-and-extensions)
 (§1.3) as the contract for package boundaries, entry points, registration, and
