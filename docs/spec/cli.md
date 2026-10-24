@@ -308,13 +308,19 @@ that runs before it can be read is a reference that decides what it describes.
     identity, once per model. Repeated instances of one definition MUST NOT
     increase either count. The forest MUST still show every instance, including
     the element count of an indexed slot when its instances are grouped.
-  - `--source` MUST print the model directory's absolute path alone on the first
-    line, then its files except `__pycache__` in stable filename order. Checkout
-    and installation MUST list the same files.
-  - The catalog MUST merge each target's `models/catalog.json`, rejecting duplicate
-    model names with an error naming both targets. Model directories MUST NOT
-    publish `run.py` or `generation.py`; these MUST ship once in core's
-    `orchestrator/causal_lm/` resources.
+  - `--source` MUST print the model directory's absolute path alone on the first line, then
+    one line per file except `__pycache__`, in stable filename order. Each file line MUST
+    give its filename and the first line of its own docstring, or `-` when it has none.
+    Checkout and installation MUST list the same files.
+  - `--source` MUST parse a file's text to read its docstring and MUST NOT import
+    or execute model source. It MUST NOT reformat, regenerate, or copy a shipped
+    file: the installed directory is the reference, and a rendered copy is a
+    different artifact wearing its name.
+  - Catalog membership and `--source` describe a model and its shipped authored files; neither
+    claims that the model has a runnable decode path. Model directories MUST NOT publish `run.py` or
+    `generation.py`; these MUST ship once in core's `orchestrator/causal_lm/` resources.
+  - The catalog MUST merge each target's `models/catalog.json`, rejecting duplicate model
+    names with an error naming both targets.
   - A `NAME` the catalog does not have MUST be refused naming the models it does.
   - The forest and the counts MUST be generated from the models themselves rather
     than maintained beside them, because a hand-kept inventory of trees and numbers

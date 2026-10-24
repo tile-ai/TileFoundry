@@ -7,12 +7,18 @@ from pathlib import Path
 
 import pytest
 
-from tests.core.schedule._fixtures import FixtureCase, arithmetic_facts, check_facts, check_fixture
+from tests.core.schedule._fixtures import FixtureCase, check_facts, check_fixture
 
-_TARGET_NEUTRAL_FACTS = f"""\
-target {{target}}
+_TARGET_NEUTRAL_FACTS = """\
+target {target}
 instructions
-{arithmetic_facts(8)}  T.copy    all targets
+  T.arange  all targets
+  T.binary  all targets
+  T.cast    all targets
+  T.clamp   all targets
+  T.unary   all targets
+  T.where   all targets
+  T.copy    all targets
   T.relu    all targets
   T.reduce  all targets
 """

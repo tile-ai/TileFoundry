@@ -29,7 +29,6 @@ from tests.core._source import import_dsl
 from tests.core.schedule._fixtures import (
     FixtureCase,
     _quiet_json,
-    arithmetic_facts,
     check_facts,
     check_fixture,
 )
@@ -200,10 +199,16 @@ FACT_INSTRUCTIONS = sorted(
     }
 )
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
-_H200_FACTS_TEXT = f"""\
+_H200_FACTS_TEXT = """\
 target nvidia.h200_sxm
 instructions
-{arithmetic_facts(27)}  T.copy_async                 cp.async
+  T.arange                     all targets
+  T.binary                     all targets
+  T.cast                       all targets
+  T.clamp                      all targets
+  T.unary                      all targets
+  T.where                      all targets
+  T.copy_async                 cp.async
   T.copy_async_bulk            cp.async.bulk
   T.copy_async_tensor          cp.async.bulk.tensor
   T.copy_reduce_async_tensor   cp.async.bulk.tensor
@@ -239,10 +244,16 @@ _H200_FACTS_JSON = {
         {"id": "T.reduce", "capability": None},
     ],
 }
-_SM89_FACTS_TEXT = f"""\
+_SM89_FACTS_TEXT = """\
 target nvidia.rtx_6000_ada
 instructions
-{arithmetic_facts(12)}  T.copy_async  cp.async
+  T.arange      all targets
+  T.binary      all targets
+  T.cast        all targets
+  T.clamp       all targets
+  T.unary       all targets
+  T.where       all targets
+  T.copy_async  cp.async
   T.copy        all targets
   T.ldmatrix    ldmatrix
   T.relu        all targets
