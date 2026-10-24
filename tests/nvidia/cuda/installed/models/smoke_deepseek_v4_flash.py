@@ -12,8 +12,8 @@ import math
 import pytest
 import torch
 
-from tests.models.deepseek_v4_flash import reference
 from tests.nvidia.cuda.installed.models import contract
+from tests.nvidia.cuda.models.deepseek_v4_flash import reference
 
 MODEL = "deepseek_v4_flash"
 CASES = contract.model_cases(MODEL)

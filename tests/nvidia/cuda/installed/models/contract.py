@@ -22,9 +22,9 @@ from pathlib import Path
 import torch
 from safetensors.torch import save_file
 
-from tests.models.corpus import ModelCase
-from tests.models.decode_oracle import one_ulp_at
-from tests.models.registry import cases_of
+from tests.core.models.decode_oracle import one_ulp_at
+from tests.nvidia.cuda.models.corpus import ModelCase
+from tests.nvidia.cuda.models.registry import cases_of
 from tilefoundry.runtime import PREDICATES, DictResource, check
 
 LOGICAL_FAMILIES = ("compute-cost", "memory", "roofline")

@@ -13,9 +13,9 @@ import json
 import pytest
 import torch
 
-from tests.models.qwen3_1_7b import reference
-from tests.models.qwen3_1_7b.model import published
 from tests.nvidia.cuda.installed.models import contract
+from tests.nvidia.cuda.models.qwen3_1_7b import reference
+from tilefoundry_nvidia.cuda.models.qwen3_1_7b.model import published
 
 MODEL = "qwen3_1_7b"
 CASES = contract.model_cases(MODEL)

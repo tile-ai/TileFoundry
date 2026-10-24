@@ -93,7 +93,7 @@ def test_transition_exemption_only_skips_placement_and_size(lint, monkeypatch, t
     assert lint.findings(target) == [(1, "documentation carries a milestone reference")]
 
 
-@pytest.mark.parametrize("prefix", ["tests/models", "examples"])
+@pytest.mark.parametrize("prefix", ["targets/vendor/tilefoundry_vendor/backend/models", "examples"])
 def test_product_source_directories_are_exempt(lint, monkeypatch, tmp_path, prefix) -> None:
     monkeypatch.setattr(lint, "ROOT", tmp_path)
     target = tmp_path / prefix / "legacy.py"

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,7 +16,7 @@ def catalog() -> dict[str, Any]:
     The shipped catalog. The installed package carries no corpus, so the
     inventory is read from data rather than built by importing anything.
     """
-    return json.loads(data.path("models", "catalog.json").read_text(encoding="utf-8"))
+    return {"models": [model for model, _directory in data.model_catalog().values()]}
 
 
 def _find(name: str) -> dict[str, Any]:
@@ -36,10 +35,14 @@ def _counts(model: dict[str, Any]) -> str:
 
 def render_models() -> str:
     """Every model the installation describes, with the size of each forest."""
-    models = catalog()["models"]
+    known = data.model_catalog()
+    models = [model for model, _directory in known.values()]
+    if not models:
+        return "0 models: no installed target ships models\n"
     width = max(len(model["name"]) for model in models)
 
-    lines = [f"Models in {data.directory('models')}:", ""]
+    roots = dict.fromkeys(directory.parent for _model, directory in known.values())
+    lines = [f"Models in {', '.join(str(root) for root in roots)}:", ""]
     lines += [f"  {model['name']:<{width}}  {_counts(model)}" for model in models]
     return "\n".join(lines) + "\n"
 
@@ -98,20 +101,8 @@ def model_source(name: str) -> str:
     """The shipped model directory followed by one source summary per file."""
     _find(name)
     files = data.model_files(name)
-    directory = data.directory("models") / name
+    directory = files[0].parent
     return render_source_directory(directory, files)
-
-
-def source_provenance() -> str | None:
-    """Where a checkout's file list came from, for the stream prose belongs on.
-
-    Standard output is one path and one line per file, so a caller may read the
-    first line as a path in either world. Saying where the list came from is for
-    whoever is reading, not for whatever is parsing.
-    """
-    if data.is_installed():
-        return None
-    return "the files listed are the package data manifest's, not that directory's"
 
 
 def run_models(name: str | None, *, source: bool = False) -> int:
@@ -122,9 +113,6 @@ def run_models(name: str | None, *, source: bool = False) -> int:
         sys.stdout.write(render_models())
     elif source:
         sys.stdout.write(model_source(name))
-        stated = source_provenance()
-        if stated is not None:
-            print(f"tilefoundry: note: {stated}", file=sys.stderr)
     else:
         sys.stdout.write(render_model(name))
     return 0
@@ -137,6 +125,5 @@ __all__ = [
     "render_models",
     "render_source_directory",
     "run_models",
-    "source_provenance",
     "source_summary",
 ]

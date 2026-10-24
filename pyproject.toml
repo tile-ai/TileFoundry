@@ -66,7 +66,13 @@ include = ["tilefoundry", "tilefoundry.*", "tilefoundry_*"]
 [tool.setuptools.package-data]
 "tilefoundry.runtime" = ["include/tilefoundry/runtime/cpu/*.h"]
 "tilefoundry_nvidia.cuda.codegen" = ["include/tilefoundry/runtime/cuda/**/*"]
-"tilefoundry_nvidia.cuda" = ["docs/spec/*.md"]
+"tilefoundry_nvidia.cuda" = [
+    "docs/spec/*.md",
+    "models/catalog.json",
+    "models/*/*.py",
+    "models/*/*.json",
+]
+"tilefoundry" = ["orchestrator/*/*.py"]
 "tilefoundry.codegen" = ["templates/cmake/*.j2"]
 "tilefoundry_nvidia.cuda.codegen.templates" = ["*.j2"]
 "tilefoundry.codegen.cpu.templates" = ["*.j2"]
@@ -78,19 +84,6 @@ include = ["tilefoundry", "tilefoundry.*", "tilefoundry_*"]
 "share/tilefoundry/spec" = ["docs/spec/*.md"]
 # Tutorial pages have distinct filenames, so one destination is sufficient.
 "share/tilefoundry/tutorial" = ["docs/tutorial/*.md"]
-# The model catalog `tilefoundry models` reads, and each model's authored source
-# as read-only reference. One destination per model: data-files flattens, and
-# seven files all named model.py would land on each other.
-"share/tilefoundry/models" = ["tests/models/catalog.json"]
-"share/tilefoundry/models/deepseek_v4_flash" = ["tests/models/deepseek_v4_flash/model.py", "tests/models/deepseek_v4_flash/config.json"]
-"share/tilefoundry/models/gemma2_2b" = ["tests/models/gemma2_2b/model.py", "tests/models/gemma2_2b/hf_alias.py", "tests/models/gemma2_2b/config.json", "tests/models/orchestrator/causal_lm/generation.py", "tests/models/orchestrator/causal_lm/run.py"]
-"share/tilefoundry/models/kimi_linear_48b_a3b" = ["tests/models/kimi_linear_48b_a3b/model.py", "tests/models/kimi_linear_48b_a3b/config.json"]
-"share/tilefoundry/models/minicpm3_4b" = ["tests/models/minicpm3_4b/model.py", "tests/models/minicpm3_4b/hf_alias.py", "tests/models/minicpm3_4b/config.json", "tests/models/orchestrator/causal_lm/generation.py", "tests/models/orchestrator/causal_lm/run.py"]
-"share/tilefoundry/models/qwen2_5_1_5b" = ["tests/models/qwen2_5_1_5b/model.py", "tests/models/qwen2_5_1_5b/hf_alias.py", "tests/models/qwen2_5_1_5b/config.json", "tests/models/orchestrator/causal_lm/generation.py", "tests/models/orchestrator/causal_lm/run.py"]
-"share/tilefoundry/models/qwen3_1_7b" = ["tests/models/qwen3_1_7b/model.py", "tests/models/qwen3_1_7b/hf_alias.py", "tests/models/qwen3_1_7b/config.json", "tests/models/orchestrator/causal_lm/generation.py", "tests/models/orchestrator/causal_lm/run.py"]
-"share/tilefoundry/models/qwen3_5_35b_a3b" = ["tests/models/qwen3_5_35b_a3b/model.py", "tests/models/qwen3_5_35b_a3b/hf_alias.py", "tests/models/qwen3_5_35b_a3b/config.json", "tests/models/orchestrator/causal_lm/generation.py", "tests/models/orchestrator/causal_lm/run.py"]
-"share/tilefoundry/orchestrator/causal_lm" = ["tests/models/orchestrator/causal_lm/generation.py", "tests/models/orchestrator/causal_lm/run.py"]
-
 [tool.pytest.ini_options]
 # Parallel is how this suite is run, on CI (`-n 4`) and locally: conftest's
 # DumpScope isolates per xdist worker and the compile workdir is pid-keyed. No
@@ -104,7 +97,15 @@ markers = [
 src = [".", "src", "targets/nvidia", "targets/apple"]
 # Snapshot examples, shipped model sources, and recorded parser and printer output are
 # evidence; formatting them changes that evidence.
-extend-exclude = ["examples", "tests/models", "tests/parser/golden", "tests/*/*/fixtures/schedule/tir"]
+extend-exclude = [
+    "examples",
+    "tests/*/*/models",
+    "tests/core/models",
+    "targets/*/tilefoundry_*/*/models",
+    "src/tilefoundry/orchestrator",
+    "tests/parser/golden",
+    "tests/*/*/fixtures/schedule/tir",
+]
 force-exclude = true
 line-length = 100
 target-version = "py312"

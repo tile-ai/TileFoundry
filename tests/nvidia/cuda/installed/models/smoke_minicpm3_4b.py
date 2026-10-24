@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from tests.models.minicpm3_4b import reference
 from tests.nvidia.cuda.installed.models import contract
+from tests.nvidia.cuda.models.minicpm3_4b import reference
 
 MODEL = "minicpm3_4b"
 CASES = contract.model_cases(MODEL)

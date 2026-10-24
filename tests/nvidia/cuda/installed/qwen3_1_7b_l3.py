@@ -109,6 +109,12 @@ def _emitted(venv: Path, work: Path, outside: Path) -> tuple[Path, Path]:
     if not model_source.is_file() or not alias_source.is_file():
         raise SystemExit(f"copied model directory has no model.py: {copied}")
     print(f"copied {MODEL} source directory to {copied}")
+    orchestrator = _source_directory(
+        venv, "tutorial", "orchestrator", "causal_lm", outside=outside
+    )
+    shutil.copytree(
+        orchestrator, copied, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__")
+    )
     generation_source = copied / "generation.py"
     if not generation_source.is_file():
         raise SystemExit(f"copied model directory has no generation.py: {copied}")

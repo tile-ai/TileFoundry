@@ -11,8 +11,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.models.qwen3_5_35b_a3b import reference
 from tests.nvidia.cuda.installed.models import contract
+from tests.nvidia.cuda.models.qwen3_5_35b_a3b import reference
 
 MODEL = "qwen3_5_35b_a3b"
 CASES = contract.model_cases(MODEL)

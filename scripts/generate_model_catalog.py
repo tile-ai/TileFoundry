@@ -1,4 +1,4 @@
-"""Write `tests/models/catalog.json` from the live corpus.
+"""Write `targets/nvidia/tilefoundry_nvidia/cuda/models/catalog.json` from the live corpus.
 
 Run as `python -m scripts.generate_model_catalog`; it imports the corpus, so it
 only resolves as a module of this repository. Forest and counts come from the
@@ -10,10 +10,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-_MODELS_ROOT = Path(__file__).resolve().parents[1] / "tests" / "models"
+_MODELS_ROOT = Path(files("tilefoundry_nvidia.cuda") / "models")
 
 
 def _annotation(param: Any) -> str:
@@ -127,7 +128,7 @@ def catalog() -> dict[str, Any]:
     """The catalog as the live corpus describes it right now."""
     import importlib  # noqa: PLC0415
 
-    from tests.models.registry import MODELS  # noqa: PLC0415
+    from tests.nvidia.cuda.models.registry import MODELS  # noqa: PLC0415
 
     models = []
     for name in sorted(MODELS):
@@ -136,7 +137,7 @@ def catalog() -> dict[str, Any]:
         roots = _grouped(
             [
                 _node(root, counts, seen)
-                for root in _roots(importlib.import_module(f"tests.models.{name}.model"))
+                for root in _roots(importlib.import_module(f"tilefoundry_nvidia.cuda.models.{name}.model"))
             ]
         )
         models.append({"name": name, "counts": counts, "modules": roots})

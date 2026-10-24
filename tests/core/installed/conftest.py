@@ -27,10 +27,11 @@ import json
 import tilefoundry
 from tilefoundry.cli import data
 
+models = data.model_catalog()
 print(json.dumps({
     "the tilefoundry package": tilefoundry.__file__,
     "spec": str(data.directory("spec")),
-    "models": str(data.directory("models")),
+    **({"models": str(next(iter(models.values()))[1].parent)} if models else {}),
     "tutorial": str(data.directory("tutorial")),
 }))
 """

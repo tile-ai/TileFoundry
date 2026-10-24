@@ -10,8 +10,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.models.kimi_linear_48b_a3b import reference
 from tests.nvidia.cuda.installed.models import contract
+from tests.nvidia.cuda.models.kimi_linear_48b_a3b import reference
 
 MODEL = "kimi_linear_48b_a3b"
 CONFIG = reference.CONFIG

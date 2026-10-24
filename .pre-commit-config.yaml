@@ -48,6 +48,7 @@ repos:
         entry: python scripts/spec_entropy_lint.py
         language: system
         files: ^(src|targets)/.*\.py$
+        exclude: ^(targets/[^/]+/tilefoundry_[^/]+/[^/]+/models/|src/tilefoundry/orchestrator/)
       - id: forward-references
         name: forward-references
         entry: python scripts/forward_references_lint.py

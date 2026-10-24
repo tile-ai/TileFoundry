@@ -14,13 +14,13 @@ from dataclasses import replace
 
 import pytest
 
-from tests.models.access_footprint.model import TiledQKVProjection
 from tests.nvidia.cuda.fixtures.placed.performance_findings import _CrossScopePerformance
 from tests.nvidia.cuda.fixtures.placed.symbolic_offset import (
     _LiteralStoreOffset,
     _SymbolicStoreOffset,
 )
 from tests.nvidia.cuda.fixtures.placed.tp_all_to_all import HELD_BYTES, TransposeShard
+from tests.nvidia.cuda.models.access_footprint.model import TiledQKVProjection
 from tilefoundry.analysis import (
     Breakdown,
     ComputeCostMetadata,

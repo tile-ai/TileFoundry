@@ -1,16 +1,19 @@
 """Where the files that ship with TileFoundry are read from.
 
-Each kind is either in the checkout being worked in or in the installation's data
-prefix, and the same two-step lookup answers for all of them: one kind per thing
-that ships, rather than one copy of the lookup per thing.
+Reference pages live in the checkout or installation data prefix. Models and
+orchestrators are package resources in both environments.
 """
 
 from __future__ import annotations
 
-import tomllib
+import json
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError, distribution
+from importlib.metadata import PackageNotFoundError, distribution, entry_points
+from importlib.resources import files as resource_files
 from pathlib import Path
+from typing import Any
+
+from tilefoundry.target import load_targets
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
@@ -25,8 +28,6 @@ class Kind:
 
 _KINDS = {
     "spec": Kind(source=("docs", "spec"), installed="spec"),
-    "models": Kind(source=("tests", "models"), installed="models"),
-    "orchestrator": Kind(source=("tests", "models", "orchestrator"), installed="orchestrator"),
     "tutorial": Kind(source=("docs", "tutorial"), installed="tutorial"),
 }
 
@@ -54,17 +55,13 @@ def _distribution_directory(known: Kind) -> Path | None:
 
 
 def directory(kind: str) -> Path:
-    """The directory *kind* is read from: this checkout when it is one, else the installation.
-
-    The directory *kind* is read from: this checkout when it is one, else the
-    installation. The checkout comes first because it is the only place the two
-    can disagree, and there the working copy is what its author means.
-    """
+    """Read reference pages from checkout or installation, and core package resources."""
+    if kind == "orchestrator":
+        return Path(resource_files("tilefoundry") / "orchestrator")
     known = _KINDS[kind]
     source = _REPOSITORY_ROOT.joinpath(*known.source)
     if source.is_dir():
         return source
-
 
     from sysconfig import get_path  # noqa: PLC0415
 
@@ -85,63 +82,56 @@ def path(kind: str, name: str) -> Path:
     return found
 
 
-def _manifest_files(destination: str) -> tuple[Path, ...]:
-    """The checkout files named by one data-files destination, sorted by name."""
-    with (_REPOSITORY_ROOT / "pyproject.toml").open("rb") as manifest:
-        data_files = tomllib.load(manifest)["tool"]["setuptools"]["data-files"]
-    try:
-        return tuple(
-            sorted(
-                (_REPOSITORY_ROOT / entry for entry in data_files[destination]),
-                key=lambda path: path.name,
-            )
-        )
-    except KeyError:
-        raise FileNotFoundError(
-            f"installed TileFoundry data directory {destination} was not found"
-        ) from None
-
-
 def directories(kind: str) -> tuple[Path, ...]:
-    """The shipped directories of *kind*, in the checkout or an installation."""
-    known = _KINDS[kind]
-    root = directory(kind)
-    if is_installed(kind):
-        return tuple(sorted(path for path in root.iterdir() if path.is_dir()))
-
-    prefix = f"share/tilefoundry/{known.installed}/"
-    with (_REPOSITORY_ROOT / "pyproject.toml").open("rb") as manifest:
-        data_files = tomllib.load(manifest)["tool"]["setuptools"]["data-files"]
-    names = {
-        Path(destination.removeprefix(prefix)).parts[0]
-        for destination in data_files
-        if destination.startswith(prefix)
-    }
-    return tuple(root / name for name in sorted(names))
-
-
-def is_installed(kind: str = "models") -> bool:
-    """Whether lookup reads a real directory rather than the checkout manifest."""
-    return directory(kind) != _REPOSITORY_ROOT.joinpath(*_KINDS[kind].source)
+    """The shipped directories of *kind*, excluding interpreter cache files."""
+    return tuple(
+        sorted(
+            path
+            for path in directory(kind).iterdir()
+            if path.is_dir() and path.name != "__pycache__"
+        )
+    )
 
 
 def files(kind: str, name: str) -> tuple[Path, ...]:
     """The files a shipped *kind* directory carries, sorted by filename."""
-    known = _KINDS[kind]
     root = directory(kind)
     found = root / name
     if not found.is_dir():
         names = ", ".join(path.name for path in directories(kind))
         raise FileNotFoundError(f"no {kind} named {name!r}; there are {names}")
-    if not is_installed(kind):
-        destination = f"share/tilefoundry/{known.installed}/{name}"
-        return _manifest_files(destination)
-    return tuple(sorted((entry for entry in found.iterdir() if entry.is_file()), key=lambda path: path.name))
+    return tuple(
+        sorted((entry for entry in found.iterdir() if entry.is_file()), key=lambda path: path.name)
+    )
+
+
+def model_catalog() -> dict[str, tuple[dict[str, Any], Path]]:
+    """Index the models shipped by loaded targets, rejecting ambiguous names."""
+    loaded = load_targets()
+    models = {}
+    owners = {}
+    for ep in sorted(entry_points(group="tilefoundry.targets"), key=lambda ep: ep.name):
+        if ep.name not in loaded:
+            continue
+        root = Path(resource_files(ep.value) / "models")
+        if not root.is_dir():
+            continue
+        catalog = json.loads((root / "catalog.json").read_text(encoding="utf-8"))
+        for model in catalog["models"]:
+            name = model["name"]
+            if name in models:
+                raise ValueError(
+                    f"model {name!r} is shipped by both targets {owners[name]!r} and {ep.name!r}"
+                )
+            models[name] = model, root / name
+            owners[name] = ep.name
+    return dict(sorted(models.items()))
 
 
 def model_files(name: str) -> tuple[Path, ...]:
     """The files a shipped model directory carries, sorted by filename."""
-    return files("models", name)
+    root = model_catalog()[name][1]
+    return tuple(sorted(path for path in root.iterdir() if path.is_file()))
 
 
 __all__ = [
@@ -149,7 +139,7 @@ __all__ = [
     "directories",
     "directory",
     "files",
-    "is_installed",
+    "model_catalog",
     "model_files",
     "path",
 ]

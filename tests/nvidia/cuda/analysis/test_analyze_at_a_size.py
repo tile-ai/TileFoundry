@@ -18,10 +18,10 @@ import isl
 import pytest
 
 from tests.core.fixtures.placed.gqa_decode import GqaOnline
-from tests.models.corpus import ConcreteCase, placed_cases
-from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tests.nvidia.cuda.fixtures.placed.mha_decode_paged import LongerCache, ShorterCache
 from tests.nvidia.cuda.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
+from tests.nvidia.cuda.models.corpus import ConcreteCase, placed_cases
+from tests.nvidia.cuda.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     AnalysisPrecision,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import torch
 
-from tests.models.decode_oracle import agrees_to_one_rounding
+from tests.core.models.decode_oracle import agrees_to_one_rounding
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.runtime.resource import DictResource

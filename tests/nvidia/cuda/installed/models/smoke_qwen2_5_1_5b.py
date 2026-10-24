@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from tests.models.qwen2_5_1_5b import reference
 from tests.nvidia.cuda.installed.models import contract
+from tests.nvidia.cuda.models.qwen2_5_1_5b import reference
 
 MODEL = "qwen2_5_1_5b"
 CASES = contract.model_cases(MODEL)

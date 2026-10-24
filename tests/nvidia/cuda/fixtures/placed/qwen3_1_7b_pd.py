@@ -11,12 +11,12 @@ plus the current sequence through ``CTX + SEQ``.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from importlib.resources import files
 
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import CudaTarget
 
-_CONFIG = Path(__file__).parents[4] / "models" / "qwen3_1_7b" / "config.json"
+_CONFIG = files("tilefoundry_nvidia.cuda") / "models" / "qwen3_1_7b" / "config.json"
 MAX_POSITION_EMBEDDINGS = json.loads(_CONFIG.read_text(encoding="utf-8"))["max_position_embeddings"]
 
 SEQ = DimVar("seq", 1, 8192)

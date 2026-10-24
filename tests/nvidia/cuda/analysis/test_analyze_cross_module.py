@@ -15,8 +15,6 @@ from typing import ClassVar
 
 import pytest
 
-from tests.models.qwen3_1_7b.case import CASE as QWEN_CASE
-from tests.models.qwen3_1_7b.model import Qwen3_1_7B
 from tests.nvidia.cuda.fixtures.logical.hir_composition import (
     REFERENCE_PROGRAMS,
     CrossModule,
@@ -28,6 +26,7 @@ from tests.nvidia.cuda.fixtures.shapes.scaled_modules import (
     ScaledChild,
     StackedScaledParent,
 )
+from tests.nvidia.cuda.models.qwen3_1_7b.case import CASE as QWEN_CASE
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
@@ -65,6 +64,7 @@ from tilefoundry.target import Target
 from tilefoundry.visitor_registry.contexts import ValuationContext
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia.cuda.models.qwen3_1_7b.model import Qwen3_1_7B
 
 _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)

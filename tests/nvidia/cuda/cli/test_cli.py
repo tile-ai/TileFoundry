@@ -137,11 +137,11 @@ def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(tmp_path, capsy
     assert "nope" in capsys.readouterr().err
 
 
-def test_models_source_labels_checkout_manifest(capsys) -> None:
+def test_models_source_names_checkout_directory(capsys) -> None:
     assert cli.main(["models", "qwen3_1_7b", "--source"]) == 0
     source = capsys.readouterr()
     assert Path(source.out.splitlines()[0]).is_dir()
-    assert "manifest" in source.err
+    assert not source.err
     assert "manifest" not in source.out
 
 

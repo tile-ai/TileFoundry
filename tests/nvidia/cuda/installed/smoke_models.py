@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -94,6 +95,11 @@ def test_models_source_names_the_shipped_directory_and_its_files(
     )
     assert analysed_layer.returncode == 0, analysed_layer.stderr
 
+    orchestrator = Path(tf("tutorial", "orchestrator", "causal_lm").stdout.splitlines()[0])
+    shutil.copytree(
+        orchestrator, copied, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__")
+    )
+
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     driver = subprocess.run(
@@ -148,36 +154,29 @@ def test_models_source_lists_each_shipped_hf_alias(tf, capsys, name) -> None:
     assert capsys.readouterr().out.splitlines()[1:] == lines[1:]
 
 
-def test_models_source_follows_the_manifest_without_importing_files(
+def test_models_source_reads_target_resources_without_importing_files(
     tmp_path, monkeypatch, capsys
 ) -> None:
-    root = tmp_path / "checkout"
-    model = root / "tests" / "models" / "added"
+    root = tmp_path / "target"
+    model = root / "models" / "added"
     model.mkdir(parents=True)
     (model / "model.py").write_text(
         '"""A model that must not run while it is described."""\nraise RuntimeError\n',
         encoding="utf-8",
     )
-    (model / "run.py").write_text('"""An added companion."""\n', encoding="utf-8")
+    (model / "hf_alias.py").write_text('"""An added companion."""\n', encoding="utf-8")
     (model / "config.json").write_text("{}\n", encoding="utf-8")
     (model.parent / "catalog.json").write_text(
         '{"models": [{"name": "added"}]}\n', encoding="utf-8"
     )
-    (root / "pyproject.toml").write_text(
-        """[tool.setuptools.data-files]
-"share/tilefoundry/models/added" = [
-    "tests/models/added/model.py",
-    "tests/models/added/run.py",
-    "tests/models/added/config.json",
-]
-""",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(data, "_REPOSITORY_ROOT", root)
+    target = SimpleNamespace(name="added_target", value="added_target")
+    monkeypatch.setattr(data, "entry_points", lambda **kwargs: (target,))
+    monkeypatch.setattr(data, "load_targets", lambda: {target.name: object})
+    monkeypatch.setattr(data, "resource_files", lambda package: root)
 
     assert models.run_models("added", source=True) == 0
     output = capsys.readouterr().out
-    assert _listed_names(output) == {"model.py", "run.py", "config.json"}
+    assert _listed_names(output) == {"model.py", "hf_alias.py", "config.json"}
     assert "A model that must not run while it is described." in output
     assert "An added companion." in output
     assert "config.json  -" in output

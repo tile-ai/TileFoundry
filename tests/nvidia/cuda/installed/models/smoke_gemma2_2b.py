@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.models.decode_oracle import SEQ_LEN, causal_mask
-from tests.models.gemma2_2b import reference
+from tests.core.models.decode_oracle import SEQ_LEN, causal_mask
 from tests.nvidia.cuda.installed.models import contract
+from tests.nvidia.cuda.models.gemma2_2b import reference
 
 MODEL = "gemma2_2b"
 CASES = contract.model_cases(MODEL)

@@ -14,9 +14,9 @@ import pytest
 import torch
 from safetensors.torch import load_file, save_file
 
-from tests.models.corpus import MODELS_ROOT
 from tests.nvidia.cuda.fixtures.placed import leaf_weights
 from tests.nvidia.cuda.fixtures.shapes.composed_leaf_source import composed_leaf_source
+from tests.nvidia.cuda.models.corpus import MODELS_ROOT
 from tilefoundry import cli
 from tilefoundry.cli.source import load_namespace, select_ir
 from tilefoundry.evaluator import evaluate
@@ -470,7 +470,7 @@ def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, tmp_p
     source.write_text(
         """from dataclasses import replace
 from tilefoundry.dsl import *
-from tests.models.qwen3_5_35b_a3b.model import Qwen3_5MoE, Qwen3_5Router, S, _H, _DT
+from tilefoundry_nvidia.cuda.models.qwen3_5_35b_a3b.model import Qwen3_5MoE, Qwen3_5Router, S, _H, _DT
 
 @module(entry="routing")
 class Wrapper:

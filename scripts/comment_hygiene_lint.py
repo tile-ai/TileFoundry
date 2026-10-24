@@ -22,7 +22,14 @@ from pathlib import Path
 MAX_PROSE_LINES = 8
 MAX_COLUMNS = 100
 MAX_ASSERT_MESSAGE = 100
-EXEMPT_PREFIXES = ("tests/models/", "examples/", "tests/*/*/fixtures/schedule/tir/")
+EXEMPT_PREFIXES = (
+    "tests/*/*/models/",
+    "tests/core/models/",
+    "targets/*/tilefoundry_*/*/models/",
+    "src/tilefoundry/orchestrator/",
+    "examples/",
+    "tests/*/*/fixtures/schedule/tir/",
+)
 DIRECTIVE_PREFIXES = ("ruff:", "noqa", "type:", "pragma:", "mypy:", "fmt:", "isort:")
 PYTHON_SUFFIXES = frozenset({".py"})
 C_SUFFIXES = frozenset({".h", ".hpp", ".cuh", ".cu", ".cpp", ".cc"})
