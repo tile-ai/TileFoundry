@@ -30,13 +30,18 @@ class Case:
 
     def load(self) -> Module | PrimFunction:
         """Import a fresh program; lowering mutates its module."""
-        spec = importlib.util.spec_from_file_location(self.path.stem, self.path)
-        assert spec is not None and spec.loader is not None
-        loaded = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(loaded)
-        return next(
-            value for value in vars(loaded).values() if isinstance(value, (Module, PrimFunction))
-        )
+        return load_program(self.path)
+
+
+def load_program(path: Path) -> Module | PrimFunction:
+    """Import the first IR binding without retaining a cross-test module cache."""
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    assert spec is not None and spec.loader is not None
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+    return next(
+        value for value in vars(loaded).values() if isinstance(value, (Module, PrimFunction))
+    )
 
 
 class Problems:
@@ -92,7 +97,9 @@ def cases(
                 continue
             for case in case_type.expand(path, root):
                 if case.id in found:
-                    raise ValueError(f"duplicate case id {case.id!r}: {found[case.id].path}, {path}")
+                    raise ValueError(
+                        f"duplicate case id {case.id!r}: {found[case.id].path}, {path}"
+                    )
                 found[case.id] = case
     missing = expected.keys() - found.keys()
     if missing:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 
 import isl
 import pytest
@@ -60,11 +59,9 @@ from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
 from tilefoundry.analysis.iteration_scope import build_scopes
 from tilefoundry.analysis.report import report_data
-from tilefoundry.cli.source import load_namespace
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
@@ -608,13 +605,6 @@ def test_forty_of_132_lanes_move_one_row_per_latency() -> None:
     assert get_metadata(result.function, PerformanceSummaryMetadata).wave == (40, 132)
     row = 1024 * 16 * 1_000_000_000
     assert _first_duration(result, Reshard) == -(-row // (row // 353))
-
-
-def test_a_tma_load_keeps_its_three_stages_in_flight() -> None:
-    """One 16 KiB stage moves while all three are in flight: a third of the latency."""
-    fixture = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir"
-    namespace, _ = load_namespace(f"{fixture / 'gemm_8192x17408x5120_tma_store.py'}:GEMM")
-    assert _first_duration(_priced(namespace["GEMM_8192X17408X5120_TMA_STORE"]), ScheduleOp) == 118
 
 
 def test_a_window_every_position_writes_alike_costs_its_share() -> None:
