@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.core.evaluator.eval_utils import EvalCase, run_eval_case
-from tests.core.ops.ir.cost_utils import CostCase, run_cost_case
+from tests.core.ops.ir.op_case import Cost, OpCase, check_op_case
 from tilefoundry.dsl import *
 from tilefoundry.evaluator.registry import eval_registry
 from tilefoundry.evaluator.value import EvalError
@@ -20,8 +19,6 @@ from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _COORD_MESH = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("t",))
-
-
 _COORD_INDEX = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
 
 
@@ -38,17 +35,9 @@ def _infer(op: Arange) -> TensorType:
 def test_arange_static_type_evaluation_and_cost():
     type_ = TensorType(shape=(3,), dtype=DType.i64, layout=Layout((3,)), storage=StorageKind.GMEM)
     op = Arange(type=type_, start=2, step=2)
-
     assert _infer(op) is type_
-    run_eval_case(
-        EvalCase(
-            "half_open",
-            op,
-            (),
-            torch.tensor([2, 4, 6], dtype=torch.int64),
-        )
-    )
-    run_cost_case(CostCase("arange", op, (), traffic=(TrafficBytes(),)))
+    check_op_case(OpCase("half_open", op, (), value=torch.tensor([2, 4, 6], dtype=torch.int64)))
+    check_op_case(OpCase("arange", op, (), cost=Cost(traffic=(TrafficBytes(),))))
 
 
 @pytest.mark.parametrize(
@@ -62,24 +51,14 @@ def test_arange_static_type_evaluation_and_cost():
         ),
         (
             Arange(
-                type=TensorType(
-                    shape=(8,),
-                    dtype=DType.i64,
-                    layout=None,
-                    storage=StorageKind.GMEM,
-                ),
+                type=TensorType(shape=(8,), dtype=DType.i64, layout=None, storage=StorageKind.GMEM),
                 step=0,
             ),
             "step must be a positive static integer",
         ),
         (
             Arange(
-                type=TensorType(
-                    shape=(8,),
-                    dtype=DType.f32,
-                    layout=None,
-                    storage=StorageKind.GMEM,
-                )
+                type=TensorType(shape=(8,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM)
             ),
             "dtype must be i32 or i64",
         ),

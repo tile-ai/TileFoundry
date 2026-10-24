@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from tests.core._source import import_dsl
-from tests.core.ops.ir.typeinfer_utils import (
+from tests.core.ops.ir.op_case import (
     infer_call,
 )
 from tilefoundry.dsl import *

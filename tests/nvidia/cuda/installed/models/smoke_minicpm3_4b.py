@@ -2,31 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
-
 from tests.nvidia.cuda.installed.models import contract
 from tests.nvidia.cuda.models.minicpm3_4b import reference
 
 MODEL = "minicpm3_4b"
 CASES = contract.model_cases(MODEL)
-
-ANALYSED = [
-    pytest.param(case, selected, id=selected.id) for case in CASES for selected in case.analyze
-]
-SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
-
-
-@pytest.mark.parametrize(("case", "selected"), ANALYSED)
-def test_every_selected_function_analyses(tf, shipped_source, case, selected) -> None:
-    contract.analysed_every_family(
-        tf, shipped_source(MODEL), case, selected.selector, selected.dims
-    )
-
-
-@pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_every_analysis_answers_at_the_largest_context(tf, shipped_source, case, sized) -> None:
-    """At the ceiling the case states, not at a sample of it."""
-    contract.analysed_every_family(tf, shipped_source(MODEL), case, sized.selector, sized.ceiling)
 
 
 def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, comparison_cache) -> None:
@@ -62,3 +42,6 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, c
 
     assert want_k.shape[1] == drawn.ctx_len + 1
     assert entry_k.shape[1] == 1 and entry_v.shape[1] == 1
+
+
+test_model_analysis, test_model_ceiling = contract.analysis_tests(MODEL)

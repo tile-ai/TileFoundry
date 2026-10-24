@@ -14,12 +14,11 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.core.evaluator.eval_utils import EvalCase, run_eval_case
-from tests.core.ops.ir.typeinfer_utils import (
+from tests.core.ops.ir.op_case import (
     ExpectedError,
-    TypeInferCase,
+    OpCase,
     infer_call,
-    run_typeinfer_case,
+    op_case_test,
     split_local_extents,
 )
 from tilefoundry.ir.hir.sharding.reshard import Reshard
@@ -33,12 +32,7 @@ from tilefoundry.ir.types import (
     make_tensor_type,
 )
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
-    Partial,
-    Split,
-    shard_layout_local_shape,
-)
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split, shard_layout_local_shape
 from tilefoundry.ir.types.storage import StorageKind
 
 _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
@@ -80,7 +74,6 @@ def test_plain_c_order_layout_is_derived_when_reshape_is_a_view(
 ):
     source = make_tensor_type(shape, layout=Layout(shape=shape, strides=strides))
     ty = infer_call(_reshape(new_shape), source)
-
     assert ty.layout == Layout(shape=new_shape, strides=expected)
     assert infer_call(_reshape(new_shape), make_tensor_type(shape)).layout == Layout(
         shape=new_shape, strides=expected
@@ -89,43 +82,13 @@ def test_plain_c_order_layout_is_derived_when_reshape_is_a_view(
 
 def test_noncontiguous_plain_reshape_uses_default_strides():
     source = make_tensor_type((8, 16), layout=Layout(shape=(8, 16), strides=(1, 8)))
-
     assert infer_call(_reshape((128,)), source).layout == Layout(shape=(128,), strides=(1,))
 
 
-def test_straddling_split_fails_closed():
-    """Test straddling split fails closed.
-
-    Layout position 0 (size 6) would divide across the new size-3 boundary,
-    but the mesh extent (2) does not divide the outer sub-factor (3) -> the
-    split genuinely straddles a device boundary and stays rejected.
-    """
-    run_typeinfer_case(
-        TypeInferCase(
-            "straddle_fails_closed",
-            _reshape((3, 8)),
-            (
-                make_shard_tensor_type(
-                    (6, 4),
-                    mesh=Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("g",)),
-                    attrs=(Split(0),),
-                ),
-            ),
-            ExpectedError(match="align"),
-        )
-    )
-
-
-def test_unmaterialized_sharding_is_not_dropped_by_scalar_reshape():
+def _make_unmaterialized_sharding_is_not_dropped_by_scalar_reshape():
     source = make_shard_tensor_type((4, 8), storage=StorageKind.UMAT, mesh=_M, attrs=(Split(0),))
-
-    run_typeinfer_case(
-        TypeInferCase(
-            "umat_sharding_scalar_reshape",
-            _reshape(()),
-            (source,),
-            ExpectedError(match="align"),
-        )
+    return OpCase(
+        "umat_sharding_scalar_reshape", _reshape(()), (source,), error=ExpectedError(match="align")
     )
 
 
@@ -188,9 +151,7 @@ def test_reshape_then_reshard_rmem_no_split_aliasing():
     resharded = infer_call(
         Reshard(
             layout=ShardLayout(
-                layout=Layout(shape=sl.layout.shape, strides=None),
-                attrs=sl.attrs,
-                mesh=sl.mesh,
+                layout=Layout(shape=sl.layout.shape, strides=None), attrs=sl.attrs, mesh=sl.mesh
             ),
             storage=StorageKind.RMEM,
         ),
@@ -208,20 +169,14 @@ def test_reshape_then_reshard_rmem_no_split_aliasing():
 
 def test_broadcast_reshape_and_reshard_order_agree_in_smem():
     source = make_tensor_type(
-        (1, 32, 128),
-        layout=Layout(shape=(1, 32, 128), strides=(4096, 128, 1)),
+        (1, 32, 128), layout=Layout(shape=(1, 32, 128), strides=(4096, 128, 1))
     )
     packed_layout = ShardLayout(
-        layout=Layout(shape=(1, 32, 128), strides=None),
-        attrs=(Broadcast(),),
-        mesh=_M,
+        layout=Layout(shape=(1, 32, 128), strides=None), attrs=(Broadcast(),), mesh=_M
     )
     reshaped_layout = ShardLayout(
-        layout=Layout(shape=(32, 128), strides=None),
-        attrs=(Broadcast(),),
-        mesh=_M,
+        layout=Layout(shape=(32, 128), strides=None), attrs=(Broadcast(),), mesh=_M
     )
-
     resharded_then_reshaped = infer_call(
         _reshape((32, 128)),
         infer_call(Reshard(layout=packed_layout, storage=StorageKind.SMEM), source),
@@ -230,14 +185,34 @@ def test_broadcast_reshape_and_reshard_order_agree_in_smem():
         Reshard(layout=reshaped_layout, storage=StorageKind.SMEM),
         infer_call(_reshape((32, 128)), source),
     )
-
     assert resharded_then_reshaped == reshaped_then_resharded
 
 
 _S = DimVar(name="seq_len", lo=1, hi=4095)
 
 
-def test_reshape_evaluate_dynamic_axis_inferred():
+def _make_reshape_evaluate_dynamic_axis_inferred():
     torch.manual_seed(0)
     x = torch.randn(1, 6, 8)
-    run_eval_case(EvalCase("", Reshape(new_shape=(1, _S, 2, 4)), (x,), x.reshape(1, 6, 2, 4)))
+    return OpCase(
+        "dynamic_axis_inferred", Reshape(new_shape=(1, _S, 2, 4)), (x,), value=x.reshape(1, 6, 2, 4)
+    )
+
+
+CASES = (
+    OpCase(
+        "straddle_fails_closed",
+        _reshape((3, 8)),
+        (
+            make_shard_tensor_type(
+                (6, 4),
+                mesh=Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("g",)),
+                attrs=(Split(0),),
+            ),
+        ),
+        error=ExpectedError(match="align"),
+    ),
+    _make_unmaterialized_sharding_is_not_dropped_by_scalar_reshape(),
+    _make_reshape_evaluate_dynamic_axis_inferred(),
+)
+test_op_case = op_case_test(CASES)

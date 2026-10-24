@@ -13,8 +13,8 @@ from tests.core._source import import_dsl
 from tests.core.schedule._fixtures import (
     CliCase,
     _quiet_json,
-    check_cli_case,
     check_facts,
+    cli_case_test,
 )
 from tests.nvidia.cuda.schedule._plain import SiteCounts, check_plain_report
 from tilefoundry.cli import main as cli_main
@@ -645,6 +645,4 @@ def test_candidates_nk_layout(tmp_path, capsys):
     )
 
 
-@pytest.mark.parametrize("case", FIXTURES, ids=lambda case: case.name)
-def test_cli_case(case: CliCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    check_cli_case(case, tmp_path, capsys)
+test_cli_case = cli_case_test(FIXTURES)

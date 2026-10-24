@@ -51,3 +51,11 @@ def check_cli_case(case: CliCase, tmp_path: Path, capsys: pytest.CaptureFixture[
         code = error.code
     assert code == case.code
     case.check(out, capsys.readouterr())
+
+
+def cli_case_test(cases):
+    @pytest.mark.parametrize("case", cases, ids=lambda case: case.name)
+    def test_cli_case(case, tmp_path, capsys):
+        check_cli_case(case, tmp_path, capsys)
+
+    return test_cli_case

@@ -9,12 +9,7 @@ from __future__ import annotations
 
 import torch
 
-from tests.core.evaluator.eval_utils import EvalCase, run_eval_case
-from tests.core.ops.ir.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    run_typeinfer_case,
-)
+from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
 from tilefoundry.ir.hir.math.softplus import Softplus
 from tilefoundry.ir.types import Layout, Mesh, Topology, make_shard_tensor_type
 from tilefoundry.ir.types.shard_layout import Partial
@@ -24,16 +19,14 @@ _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 
 
-def test_softplus_rejects_partial_sum_input():
-    """Softplus is monotone increasing: it commutes with max/min, not sum."""
-    run_typeinfer_case(
-        TypeInferCase("partial_sum_errors", _OP, (_PSUM,), ExpectedError(match="Softplus"))
-    )
-
-
-def test_softplus_evaluate():
+def _make_softplus_evaluate():
     torch.manual_seed(0)
     x = torch.rand(4) + 0.5
-    run_eval_case(
-        EvalCase("softplus", Softplus(), (x,), torch.nn.functional.softplus(x), atol=1e-6)
-    )
+    return OpCase("softplus", Softplus(), (x,), value=torch.nn.functional.softplus(x), atol=1e-06)
+
+
+CASES = (
+    OpCase("partial_sum_errors", _OP, (_PSUM,), error=ExpectedError(match="Softplus")),
+    _make_softplus_evaluate(),
+)
+test_op_case = op_case_test(CASES)

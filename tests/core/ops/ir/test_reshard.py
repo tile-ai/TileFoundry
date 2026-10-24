@@ -11,11 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.core.ops.ir.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    run_typeinfer_case,
-)
+from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
 from tilefoundry.dsl.storage import gmem, rmem
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.sharding.reshard import Reshard
@@ -123,28 +119,18 @@ def _shard_layout(shape) -> ShardLayout:
 
 
 _SL_PRESERVES_SHAPE = _shard_layout((1, 8, 192))
-
-
 _MESH_H2L = Mesh(
     topologies=(Topology("thread", 4),), layout=Layout(shape=(4,), strides=(1,)), names=("t",)
 )
-
-
 _SL_H2L = ShardLayout(
     layout=Layout(shape=(2, 4, 128), strides=None), attrs=(Split(1),), mesh=_MESH_H2L
 )
-
-
 _MESH_L2H = Mesh(
     topologies=(Topology("thread", 4),), layout=Layout(shape=(4,), strides=(1,)), names=("w",)
 )
-
-
 _REG_L2H_LAYOUT = ShardLayout(
     layout=Layout(shape=(4, 64), strides=(0, 1)), attrs=(Split(0),), mesh=_MESH_L2H
 )
-
-
 _SL_L2H = ShardLayout(layout=Layout(shape=(4, 64), strides=None), attrs=(Split(0),), mesh=_MESH_L2H)
 
 
@@ -153,64 +139,50 @@ def _materialized(shape, strides, attrs, mesh):
 
 
 _S_DYN = DimVar("seq_len", 1, 3)
-
-
 _MESH_DYN = Mesh(topologies=(Topology("cta", 8),), layout=Layout(shape=(8,), strides=(1,)))
-
-
 _SL_DYN_BARE = ShardLayout(
-    layout=Layout(shape=(1, _S_DYN, 32, 128), strides=None),
-    attrs=(Split(axis=2),),
-    mesh=_MESH_DYN,
+    layout=Layout(shape=(1, _S_DYN, 32, 128), strides=None), attrs=(Split(axis=2),), mesh=_MESH_DYN
 )
-
-
-CASES = [
-    TypeInferCase(
-            "destination_umat_rejected",
-            Reshard(layout=_SL_PRESERVES_SHAPE, storage=StorageKind.UMAT),
-            (make_tensor_type((1, 1536)),),
-            ExpectedError(match="unmaterialized"),
+CASES = (
+    OpCase(
+        "destination_umat_rejected",
+        Reshard(layout=_SL_PRESERVES_SHAPE, storage=StorageKind.UMAT),
+        (make_tensor_type((1, 1536)),),
+        error=ExpectedError(match="unmaterialized"),
+    ),
+    OpCase(
+        "storage_change_without_layout_errors",
+        Reshard(storage=rmem),
+        (make_tensor_type((1, 1536)),),
+        error=ExpectedError(match="storage change requires"),
+    ),
+    OpCase(
+        "low_to_high_sugar_materializes_shared",
+        Reshard(layout=_SL_L2H, storage=gmem),
+        (make_tensor_type((4, 64), storage=rmem, layout=_REG_L2H_LAYOUT),),
+        type=make_tensor_type(
+            (4, 64), storage=gmem, layout=_materialized((4, 64), (64, 1), (Split(0),), _MESH_L2H)
         ),
-    TypeInferCase(
-            "storage_change_without_layout_errors",
-            Reshard(storage=rmem),
-            (make_tensor_type((1, 1536)),),
-            ExpectedError(match="storage change requires"),
+    ),
+    OpCase(
+        "unmaterialized_to_high_sugar_materializes_shared",
+        Reshard(layout=_SL_L2H, storage=gmem),
+        (make_tensor_type((4, 64), storage=StorageKind.UMAT),),
+        type=make_tensor_type(
+            (4, 64), storage=gmem, layout=_materialized((4, 64), (64, 1), (Split(0),), _MESH_L2H)
         ),
-    TypeInferCase(
-            "low_to_high_sugar_materializes_shared",
-            Reshard(layout=_SL_L2H, storage=gmem),
-            (make_tensor_type((4, 64), storage=rmem, layout=_REG_L2H_LAYOUT),),
-            make_tensor_type(
-                (4, 64), storage=gmem, layout=_materialized((4, 64), (64, 1), (Split(0),), _MESH_L2H)
+    ),
+    OpCase(
+        "same_storage_dynamic_bare_axis_shared_engine",
+        Reshard(layout=_SL_DYN_BARE, storage=None),
+        (make_tensor_type((1, _S_DYN, 32, 128)),),
+        type=make_tensor_type(
+            (1, _S_DYN, 32, 128),
+            storage=gmem,
+            layout=_materialized(
+                (1, _S_DYN, 32, 128), (0, 32 * 128, 128, 1), (Split(2),), _MESH_DYN
             ),
         ),
-    TypeInferCase(
-            "unmaterialized_to_high_sugar_materializes_shared",
-            Reshard(layout=_SL_L2H, storage=gmem),
-            (make_tensor_type((4, 64), storage=StorageKind.UMAT),),
-            make_tensor_type(
-                (4, 64),
-                storage=gmem,
-                layout=_materialized((4, 64), (64, 1), (Split(0),), _MESH_L2H),
-            ),
-        ),
-    TypeInferCase(
-            "same_storage_dynamic_bare_axis_shared_engine",
-            Reshard(layout=_SL_DYN_BARE, storage=None),
-            (make_tensor_type((1, _S_DYN, 32, 128)),),
-            make_tensor_type(
-                (1, _S_DYN, 32, 128),
-                storage=gmem,
-                layout=_materialized(
-                    (1, _S_DYN, 32, 128), (0, 32 * 128, 128, 1), (Split(2),), _MESH_DYN
-                ),
-            ),
-        ),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_reshard_typeinfer(case):
-    run_typeinfer_case(case)
+    ),
+)
+test_op_case = op_case_test(CASES)

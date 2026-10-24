@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import cases
-from tests.core.parser._parser_case import ParserCase, check_parser_case
+from tests.core.parser._parser_case import ParserCase, check_parser_case, unique_parser_cases
 from tests.core.parser._parser_hooks import (
     _carry_order,
     _dtype_names,
@@ -55,8 +55,7 @@ NAMED = (
     ),
 )
 CASES = cases(FIXTURES / "inspection", case_type=ParserCase, expected=EXPECTED) + NAMED
-if len({case.id for case in CASES}) != len(CASES):
-    raise ValueError("duplicate core parser case ids")
+CASES = unique_parser_cases(CASES)
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)

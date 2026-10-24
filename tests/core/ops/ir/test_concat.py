@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from tests.core.ops.ir.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    run_typeinfer_case,
-)
+from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
 from tilefoundry.ir.hir.tensor.concat import Concat
 from tilefoundry.ir.types import (
     DType,
@@ -20,31 +16,18 @@ from tilefoundry.ir.types.shard_layout import Split
 
 _F = DType.f32
 _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
-
-
-def test_concat_propagates_a_split_outside_the_concat_axis():
-    run_typeinfer_case(
-        TypeInferCase(
-            "non_concat_split_propagates",
-            Concat(axis=0),
-            (
-                make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(1),)),
-                make_tensor_type((4, 8), _F),
-            ),
-            make_shard_tensor_type((8, 8), mesh=_M, attrs=(Split(1),)),
-        )
-    )
-
-
-def test_concat_rejects_a_first_input_split_on_the_concat_axis():
-    run_typeinfer_case(
-        TypeInferCase(
-            "first_input_concat_split_rejected",
-            Concat(axis=0),
-            (
-                make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(0),)),
-                make_tensor_type((6, 8), _F),
-            ),
-            ExpectedError(match=r"input 0.*concat axis 0.*Reshard before Concat"),
-        )
-    )
+CASES = (
+    OpCase(
+        "non_concat_split_propagates",
+        Concat(axis=0),
+        (make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(1),)), make_tensor_type((4, 8), _F)),
+        type=make_shard_tensor_type((8, 8), mesh=_M, attrs=(Split(1),)),
+    ),
+    OpCase(
+        "first_input_concat_split_rejected",
+        Concat(axis=0),
+        (make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((6, 8), _F)),
+        error=ExpectedError(match="input 0.*concat axis 0.*Reshard before Concat"),
+    ),
+)
+test_op_case = op_case_test(CASES)

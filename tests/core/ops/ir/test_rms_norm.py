@@ -11,13 +11,7 @@ reduction commutes).
 
 from __future__ import annotations
 
-import pytest
-
-from tests.core.ops.ir.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    run_typeinfer_case,
-)
+from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
 from tilefoundry.ir.types import (
     DType,
@@ -29,23 +23,22 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.shard_layout import Partial
 
-_RMS = RMSNorm(eps=1e-6)
+_RMS = RMSNorm(eps=1e-06)
 _PARTIAL_MESH = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
-
-CASES = [
-    TypeInferCase(
+CASES = (
+    OpCase(
         "rank2_weight_rejected",
         _RMS,
         (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((1, 2048), DType.f32)),
-        ExpectedError(match="weight must be rank-1"),
+        error=ExpectedError(match="weight must be rank-1"),
     ),
-    TypeInferCase(
+    OpCase(
         "last_dim_mismatch_rejected",
         _RMS,
         (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((1024,), DType.f32)),
-        ExpectedError(match="last dim"),
+        error=ExpectedError(match="last dim"),
     ),
-    TypeInferCase(
+    OpCase(
         "partial_input_rejected",
         _RMS,
         (
@@ -54,11 +47,7 @@ CASES = [
             ),
             make_tensor_type((2048,), DType.f32),
         ),
-        ExpectedError(match="x carries Partial"),
+        error=ExpectedError(match="x carries Partial"),
     ),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_rms_norm_typeinfer(case):
-    run_typeinfer_case(case)
+)
+test_op_case = op_case_test(CASES)

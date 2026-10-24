@@ -8,12 +8,12 @@ from dataclasses import replace
 import pytest
 import torch
 
-from tests.core.ops.ir.typeinfer_utils import (
+from tests.core.ops.ir.op_case import (
     ExpectedError,
-    TypeInferCase,
+    OpCase,
     infer_call,
+    op_case_test,
     raw_shard_tensor_type,
-    run_typeinfer_case,
 )
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
@@ -31,130 +31,12 @@ from tilefoundry.ir.types import (
     make_tensor_type,
 )
 from tilefoundry.ir.types.dim import DimFloorDiv, DimVar
-from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
-    Partial,
-    Split,
-    split_target_axes,
-)
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split, split_target_axes
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _BF = DType.bf16
 _FP8 = DType.fp8e4m3
-
-CASES = [
-    TypeInferCase(
-        "rank2_per_token_group_128",
-        Quant(),
-        (make_tensor_type((1, 2048), _BF),),
-        TupleType(
-            fields=(
-                make_tensor_type((1, 2048), _FP8),
-                make_tensor_type((1, 16), DType.f32),
-            )
-        ),
-    ),
-    TypeInferCase(
-        "rank_zero_rejected",
-        Quant(group=1),
-        (make_tensor_type((), _BF),),
-        ExpectedError(match="at least rank-1"),
-    ),
-    TypeInferCase(
-        "indivisible_last_dim",
-        Quant(),
-        (make_tensor_type((1, 100), _BF),),
-        ExpectedError(match="not divisible by group"),
-    ),
-    TypeInferCase(
-        "unknown_scheme",
-        Quant(scheme="block"),
-        (make_tensor_type((1, 128), _BF),),
-        ExpectedError(match="scheme must be 'per_token_group'.*block"),
-    ),
-    TypeInferCase(
-        "zero_group",
-        Quant(group=0),
-        (make_tensor_type((1, 128), _BF),),
-        ExpectedError(match="positive non-boolean integer.*0"),
-    ),
-    TypeInferCase(
-        "negative_group",
-        Quant(group=-4),
-        (make_tensor_type((1, 128), _BF),),
-        ExpectedError(match="positive non-boolean integer.*-4"),
-    ),
-    TypeInferCase(
-        "boolean_group",
-        Quant(group=True),
-        (make_tensor_type((1, 128), _BF),),
-        ExpectedError(match="positive non-boolean integer.*True"),
-    ),
-    TypeInferCase(
-        "unsupported_target_dtype",
-        Quant(target_dtype=DType.f8e8m0),
-        (make_tensor_type((1, 128), _BF),),
-        ExpectedError(match="target_dtype must be fp8e4m3.*f8e8m0"),
-    ),
-    TypeInferCase(
-        "partial_input_rejected",
-        Quant(),
-        (
-            make_shard_tensor_type(
-                (1, 2048),
-                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-                attrs=(Partial("max"),),
-            ),
-        ),
-        ExpectedError(match="x carries Partial"),
-    ),
-    TypeInferCase(
-        "last_split_through_group_rejected",
-        Quant(group=128),
-        (
-            make_shard_tensor_type(
-                (2, 256),
-                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-                attrs=(Split(1),),
-            ),
-        ),
-        ExpectedError(match=r"last axis 1 Split cuts through group=128.*Reshard"),
-    ),
-    TypeInferCase(
-        "strided_last_split_rejected",
-        Quant(group=128),
-        (
-            raw_shard_tensor_type(
-                (2, 1024),
-                (2, 4, 256),
-                (1024, 256, 2),
-                (Split(1),),
-                Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-            ),
-        ),
-        ExpectedError(match=r"last axis 1 Split cuts through group=128.*Reshard"),
-    ),
-    TypeInferCase(
-        "overlapping_last_split_rejected",
-        Quant(group=128),
-        (
-            raw_shard_tensor_type(
-                (2, 1024),
-                (2, 4, 256),
-                (1024, 128, 1),
-                (Split(1),),
-                Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-            ),
-        ),
-        ExpectedError(match=r"last axis 1 Split cuts through group=128.*Reshard"),
-    ),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
-def test_quant_typeinfer(case) -> None:
-    run_typeinfer_case(case)
 
 
 def _reference(x: torch.Tensor, group: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -167,7 +49,7 @@ def _reference(x: torch.Tensor, group: int) -> tuple[torch.Tensor, torch.Tensor]
         .reshape(x.shape)
         .to(torch.float8_e4m3fn)
     )
-    return quantized, scale
+    return (quantized, scale)
 
 
 def _quant_function(shape, group: int) -> tuple[Function, TupleType]:
@@ -176,12 +58,7 @@ def _quant_function(shape, group: int) -> tuple[Function, TupleType]:
     result_type = TypeInferVisitor().visit(call, TypeInferContext())
     call = replace(call, type=result_type)
     return (
-        Function.build(
-            name="quant_eval",
-            params=(x,),
-            body=call,
-            return_type=result_type,
-        ),
+        Function.build(name="quant_eval", params=(x,), body=call, return_type=result_type),
         result_type,
     )
 
@@ -198,7 +75,6 @@ def test_quant_matches_exact_fp8e4m3_reference(source) -> None:
     function, _ = _quant_function(tuple(source.shape), 4)
     quantized, scale = evaluate(function, source)
     expected_q, expected_scale = _reference(source, 4)
-
     assert quantized.dtype == torch.float8_e4m3fn
     assert scale.dtype == torch.float32
     torch.testing.assert_close(quantized.float(), expected_q.float(), atol=0, rtol=0)
@@ -210,13 +86,8 @@ def test_quant_matches_exact_fp8e4m3_reference(source) -> None:
 
 
 def test_quant_plain_layouts_describe_each_result() -> None:
-    source = make_tensor_type(
-        (2, 256),
-        _BF,
-        layout=Layout(shape=(2, 256), strides=(256, 1)),
-    )
+    source = make_tensor_type((2, 256), _BF, layout=Layout(shape=(2, 256), strides=(256, 1)))
     quantized, scale = infer_call(Quant(group=128), source).fields
-
     assert quantized.layout == Layout(shape=(2, 256), strides=(256, 1))
     assert quantized.layout is not source.layout
     assert scale.layout == Layout(shape=(2, 2), strides=(2, 1))
@@ -224,10 +95,7 @@ def test_quant_plain_layouts_describe_each_result() -> None:
 
 @pytest.mark.parametrize(
     ("shape", "split_axis", "expected_scale_shape"),
-    (
-        ((4, 256), 0, (4, 2)),
-        ((2, 1024), 1, (2, 8)),
-    ),
+    (((4, 256), 0, (4, 2)), ((2, 1024), 1, (2, 8))),
     ids=("outer_axis", "whole_group_last_axis"),
 )
 def test_quant_propagates_representable_sharding(shape, split_axis, expected_scale_shape) -> None:
@@ -238,7 +106,6 @@ def test_quant_propagates_representable_sharding(shape, split_axis, expected_sca
         attrs=(Split(split_axis),),
     )
     quantized, scale = infer_call(Quant(group=128), source).fields
-
     assert quantized.shape == shape
     assert scale.shape == expected_scale_shape
     for field in (quantized, scale):
@@ -258,7 +125,6 @@ def test_quant_accepts_factorized_contiguous_whole_groups() -> None:
         dtype=_BF,
     )
     quantized, scale = infer_call(Quant(group=128), source).fields
-
     assert scale.shape == (2, 8)
     assert split_target_axes(quantized.layout, quantized.shape) == (1,)
     assert split_target_axes(scale.layout, scale.shape) == (1,)
@@ -272,7 +138,6 @@ def test_quant_drops_fully_broadcast_mesh_ownership() -> None:
         attrs=(Broadcast(),),
     )
     quantized, scale = infer_call(Quant(group=128), source).fields
-
     assert quantized.layout == Layout(quantized.shape)
     assert scale.layout == Layout(scale.shape)
 
@@ -287,12 +152,117 @@ def test_quant_symbolic_scale_extent_and_runtime_divisibility() -> None:
     assert isinstance(scale_last.target, DimFloorDiv)
     assert scale_last.args[0] is _SYMBOLIC_LAST
     assert scale_last.args[1].value == 4
-
     source = torch.arange(-12, 12, dtype=torch.float32).reshape(2, 12)
     quantized, scale = evaluate(function, source)
     expected_q, expected_scale = _reference(source, 4)
     torch.testing.assert_close(quantized.float(), expected_q.float(), atol=0, rtol=0)
     torch.testing.assert_close(scale, expected_scale, atol=0, rtol=0)
-
     with pytest.raises(EvalError, match="runtime last dim 10.*group=4"):
         evaluate(function, torch.zeros((2, 10)))
+
+
+CASES = (
+    OpCase(
+        "rank2_per_token_group_128",
+        Quant(),
+        (make_tensor_type((1, 2048), _BF),),
+        type=TupleType(
+            fields=(make_tensor_type((1, 2048), _FP8), make_tensor_type((1, 16), DType.f32))
+        ),
+    ),
+    OpCase(
+        "rank_zero_rejected",
+        Quant(group=1),
+        (make_tensor_type((), _BF),),
+        error=ExpectedError(match="at least rank-1"),
+    ),
+    OpCase(
+        "indivisible_last_dim",
+        Quant(),
+        (make_tensor_type((1, 100), _BF),),
+        error=ExpectedError(match="not divisible by group"),
+    ),
+    OpCase(
+        "unknown_scheme",
+        Quant(scheme="block"),
+        (make_tensor_type((1, 128), _BF),),
+        error=ExpectedError(match="scheme must be 'per_token_group'.*block"),
+    ),
+    OpCase(
+        "zero_group",
+        Quant(group=0),
+        (make_tensor_type((1, 128), _BF),),
+        error=ExpectedError(match="positive non-boolean integer.*0"),
+    ),
+    OpCase(
+        "negative_group",
+        Quant(group=-4),
+        (make_tensor_type((1, 128), _BF),),
+        error=ExpectedError(match="positive non-boolean integer.*-4"),
+    ),
+    OpCase(
+        "boolean_group",
+        Quant(group=True),
+        (make_tensor_type((1, 128), _BF),),
+        error=ExpectedError(match="positive non-boolean integer.*True"),
+    ),
+    OpCase(
+        "unsupported_target_dtype",
+        Quant(target_dtype=DType.f8e8m0),
+        (make_tensor_type((1, 128), _BF),),
+        error=ExpectedError(match="target_dtype must be fp8e4m3.*f8e8m0"),
+    ),
+    OpCase(
+        "partial_input_rejected",
+        Quant(),
+        (
+            make_shard_tensor_type(
+                (1, 2048),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Partial("max"),),
+            ),
+        ),
+        error=ExpectedError(match="x carries Partial"),
+    ),
+    OpCase(
+        "last_split_through_group_rejected",
+        Quant(group=128),
+        (
+            make_shard_tensor_type(
+                (2, 256),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Split(1),),
+            ),
+        ),
+        error=ExpectedError(match="last axis 1 Split cuts through group=128.*Reshard"),
+    ),
+    OpCase(
+        "strided_last_split_rejected",
+        Quant(group=128),
+        (
+            raw_shard_tensor_type(
+                (2, 1024),
+                (2, 4, 256),
+                (1024, 256, 2),
+                (Split(1),),
+                Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+            ),
+        ),
+        error=ExpectedError(match="last axis 1 Split cuts through group=128.*Reshard"),
+    ),
+    OpCase(
+        "overlapping_last_split_rejected",
+        Quant(group=128),
+        (
+            raw_shard_tensor_type(
+                (2, 1024),
+                (2, 4, 256),
+                (1024, 128, 1),
+                (Split(1),),
+                Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+            ),
+        ),
+        error=ExpectedError(match="last axis 1 Split cuts through group=128.*Reshard"),
+    ),
+)
+test_op_case = op_case_test(CASES)

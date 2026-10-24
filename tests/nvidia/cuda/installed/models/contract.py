@@ -1,7 +1,7 @@
 """What one corpus case asks of the shipped source, one command per question.
 
-Helper functions rather than a base class: every model states its own ``test_``
-functions and calls these, so each test is visible in the file it fails in.
+A factory binds the common analysis workflows to each model. Model-specific
+parity and numerical checks remain in the model smoke files.
 
 Every helper here runs exactly one command and judges exactly its result. The
 machine is never passed in -- the copied ``model.py`` declares its own target and
@@ -19,6 +19,7 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+import pytest
 import torch
 from safetensors.torch import save_file
 
@@ -116,7 +117,7 @@ def reported(
 
 def _compute_cost_evidence(report: dict) -> str | None:
     """What `compute-cost` must have counted: flops, bucketed by dtype."""
-    flops = report["functions"][0]['totals']["flops"]
+    flops = report["functions"][0]["totals"]["flops"]
     if not flops or not any(count > 0 for count in flops.values()):
         return f"reported no flops at all ({flops!r})"
     return None
@@ -129,11 +130,11 @@ def _memory_evidence(report: dict) -> str | None:
     what a program moves and what it must hold at once are two answers, reported
     as two.
     """
-    record = report["functions"][0]['function_records']["memory"]
+    record = report["functions"][0]["function_records"]["memory"]
     solver_status = record.get("solver_status")
     if solver_status not in ("optimal", "feasible"):
         return f"solver status is {solver_status!r}"
-    gmem = report["functions"][0]['totals']["traffic"]["gmem"]
+    gmem = report["functions"][0]["totals"]["traffic"]["gmem"]
     if not gmem.get("read", 0) > 0:
         return f"reported no gmem read ({gmem!r})"
     if not record["lifetimes"]:
@@ -143,7 +144,7 @@ def _memory_evidence(report: dict) -> str | None:
 
 def _roofline_evidence(report: dict) -> str | None:
     """What `roofline` must have decided: which side bounds, and the time it implies."""
-    record = report["functions"][0]['function_records']["roofline"]
+    record = report["functions"][0]["function_records"]["roofline"]
     if record["bound_by"] not in ("compute", "memory", "balanced"):
         return f"bound_by is {record['bound_by']!r}, no rated resource"
     if not record["ideal_ns"] > 0:
@@ -153,7 +154,7 @@ def _roofline_evidence(report: dict) -> str | None:
 
 def _performance_evidence(report: dict) -> str | None:
     """What `performance` must have laid out and scaled by physical capacity."""
-    record = report["functions"][0]['function_records']["performance"]
+    record = report["functions"][0]["function_records"]["performance"]
     envelope = record["timeline"]
     if envelope["start_ns"] != 0 or not envelope["end_ns"] > 0:
         return f"predicted interval is {envelope!r}"
@@ -209,14 +210,15 @@ def lifetimes(
     """What the memory analysis says each binding of one function costs."""
     report = reported(tf, source, case, selector, ("memory",), dims)
     return {
-        item["binding"]: item["bytes"] for item in report["functions"][0]['function_records']["memory"]["lifetimes"]
+        item["binding"]: item["bytes"]
+        for item in report["functions"][0]["function_records"]["memory"]["lifetimes"]
     }
 
 
 def traffic_read(tf, source: Path, case: ModelCase, selector: str, dims: Mapping[str, int]) -> int:
     """How many bytes the memory analysis says one function reads from gmem."""
     report = reported(tf, source, case, selector, ("memory",), dims)
-    return report["functions"][0]['totals']["traffic"]["gmem"]["read"]
+    return report["functions"][0]["totals"]["traffic"]["gmem"]["read"]
 
 
 def one_rounding(want) -> tuple[str, dict[str, float]]:
@@ -385,10 +387,7 @@ def compared(
     argv += ["--inputs", f"files:{','.join(input_paths)}"]
 
     if weights:
-        checkpoint = {
-            name: value
-            for name, value in weights.items()
-        }
+        checkpoint = {name: value for name, value in weights.items()}
         argv += ["--weights", f"ckpt:{_materialize_weights(checkpoint, cache)}"]
     else:
         argv += ["--weights", "random"]
@@ -420,3 +419,22 @@ def disagreed(tf, cache: Path, source: Path, case: ModelCase, selector: str, **a
     assert done.returncode == 1, done.stdout + done.stderr
     assert "FAIL" in done.stdout, done.stdout
     return done
+
+
+def analysis_tests(model: str):
+    """Bind the selected functions and largest contexts to one model's shipped source."""
+    cases = model_cases(model)
+    analysed = [
+        pytest.param(case, selected, id=selected.id) for case in cases for selected in case.analyze
+    ]
+    sized = [pytest.param(case, item, id=item.id) for case in cases for item in case.sized]
+
+    @pytest.mark.parametrize(("case", "selected"), analysed)
+    def test_model_analysis(tf, shipped_source, case, selected):
+        analysed_every_family(tf, shipped_source(model), case, selected.selector, selected.dims)
+
+    @pytest.mark.parametrize(("case", "sized"), sized)
+    def test_model_ceiling(tf, shipped_source, case, sized):
+        analysed_every_family(tf, shipped_source(model), case, sized.selector, sized.ceiling)
+
+    return test_model_analysis, test_model_ceiling

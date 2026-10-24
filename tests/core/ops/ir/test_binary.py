@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import pytest
 
-from tests.core.ops.ir.cost_utils import CostCase, run_cost_case
-from tests.core.ops.ir.typeinfer_utils import (
+from tests.core.ops.ir.op_case import (
+    Cost,
     ExpectedError,
-    TypeInferCase,
+    OpCase,
+    check_op_case,
     infer_call,
-    run_typeinfer_case,
+    op_case_test,
 )
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -35,8 +36,6 @@ _ADD = Binary(kind=BinaryKind.ADD)
 _MUL = Binary(kind=BinaryKind.MUL)
 _SUB = Binary(kind=BinaryKind.SUB)
 _F = DType.f32
-
-
 _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 _MAB = Mesh((Topology("gpu", 8),), Layout((2, 4), (4, 1)), ("a", "b"))
 _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
@@ -44,44 +43,6 @@ _PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
 _BCAST = make_tensor_type((16, 8), _F)
 _PSUM_AXIS0 = make_shard_tensor_type((16, 8), mesh=_MAB, attrs=(Partial("sum"), Broadcast()))
 _PSUM_AXIS1 = make_shard_tensor_type((16, 8), mesh=_MAB, attrs=(Broadcast(), Partial("sum")))
-
-CASES = [
-    TypeInferCase(
-        "different_rank_broadcast",
-        _ADD,
-        (make_tensor_type((4, 8), _F), make_tensor_type((8,), _F)),
-        make_tensor_type((4, 8), _F),
-    ),
-    TypeInferCase(
-        "empty_axis",
-        _ADD,
-        (make_tensor_type((1, 0, 8), _F), make_tensor_type((8,), _F)),
-        make_tensor_type((1, 0, 8), _F),
-    ),
-    TypeInferCase(
-        "conflicting_concrete_storage",
-        _ADD,
-        (
-            make_tensor_type((4, 8), _F, storage="gmem"),
-            make_tensor_type((4, 8), _F, storage="rmem"),
-        ),
-        ExpectedError(match="conflicting storage"),
-    ),
-    TypeInferCase(
-        "unmaterialized_abstains_from_storage",
-        _ADD,
-        (
-            make_tensor_type((4, 8), _F, storage=StorageKind.UMAT),
-            make_tensor_type((4, 8), _F, storage="rmem"),
-        ),
-        make_tensor_type((4, 8), _F, layout=Layout((4, 8), (8, 1)), storage="rmem"),
-    ),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_binary_typeinfer(case):
-    run_typeinfer_case(case)
 
 
 def test_broadcast_layout_fallback_does_not_weaken_shard_mismatch():
@@ -91,57 +52,13 @@ def test_broadcast_layout_fallback_does_not_weaken_shard_mismatch():
     rhs = make_tensor_type(wide, _F, layout=Layout(wide))
     assert infer_call(_MUL, lhs, rhs).layout == Layout(wide)
     assert infer_call(_MUL, lhs, make_tensor_type(wide, _F)).layout == Layout(wide)
-
     replicated = make_shard_tensor_type(narrow, mesh=_M, attrs=(Broadcast(),))
     replicated_out = infer_call(_MUL, replicated, rhs)
     assert replicated_out.layout.layout.shape == wide
-
     split_0 = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),))
     split_1 = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(1),))
     with pytest.raises(VerifyError, match="incompatible"):
         infer_call(_ADD, split_0, split_1)
-
-
-PARTIAL_CASES = [
-    TypeInferCase("add_partial_sum_partial_sum_passes", _ADD, (_PSUM, _PSUM), _PSUM),
-    TypeInferCase(
-        "add_partial_max_partial_max_errors",
-        _ADD,
-        (_PMAX, _PMAX),
-        ExpectedError(match="do not commute"),
-    ),
-    TypeInferCase(
-        "add_partial_sum_broadcast_errors",
-        _ADD,
-        (_PSUM, _BCAST),
-        ExpectedError(match="carries Partial"),
-    ),
-    TypeInferCase("add_partial_max_broadcast_passes", _ADD, (_PMAX, _BCAST), _PMAX),
-    TypeInferCase("mul_partial_sum_broadcast_passes", _MUL, (_PSUM, _BCAST), _PSUM),
-    TypeInferCase(
-        "mul_partial_max_broadcast_errors",
-        _MUL,
-        (_PMAX, _BCAST),
-        ExpectedError(match="carries Partial"),
-    ),
-    TypeInferCase(
-        "sub_partial_sum_broadcast_errors",
-        _SUB,
-        (_PSUM, _BCAST),
-        ExpectedError(match="carries Partial"),
-    ),
-    TypeInferCase(
-        "partial_sum_different_mesh_axes_errors",
-        _ADD,
-        (_PSUM_AXIS0, _PSUM_AXIS1),
-        ExpectedError(match="mesh axis 0"),
-    ),
-]
-
-
-@pytest.mark.parametrize("case", PARTIAL_CASES, ids=lambda c: c.name)
-def test_binary_partial_typeinfer(case):
-    run_typeinfer_case(case)
 
 
 def test_lower_rank_split_right_aligns():
@@ -172,21 +89,24 @@ _TRUTH = (BinaryKind.AND, BinaryKind.OR)
 _REAL = make_tensor_type((8,), DType.f32)
 _WHOLE = make_tensor_type((8,), DType.i32)
 _TRUTHY = make_tensor_type((8,), DType.bool)
-
 COST_CASES = [
-    CostCase(
+    OpCase(
         "lt_over_reals_is_a_predicate",
         Binary(kind=BinaryKind.LT),
         (_REAL, _REAL),
-        ops={"predicate": 8},
-        traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=1)),
+        cost=Cost(
+            ops={"predicate": 8},
+            traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=1)),
+        ),
     ),
-    CostCase(
+    OpCase(
         "add_over_reals_is_floating_point_work",
         _ADD,
         (_REAL, _REAL),
-        flops={DType.f32: 8},
-        traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=32)),
+        cost=Cost(
+            flops={DType.f32: 8},
+            traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=32)),
+        ),
     ),
 ]
 
@@ -200,5 +120,73 @@ def test_binary_charges_the_kind_of_work_it_asks_for(case):
     FLOP. Reading the work off the result dtype produced `bool` FLOPs, a rate no
     target publishes, so `performance` refused the program instead of timing it.
     """
-    run_cost_case(case)
-    assert DType.bool not in case.flops
+    check_op_case(case)
+    assert DType.bool not in case.cost.flops
+
+
+CASES = (
+    OpCase(
+        "different_rank_broadcast",
+        _ADD,
+        (make_tensor_type((4, 8), _F), make_tensor_type((8,), _F)),
+        type=make_tensor_type((4, 8), _F),
+    ),
+    OpCase(
+        "empty_axis",
+        _ADD,
+        (make_tensor_type((1, 0, 8), _F), make_tensor_type((8,), _F)),
+        type=make_tensor_type((1, 0, 8), _F),
+    ),
+    OpCase(
+        "conflicting_concrete_storage",
+        _ADD,
+        (
+            make_tensor_type((4, 8), _F, storage="gmem"),
+            make_tensor_type((4, 8), _F, storage="rmem"),
+        ),
+        error=ExpectedError(match="conflicting storage"),
+    ),
+    OpCase(
+        "unmaterialized_abstains_from_storage",
+        _ADD,
+        (
+            make_tensor_type((4, 8), _F, storage=StorageKind.UMAT),
+            make_tensor_type((4, 8), _F, storage="rmem"),
+        ),
+        type=make_tensor_type((4, 8), _F, layout=Layout((4, 8), (8, 1)), storage="rmem"),
+    ),
+    OpCase("add_partial_sum_partial_sum_passes", _ADD, (_PSUM, _PSUM), type=_PSUM),
+    OpCase(
+        "add_partial_max_partial_max_errors",
+        _ADD,
+        (_PMAX, _PMAX),
+        error=ExpectedError(match="do not commute"),
+    ),
+    OpCase(
+        "add_partial_sum_broadcast_errors",
+        _ADD,
+        (_PSUM, _BCAST),
+        error=ExpectedError(match="carries Partial"),
+    ),
+    OpCase("add_partial_max_broadcast_passes", _ADD, (_PMAX, _BCAST), type=_PMAX),
+    OpCase("mul_partial_sum_broadcast_passes", _MUL, (_PSUM, _BCAST), type=_PSUM),
+    OpCase(
+        "mul_partial_max_broadcast_errors",
+        _MUL,
+        (_PMAX, _BCAST),
+        error=ExpectedError(match="carries Partial"),
+    ),
+    OpCase(
+        "sub_partial_sum_broadcast_errors",
+        _SUB,
+        (_PSUM, _BCAST),
+        error=ExpectedError(match="carries Partial"),
+    ),
+    OpCase(
+        "partial_sum_different_mesh_axes_errors",
+        _ADD,
+        (_PSUM_AXIS0, _PSUM_AXIS1),
+        error=ExpectedError(match="mesh axis 0"),
+    ),
+)
+test_op_case = op_case_test(CASES)

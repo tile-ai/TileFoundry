@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from tests.core.models.decode_oracle import SEQ_LEN, causal_mask
@@ -11,24 +10,6 @@ from tests.nvidia.cuda.models.gemma2_2b import reference
 
 MODEL = "gemma2_2b"
 CASES = contract.model_cases(MODEL)
-
-ANALYSED = [
-    pytest.param(case, selected, id=selected.id) for case in CASES for selected in case.analyze
-]
-SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
-
-
-@pytest.mark.parametrize(("case", "selected"), ANALYSED)
-def test_every_selected_function_analyses(tf, shipped_source, case, selected) -> None:
-    contract.analysed_every_family(
-        tf, shipped_source(MODEL), case, selected.selector, selected.dims
-    )
-
-
-@pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_every_analysis_answers_at_the_largest_context(tf, shipped_source, case, sized) -> None:
-    """At the ceiling the case states, not at a sample of it."""
-    contract.analysed_every_family(tf, shipped_source(MODEL), case, sized.selector, sized.ceiling)
 
 
 def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, comparison_cache) -> None:
@@ -112,3 +93,6 @@ def test_the_attention_matches_hugging_face(tf, shipped_source, comparison_cache
         ),
         dims={"ctx_len": drawn.ctx_len},
     )
+
+
+test_model_analysis, test_model_ceiling = contract.analysis_tests(MODEL)

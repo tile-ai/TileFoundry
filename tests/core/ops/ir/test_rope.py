@@ -9,13 +9,7 @@ rotation because it is linear in q and k, ``max`` does not.
 
 from __future__ import annotations
 
-import pytest
-
-from tests.core.ops.ir.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    run_typeinfer_case,
-)
+from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.types import (
     DType,
@@ -43,26 +37,26 @@ def _rope_inputs(q_shape, k_shape, *, q=None, k=None, cos=None, sin=None, pos=No
     )
 
 
-CASES = [
-    TypeInferCase(
+CASES = (
+    OpCase(
         "odd_head_dim",
         RoPE(),
         _rope_inputs((1, 32, 127), (1, 4, 127)),
-        ExpectedError(match="head_dim 127 must be even"),
+        error=ExpectedError(match="head_dim 127 must be even"),
     ),
-    TypeInferCase(
+    OpCase(
         "mismatched_head_dims",
         RoPE(),
         _rope_inputs((1, 32, 128), (1, 4, 64)),
-        ExpectedError(match="!= k head_dim"),
+        error=ExpectedError(match="!= k head_dim"),
     ),
-    TypeInferCase(
+    OpCase(
         "mismatched_ranks",
         RoPE(),
         _rope_inputs((1, 32, 128), (32, 128)),
-        ExpectedError(match="q rank 3 != k rank 2"),
+        error=ExpectedError(match="q rank 3 != k rank 2"),
     ),
-    TypeInferCase(
+    OpCase(
         "partial_sum_q_passes",
         RoPE(),
         _rope_inputs(
@@ -70,14 +64,14 @@ CASES = [
             (1, 4, 128),
             q=make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
         ),
-        TupleType(
+        type=TupleType(
             fields=(
                 make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
                 make_tensor_type((1, 4, 128), _BF),
             )
         ),
     ),
-    TypeInferCase(
+    OpCase(
         "partial_max_q_errors",
         RoPE(),
         _rope_inputs(
@@ -85,11 +79,7 @@ CASES = [
             (1, 4, 128),
             q=make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("max"),), dtype=_BF),
         ),
-        ExpectedError(match="RoPE"),
+        error=ExpectedError(match="RoPE"),
     ),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_rope_typeinfer(case):
-    run_typeinfer_case(case)
+)
+test_op_case = op_case_test(CASES)

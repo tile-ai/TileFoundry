@@ -10,7 +10,7 @@ indexing layout positions with the tensor-axis permutation directly.
 
 from __future__ import annotations
 
-from tests.core.ops.ir.typeinfer_utils import (
+from tests.core.ops.ir.op_case import (
     infer_call,
     raw_shard_tensor_type,
 )

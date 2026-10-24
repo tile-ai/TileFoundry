@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import cases
-from tests.core.parser._parser_case import ParserCase, check_parser_case
+from tests.core.parser._parser_case import ParserCase, check_parser_case, unique_parser_cases
 from tests.nvidia.cuda.parser._parser_hooks import (
     _child_contexts,
     _composed_tree,
@@ -125,26 +125,17 @@ NAMED = (
         hooks=(_dispatch_tree,),
     ),
 )
-INSPECTION = tuple(
-    case
-    for case in cases(
-        FIXTURES / "inspection",
-        case_type=ParserCase,
-        expected={key: value for key, value in EXPECTED.items() if key.startswith("inspection/")},
-    )
-    if case.path.stem not in ("composed", "dispatching")
-)
 CASES = (
-    INSPECTION
-    + cases(
-        FIXTURES / "tir",
-        case_type=ParserCase,
-        expected={key: value for key, value in EXPECTED.items() if key.startswith("tir/")},
+    tuple(
+        case
+        for case in cases(
+            FIXTURES / "inspection", FIXTURES / "tir", case_type=ParserCase, expected=EXPECTED
+        )
+        if case.path.stem not in ("composed", "dispatching")
     )
     + NAMED
 )
-if len({case.id for case in CASES}) != len(CASES):
-    raise ValueError("duplicate NVIDIA parser case ids")
+CASES = unique_parser_cases(CASES)
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)

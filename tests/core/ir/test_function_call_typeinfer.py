@@ -12,7 +12,7 @@ from dataclasses import replace
 
 import pytest
 
-from tests.core.ops.ir.typeinfer_utils import infer_call
+from tests.core.ops.ir.op_case import infer_call
 from tilefoundry.ir.core import BindingMetadata, Call, Constant, Tuple, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind

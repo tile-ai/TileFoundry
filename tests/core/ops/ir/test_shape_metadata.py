@@ -8,7 +8,7 @@ import isl
 import pytest
 import torch
 
-from tests.core.ops.ir.cost_utils import CostCase, run_cost_case
+from tests.core.ops.ir.op_case import Cost, OpCase, check_op_case
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Var
@@ -27,21 +27,21 @@ _S = DimVar("runtime_shape", 1, 8)
 
 @func
 def _shape_metadata(x: Tensor[(_S, 4), "f32"]):
-    return tf.shape_of(x), tf.rank(x)
+    return (tf.shape_of(x), tf.rank(x))
 
 
 def _idle(arity: int) -> tuple[TrafficBytes, ...]:
-    return tuple(TrafficBytes() for _ in range(arity + 1))
+    return tuple((TrafficBytes() for _ in range(arity + 1)))
 
 
 COST_CASES = [
-    CostCase("rank", Rank(), (make_tensor_type((_S, 4)),), traffic=_idle(1)),
-    CostCase("shape_of", ShapeOf(), (make_tensor_type((_S, 4)),), traffic=_idle(1)),
-    CostCase(
+    OpCase("rank", Rank(), (make_tensor_type((_S, 4)),), cost=Cost(traffic=_idle(1))),
+    OpCase("shape_of", ShapeOf(), (make_tensor_type((_S, 4)),), cost=Cost(traffic=_idle(1))),
+    OpCase(
         "full_like",
         FullLike(value=0.0),
         (make_tensor_type((4, 8), DType.f32),),
-        traffic=(TrafficBytes(), TrafficBytes(write=4 * 8 * 4)),
+        cost=Cost(traffic=(TrafficBytes(), TrafficBytes(write=4 * 8 * 4))),
     ),
 ]
 
@@ -55,8 +55,8 @@ def test_shape_metadata_cost(case):
     reached nowhere; a metadata result is reached nowhere, and a filled one at
     every coordinate it has, once.
     """
-    run_cost_case(case)
-    args = tuple(Var(type=type_, name=f"x{i}") for i, type_ in enumerate(case.inputs))
+    check_op_case(case)
+    args = tuple((Var(type=type_, name=f"x{i}") for i, type_ in enumerate(case.inputs)))
     call = Call(type=case.inputs[0], target=case.op, args=args)
     call = replace(call, type=TypeInferVisitor().visit(call, TypeInferContext()))
     relations = operand_relations(case.op, tuple(case.inputs))
@@ -64,7 +64,7 @@ def test_shape_metadata_cost(case):
     for boundary, value in zip(relations, values, strict=True):
         assert boundary.relation.dim(isl.dim_type.OUT) == len(value.shape)
     *inputs, written = (boundary.relation for boundary in relations)
-    assert all(relation.is_empty() for relation in inputs)
+    assert all((relation.is_empty() for relation in inputs))
     if isinstance(case.op, FullLike):
         assert written.is_equal(shape_to_isl_set(tuple(call.type.shape), {}).identity())
     else:
@@ -73,14 +73,13 @@ def test_shape_metadata_cost(case):
 
 def test_shape_metadata_uses_runtime_shape_and_host_types() -> None:
     actual_shape, actual_rank = evaluate(_shape_metadata, torch.zeros(3, 4))
-
     torch.testing.assert_close(actual_shape, torch.tensor([3, 4], dtype=torch.int64))
     torch.testing.assert_close(actual_rank, torch.tensor(2, dtype=torch.int64))
     calls = [expr for expr in collect_exprs(_shape_metadata.body) if isinstance(expr, Call)]
     metadata_calls = [call for call in calls if isinstance(call.target, (Rank, ShapeOf))]
     assert metadata_calls
-    assert all(call.type.storage is StorageKind.UMAT for call in metadata_calls)
-    assert all(call.type.layout == Layout(call.type.shape) for call in metadata_calls)
+    assert all((call.type.storage is StorageKind.UMAT for call in metadata_calls))
+    assert all((call.type.layout == Layout(call.type.shape) for call in metadata_calls))
 
 
 @func

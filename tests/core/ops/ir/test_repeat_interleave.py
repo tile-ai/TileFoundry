@@ -7,13 +7,7 @@ rather than normalized.
 
 from __future__ import annotations
 
-import pytest
-
-from tests.core.ops.ir.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    run_typeinfer_case,
-)
+from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
 from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
 from tilefoundry.ir.types import (
     DType,
@@ -27,23 +21,18 @@ from tilefoundry.ir.types.shard_layout import Split
 
 _F = DType.f32
 _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
-
-CASES = [
-    TypeInferCase(
+CASES = (
+    OpCase(
         "sharded_fails_closed",
         RepeatInterleave(repeats=2, axis=1),
         (make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(0),)),),
-        ExpectedError(match="cannot express a sharded layout"),
+        error=ExpectedError(match="cannot express a sharded layout"),
     ),
-    TypeInferCase(
+    OpCase(
         "axis_out_of_range",
         RepeatInterleave(repeats=2, axis=5),
         (make_tensor_type((4,), _F),),
-        ExpectedError(match="out of range"),
+        error=ExpectedError(match="out of range"),
     ),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_repeat_interleave_typeinfer(case):
-    run_typeinfer_case(case)
+)
+test_op_case = op_case_test(CASES)

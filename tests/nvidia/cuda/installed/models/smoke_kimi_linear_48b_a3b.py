@@ -17,24 +17,6 @@ MODEL = "kimi_linear_48b_a3b"
 CONFIG = reference.CONFIG
 CASES = contract.model_cases(MODEL)
 
-ANALYSED = [
-    pytest.param(case, selected, id=selected.id) for case in CASES for selected in case.analyze
-]
-SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
-
-
-@pytest.mark.parametrize(("case", "selected"), ANALYSED)
-def test_every_selected_function_analyses(tf, shipped_source, case, selected) -> None:
-    contract.analysed_every_family(
-        tf, shipped_source(MODEL), case, selected.selector, selected.dims
-    )
-
-
-@pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_every_analysis_answers_at_the_largest_context(tf, shipped_source, case, sized) -> None:
-    """At the ceiling the case states, not at a sample of it."""
-    contract.analysed_every_family(tf, shipped_source(MODEL), case, sized.selector, sized.ceiling)
-
 
 CTX_LENGTHS = (24, 40)
 
@@ -186,3 +168,6 @@ def test_moe_matches_hugging_face(tf, shipped_source, comparison_cache) -> None:
     unshared = list(step.args)
     unshared[8] = torch.zeros_like(step.args[8])
     _moe(tf, comparison_cache, source, step, want, args=unshared, refuse=True)
+
+
+test_model_analysis, test_model_ceiling = contract.analysis_tests(MODEL)

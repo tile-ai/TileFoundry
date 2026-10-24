@@ -16,12 +16,12 @@ import pytest
 import torch
 
 from tests.core._source import import_dsl
-from tests.core.ops.ir.typeinfer_utils import (
+from tests.core.ops.ir.op_case import (
     ExpectedError,
-    TypeInferCase,
+    OpCase,
     infer_call,
+    op_case_test,
     raw_shard_tensor_type,
-    run_typeinfer_case,
 )
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
@@ -38,45 +38,6 @@ from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _F32 = DType.f32
 _I64 = DType.i64
-
-
-CASES = [
-    TypeInferCase(
-        "oversized_k_rejected",
-        TopK(k=300, axis=-1),
-        (make_tensor_type((4, 256), _F32),),
-        ExpectedError(match="exceeds axis"),
-    ),
-    TypeInferCase(
-        "split_on_selected_axis_rejected",
-        TopK(k=2, axis=-1),
-        (
-            make_shard_tensor_type(
-                (4, 256),
-                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-                attrs=(Split(1),),
-            ),
-        ),
-        ExpectedError(match="must not be Split-sharded"),
-    ),
-    TypeInferCase(
-        "partial_input_rejected",
-        TopK(k=2, axis=-1),
-        (
-            make_shard_tensor_type(
-                (4, 256),
-                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-                attrs=(Partial("max"),),
-            ),
-        ),
-        ExpectedError(match="x carries Partial"),
-    ),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_topk_typeinfer(case):
-    run_typeinfer_case(case)
 
 
 def _run_topk(x: torch.Tensor, **attrs):
@@ -100,9 +61,7 @@ def test_topk_unsorted_selects_same_set():
     x = torch.randn(4, 256)
     vals, idx = _run_topk(x, k=6, axis=-1, largest=True, sorted=False)
     ref_v, _ = torch.topk(x, 6, dim=-1, largest=True, sorted=True)
-
     torch.testing.assert_close(vals, x.gather(-1, idx.long()))
-
     got_sorted, _ = torch.sort(vals, dim=-1, descending=True)
     torch.testing.assert_close(got_sorted, ref_v)
     for r in range(x.shape[0]):
@@ -123,7 +82,7 @@ def test_topk_output_layout_shrinks_selected_axis_preserving_split():
     assert values_ty.shape == (4, 6) and indices_ty.shape == (4, 6)
     for t in (values_ty, indices_ty):
         assert isinstance(t.layout, ShardLayout), "sharded input must stay sharded"
-        assert any(isinstance(a, Split) and a.axis == 0 for a in t.layout.attrs), (
+        assert any((isinstance(a, Split) and a.axis == 0 for a in t.layout.attrs)), (
             "non-selected Split(0) must survive TopK"
         )
         assert math.prod(t.layout.layout.shape) == math.prod(t.shape), (
@@ -133,9 +92,7 @@ def test_topk_output_layout_shrinks_selected_axis_preserving_split():
 
 def test_plain_topk_layout_describes_the_selected_result():
     source = make_tensor_type((4, 256), _F32, layout=Layout(shape=(4, 256), strides=(256, 1)))
-
     values, indices = infer_call(TopK(k=6, axis=-1), source).fields
-
     assert values.layout == Layout(shape=(4, 6), strides=(6, 1))
     assert indices.layout == values.layout
 
@@ -163,24 +120,13 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
     assert values_ty.shape == (6, s) and indices_ty.shape == (6, s)
     for t in (values_ty, indices_ty):
         assert isinstance(t.layout, ShardLayout)
-        assert all(isinstance(a, Broadcast) for a in t.layout.attrs), "replication preserved"
+        assert all((isinstance(a, Broadcast) for a in t.layout.attrs)), "replication preserved"
         assert t.layout.layout.shape == (6, s), t.layout.layout.shape
         assert t.layout.layout.strides == (s, 1), "symbolic row-major strides, never None"
 
 
 def test_topk_parser_preserves_largest_sorted():
-    src = (
-        (
-            'from tilefoundry.dsl import *\n'
-            '\n'
-            '\n'
-            '\n'
-            '@func\n'
-            'def f(x: Tensor[(4, 256), "f32"]):\n'
-            '    v = tf.topk(x, k=6, axis=-1, largest=False, sorted=True)\n'
-            '    return v\n'
-        )
-    )
+    src = 'from tilefoundry.dsl import *\n\n\n\n@func\ndef f(x: Tensor[(4, 256), "f32"]):\n    v = tf.topk(x, k=6, axis=-1, largest=False, sorted=True)\n    return v\n'
     topk = import_dsl(src).body.target
     assert isinstance(topk, TopK)
     assert topk.k == 6 and topk.axis == -1
@@ -188,8 +134,6 @@ def test_topk_parser_preserves_largest_sorted():
 
 
 POS = DimVar("POS", 1, 8192)
-
-
 K = dim_min(512, POS // 4)
 
 
@@ -206,36 +150,10 @@ def _build_topk_fn(x_shape, k, *, axis: int = -1) -> tuple[Function, "TupleType"
     result_type = TypeInferVisitor().visit(call, TypeInferContext())
     call = replace(call, type=result_type)
     fn = Function.build(name="topk_dyn_k", params=(x,), body=call, return_type=result_type)
-    return fn, result_type
+    return (fn, result_type)
 
 
 _BIG_K = DimVar("topk_dyn_big_k", 1, 1999)
-
-DYNAMIC_K_TYPEINFER_CASES = [
-    TypeInferCase(
-        "dynamic_k_from_ctx_len_propagates_as_symbolic_output_axis",
-        TopK(k=K, axis=-1),
-        (make_tensor_type((4, POS), _F32),),
-        TupleType(fields=(make_tensor_type((4, K), _F32), make_tensor_type((4, K), _I64))),
-    ),
-    TypeInferCase(
-        "symbolic_k_hi_bound_exceeds_static_axis_rejected",
-        TopK(k=_BIG_K, axis=-1),
-        (make_tensor_type((4, 100), _F32),),
-        ExpectedError(match="upper bound"),
-    ),
-    TypeInferCase(
-        "invalid_k_type_rejected",
-        TopK(k="oops", axis=-1),
-        (make_tensor_type((4, 256), _F32),),
-        ExpectedError(match="DimVar, or dim expression"),
-    ),
-]
-
-
-@pytest.mark.parametrize("case", DYNAMIC_K_TYPEINFER_CASES, ids=lambda c: c.name)
-def test_topk_dynamic_k_typeinfer(case):
-    run_typeinfer_case(case)
 
 
 def test_topk_dynamic_k_evaluates_at_two_ctx_bindings():
@@ -247,7 +165,6 @@ def test_topk_dynamic_k_evaluates_at_two_ctx_bindings():
     DimVar-shaped kv cache).
     """
     fn, _ = _build_topk_fn((4, POS), K)
-
     torch.manual_seed(0)
     for pos, expected_k in ((100, 25), (4096, 512)):
         scores = torch.randn(4, pos)
@@ -275,43 +192,29 @@ def test_topk_dynamic_k_downstream_index_select_shape_consistent(table_layout):
     """
     scores = Var(type=make_tensor_type((1, POS), _F32), name="scores")
     table = Var(type=make_tensor_type((POS, _D), _F32, layout=table_layout), name="table")
-
     topk_call = Call(type=scores.type, target=TopK(k=K, axis=-1), args=(scores,))
     topk_ty = TypeInferVisitor().visit(topk_call, TypeInferContext())
     topk_call = replace(topk_call, type=topk_ty)
-
     index = Constant(type=TensorType.umat_scalar(), value=1)
     idx_call = Call(type=topk_ty.fields[1], target=TupleGetItem(), args=(topk_call, index))
     idx_ty = TypeInferVisitor().visit(idx_call, TypeInferContext())
     idx_call = replace(idx_call, type=idx_ty)
-
     flat_index = Call(type=idx_ty, target=Reshape(new_shape=(K,)), args=(idx_call,))
     flat_index_ty = TypeInferVisitor().visit(flat_index, TypeInferContext())
     flat_index = replace(flat_index, type=flat_index_ty)
-
     selected = Call(type=idx_ty, target=IndexSelect(dim=0), args=(table, flat_index))
     selected_ty = TypeInferVisitor().visit(selected, TypeInferContext())
     assert selected_ty.shape == (K, _D)
     if table_layout is not None:
         assert selected_ty.layout == Layout((K, _D), (_D, 1))
     selected = replace(selected, type=selected_ty)
-
-    output = Call(
-        type=selected_ty,
-        target=Reshape(new_shape=(1, K, _D)),
-        args=(selected,),
-    )
+    output = Call(type=selected_ty, target=Reshape(new_shape=(1, K, _D)), args=(selected,))
     output_ty = TypeInferVisitor().visit(output, TypeInferContext())
     assert output_ty.shape == (1, K, _D)
     output = replace(output, type=output_ty)
-
     fn = Function.build(
-        name="topk_dyn_k_index_select",
-        params=(scores, table),
-        body=output,
-        return_type=output_ty,
+        name="topk_dyn_k_index_select", params=(scores, table), body=output, return_type=output_ty
     )
-
     torch.manual_seed(0)
     for pos, expected_k in ((100, 25), (4096, 512)):
         scores_data = torch.randn(1, pos)
@@ -321,3 +224,56 @@ def test_topk_dynamic_k_downstream_index_select_shape_consistent(table_layout):
         _, ref_idx = torch.topk(scores_data, expected_k, dim=-1, largest=True, sorted=True)
         ref_out = table_data.index_select(0, ref_idx.reshape(-1)).reshape(1, expected_k, _D)
         torch.testing.assert_close(out, ref_out)
+
+
+CASES = (
+    OpCase(
+        "oversized_k_rejected",
+        TopK(k=300, axis=-1),
+        (make_tensor_type((4, 256), _F32),),
+        error=ExpectedError(match="exceeds axis"),
+    ),
+    OpCase(
+        "split_on_selected_axis_rejected",
+        TopK(k=2, axis=-1),
+        (
+            make_shard_tensor_type(
+                (4, 256),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Split(1),),
+            ),
+        ),
+        error=ExpectedError(match="must not be Split-sharded"),
+    ),
+    OpCase(
+        "partial_input_rejected",
+        TopK(k=2, axis=-1),
+        (
+            make_shard_tensor_type(
+                (4, 256),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Partial("max"),),
+            ),
+        ),
+        error=ExpectedError(match="x carries Partial"),
+    ),
+    OpCase(
+        "dynamic_k_from_ctx_len_propagates_as_symbolic_output_axis",
+        TopK(k=K, axis=-1),
+        (make_tensor_type((4, POS), _F32),),
+        type=TupleType(fields=(make_tensor_type((4, K), _F32), make_tensor_type((4, K), _I64))),
+    ),
+    OpCase(
+        "symbolic_k_hi_bound_exceeds_static_axis_rejected",
+        TopK(k=_BIG_K, axis=-1),
+        (make_tensor_type((4, 100), _F32),),
+        error=ExpectedError(match="upper bound"),
+    ),
+    OpCase(
+        "invalid_k_type_rejected",
+        TopK(k="oops", axis=-1),
+        (make_tensor_type((4, 256), _F32),),
+        error=ExpectedError(match="DimVar, or dim expression"),
+    ),
+)
+test_op_case = op_case_test(CASES)

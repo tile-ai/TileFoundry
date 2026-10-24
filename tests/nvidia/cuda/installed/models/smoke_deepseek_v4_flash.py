@@ -18,24 +18,6 @@ from tests.nvidia.cuda.models.deepseek_v4_flash import reference
 MODEL = "deepseek_v4_flash"
 CASES = contract.model_cases(MODEL)
 
-ANALYSED = [
-    pytest.param(case, selected, id=selected.id) for case in CASES for selected in case.analyze
-]
-SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
-
-
-@pytest.mark.parametrize(("case", "selected"), ANALYSED)
-def test_every_selected_function_analyses(tf, shipped_source, case, selected) -> None:
-    contract.analysed_every_family(
-        tf, shipped_source(MODEL), case, selected.selector, selected.dims
-    )
-
-
-@pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_every_analysis_answers_at_the_largest_context(tf, shipped_source, case, sized) -> None:
-    """At the ceiling the case states, not at a sample of it."""
-    contract.analysed_every_family(tf, shipped_source(MODEL), case, sized.selector, sized.ceiling)
-
 
 ATOL = RTOL = 2e-3
 
@@ -184,3 +166,6 @@ def test_the_step_returns_the_cache_entry_to_append(tf, shipped_source, comparis
         step,
         out_held=("allclose", {"atol": _bf16_ulps(want), "rtol": 0.0}),
     )
+
+
+test_model_analysis, test_model_ceiling = contract.analysis_tests(MODEL)

@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
-from tests.core.ops.ir.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    run_typeinfer_case,
-)
+from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
 from tilefoundry.ir.hir.nn.relu import ReLU
 from tilefoundry.ir.types import Layout, Mesh, Topology, make_shard_tensor_type
 from tilefoundry.ir.types.shard_layout import Partial
@@ -17,13 +11,8 @@ _OP = ReLU()
 _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 _PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
-
-CASES = [
-    TypeInferCase("partial_max_passes", _OP, (_PMAX,), _PMAX),
-    TypeInferCase("partial_sum_errors", _OP, (_PSUM,), ExpectedError(match="ReLU")),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_relu_typeinfer(case):
-    run_typeinfer_case(case)
+CASES = (
+    OpCase("partial_max_passes", _OP, (_PMAX,), type=_PMAX),
+    OpCase("partial_sum_errors", _OP, (_PSUM,), error=ExpectedError(match="ReLU")),
+)
+test_op_case = op_case_test(CASES)

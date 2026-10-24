@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 from functools import partial
-from pathlib import Path
 
-import pytest
-
-from tests.core.schedule._fixtures import CliCase, check_cli_case, check_facts
+from tests.core.schedule._fixtures import CliCase, check_facts, cli_case_test
 
 _TARGET_NEUTRAL_FACTS = """\
 target {target}
@@ -33,8 +30,4 @@ FIXTURES = (
 )
 
 
-@pytest.mark.parametrize("case", FIXTURES, ids=lambda case: case.name)
-def test_cli_case(
-    case: CliCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    check_cli_case(case, tmp_path, capsys)
+test_cli_case = cli_case_test(FIXTURES)

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
+from tests.core.ops.ir.op_case import OpCase, op_case_test
 from tests.core.ops.ir.test_reshard import (
     _MESH_DYN,
     _MESH_H2L,
@@ -12,59 +11,52 @@ from tests.core.ops.ir.test_reshard import (
     _SL_H2L,
     _materialized,
 )
-from tests.core.ops.ir.typeinfer_utils import (
-    TypeInferCase,
-    run_typeinfer_case,
-)
 from tilefoundry.dsl.storage import rmem
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import ShardLayout, make_tensor_type
 from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry_nvidia import CudaTarget
 
-CASES = [
-    TypeInferCase(
-            "high_to_low_sugar_materializes_per_instance",
-            Reshard(
-                layout=ShardLayout.from_modes(
-                    _SL_H2L.shape,
-                    _SL_H2L.mesh,
-                    _SL_H2L.attrs,
-                    storage=rmem,
-                    owners=CudaTarget("nvidia.h200_sxm").storage_owners,
-                ),
+CASES = (
+    OpCase(
+        "high_to_low_sugar_materializes_per_instance",
+        Reshard(
+            layout=ShardLayout.from_modes(
+                _SL_H2L.shape,
+                _SL_H2L.mesh,
+                _SL_H2L.attrs,
                 storage=rmem,
+                owners=CudaTarget("nvidia.h200_sxm").storage_owners,
             ),
-            (make_tensor_type((2, 4, 128)),),
-            make_tensor_type(
-                (2, 4, 128),
-                storage=rmem,
-                layout=_materialized((2, 4, 128), (128, 0, 1), (Split(1),), _MESH_H2L),
-            ),
-            target=CudaTarget("nvidia.h200_sxm"),
+            storage=rmem,
         ),
-    TypeInferCase(
-            "high_to_low_dynamic_bare_axis_materializes_per_instance",
-            Reshard(
-                layout=ShardLayout.from_modes(
-                    _SL_DYN_BARE.shape,
-                    _SL_DYN_BARE.mesh,
-                    _SL_DYN_BARE.attrs,
-                    storage=rmem,
-                    owners=CudaTarget("nvidia.h200_sxm").storage_owners,
-                ),
-                storage=rmem,
-            ),
-            (make_tensor_type((1, _S_DYN, 32, 128)),),
-            make_tensor_type(
-                (1, _S_DYN, 32, 128),
-                storage=rmem,
-                layout=_materialized((1, _S_DYN, 32, 128), (0, 4 * 128, 0, 1), (Split(2),), _MESH_DYN),
-            ),
-            target=CudaTarget("nvidia.h200_sxm"),
+        (make_tensor_type((2, 4, 128)),),
+        type=make_tensor_type(
+            (2, 4, 128),
+            storage=rmem,
+            layout=_materialized((2, 4, 128), (128, 0, 1), (Split(1),), _MESH_H2L),
         ),
-]
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_reshard_typeinfer(case):
-    run_typeinfer_case(case)
+        target=CudaTarget("nvidia.h200_sxm"),
+    ),
+    OpCase(
+        "high_to_low_dynamic_bare_axis_materializes_per_instance",
+        Reshard(
+            layout=ShardLayout.from_modes(
+                _SL_DYN_BARE.shape,
+                _SL_DYN_BARE.mesh,
+                _SL_DYN_BARE.attrs,
+                storage=rmem,
+                owners=CudaTarget("nvidia.h200_sxm").storage_owners,
+            ),
+            storage=rmem,
+        ),
+        (make_tensor_type((1, _S_DYN, 32, 128)),),
+        type=make_tensor_type(
+            (1, _S_DYN, 32, 128),
+            storage=rmem,
+            layout=_materialized((1, _S_DYN, 32, 128), (0, 4 * 128, 0, 1), (Split(2),), _MESH_DYN),
+        ),
+        target=CudaTarget("nvidia.h200_sxm"),
+    ),
+)
+test_op_case = op_case_test(CASES)

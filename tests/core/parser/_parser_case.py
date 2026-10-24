@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.core._corpus import Case, Problems
+from tests.core._corpus import Case, Problems, import_program
 from tests.core._source import import_dsl
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, SourceSpanMetadata, get_metadata
@@ -31,10 +30,7 @@ class ParserCase(Case):
         return super().id + (f".{self.name}" if self.name else "")
 
     def load(self) -> Module | Function | PrimFunction:
-        spec = importlib.util.spec_from_file_location(self.path.stem, self.path)
-        assert spec is not None and spec.loader is not None
-        loaded = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(loaded)
+        loaded = import_program(self.path)
         if self.name is not None:
             return getattr(loaded, self.name)
         return next(
@@ -115,3 +111,13 @@ def check_parser_case(case: ParserCase) -> None:
     for hook in case.hooks:
         problems.run(hook.__name__, hook, state, problems)
     problems.dump()
+
+
+def unique_parser_cases(cases):
+    """Refuse colliding ids after directory cases and named bindings are combined."""
+    found = set()
+    for case in cases:
+        if case.id in found:
+            raise ValueError(f"duplicate parser case id: {case.id}")
+        found.add(case.id)
+    return cases

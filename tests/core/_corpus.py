@@ -33,12 +33,18 @@ class Case:
         return load_program(self.path)
 
 
-def load_program(path: Path) -> Module | PrimFunction:
-    """Import the first IR binding without retaining a cross-test module cache."""
+def import_program(path: Path):
+    """Execute a fixture file and return its Python namespace module."""
     spec = importlib.util.spec_from_file_location(path.stem, path)
     assert spec is not None and spec.loader is not None
     loaded = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(loaded)
+    return loaded
+
+
+def load_program(path: Path) -> Module | PrimFunction:
+    """Import the first IR binding without retaining a cross-test module cache."""
+    loaded = import_program(path)
     return next(
         value for value in vars(loaded).values() if isinstance(value, (Module, PrimFunction))
     )

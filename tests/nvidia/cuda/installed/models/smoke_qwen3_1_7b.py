@@ -20,27 +20,11 @@ from tilefoundry_nvidia.cuda.models.qwen3_1_7b.model import published
 MODEL = "qwen3_1_7b"
 CASES = contract.model_cases(MODEL)
 
-ANALYSED = [
-    pytest.param(case, selected, id=selected.id) for case in CASES for selected in case.analyze
-]
 JSON_CASES = [pytest.param(case, case.analyze[0], id=case.id) for case in CASES]
 SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
 
 
 ZERO_SIZED = frozenset(("k_cache", "v_cache"))
-
-
-@pytest.mark.parametrize(("case", "selected"), ANALYSED)
-def test_every_selected_function_analyses(tf, shipped_source, case, selected) -> None:
-    contract.analysed_every_family(
-        tf, shipped_source(MODEL), case, selected.selector, selected.dims
-    )
-
-
-@pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_every_analysis_answers_at_the_largest_context(tf, shipped_source, case, sized) -> None:
-    """At the ceiling the case states, not at a sample of it."""
-    contract.analysed_every_family(tf, shipped_source(MODEL), case, sized.selector, sized.ceiling)
 
 
 @pytest.mark.parametrize(("case", "sized"), SIZED)
@@ -312,3 +296,6 @@ def test_a_decode_step_is_bound_by_memory(tf, shipped_source) -> None:
         f"{data["functions"][0]['totals']['flops']['f32']} flops"
     )
     assert bound["ideal_ns"] > 0
+
+
+test_model_analysis, test_model_ceiling = contract.analysis_tests(MODEL)
