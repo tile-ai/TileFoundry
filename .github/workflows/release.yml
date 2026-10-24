@@ -36,14 +36,22 @@ jobs:
           .venv/bin/python -m pip install --upgrade build twine
       - name: Build tag distributions
         if: github.event_name == 'push'
-        run: .venv/bin/python -m build
+        run: |
+          .venv/bin/python -m build --outdir dist/core .
+          for project in targets/*/; do
+            .venv/bin/python -m build --outdir "dist/$(basename "$project")" "$project"
+          done
       - name: Build TestPyPI distributions
         if: github.event_name == 'workflow_dispatch'
         env:
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.testpypi-version }}
-        run: .venv/bin/python -m build
+        run: |
+          .venv/bin/python -m build --outdir dist/core .
+          for project in targets/*/; do
+            .venv/bin/python -m build --outdir "dist/$(basename "$project")" "$project"
+          done
       - name: Check distribution metadata
-        run: .venv/bin/twine check dist/*
+        run: .venv/bin/twine check dist/*/*
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:
@@ -51,8 +59,39 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  publish:
+  publish-targets:
     needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - {dist: nvidia, project: tilefoundry-nvidia, pypi: pypi-nvidia, testpypi: testpypi-nvidia}
+          - {dist: apple, project: tilefoundry-apple, pypi: pypi-apple, testpypi: testpypi-apple}
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && matrix.testpypi || matrix.pypi }}
+      url: ${{ format('https://{0}pypi.org/project/{1}/', github.event_name == 'workflow_dispatch' && 'test.' || '', matrix.project) }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist
+      - name: Publish distributions to TestPyPI
+        if: github.event_name == 'workflow_dispatch'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/${{ matrix.dist }}/
+          repository-url: https://test.pypi.org/legacy/
+      - name: Publish distributions to PyPI
+        if: github.event_name == 'push'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/${{ matrix.dist }}/
+
+  publish-core:
+    needs: [build, publish-targets]
     runs-on: ubuntu-latest
     environment:
       name: ${{ github.event_name == 'workflow_dispatch' && 'testpypi' || 'pypi' }}
@@ -69,10 +108,10 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dist/
+          packages-dir: dist/core/
           repository-url: https://test.pypi.org/legacy/
       - name: Publish distributions to PyPI
         if: github.event_name == 'push'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dist/
+          packages-dir: dist/core/
