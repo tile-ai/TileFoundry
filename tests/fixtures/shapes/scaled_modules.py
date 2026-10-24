@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 EVALUATOR_N = DimVar("N_eval", 1, 7)
 RESOURCE_N = DimVar("n_resource", 1, 8)

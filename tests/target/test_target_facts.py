@@ -15,8 +15,8 @@ from tilefoundry.analysis.facts import (
 from tilefoundry.ir.types import DType, Topology
 from tilefoundry.target import Target, TopologyFacts, TopologyLevelFacts, UnsupportedCapabilityError
 from tilefoundry.target.facts import TargetFactsError, facts_result
-from tilefoundry_amx import AmxTarget
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_apple import AmxTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 def test_builtin_targets_own_their_facts_projections() -> None:

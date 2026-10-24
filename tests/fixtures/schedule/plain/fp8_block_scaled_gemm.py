@@ -9,7 +9,7 @@ weight, so its K windows are K-contiguous. The block offsets ``kb * BLOCK`` are
 scalar index arithmetic, which costs nothing.
 """
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 128
 N = 128

@@ -34,7 +34,7 @@ from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 from tilefoundry.visitor_registry.visitors import CostEvaluator
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 def _ref(cache, cur_pos, s, new):

@@ -7,7 +7,7 @@ uses that decision at the producer, before entering the capturing scope.
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, T, Tensor, Topology, tf
 from tilefoundry.ir.types import Layout
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(

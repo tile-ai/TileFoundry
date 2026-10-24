@@ -15,7 +15,7 @@ import tilefoundry
 from tilefoundry.dsl import *
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.target import CpuTarget
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _TILE = 12
 _NT = DimVar("Ntile", 1, 63)

@@ -178,14 +178,16 @@ def load_targets() -> Mapping[str, type[Target]]: ...
 
 - constraints:
   - `load_targets()` MUST load the `tilefoundry.targets` entry points in name
-    order. Each entry point MUST name its plugin package; importing that package
-    MUST complete its target, operation, visitor, evaluator and pass registrations.
+    order. Each entry point `<name>` MUST name the subpackage
+    `tilefoundry_<vendor>.<name>`; importing that subpackage MUST complete its
+    target, operation, visitor, evaluator and pass registrations.
   - A load failure MUST raise `TargetLoadError` naming the entry point and cause.
     A failed load MUST NOT mark loading complete; a later call MAY retry it.
     A successful call MUST make later calls no-ops.
   - Core MUST NOT import or re-export plugin implementations. CPU MUST remain
-    available from `tilefoundry.target`; another backend MUST export its target
-    values from `tilefoundry_<name>`.
+    available from `tilefoundry.target`; another backend MUST be a subpackage
+    `tilefoundry_<vendor>.<name>` and MUST export its target values from
+    `tilefoundry_<vendor>`.
   - Importing `tilefoundry` MUST call `load_targets()` once at the end of core
     initialization. CLI, DSL lookup, stub generation and spec discovery MUST
     use the registrations established by that import, without loading again.

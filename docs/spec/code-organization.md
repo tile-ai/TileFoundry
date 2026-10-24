@@ -27,7 +27,7 @@ truth for the directory's structure and invariants.
 | `ir/isl_interop.py` | [types §11](./types.md#11-isl-interoperability) | Interoperation between dimension and shape IR values and isl: expression rendering and decoding, normalization, value ranges, and shape-domain construction. Pure isl operations remain in `utils/isl_utils.py`. |
 | `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per multi-operation category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`), with the standalone scheduling carrier in `schedule.py`. One real Op per `.py` ([§2](#2-file-naming-and-content-rules) rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` ([§2](#2-file-naming-and-content-rules) rule 5). |
 | `schedule/` | [schedule](./schedule.md) | Schedule finalization, instruction facts, and candidate discovery over HIR. |
-| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the general TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes live in `targets/<target>/tilefoundry_<target>/ir/tir/<category>/` per [§2](#2-file-naming-and-content-rules) Rule 1c. |
+| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the general TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes live in `targets/<vendor>/tilefoundry_<vendor>/<target>/ir/tir/<category>/` per [§2](#2-file-naming-and-content-rules) Rule 1c. |
 | `parser/` | [parser](./parser.md) | DSL → IR parsing: `base.py` (shared visitor base + dispatch), `hir_parser.py` (`@func` body), `tir_parser.py` (`@prim_func` body), layout sugar / range-slice / dispatch modules. **Not under `ir/`** — the parser is a producer of IR, not an IR sublayer. |
 | `analysis/` | [analysis](./analysis.md) | Fact layer over typed HIR: one module per analysis family. The compact public surface lives in `analysis/__init__.py`; per-target Facts projections live with their owning Target. |
 | `passes/` | [passes](./passes.md) | Pass framework (`pass_base.py` / `pass_manager.py`) plus concrete transforms (`transforms/<pass_name>.py`, [§2](#2-file-naming-and-content-rules) rule 6). |
@@ -146,7 +146,7 @@ Rule 1: "one Op = one file" means **one IR class** per file; aliases
 are not IR classes, so they go through Rule 1a.
 
 **Rule 1c — target-specific code lives in a plugin package.** A backend lives
-under `targets/<name>/tilefoundry_<name>/`.
+under `targets/<vendor>/tilefoundry_<vendor>/<name>/`.
 Its internal paths preserve the core categories: `target/`, `ir/hir/`,
 `ir/tir/`, `codegen/`, `passes/` and `visitor_registry/`. Target-owned IR
 nodes nest as `ir/{dialect}/{category}/<name>.py` within that package;

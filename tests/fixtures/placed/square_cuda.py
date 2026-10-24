@@ -1,7 +1,7 @@
 """A CTA-sharded elementwise square for a CUDA target."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 168),))

@@ -1,6 +1,6 @@
 """``ops::copy`` across the storage boundaries and both vector widths, one kernel.
 
-See [runtime §2.6](targets/cuda/tilefoundry_cuda/docs/spec/runtime.md#26-cudaops).
+See [runtime §2.6](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#26-cudaops).
 """
 
 from __future__ import annotations
@@ -9,11 +9,11 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
+import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
 from tests.fixtures.tir.layouts import split_pairs, split_rows, split_short_rows
 from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 

@@ -35,8 +35,8 @@ Repository = "https://github.com/tile-ai/TileFoundry"
 tilefoundry = "tilefoundry.cli:main"
 
 [project.entry-points."tilefoundry.targets"]
-cuda = "tilefoundry_cuda"
-amx = "tilefoundry_amx"
+cuda = "tilefoundry_nvidia.cuda"
+amx = "tilefoundry_apple.amx"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-xdist>=3", "pytest-cov>=7"]
@@ -60,19 +60,19 @@ skip_empty = true
 [tool.setuptools_scm]
 
 [tool.setuptools.packages.find]
-where = ["src", "targets/cuda", "targets/amx"]
+where = ["src", "targets/nvidia", "targets/apple"]
 include = ["tilefoundry", "tilefoundry.*", "tilefoundry_*"]
 
 [tool.setuptools.package-data]
 "tilefoundry.runtime" = ["include/tilefoundry/runtime/cpu/*.h"]
-"tilefoundry_cuda.codegen" = ["include/tilefoundry/runtime/cuda/**/*"]
-"tilefoundry_cuda" = ["docs/spec/*.md"]
+"tilefoundry_nvidia.cuda.codegen" = ["include/tilefoundry/runtime/cuda/**/*"]
+"tilefoundry_nvidia.cuda" = ["docs/spec/*.md"]
 "tilefoundry.codegen" = ["templates/cmake/*.j2"]
-"tilefoundry_cuda.codegen.templates" = ["*.j2"]
+"tilefoundry_nvidia.cuda.codegen.templates" = ["*.j2"]
 "tilefoundry.codegen.cpu.templates" = ["*.j2"]
-"tilefoundry_cuda.target.hardware" = ["*.toml"]
-"tilefoundry_amx.target.hardware" = ["*.toml"]
-"tilefoundry_amx" = ["include/tilefoundry/runtime/amx/*.h", "docs/spec/*.md"]
+"tilefoundry_nvidia.cuda.target.hardware" = ["*.toml"]
+"tilefoundry_apple.amx.target.hardware" = ["*.toml"]
+"tilefoundry_apple.amx" = ["include/tilefoundry/runtime/amx/*.h", "docs/spec/*.md"]
 
 [tool.setuptools.data-files]
 "share/tilefoundry/spec" = ["docs/spec/*.md"]
@@ -101,7 +101,7 @@ markers = [
 ]
 
 [tool.ruff]
-src = [".", "src", "targets/cuda", "targets/amx"]
+src = [".", "src", "targets/nvidia", "targets/apple"]
 # Snapshot examples, shipped model sources, and recorded parser and printer output are
 # evidence; formatting them changes that evidence.
 extend-exclude = ["examples", "tests/models", "tests/parser/golden", "tests/fixtures/schedule/tir"]

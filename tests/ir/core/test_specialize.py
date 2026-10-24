@@ -25,7 +25,7 @@ from tilefoundry.ir.hir.specialize import (
     residual_dims,
     variant_for,
 )
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 ENTRY = GqaOnline.entry_function()
 STEADY = {"ctx_len": SMALL_CONTEXT_T + NUM_SPLITS}

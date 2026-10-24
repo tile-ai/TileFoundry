@@ -7,7 +7,7 @@ so the final ``tf.insert_slice`` identifies the destination without a copy.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 8192
 K = 5120

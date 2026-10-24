@@ -27,7 +27,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.visitor import ExprCloner
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.runtime.resource import DictResource
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 class _Weights:

@@ -5,7 +5,7 @@ import tvm_ffi
 
 from tilefoundry.dsl import *
 from tilefoundry.runtime.module import RuntimeModule
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 S = DimVar("S", 1, 16)
 

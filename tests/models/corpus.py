@@ -475,7 +475,7 @@ def placed_cases(level: str = "cta") -> tuple[ConcreteCase, ...]:
     that failed.
     """
     from tilefoundry.target import TopologyFacts
-    from tilefoundry_cuda import CudaTarget
+    from tilefoundry_nvidia import CudaTarget
 
     cases: list[ConcreteCase] = []
     for file, name, published in placed_fixture_roots():

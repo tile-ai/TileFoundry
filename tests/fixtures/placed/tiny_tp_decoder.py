@@ -12,7 +12,7 @@ import torch
 
 from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_func, runtime_module
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 GPUS, R, C = 2, 4, 4
 COLUMNS = C // GPUS

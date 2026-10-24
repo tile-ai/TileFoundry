@@ -3,7 +3,7 @@
 from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.target import CpuTarget
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 D, W = 64, 4
 PER = 48 * (1 << 30) // 2 // D

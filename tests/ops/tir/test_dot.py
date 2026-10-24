@@ -9,7 +9,7 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
+import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.dot import Dot
@@ -18,7 +18,7 @@ from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 def _pf(*types) -> PrimFunction:

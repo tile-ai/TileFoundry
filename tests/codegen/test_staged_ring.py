@@ -7,7 +7,7 @@ re-authored with what execution needs and the corpus does not state --
 the dynamic-smem carve-out, the cp.async commit/wait before read-back,
 and trip counts uniform across the warp.
 
-See [runtime §2.6.2](targets/cuda/tilefoundry_cuda/docs/spec/runtime.md#262-opscopycuh).
+See [runtime §2.6.2](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#262-opscopycuh).
 """
 
 from __future__ import annotations
@@ -16,10 +16,10 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
+import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
 from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 

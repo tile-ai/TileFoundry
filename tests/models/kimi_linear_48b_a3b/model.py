@@ -58,7 +58,7 @@ from typing import Optional
 from transformers.configuration_utils import PretrainedConfig
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 # ── the checkpoint's own configuration class ─────────────────────────────────
 #

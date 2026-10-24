@@ -22,7 +22,7 @@ from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _ROWS = 128
 _COLS = 12

@@ -1,6 +1,6 @@
 """The reduce tag table and the Partial attr both name a ``ReduceKind``.
 
-See [runtime §2.6](targets/cuda/tilefoundry_cuda/docs/spec/runtime.md#26-cudaops).
+See [runtime §2.6](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#26-cudaops).
 """
 
 from __future__ import annotations
@@ -9,8 +9,8 @@ import pytest
 
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.types.shard_layout import Partial
-from tilefoundry_cuda.codegen.tir.memory.tensor_view import _render_attr
-from tilefoundry_cuda.codegen.tir.reduce import REDUCE_TAG
+from tilefoundry_nvidia.cuda.codegen.tir.memory.tensor_view import _render_attr
+from tilefoundry_nvidia.cuda.codegen.tir.reduce import REDUCE_TAG
 
 
 def test_every_reduce_kind_has_a_runtime_tag() -> None:

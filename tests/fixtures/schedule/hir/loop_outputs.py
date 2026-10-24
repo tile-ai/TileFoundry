@@ -1,7 +1,7 @@
 """Write three output buffers explicitly and reuse an induction name."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(

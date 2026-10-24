@@ -15,7 +15,7 @@ from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import Target
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @dataclass(frozen=True)

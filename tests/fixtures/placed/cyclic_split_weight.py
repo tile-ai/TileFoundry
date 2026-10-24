@@ -1,7 +1,7 @@
 """Weights whose local views cannot be represented on logical tensor axes."""
 from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_func, runtime_module
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 def weight_module(size, layout, attrs, mesh):

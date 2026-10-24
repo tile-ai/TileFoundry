@@ -14,7 +14,7 @@ def _vendor_npu_model(cmine: Path, tmp_path: Path) -> Path:
     model.write_text(
         cmine.read_text(encoding="utf-8")
         .replace(
-            "from tilefoundry_cuda import CudaTarget",
+            "from tilefoundry_nvidia import CudaTarget",
             "from vendor_npu import VendorNpuTarget",
         )
         .replace(

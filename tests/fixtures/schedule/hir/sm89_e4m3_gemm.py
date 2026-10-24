@@ -8,7 +8,7 @@ belong to the implementation, as in ``tests/fixtures/tir/e4m3_gemm.py``.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 16
 N = 8

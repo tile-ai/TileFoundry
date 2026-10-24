@@ -1,7 +1,7 @@
 """A dispatch on a callee: check and analyze both select its implementation."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 D, W, BOUND = 64, 4, 128
 N_MAX = 1023

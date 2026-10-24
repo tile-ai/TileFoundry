@@ -1,0 +1,67 @@
+"""CUDA HIR-to-TIR candidate pairings."""
+
+from dataclasses import replace
+from math import prod
+
+from tilefoundry.ir.hir.nn.matmul import MatMul
+from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.tensor.index_select import IndexSelect
+from tilefoundry.ir.tir.async_copy import CopyAsync
+from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Split
+from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axes
+from tilefoundry.visitor_registry.candidates import register_candidates
+from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensor
+from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
+from tilefoundry_nvidia.cuda.ir.tir.memory.ldmatrix import LdMatrix
+from tilefoundry_nvidia.cuda.ir.tir.memory.stmatrix import StMatrix
+from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
+
+
+def _matrix_type(type_, reverse):
+    """Describe the same matrix bytes with reversed logical axes when requested."""
+    if not reverse:
+        return type_
+
+    def permuted(layout):
+        if isinstance(layout, ComposedLayout):
+            return replace(layout, outer=permuted(layout.outer))
+        shard = layout if isinstance(layout, ShardLayout) else None
+        local = shard.layout if shard is not None else layout
+        axes = mode_axes(compatible_profile(tuple(prod(flatten(mode)) for mode in local.shape), type_.shape))
+        order = tuple(
+            index
+            for axis in reversed(range(len(type_.shape)))
+            for index, held in enumerate(axes)
+            if held == axis
+        )
+        result = Layout(
+            tuple(local.shape[index] for index in order),
+            tuple(local.strides[index] for index in order),
+        )
+        if shard is None:
+            return result
+        positions = {old: new for new, old in enumerate(order)}
+        attrs = tuple(
+            Split(positions[attr.axis]) if isinstance(attr, Split) else attr for attr in shard.attrs
+        )
+        return replace(shard, layout=result, attrs=attrs)
+
+    return replace(type_, shape=tuple(reversed(type_.shape)), layout=permuted(type_.layout))
+
+
+@register_candidates(MatMul, (TiledMma,))
+def _matmul_operands(call, instruction):
+    """Map HIR physical matrix axes to the instruction's fixed M,K and K,N axes."""
+    op = call.target
+    lhs = _matrix_type(call.args[0].type, op.a_layout == "KM")
+    rhs = _matrix_type(call.args[1].type, op.b_layout == "NK")
+    return {}, (call.type, lhs, rhs)
+
+
+register_candidates(Reshard, (CopyAsync, CopyAsyncTensor, CopyReduceAsyncTensor, LdMatrix, StMatrix))
+
+
+@register_candidates(IndexSelect, (CopyAsync,))
+def _index_select_operands(call, instruction):
+    """Supply the table, result and index; the HIR fill value belongs to the copy."""
+    return {"fill": call.target.fill_value}, (call.args[0].type, call.type, call.args[1].type)

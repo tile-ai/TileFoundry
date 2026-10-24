@@ -7,7 +7,7 @@ import torch
 
 import tilefoundry
 from tests.fixtures.tir.square import TirSquare
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")

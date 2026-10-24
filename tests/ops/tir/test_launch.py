@@ -16,7 +16,7 @@ from tilefoundry.ir.types import Layout
 from tilefoundry.ir.types.callable_type import callable_type_for_prim_function
 from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry.verify import verify_module
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 def test_launch_rejects_forwarded_type_that_differs_from_device_param() -> None:

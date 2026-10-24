@@ -24,7 +24,7 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 def _shard_layout(shape) -> ShardLayout:

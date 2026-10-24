@@ -10,7 +10,7 @@ is a different program on every machine. They are four Modules over one builder.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _WAVE = 128
 

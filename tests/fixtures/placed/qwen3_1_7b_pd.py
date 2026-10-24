@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _CONFIG = Path(__file__).parents[2] / "models" / "qwen3_1_7b" / "config.json"
 MAX_POSITION_EMBEDDINGS = json.loads(_CONFIG.read_text(encoding="utf-8"))["max_position_embeddings"]

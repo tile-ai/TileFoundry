@@ -7,7 +7,7 @@ accumulator otherwise match the K-major baseline fixture.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 64
 N = 32

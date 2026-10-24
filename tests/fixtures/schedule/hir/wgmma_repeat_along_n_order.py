@@ -5,7 +5,7 @@ outside M, with K innermost.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 128
 N = 256

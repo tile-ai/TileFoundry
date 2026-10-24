@@ -23,7 +23,7 @@ _OPEN_MODULE = (
     '\n'
     'from tilefoundry.dsl import *\n'
     '\n'
-    'from tilefoundry_cuda import CudaTarget\n'
+    'from tilefoundry_nvidia import CudaTarget\n'
     '\n'
     'N = DimVar("N", 1, 8)\n'
     '\n'

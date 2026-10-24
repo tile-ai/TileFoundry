@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(entry="mm_host", target=CudaTarget("nvidia.h200_sxm"))

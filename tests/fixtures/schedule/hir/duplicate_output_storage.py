@@ -1,7 +1,7 @@
 """Repeat an output leaf and reuse an induction name in a second loop."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(

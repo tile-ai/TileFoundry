@@ -24,10 +24,10 @@ import clang.cindex as CI
 ROOT = Path(__file__).resolve().parent.parent
 HEADERS = {
     "cpu": ROOT / "src/tilefoundry/runtime/include/tilefoundry/runtime",
-    "cuda": ROOT / "targets/cuda/tilefoundry_cuda/codegen/include/tilefoundry/runtime",
+    "cuda": ROOT / "targets/nvidia/tilefoundry_nvidia/cuda/codegen/include/tilefoundry/runtime",
 }
 PACKAGE = ROOT / "src/tilefoundry"
-SPECS = (ROOT / "docs/spec/runtime.md", *sorted(ROOT.glob("targets/*/tilefoundry_*/docs/spec/runtime.md")))
+SPECS = (ROOT / "docs/spec/runtime.md", *sorted(ROOT.glob("targets/*/tilefoundry_*/*/docs/spec/runtime.md")))
 LIBCLANG = ("/usr/lib/x86_64-linux-gnu/libclang-18.so.1", "/usr/lib/llvm-18/lib/libclang.so.1")
 """Where a system install puts it; the ``libclang`` wheel is asked first."""
 

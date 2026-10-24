@@ -57,7 +57,7 @@ from pathlib import Path
 from transformers import Qwen3Config
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 def published(path: Path | None = None) -> Qwen3Config:

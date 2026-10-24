@@ -246,7 +246,7 @@ def test_an_input_whole_at_one_level_keeps_that_level_aligned():
 
 def test_two_extent_one_splits_survive_a_loop_carry() -> None:
     module = import_dsl('''from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 @module(entry="accumulate", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2),))
 class UnitAxesCarry:

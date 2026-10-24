@@ -1,7 +1,7 @@
 """Retain indexed, repeated, constant-index, and local calls to scheduled definitions."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 def _program():

@@ -1,7 +1,7 @@
 """Issue n16 atoms within each warpgroup share of a split N axis."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 Q_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), (3, 4, 16)), ((512, 64), (4096, 16, 1))))
 K_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((12, 8), (3, 4, 16)), ((512, 64), (6144, 16, 1))))

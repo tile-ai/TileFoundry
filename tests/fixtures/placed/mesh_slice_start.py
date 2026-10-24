@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 D, BLK, W, N = 64, 8, 4, 32
 _H200, _CTA = CudaTarget("nvidia.h200_sxm"), Topology("cta", W)

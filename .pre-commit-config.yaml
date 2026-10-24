@@ -27,7 +27,7 @@ repos:
         name: spec-rules-lint
         entry: python scripts/spec_rules_lint.py
         language: system
-        files: ^(docs/(spec|tutorial)/.*|targets/[^/]+/tilefoundry_[^/]+/docs/spec/.*)\.md$
+        files: ^(docs/(spec|tutorial)/.*|targets/[^/]+/tilefoundry_[^/]+/[^/]+/docs/spec/.*)\.md$
       # Every place a reference is written. Kept off `docs/SPEC-RULES.md`, which
       # states the forbidden forms as examples and would report itself.
       - id: spec-refs-lint
@@ -42,7 +42,7 @@ repos:
         entry: python scripts/runtime_spec_surface.py --check
         language: system
         pass_filenames: false
-        files: ^(docs/spec/runtime\.md|targets/[^/]+/tilefoundry_[^/]+/(docs/spec/runtime\.md|(codegen/)?include/.*)|src/tilefoundry/(runtime/include/.*|(runtime/.*|compile)\.py))$
+        files: ^(docs/spec/runtime\.md|targets/[^/]+/tilefoundry_[^/]+/[^/]+/(docs/spec/runtime\.md|(codegen/)?include/.*)|src/tilefoundry/(runtime/include/.*|(runtime/.*|compile)\.py))$
       - id: spec-entropy-lint
         name: spec-entropy-lint
         entry: python scripts/spec_entropy_lint.py

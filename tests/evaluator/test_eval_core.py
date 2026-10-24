@@ -26,7 +26,7 @@ from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.hir.function import Function
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _DEV = "cpu"
 

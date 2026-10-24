@@ -17,8 +17,8 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.target import CpuTarget
-from tilefoundry_cuda import CudaTarget
-from tilefoundry_cuda.codegen.abi import launcher_symbol
+from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia.cuda.codegen.abi import launcher_symbol
 
 
 @module(entry="host", target=CudaTarget("nvidia.h200_sxm"))

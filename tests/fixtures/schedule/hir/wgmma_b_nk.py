@@ -1,7 +1,7 @@
 """Schedule an NK weight through an explicit K,N shared-memory destination."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(

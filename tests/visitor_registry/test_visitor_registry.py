@@ -39,7 +39,7 @@ from tilefoundry.visitor_registry.visitors import (
     CostEvaluator,
     VerifyVisitor,
 )
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 def _t() -> TensorType:

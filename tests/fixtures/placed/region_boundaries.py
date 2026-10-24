@@ -1,7 +1,7 @@
 """Every legal region-boundary shape in one program, priced and round-tripped."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(

@@ -1,7 +1,7 @@
 """Minimal: a CTA reads a window whose start is a value loaded from a tensor."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 N, W, D, C = 64, 8, 16, 4
 

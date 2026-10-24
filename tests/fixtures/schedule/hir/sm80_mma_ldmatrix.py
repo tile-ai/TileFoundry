@@ -7,7 +7,7 @@ the staged A and B tiles retain separate shared-memory arrangements.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 16
 N = 8

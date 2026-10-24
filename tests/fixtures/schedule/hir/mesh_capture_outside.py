@@ -1,6 +1,6 @@
 """Capture storage written by a two-CTA region in a later one-CTA region."""
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),

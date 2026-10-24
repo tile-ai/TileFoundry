@@ -11,7 +11,7 @@ def _registered_model(path: Path, *, target: str, topology: str) -> Path:
     path.write_text(
         "from tilefoundry import func\n"
         "from tilefoundry.dsl import Tensor, Topology, tf\n"
-        "from tilefoundry.target import registered_targets\nfrom tilefoundry_cuda import CudaTarget\n"
+        "from tilefoundry.target import registered_targets\nfrom tilefoundry_nvidia import CudaTarget\n"
         f"_target = {target}\n"
         f"@func(target=_target, topologies=(Topology('{topology}', 1),))\n"
         "def model(source: Tensor[(8,), 'f32']):\n"

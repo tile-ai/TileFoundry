@@ -3,7 +3,7 @@
 Only the parent is a file-level Module; it retains the child in its slot.
 """
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(entry="run")

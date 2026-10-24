@@ -41,9 +41,9 @@ from tilefoundry.target import (
     registered_targets,
 )
 from tilefoundry.target.base import bind
-from tilefoundry_cuda import CudaTarget
-from tilefoundry_cuda.codegen.tir.stmts.mesh_scope import validate_cuda_topology_levels
-from tilefoundry_cuda.target.spec import SM90_ID
+from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia.cuda.codegen.tir.stmts.mesh_scope import validate_cuda_topology_levels
+from tilefoundry_nvidia.cuda.target.spec import SM90_ID
 
 
 class ExternalCudaTarget(CudaTarget):

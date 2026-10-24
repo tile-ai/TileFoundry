@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 WINDOW_SEQ = DimVar("seq", 4, 63)
 WINDOW_TILE = DimVar("tile_size", 2, 7)

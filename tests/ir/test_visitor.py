@@ -45,8 +45,8 @@ from tilefoundry.ir.visitor import (
     rewrite_prim_function,
     walk_prim_function,
 )
-from tilefoundry_cuda.ir.tir.nn.mma import TiledMma
-from tilefoundry_cuda.ir.tir.nn.sm80_mma import Mma
+from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
+from tilefoundry_nvidia.cuda.ir.tir.nn.sm80_mma import Mma
 
 
 def _t() -> TensorType:

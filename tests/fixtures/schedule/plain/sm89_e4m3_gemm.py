@@ -5,7 +5,7 @@ runs in four 32-wide slices; each slice is loaded into registers, where the SM89
 warp MMA reads its operands, and its product is added into the F32 accumulator.
 """
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 16
 N = 8

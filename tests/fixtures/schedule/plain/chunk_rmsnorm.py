@@ -7,7 +7,7 @@ only two binaries select instructions; the other sites still need candidates.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 H = 4
 BT = 64

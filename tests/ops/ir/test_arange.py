@@ -25,7 +25,7 @@ from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _N = DimVar("arange_n", 1, 16)
 

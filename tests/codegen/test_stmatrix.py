@@ -4,10 +4,10 @@ import pytest
 
 from tilefoundry.codegen.emitter import CppEmitter
 from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry_cuda import CudaTarget
-from tilefoundry_cuda.codegen.context import CudaCodegenContext
-from tilefoundry_cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
-from tilefoundry_cuda.ir.tir.memory.stmatrix import StMatrix
+from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
+from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
+from tilefoundry_nvidia.cuda.ir.tir.memory.stmatrix import StMatrix
 
 
 @pytest.mark.parametrize(

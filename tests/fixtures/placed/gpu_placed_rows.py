@@ -10,10 +10,10 @@ lowering.
 
 from __future__ import annotations
 
-import tilefoundry_cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
+import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
 from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 GPUS, CTAS, THREADS = 2, 4, 16
 ROWS, COLS = GPUS * CTAS * THREADS, 4

@@ -10,7 +10,7 @@ this kernel is ``wgmma_a_k_major.py`` instruction for instruction, with
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 64
 N = 32

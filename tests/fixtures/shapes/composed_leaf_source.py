@@ -14,7 +14,7 @@ def composed_leaf_source(dim_name: str) -> str:
     """The source a CLI test writes to a temp file, with its own DimVar name."""
     return (
         "from tilefoundry.dsl import *\n"
-        "from tilefoundry_cuda import CudaTarget\n"
+        "from tilefoundry_nvidia import CudaTarget\n"
         f"N = DimVar('{dim_name}', 1, 8)\n"
         "@module(entry='run')\n"
         "class Leaf:\n"

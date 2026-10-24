@@ -36,7 +36,7 @@ from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.runtime.resource import DictResource
 from tilefoundry.target import CpuTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(entry="composed")

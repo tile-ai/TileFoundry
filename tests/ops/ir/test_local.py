@@ -14,7 +14,7 @@ from tilefoundry.ir.hir.schedule import operand_relations
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.contexts import TrafficBytes
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _N = DimVar("n", 1, 128)
 

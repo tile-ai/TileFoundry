@@ -55,7 +55,7 @@ def _write_registered_model(path: Path, *, target: str, topology: str) -> Path:
         "import json\n"
         "from tilefoundry import func\n"
         "from tilefoundry.dsl import Tensor, Topology, tf\n"
-        "from tilefoundry.target import registered_targets\nfrom tilefoundry_cuda import CudaTarget\n"
+        "from tilefoundry.target import registered_targets\nfrom tilefoundry_nvidia import CudaTarget\n"
         '_extent = json.loads(\'{"extent": 1}\')["extent"]\n'
         f"_target = {target}\n"
         f"@func(target=_target, topologies=(Topology('{topology}', _extent),))\n"
@@ -110,7 +110,7 @@ def test_parse_dims_rejects_one_dimension_stated_twice() -> None:
 _NEIGHBOURS = (
     'from tilefoundry.dsl import *\n'
     '\n'
-    'from tilefoundry_cuda import CudaTarget\n'
+    'from tilefoundry_nvidia import CudaTarget\n'
     '\n'
     'N = 132 * 128\n'
     "_H200 = CudaTarget('nvidia.h200_sxm')\n"
@@ -322,7 +322,7 @@ def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
         source.write_text(
             "from tilefoundry import func\n"
             "from tilefoundry.dsl import Tensor, Topology, tf\n"
-            "from tilefoundry_cuda import CudaTarget\n"
+            "from tilefoundry_nvidia import CudaTarget\n"
             f"@func(target=CudaTarget('{device}'), "
             "topologies=(Topology('cta', 1),))\n"
             "def model(source: Tensor[(8,), 'f32']):\n"

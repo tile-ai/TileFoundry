@@ -15,8 +15,8 @@ def test_target_list_prints_reconstructing_values(tf) -> None:
         assert expression in done.stdout
         assert f"identity: {identity}" in done.stdout
     assert "from tilefoundry.target import CpuTarget" in done.stdout
-    assert "from tilefoundry_amx import AmxTarget" in done.stdout
-    assert "from tilefoundry_cuda import CudaTarget" in done.stdout
+    assert "from tilefoundry_apple import AmxTarget" in done.stdout
+    assert "from tilefoundry_nvidia import CudaTarget" in done.stdout
     assert done.stderr == ""
 
 

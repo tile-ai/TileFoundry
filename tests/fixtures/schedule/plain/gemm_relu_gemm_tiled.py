@@ -3,7 +3,7 @@
 ReLU is the first matmul's epilogue, so every op stays at tile level.
 """
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 1024
 N = 2048

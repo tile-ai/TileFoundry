@@ -1,7 +1,7 @@
 """A CTA-scoped, thread-sharded RMS norm over two 1536-element rows."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(

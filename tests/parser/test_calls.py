@@ -21,7 +21,7 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CpuTarget
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _EXTERNAL_PLACEMENT_MESH = Mesh(("cta",), (2,), names=("tile",))
 

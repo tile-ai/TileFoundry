@@ -1,7 +1,7 @@
 """Print a loop footprint reading a previous launch at mesh-coordinate offsets."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 N = 4
 R = 32

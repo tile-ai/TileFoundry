@@ -4,7 +4,7 @@ A stride-0 operand is the whole of broadcast. Beyond it, a tile can be cut by
 two levels at once -- a CTA takes a block of it and a thread takes a row of
 that -- or by two axes of one level, which is the same cut written as a grid.
 
-See [runtime §2.6](targets/cuda/tilefoundry_cuda/docs/spec/runtime.md#26-cudaops).
+See [runtime §2.6](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#26-cudaops).
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
+import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
 from tests.fixtures.tir.layouts import bcast
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Var, VerifyError
@@ -23,7 +23,7 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 

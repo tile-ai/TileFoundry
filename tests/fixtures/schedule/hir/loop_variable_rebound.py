@@ -1,6 +1,6 @@
 """Keep a tensor alive across a loop which reuses its authored name."""
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),

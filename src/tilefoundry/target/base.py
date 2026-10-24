@@ -396,12 +396,12 @@ def load_targets() -> Mapping[str, type[Target]]:
         for ep in entry_points(group="tilefoundry.targets"):
             if ep.value in sys.modules:
                 continue
-            package = f"tilefoundry_{ep.name}"
             distribution = ep.dist.name if ep.dist is not None else "<unknown distribution>"
-            if ep.value != package:
+            vendor, _, target = ep.value.partition(".")
+            if not vendor.startswith("tilefoundry_") or target != ep.name:
                 raise TargetLoadError(
                     f"{distribution}: entry point {ep.name}={ep.value} "
-                    f"must name package {package}"
+                    f"must name subpackage tilefoundry_<vendor>.{ep.name}"
                 )
             try:
                 importlib.import_module(ep.value)

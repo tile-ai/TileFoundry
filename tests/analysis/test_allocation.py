@@ -248,7 +248,7 @@ def test_retained_update_translates_an_actual_window(tmp_path):
 
 def test_insert_slice_keeps_its_address_through_sequential_carry_loops(tmp_path):
     source = """from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 @module(entry='gemm', target=CudaTarget('nvidia.h200_sxm'),
         topologies=(Topology('cta', 1), Topology('thread', 1)))
 class SequentialCarries:
@@ -326,7 +326,7 @@ def test_read_only_call_return_keeps_storage_despite_later_actual_use(tmp_path, 
 @pytest.mark.parametrize("later_use", [False, True])
 def test_retained_elementwise_return_overwrites_only_a_dead_actual(tmp_path, later_use):
     source = """from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 @module(entry='gemm', target=CudaTarget('nvidia.h200_sxm'),
         topologies=(Topology('cta', 1), Topology('thread', 1)))
 class FreshReturn:

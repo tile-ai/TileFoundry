@@ -8,7 +8,7 @@ instruction that performs it is an offer --- `T.copy_async`, `T.tma` or a plain
 decision of its own, and ReLU stays the first matmul's tile-level epilogue.
 """
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 1024
 N = 2048

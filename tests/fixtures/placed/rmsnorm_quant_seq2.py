@@ -1,7 +1,7 @@
 """A CTA-scoped two-row RMS norm followed by blockwise FP8 quantization."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(

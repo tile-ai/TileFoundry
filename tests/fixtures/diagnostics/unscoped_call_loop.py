@@ -1,7 +1,7 @@
 """A name bound before a mesh scope, rebound inside it, and returned after it."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 N = 8
 

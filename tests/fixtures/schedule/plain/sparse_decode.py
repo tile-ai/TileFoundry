@@ -7,7 +7,7 @@ and a nested row loop carries two shared tiles. No instruction is selected.
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, ReduceKind, Tensor, Topology, tf
 from tilefoundry.ir.types import Layout
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 NEG_INF = float("-inf")
 

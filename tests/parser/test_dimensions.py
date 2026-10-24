@@ -11,7 +11,7 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.parser import ParseError
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @pytest.mark.parametrize(
@@ -27,7 +27,7 @@ from tilefoundry_cuda import CudaTarget
 def test_layout_states_reject_invalid_forms(layout: str, message: str) -> None:
     source = f'''from __future__ import annotations
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 @module(target=CudaTarget("nvidia.h200_sxm"))
 class Model:

@@ -1,7 +1,7 @@
 """A placed prefill whose execution geometry derives from authored dimensions."""
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 PREFILL_N = DimVar("prefill_n", 1, 64)
 TOPOLOGY_ONLY = DimVar("topology_only", 1, 1024)

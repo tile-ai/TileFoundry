@@ -1,6 +1,6 @@
 """Materialize captured slice, sharded bitcast and transpose in their consumer."""
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),

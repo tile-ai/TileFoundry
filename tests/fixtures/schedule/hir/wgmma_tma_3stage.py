@@ -5,7 +5,7 @@ register arrangement is held by the corresponding pair of warpgroups.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 128
 N = 16

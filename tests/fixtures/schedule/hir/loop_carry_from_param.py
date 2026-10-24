@@ -6,7 +6,7 @@ entering the loop, then inserts each row into acc.
 
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, T, Tensor, Topology, tf
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @module(

@@ -56,7 +56,7 @@ from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.contexts import ValuationContext
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)

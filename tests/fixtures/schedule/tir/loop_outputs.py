@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 
 @prim_func(target=CudaTarget("nvidia.h200_sxm"), output_count=3)

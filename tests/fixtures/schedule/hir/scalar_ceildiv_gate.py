@@ -1,6 +1,6 @@
 """Round-trip a scalar ceildiv whose numerator is a mesh coordinate."""
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 NB = 2
 

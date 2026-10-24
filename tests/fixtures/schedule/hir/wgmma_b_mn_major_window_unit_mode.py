@@ -1,6 +1,6 @@
 """Preserve the unsplit unit mode in a sharded MN-major B window."""
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 A = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), 16), ((512, 64), 1)))
 B = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((2, 8), (2, 1, 2, 64)), ((512, 64), (8192, 1024, 4096, 1))))

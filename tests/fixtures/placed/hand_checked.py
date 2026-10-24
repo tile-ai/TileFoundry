@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 S, K, N = 8, 4, 6
 BM, BK, BN = 4, 2, 2

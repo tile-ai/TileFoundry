@@ -64,7 +64,7 @@ from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import PerformanceServiceFacts, ThroughputFacts, TopologyFacts
 from tilefoundry.visitor_registry.contexts import ValuationContext
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
@@ -583,7 +583,7 @@ def _case_source(case: ConcreteCase, tmp_path: Path) -> str:
         source.write_text(
             "from dataclasses import replace\n"
             f"from tests.fixtures.placed.{file} import {root} as authored\n"
-            "from tilefoundry_cuda import CudaTarget\n"
+            "from tilefoundry_nvidia import CudaTarget\n"
             f"{root} = replace(authored, target=CudaTarget('nvidia.h200_sxm'))\n"
         )
     return f"{source}:{root}.{'.'.join(selection)}"

@@ -7,7 +7,7 @@ the same finished tile through shared memory instead.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 8192
 K = 5120

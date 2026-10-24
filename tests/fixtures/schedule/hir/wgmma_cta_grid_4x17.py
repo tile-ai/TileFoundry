@@ -6,7 +6,7 @@ memory, register fragments, and issuing warpgroups; only the launch changes.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_cuda import CudaTarget
+from tilefoundry_nvidia import CudaTarget
 
 M = 128
 N = 16
