@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from tests.core._source import import_dsl
 from tests.core.parser.test_mesh_visibility import (
     _diagnostic,
@@ -15,6 +19,7 @@ from tilefoundry.ir.core import Call, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.visitor import collect_exprs, expr_children
+from tilefoundry.parser import ParseError
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 from tilefoundry_nvidia import CudaTarget
@@ -110,3 +115,15 @@ def test_sibling_region_chain_captures_each_value_at_the_next_boundary() -> None
     assert isinstance(previous, MeshRegion)
     assert [param.name for param in previous.params] == ["acc", "lhs"]
     assert isinstance(previous.args[0], MeshRegion)
+
+
+def test_unscoped_initialization_is_rejected_at_the_authored_call() -> None:
+    source = (
+        Path(__file__).parents[1] / "fixtures" / "diagnostics" / "unscoped_call_loop.py"
+    ).read_text()
+    line = next(i for i, text in enumerate(source.splitlines(), 1) if "out = tf.zeros" in text)
+    with pytest.raises(ParseError, match="runs outside every mesh scope") as raised:
+        import_dsl(source, "EscapedRebindInLoop")
+    assert f"source.py:{line}:" in str(raised.value)
+    assert "tf.zeros" in str(raised.value)
+    assert "inside with Mesh(...)" in str(raised.value)

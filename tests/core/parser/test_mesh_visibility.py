@@ -18,16 +18,6 @@ def _diagnostic(name: str) -> str:
     return (_DIAGNOSTICS / f"{name}.py").read_text()
 
 
-def test_unscoped_initialization_is_rejected_at_the_authored_call() -> None:
-    source = _diagnostic("unscoped_call_loop")
-    line = next(i for i, text in enumerate(source.splitlines(), 1) if "out = tf.zeros" in text)
-    with pytest.raises(ParseError, match="runs outside every mesh scope") as raised:
-        import_dsl(source, "EscapedRebindInLoop")
-    assert f"source.py:{line}:" in str(raised.value)
-    assert "tf.zeros" in str(raised.value)
-    assert "inside with Mesh(...)" in str(raised.value)
-
-
 @func
 def mesh_scope_helper(x: Tensor[(4, 4), "f32"]):
     return x

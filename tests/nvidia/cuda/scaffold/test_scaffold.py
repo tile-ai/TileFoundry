@@ -2,12 +2,16 @@
 
 import subprocess
 from importlib import import_module
+from pathlib import Path
 
 import pytest
 import torch
 
-from tests.core.scaffold.test_scaffold import FIXTURES
+import tilefoundry
 from tilefoundry.cli import main as cli_main
+from tilefoundry.cli.source import load_authored_ir
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "scaffold"
 
 CASES = ("hir_moe", "hir_layers", "tir_launches", "tir_dispatch")
 
@@ -35,7 +39,7 @@ def test_skeleton_builds_and_every_export_is_callable(fixture, tmp_path):
         text=True,
         timeout=300,
     )
-    fixture_module = import_module(f"tests.core.fixtures.scaffold.{fixture}")
+    fixture_module = import_module(f"tests.nvidia.cuda.fixtures.scaffold.{fixture}")
     runtime = fixture_module.Runtime(fresh / "libRoot.so")
     for extent in (2, 8, 14):
         runtime(torch.randn(extent, 8, dtype=torch.float32, device="cuda"))
@@ -69,3 +73,10 @@ def test_codegen_reports_unsupported_scaffold_targets(target, tmp_path, capsys):
     message = "expected one device Target, found 0" if target == "CpuTarget()" else "only single-device CUDA"
     assert message in capsys.readouterr().err
     assert not project.exists()
+
+
+@pytest.mark.parametrize("fixture", ("hir_moe", "hir_layers"))
+def test_full_refuses_hir(fixture):
+    module = load_authored_ir(f"{FIXTURES / (fixture + '.py')}:Root")
+    with pytest.raises(ValueError, match='emit="skeleton" or lowering to TIR'):
+        tilefoundry.compile(module)
