@@ -14,6 +14,7 @@ from dataclasses import replace
 
 import pytest
 
+from tests.core.target.test_target import _provider_target
 from tests.nvidia.cuda.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.nvidia.cuda.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry import CompilerOptions, build, jit

@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass
 from functools import cached_property
-from importlib.metadata import entry_points
+from importlib.metadata import Distribution, entry_points
 from importlib.resources import files
 from pathlib import Path
 from types import MappingProxyType
@@ -389,13 +389,34 @@ class TargetLoadError(RuntimeError):
 _LOADED = False
 
 
+def _top_level(distribution: Distribution | None) -> set[str]:
+    """Read declared top-level packages, falling back to installed file records."""
+    provided = set()
+    if distribution is not None:
+        declared = distribution.read_text("top_level.txt")
+        if declared is not None:
+            provided = {name.strip() for name in declared.splitlines() if name.strip()}
+        else:
+            for path in distribution.files or ():
+                if not path.parts:
+                    continue
+                root = path.parts[0]
+                if root.startswith("..") or root.endswith((".dist-info", ".pth")):
+                    continue
+                if root != "__pycache__":
+                    provided.add(root.removesuffix(".py"))
+    if not provided:
+        name = distribution.name if distribution is not None else "<unknown distribution>"
+        raise TargetLoadError(f"cannot determine the top-level packages of {name}")
+    return provided
+
+
 def load_targets() -> Mapping[str, type[Target]]:
     """Import each installed target package once; importing registers its contents."""
     global _LOADED
     if not _LOADED:
+        top_levels = {}
         for ep in entry_points(group="tilefoundry.targets"):
-            if ep.value in sys.modules:
-                continue
             distribution = ep.dist.name if ep.dist is not None else "<unknown distribution>"
             vendor, _, target = ep.value.partition(".")
             if not vendor.startswith("tilefoundry_") or target != ep.name:
@@ -403,6 +424,16 @@ def load_targets() -> Mapping[str, type[Target]]:
                     f"{distribution}: entry point {ep.name}={ep.value} "
                     f"must name subpackage tilefoundry_<vendor>.{ep.name}"
                 )
+            if ep.dist is None or distribution not in top_levels:
+                top_levels[distribution] = _top_level(ep.dist)
+            provided = top_levels[distribution]
+            if provided != {vendor}:
+                raise TargetLoadError(
+                    f"{distribution}: installs {sorted(provided)}; a target distribution "
+                    f"installs only {vendor}"
+                )
+            if ep.value in sys.modules:
+                continue
             try:
                 importlib.import_module(ep.value)
             except Exception as error:

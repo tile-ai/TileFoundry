@@ -30,6 +30,7 @@ from tilefoundry.target import (
     UnsupportedCapabilityError,
     facts_result,
     register_target,
+    registered_targets,
 )
 from tilefoundry.target.base import bind
 
