@@ -24,12 +24,15 @@ echo CONDA_ENV=tilefoundry-dev > .dev-env
 
 ```sh
 git submodule update --init --recursive   # third_party/cutlass
-python -m pip install -e '.[test]'
+python -m pip install -e '.[test]' -e targets/nvidia -e targets/apple
 ```
 
-`pyproject.toml` declares runtime deps (`apache-tvm-ffi`, `torch`),
-the `[test]` extra (`pytest`), and the jinja `*.j2` templates as
-package data. After this `import tilefoundry` resolves to
+When upgrading a checkout from before the distribution split, delete the
+repository-root `tilefoundry.egg-info` before reinstalling all three editable projects.
+
+The core distribution declares runtime deps (`apache-tvm-ffi`, `torch`) and
+the `[test]` extra (`pytest`). Each target distribution provides its own package
+data and registration entry point. After this `import tilefoundry` resolves to
 `src/tilefoundry/...` and plain `pytest tests/` works from repo root.
 **Do not set `PYTHONPATH`** — in particular `PYTHONPATH=tests:src`
 shadows stdlib `types` via `tests/types/__init__.py`.

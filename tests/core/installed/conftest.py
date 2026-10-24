@@ -72,19 +72,21 @@ def installation(tmp_path_factory) -> Path:
 
     build = tmp_path_factory.mktemp("installation")
     wheels, venv = build / "wheel", build / "venv"
+    projects = (REPO, *sorted((REPO / "targets").glob("*/")))
+    for project in projects:
+        done = _run(["uv", "build", "--out-dir", wheels, project], build)
+        if done.returncode != 0:
+            pytest.fail(f"building {project}\n{done.stderr}")
+    built = sorted(wheels.glob("tilefoundry*.whl"))
+    if len(built) != len(projects):
+        pytest.fail(f"expected {len(projects)} wheels in {wheels}, found {built}")
     for argv in (
-        [sys.executable, "-m", "pip", "wheel", REPO, "--no-deps", "--wheel-dir", wheels],
         [sys.executable, "-m", "venv", "--system-site-packages", venv],
+        [venv / "bin" / "pip", "install", "--no-deps", *built],
     ):
         done = _run(argv, build)
         if done.returncode != 0:
             pytest.fail(f"{' '.join(str(p) for p in argv)}\n{done.stderr}")
-    built = sorted(wheels.glob("tilefoundry-*.whl"))
-    if len(built) != 1:
-        pytest.fail(f"expected one wheel in {wheels}, found {len(built)}")
-    done = _run([venv / "bin" / "pip", "install", "--no-deps", built[0]], build)
-    if done.returncode != 0:
-        pytest.fail(f"installing {built[0].name}\n{done.stderr}")
     return venv
 
 

@@ -22,7 +22,7 @@ def _version() -> str:
     return get_version(root=".", relative_to=__file__)
 
 
-v = _version()
+version = _version()
 setup(
     extras_require={
         "test": [
@@ -38,8 +38,8 @@ setup(
             "setuptools>=68",
             "setuptools-scm>=8",
         ],
-        "nvidia": [f"tilefoundry-nvidia=={v}"],
-        "apple": [f"tilefoundry-apple=={v}"],
+        "nvidia": [f"tilefoundry-nvidia=={version}"],
+        "apple": [f"tilefoundry-apple=={version}"],
         "all": ["tilefoundry[nvidia,apple]"],
     },
 )

@@ -42,7 +42,7 @@ jobs:
         run: |
           mkdir -p test_results
           uv venv --clear --no-project --python /usr/local/bin/python3.12 .venv
-          uv pip compile --quiet --all-extras --generate-hashes \
+          uv pip compile --quiet --extra test --extra dev --generate-hashes \
             --python .venv/bin/python pyproject.toml \
             -o test_results/requirements.txt
           uv pip compile --quiet --generate-hashes \
@@ -50,8 +50,10 @@ jobs:
             -o test_results/requirements-runtime.txt
           uv pip sync --python .venv/bin/python \
             --require-hashes test_results/requirements.txt
+          editable=(--editable .)
+          for project in targets/*/; do editable+=(--editable "$project"); done
           uv pip install --python .venv/bin/python \
-            --no-deps --no-build-isolation --editable .
+            --no-deps --no-build-isolation "${editable[@]}"
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=$PWD/.venv/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
       - name: Run pre-commit
@@ -66,39 +68,63 @@ jobs:
           CCACHE_STATSLOG: ${{ runner.temp }}/ccache-stats.log
         run: |
           pytest tests/ -n 4 \
-            --cov=tilefoundry --cov-branch --cov-context=test \
+            --cov --cov-branch --cov-context=test \
             --cov-report=xml:test_results/coverage-source.xml --cov-report=
       - name: Report compile cache use
         if: always()
         env:
           CCACHE_STATSLOG: ${{ runner.temp }}/ccache-stats.log
         run: ccache --dir "$TILEFOUNDRY_CACHE_DIR/ccache" --show-log-stats
-      - name: Build the wheel
-        run: uv build --wheel --out-dir "$RUNNER_TEMP/wheel"
+      - name: Build the distributions
+        run: |
+          shopt -s nullglob
+          projects=(. targets/*/)
+          for project in "${projects[@]}"; do
+            uv build --out-dir "$RUNNER_TEMP/wheel" "$project"
+          done
+          built=("$RUNNER_TEMP"/wheel/tilefoundry*.whl)
+          if (( ${#built[@]} != ${#projects[@]} )); then
+            echo "expected ${#projects[@]} wheels, found ${#built[@]}" >&2
+            printf '%s\n' "${built[@]}" >&2
+            exit 1
+          fi
       - name: Install the wheel into a clean environment
         run: |
           uv venv --clear --no-project --python /usr/local/bin/python3.12 .wheel-venv
           uv pip sync --python .wheel-venv/bin/python \
             --require-hashes test_results/requirements-runtime.txt
           uv pip install --python .wheel-venv/bin/python \
-            --no-deps "$RUNNER_TEMP"/wheel/tilefoundry-*.whl
+            --no-deps "$RUNNER_TEMP"/wheel/tilefoundry*.whl
       - name: Verify the installed surface
         run: |
           export LD_LIBRARY_PATH="$PWD/.wheel-venv/lib:$LD_LIBRARY_PATH"
           uv pip install --python .wheel-venv/bin/python --no-deps \
             --constraint test_results/requirements.txt coverage pytest-cov
-          cat > test_results/coveragerc-installed <<EOF
+          package_sources=("$PWD/src/tilefoundry" "$PWD"/targets/*/tilefoundry_*)
+          {
+            cat <<EOF
           [run]
           branch = True
           parallel = True
-          source = tilefoundry
+          source =
+          EOF
+            for package in "${package_sources[@]}"; do
+              if [[ -f "$package/__init__.py" ]]; then
+                printf '    %s\n' "${package##*/}"
+              fi
+            done
+            cat <<EOF
           data_file = $PWD/test_results/.coverage-installed
 
           [paths]
-          package =
-              $PWD/src/tilefoundry
-              $PWD/.wheel-venv/lib/*/site-packages/tilefoundry
           EOF
+            for package in "${package_sources[@]}"; do
+              if [[ -f "$package/__init__.py" ]]; then
+                printf '%s =\n    %s\n    %s/lib/*/site-packages/%s\n' \
+                  "${package##*/}" "$package" "$PWD/.wheel-venv" "${package##*/}"
+              fi
+            done
+          } > test_results/coveragerc-installed
           COVERAGE_PROCESS_START="$PWD/test_results/coveragerc-installed" \
             TF_SMOKE_VENV="$PWD/.wheel-venv" \
             pytest tests/core/installed tests/*/*/installed -o python_files='smoke_*.py' -q -n 8
