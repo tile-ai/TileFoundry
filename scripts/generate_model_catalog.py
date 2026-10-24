@@ -137,7 +137,9 @@ def catalog() -> dict[str, Any]:
         roots = _grouped(
             [
                 _node(root, counts, seen)
-                for root in _roots(importlib.import_module(f"tilefoundry_nvidia.cuda.models.{name}.model"))
+                for root in _roots(
+                    importlib.import_module(f"tilefoundry_nvidia.cuda.models.{name}.model")
+                )
             ]
         )
         models.append({"name": name, "counts": counts, "modules": roots})

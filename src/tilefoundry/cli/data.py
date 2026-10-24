@@ -55,7 +55,12 @@ def _distribution_directory(known: Kind) -> Path | None:
 
 
 def directory(kind: str) -> Path:
-    """Read reference pages from checkout or installation, and core package resources."""
+    """Read reference pages from checkout or installation, and core package resources.
+
+    The checkout comes first because it is the only place the two can disagree,
+    and there the working copy is what its author means. Orchestrators always
+    come from core package resources.
+    """
     if kind == "orchestrator":
         return Path(resource_files("tilefoundry") / "orchestrator")
     known = _KINDS[kind]

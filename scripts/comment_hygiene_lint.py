@@ -24,7 +24,8 @@ MAX_COLUMNS = 100
 MAX_ASSERT_MESSAGE = 100
 EXEMPT_PREFIXES = (
     "tests/*/*/models/",
-    "tests/core/models/",
+    "tests/core/models/decode_oracle.py",
+    "tests/core/models/dense_decode.py",
     "targets/*/tilefoundry_*/*/models/",
     "src/tilefoundry/orchestrator/",
     "examples/",
@@ -61,10 +62,16 @@ ROOT = SELF.parent.parent
 def is_exempt(path: Path) -> bool:
     """Whether *path* is temporarily outside placement and size checks."""
     try:
-        relative = path.resolve().relative_to(ROOT).as_posix()
+        relative = path.resolve().relative_to(ROOT).parts
     except ValueError:
         return False
-    return any(fnmatchcase(relative, prefix + "*") for prefix in EXEMPT_PREFIXES)
+    for prefix in EXEMPT_PREFIXES:
+        parts = prefix.rstrip("/").split("/")
+        if len(relative) >= len(parts) and all(
+            fnmatchcase(part, pattern) for part, pattern in zip(relative, parts)
+        ):
+            return True
+    return False
 
 
 def comment_tokens(text: str) -> list[tokenize.TokenInfo]:

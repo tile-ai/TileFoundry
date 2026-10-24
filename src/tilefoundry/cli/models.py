@@ -91,7 +91,7 @@ def source_summary(path: Path) -> str:
 
 def render_source_directory(directory: Path, files: tuple[Path, ...]) -> str:
     """One source directory followed by aligned leading file descriptions."""
-    width = max(len(path.name) for path in files)
+    width = max((len(path.name) for path in files), default=0)
     lines = [str(directory)]
     lines += [f"{path.name:<{width}}  {source_summary(path)}" for path in files]
     return "\n".join(lines) + "\n"
@@ -101,7 +101,7 @@ def model_source(name: str) -> str:
     """The shipped model directory followed by one source summary per file."""
     _find(name)
     files = data.model_files(name)
-    directory = files[0].parent
+    directory = data.model_catalog()[name][1]
     return render_source_directory(directory, files)
 
 

@@ -99,8 +99,10 @@ src = [".", "src", "targets/nvidia", "targets/apple"]
 # evidence; formatting them changes that evidence.
 extend-exclude = [
     "examples",
-    "tests/*/*/models",
-    "tests/core/models",
+    # Ruff's * also matches /, so keep the harness directory exact.
+    "tests/nvidia/cuda/models",
+    "tests/core/models/decode_oracle.py",
+    "tests/core/models/dense_decode.py",
     "targets/*/tilefoundry_*/*/models",
     "src/tilefoundry/orchestrator",
     "tests/parser/golden",
