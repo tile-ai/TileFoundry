@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.core.schedule._fixtures import FixtureCase, check_facts, check_fixture
+from tests.core.schedule._fixtures import CliCase, check_cli_case, check_facts
 
 _TARGET_NEUTRAL_FACTS = """\
 target {target}
@@ -25,7 +25,7 @@ instructions
 
 
 FIXTURES = (
-    FixtureCase(
+    CliCase(
         "CPU facts list only target neutral instructions",
         ("schedule", "facts", "--target", "cpu", "{out}"),
         partial(check_facts, expected=_TARGET_NEUTRAL_FACTS.format(target="cpu")),
@@ -34,7 +34,7 @@ FIXTURES = (
 
 
 @pytest.mark.parametrize("case", FIXTURES, ids=lambda case: case.name)
-def test_fixture(
-    case: FixtureCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_cli_case(
+    case: CliCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    check_fixture(case, tmp_path, capsys)
+    check_cli_case(case, tmp_path, capsys)

@@ -14,7 +14,7 @@ from tilefoundry.cli import main as cli_main
 
 
 @dataclass(frozen=True)
-class FixtureCase:
+class CliCase:
     name: str
     argv: tuple[str, ...]
     check: Callable[[Path, pytest.CaptureResult[str]], None]
@@ -40,7 +40,7 @@ def check_facts(
         assert out.read_text() == expected
 
 
-def check_fixture(case: FixtureCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def check_cli_case(case: CliCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     for name, make in case.files.items():
         torch.save(make(), tmp_path / name)
     out = tmp_path / "out"

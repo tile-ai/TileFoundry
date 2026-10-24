@@ -28,10 +28,10 @@ import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 import tilefoundry.visitor_registry.instruction as instructions
 from tests.core._source import import_dsl
 from tests.core.schedule._fixtures import (
-    FixtureCase,
+    CliCase,
     _quiet_json,
+    check_cli_case,
     check_facts,
-    check_fixture,
 )
 from tilefoundry.analysis.access import AliasKind
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
@@ -1376,7 +1376,7 @@ def _reshape_tensor(expected: bool = False) -> torch.Tensor:
 
 
 FIXTURES = (
-    FixtureCase(
+    CliCase(
         "reshard is charged only when an element moves",
         (
             "analyze",
@@ -1387,7 +1387,7 @@ FIXTURES = (
         ),
         _check_reshard_locations,
     ),
-    FixtureCase(
+    CliCase(
         "check binds two DimVars in a reshape",
         (
             "check",
@@ -1416,18 +1416,18 @@ FIXTURES = (
         _check_reshape_matches_torch,
         files={"x.pt": _reshape_tensor, "expected.pt": partial(_reshape_tensor, True)},
     ),
-    FixtureCase(
+    CliCase(
         "finalize refuses a layout crossing logical axes where it is declared",
         ("schedule", "finalize", "tests/nvidia/cuda/fixtures/diagnostics/layout_crossing_axes.py", "{out}"),
         _check_crossing_axes_refusal,
         code=1,
     ),
-    FixtureCase(
+    CliCase(
         "analyze help names only Module.function",
         ("analyze", "--help"),
         _check_selector_help,
     ),
-    FixtureCase(
+    CliCase(
         "finalize binds an open row dimension",
         (
             "schedule",
@@ -1438,13 +1438,13 @@ FIXTURES = (
         ),
         _check_finalized_rows,
     ),
-    FixtureCase(
+    CliCase(
         "finalize refuses an unbound row dimension without output",
         ("schedule", "finalize", "tests/nvidia/cuda/fixtures/schedule/hir/dim/row_copy.py", "{out}"),
         _check_finalize_unbound_dim,
         code=1,
     ),
-    FixtureCase(
+    CliCase(
         "gather reads selected rows and caps the footprint",
         (
             "analyze",
@@ -1455,7 +1455,7 @@ FIXTURES = (
         ),
         _check_selected_rows,
     ),
-    FixtureCase(
+    CliCase(
         "integer and predicate work uses services",
         (
             "analyze",
@@ -1466,7 +1466,7 @@ FIXTURES = (
         ),
         _check_service_work,
     ),
-    FixtureCase(
+    CliCase(
         "gather into smem is refused for a gmem result",
         (
             "schedule",
@@ -1477,13 +1477,13 @@ FIXTURES = (
         ),
         _check_gmem_gather_refusal,
     ),
-    FixtureCase(
+    CliCase(
         "analyzed smem peak matches the lowered placement",
         ("schedule", "finalize", "tests/nvidia/cuda/fixtures/schedule/hir/sparse_decode.py", "{out}"),
         _check_smem_placement,
     ),
     *(
-        FixtureCase(
+        CliCase(
             name,
             (
                 "check",
@@ -1517,7 +1517,7 @@ FIXTURES = (
         )
     ),
     *(
-        FixtureCase(
+        CliCase(
             name,
             (
                 "check",
@@ -1547,18 +1547,18 @@ FIXTURES = (
             ("scheduled e4m3 gemm matches torch", "hir"),
         )
     ),
-    FixtureCase(
+    CliCase(
         "facts write the Wgmma declaration",
         ("schedule", "facts", "T.cuda.sm90.Wgmma", "--target", "nvidia.h200_sxm", "{out}"),
         partial(_check_golden, golden=WGMMA_FACTS),
     ),
-    FixtureCase(
+    CliCase(
         "facts write the tiled MMA atom alternatives",
         ("schedule", "facts", "T.tiled_mma", "--target", "nvidia.h200_sxm", "{out}"),
         partial(_check_golden, golden=WGMMA_FACTS.with_name("tiled_mma.facts.txt")),
     ),
     *(
-        FixtureCase(
+        CliCase(
             f"facts describe {instruction}",
             (
                 "schedule",
@@ -1575,7 +1575,7 @@ FIXTURES = (
         if instruction not in {"T.cuda.sm90.Wgmma", "T.tiled_mma"}
     ),
     *(
-        FixtureCase(
+        CliCase(
             name,
             ("schedule", "facts", "--target", target, "{out}", *options),
             partial(check_facts, expected=expected),
@@ -1597,7 +1597,7 @@ FIXTURES = (
         )
     ),
     *(
-        FixtureCase(
+        CliCase(
             name,
             ("schedule", "facts", instruction, "--target", target, "{out}"),
             partial(_check_facts_refusal, message=message),
@@ -1618,7 +1618,7 @@ FIXTURES = (
             ),
         )
     ),
-    FixtureCase(
+    CliCase(
         "candidates write the canonical report",
         (
             "schedule",
@@ -1628,7 +1628,7 @@ FIXTURES = (
         ),
         partial(_check_golden, golden=CANDIDATE_GOLDEN),
     ),
-    FixtureCase(
+    CliCase(
         "analyze writes the memory report",
         (
             "analyze",
@@ -3082,7 +3082,7 @@ def test_verifier_rejects_non_integer_indexed_tir_target():
 
 
 @pytest.mark.parametrize("case", FIXTURES, ids=lambda case: case.name)
-def test_fixture(
-    case: FixtureCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_cli_case(
+    case: CliCase, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    check_fixture(case, tmp_path, capsys)
+    check_cli_case(case, tmp_path, capsys)

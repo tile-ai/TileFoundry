@@ -455,11 +455,11 @@ def suggested_extents(lo: int, hi: int) -> tuple[int, ...]:
 
 
 __all__ = [
-    "load_authored_ir",
-    "load_namespace",
     "Program",
     "bind_dims",
     "checked_program",
+    "load_authored_ir",
+    "load_namespace",
     "parse_dims",
     "select_ir",
     "selected_target",
