@@ -7,6 +7,8 @@ import json
 import torch
 from safetensors.torch import save_file
 
+from tests.core.cli._check import MESH_CHECK_ARGS
+
 _ARGS = (
     "--inputs",
     "random",
@@ -114,21 +116,12 @@ def test_a_whole_module_is_checked_against_an_expected_output_file(
     assert "elements 168" in done.stdout
 
 
-def test_check_refuses_a_named_orchestration_method_on_both_sides(
-    tf, orchestrated_twin
-) -> None:
+def test_check_refuses_a_named_orchestration_method_on_both_sides(tf, orchestrated_twin) -> None:
     for target in ("Orchestrated.forward", "OrchestratedTwin.forward"):
         done = tf(
             "check",
             f"{orchestrated_twin}:{target}",
-            "--inputs",
-            "random",
-            "--weights",
-            "random",
-            "--out",
-            "output",
-            "--fn",
-            "nan_inf",
+            *MESH_CHECK_ARGS,
         )
         assert done.returncode == 1
         assert "not orchestration method Orchestrated.forward" in done.stderr
@@ -168,14 +161,7 @@ def test_an_orchestration_method_names_the_files_its_inputs_need(tf, orchestrate
     done = tf(
         "check",
         f"{orchestrated_twin}:OrchestratedTwin",
-        "--inputs",
-        "random",
-        "--weights",
-        "random",
-        "--out",
-        "output",
-        "--fn",
-        "nan_inf",
+        *MESH_CHECK_ARGS,
     )
     assert done.returncode == 1
     assert "orchestration method" in done.stderr
@@ -263,14 +249,7 @@ def test_a_runtime_module_that_names_no_authored_module_is_refused(
         done = tf(
             "check",
             f"{source}:{target}",
-            "--inputs",
-            "random",
-            "--weights",
-            "random",
-            "--out",
-            "output",
-            "--fn",
-            "nan_inf",
+            *MESH_CHECK_ARGS,
         )
         assert done.returncode == 1
         assert refused in done.stderr

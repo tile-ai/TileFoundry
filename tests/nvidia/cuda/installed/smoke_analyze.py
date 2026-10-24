@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+from tests.core.installed._analyze import check_usage_error
+
 _BAD_MODULE = (
     '\n'
     'from tilefoundry.dsl import *\n'
@@ -146,9 +148,7 @@ def test_a_bare_analyze_typechecks_and_prints_only_typed_hir(tf, cmine, tmp_path
 
 def test_analyze_json_needs_an_explicit_analysis(tf, cmine, tmp_path) -> None:
     done = tf("analyze", f"{cmine}:CMine.root", str(tmp_path / "report.json"), "--json")
-    assert done.returncode == 2
-    assert done.stdout == ""
-    assert done.stderr.startswith("usage: tilefoundry analyze")
+    check_usage_error(done)
     assert "tilefoundry analyze: error: --json requires at least one analysis flag:" in done.stderr
 
 

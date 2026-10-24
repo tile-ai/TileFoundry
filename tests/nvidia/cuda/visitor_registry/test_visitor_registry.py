@@ -1,13 +1,4 @@
-"""``tilefoundry.visitor_registry`` — dispatch on the Op class.
-
-``tilefoundry.visitor_registry`` — dispatch on the Op class, and what happens
-when nothing is registered for it.
-
-Every model run dispatches thousands of registered visits, so the positive path
-needs no separate witness. What a model cannot show is the shape of the *miss*:
-an unregistered structural Stmt must pass through, while an unregistered Op must
-raise rather than return a zero.
-"""
+"""``tilefoundry.visitor_registry`` — dispatch on the Op class."""
 
 from __future__ import annotations
 

@@ -34,15 +34,7 @@ jobs:
         run: |
           python -m venv --system-site-packages .venv
           .venv/bin/python -m pip install --upgrade build twine
-      - name: Build tag distributions
-        if: github.event_name == 'push'
-        run: |
-          .venv/bin/python -m build --outdir dist/core .
-          for project in targets/*/; do
-            .venv/bin/python -m build --outdir "dist/$(basename "$project")" "$project"
-          done
-      - name: Build TestPyPI distributions
-        if: github.event_name == 'workflow_dispatch'
+      - name: Build distributions
         env:
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.testpypi-version }}
         run: |

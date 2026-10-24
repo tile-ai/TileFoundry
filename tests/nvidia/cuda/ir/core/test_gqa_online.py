@@ -1,10 +1,4 @@
-"""Cover online GQA specialization and CTA distribution strategies.
-
-Each variant and its dispatch prototype must match the torch decode reference.
-A nonaligned context length fails closed instead of dropping a split tail.
-
-See [hir §2](docs/spec/hir.md#2-function-specialization-api).
-"""
+"""Cover online GQA specialization and CTA distribution strategies."""
 
 from __future__ import annotations
 

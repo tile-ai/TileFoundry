@@ -1,11 +1,4 @@
-"""Cover Reshard materialization strides and rejected destinations.
-
-Storage changes require explicit layouts and cannot target ``umat``. The target
-memory owner selects shared or per-instance strides; without a target the default
-is shared. Dynamic axes have symbolic compact strides.
-
-See [hir §1.3](docs/spec/hir.md#13-op).
-"""
+"""Cover Reshard materialization strides and rejected destinations."""
 
 from __future__ import annotations
 

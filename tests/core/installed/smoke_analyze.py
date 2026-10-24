@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
+from tests.core.installed._analyze import check_usage_error
+
 
 def test_usage_errors_print_usage_before_error(tf) -> None:
     done = tf("analyze")
-    assert done.returncode == 2
-
-    assert done.stdout == ""
-    assert done.stderr.startswith("usage: tilefoundry analyze")
-    assert (
-        "tilefoundry analyze: error: the following arguments are required: SOURCE"
-        in done.stderr
-    )
+    check_usage_error(done)
+    assert "tilefoundry analyze: error: the following arguments are required: SOURCE" in done.stderr
     assert "SOURCE" in done.stderr
     assert "model.py[:Module[.child_module...][.function]]" not in done.stderr
 

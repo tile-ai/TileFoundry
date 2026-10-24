@@ -1,10 +1,4 @@
-"""Pin checkpoint loading to the process-selected CUDA device.
-
-Safetensors interprets bare ``"cuda"`` as index 0, while torch uses the current
-device. They diverge only on multi-GPU hosts. These tests require all spellings
-to resolve through ``torch.cuda.current_device()`` so loaded weights and adjacent
-computations share a device.
-"""
+"""Pin checkpoint loading to the process-selected CUDA device."""
 
 from __future__ import annotations
 

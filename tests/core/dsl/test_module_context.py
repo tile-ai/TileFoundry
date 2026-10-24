@@ -1,13 +1,4 @@
-"""Module-owned execution context: Target and the ordered Topology hierarchy.
-
-A Module is the execution domain of the functions it owns. The outermost
-Module declares its Target; a child declaration defines its own domain, while
-an undeclared child inherits during a visitor walk. Topologies are declared per
-Module: omitting them inherits the owner's hierarchy, while an explicit empty
-tuple declares a topology-free
-domain. A visitor frame supplies inherited context without any
-Function carrying it.
-"""
+"""Module-owned execution context: Target and the ordered Topology hierarchy."""
 
 from __future__ import annotations
 

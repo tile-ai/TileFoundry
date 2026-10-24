@@ -177,33 +177,23 @@ def load_targets() -> Mapping[str, type[Target]]: ...
 ```
 
 - constraints:
-  - `load_targets()` MUST load the `tilefoundry.targets` entry points in name
-    order. Each entry point `<name>` MUST name the subpackage
-    `tilefoundry_<vendor>.<name>`; importing that subpackage MUST complete its
-    target, operation, visitor, evaluator and pass registrations.
-  - A backend MUST ship as its own distribution `tilefoundry-<vendor>` whose only
-    top-level package is `tilefoundry_<vendor>`. It MAY declare several entry
-    points, one per target subpackage, and MUST depend on `tilefoundry==V` at its
-    own version `V`.
-  - `load_targets()` MUST read the top-level package metadata once per target
-    distribution during a load attempt, preferring `top_level.txt` and using
-    `RECORD` when it is absent.
-    It MUST reject any other top-level package. Missing distribution metadata or
-    an undetermined package set MUST raise `TargetLoadError` naming the distribution.
-  - A load failure MUST raise `TargetLoadError`. Import and registration failures
-    MUST identify the entry point and cause; package metadata failures MUST
-    identify the distribution and cause.
-    A failed load MUST NOT mark loading complete; a later call MAY retry it.
-    A successful call MUST make later calls no-ops.
+  - `load_targets()` MUST load `tilefoundry.targets` entry points in name order.
+    Each `<name>` MUST point to `tilefoundry_<vendor>.<name>`; importing it MUST
+    complete target, operation, visitor, evaluator and pass registrations.
+  - A backend MUST ship as `tilefoundry-<vendor>` with only the top-level package
+    `tilefoundry_<vendor>` and depend on `tilefoundry==V` at its own version `V`.
+    `load_targets()` MUST reject other top-level packages.
+  - A load failure MUST raise `TargetLoadError` naming the entry point or
+    distribution and cause. A failed load MUST allow retry; a successful load
+    MUST make later calls no-ops.
   - Core MUST NOT import or re-export plugin implementations. CPU MUST remain
-    available from `tilefoundry.target`; another backend MUST be a subpackage
-    `tilefoundry_<vendor>.<name>` and MUST export its target values from
-    `tilefoundry_<vendor>`.
+    available from `tilefoundry.target`; other backends MUST export target values
+    from `tilefoundry_<vendor>`.
   - Importing `tilefoundry` MUST call `load_targets()` once at the end of core
     initialization. CLI, DSL lookup, stub generation and spec discovery MUST
     use the registrations established by that import, without loading again.
-    A plugin package already present in `sys.modules` MUST NOT be imported again:
-    when a user imports a plugin first, that partially initialized package completes
+    A plugin package already present in `sys.modules` MUST be skipped: when a
+    user imports a plugin first, that partially initialized package completes
     its own registrations after core initialization returns.
   - A plugin MUST install its specifications as package data under `docs/spec/`.
     After loading targets, `tilefoundry spec` MUST discover those files through

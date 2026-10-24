@@ -26,7 +26,13 @@ import tilefoundry.ir.hir.schedule as schedules
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 import tilefoundry.visitor_registry.instruction as instructions
 from tests.core._source import import_dsl
-from tests.core.schedule._fixtures import FixtureCase, _quiet_json, check_facts, check_fixture
+from tests.core.schedule._fixtures import (
+    FixtureCase,
+    _quiet_json,
+    arithmetic_facts,
+    check_facts,
+    check_fixture,
+)
 from tilefoundry.analysis.access import AliasKind
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.api import analyze
@@ -194,16 +200,10 @@ FACT_INSTRUCTIONS = sorted(
     }
 )
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
-_H200_FACTS_TEXT = """\
+_H200_FACTS_TEXT = f"""\
 target nvidia.h200_sxm
 instructions
-  T.arange                     all targets
-  T.binary                     all targets
-  T.cast                       all targets
-  T.clamp                      all targets
-  T.unary                      all targets
-  T.where                      all targets
-  T.copy_async                 cp.async
+{arithmetic_facts(27)}  T.copy_async                 cp.async
   T.copy_async_bulk            cp.async.bulk
   T.copy_async_tensor          cp.async.bulk.tensor
   T.copy_reduce_async_tensor   cp.async.bulk.tensor
@@ -239,16 +239,10 @@ _H200_FACTS_JSON = {
         {"id": "T.reduce", "capability": None},
     ],
 }
-_SM89_FACTS_TEXT = """\
+_SM89_FACTS_TEXT = f"""\
 target nvidia.rtx_6000_ada
 instructions
-  T.arange      all targets
-  T.binary      all targets
-  T.cast        all targets
-  T.clamp       all targets
-  T.unary       all targets
-  T.where       all targets
-  T.copy_async  cp.async
+{arithmetic_facts(12)}  T.copy_async  cp.async
   T.copy        all targets
   T.ldmatrix    ldmatrix
   T.relu        all targets

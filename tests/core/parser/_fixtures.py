@@ -14,6 +14,16 @@ from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.visitor import collect_exprs
 
 
+def fixture_cases(module_file: str, excluded: tuple[str, ...] = ()):
+    root = Path(module_file).resolve().parents[1] / "fixtures"
+    sources = tuple(
+        path
+        for path in sorted(root.rglob("*.py"))
+        if path.name != "__init__.py" and str(path.relative_to(root)) not in excluded
+    )
+    return pytest.mark.parametrize("source", sources, ids=lambda path: str(path.relative_to(root)))
+
+
 def _functions_defined_by(namespace: dict[str, object]) -> tuple[Function, ...]:
     found: list[Function] = []
     seen: set[int] = set()

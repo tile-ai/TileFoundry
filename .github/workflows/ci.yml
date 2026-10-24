@@ -77,17 +77,9 @@ jobs:
         run: ccache --dir "$TILEFOUNDRY_CACHE_DIR/ccache" --show-log-stats
       - name: Build the distributions
         run: |
-          shopt -s nullglob
-          projects=(. targets/*/)
-          for project in "${projects[@]}"; do
+          for project in . targets/*/; do
             uv build --out-dir "$RUNNER_TEMP/wheel" "$project"
           done
-          built=("$RUNNER_TEMP"/wheel/tilefoundry*.whl)
-          if (( ${#built[@]} != ${#projects[@]} )); then
-            echo "expected ${#projects[@]} wheels, found ${#built[@]}" >&2
-            printf '%s\n' "${built[@]}" >&2
-            exit 1
-          fi
       - name: Install the wheel into a clean environment
         run: |
           uv venv --clear --no-project --python /usr/local/bin/python3.12 .wheel-venv

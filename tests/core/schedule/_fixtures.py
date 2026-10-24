@@ -51,3 +51,10 @@ def check_fixture(case: FixtureCase, tmp_path: Path, capsys: pytest.CaptureFixtu
         code = error.code
     assert code == case.code
     case.check(out, capsys.readouterr())
+
+
+def arithmetic_facts(width: int) -> str:
+    return "".join(
+        f"  {name:<{width}}  all targets\n"
+        for name in ("T.arange", "T.binary", "T.cast", "T.clamp", "T.unary", "T.where")
+    )

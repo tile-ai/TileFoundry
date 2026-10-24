@@ -1,10 +1,4 @@
-"""Inspection printer: what the emitted source carries besides the program.
-
-The program itself round-trips on every corpus model. What has no such witness is
-the material around it — an opt-in type annotation, the binding label the emitted
-left-hand side carries, and the target header, whose value must rebuild the
-*same* Target when the emitted source is executed.
-"""
+"""Inspection printer: what the emitted source carries besides the program."""
 
 from tests.core._source import import_dsl
 from tilefoundry.dsl import *

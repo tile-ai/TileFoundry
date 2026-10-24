@@ -14,6 +14,7 @@ import pytest
 import torch
 from safetensors.torch import load_file, save_file
 
+from tests.core.cli._check import MESH_CHECK_ARGS
 from tests.nvidia.cuda.fixtures.placed import leaf_weights
 from tests.nvidia.cuda.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tests.nvidia.cuda.models.corpus import MODELS_ROOT
@@ -514,14 +515,7 @@ def test_a_pinned_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> Non
             [
                 "check",
                 f"{source}:Composed.root",
-                "--inputs",
-                "random",
-                "--weights",
-                "random",
-                "--out",
-                "output",
-                "--fn",
-                "nan_inf",
+                *MESH_CHECK_ARGS,
                 "--dim",
                 "n_check=4",
             ]

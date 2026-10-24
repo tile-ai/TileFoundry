@@ -1,10 +1,4 @@
-"""Pin schemas and identities for independent installed hardware documents.
-
-A wrong hardware number silently prices a plan for a nonexistent machine. These
-tests reject malformed documents, unmodelled facts, counterfeit measurements,
-and numbers outside documents. Each failure retains a diagnostic useful to the
-TOML author.
-"""
+"""Pin schemas and identities for independent installed hardware documents."""
 
 from __future__ import annotations
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.core.parser._fixtures import check_parsed_call_sources
+from tests.core.parser._fixtures import check_parsed_call_sources, fixture_cases
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.parser import ParseError
@@ -78,14 +78,6 @@ def test_a_loop_iterator_states_why_its_arity_is_invalid(iterator: str, expected
                 return out
 
 
-_FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures"
-_FIXTURE_SOURCES = tuple(
-    path for path in sorted(_FIXTURE_ROOT.rglob("*.py")) if path.name != "__init__.py"
-)
-
-
-@pytest.mark.parametrize(
-    "source", _FIXTURE_SOURCES, ids=lambda source: str(source.relative_to(_FIXTURE_ROOT))
-)
+@fixture_cases(__file__)
 def test_every_parsed_call_knows_where_it_came_from(source: Path) -> None:
     check_parsed_call_sources(source)

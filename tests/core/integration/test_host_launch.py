@@ -1,8 +1,4 @@
-"""End-to-end checks for the explicit host/device boundary.
-
-Covers static and dynamic CTA launches, implicit and explicit CPU entries,
-multi-CTA execution, and device-placement and shape negatives.
-"""
+"""End-to-end checks for the explicit host/device boundary."""
 
 from __future__ import annotations
 

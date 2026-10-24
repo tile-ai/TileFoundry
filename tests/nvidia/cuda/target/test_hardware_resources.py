@@ -14,8 +14,13 @@ from pathlib import Path
 
 import pytest
 
-from tests.core.target._hardware import _BareArchitecture, _BareDevice
-from tests.core.target._instructions import instruction_declarations
+from tests.core.target._hardware import (
+    bare_projection_cases,
+    check_bare_projection,
+    check_document_evidence,
+    check_hardware_defaults,
+)
+from tests.core.target._instructions import check_architecture_capabilities
 from tests.core.target.test_hardware_resources import _MINIMAL_DEVICE
 from tilefoundry.analysis.facts import MemoryHierarchyFacts, ThroughputFacts
 from tilefoundry.ir.types import DType
@@ -256,41 +261,24 @@ def test_resolution_failures_are_each_distinguishable() -> None:
 
 @pytest.mark.parametrize(
     ("construct", "message"),
-    [
-        pytest.param(
-            lambda: CudaTarget(_H200, architecture=_BareArchitecture()),
-            "CudaTarget.architecture must be an installed ID string, a document "
-            "path, or a CudaArchitecture; got _BareArchitecture",
-            id="cuda-architecture",
+    bare_projection_cases(
+        lambda architecture: CudaTarget(_H200, architecture=architecture),
+        CudaTarget,
+        "cuda",
+        (
+            "CudaTarget.architecture must be an installed ID string, a document path, "
+            "or a CudaArchitecture; got _BareArchitecture",
+            "CudaTarget.device must be an installed ID string, a document path, or a "
+            "CudaDevice; got _BareDevice",
         ),
-        pytest.param(
-            lambda: CudaTarget(_BareDevice()),
-            "CudaTarget.device must be an installed ID string, a document path, "
-            "or a CudaDevice; got _BareDevice",
-            id="cuda-device",
-        ),
-    ],
+    ),
 )
 def test_document_backends_reject_bare_projection_value_markers(construct, message: str) -> None:
-    with pytest.raises(TypeError) as rejected:
-        construct()
-    assert str(rejected.value) == message
+    check_bare_projection(construct, message)
 
 
 def test_no_installed_number_is_repeated_as_a_python_default() -> None:
-    """Keep hardware numbers exclusively in documents.
-
-    Value classes declare shape, not content, and cannot be constructed without
-    document values.
-    """
-    for value_type in (
-        cuda_spec.SM90_ID,
-        cuda_spec.H200_SXM_ID,
-    ):
-        hardware = CudaTarget.hardware
-        built = hardware.resolve(value_type).value
-        with pytest.raises(TypeError, match="required positional argument"):
-            type(built)()
+    check_hardware_defaults(CudaTarget.hardware, (cuda_spec.SM90_ID, cuda_spec.H200_SXM_ID))
 
     assert CudaTarget("nvidia.h200_sxm").device.peak_for(DType.f32) == 67_000_000_000_000
     assert CudaTarget.hardware.documents()[_H200].fact("throughput.f32").origin == "vendor"
@@ -332,14 +320,7 @@ def test_architecture_bandwidth_evidence_distinguishes_known_from_unavailable() 
         _H200: {"memory.hbm.owner": "target"},
         _B200: {"memory.hbm.owner": "target"},
     }
-    for spec_id, expected_owners in owners.items():
-        hardware = CudaTarget.hardware
-        document = hardware.documents()[spec_id]
-        assert not any("policy" in path for path in document.facts)
-        assert not any("topology" in path for path in document.facts)
-        assert {path: document.fact(path).value for path in expected_owners} == expected_owners
-        for fact in document.facts.values():
-            assert (fact.value is None) == (not fact.available)
+    check_document_evidence(CudaTarget.hardware, owners)
 
 
 def test_cuda_sm_clocks_are_the_typed_floor_of_existing_device_facts() -> None:
@@ -367,16 +348,5 @@ def test_cuda_sm_clocks_are_the_typed_floor_of_existing_device_facts() -> None:
 
 def test_instruction_capabilities_and_execution_resources_are_separate_axes() -> None:
     """Enumerate instruction declarations and reconcile only their capability side."""
-    instructions = tuple(
-        (op_type, capability)
-        for op_type, capability in instruction_declarations()
-        if op_type.__module__.startswith("tilefoundry_nvidia.")
-    )
-    capabilities = {capability.name for _op_type, capability in instructions}
-    architecture_capabilities = {
-        capability
-        for target in CudaTarget.available()
-        for capability in target.architecture.capabilities
-    }
-    assert capabilities <= architecture_capabilities
+    check_architecture_capabilities(CudaTarget, "tilefoundry_nvidia.")
     assert all("cp.async" in target.architecture.capabilities for target in CudaTarget.available())

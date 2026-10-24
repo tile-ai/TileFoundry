@@ -1,13 +1,4 @@
-"""Generic shard propagation engine over a matmul-shaped relation.
-
-Domain dims: 0=M, 1=N, 2=K. lhs[M,K], rhs[K,N], out[M,N] (K reduced).
-
-What is kept here is one case per rule the engine has to decide, plus every case
-where the answer is "refuse": a Split the engine cannot carry into the output has
-to fail rather than silently degrade to Broadcast, because a value quietly
-declared replicated when each point holds a shard of it is read whole by everyone
-downstream.
-"""
+"""Generic shard propagation engine over a matmul-shaped relation."""
 
 from __future__ import annotations
 

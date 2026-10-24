@@ -1,8 +1,4 @@
-"""`check` through the command line, on targets the corpus already declares.
-
-The command is the workflow: nothing else compares an implementation against a
-reference, so every behaviour here is reached the way an agent reaches it.
-"""
+"""`check` through the command line, on targets the corpus already declares."""
 
 from __future__ import annotations
 
@@ -11,6 +7,7 @@ import json
 import pytest
 import torch
 
+from tests.core.cli._check import MESH_CHECK_ARGS
 from tests.core.fixtures.logical import callee_dim
 from tests.core.fixtures.placed import gqa_decode
 from tilefoundry import cli
@@ -166,14 +163,7 @@ def test_a_dimension_left_as_a_range_is_refused(capsys) -> None:
             [
                 "check",
                 DISPATCHING,
-                "--inputs",
-                "random",
-                "--weights",
-                "random",
-                "--out",
-                "output",
-                "--fn",
-                "nan_inf",
+                *MESH_CHECK_ARGS,
             ]
         )
         == 1

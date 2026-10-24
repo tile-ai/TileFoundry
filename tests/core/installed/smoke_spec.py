@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.core.installed._spec import check_rule, listed_documents
+
 
 def test_spec_lists_the_documents_there_are(tf) -> None:
-    done = tf("spec")
-    assert done.returncode == 0, done.stderr
-    listed = done.stdout
+    listed = listed_documents(tf)
 
     assert "hir" in listed and "dsl" in listed
     assert "runtime" in listed
@@ -58,12 +58,10 @@ def test_spec_rejects_a_section_that_does_not_exist(tf) -> None:
 @pytest.mark.parametrize(
     ("topic", "section", "expected"),
     (
-        ("core-ir", "target-inheritance", 'with `target=CpuTarget()`'),
+        ("core-ir", "target-inheritance", "with `target=CpuTarget()`"),
         ("core-ir", "default-step", "MUST have no default step"),
         ("cli", "check", "A FAIL with `--inputs random`"),
     ),
 )
 def test_spec_answers_askable_rules(tf, topic, section, expected) -> None:
-    done = tf("spec", topic, section)
-    assert done.returncode == 0, done.stderr
-    assert expected in done.stdout
+    check_rule(tf, topic, section, expected)

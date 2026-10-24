@@ -16,20 +16,17 @@ import io
 import re
 import sys
 import tokenize
-from fnmatch import fnmatchcase
 from pathlib import Path
 
 MAX_PROSE_LINES = 8
 MAX_COLUMNS = 100
 MAX_ASSERT_MESSAGE = 100
 EXEMPT_PREFIXES = (
-    "tests/*/*/models/",
+    "tests/nvidia/cuda/models/",
     "tests/core/models/decode_oracle.py",
     "tests/core/models/dense_decode.py",
-    "targets/*/tilefoundry_*/*/models/",
-    "src/tilefoundry/orchestrator/",
+    "targets/nvidia/tilefoundry_nvidia/cuda/models/",
     "examples/",
-    "tests/*/*/fixtures/schedule/tir/",
 )
 DIRECTIVE_PREFIXES = ("ruff:", "noqa", "type:", "pragma:", "mypy:", "fmt:", "isort:")
 PYTHON_SUFFIXES = frozenset({".py"})
@@ -62,16 +59,10 @@ ROOT = SELF.parent.parent
 def is_exempt(path: Path) -> bool:
     """Whether *path* is temporarily outside placement and size checks."""
     try:
-        relative = path.resolve().relative_to(ROOT).parts
+        relative = path.resolve().relative_to(ROOT).as_posix()
     except ValueError:
         return False
-    for prefix in EXEMPT_PREFIXES:
-        parts = prefix.rstrip("/").split("/")
-        if len(relative) >= len(parts) and all(
-            fnmatchcase(part, pattern) for part, pattern in zip(relative, parts)
-        ):
-            return True
-    return False
+    return any(relative.startswith(prefix) for prefix in EXEMPT_PREFIXES)
 
 
 def comment_tokens(text: str) -> list[tokenize.TokenInfo]:

@@ -308,28 +308,13 @@ that runs before it can be read is a reference that decides what it describes.
     identity, once per model. Repeated instances of one definition MUST NOT
     increase either count. The forest MUST still show every instance, including
     the element count of an indexed slot when its instances are grouped.
-  - `--source` MUST print the absolute path of the shipped model directory first,
-    followed by one line for every ordinary file in that model's directory, in
-    stable filename order, excluding `__pycache__`. Each file line MUST give its
-    filename and the first line of its own docstring, or `-` when it has none.
-    Checkout and installation MUST read the same target package resources and
-    name the same files, without a provenance message on standard error. The
-    first line MUST be the path alone, so a caller may read it as one.
-  - `--source` MUST parse a file's text to read its docstring and MUST NOT import
-    or execute model source. It MUST NOT reformat, regenerate, or copy a shipped
-    file: the installed directory is the reference, and a rendered copy is a
-    different artifact wearing its name.
-  - Catalog membership and `--source` describe a model and its shipped authored
-    files; neither claims that the model has a runnable decode path. The
-    model directory MUST contain only `model.py`, `config.json`, and any published
-    `hf_alias.py`. It MUST NOT contain `run.py` or `generation.py`; those files
-    MUST ship only under the core `orchestrator/causal_lm/` resources. To run a
-    decode loop, the caller MUST copy the files named by
-    `tutorial orchestrator causal_lm` into its copy of a model directory.
-  - The catalog MUST combine models from every loaded target's `models/catalog.json`.
-    Duplicate model names MUST be refused with an error naming both targets.
-    With no target shipping models, `models` MUST report zero models and say
-    `no installed target ships models`.
+  - `--source` MUST print the model directory's absolute path alone on the first
+    line, then its files except `__pycache__` in stable filename order. Checkout
+    and installation MUST list the same files.
+  - The catalog MUST merge each target's `models/catalog.json`, rejecting duplicate
+    model names with an error naming both targets. Model directories MUST NOT
+    publish `run.py` or `generation.py`; these MUST ship once in core's
+    `orchestrator/causal_lm/` resources.
   - A `NAME` the catalog does not have MUST be refused naming the models it does.
   - The forest and the counts MUST be generated from the models themselves rather
     than maintained beside them, because a hand-kept inventory of trees and numbers

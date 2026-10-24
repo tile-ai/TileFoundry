@@ -1,13 +1,4 @@
-"""``@module(entry=...)`` decorator: collect class-body DSL functions into a Module.
-
-The decorator scans the class for ``@func`` / ``@prim_func`` members (which are
-``hir.Function`` / ``tir.PrimFunction`` values), builds a ``Module`` in
-definition order, and binds the decorated name to it. The class body is a pure
-function container: a non-dunder, non-DSL member is rejected; ``entry`` is an
-explicit, required name that must resolve to a collected function. A composed
-member may call siblings defined above it (the call lowers to a ``Call``
-targeting the sibling); forward references stay unresolved and fail loudly.
-"""
+"""``@module(entry=...)`` decorator: collect class-body DSL functions into a Module."""
 
 from __future__ import annotations
 
