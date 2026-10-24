@@ -1,0 +1,49 @@
+"""Pin checkpoint loading to the process-selected CUDA device.
+
+Safetensors interprets bare ``"cuda"`` as index 0, while torch uses the current
+device. They diverge only on multi-GPU hosts. These tests require all spellings
+to resolve through ``torch.cuda.current_device()`` so loaded weights and adjacent
+computations share a device.
+"""
+
+from __future__ import annotations
+
+import pytest
+import torch
+
+from tilefoundry.runtime.resource import DrawnResource, _resolved_device
+
+
+def cpu_gen() -> torch.Generator:
+    return torch.Generator(device="cpu").manual_seed(0)
+
+
+def test_drawn_resource_never_redraws():
+    from tests.nvidia.cuda.fixtures.placed.leaf_weights import Small  # noqa: PLC0415
+
+    resource = DrawnResource(Small, cpu_gen(), "cpu")
+    assert resource.load("w") is resource.load("w")
+
+
+def test_a_bare_cuda_resolves_to_the_device_the_process_selected() -> None:
+    if not torch.cuda.is_available():
+        assert _resolved_device("cuda") == "cuda"
+        return
+    assert _resolved_device("cuda") == f"cuda:{torch.cuda.current_device()}"
+
+
+def test_it_follows_the_selection_rather_than_reading_it_once() -> None:
+    """The resolved device tracks a later `set_device`.
+
+    The resolved device tracks a later `set_device`, so a worker assigned a card
+    after import still loads onto that card.
+    """
+    if torch.cuda.device_count() < 2:
+        pytest.skip("tracking a later set_device needs a second card to move to")
+    original = torch.cuda.current_device()
+    try:
+        for index in (0, 1):
+            torch.cuda.set_device(index)
+            assert _resolved_device("cuda") == f"cuda:{index}"
+    finally:
+        torch.cuda.set_device(original)

@@ -10,7 +10,7 @@ import torch
 
 import tilefoundry
 import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tests._source import import_dsl
+from tests.core._source import import_dsl
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.kinds import BinaryKind

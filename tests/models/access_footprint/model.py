@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
+from tests.nvidia.cuda.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import CudaTarget
 

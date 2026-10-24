@@ -1,0 +1,232 @@
+"""Target-neutral tests and helpers."""
+
+import torch
+
+from tests.core._source import import_dsl
+from tests.core.fixtures.shapes.tile_window_syntax import (
+    nested_scan_copy,
+    scan_copy,
+    sequential_scan_copy,
+)
+from tilefoundry.dsl import *
+from tilefoundry.evaluator import evaluate
+from tilefoundry.inspection import as_script
+
+_HEADER = (
+    'from __future__ import annotations\n'
+    'from tilefoundry.dsl import *\n'
+    '\n'
+    '\n'
+)
+
+
+def test_positional_and_keyword_attrs_are_the_same_program() -> None:
+    """``tf.reshard(a, shared_layout)`` ≡ ``tf.reshard(a, layout=shared_layout)``.
+
+    ``tf.reshard(a, shared_layout)`` ≡ ``tf.reshard(a, layout=shared_layout)``: an
+    attribute may be passed either way at the call site, and the printer has one
+    canonical form for both, so the two sources print identically.
+    """
+    body = (
+        "@func\n"
+        'def f(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1536), "f32"]:\n'
+        "    sl = ShardLayout(\n"
+        "        layout=Layout((1, 1536), (1536, 1)),\n"
+        "        attrs=(),\n"
+        '        mesh=Mesh((Topology("cta", 128),), Layout((128,), (1,))),\n'
+        "    )\n"
+    )
+    printed = [
+        as_script(import_dsl(_HEADER + body + call))
+        for call in (
+            "    b = tf.reshard(a, sl)\n    return b\n",
+            "    b = tf.reshard(a, layout=sl)\n    return b\n",
+        )
+    ]
+
+    assert printed[0] == printed[1]
+
+
+def test_insert_slice_tuple_offset_arg_roundtrips() -> None:
+    """Test insert slice tuple offset arg roundtrips.
+
+    A rank-3 ``insert_slice`` whose offset is a literal tuple argument prints
+    the tuple inline as a literal ``(e0, e1, e2)`` at the call site (the parser
+    lifts an inline offset tuple back to a hir Tuple), so importing the source
+    leaves no dangling reference and re-printing is identical.
+    """
+    fn = import_dsl(
+        _HEADER + "\n@func\n"
+        'def ins(dst: Tensor[(2, 5, 3), "f32"], upd: Tensor[(2, 1, 3), "f32"]):\n'
+        "    res = tf.insert_slice(dst, upd, (0, 1, 0))\n"
+        "    return res\n"
+    )
+    script = as_script(fn)
+    assert as_script(import_dsl(script)) == script
+
+
+def test_slice_runtime_starts_tuple_roundtrips() -> None:
+    """An explicit Slice preserves a runtime start that subscript sugar cannot spell."""
+    fn = import_dsl(
+        _HEADER + "\n@func\n"
+        'def cut(x: Tensor[(8, 4), "f32"], start: Tensor[(), "i64"]):\n'
+        "    return tf.slice(x, (start, 0), sizes=(2, 4), strides=(1, 1))\n"
+    )
+    script = as_script(fn)
+
+    assert "tf.slice(x, (start, 0), sizes=(2, 4), strides=(1, 1))" in script
+    assert as_script(import_dsl(script)) == script
+
+
+def test_non_unit_scalar_index_loop_roundtrips_as_range() -> None:
+    """A scalar index is not the full-window signature emitted by ``tile``."""
+    for loop in ("range(8)", "range(0, 8, 2)"):
+        fn = import_dsl(
+            _HEADER + "\n@func\n"
+            'def gather(x: Tensor[(8,), "f32"]):\n'
+            '    out = tf.zeros(Tensor[(), "f32"])\n'
+            f"    for i in {loop}:\n"
+            "        out = tf.add(out, x[i])\n"
+            "    return out\n"
+        )
+        script = as_script(fn)
+
+        assert f"for i in {loop}:" in script
+        assert "for i in tf.tile(" not in script
+        assert as_script(import_dsl(script)) == script
+
+
+def test_shadowed_call_loc_roundtrips() -> None:
+    """Preserve a binding that has the same name as its qualified operation.
+
+    The tuple assignment labels its producer ``topk``. The qualified
+    ``tf.topk`` call keeps that binding usable without renaming it.
+    """
+    fn = import_dsl(
+        _HEADER + "\n@func\n"
+        'def sh(x: Tensor[(4, 8), "f32"]):\n'
+        "    vals, idx = tf.topk(x, k=3, axis=-1, largest=True, sorted=True)\n"
+        "    return vals\n"
+    )
+    script = as_script(fn)
+    assert "topk = tf.topk(" in script, script
+    assert as_script(import_dsl(script)) == script
+
+
+def test_low_precision_dtype_names_roundtrip() -> None:
+    """Test low precision dtype names roundtrip.
+
+    A ``@func`` whose parameters are typed with the three low-precision dtype
+    names (fp8e4m3, f8e8m0, f4e2m1) prints those names and imports with the same
+    dtypes.
+    """
+    expected = [DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1]
+    fn = import_dsl(
+        _HEADER + "\n@func\n"
+        'def lp(a: Tensor[(4,), "fp8e4m3"], b: Tensor[(4,), "f8e8m0"], '
+        'c: Tensor[(4,), "f4e2m1"]):\n'
+        "    return (a, b, c)\n"
+    )
+    assert [p.type.dtype for p in fn.params] == expected
+
+    printed = as_script(fn)
+    for name in ("fp8e4m3", "f8e8m0", "f4e2m1"):
+        assert name in printed, printed
+    imported = import_dsl(printed)
+    assert [p.type.dtype for p in imported.params] == expected
+    assert as_script(imported) == printed
+
+
+def test_tuple_return_with_mesh_element_roundtrips() -> None:
+    """Test tuple return with mesh element roundtrips.
+
+    A tuple-return element that introduces a mesh (a ``reshard``) must be
+    discovered by the printer's mesh collection via ``Tuple.elements``; the
+    rendered call references the declared mesh and round-trips.
+    """
+    fn = import_dsl(
+        _HEADER + "@func\n"
+        'def f(a: Tensor[(1, 1536), "f32"], c: Tensor[(1, 1536), "f32"]):\n'
+        "    sl = ShardLayout(\n"
+        "        layout=Layout((1, 1536), (1536, 1)),\n"
+        "        attrs=(),\n"
+        '        mesh=Mesh((Topology("cta", 128),), Layout((128,), (1,))),\n'
+        "    )\n"
+        '    b = tf.reshard(a, sl, "smem")\n'
+        "    return (b, c)\n"
+    )
+    printed = as_script(fn)
+    assert "return (" in printed, printed
+    assert "mesh=Mesh(" in printed, printed
+    assert as_script(import_dsl(printed)) == printed
+
+
+def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
+    """A ``ComposedLayout`` whose outer is a prior ``ShardLayout`` stage must print as that nesting.
+
+    A ``ComposedLayout`` whose outer is a prior ``ShardLayout`` stage must print
+    as that nesting: flattening it would lose which mesh level owns which axis.
+    """
+    nested = (
+        "ShardLayout(ComposedLayout(None, 1, "
+        "ShardLayout(Layout((8,), (1,)), (S(0),), "
+        "Mesh((Topology('thread', 2),), Layout((2,), (1,))))), "
+        "(B(),), Mesh((Topology('cta', 4),), Layout((4,), (1,))))"
+    )
+    fn = import_dsl(
+        _HEADER + "@func\n"
+        f"def f(a: Tensor[(8,), 'f32', {nested}]) -> Tensor[(8,), 'f32', {nested}]:\n"
+        "    return a\n"
+    )
+    printed = as_script(fn)
+
+    assert "layout=ComposedLayout(" in printed
+    assert "outer=ShardLayout(" in printed
+    assert as_script(import_dsl(printed)) == printed
+
+
+def test_carry_updates_print_last_without_shadowing_the_old_value() -> None:
+    fn = import_dsl(
+        _HEADER + "\n@func\n"
+        'def online(x: Tensor[(4,), "f32"]):\n'
+        '    m = tf.zeros(Tensor[(4,), "f32"])\n'
+        '    o = tf.zeros(Tensor[(4,), "f32"])\n'
+        "    for i in range(4):\n"
+        "        m_new = tf.maximum(m, x)\n"
+        "        corr = tf.sub(m, m_new)\n"
+        "        o = tf.add(o, corr)\n"
+        "        m = m_new\n"
+        "    return (m, o)\n"
+    )
+
+    printed = as_script(fn)
+    rebuilt = import_dsl(printed)
+    loop_lines = printed[printed.index("    for i in range(4):") :].splitlines()
+
+    assert loop_lines[-3:] == ["        o = o_2", "        m = m_new", "    return (m, o)"]
+    assert loop_lines.index("        m_new = tf.max(m, x)") < loop_lines.index(
+        "        corr = tf.sub(m, m_new)"
+    )
+    assert repr(fn.body) == repr(rebuilt.body)
+    assert as_script(rebuilt) == printed
+
+
+def test_two_argument_tile_window_roundtrips_as_a_subscript() -> None:
+    for fn, index in (
+        (scan_copy, "x[row, :]"),
+        (nested_scan_copy, "x[row, col]"),
+        (sequential_scan_copy, "x[row, :]"),
+    ):
+        script = as_script(fn)
+
+        assert index in script
+        lines = script.splitlines()
+        if fn is nested_scan_copy:
+            inner = next(i for i, line in enumerate(lines) if line.strip() == "for col in tf.tile(4, 2):")
+            assert lines[inner - 1].strip() != "out = out"
+            assert lines[-2].strip() == "out = out"
+        rebuilt = import_dsl(script)
+        assert as_script(rebuilt) == script
+        if fn is sequential_scan_copy:
+            x = torch.arange(16, dtype=torch.float32).reshape(4, 4)
+            torch.testing.assert_close(evaluate(rebuilt, x), (x + 1) * 2)

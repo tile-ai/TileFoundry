@@ -1,0 +1,110 @@
+"""ArgMax typeinfer: the reduced axis is dropped and the result is i64."""
+
+from __future__ import annotations
+
+import pytest
+import torch
+
+from tests.core.evaluator.eval_utils import EvalCase, run_eval_case
+from tests.core.ops.ir.typeinfer_utils import (
+    ExpectedError,
+    TypeInferCase,
+    infer_call,
+    run_typeinfer_case,
+)
+from tilefoundry.ir.hir.tensor.argmax import ArgMax
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    Mesh,
+    ShardLayout,
+    TensorType,
+    Topology,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
+from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
+from tilefoundry.ir.types.shard_layout import (
+    Partial,
+    Split,
+)
+
+_I64 = DType.i64
+
+CASES = [
+    TypeInferCase(
+        "default_axis_last",
+        ArgMax(),
+        (make_tensor_type((1, 151936), DType.f32),),
+        make_tensor_type((1,), _I64),
+    ),
+    TypeInferCase(
+        "axis_out_of_range",
+        ArgMax(axis=3),
+        (make_tensor_type((4,), DType.f32),),
+        ExpectedError(match="out of range"),
+    ),
+    TypeInferCase(
+        "partial_input_rejected",
+        ArgMax(),
+        (
+            make_shard_tensor_type(
+                (4, 256),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Partial("max"),),
+            ),
+        ),
+        ExpectedError(match="x carries Partial"),
+    ),
+    TypeInferCase(
+        "reduction_axis_split_rejected",
+        ArgMax(axis=-1),
+        (
+            make_shard_tensor_type(
+                (4, 256),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Split(1),),
+            ),
+        ),
+        ExpectedError(match=r"reduction axis 1.*Split-sharded.*Reshard"),
+    ),
+    TypeInferCase(
+        "nested_modes_fall_back_to_flat_axis_projection",
+        ArgMax(axis=1),
+        (TensorType(
+            (8, 512), DType.f32,
+            ShardLayout(
+                Layout(((8, 8), (4, 16)), ((512, 64), (16, 1))),
+                (Split(1),),
+                Mesh((Topology("thread", 8),), Layout((8,), (1,)), ("lane",)),
+            ),
+            "rmem",
+        ),),
+        ExpectedError(match=r"reduction axis 1.*Split-sharded.*Reshard"),
+    ),
+
+]
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
+def test_argmax_typeinfer(case):
+    run_typeinfer_case(case)
+
+
+def test_argmax_layout_describes_result_and_preserves_surviving_split():
+    plain = make_tensor_type((4, 256), DType.f32, layout=Layout(shape=(4, 256), strides=(256, 1)))
+    assert infer_call(ArgMax(axis=-1), plain).layout == Layout(shape=(4,), strides=(1,))
+
+    sharded = make_shard_tensor_type(
+        (4, 256), mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)), attrs=(Split(0),)
+    )
+    result = infer_call(ArgMax(axis=-1), sharded)
+    assert isinstance(result.layout, ShardLayout)
+    assert result.layout.attrs == (Split(0),)
+    assert mode_axes(compatible_profile(result.layout.layout.shape, result.shape))[0] == 0
+
+
+def test_argmax_matches_torch_reference() -> None:
+    torch.manual_seed(0)
+    x = torch.randn(1, 151936)
+    run_eval_case(EvalCase("greedy_sampling", ArgMax(), (x,), torch.argmax(x, dim=-1)))

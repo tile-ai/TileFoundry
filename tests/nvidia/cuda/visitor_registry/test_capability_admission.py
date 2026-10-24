@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.schedule.tir.wgmma_b_nk import gemm as wgmma_gemm
-from tests.fixtures.tir.mma import MmHandwritten
+from tests.nvidia.cuda.fixtures.schedule.tir.wgmma_b_nk import gemm as wgmma_gemm
+from tests.nvidia.cuda.fixtures.tir.mma import MmHandwritten
 from tests.nvidia.cuda.ops.tir.targets import retarget
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.module import Module

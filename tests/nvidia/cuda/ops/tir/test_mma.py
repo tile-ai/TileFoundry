@@ -10,8 +10,8 @@ import torch
 
 import tilefoundry
 import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tests.fixtures.tir.e4m3_gemm import Fp8Gemm
-from tests.fixtures.tir.mma import MmHandwritten
+from tests.nvidia.cuda.fixtures.tir.e4m3_gemm import Fp8Gemm
+from tests.nvidia.cuda.fixtures.tir.mma import MmHandwritten
 from tests.nvidia.cuda.ops.tir.targets import CUDA_TARGETS, retarget
 from tilefoundry.dsl import *
 from tilefoundry.ir.types.shard_layout import Broadcast

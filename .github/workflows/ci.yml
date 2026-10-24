@@ -101,14 +101,14 @@ jobs:
           EOF
           COVERAGE_PROCESS_START="$PWD/test_results/coveragerc-installed" \
             TF_SMOKE_VENV="$PWD/.wheel-venv" \
-            pytest tests/installed -o python_files='smoke_*.py' -q -n 8
+            pytest tests/core/installed tests/*/*/installed -o python_files='smoke_*.py' -q -n 8
           coverage combine --rcfile=test_results/coveragerc-installed
           coverage xml --rcfile=test_results/coveragerc-installed \
             -o test_results/coverage-installed.xml
       - name: Decode the published checkpoint with the shipped source
         run: |
           export LD_LIBRARY_PATH="$PWD/.wheel-venv/lib:$LD_LIBRARY_PATH"
-          .wheel-venv/bin/python tests/installed/qwen3_1_7b_l3.py \
+          .wheel-venv/bin/python tests/nvidia/cuda/installed/qwen3_1_7b_l3.py \
             --venv "$PWD/.wheel-venv" \
             --work "$RUNNER_TEMP/l3"
       - name: Publish the coverage report

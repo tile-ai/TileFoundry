@@ -438,32 +438,34 @@ def placed_fixture_roots() -> tuple[tuple[str, str, Module], ...]:
     import pkgutil
     import sys
 
-    import tests.fixtures.placed as placed
+    import tests.core.fixtures.placed as core_placed
+    import tests.nvidia.cuda.fixtures.placed as nvidia_placed
 
     found: list[tuple[str, str, Module]] = []
-    sys.path.insert(0, str(Path(placed.__path__[0])))
-    try:
-        for info in sorted(pkgutil.iter_modules(placed.__path__), key=lambda i: i.name):
-            source = importlib.import_module(f"{placed.__name__}.{info.name}")
-            named = [
-                (name, value)
-                for name in dir(source)
-                if not name.startswith("_")
-                and isinstance(value := getattr(source, name), Module)
-            ]
-            children = {
-                id(child)
-                for _name, owner in named
-                for frame in list_call_paths(owner).values()
-                for child in (frame.module,) if child is not owner
-            }
-            found.extend(
-                (info.name, name, value)
-                for name, value in named
-                if id(value) not in children or value.target is not None
-            )
-    finally:
-        sys.path.pop(0)
+    for placed in (core_placed, nvidia_placed):
+        sys.path.insert(0, str(Path(placed.__path__[0])))
+        try:
+            for info in sorted(pkgutil.iter_modules(placed.__path__), key=lambda i: i.name):
+                source = importlib.import_module(f"{placed.__name__}.{info.name}")
+                named = [
+                    (name, value)
+                    for name in dir(source)
+                    if not name.startswith("_")
+                    and isinstance(value := getattr(source, name), Module)
+                ]
+                children = {
+                    id(child)
+                    for _name, owner in named
+                    for frame in list_call_paths(owner).values()
+                    for child in (frame.module,) if child is not owner
+                }
+                found.extend(
+                    (info.name, name, value)
+                    for name, value in named
+                    if id(value) not in children or value.target is not None
+                )
+        finally:
+            sys.path.pop(0)
     return tuple(found)
 
 

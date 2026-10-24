@@ -16,8 +16,8 @@ import torch
 
 import tilefoundry
 import tilefoundry_nvidia.cuda.codegen  # noqa: F401 — trigger emitter autodiscovery
-from tests.fixtures.tir.async_sync import AsyncStage
-from tests.fixtures.tir.split_stage import SplitStage
+from tests.nvidia.cuda.fixtures.tir.async_sync import AsyncStage
+from tests.nvidia.cuda.fixtures.tir.split_stage import SplitStage
 from tests.nvidia.cuda.ops.tir.targets import CUDA_TARGETS, retarget
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.async_copy import CopyAsync, CpAsyncWait

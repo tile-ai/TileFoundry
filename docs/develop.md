@@ -57,9 +57,9 @@ CI uses `/__w/tf-cache` as its cache root.
 Common inner loops:
 
 ```sh
-pytest tests/passes tests/ir tests/ir_types -q   # IR / passes edits
-pytest tests/codegen tests/runtime -q            # codegen-text edits
-pytest tests/e2e -q                              # runtime header / host wrapper edits
+pytest tests/core/passes tests/core/ir tests/nvidia/cuda/ir -q  # IR / passes edits
+pytest tests/nvidia/cuda/codegen tests/nvidia/cuda/runtime -q  # codegen-text edits
+pytest tests/nvidia/cuda/integration -q  # runtime header / host wrapper edits
 ```
 
 ## 4. Development workflow

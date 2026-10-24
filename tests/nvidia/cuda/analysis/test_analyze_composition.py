@@ -1,0 +1,128 @@
+"""Analyze obtains its complete dependency closure from the Target value."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import ClassVar
+
+import pytest
+
+from tests.nvidia.cuda.fixtures.placed.rmsnorm import RmsnormModule
+from tilefoundry.analysis.api import analyze
+from tilefoundry.analysis.check import check_program
+from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.registry import Analyzer
+from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.types import Topology
+from tilefoundry.target import Target
+from tilefoundry_nvidia import CudaTarget
+
+
+@dataclass(frozen=True)
+class _AnalysisTarget(Target):
+    name: ClassVar[str] = "test.analysis"
+    services: tuple[Analyzer, ...] = ()
+
+    def get_analyzer(self, selector: str) -> Analyzer:
+        for service in self.services:
+            if service.selector == selector:
+                return service
+        return super().get_analyzer(selector)
+
+
+def _module(target: Target) -> tuple[Module, object]:
+    function = RmsnormModule.entry_function()
+    return Module("rmsnorm", (function,), function.name, target=target), function
+
+
+def test_analyze_orders_the_union_of_target_selected_dependency_roots_once() -> None:
+    ran: list[tuple[str, int]] = []
+
+    def service(selector: str, requires: tuple[str, ...] = ()) -> Analyzer:
+        return Analyzer(
+            selector,
+            lambda function, _context: ran.append((selector, id(function))),
+            requires=requires,
+        )
+
+    target = _AnalysisTarget(
+        (
+            service("base"),
+            service("left", ("base",)),
+            service("right", ("base",)),
+            service("top", ("left", "right")),
+        )
+    )
+    module, function = _module(target)
+
+    result = analyze(*check_program(module, function), analysis=("left", "top", "right", "left"))
+
+    assert result.analyses == ("left", "top", "right")
+    assert result.executed == ("base", "left", "right", "top")
+    assert [selector for selector, _function in ran] == list(result.executed)
+    assert {function for _selector, function in ran} == {id(result.function)}
+
+
+def test_analyze_reports_missing_root_and_missing_dependency_from_the_target() -> None:
+    module, function = _module(_AnalysisTarget())
+    with pytest.raises(AnalysisError, match="no analyzer for 'missing'"):
+        analyze(*check_program(module, function), analysis="missing")
+
+    target = _AnalysisTarget((Analyzer("root", lambda *_args: None, requires=("lost",)),))
+    module, function = _module(target)
+    with pytest.raises(AnalysisError, match="'root' depends on 'lost'"):
+        analyze(*check_program(module, function), analysis="root")
+
+    target = _AnalysisTarget(
+        (
+            Analyzer(
+                "needs-facts",
+                lambda _function, context: context.target.get_facts(
+                    type("MissingFacts", (), {})
+                ),
+            ),
+        )
+    )
+    module, function = _module(target)
+    with pytest.raises(
+        AnalysisError,
+        match=r"needs-facts: _AnalysisTarget \(test.analysis\): no Facts projection",
+    ):
+        analyze(*check_program(module, function), analysis="needs-facts")
+
+
+def test_analyze_detects_cycles_declared_by_target_services() -> None:
+    target = _AnalysisTarget(
+        (
+            Analyzer("a", lambda *_args: None, requires=("b",)),
+            Analyzer("b", lambda *_args: None, requires=("a",)),
+        )
+    )
+    module, function = _module(target)
+
+    with pytest.raises(AnalysisError, match="a -> b -> a"):
+        analyze(*check_program(module, function), analysis="a")
+
+
+def test_analyze_keeps_a_provider_value_error_and_rejects_over_limit_topology() -> None:
+    @dataclass(frozen=True)
+    class _BrokenTarget(Target):
+        name: ClassVar[str] = "test.broken-analysis"
+
+        def get_analyzer(self, selector: str) -> Analyzer:
+            raise ValueError("provider analysis failure")
+
+    module, function = _module(_BrokenTarget())
+    with pytest.raises(ValueError, match="provider analysis failure"):
+        analyze(*check_program(module, function), analysis="broken")
+
+    function = RmsnormModule.entry_function()
+    over_limit = Module(
+        "over-limit",
+        (function,),
+        function.name,
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 1), Topology("thread", 1025)),
+    )
+    with pytest.raises(ValueError, match="1 <= extent <= 1024"):
+        analyze(*check_program(over_limit, function), analysis="roofline")

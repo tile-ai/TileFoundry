@@ -104,7 +104,7 @@ markers = [
 src = [".", "src", "targets/nvidia", "targets/apple"]
 # Snapshot examples, shipped model sources, and recorded parser and printer output are
 # evidence; formatting them changes that evidence.
-extend-exclude = ["examples", "tests/models", "tests/parser/golden", "tests/fixtures/schedule/tir"]
+extend-exclude = ["examples", "tests/models", "tests/parser/golden", "tests/*/*/fixtures/schedule/tir"]
 force-exclude = true
 line-length = 100
 target-version = "py312"

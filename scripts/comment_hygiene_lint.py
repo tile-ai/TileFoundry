@@ -16,12 +16,13 @@ import io
 import re
 import sys
 import tokenize
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 MAX_PROSE_LINES = 8
 MAX_COLUMNS = 100
 MAX_ASSERT_MESSAGE = 100
-EXEMPT_PREFIXES = ("tests/models/", "examples/", "tests/fixtures/schedule/tir/")
+EXEMPT_PREFIXES = ("tests/models/", "examples/", "tests/*/*/fixtures/schedule/tir/")
 DIRECTIVE_PREFIXES = ("ruff:", "noqa", "type:", "pragma:", "mypy:", "fmt:", "isort:")
 PYTHON_SUFFIXES = frozenset({".py"})
 C_SUFFIXES = frozenset({".h", ".hpp", ".cuh", ".cu", ".cpp", ".cc"})
@@ -56,7 +57,7 @@ def is_exempt(path: Path) -> bool:
         relative = path.resolve().relative_to(ROOT).as_posix()
     except ValueError:
         return False
-    return any(relative.startswith(prefix) for prefix in EXEMPT_PREFIXES)
+    return any(fnmatchcase(relative, prefix + "*") for prefix in EXEMPT_PREFIXES)
 
 
 def comment_tokens(text: str) -> list[tokenize.TokenInfo]:
