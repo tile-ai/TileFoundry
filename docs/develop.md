@@ -37,34 +37,6 @@ data and registration entry point. After this `import tilefoundry` resolves to
 **Do not set `PYTHONPATH`** — in particular `PYTHONPATH=tests:src`
 shadows stdlib `types` via `tests/types/__init__.py`.
 
-## Writing a target
-
-Start with [targets/apple](../targets/apple) as a small working example; use
-[targets/nvidia](../targets/nvidia) for a complete compiler and runtime reference.
-The Apple project keeps its `pyproject.toml`, `setup.py`, and `README.md` beside
-`tilefoundry_apple/`. Its top-level `__init__.py` exports the public target values,
-while the implementation lives in the `amx/` subpackage. The packaging entry point
-is `amx = "tilefoundry_apple.amx"`.
-
-Importing the target subpackage loads its registrations. The Apple example uses
-`register_target` for its target class, `register_op` for instructions,
-`register_typeinfer` for their inference rules, and `register_candidates` to offer
-AMX instructions for a generic operation. For exported DSL types, use
-`register_type`; its `namespace` parameter, like that of `register_op`, determines
-the path under `T`. For example, NVIDIA's
-[wgmma.py](../targets/nvidia/tilefoundry_nvidia/cuda/ir/tir/nn/wgmma.py) uses
-`namespace="cuda.sm90"` to expose types under `T.cuda.sm90`. Use `register_codegen`
-and `register_pass` when adding code generation and compiler passes.
-
-Keep tests in `tests/<vendor>/<target>/` and specifications in the target
-subpackage's `docs/spec/` directory.
-
-Use [Target loading and extensions](spec/target.md#13-target-loading-and-extensions)
-(§1.3) as the contract for package boundaries, entry points, registration, and
-loading metadata. The Apple example publishes `tilefoundry-apple`; its `setup.py`
-pins `tilefoundry==V` to the version `V` being built. Follow the same project
-structure when adding a vendor distribution.
-
 ## 3. Tests
 
 `pytest tests/` runs the **entire** suite — unit, codegen, nvcc-compiled,
@@ -209,3 +181,31 @@ short bullet list — keep it that way.
 - Headers: each target's preamble directly includes its package-owned runtime
   header. There is no umbrella header or target-selection macro. Device headers
   use `.cuh` where required by their compiler; ordinary C++ headers use `.h`.
+
+## 6. Writing a target
+
+Start with [targets/apple](../targets/apple) as a small working example; use
+[targets/nvidia](../targets/nvidia) for a complete compiler and runtime reference.
+The Apple project keeps its `pyproject.toml`, `setup.py`, and `README.md` beside
+`tilefoundry_apple/`. Its top-level `__init__.py` exports the public target values,
+while the implementation lives in the `amx/` subpackage. The packaging entry point
+is `amx = "tilefoundry_apple.amx"`.
+
+Importing the target subpackage loads its registrations. The Apple example uses
+`register_target` for its target class, `register_op` for instructions,
+`register_typeinfer` for their inference rules, and `register_candidates` to offer
+AMX instructions for a generic operation. For exported DSL types, use
+`register_type`; its `namespace` parameter, like that of `register_op`, determines
+the path under `T`. For example, NVIDIA's
+[wgmma.py](../targets/nvidia/tilefoundry_nvidia/cuda/ir/tir/nn/wgmma.py) uses
+`namespace="cuda.sm90"` to expose types under `T.cuda.sm90`. Use `register_codegen`
+and `register_pass` when adding code generation and compiler passes.
+
+Keep tests in `tests/<vendor>/<target>/` and specifications in the target
+subpackage's `docs/spec/` directory.
+
+Use [Target loading and extensions](spec/target.md#13-target-loading-and-extensions)
+(§1.3) as the contract for package boundaries, entry points, registration, and
+loading metadata. The Apple example publishes `tilefoundry-apple`; its `setup.py`
+pins `tilefoundry==V` to the version `V` being built. Follow the same project
+structure when adding a vendor distribution.
