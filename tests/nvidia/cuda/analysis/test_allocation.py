@@ -1,6 +1,5 @@
 """Physical placement, semantic aliases, and call-boundary proofs."""
 
-
 import pytest
 
 from tilefoundry.analysis import MemoryMetadata, analyze

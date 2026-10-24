@@ -294,6 +294,22 @@ def _reshape_tensor(expected: bool = False) -> torch.Tensor:
     return x.reshape(8, 16) if expected else x
 
 
+def _check_plain_candidates(out, captured, *, source, sites):
+    assert captured == ("", "")
+    check_plain_report(json.loads(out.read_text()), source, sites)
+
+
+def _check_invalid_chunks(out, captured):
+    assert "[1, 32]" in captured.err
+    assert not out.exists()
+
+
+def _check_unbound_chunks(out, captured):
+    assert "chunks is declared as [1, 32]" in captured.err
+    assert "bind it with --dim" in captured.err
+    assert not out.exists()
+
+
 FIXTURES = (
     CliCase(
         "reshard is charged only when an element moves",
@@ -572,26 +588,6 @@ FIXTURES = (
         ),
         partial(_check_golden, golden=ANALYZED_GOLDEN),
     ),
-)
-
-
-def _check_plain_candidates(out, captured, *, source, sites):
-    assert captured == ("", "")
-    check_plain_report(json.loads(out.read_text()), source, sites)
-
-
-def _check_invalid_chunks(out, captured):
-    assert "[1, 32]" in captured.err
-    assert not out.exists()
-
-
-def _check_unbound_chunks(out, captured):
-    assert "chunks is declared as [1, 32]" in captured.err
-    assert "bind it with --dim" in captured.err
-    assert not out.exists()
-
-
-FIXTURES += (
     CliCase(
         "candidate sites at chunks=32",
         (

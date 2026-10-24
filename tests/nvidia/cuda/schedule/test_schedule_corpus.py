@@ -83,6 +83,17 @@ from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyR
 from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
 from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import Wgmma
 
+ANALYSES = (
+    ("compute-cost", ComputeCostMetadata),
+    ("memory", MemoryMetadata),
+    ("roofline", RooflineMetadata),
+    ("performance", PerformanceSummaryMetadata),
+)
+
+_TENSOR_CLOCK_HZ = 1_830_000_000
+
+_SHARED_BYTES_PER_CLOCK = 128
+
 
 @dataclass(frozen=True)
 class RmemPeak:
@@ -99,6 +110,7 @@ class ScheduleCase(Case):
     smem_peak: int = 0
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType({})
     sites: SiteCounts | None = None
+    child_regions: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,7 +118,7 @@ class Scheduled:
     result: AnalysisResult | None
     module: Module | None
     lowered: Module | PrimFunction | None
-    report: dict | None
+    candidates: dict | None
 
 
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
@@ -159,6 +171,14 @@ def _analysis_metadata(case, result, analysis, metadata_type):
             for region in regions
             if (record := get_metadata(region, RegionMemoryMetadata)) is not None
         )
+        if case.child_regions:
+            region_records += tuple(
+                record
+                for function in result.functions[1:]
+                for region in collect_exprs(function.body)
+                if isinstance(region, MeshRegion)
+                and (record := get_metadata(region, RegionMemoryMetadata)) is not None
+            )
         _region_records(region_records, placement)
         region_rmem_peaks = tuple(
             peak.peak_bytes
@@ -239,20 +259,6 @@ def _module_instances(state, problems):
                     if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
                 ]
                 assert any(get_metadata(expr, record_type) is not None for expr in schedules)
-        records = tuple(
-            record
-            for function in result.functions
-            for region in collect_exprs(function.body)
-            if isinstance(region, MeshRegion)
-            and (record := get_metadata(region, RegionMemoryMetadata)) is not None
-        )
-        placement = get_metadata(result.function, RegionMemoryMetadata)
-        _region_records(records, placement)
-        peaks = tuple(
-            peak.peak_bytes for record in records if (peak := record.peak_for("rmem")) is not None
-        )
-        peak = placement.peak_for("rmem")
-        assert (peak.peak_bytes if peak is not None else 0) == max(peaks, default=0)
 
     problems.run("_module_instances", check, state.result)
 
@@ -630,7 +636,7 @@ def _cast_candidates(state, problems):
         ops = [row["op"] for row in report["lines"]]
         assert ops.count("tf.reduce") == 1
 
-    problems.run("_cast_candidates", check, state.report)
+    problems.run("_cast_candidates", check, state.candidates)
 
 
 def _structural_layouts(program):
@@ -808,18 +814,15 @@ def _tir(case, problems):
 EXPECTED = {
     "hir/bulk_reduce_store": dict(
         smem_peak=16_384,
-        rmem_peaks={},
         candidates_refusal="source has no unscheduled candidate site",
         hooks=(_reduce_scope,),
     ),
     "hir/captured_insert_update": dict(
         smem_peak=24,
-        rmem_peaks={},
         candidates_refusal="source has no unscheduled candidate site",
         hooks=(_captured_storage,),
     ),
     "hir/child_weight": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:32#0": RmemPeak(384, "independent live Buffers: 3 * 128B"),
             "cta@0:1#0": RmemPeak(384, "independent live Buffers: 3 * 128B"),
@@ -827,7 +830,6 @@ EXPECTED = {
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/cta_submesh_thread_scope": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:128#0": RmemPeak(512, "4x32 f32 register tile"),
         },
@@ -835,12 +837,10 @@ EXPECTED = {
     ),
     "hir/duplicate_output_storage": dict(
         smem_peak=8,
-        rmem_peaks={},
         finalize_refusal="return leaf (2,) shares storage with another output",
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/finalize_footprint_mesh_offset": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:32#0": RmemPeak(136, "32 f32 row elements and one i64 mesh offset"),
             "cta@0:4#0": RmemPeak(8, "one i64 mesh offset"),
@@ -887,30 +887,26 @@ EXPECTED = {
         hooks=(_tma_regions,),
     ),
     "hir/inplace_output_update": dict(
-        smem_peak=0,
         rmem_peaks={
             "cta@0:1#0": RmemPeak(16, "CTA envelope of the row register storage"),
         },
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/loop_bound_from_outer_induction": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:32#0": RmemPeak(256, "32 f32 accumulator and loaded row elements"),
         },
     ),
     "hir/loop_carry_from_param": dict(
-        smem_peak=0, rmem_peaks={}, candidates_refusal="source has no unscheduled candidate site"
+        candidates_refusal="source has no unscheduled candidate site"
     ),
     "hir/loop_carry_rebind": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:32#0": RmemPeak(96, "independent live Buffers: 1 * 32B + 1 * 64B"),
             "cta@0:1#0": RmemPeak(96, "independent live Buffers: 1 * 32B + 1 * 64B"),
         },
     ),
     "hir/loop_carry_window": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:32#0": RmemPeak(96, "independent live Buffers: 1 * 32B + 1 * 64B"),
             "cta@0:1#0": RmemPeak(96, "independent live Buffers: 1 * 32B + 1 * 64B"),
@@ -919,23 +915,18 @@ EXPECTED = {
     ),
     "hir/loop_outputs": dict(
         smem_peak=8,
-        rmem_peaks={},
         candidates_refusal="source has no unscheduled candidate site",
         hooks=(_loop_outputs,),
     ),
     "hir/loop_variable_rebound": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:1#0": RmemPeak(64, "two independent live 2x4 f32 buffers"),
             "cta@0:1#0": RmemPeak(64, "parent envelope of the independent loop buffers"),
         },
         candidates_refusal="source has no unscheduled candidate site",
     ),
-    "hir/mesh_capture_outside": dict(
-        smem_peak=0, rmem_peaks={}, candidates_refusal="source has no unscheduled candidate site"
-    ),
+    "hir/mesh_capture_outside": dict(candidates_refusal="source has no unscheduled candidate site"),
     "hir/mesh_views": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:32#0": RmemPeak(256, "independent live Buffers: 2 * 128B"),
             "thread@0:32#1": RmemPeak(256, "independent live Buffers: 2 * 128B"),
@@ -943,10 +934,10 @@ EXPECTED = {
         },
     ),
     "hir/mesh_zeros_submesh": dict(
-        smem_peak=128, rmem_peaks={}, candidates_refusal="source has no unscheduled candidate site"
+        smem_peak=128, candidates_refusal="source has no unscheduled candidate site"
     ),
     "hir/module_instances": dict(
-        smem_peak=0,
+        child_regions=True,
         rmem_peaks={
             "cta@0:1#0": RmemPeak(
                 384, "three independent 128-byte callee operand/result Buffers in the CTA window"
@@ -968,21 +959,18 @@ EXPECTED = {
         },
     ),
     "hir/register_arange": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:1#0": RmemPeak(64, "independent 8-element i32 indices and output buffers"),
             "cta@0:1#0": RmemPeak(64, "parent envelope of the two independent buffers"),
         },
     ),
     "hir/register_full_like": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:1#0": RmemPeak(65, "two independent 8-element f32 buffers and a predicate"),
             "cta@0:1#0": RmemPeak(65, "parent envelope of the independent buffers and predicate"),
         },
     ),
     "hir/register_index_window": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:1#0": RmemPeak(
                 32, "8 f32 output elements; index/view lifetimes reuse their storage"
@@ -992,7 +980,6 @@ EXPECTED = {
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/register_index_window_offset": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:1#0": RmemPeak(
                 32, "8 f32 output elements; index/view lifetimes reuse their storage"
@@ -1002,7 +989,6 @@ EXPECTED = {
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/reshard_views": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:1#0": RmemPeak(32, "8 f32 register output elements"),
             "cta@0:2#0": RmemPeak(32, "parent envelope of the output"),
@@ -1010,7 +996,6 @@ EXPECTED = {
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/scalar_binary": dict(
-        smem_peak=0,
         rmem_peaks={
             "cta@0:1#0": RmemPeak(
                 260,
@@ -1023,7 +1008,6 @@ EXPECTED = {
         },
     ),
     "hir/scalar_ceildiv_gate": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:1#0": RmemPeak(32, "8 f32 register output elements"),
             "cta@0:4#0": RmemPeak(32, "parent envelope of the output"),
@@ -1056,7 +1040,6 @@ EXPECTED = {
     ),
     "hir/smem_padded_stages": dict(
         smem_peak=96,
-        rmem_peaks={},
         candidates_refusal="source has no unscheduled candidate site",
         hooks=(_physical_slots,),
     ),
@@ -1094,7 +1077,6 @@ EXPECTED = {
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/strided_return_window": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:1#0": RmemPeak(12288, "24 * 256 bf16 register output elements"),
             "cta@0:32#0": RmemPeak(12288, "parent envelope of the register output"),
@@ -1102,10 +1084,9 @@ EXPECTED = {
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/submesh_slice_in_sibling": dict(
-        smem_peak=32, rmem_peaks={}, candidates_refusal="source has no unscheduled candidate site"
+        smem_peak=32, candidates_refusal="source has no unscheduled candidate site"
     ),
     "hir/view_visit_memo": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:1#0": RmemPeak(32, "one eight-element f32 row"),
             "cta@0:1#0": RmemPeak(32, "parent envelope of the output row"),
@@ -1338,7 +1319,6 @@ EXPECTED = {
         },
     ),
     "hir/zero_trip_insert_slice": dict(
-        smem_peak=0,
         rmem_peaks={
             "thread@0:1#0": RmemPeak(16, "one four-element f32 update row"),
             "cta@0:1#0": RmemPeak(16, "parent envelope of the update row"),
@@ -1380,15 +1360,3 @@ def test_schedule_case(case: ScheduleCase) -> None:
     problems = Problems(case)
     STAGES[case.corpus.name](case, problems)
     problems.dump()
-
-
-ANALYSES = (
-    ("compute-cost", ComputeCostMetadata),
-    ("memory", MemoryMetadata),
-    ("roofline", RooflineMetadata),
-    ("performance", PerformanceSummaryMetadata),
-)
-
-_TENSOR_CLOCK_HZ = 1_830_000_000
-
-_SHARED_BYTES_PER_CLOCK = 128
