@@ -7,20 +7,6 @@ import shutil
 from pathlib import Path
 
 
-def _registered_model(path: Path, *, target: str, topology: str) -> Path:
-    path.write_text(
-        "from tilefoundry import func\n"
-        "from tilefoundry.dsl import Tensor, Topology, tf\n"
-        "from tilefoundry.target import registered_targets\nfrom tilefoundry_nvidia import CudaTarget\n"
-        f"_target = {target}\n"
-        f"@func(target=_target, topologies=(Topology('{topology}', 1),))\n"
-        "def model(source: Tensor[(8,), 'f32']):\n"
-        "    return tf.add(source, source)\n",
-        encoding="utf-8",
-    )
-    return path
-
-
 def test_added_documents_and_provider_drive_installed_commands(
     tf, installation, tmp_path
 ) -> None:
@@ -34,9 +20,10 @@ def test_added_documents_and_provider_drive_installed_commands(
     shutil.copyfile(fixtures / "hw" / architecture.name, architecture)
     shutil.copyfile(fixtures / "hw" / device.name, device)
     provider_fixture = (
-        Path(__file__).parents[4] / "core" / "installed" / "smoke_target" / "vendor_npu"
+        Path(__file__).parents[4] / "core" / "fixtures" / "target_plugins" / "vendor_npu"
     )
     shutil.copyfile(provider_fixture / "__init__.py", provider)
+    models = Path(__file__).parents[2] / "fixtures" / "cli"
 
     for source, document in ((architecture, True), (device, True), (provider, False)):
         arguments = ["--registry", registry, "target", "add"]
@@ -57,16 +44,11 @@ def test_added_documents_and_provider_drive_installed_commands(
     assert "device: vendor.v100_sxm2_32gb" in shown.stdout
     assert shown.stdout.count("  digest: ") == 2
 
-    npu_model = _registered_model(
-        tmp_path / "npu_model.py",
-        target="registered_targets()['vendor.npu']()",
-        topology="core",
-    )
     analyzed_npu = tf(
         "--registry",
         registry,
         "analyze",
-        f"{npu_model}:model",
+        f"{models / 'registered_npu_installed.py'}:Model",
         str(tmp_path / "npu.json"),
         "--compute-cost",
         "--memory",
@@ -78,16 +60,11 @@ def test_added_documents_and_provider_drive_installed_commands(
     npu_report = json.loads((tmp_path / "npu.json").read_text(encoding="utf-8"))
     assert npu_report["target"] == "vendor.npu"
     assert npu_report["executed"] == ["compute-cost", "memory", "roofline"]
-    cuda_model = _registered_model(
-        tmp_path / "cuda_model.py",
-        target='CudaTarget("vendor.v100_sxm2_32gb")',
-        topology="cta",
-    )
     analyzed_cuda = tf(
         "--registry",
         registry,
         "analyze",
-        f"{cuda_model}:model",
+        f"{models / 'registered_cuda_installed.py'}:Model",
         str(tmp_path / "cuda.json"),
         "--compute-cost",
         "--json",

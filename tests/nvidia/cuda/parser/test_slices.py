@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tests.core._source import import_dsl
+from tests.core._corpus import reload_program
 from tests.nvidia.cuda.fixtures.shapes.tile_window_syntax import (
     MeshInsideTileWindow,
     NestedScaledTileWindows,
@@ -83,7 +83,7 @@ def test_nested_tile_windows_capture_and_transform_the_outer_window() -> None:
         "x[m * 2 - 1, n]",
     ):
         assert index in printed
-    restored = import_dsl(printed, "NestedScaledTileWindows")
+    restored = reload_program(printed, "NestedScaledTileWindows")
     assert as_script(restored) == printed
     assert {
         name: (len(loop.params), len(loop.args)) for name, loop in _loops(restored).items()
@@ -112,7 +112,7 @@ def test_a_mesh_inside_a_tile_loop_captures_the_outer_window() -> None:
 
     printed = as_script(MeshInsideTileWindow)
     assert "x[m * 2 + 1, :]" in printed
-    restored = import_dsl(printed, "MeshInsideTileWindow")
+    restored = reload_program(printed, "MeshInsideTileWindow")
     assert as_script(restored) == printed
     restored_loop = _loops(restored)["m"]
     restored_mesh = next(

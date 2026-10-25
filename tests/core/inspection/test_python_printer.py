@@ -1,6 +1,6 @@
 """Binding metadata and unmaterialized types in printed programs."""
 
-from tests.core._source import import_dsl
+from tests.core._corpus import reload_program
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.inspection.analysis_report import _type_text
@@ -54,7 +54,7 @@ def test_binding_metadata_names_the_emitted_binding():
     reserved = as_script(reserved_function)
     assert "v0_2 = tf.add(source, source)" in reserved
     assert "v0 = tf.add(v0_2, source)" in reserved
-    assert as_script(import_dsl(reserved)) == reserved
+    assert as_script(reload_program(reserved)) == reserved
 
 
 def test_umat_type_is_printed_and_round_trips() -> None:
@@ -70,7 +70,7 @@ def test_umat_type_is_printed_and_round_trips() -> None:
     rendered = as_script(function)
 
     assert 'Tensor[(), "i64", "umat"]' in rendered
-    rebuilt = import_dsl(rendered)
+    rebuilt = reload_program(rendered)
     assert rebuilt.params[0].type == tensor_type
     assert rebuilt.return_type == tensor_type
 

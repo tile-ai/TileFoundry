@@ -16,7 +16,6 @@ from safetensors.torch import load_file, save_file
 
 from tests.core.cli._check import MESH_CHECK_ARGS
 from tests.nvidia.cuda.fixtures.placed import leaf_weights
-from tests.nvidia.cuda.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tests.nvidia.cuda.models.corpus import MODELS_ROOT
 from tilefoundry import cli
 from tilefoundry.cli.source import load_namespace, select_ir
@@ -467,24 +466,7 @@ def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, tmp_p
     Reaching `router.routing` reads `router.w_router`: the checkpoint holds
     that one tensor and none of the eight the block around it declares.
     """
-    source = tmp_path / "nested.py"
-    source.write_text(
-        """from dataclasses import replace
-from tilefoundry.dsl import *
-from tilefoundry_nvidia.cuda.models.qwen3_5_35b_a3b.model import Qwen3_5MoE, Qwen3_5Router, S, _H, _DT
-
-@module(entry="routing")
-class Wrapper:
-    router = Qwen3_5Router
-
-    @func
-    def routing(tokens: Tensor[(S, _H), _DT]):
-        return router(tokens)
-
-Root = replace(Qwen3_5MoE, functions=(*Qwen3_5MoE.functions, Wrapper.routing))
-""",
-        encoding="utf-8",
-    )
+    source = Path(__file__).parents[1] / "fixtures/cli/nested_checkpoint.py"
     save_file(
         {"router.w_router": load_file(str(routing["dir"] / "model.safetensors"))["w_router"]},
         str(tmp_path / "model.safetensors"),
@@ -506,10 +488,9 @@ Root = replace(Qwen3_5MoE, functions=(*Qwen3_5MoE.functions, Wrapper.routing))
     assert cli.main(argv) == 0
 
 
-def test_a_pinned_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> None:
+def test_a_pinned_extent_on_a_root_that_reaches_a_child(capsys) -> None:
     """Binding an extent must not turn the child call back into an exact one."""
-    source = tmp_path / "composed.py"
-    source.write_text(composed_leaf_source("n_check"), encoding="utf-8")
+    source = Path(__file__).parents[1] / "fixtures/cli/composed_leaf_n_check.py"
     assert (
         cli.main(
             [

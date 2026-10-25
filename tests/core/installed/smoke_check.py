@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import torch
 from safetensors.torch import save_file
@@ -25,25 +26,12 @@ _ARGS = (
 )
 
 
-def test_check_reports_grid_loop_parser_errors_from_the_installed_wheel(
-    tf, tmp_path
-) -> None:
-    for name, loop, message in (
-        ("single", "tf.tile(8)", "tf.tile(extent) is not supported; use range(extent)"),
-        ("keyword", "tf.tile(8, step=2)", "positional-only at the IR level"),
+def test_check_reports_grid_loop_parser_errors_from_the_installed_wheel(tf) -> None:
+    for name, message in (
+        ("single", "tf.tile(extent) is not supported; use range(extent)"),
+        ("keyword", "positional-only at the IR level"),
     ):
-        source = tmp_path / f"{name}.py"
-        source.write_text(
-            "from tilefoundry import module\n"
-            "from tilefoundry.dsl import Tensor, func, tf\n\n"
-            '@module(entry="main")\n'
-            "class Bad:\n"
-            "    @func\n"
-            '    def main(x: Tensor[(8,), "f32"]):\n'
-            f"        for i in {loop}:\n"
-            "            y = tf.relu(x)\n",
-            encoding="utf-8",
-        )
+        source = Path(__file__).parents[1] / f"fixtures/diagnostics/parser_tile_{name}.py"
 
         done = tf("check", f"{source}:Bad", *_ARGS)
 

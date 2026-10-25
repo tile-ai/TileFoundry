@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tests.core._source import import_dsl
+from tests.core._corpus import reload_program
 from tests.nvidia.cuda.fixtures.logical.gqa_static import static_online_attend
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Tuple
@@ -49,7 +49,7 @@ def test_static_fixture_has_one_fixed_online_softmax_region() -> None:
         (topology.name, topology.size) for topology in static_online_attend.effective_topologies()
     ) == (("cta", 132),)
 
-    imported = import_dsl(as_script(static_online_attend))
+    imported = reload_program(as_script(static_online_attend))
     imported_regions = tuple(
         expr
         for expr in _walk_ir(imported.entry_function().body)

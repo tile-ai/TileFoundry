@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -120,19 +121,8 @@ def shipped(installation: Path, tmp_path_factory) -> dict[str, str]:
 def mine(tmp_path) -> Path:
     """A two-file model of one's own, which the installation never shipped."""
     home = tmp_path / "mine"
-    home.mkdir()
-    source = REPO / "tests" / "core" / "fixtures" / "placed"
-    (home / "model.py").write_text(
-        (source / "square_cpu.py").read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    runtime = home / "runtime_model.py"
-    runtime.write_text(
-        (source / "square_cpu_runtime.py")
-        .read_text(encoding="utf-8")
-        .replace("from square_cpu import Mine", "from model import Mine"),
-        encoding="utf-8",
-    )
-    return runtime
+    shutil.copytree(REPO / "tests/core/fixtures/cli/mine", home)
+    return home / "runtime_model.py"
 
 
 def _fixture_path(category: str, name: str) -> Path:

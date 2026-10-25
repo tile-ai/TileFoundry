@@ -14,8 +14,7 @@ import tilefoundry.cli.schedule as schedule_cli
 import tilefoundry.ir.hir.schedule as schedules
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 import tilefoundry.visitor_registry.instruction as instructions
-from tests.core._corpus import load_program
-from tests.core._source import import_dsl
+from tests.core._corpus import load_program, reload_program
 from tests.nvidia.cuda.schedule._support import (
     _finalized,
     _RetainedStatements,
@@ -72,6 +71,9 @@ from tilefoundry.visitor_registry.verify import verify_module, verify_prim_funct
 from tilefoundry_nvidia import CudaTarget
 from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
 
+FIXTURES = Path(__file__).parents[1] / "fixtures"
+VARIANTS = FIXTURES / "schedule" / "variants"
+INPLACE = FIXTURES / "schedule" / "hir" / "inplace_output_update.py"
 
 def _m1_analysis():
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
@@ -131,23 +133,13 @@ def test_schedule_finalize_json_carries_the_same_source(
     assert capsys.readouterr() == ("", "")
     payload = json.loads(out.read_text())
     assert set(payload) == {"source"}
-    python = tmp_path / "finalized.py"
-    python.write_text(payload["source"])
-    verify_prim_function(entry_function(load_program(python)))
+    verify_prim_function(entry_function(reload_program(payload["source"])))
 
 
 def test_lowering_reports_smem_placement_above_capacity(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    source = (
-        Path(__file__).parents[1]
-        / "fixtures"
-        / "schedule"
-        / "hir"
-        / "gemm_8192x17408x5120_tma_store.py"
-    )
-    four_stage = tmp_path / source.name
-    four_stage.write_text(source.read_text().replace("STAGES = 3", "STAGES = 4", 1))
+    four_stage = VARIANTS / "four_stage_gemm.py"
 
     out = tmp_path / "finalized.py"
     assert cli_main(["schedule", "finalize", str(four_stage), str(out)]) == 0
@@ -177,19 +169,7 @@ def test_lowering_rejects_instruction_without_access_relation(
 
 
 def test_lowering_rejects_nonidentity_inverse_for_a_written_return():
-    module = import_dsl("""
-from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1), Topology("thread", 1)))
-class WrittenReturnWindow:
-    @func
-    def gemm(x: Tensor[(1, 4), "f32"]):
-        with Mesh(("cta",), layout=(1,), names=("block",)) as cta:
-            out = tf.zeros(Tensor[(2, 4), "f32"])
-            updated = tf.insert_slice(out, x, (1, 0))
-            return updated[1:2, :]
-""")
+    module = load_program(FIXTURES / "diagnostics" / "lowering_written_return_window.py")
     with pytest.raises(
         lowering_module.LoweringError, match="requires a non-identity inverse relation"
     ):
@@ -197,21 +177,7 @@ class WrittenReturnWindow:
 
 
 def test_zero_trip_carry_keeps_direct_address_proofs_and_the_loop():
-    module = import_dsl("""
-from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1), Topology("thread", 1)))
-class ZeroTripCarry:
-    @func
-    def gemm(x: Tensor[(4,), "f32"]):
-        with Mesh(("cta",), layout=(1,), names=("b",)) as cta:
-            with Mesh(("thread",), layout=(1,), names=("t",)) as thread:
-                acc = tf.schedule((x, tf.empty(Tensor[(4,), "f32", "rmem"])), op=T.copy())
-                for k in range(0):
-                    acc = tf.schedule((x, tf.empty(Tensor[(4,), "f32", "rmem"])), op=T.copy())
-                return tf.schedule((acc, tf.empty(Tensor[(4,), "f32"])), op=T.copy())
-""")
+    module = load_program(VARIANTS / "zero_trip_carry.py")
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
     summary = get_metadata(result.function, AllocationSummaryMetadata)
     carry = [
@@ -224,7 +190,7 @@ class ZeroTripCarry:
     assert all(proof.relation.relation.is_identity() for proof in carry)
     lowered = _finalized(module)
     verify_module(lowered)
-    verify_module(import_dsl(as_script(lowered)))
+    verify_module(reload_program(as_script(lowered)))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     assert len(visitor.loops) == 1
@@ -240,25 +206,11 @@ class ZeroTripCarry:
 
 
 def test_dynamic_window_keeps_a_mixed_scalar_and_constant_key():
-    module = import_dsl("""
-from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1), Topology("thread", 1)))
-class Window:
-    @func
-    def gemm(x: Tensor[(64, 8), "f32"], starts: Tensor[(1,), "i64"]) -> Tensor[(8, 8), "f32", "rmem"]:
-        with Mesh(("cta",), layout=(1,), names=("b",)) as cta:
-            with Mesh(("thread",), layout=(1,), names=("t",)) as thread:
-                held = tf.schedule((starts, tf.empty(Tensor[(1,), "i64", (1,), "rmem"])), op=T.copy())
-                start = tf.reshape(held, new_shape=())
-                window = x[start + 1:start + 9, 0:8]
-                return tf.schedule((window, tf.empty(Tensor[(8, 8), "f32", (8, 8), "rmem"])), op=T.copy())
-""")
+    module = load_program(VARIANTS / "dynamic_window.py")
     lowered = _finalized(module)
     verify_module(lowered)
     printed = as_script(lowered)
-    verify_module(import_dsl(printed))
+    verify_module(reload_program(printed))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     views = [
@@ -283,25 +235,10 @@ class Window:
 
 
 def test_register_row_pointer_keeps_the_split_axis_whole():
-    module = import_dsl("""
-from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1), Topology("thread", 16)))
-class RegisterRows:
-    @func
-    def gemm(x: Tensor[(16,16), "f32"]):
-        with Mesh(("cta",), layout=(1,), names=("b",)) as cta:
-            with Mesh(("thread",), layout=(16,), names=("col",)) as th:
-                held = tf.schedule((x, tf.empty(Tensor[(16,16), "f32", (16,16 @ th.col), "rmem"])), op=T.copy())
-                out = tf.zeros(Tensor[(16,16), "f32"])
-                for i in range(16):
-                    out = tf.insert_slice(out, held[i:i+1, :], (i,0))
-                return out
-""")
+    module = load_program(VARIANTS / "register_rows.py")
     lowered = _finalized(module)
     verify_module(lowered)
-    verify_module(import_dsl(as_script(lowered)))
+    verify_module(reload_program(as_script(lowered)))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     slices = [
@@ -317,26 +254,10 @@ class RegisterRows:
 
 @pytest.mark.parametrize("start,offset", [(0, 0), (64, 4096)])
 def test_composed_view_keeps_its_layout_when_logical_rank_changes(start, offset):
-    module = import_dsl(
-        """
-from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1), Topology("thread", 1)))
-class ComposedReshape:
-    @func
-    def gemm(x: Tensor[(64,128), "bf16"]):
-        with Mesh(("cta",), layout=(1,), names=("b",)) as cta:
-            with Mesh(("thread",), layout=(1,), names=("t",)) as thread:
-                layout = ComposedLayout(Swizzle(3,4,3), 0, Layout(((8,8),(2,4,16)), ((512,64),(4096,16,1))))
-                shared = tf.schedule((x, tf.empty(Tensor[(64,128), "bf16", layout, "smem"])), op=T.copy())
-                reshaped = tf.reshape(shared[:,START:START+64], (8,8,16,4))
-                return tf.schedule((reshaped, tf.empty(Tensor[(8,8,16,4), "bf16", "rmem"])), op=T.copy())
-""".replace("START", str(start))
-    )
+    module = load_program(VARIANTS / f"composed_rank_{start}.py")
     lowered = _finalized(module)
     verify_module(lowered)
-    verify_module(import_dsl(as_script(lowered)))
+    verify_module(reload_program(as_script(lowered)))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     views = [
@@ -364,27 +285,9 @@ class ComposedReshape:
 def test_composed_reshape_retains_non_affine_outer_modes(
     width, start, shape, modes, strides, offset
 ):
-    module = import_dsl(
-        """
-from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1), Topology("thread", 1)))
-class ComposedReshape:
-    @func
-    def gemm(x: Tensor[(128,256), "bf16"]):
-        with Mesh(("cta",), layout=(1,), names=("b",)) as cta:
-            with Mesh(("thread",), layout=(1,), names=("t",)) as thread:
-                layout = ComposedLayout(Swizzle(3,4,3), 0, Layout((128,(4,64)), (64,(8192,1))))
-                shared = tf.schedule((x, tf.empty(Tensor[(128,256), "bf16", layout, "smem"])), op=T.copy())
-                reshaped = tf.reshape(shared[:,START:START+WIDTH], SHAPE)
-                return tf.schedule((reshaped, tf.empty(Tensor[SHAPE, "bf16", "rmem"])), op=T.copy())
-""".replace("WIDTH", str(width))
-        .replace("START", str(start))
-        .replace("SHAPE", repr(shape))
-    )
+    module = load_program(VARIANTS / f"composed_outer_{width}_{start}.py")
     lowered = _finalized(module)
-    verify_module(import_dsl(as_script(lowered)))
+    verify_module(reload_program(as_script(lowered)))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     expected = ComposedLayout(Swizzle(3, 4, 3), offset, Layout(modes, strides))
@@ -397,23 +300,8 @@ class ComposedReshape:
 
 
 def test_address_origin_can_divide_a_runtime_loop_index():
-    module = import_dsl("""
-from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1), Topology("thread", 1)))
-class ModularWindow:
-    @func
-    def gemm(x: Tensor[(64,), "f32"]):
-        with Mesh(("cta",), layout=(1,), names=("b",)) as cta:
-            with Mesh(("thread",), layout=(1,), names=("t",)) as thread:
-                out = tf.zeros(Tensor[(8,), "f32", "rmem"])
-                for u in range(cta.b, 8, 1):
-                    start = (u % 4) * 8
-                    out = tf.schedule((x[start:start+8], tf.empty(Tensor[(8,), "f32", "rmem"])), op=T.copy())
-                return out
-""")
-    verify_module(import_dsl(as_script(_finalized(module))))
+    module = load_program(VARIANTS / "modular_window.py")
+    verify_module(reload_program(as_script(_finalized(module))))
 
 
 @pytest.mark.parametrize("coordinate_division", [False, True])
@@ -598,21 +486,11 @@ def test_a_returned_view_passes_its_analyzed_storage_to_the_callee(storage, chai
 
 @pytest.mark.parametrize("read_old", [False, True])
 @pytest.mark.parametrize("reshape", [False, True])
-def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(
-    tmp_path, read_old, reshape
-):
-    source = Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py"
+def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(read_old, reshape):
+    source = INPLACE
     if read_old or reshape:
-        text = source.read_text()
-        if read_old:
-            text = text.replace("(x, tf.empty", "(out[0:1, :], tf.empty")
-        if reshape:
-            text = text.replace(
-                "return update(out, x)", "return tf.reshape(update(out, x), (4, 2))"
-            )
-        rewritten = tmp_path / source.name
-        rewritten.write_text(text)
-        source = rewritten
+        variant = f"inplace_read_{int(read_old)}_reshape_{int(reshape)}.py"
+        source = FIXTURES / "diagnostics" / f"lowering_{variant}" if reshape else VARIANTS / variant
     if reshape:
         with pytest.raises(
             lowering_module.LoweringError, match="requires a non-identity inverse relation"
@@ -638,23 +516,8 @@ def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(
     assert not any(stmt.args[0].type.shape == (2, 4) for stmt in copies)
 
 
-def test_read_only_call_before_an_update_keeps_the_input_storage(tmp_path):
-    source = Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py"
-    text = (
-        source.read_text()
-        .replace(
-            "    @func\n    def update",
-            '    @func\n    def identity(out: Tensor[(2, 4), "f32"]):\n'
-            "        return out\n\n    @func\n    def update",
-        )
-        .replace(
-            "row = tf.schedule((x,",
-            "old = identity(out)\n                row = tf.schedule((old[0:1, :],",
-        )
-        .replace("return tf.insert_slice(out,", "return tf.insert_slice(old,")
-    )
-    path = tmp_path / source.name
-    path.write_text(text)
+def test_read_only_call_before_an_update_keeps_the_input_storage():
+    path = VARIANTS / "read_before_update.py"
     lowered = _finalized(load_program(path))
     verify_module(lowered)
     visitor = _RetainedStatements()
@@ -671,10 +534,8 @@ def test_read_only_call_before_an_update_keeps_the_input_storage(tmp_path):
     assert body.storage(copies[-1].args[-1]) is update.params[-1]
 
 
-def test_staged_smem_keeps_logical_capacity_and_aligns_each_slot(tmp_path):
-    source = (Path(__file__).parents[1] / "fixtures/schedule/hir/smem_padded_stages.py").read_text()
-    path = tmp_path / "broadcast_stages.py"
-    path.write_text(source.replace("((2, 3), (8, 1))", "((2, 3), (0, 1))"))
+def test_staged_smem_keeps_logical_capacity_and_aligns_each_slot():
+    path = VARIANTS / "broadcast_stages.py"
     module = load_authored_ir(str(path))
     result = analyze(*check_program(module, module.entry_function()), analysis="memory")
     staged = next(
@@ -690,27 +551,10 @@ def test_staged_smem_keeps_logical_capacity_and_aligns_each_slot(tmp_path):
 
 @pytest.mark.parametrize("later_use", [None, "callee", "caller"])
 @pytest.mark.parametrize("nested", [False, True])
-def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_use, nested):
-    source = (
-        Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py"
-    ).read_text()
-    if later_use == "callee":
-        source = source.replace(
-            "return tf.insert_slice(out, row, (1, 0))",
-            "updated = tf.insert_slice(out, row, (1, 0))\n                return updated + out",
-        )
-    elif later_use == "caller":
-        source = source.replace("return update(out, x)", "return update(out, x), out")
-    if nested:
-        source = source.replace(
-            "    @func\n    def gemm",
-            '    @func\n    def relay(out: Tensor[(2, 4), "f32"], x: Tensor[(1, 4), "f32"]):\n'
-            "        return update(out, x)\n\n    @func\n    def gemm",
-        )
-        source = source.replace("return update(out, x), out", "return relay(out, x), out")
-        source = source.replace("return update(out, x)  #", "return relay(out, x)  #")
-    path = tmp_path / "update.py"
-    path.write_text(source)
+def test_insert_slice_and_retained_call_keep_parameter_storage(later_use, nested):
+    path = INPLACE
+    if later_use is not None or nested:
+        path = VARIANTS / f"retained_{later_use}_{int(nested)}.py"
     module = load_authored_ir(str(path))
     result = analyze(*check_program(module, module.entry_function()), analysis="memory")
     call = next(
@@ -774,14 +618,8 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(tmp_path, later_u
         copy.assert_not_called()
 
 
-def test_retained_update_translates_an_actual_window(tmp_path):
-    source = (
-        Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py"
-    ).read_text()
-    source = source.replace("def gemm(out: Tensor[(2, 4)", "def gemm(out: Tensor[(3, 4)")
-    source = source.replace("return update(out, x)", "return update(out[1:3, :], x)")
-    path = tmp_path / "window.py"
-    path.write_text(source)
+def test_retained_update_translates_an_actual_window():
+    path = VARIANTS / "retained_window.py"
     module = load_authored_ir(str(path))
     result = analyze(*check_program(module, module.entry_function()), analysis="memory")
     call = next(
@@ -804,14 +642,8 @@ def test_retained_update_translates_an_actual_window(tmp_path):
 
 
 @pytest.mark.parametrize("returned", ["out", "out[1:2, :]"])
-def test_read_only_call_return_keeps_storage_despite_later_actual_use(tmp_path, returned):
-    source = (
-        Path(__file__).parents[1] / "fixtures/schedule/hir/inplace_output_update.py"
-    ).read_text()
-    source = source.replace("return tf.insert_slice(out, row, (1, 0))", f"return {returned}")
-    source = source.replace("return update(out, x)", "return update(out, x), out")
-    path = tmp_path / "readonly.py"
-    path.write_text(source)
+def test_read_only_call_return_keeps_storage_despite_later_actual_use(returned):
+    path = VARIANTS / ("readonly_whole.py" if returned == "out" else "readonly_window.py")
     module = load_authored_ir(str(path))
     result = analyze(*check_program(module, module.entry_function()), analysis="memory")
     call = next(

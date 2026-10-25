@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 import torch
 
-from tests.core._source import import_dsl
+from tests.core._corpus import load_program
 from tests.core.ops.ir.op_case import (
     ExpectedError,
     OpCase,
@@ -126,8 +127,8 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
 
 
 def test_topk_parser_preserves_largest_sorted():
-    src = 'from tilefoundry.dsl import *\n\n\n\n@func\ndef f(x: Tensor[(4, 256), "f32"]):\n    v = tf.topk(x, k=6, axis=-1, largest=False, sorted=True)\n    return v\n'
-    topk = import_dsl(src).body.target
+    program = load_program(Path(__file__).parents[2] / "fixtures/logical/topk_largest_sorted.py")
+    topk = program.entry_function().body.target
     assert isinstance(topk, TopK)
     assert topk.k == 6 and topk.axis == -1
     assert topk.largest is False and topk.sorted is True

@@ -27,13 +27,9 @@ class Program:
     dims: Mapping[str, int] | None
 
 
-def bind_dims(
-    module: Module, entry: Function, stated: Sequence[str] | None, *, command: str
-) -> dict[str, int] | None:
-    """Parse --dim, take one extent per dim, and require every open dim."""
-    dims = _one_extent_per_dim(parse_dims(stated))
-    _require_bound_dims(module, entry, dims, command=command)
-    return dims
+def bind_dims(stated: Sequence[str] | None) -> dict[str, int] | None:
+    """Parse --dim and take one extent per dim, before the source runs."""
+    return _one_extent_per_dim(parse_dims(stated))
 
 
 def checked_program(
@@ -41,9 +37,10 @@ def checked_program(
     topology_level: str | None = None,
 ) -> Program:
     """Load the authored HIR, bind its dims, and check it."""
+    bound = bind_dims(dims)
     module = load_authored_ir(source)
     authored = module.entry_function()
-    bound = bind_dims(module, authored, dims, command=command)
+    _require_bound_dims(module, authored, bound, command=command)
     try:
         checked, entry = check_program(module, authored, topology_level=topology_level, dims=bound)
     except SpecializationError as error:

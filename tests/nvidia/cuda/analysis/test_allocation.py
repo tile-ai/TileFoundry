@@ -1,5 +1,7 @@
 """Physical placement, semantic aliases, and call-boundary proofs."""
 
+from pathlib import Path
+
 import pytest
 
 from tilefoundry import func, module
@@ -26,26 +28,8 @@ from tilefoundry.visitor_registry.verify import verify_module
 from tilefoundry_nvidia import CudaTarget
 
 
-def test_insert_slice_keeps_its_address_through_sequential_carry_loops(tmp_path):
-    source = """from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-@module(entry='gemm', target=CudaTarget('nvidia.h200_sxm'),
-        topologies=(Topology('cta', 1), Topology('thread', 1)))
-class SequentialCarries:
-    @func
-    def gemm(x: Tensor[(2, 4), 'f32'], y: Tensor[(2, 4), 'f32'], z: Tensor[(2, 4), 'f32']):
-        with Mesh(('cta',), layout=(1,), names=('block',)) as _cta:
-            with Mesh(('thread',), layout=(1,), names=('lane',)) as _thread:
-                out = tf.zeros(Tensor[(6, 4), 'f32'])
-                for j in range(2):
-                    out = tf.insert_slice(out, x[j:j + 1, :], (j, 0))
-                for j in range(2):
-                    out = tf.insert_slice(out, y[j:j + 1, :], (2 + j, 0))
-                    out = tf.insert_slice(out, z[j:j + 1, :], (4 + j, 0))
-                return out
-"""
-    path = tmp_path / "sequential.py"
-    path.write_text(source)
+def test_insert_slice_keeps_its_address_through_sequential_carry_loops():
+    path = Path(__file__).parents[1] / "fixtures/logical/sequential_carries.py"
     module = load_authored_ir(str(path))
     result = analyze(*check_program(module, module.entry_function()), analysis="memory")
     inserts = [
@@ -72,25 +56,8 @@ class SequentialCarries:
 
 
 @pytest.mark.parametrize("later_use", [False, True])
-def test_retained_elementwise_return_overwrites_only_a_dead_actual(tmp_path, later_use):
-    source = """from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-@module(entry='gemm', target=CudaTarget('nvidia.h200_sxm'),
-        topologies=(Topology('cta', 1), Topology('thread', 1)))
-class FreshReturn:
-    @func
-    def doubled(x: Tensor[(2, 4), 'f32']):
-        return x + x
-    @func
-    def gemm():
-        with Mesh(('cta',), layout=(1,), names=('block',)) as _cta:
-            a = tf.zeros(Tensor[(2, 4), 'f32'])
-            return doubled(a)
-"""
-    if later_use:
-        source = source.replace("return doubled(a)", "return doubled(a), a")
-    path = tmp_path / "fresh.py"
-    path.write_text(source)
+def test_retained_elementwise_return_overwrites_only_a_dead_actual(later_use):
+    path = Path(__file__).parents[1] / f"fixtures/logical/fresh_return_{int(later_use)}.py"
     module = load_authored_ir(str(path))
     result = analyze(*check_program(module, module.entry_function()), analysis="memory")
     call = next(

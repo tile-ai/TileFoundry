@@ -11,13 +11,12 @@ targeting the sibling); forward references stay unresolved and fail loudly.
 
 from __future__ import annotations
 
-import ast
 import dataclasses
 from pathlib import Path
 
 import pytest
 
-from tests.core._source import import_dsl
+from tests.core._corpus import import_program, load_program, reload_program
 from tests.nvidia.cuda.fixtures.shapes import scaled_modules
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
@@ -43,13 +42,10 @@ def test_a_held_child_takes_its_own_owners_target_types():
     Target and the call's storage, and a call the Target refuses fails where the
     root makes it, leaving the child's types as they were.
     """
-    from tests.core._source import import_dsl  # noqa: PLC0415
-    from tests.nvidia.cuda.fixtures.placed.child_matmul_target import (  # noqa: PLC0415
-        K_LEN,
-        K,
-        M,
-        N,
+    namespace = import_program(
+        Path(__file__).parents[1] / "fixtures/logical/child_matmul_inherited_target.py"
     )
+    K_LEN, K, M, N = (namespace[name] for name in ("K_LEN", "K", "M", "N"))
 
     def storages(owner):
         found = []
@@ -81,17 +77,7 @@ def test_a_held_child_takes_its_own_owners_target_types():
         (function,) = (function for function in owner.functions if function.name == name)
         return function.body.type.storage
 
-    authored = ast.parse(Path(__file__).parents[1].joinpath(
-        "fixtures/placed/child_matmul_target.py"
-    ).read_text())
-    for definition in authored.body:
-        if isinstance(definition, ast.ClassDef) and definition.name in {
-            "ChildMatmul", "ChildMatmulDirect", "ChildMatmulStaged"
-        }:
-            for decorator in definition.decorator_list:
-                if isinstance(decorator, ast.Call):
-                    decorator.keywords = [kw for kw in decorator.keywords if kw.arg != "target"]
-    cuda_root = import_dsl(ast.unparse(authored), "ChildMatmulRoot")
+    cuda_root = namespace["ChildMatmulRoot"]
     held = tuple(slot.elements[0] for slot in cuda_root.children.values())
     for child in held:
         assert child.target is None
@@ -131,7 +117,7 @@ def test_a_held_child_takes_its_own_owners_target_types():
     ]
     assert all(any(target is slot for target in callees) for slot in _CpuRoot.children.values())
 
-    imported = import_dsl(as_script(cuda_root), "ChildMatmulRoot")
+    imported = reload_program(as_script(cuda_root), "ChildMatmulRoot")
     for slot in imported.children.values():
         child = slot.elements[0]
         assert child.target is None
@@ -201,43 +187,32 @@ def test_prim_func_host_resolves_sibling_device_in_class_body():
 
 
 @pytest.mark.parametrize(
-    "declarations,body,refused",
+    ("fixture", "refused"),
     [
-        ("layers = [ScaledChild]", "return x", "use ModuleList"),
-        ("layers = (ScaledChild,)", "return x", "use ModuleList"),
-        ("layers = ModuleList(ScaledChild, 0)", "return x", "positive integer"),
-        ("layers = ModuleList(ScaledChild, 1.5)", "return x", "positive integer"),
-        ("layers = ModuleList(())", "return x", "non-empty tuple"),
-        ("layers = ModuleList((ScaledChild, 1))", "return x", "requires Modules"),
-        ("layers = ModuleList(ScaledChild, 3)\n    other = layers", "return x", "layers.*other"),
-        ("layers = ModuleList(ScaledChild, 3)", "return layers[3](x)", "layers.*N=3"),
-        ("layers = ModuleList(ScaledChild, 3)", "return layers[-1](x)", "layers.*N=3"),
-        ("layers = ModuleList(ScaledChild, 3)", "return layers[0.5](x)", "integer scalar"),
-        ("layers = ScaledChild", "return layers[0](x)", "single slot.*cannot be indexed"),
-        ("layers = ModuleList(ScaledChild, 3)", "return layers(x)", "must be indexed"),
-        ("layers = ModuleList((ScaledChild, NestedScaledMiddle))", "return layers[i](x)", "same definition"),
-        ("layers = ModuleList(ScaledChild, 3)", "return layers[0].run(x)", "only calling an instance entry"),
-        ("layers = ScaledChild", "return layers(x, x)", "arity mismatch.*1 activation.*passed 2"),
-        ("helper = ScaledChild.run", "return helper(x)", "arity mismatch.*2 parameter.*passed 1"),
-        ("layers = replace(ScaledChild, entry=None)", "return layers(x)", "declares no entry"),
-        ("", "return ScaledChild(x)", "instance calls must use a slot name"),
+        ("list_slot", "use ModuleList"),
+        ("tuple_slot", "use ModuleList"),
+        ("zero_count", "positive integer"),
+        ("fractional_count", "positive integer"),
+        ("empty_tuple", "non-empty tuple"),
+        ("non_module", "requires Modules"),
+        ("aliased_slot", "layers.*other"),
+        ("large_index", "layers.*N=3"),
+        ("negative_index", "layers.*N=3"),
+        ("fractional_index", "integer scalar"),
+        ("indexed_single_slot", "single slot.*cannot be indexed"),
+        ("unindexed_list", "must be indexed"),
+        ("mixed_definitions", "same definition"),
+        ("non_entry_call", "only calling an instance entry"),
+        ("extra_activation", "arity mismatch.*1 activation.*passed 2"),
+        ("missing_weight", "arity mismatch.*2 parameter.*passed 1"),
+        ("missing_entry", "declares no entry"),
+        ("unbound_slot", "instance calls must use a slot name"),
     ],
 )
-def test_module_rejects_invalid_instance_declarations_and_calls(declarations, body, refused):
-    source = f'''from dataclasses import replace
-from tilefoundry.dsl import *
-from tests.nvidia.cuda.fixtures.shapes.scaled_modules import ScaledChild, NestedScaledMiddle
-
-@module(entry="main")
-class Invalid:
-    {declarations}
-
-    @func
-    def main(x: Tensor[(4,), "f32"], i: Tensor[(), "i32"]):
-        {body}
-'''
+def test_module_rejects_invalid_instance_declarations_and_calls(fixture, refused):
+    source = Path(__file__).parents[1] / f"fixtures/diagnostics/parser_module_instance_{fixture}.py"
     with pytest.raises((TypeError, ValueError, VerifyError), match=refused):
-        import_dsl(source, "Invalid")
+        load_program(source)
 
 
 def test_an_unused_module_without_entry_can_occupy_a_slot_and_be_replaced():

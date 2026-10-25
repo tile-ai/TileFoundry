@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from tests.core._source import import_dsl
+from tests.core._corpus import load_program, reload_program
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call
@@ -15,28 +17,19 @@ from tilefoundry_nvidia import CudaTarget
 
 
 @pytest.mark.parametrize(
-    ("layout", "message"),
+    ("fixture", "message"),
     [
-        ("(8, 16) @ {}", "layout states must be"),
-        ("(8, 16) @ {mesh.lane @ B()}", "layout states must be"),
-        ('(8, 16) @ {B(), mesh.lane @ P("sum")}', "layout states must be"),
-        ('(8, 16) @ {mesh.lane @ P("")}', "layout states must be"),
-        ("3 @ {B()}", "layout states require"),
+        ("empty", "layout states must be"),
+        ("bare_split", "layout states must be"),
+        ("mixed", "layout states must be"),
+        ("empty_partial", "layout states must be"),
+        ("scalar_shape", "layout states require"),
     ],
 )
-def test_layout_states_reject_invalid_forms(layout: str, message: str) -> None:
-    source = f'''from __future__ import annotations
-from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-
-@module(target=CudaTarget("nvidia.h200_sxm"))
-class Model:
-    @func(mesh=Mesh((Topology("thread", 8),), layout=(8,), names=("lane",)))
-    def f(x: Tensor[(8, 16), "f32", {layout}, "rmem"]):
-        return x
-'''
+def test_layout_states_reject_invalid_forms(fixture: str, message: str) -> None:
+    source = Path(__file__).parents[1] / f"fixtures/diagnostics/parser_layout_states_{fixture}.py"
     with pytest.raises(ParseError, match=message):
-        import_dsl(source, "Model")
+        load_program(source)
 
 
 def test_composed_layout_states_parse_round_trip_and_reshard() -> None:
@@ -63,7 +56,7 @@ def test_composed_layout_states_parse_round_trip_and_reshard() -> None:
     assert function.body.type.layout == ShardLayout(composed, (B(),), execution_mesh)
     assert function.body.type.storage is StorageKind.SMEM
     printed = as_script(Model)
-    assert as_script(import_dsl(printed, "Model")) == printed
+    assert as_script(reload_program(printed, "Model")) == printed
 
 
 def test_body_local_integer_arithmetic_is_normalized_before_layout_construction() -> None:

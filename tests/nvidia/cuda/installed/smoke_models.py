@@ -160,11 +160,8 @@ def test_models_source_reads_target_resources_without_importing_files(
     root = tmp_path / "target"
     model = root / "models" / "added"
     model.mkdir(parents=True)
-    (model / "model.py").write_text(
-        '"""A model that must not run while it is described."""\nraise RuntimeError\n',
-        encoding="utf-8",
-    )
-    (model / "hf_alias.py").write_text('"""An added companion."""\n', encoding="utf-8")
+    for name in ("model.py", "hf_alias.py"):
+        shutil.copyfile(Path(__file__).parents[1] / "fixtures/cli/unimportable_model" / name, model / name)
     (model / "config.json").write_text("{}\n", encoding="utf-8")
     (model.parent / "catalog.json").write_text(
         '{"models": [{"name": "added"}]}\n', encoding="utf-8"

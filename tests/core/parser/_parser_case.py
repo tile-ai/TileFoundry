@@ -5,8 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.core._corpus import Case, Problems, import_program
-from tests.core._source import import_dsl
+from tests.core._corpus import Case, Problems, load_program, reload_program
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, SourceSpanMetadata, get_metadata
 from tilefoundry.ir.core.module import Module
@@ -30,14 +29,7 @@ class ParserCase(Case):
         return super().id + (f".{self.name}" if self.name else "")
 
     def load(self) -> Module | Function | PrimFunction:
-        loaded = import_program(self.path)
-        if self.name is not None:
-            return getattr(loaded, self.name)
-        return next(
-            value
-            for value in vars(loaded).values()
-            if isinstance(value, (Module, Function, PrimFunction))
-        )
+        return load_program(self.path, name=self.name)
 
 
 @dataclass(frozen=True)
@@ -62,7 +54,7 @@ def require_call_spans(ir) -> None:
 
 
 def _reparse(ir, printed):
-    return import_dsl(printed, name=ir.name)
+    return reload_program(printed, name=ir.name)
 
 
 def _const_parameters(ir, printed, rebuilt):

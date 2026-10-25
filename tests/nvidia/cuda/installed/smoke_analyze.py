@@ -8,33 +8,7 @@ from pathlib import Path
 
 from tests.core.installed._analyze import check_usage_error
 
-_BAD_MODULE = (
-    '\n'
-    'from tilefoundry.dsl import *\n'
-    '\n'
-    '\n'
-    '@module(entry="main")\n'
-    'class Bad:\n'
-    '    @func\n'
-    '    def main(x: Tensor[(8,), "f32"]):\n'
-    '        wrong = tf.add(x, tf.cast(x, "i32"))\n'
-    '        return wrong\n'
-)
-
-_OPEN_MODULE = (
-    '\n'
-    'from tilefoundry.dsl import *\n'
-    '\n'
-    'from tilefoundry_nvidia import CudaTarget\n'
-    '\n'
-    'N = DimVar("N", 1, 8)\n'
-    '\n'
-    '@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))\n'
-    'class Open:\n'
-    '    @func\n'
-    '    def main(x: Tensor[(N,), "f32"]):\n'
-    '        return tf.add(x, x)\n'
-)
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 
 def test_logical_analyses_run(tf, cmine, tmp_path) -> None:
@@ -153,8 +127,7 @@ def test_analyze_json_needs_an_explicit_analysis(tf, cmine, tmp_path) -> None:
 
 
 def test_a_bare_analyze_binds_every_open_dimension(tf, tmp_path) -> None:
-    source = tmp_path / "open.py"
-    source.write_text(_OPEN_MODULE, encoding="utf-8")
+    source = FIXTURES / "logical/open_dimension.py"
 
     unbound = tf("analyze", f"{source}:Open", str(tmp_path / "unbound.py"))
     assert unbound.returncode == 1
@@ -219,8 +192,7 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide, tmp_pa
 
 
 def test_analyze_failure_reports_line_variable_and_reason(tf, dynamic_trip_count, tmp_path) -> None:
-    bad = tmp_path / "bad.py"
-    bad.write_text(_BAD_MODULE, encoding="utf-8")
+    bad = FIXTURES / "diagnostics/verify_dtype_mismatch.py"
 
     done = tf("analyze", f"{bad}:Bad", str(tmp_path / "bad_report.py"))
     assert done.returncode == 1

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tilefoundry import cli
@@ -10,6 +12,8 @@ from tilefoundry.cli.source import (
     load_authored_ir,
 )
 from tilefoundry.target import registered_targets
+
+FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 
 def test_parse_dims_reads_one_extent_per_dimension() -> None:
@@ -130,26 +134,8 @@ def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys, tmp_path
     assert "source file not found" not in refused.err
 
 
-def test_repeated_source_loads_keep_one_logical_target_registration(tmp_path) -> None:
-    (tmp_path / "provider.py").write_text(
-        "from tilefoundry.target import CpuTarget, register_target\n"
-        "@register_target\n"
-        "class ReloadTarget(CpuTarget):\n"
-        "    name = 'tests.cli.reload_target'\n",
-        encoding="utf-8",
-    )
-    source = tmp_path / "model.py"
-    source.write_text(
-        (
-            'from tilefoundry.dsl import *\n'
-            'from provider import ReloadTarget\n'
-            '@module(target=ReloadTarget())\n'
-            'class Model:\n'
-            '    def forward(self):\n'
-            '        return None\n'
-        ),
-        encoding="utf-8",
-    )
+def test_repeated_source_loads_keep_one_logical_target_registration() -> None:
+    source = FIXTURES / "cli/reload_target/model.py"
 
     first = load_authored_ir(f"{source}:Model")
     second = load_authored_ir(f"{source}:Model")
@@ -162,19 +148,7 @@ def test_named_provider_registers_only_decorated_targets_and_replays_them(
     tmp_path, monkeypatch, capsys
 ) -> None:
     provider_name = "decorated_target_provider"
-    (tmp_path / f"{provider_name}.py").write_text(
-        "from dataclasses import dataclass\n"
-        "from tilefoundry.target import Target, register_target\n"
-        "@dataclass(frozen=True)\n"
-        "class _VendorBase(Target):\n"
-        "    topology_levels = ('core',)\n"
-        "@register_target\n"
-        "@dataclass(frozen=True)\n"
-        "class VendorOne(_VendorBase):\n"
-        "    name = 'tests.cli.vendor_one'\n",
-        encoding="utf-8",
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.syspath_prepend(str(FIXTURES / "target_plugins"))
     registry = tmp_path / "registry.toml"
     prefix = ["--registry", str(registry), "target"]
 

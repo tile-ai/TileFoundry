@@ -6,7 +6,7 @@ import typing
 
 import pytest
 
-from tests.core.installed.smoke_target.vendor_npu import VendorNpuTarget
+from tests.core.fixtures.target_plugins.vendor_npu import VendorNpuTarget
 from tilefoundry.codegen.linkable_module import LinkableModule
 from tilefoundry.dsl import *
 from tilefoundry.ir.core.module import Module

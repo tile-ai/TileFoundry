@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from tests.core._source import import_dsl
+from tests.core._corpus import reload_program
 from tests.core.schedule._fixtures import (
     CliCase,
     _quiet_json,
@@ -241,7 +241,7 @@ def _check_facts_refusal(out: Path, captured: pytest.CaptureResult[str], *, mess
 
 def _check_finalized_rows(out: Path, captured: pytest.CaptureResult[str]) -> None:
     assert captured == ("", "")
-    lowered = import_dsl(out.read_text()).entry_function()
+    lowered = reload_program(out.read_text()).entry_function()
     assert isinstance(lowered, PrimFunction)
     assert lowered.params[-1].type.shape == (128,)
 
@@ -631,13 +631,7 @@ FIXTURES = (
 
 
 def test_candidates_nk_layout(tmp_path, capsys):
-    source = Path("tests/nvidia/cuda/fixtures/schedule/plain/gemm_relu_gemm_untiled.py")
-    variant = tmp_path / "gemm_relu_gemm_untiled_nk.py"
-    variant.write_text(
-        source.read_text()
-        .replace("tf.matmul(a, b)", 'tf.matmul(a, b, b_layout="NK")')
-        .replace("tf.matmul(y, c)", 'tf.matmul(y, c, b_layout="NK")')
-    )
+    variant = Path(__file__).parents[1] / "fixtures/schedule/variants/gemm_relu_gemm_untiled_nk.py"
     out = tmp_path / "gemm_relu_gemm_untiled.json"
     assert cli_main(["schedule", "candidates", str(variant), str(out), "--json"]) == 0
     _check_plain_candidates(

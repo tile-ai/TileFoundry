@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -29,22 +30,9 @@ def siblings(tmp_path) -> Callable[[str, str], Path]:
 
     def write(directory: str, name: str) -> Path:
         home = tmp_path / directory
-        home.mkdir()
-        (home / "model.py").write_text(
-            (
-                REPO / "tests" / "nvidia" / "cuda" / "fixtures" / "logical" / "matmul_rms_norm.py"
-            ).read_text(encoding="utf-8").replace("class CMine:", f"class {name}:"),
-            encoding="utf-8",
-        )
-        runtime = home / "runtime_model.py"
-        runtime.write_text(
-            f"from model import {name}\n"
-            "if __spec__ is None:\n"
-            "    raise RuntimeError('source was not loaded as a module')\n"
-            "print('source output')\n",
-            encoding="utf-8",
-        )
-        return runtime
+        source = REPO / "tests/nvidia/cuda/fixtures/cli/siblings" / name
+        shutil.copytree(source, home)
+        return home / "runtime_model.py"
 
     return write
 

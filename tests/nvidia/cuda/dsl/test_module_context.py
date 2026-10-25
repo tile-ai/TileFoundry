@@ -11,9 +11,11 @@ Function carrying it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from tests.core._source import import_dsl
+from tests.core._corpus import load_program
 from tests.nvidia.cuda.fixtures.logical import module_context as context_fixture
 from tilefoundry.dsl import *
 from tilefoundry.ir.core.module import Module
@@ -127,32 +129,8 @@ def test_declaring_context_on_a_function_yields_its_own_module() -> None:
     assert not hasattr(plain, "target") and not hasattr(plain, "topologies")
 
 
-_MEMBER_CONTEXT_SOURCE = """
-import tilefoundry
-from tilefoundry.dsl import Mesh, Tensor, tf
-from tilefoundry.ir.types import Topology
-from tilefoundry_nvidia import CudaTarget
-
-@tilefoundry.module(
-    entry="attention",
-    target=CudaTarget("nvidia.h200_sxm"),
-    topologies=(Topology("cta", 2),),
-)
-class Layer:
-    @tilefoundry.func
-    def attention(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        with Mesh(("cta",), (2,), ("block",)) as _cta:
-            return tf.relu(x)
-
-    @tilefoundry.func(topologies=(Topology("thread", 4),))
-    def softmax(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        with Mesh(("thread",), (4,), ("lane",)) as _thread:
-            return tf.square(x)
-"""
-
-
 def test_member_context_builds_its_own_runtime_domain() -> None:
-    imported = import_dsl(_MEMBER_CONTEXT_SOURCE, "Layer")
+    imported = load_program(Path(__file__).parents[1] / "fixtures/logical/member_context.py")
 
     assert [function.name for function in imported.functions] == ["attention"]
     assert list(imported.children) == ["softmax"]

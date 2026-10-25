@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
-from tests.core._source import import_dsl
+from tests.core._corpus import load_program
 from tests.nvidia.cuda.analysis._contracts import (
     _footprint_bytes,
     _reuse_conclusions,
@@ -117,19 +118,7 @@ def test_capacity_exceeded_matches_the_written_ratio(
 
 
 def test_runtime_loop_start_names_the_unbounded_value() -> None:
-    module = import_dsl("""from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-
-@module(entry="read", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-class RuntimeStart:
-    @func
-    def read(x: Tensor[(16,), "f32"], start: Tensor[(), "i64"]):
-        with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
-            result = tf.zeros(Tensor[(4,), "f32", (4,), "rmem"])
-            for n in range(start, 4):
-                result = tf.reshard(x[n * 4 : n * 4 + 4], (4,), "rmem")
-            return result
-""")
+    module = load_program(Path(__file__).parents[1] / "fixtures/diagnostics/analysis_runtime_start.py")
     with pytest.raises(
         AnalysisError,
         match=r"loop 'n' takes its start from 'start'.*analysis needs a literal start or a stated value range",
@@ -138,21 +127,7 @@ class RuntimeStart:
 
 
 def test_symbolic_divisor_loop_start_does_not_block_typing() -> None:
-    module = import_dsl("""from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
-
-NC = DimVar("chunks", 1, 32)
-
-@module(entry="read", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
-class SymbolicStart:
-    @func
-    def read(x: Tensor[(16,), "f32"]):
-        with Mesh(("cta",), layout=(4,), names=("t",)) as _cta:
-            result = tf.zeros(Tensor[(4,), "f32", (4,), "rmem"])
-            for n in range(16 // NC, 4):
-                result = tf.reshard(x[n * 4 : n * 4 + 4], (4,), "rmem")
-            return result
-""")
+    module = load_program(Path(__file__).parents[1] / "fixtures/logical/symbolic_loop_start.py")
     with pytest.raises(SpecializationError, match=r"still states \['chunks'\] as ranges"):
         check_program(module, module.entry_function())
     check_program(module, module.entry_function(), dims={"chunks": 8})

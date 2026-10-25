@@ -7,10 +7,12 @@ evaluator, and a sub-byte destination dtype is refused there.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
-from tests.core._source import import_dsl
+from tests.core._corpus import load_program
 from tests.core.ops.ir.op_case import (
     infer_call,
 )
@@ -20,6 +22,7 @@ from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.types.shard_layout import ShardLayout, Split
 
+FIXTURES = Path(__file__).parents[2] / "fixtures"
 _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 
 
@@ -34,24 +37,6 @@ def test_cast_carries_sharded_layout():
     assert out.dtype == DType.bf16
     assert out.shape == (16, 8)
     assert out.layout == sl
-
-
-_PRELUDE = (
-    "from __future__ import annotations\n"
-    "from tilefoundry import func\n"
-    "from tilefoundry.dsl import Tensor, tf\n"
-    "\n"
-)
-
-
-def _double_cast_fn(n: int, io_dtype: str, mid_dtype: str):
-    """A parsed ``@func`` computing ``cast(cast(x, mid), io)`` over shape ``(n,)``."""
-    src = (
-        _PRELUDE + "@func\n"
-        f'def rt(x: Tensor[({n},), "{io_dtype}"]) -> Tensor[({n},), "{io_dtype}"]:\n'
-        f'    return tf.cast(tf.cast(x, "{mid_dtype}"), "{io_dtype}")\n'
-    )
-    return import_dsl(src)
 
 
 ROUNDTRIPS = [
@@ -78,17 +63,13 @@ ROUNDTRIPS = [
 def test_a_double_roundtrip_matches_torch(io_dtype, mid_dtype, io_torch, mid_torch, values):
     x = torch.tensor(values, dtype=io_torch)
 
-    out = evaluate(_double_cast_fn(len(values), io_dtype, mid_dtype), x)
+    function = load_program(FIXTURES / f"logical/cast_{mid_dtype}.py").entry_function()
+    out = evaluate(function, x)
 
     torch.testing.assert_close(out, x.to(mid_torch).to(io_torch))
 
 
 def test_cast_f4e2m1_has_no_evaluator_support():
-    src = (
-        _PRELUDE + "@func\n"
-        'def rt(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f4e2m1"]:\n'
-        '    return tf.cast(x, "f4e2m1")\n'
-    )
-    fn = import_dsl(src)
+    fn = load_program(FIXTURES / "diagnostics/evaluator_cast_f4e2m1.py").entry_function()
     with pytest.raises(EvalError, match=r"unsupported dtype.*f4e2m1"):
         evaluate(fn, torch.randn(4))

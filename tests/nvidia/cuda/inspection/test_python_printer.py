@@ -8,7 +8,7 @@ left-hand side carries, and the target header, whose value must rebuild the
 
 from dataclasses import dataclass, fields, replace
 
-from tests.core._source import import_dsl
+from tests.core._corpus import reload_program
 from tests.nvidia.cuda.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.dsl import *
 from tilefoundry.inspection import PythonPrintOptions, as_script
@@ -94,7 +94,7 @@ def test_external_same_named_cuda_target_keeps_its_provider_in_module_source():
 
     assert "from tests.nvidia.cuda.inspection.test_python_printer import CudaTarget" in canonical
     assert "from tilefoundry_nvidia.cuda.target import CudaTarget" not in canonical
-    rebuilt = import_dsl(canonical)
+    rebuilt = reload_program(canonical)
     assert type(rebuilt.target) is CudaTarget
     assert rebuilt.target == target
 

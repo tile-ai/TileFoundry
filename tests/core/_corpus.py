@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import importlib.util
 import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import MappingProxyType
 
+from tilefoundry.cli.source import load_namespace
 from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.prim_function import PrimFunction
 
 
@@ -33,21 +35,33 @@ class Case:
         return load_program(self.path)
 
 
-def import_program(path: Path):
-    """Execute a fixture file and return its Python namespace module."""
-    spec = importlib.util.spec_from_file_location(path.stem, path)
-    assert spec is not None and spec.loader is not None
-    loaded = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(loaded)
-    return loaded
+def import_program(path: Path) -> dict[str, object]:
+    """Execute a fixture with isolated sibling imports and return its namespace."""
+    return load_namespace(str(path))[0]
 
 
-def load_program(path: Path) -> Module | PrimFunction:
-    """Import the first IR binding without retaining a cross-test module cache."""
-    loaded = import_program(path)
-    return next(
-        value for value in vars(loaded).values() if isinstance(value, (Module, PrimFunction))
-    )
+def load_program(path: Path, name: str | None = None) -> Module | Function | PrimFunction:
+    """Load a fresh named IR binding, or the first Module or PrimFunction."""
+    namespace = import_program(path)
+    if name is not None:
+        return namespace[name]
+    return next(value for value in namespace.values() if isinstance(value, (Module, PrimFunction)))
+
+
+def reload_program(printed: str, name: str | None = None) -> Module | Function | PrimFunction:
+    """Reload runtime printer output for roundtrip checks only."""
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "roundtrip.py"
+        path.write_text(printed)
+        loaded = import_program(path)
+    kinds = (Module, Function, PrimFunction)
+    if name is not None:
+        value = loaded[name]
+        assert isinstance(value, kinds)
+        return value
+    values = [value for value in loaded.values() if isinstance(value, kinds)]
+    assert len(values) == 1, "name the printed IR binding when output builds more than one"
+    return values[0]
 
 
 class Problems:

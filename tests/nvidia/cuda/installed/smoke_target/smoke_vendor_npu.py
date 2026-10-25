@@ -7,33 +7,19 @@ import shutil
 from pathlib import Path
 
 
-def _vendor_npu_model(cmine: Path, tmp_path: Path) -> Path:
+def _vendor_npu_model(tmp_path: Path) -> Path:
     provider = tmp_path / "vendor_npu"
     provider_fixture = (
-        Path(__file__).parents[4] / "core" / "installed" / "smoke_target" / "vendor_npu"
+        Path(__file__).parents[4] / "core" / "fixtures" / "target_plugins" / "vendor_npu"
     )
     shutil.copytree(provider_fixture, provider)
     model = tmp_path / "vendor_npu_model.py"
-    model.write_text(
-        cmine.read_text(encoding="utf-8")
-        .replace(
-            "from tilefoundry_nvidia import CudaTarget",
-            "from vendor_npu import VendorNpuTarget",
-        )
-        .replace(
-            '@module(entry="root", target=CudaTarget("nvidia.h200_sxm"), '
-            'topologies=(Topology("cta", 1), Topology("thread", 128)))',
-            '@module(entry="root", target=VendorNpuTarget(), topologies=(Topology("core", 1),))',
-        ),
-        encoding="utf-8",
-    )
+    shutil.copyfile(Path(__file__).parents[2] / "fixtures/cli/vendor_npu/model.py", model)
     return model
 
 
-def test_document_free_target_analyzes_with_its_declared_target(
-    tf, cmine, tmp_path
-) -> None:
-    model = _vendor_npu_model(cmine, tmp_path)
+def test_document_free_target_analyzes_with_its_declared_target(tf, tmp_path) -> None:
+    model = _vendor_npu_model(tmp_path)
     analyzed = tf(
         "analyze",
         f"{model}:CMine.root",

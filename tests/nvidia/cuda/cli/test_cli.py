@@ -12,11 +12,11 @@ import pytest
 import tilefoundry.cli.analyze as analyze_cli
 import tilefoundry.cli.target as target_cli
 from tests.core.cli._targets import listed_identities
-from tests.nvidia.cuda.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tilefoundry import cli
 from tilefoundry.utils.units import format_bytes
 
 _SMOKE_TARGET = Path(__file__).parents[1] / "installed" / "smoke_target"
+FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 
 def _run_cli(registry: Path, cwd: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -41,48 +41,6 @@ def _copy(source: Path, destination: Path) -> Path:
     return destination
 
 
-def _write_registered_model(path: Path, *, target: str, topology: str) -> Path:
-    path.write_text(
-        "import json\n"
-        "from tilefoundry import func\n"
-        "from tilefoundry.dsl import Tensor, Topology, tf\n"
-        "from tilefoundry.target import registered_targets\nfrom tilefoundry_nvidia import CudaTarget\n"
-        '_extent = json.loads(\'{"extent": 1}\')["extent"]\n'
-        f"_target = {target}\n"
-        f"@func(target=_target, topologies=(Topology('{topology}', _extent),))\n"
-        "def model(source: Tensor[(8,), 'f32']):\n"
-        "    return tf.add(source, source)\n",
-        encoding="utf-8",
-    )
-    return path
-
-
-_NEIGHBOURS = (
-    'from tilefoundry.dsl import *\n'
-    '\n'
-    'from tilefoundry_nvidia import CudaTarget\n'
-    '\n'
-    'N = 132 * 128\n'
-    "_H200 = CudaTarget('nvidia.h200_sxm')\n"
-    '\n'
-    '\n'
-    "@module(entry='nope', target=_H200, topologies=(Topology('cta', 132),))\n"
-    'class Unsound:\n'
-    '    @func\n'
-    "    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
-    '        return tf.square(x)\n'
-    '\n'
-    '\n'
-    "@module(entry='kernel', target=_H200, topologies=(Topology('cta', 132),))\n"
-    'class Sound:\n'
-    '    @func\n'
-    "    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
-    "        with Mesh(('cta',), layout=(132,), names=('block',)) as m:\n"
-    "            placed = tf.reshard(x, (N @ m.block,), 'gmem')\n"
-    "            return tf.reshard(tf.square(placed), (N @ m.block,), 'gmem')\n"
-)
-
-
 @pytest.mark.parametrize(
     ("root", "flags", "expected"),
     [
@@ -96,8 +54,7 @@ def test_analyze_disarms_its_watchdog_on_every_exit(
     tmp_path, monkeypatch, root, flags, expected
 ) -> None:
     """Neither successful returns nor raised errors leave a timer armed in the caller."""
-    source = tmp_path / "neighbours.py"
-    source.write_text(_NEIGHBOURS, encoding="utf-8")
+    source = FIXTURES / "cli/neighbours.py"
     disarmed = analyze_cli._watch(analyze_cli._ANALYSIS_TIMEOUT_SECONDS)
     monkeypatch.setattr(analyze_cli, "_watch", lambda limit: disarmed)
     assert not disarmed.is_set()
@@ -118,8 +75,7 @@ def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(tmp_path, capsy
     about the sound root; asking about the file still has to refuse, because then
     the broken root is one of the programs that was asked for.
     """
-    source = tmp_path / "neighbours.py"
-    source.write_text(_NEIGHBOURS, encoding="utf-8")
+    source = FIXTURES / "cli/neighbours.py"
 
     report_path = tmp_path / "sound.json"
     assert (
@@ -159,23 +115,13 @@ def test_target_list_expressions_execute_and_show_accepts_their_identities(
 def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
     reports = {}
     for device in ("nvidia.h200_sxm", "nvidia.b200_sxm"):
-        source = tmp_path / f"{device.rsplit('.', 1)[1]}.py"
-        source.write_text(
-            "from tilefoundry import func\n"
-            "from tilefoundry.dsl import Tensor, Topology, tf\n"
-            "from tilefoundry_nvidia import CudaTarget\n"
-            f"@func(target=CudaTarget('{device}'), "
-            "topologies=(Topology('cta', 1),))\n"
-            "def model(source: Tensor[(8,), 'f32']):\n"
-            "    return tf.add(source, source)\n",
-            encoding="utf-8",
-        )
+        source = FIXTURES / f"cli/products/{device.rsplit('.', 1)[1]}.py"
         report_path = tmp_path / f"{device.rsplit('.', 1)[1]}.json"
         assert (
             cli.main(
                 [
                     "analyze",
-                    f"{source}:model",
+                    f"{source}:Model",
                     str(report_path),
                     "--compute-cost",
                     "--json",
@@ -210,8 +156,8 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
     provider = _copy(
         Path(__file__).parents[3]
         / "core"
-        / "installed"
-        / "smoke_target"
+        / "fixtures"
+        / "target_plugins"
         / "vendor_npu"
         / "__init__.py",
         tmp_path / "vendor_npu.py",
@@ -278,16 +224,11 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
     assert "device: vendor.v100_sxm2_32gb" in shown.stdout
     assert shown.stdout.count("  digest: ") == 2
 
-    npu_model = _write_registered_model(
-        tmp_path / "npu_model.py",
-        target="registered_targets()['vendor.npu']()",
-        topology="core",
-    )
     analyzed_npu = _run_cli(
         registry,
         tmp_path,
         "analyze",
-        f"{npu_model}:model",
+        f"{FIXTURES / 'cli/registered_npu_source.py'}:Model",
         "--compute-cost",
         "--memory",
         "--roofline",
@@ -297,16 +238,11 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
     assert analyzed_npu.returncode == 0, analyzed_npu.stderr
     assert analyzed_npu.stdout == ""
     assert json.loads((tmp_path / "npu.json").read_text(encoding="utf-8"))["target"] == "vendor.npu"
-    cuda_model = _write_registered_model(
-        tmp_path / "cuda_model.py",
-        target='CudaTarget("vendor.v100_sxm2_32gb")',
-        topology="cta",
-    )
     analyzed_cuda = _run_cli(
         registry,
         tmp_path,
         "analyze",
-        f"{cuda_model}:model",
+        f"{FIXTURES / 'cli/registered_cuda_source.py'}:Model",
         "--compute-cost",
         str(tmp_path / "cuda.json"),
         "--json",
@@ -371,14 +307,7 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
 
     shadow_dir = tmp_path / "shadow"
     shadow_dir.mkdir()
-    json_provider = shadow_dir / "json.py"
-    json_provider.write_text(
-        "from tilefoundry.target import Target, register_target\n"
-        "@register_target\n"
-        "class JsonTarget(Target):\n"
-        "    name = 'vendor.json'\n",
-        encoding="utf-8",
-    )
+    json_provider = _copy(FIXTURES / "target_plugins/shadow/json.py", shadow_dir / "json.py")
     shadowed = _run_cli(
         tmp_path / "shadow-registry.toml",
         tmp_path,
@@ -391,14 +320,7 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     assert "json/__init__.py" in shadowed.stderr
     assert not (tmp_path / "shadow-registry.toml").exists()
 
-    collision_provider = tmp_path / "collision.py"
-    collision_provider.write_text(
-        "from tilefoundry.target import Target, register_target\n"
-        "@register_target\n"
-        "class CollisionTarget(Target):\n"
-        "    name = 'nvidia.h200_sxm'\n",
-        encoding="utf-8",
-    )
+    collision_provider = _copy(FIXTURES / "target_plugins/collision.py", tmp_path / "collision.py")
     collision = _run_cli(registry, tmp_path, "target", "add", str(collision_provider))
     assert collision.returncode == 1
     assert "target identity 'nvidia.h200_sxm' is already occupied by" in collision.stderr
@@ -406,14 +328,7 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     stored = tomllib.loads(registry.read_text(encoding="utf-8"))
     assert "module" not in stored
 
-    named_provider = tmp_path / "named_provider.py"
-    named_provider.write_text(
-        "from tilefoundry.target import Target, register_target\n"
-        "@register_target\n"
-        "class NamedTarget(Target):\n"
-        "    name = 'vendor.named'\n",
-        encoding="utf-8",
-    )
+    named_provider = _copy(FIXTURES / "target_plugins/named_provider.py", tmp_path / "named_provider.py")
     named_registry = tmp_path / "named-registry.toml"
     named = _run_cli(named_registry, tmp_path, "target", "add", "named_provider")
     assert named.returncode == 0, named.stderr
@@ -423,7 +338,7 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     named_list = _run_cli(named_registry, tmp_path, "target", "list")
     assert named_list.returncode == 0, named_list.stderr
     assert "identity: vendor.named   added" in named_list.stdout
-    named_provider.write_text("raise RuntimeError('provider changed')\n", encoding="utf-8")
+    _copy(FIXTURES / "target_plugins/changed_provider.py", named_provider)
     named_removed = _run_cli(named_registry, tmp_path, "target", "remove", "named_provider")
     assert named_removed.returncode == 0, named_removed.stderr
     assert "module 'named_provider' failed: provider changed" in named_removed.stderr
@@ -449,16 +364,11 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     assert listed.returncode == 0
     assert "document 'vendor.bad_sm70' content changed" in listed.stderr
     assert 'CudaTarget("vendor.v100_sxm2_32gb")' in listed.stdout
-    good_model = _write_registered_model(
-        tmp_path / "good_model.py",
-        target='CudaTarget("vendor.v100_sxm2_32gb")',
-        topology="cta",
-    )
     analyzed = _run_cli(
         registry,
         tmp_path,
         "analyze",
-        f"{good_model}:model",
+        f"{FIXTURES / 'cli/registered_cuda_source.py'}:Model",
         "--compute-cost",
         str(tmp_path / "repaired.json"),
         "--json",
@@ -480,8 +390,7 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
 
 def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> None:
     """Choosing a size for a composed root keeps its child call activation-only."""
-    source = tmp_path / "composed.py"
-    source.write_text(composed_leaf_source("n_cli"), encoding="utf-8")
+    source = FIXTURES / "cli/composed_leaf_n_cli.py"
 
     report_path = tmp_path / "composed_report.py"
     assert (

@@ -1,6 +1,6 @@
 """The runtime reference for the sibling CPU square program."""
 
-from square_cpu import Mine
+from model import Mine
 
 from tilefoundry.runtime import runtime_func, runtime_module
 

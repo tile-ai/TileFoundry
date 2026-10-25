@@ -12,8 +12,7 @@ from types import MappingProxyType
 import pytest
 import torch
 
-from tests.core._corpus import Case, Problems, cases
-from tests.core._source import import_dsl
+from tests.core._corpus import Case, Problems, cases, reload_program
 from tests.nvidia.cuda.schedule._plain import SiteCounts, check_plain_report
 from tests.nvidia.cuda.schedule._support import (
     _assert_live_smem_views_do_not_overlap,
@@ -611,7 +610,7 @@ def _loop_outputs(state, problems):
     def check(lowered):
         function = entry_function(lowered)
         assert function.output_count == 3
-        assert import_dsl(as_script(function)).output_count == 3
+        assert reload_program(as_script(function)).output_count == 3
 
     problems.run("_loop_outputs", check, state.lowered)
 
@@ -750,14 +749,14 @@ def _hir(case, problems):
     report = problems.run("memory report", lambda r: render_analysis(r).data, result)
     problems.run("memory allocations", _memory_report, case, module, report)
     printed = problems.run("print HIR", as_script, module)
-    problems.run("reload HIR", import_dsl, printed)
+    problems.run("reload HIR", reload_program, printed)
     candidates_report = problems.run("candidates", _candidates, case, checked)
     if case.candidates_refusal is None:
         problems.run("candidate sites", _hir_candidates, candidates_report)
     lowered = problems.run("finalize", _finalize, case, module, result)
     if case.finalize_refusal is None:
         printed = problems.run("print TIR", as_script, lowered)
-        lowered = problems.run("reload TIR", import_dsl, printed)
+        lowered = problems.run("reload TIR", reload_program, printed)
         problems.run("TIR operands", _tir_checks, lowered, case.path)
     state = Scheduled(result, module, lowered, candidates_report)
     for hook in case.hooks:
@@ -784,13 +783,13 @@ def _plain(case, problems):
     report = problems.run("candidates", _candidates, case, checked)
     problems.run("plain sites", check_plain_report, report, str(case.path), case.sites)
     printed = problems.run("print plain", as_script, module)
-    problems.run("reload plain", import_dsl, printed)
+    problems.run("reload plain", reload_program, printed)
 
 
 def _dim(case, problems):
     module = problems.run("load", case.load)
     printed = problems.run("print", as_script, module)
-    problems.run("reload", import_dsl, printed)
+    problems.run("reload", reload_program, printed)
 
 
 def _verify(program):

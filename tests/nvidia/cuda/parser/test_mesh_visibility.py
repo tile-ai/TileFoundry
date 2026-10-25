@@ -6,10 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._source import import_dsl
-from tests.core.parser.test_mesh_visibility import (
-    _diagnostic,
-)
+from tests.core._corpus import load_program
 from tests.nvidia.cuda.fixtures.placed.fused_boundary import FusedBoundary
 from tests.nvidia.cuda.fixtures.placed.region_boundaries import RegionBoundaries
 from tests.nvidia.cuda.fixtures.placed.rmsnorm import RmsnormModule
@@ -64,8 +61,9 @@ def test_region_boundaries_capture_external_regions_through_args() -> None:
     assert len(parents) == 2
     assert any(isinstance(parent, MeshRegion) and producer in parent.args for parent in parents)
 
-    import_dsl(_diagnostic("region_rebind"), "RegionRebind")
-    import_dsl(_diagnostic("region_tuple_rebind"), "RegionTupleRebind")
+    core_diagnostics = Path(__file__).parents[3] / "core" / "fixtures" / "diagnostics"
+    load_program(core_diagnostics / "region_rebind.py")
+    load_program(core_diagnostics / "region_tuple_rebind.py")
 
 
 def test_sibling_region_chain_captures_each_value_at_the_next_boundary() -> None:
@@ -118,12 +116,11 @@ def test_sibling_region_chain_captures_each_value_at_the_next_boundary() -> None
 
 
 def test_unscoped_initialization_is_rejected_at_the_authored_call() -> None:
-    source = (
-        Path(__file__).parents[1] / "fixtures" / "diagnostics" / "unscoped_call_loop.py"
-    ).read_text()
+    path = Path(__file__).parents[1] / "fixtures" / "diagnostics" / "unscoped_call_loop.py"
+    source = path.read_text()
     line = next(i for i, text in enumerate(source.splitlines(), 1) if "out = tf.zeros" in text)
     with pytest.raises(ParseError, match="runs outside every mesh scope") as raised:
-        import_dsl(source, "EscapedRebindInLoop")
-    assert f"source.py:{line}:" in str(raised.value)
+        load_program(path)
+    assert f"unscoped_call_loop.py:{line}:" in str(raised.value)
     assert "tf.zeros" in str(raised.value)
     assert "inside with Mesh(...)" in str(raised.value)
