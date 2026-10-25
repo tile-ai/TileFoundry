@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.analysis import (
     Breakdown,
     ComputeCostMetadata,
@@ -56,19 +57,28 @@ ANALYSIS = Path(__file__).parents[1] / "fixtures" / "analysis"
 ACCESS_FOOTPRINT = Path(__file__).parents[1] / "models" / "access_footprint" / "model.py"
 
 
-def test_invariant_gemm_operands_repeat_in_total_traffic() -> None:
-    """The QKV tiles load again even when one operand is invariant in one loop."""
-    TiledQKVProjection = load_authored_ir(f"{ACCESS_FOOTPRINT}:TiledQKVProjection")
-    result = analyze(
-        *check_program(TiledQKVProjection, TiledQKVProjection.entry_function()),
-        analysis="memory",
-    )
-    record = get_metadata(result.function, RegionMemoryMetadata)
-    gmem = record.traffic.storage.of("gmem")
+class FamilyCase(Case):
+    """One program whose family records state the arithmetic a family must keep."""
 
-    assert gmem is not None
-    assert gmem.logical == TrafficBytes(read=27_262_976, write=16_777_216)
-    assert gmem.total == TrafficBytes(read=18_824_036_352, write=2_214_592_512)
+
+@case
+class InvariantGemmOperands(FamilyCase):
+    """The QKV tiles load again even when one operand is invariant in one loop."""
+
+    path: Path = ACCESS_FOOTPRINT
+    name: str | None = "TiledQKVProjection"
+
+    def guard(self, state, problems):
+        result = analyze(
+            *check_program(state, state.entry_function()),
+            analysis="memory",
+        )
+        record = get_metadata(result.function, RegionMemoryMetadata)
+        gmem = record.traffic.storage.of("gmem")
+
+        assert gmem is not None
+        assert gmem.logical == TrafficBytes(read=27_262_976, write=16_777_216)
+        assert gmem.total == TrafficBytes(read=18_824_036_352, write=2_214_592_512)
 
 
 def test_reshard_compares_address_boxes_without_participant_ownership() -> None:
@@ -132,90 +142,93 @@ def _calls(function) -> tuple[Call, ...]:
     return tuple(expr for expr in collect_exprs(function.body) if isinstance(expr, Call))
 
 
-def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> None:
+@case
+class CrossScopePerformance(FamilyCase):
     """The outer stage waits for the inner stage to complete."""
-    results = {}
-    _CrossScopePerformance = load_authored_ir(
-        f"{PLACED / 'performance_findings.py'}:_CrossScopePerformance"
-    )
-    for name in ("cross_scope", "nested_control"):
-        function = next(fn for fn in _CrossScopePerformance.functions if fn.name == name)
-        results[name] = analyze(
-            *check_program(_CrossScopePerformance, function, dims={"seq_len": 8192}),
-            analysis=_ALL_FAMILIES,
-        )
-        assert get_metadata(results[name].function, PerformanceSummaryMetadata) is not None
 
-    cross_scope = results["cross_scope"]
-    timed = []
-    context = _build_context(cross_scope.module, cross_scope.function)[-1]
-    for call in _calls(cross_scope.function):
-        frame = context._callee_context(call)
-        occurrence = get_metadata(call, PerformanceMetadata)
-        if frame is None or occurrence is None:
-            continue
-        for primitive in _calls(frame.function):
-            record = get_metadata(primitive, PerformanceMetadata)
-            if record is None:
-                continue
-            resolved = replace(
-                record, timeline=shifted(record.timeline, occurrence.timeline.start_ns)
+    path: Path = PLACED / "performance_findings.py"
+    name: str | None = "_CrossScopePerformance"
+
+    def guard(self, state, problems):
+        results = {}
+        for name in ("cross_scope", "nested_control"):
+            function = next(fn for fn in state.functions if fn.name == name)
+            results[name] = analyze(
+                *check_program(state, function, dims={"seq_len": 8192}),
+                analysis=_ALL_FAMILIES,
             )
-            for invocation in range(occurrence.timeline.trips):
-                for iteration in range(resolved.timeline.trips):
-                    offset = (
-                        invocation * occurrence.timeline.stride_ns
-                        + iteration * resolved.timeline.stride_ns
-                    )
-                    timed.append(
-                        (
-                            primitive,
-                            replace(
-                                resolved,
-                                timeline=replace(
-                                    resolved.timeline,
-                                    start_ns=resolved.timeline.start_ns + offset,
-                                    end_ns=resolved.timeline.end_ns + offset,
-                                ),
-                            ),
+            assert get_metadata(results[name].function, PerformanceSummaryMetadata) is not None
+
+        cross_scope = results["cross_scope"]
+        timed = []
+        context = _build_context(cross_scope.module, cross_scope.function)[-1]
+        for call in _calls(cross_scope.function):
+            frame = context._callee_context(call)
+            occurrence = get_metadata(call, PerformanceMetadata)
+            if frame is None or occurrence is None:
+                continue
+            for primitive in _calls(frame.function):
+                record = get_metadata(primitive, PerformanceMetadata)
+                if record is None:
+                    continue
+                resolved = replace(
+                    record, timeline=shifted(record.timeline, occurrence.timeline.start_ns)
+                )
+                for invocation in range(occurrence.timeline.trips):
+                    for iteration in range(resolved.timeline.trips):
+                        offset = (
+                            invocation * occurrence.timeline.stride_ns
+                            + iteration * resolved.timeline.stride_ns
                         )
-                    )
-    scalar_indices = tuple(
-        (call, record)
-        for call, record in timed
-        if record is not None and isinstance(call.target, Binary) and call.type.shape == ()
-    )
-    stores = tuple(
-        (call, record)
-        for call, record in timed
-        if record is not None and isinstance(call.target, InsertSlice)
-    )
-    loads = tuple(
-        (call, record)
-        for call, record in timed
-        if record is not None and isinstance(call.target, Reshard)
-    )
+                        timed.append(
+                            (
+                                primitive,
+                                replace(
+                                    resolved,
+                                    timeline=replace(
+                                        resolved.timeline,
+                                        start_ns=resolved.timeline.start_ns + offset,
+                                        end_ns=resolved.timeline.end_ns + offset,
+                                    ),
+                                ),
+                            )
+                        )
+        scalar_indices = tuple(
+            (call, record)
+            for call, record in timed
+            if record is not None and isinstance(call.target, Binary) and call.type.shape == ()
+        )
+        stores = tuple(
+            (call, record)
+            for call, record in timed
+            if record is not None and isinstance(call.target, InsertSlice)
+        )
+        loads = tuple(
+            (call, record)
+            for call, record in timed
+            if record is not None and isinstance(call.target, Reshard)
+        )
 
-    outer_index = max(scalar_indices, key=lambda item: item[1].timeline.start_ns)[1]
-    inner_store = max(
-        (
-            record
-            for _call, record in stores
-            if record.timeline.end_ns <= outer_index.timeline.start_ns
-        ),
-        key=lambda record: record.timeline.end_ns,
-    )
-    outer_load = min(
-        (
-            record
-            for _call, record in loads
-            if record.timeline.start_ns >= outer_index.timeline.end_ns
-        ),
-        key=lambda record: record.timeline.start_ns,
-    )
+        outer_index = max(scalar_indices, key=lambda item: item[1].timeline.start_ns)[1]
+        inner_store = max(
+            (
+                record
+                for _call, record in stores
+                if record.timeline.end_ns <= outer_index.timeline.start_ns
+            ),
+            key=lambda record: record.timeline.end_ns,
+        )
+        outer_load = min(
+            (
+                record
+                for _call, record in loads
+                if record.timeline.start_ns >= outer_index.timeline.end_ns
+            ),
+            key=lambda record: record.timeline.start_ns,
+        )
 
-    assert inner_store.timeline.end_ns == outer_index.timeline.start_ns
-    assert outer_index.timeline.end_ns == outer_load.timeline.start_ns
+        assert inner_store.timeline.end_ns == outer_index.timeline.start_ns
+        assert outer_index.timeline.end_ns == outer_load.timeline.start_ns
 
 
 def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
@@ -255,19 +268,21 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
     assert symbolic_performance - literal_performance == 6 * 32
 
 
-def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:
-    _LargeRooflineRounding = load_authored_ir(
-        f"{ANALYSIS / 'large_roofline_rounding.py'}:_LargeRooflineRounding"
-    )
-    result = analyze(
-        *check_program(_LargeRooflineRounding, _LargeRooflineRounding.entry_function()),
-        analysis="roofline",
-    )
-    bound = get_metadata(result.function, RooflineMetadata)
+@case
+class LargeRooflineRounding(FamilyCase):
+    path: Path = ANALYSIS / "large_roofline_rounding.py"
+    name: str | None = "_LargeRooflineRounding"
 
-    assert bound is not None
-    assert bound.compute_ns == 197_014_925_373_451
-    assert bound.ideal_ns == 197_014_925_373_451
+    def guard(self, state, problems):
+        result = analyze(
+            *check_program(state, state.entry_function()),
+            analysis="roofline",
+        )
+        bound = get_metadata(result.function, RooflineMetadata)
+
+        assert bound is not None
+        assert bound.compute_ns == 197_014_925_373_451
+        assert bound.ideal_ns == 197_014_925_373_451
 
 
 _SPLIT_GRID = 128
@@ -461,3 +476,11 @@ def test_local_pricing_requires_compute_rates_and_uses_available_memory_rates() 
         local_duration_ns(ComputeCostMetadata(), throughput, priced, moved=crossed, level="cta")
         == 8
     )
+
+
+CASES = special(FamilyCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_family_case(case: FamilyCase) -> None:
+    check_case(case)

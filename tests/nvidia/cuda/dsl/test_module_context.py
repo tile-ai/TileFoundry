@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.ir.core.module import Module
@@ -132,12 +133,26 @@ def test_declaring_context_on_a_function_yields_its_own_module() -> None:
     assert not hasattr(plain, "target") and not hasattr(plain, "topologies")
 
 
-def test_member_context_builds_its_own_runtime_domain() -> None:
-    imported = load_authored_ir(
-        str(Path(__file__).parents[1] / "fixtures/logical/member_context.py")
-    )
+class ModuleContextCase(Case):
+    """A program whose Modules declare the execution context their functions run in."""
 
-    assert [function.name for function in imported.functions] == ["attention"]
-    assert list(imported.children) == ["softmax"]
-    assert imported.children["softmax"].elements[0].topologies == (Topology("thread", 4),)
-    assert list_call_paths(imported)["softmax.softmax"].target == CudaTarget("nvidia.h200_sxm")
+
+@case
+class MemberContext(ModuleContextCase):
+    """A member context builds its own runtime domain."""
+
+    path: Path = Path(__file__).parents[1] / "fixtures/logical/member_context.py"
+
+    def guard(self, state, problems):
+        assert [function.name for function in state.functions] == ["attention"]
+        assert list(state.children) == ["softmax"]
+        assert state.children["softmax"].elements[0].topologies == (Topology("thread", 4),)
+        assert list_call_paths(state)["softmax.softmax"].target == CudaTarget("nvidia.h200_sxm")
+
+
+CASES = special(ModuleContextCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_module_context_case(case: ModuleContextCase) -> None:
+    check_case(case)

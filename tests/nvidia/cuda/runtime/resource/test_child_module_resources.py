@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import EvalError, evaluate
@@ -79,27 +80,40 @@ def test_a_converter_may_call_a_child_staged_before_it(tmp_path) -> None:
     assert torch.equal(prepared["scaled.w"], torch.full((4,), 2.0))
 
 
-def test_preparation_stages_on_the_device_it_was_given() -> None:
+class ChildResourceCase(Case):
+    """A program whose reading fills each reached child's constants from its own place."""
+
+
+@case
+class SquaringConverter(ChildResourceCase):
     """A converter runs on the requested device, and what it produced stays there."""
-    _Doubled = load_authored_ir(str(RUNTIME / "squaring_converter.py"))
-    staged: dict[str, object] = {}
-    reading = _Doubled._prepare_into(
-        _Weights({"w": torch.full((4,), 3.0)}), "", staged, "meta"
-    )
 
-    assert str(staged["w"].device) == "meta"
-    assert str(reading.resource.load("w").device) == "meta"
+    path: Path = RUNTIME / "squaring_converter.py"
+
+    def guard(self, state, problems):
+        staged: dict[str, object] = {}
+        reading = state._prepare_into(_Weights({"w": torch.full((4,), 3.0)}), "", staged, "meta")
+
+        assert str(staged["w"].device) == "meta"
+        assert str(reading.resource.load("w").device) == "meta"
 
 
-def test_nested_same_name_entries_load_weights_from_the_current_instance() -> None:
-    root = load_authored_ir(f"{SCALED_MODULES}:NestedScaledRoot")
-    middle = root.children["middle"].elements[0]
-    leaf = middle.children["scaled"].elements[0]
-    for owner in (root, middle, leaf):
-        assert owner.entry_function() is owner.lookup("run")
-    assert len({id(owner.entry_function()) for owner in (root, middle, leaf)}) == 3
-    loaded = root.load(DictResource({"middle.scaled.w": torch.full((4,), 2.0)}))
-    assert torch.equal(loaded.run(torch.ones(4)), torch.full((4,), 2.0))
+@case
+class NestedSameNameEntries(ChildResourceCase):
+    """Nested same-name entries load weights from the current instance."""
+
+    path: Path = SCALED_MODULES
+    name: str | None = "NestedScaledRoot"
+
+    def guard(self, state, problems):
+        root = state
+        middle = root.children["middle"].elements[0]
+        leaf = middle.children["scaled"].elements[0]
+        for owner in (root, middle, leaf):
+            assert owner.entry_function() is owner.lookup("run")
+        assert len({id(owner.entry_function()) for owner in (root, middle, leaf)}) == 3
+        loaded = root.load(DictResource({"middle.scaled.w": torch.full((4,), 2.0)}))
+        assert torch.equal(loaded.run(torch.ones(4)), torch.full((4,), 2.0))
 
 
 def test_indexed_instances_share_definitions_and_read_their_own_weights() -> None:
@@ -158,3 +172,11 @@ def test_runtime_twins_match_slot_keys_indexing_and_element_count(key, count, in
     namespace = {key: children, "run": runtime_func(lambda self, x: x)}
     with pytest.raises(TypeError, match="children|layers|indexed|count"):
         runtime_module(StackedScaledParent)(type("WrongTwin", (), namespace))
+
+
+CASES = special(ChildResourceCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_child_resource_case(case: ChildResourceCase) -> None:
+    check_case(case)

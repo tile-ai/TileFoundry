@@ -8,6 +8,7 @@ from typing import get_args, get_origin
 
 import pytest
 
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import DType
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
@@ -37,6 +38,10 @@ REFUSED_MATMULS = {
     "many": "parser_matmul_six_arguments.py",
     "twice": "parser_matmul_attribute_twice.py",
 }
+
+
+class CallCase(Case):
+    """A parsed call checked by the IR it builds."""
 
 
 def test_matmul_layout_literals_are_parser_checked() -> None:
@@ -70,12 +75,17 @@ def test_variadic_list_and_tuple_literals_flatten_to_call_args() -> None:
         assert len(function.body.args) == 2
 
 
-def test_stack_uses_the_same_variadic_list_contract() -> None:
-    stack_rows = load_authored_ir(f"{VARIADICS}:StackRows").entry_function()
+@case
+class StackUsesTheVariadicListContract(CallCase):
+    path: Path = VARIADICS
+    name: str | None = "StackRows"
 
-    assert isinstance(stack_rows.body, Call)
-    assert isinstance(stack_rows.body.target, Stack)
-    assert len(stack_rows.body.args) == 2
+    def guard(self, state, problems):
+        stack_rows = state.entry_function()
+
+        assert isinstance(stack_rows.body, Call)
+        assert isinstance(stack_rows.body.target, Stack)
+        assert len(stack_rows.body.args) == 2
 
 
 def test_an_empty_variadic_list_reaches_the_operation_verifier() -> None:
@@ -83,23 +93,28 @@ def test_an_empty_variadic_list_reaches_the_operation_verifier() -> None:
         load_authored_ir(str(DIAGNOSTICS / "parser_concat_empty_list.py"))
 
 
-def test_a_static_range_list_comprehension_expands_in_source_order() -> None:
-    rows = load_authored_ir(f"{VARIADICS}:ComprehensionRows").entry_function()
+@case
+class StaticRangeComprehensionInSourceOrder(CallCase):
+    path: Path = VARIADICS
+    name: str | None = "ComprehensionRows"
 
-    assert isinstance(rows.body, Call)
-    assert isinstance(rows.body.target, Stack)
-    assert len(rows.body.args) == 2
-    indices = []
-    for row in rows.body.args:
-        assert isinstance(row, Call) and isinstance(row.target, Reshape)
-        sliced = row.args[0]
-        assert isinstance(sliced, Call) and isinstance(sliced.target, Slice)
-        starts = sliced.args[1]
-        assert isinstance(starts, Tuple)
-        start = starts.elements[0]
-        assert isinstance(start, Constant)
-        indices.append(start.value)
-    assert indices == [0, 1]
+    def guard(self, state, problems):
+        rows = state.entry_function()
+
+        assert isinstance(rows.body, Call)
+        assert isinstance(rows.body.target, Stack)
+        assert len(rows.body.args) == 2
+        indices = []
+        for row in rows.body.args:
+            assert isinstance(row, Call) and isinstance(row.target, Reshape)
+            sliced = row.args[0]
+            assert isinstance(sliced, Call) and isinstance(sliced.target, Slice)
+            starts = sliced.args[1]
+            assert isinstance(starts, Tuple)
+            start = starts.elements[0]
+            assert isinstance(start, Constant)
+            indices.append(start.value)
+        assert indices == [0, 1]
 
 
 def test_variadic_direct_positional_inputs_are_rejected() -> None:
@@ -141,13 +156,19 @@ def test_unsupported_list_comprehension_shapes_are_named(program: str, message: 
         load_authored_ir(str(DIAGNOSTICS / COMPREHENSIONS[program]))
 
 
-def test_a_python_float_literal_is_f32_like_any_other() -> None:
+@case
+class PythonFloatLiteralIsF32(CallCase):
     """A literal carries the dtype it is written with; nothing adapts it."""
-    add_literal = load_authored_ir(f"{LITERALS}:FloatLiteral").entry_function()
 
-    assert isinstance(add_literal.body, Call)
-    constant = next(arg for arg in add_literal.body.args if isinstance(arg, Constant))
-    assert constant.type.dtype is DType.f32
+    path: Path = LITERALS
+    name: str | None = "FloatLiteral"
+
+    def guard(self, state, problems):
+        add_literal = state.entry_function()
+
+        assert isinstance(add_literal.body, Call)
+        constant = next(arg for arg in add_literal.body.args if isinstance(arg, Constant))
+        assert constant.type.dtype is DType.f32
 
 
 def test_a_mismatched_literal_is_rejected_and_names_the_cast() -> None:
@@ -156,11 +177,16 @@ def test_a_mismatched_literal_is_rejected_and_names_the_cast() -> None:
         load_authored_ir(str(DIAGNOSTICS / "parser_bf16_float_literal.py"))
 
 
-def test_an_explicit_cast_gives_a_literal_the_operand_dtype() -> None:
-    scale = load_authored_ir(f"{LITERALS}:CastLiteral").entry_function()
+@case
+class ExplicitCastGivesTheOperandDtype(CallCase):
+    path: Path = LITERALS
+    name: str | None = "CastLiteral"
 
-    assert isinstance(scale.body, Call)
-    assert scale.body.type.dtype is DType.bf16
+    def guard(self, state, problems):
+        scale = state.entry_function()
+
+        assert isinstance(scale.body, Call)
+        assert scale.body.type.dtype is DType.bf16
 
 
 def test_a_python_integer_operand_is_not_adopted() -> None:
@@ -234,3 +260,11 @@ def test_a_call_nobody_claims_is_named_without_taking_a_turn() -> None:
 def test_function_mesh_requires_a_module_topology_declaration() -> None:
     with pytest.raises(ParseError, match="topology 'cta' not declared by @module"):
         load_authored_ir(str(DIAGNOSTICS / "parser_undeclared_topology.py"))
+
+
+CASES = special(CallCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_call_case(case: CallCase) -> None:
+    check_case(case)

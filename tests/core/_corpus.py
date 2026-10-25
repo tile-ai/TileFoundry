@@ -155,3 +155,11 @@ def special(case_type: type[C]) -> tuple[C, ...]:
             )
         found[case.id] = case
     return tuple(found[key] for key in sorted(found))
+
+
+def check_case(case: Case) -> None:
+    """Load the case's program once and run its guard on it."""
+    problems = Problems(case)
+    program = problems.run("load", case.load)
+    problems.run("guard", case.guard, program, problems)
+    problems.dump()

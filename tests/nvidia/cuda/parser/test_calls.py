@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -20,44 +21,65 @@ PARSER = FIXTURES / "parser"
 DIAGNOSTICS = FIXTURES / "diagnostics"
 
 
-def test_placement_at_and_matmul_at_coexist_in_one_function() -> None:
+class MeshScopeCase(Case):
+    """A program checked by the mesh scopes its calls parse into."""
+
+
+@case
+class PlacementAndMatmulAt(MeshScopeCase):
     """The two spellings of ``@`` are told apart by position, not by shape."""
-    PlacedMatMul = load_authored_ir(str(PARSER / "placed_matmul.py"))
 
-    scope = PlacedMatMul.entry_function().body
-    assert isinstance(scope, MeshRegion)
-    body = scope.body
-    assert isinstance(body, Call)
-    assert isinstance(body.target, MatMul)
-    assert any(isinstance(argument.target, Reshard) for argument in body.args)
+    path: Path = PARSER / "placed_matmul.py"
+
+    def guard(self, state, problems):
+        scope = state.entry_function().body
+        assert isinstance(scope, MeshRegion)
+        body = scope.body
+        assert isinstance(body, Call)
+        assert isinstance(body.target, MatMul)
+        assert any(isinstance(argument.target, Reshard) for argument in body.args)
 
 
-def test_value_less_mesh_region_exposes_multiple_values_through_a_tuple() -> None:
+@case
+class ValueLessRegionTuple(MeshScopeCase):
     """A value-less with exports only its live values through one region result."""
-    MultiEscape = load_authored_ir(str(PARSER / "mesh_region_tuple_escape.py"))
 
-    body = MultiEscape.entry_function().body
-    assert isinstance(body, Tuple)
-    first, second = body.elements
-    assert isinstance(first, Call) and isinstance(second, Call)
-    assert isinstance(first.target, TupleGetItem)
-    assert isinstance(second.target, TupleGetItem)
-    scope = first.args[0]
-    assert isinstance(scope, MeshRegion)
-    assert isinstance(scope.body, Tuple)
-    assert len(scope.body.elements) == 2
-    assert isinstance(first.args[1], Constant) and first.args[1].value == 0
-    assert isinstance(second.args[1], Constant) and second.args[1].value == 1
+    path: Path = PARSER / "mesh_region_tuple_escape.py"
+
+    def guard(self, state, problems):
+        body = state.entry_function().body
+        assert isinstance(body, Tuple)
+        first, second = body.elements
+        assert isinstance(first, Call) and isinstance(second, Call)
+        assert isinstance(first.target, TupleGetItem)
+        assert isinstance(second.target, TupleGetItem)
+        scope = first.args[0]
+        assert isinstance(scope, MeshRegion)
+        assert isinstance(scope.body, Tuple)
+        assert len(scope.body.elements) == 2
+        assert isinstance(first.args[1], Constant) and first.args[1].value == 0
+        assert isinstance(second.args[1], Constant) and second.args[1].value == 1
 
 
-def test_valueful_mesh_region_also_wraps_escaping_bindings() -> None:
+@case
+class ValuefulRegionEscape(MeshScopeCase):
     """A with result and an escaping assignment keep both region edges."""
-    ValuefulEscape = load_authored_ir(str(PARSER / "mesh_region_valueful_escape.py"))
 
-    scoped = ValuefulEscape.entry_function().body
-    assert isinstance(scoped, MeshRegion)
-    assert isinstance(scoped.body, LoopRegion)
-    assert isinstance(scoped.body.body, Call)
+    path: Path = PARSER / "mesh_region_valueful_escape.py"
+
+    def guard(self, state, problems):
+        scoped = state.entry_function().body
+        assert isinstance(scoped, MeshRegion)
+        assert isinstance(scoped.body, LoopRegion)
+        assert isinstance(scoped.body.body, Call)
+
+
+CASES = special(MeshScopeCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_mesh_scope_case(case: MeshScopeCase) -> None:
+    check_case(case)
 
 
 def test_mesh_binding_does_not_escape_its_with_scope() -> None:

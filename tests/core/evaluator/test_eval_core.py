@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import torch
 
-from tilefoundry.cli.source import load_authored_ir
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Var
@@ -15,16 +16,30 @@ from tilefoundry.ir.hir.function import Function
 CORE = Path(__file__).parents[1] / "fixtures" / "evaluator" / "core_semantics.py"
 
 
-def test_python_scalar_constant_operand():
-    add_scalar = load_authored_ir(f"{CORE}:AddScalar").entry_function()
-    x = torch.randn(4)
-    assert torch.allclose(evaluate(add_scalar, x), x + 2.0)
+class CoreEvalCase(Case):
+    """A core-semantics program evaluated against its torch reference."""
 
 
-def test_function_call_binds_callee_params():
-    caller = load_authored_ir(f"{CORE}:CallerCallee").entry_function()
-    a, b = torch.randn(4), torch.randn(4)
-    assert torch.allclose(evaluate(caller, a, b), (a + b) * b)
+@case
+class PythonScalarConstantOperand(CoreEvalCase):
+    path: Path = CORE
+    name: str | None = "AddScalar"
+
+    def guard(self, state, problems):
+        add_scalar = state.entry_function()
+        x = torch.randn(4)
+        assert torch.allclose(evaluate(add_scalar, x), x + 2.0)
+
+
+@case
+class CallBindsCalleeParams(CoreEvalCase):
+    path: Path = CORE
+    name: str | None = "CallerCallee"
+
+    def guard(self, state, problems):
+        caller = state.entry_function()
+        a, b = torch.randn(4), torch.randn(4)
+        assert torch.allclose(evaluate(caller, a, b), (a + b) * b)
 
 
 def test_structurally_equal_params_keep_distinct_ssa_bindings():
@@ -43,16 +58,36 @@ def test_structurally_equal_params_keep_distinct_ssa_bindings():
     assert torch.equal(result, torch.tensor([1.0]))
 
 
-def test_single_carry_accumulator():
+@case
+class SingleCarryAccumulator(CoreEvalCase):
     """Carry init comes from the IR's args (the param ``a``), looped 3×."""
-    carry_sum = load_authored_ir(f"{CORE}:CarrySum").entry_function()
-    a, b = torch.randn(4), torch.randn(4)
-    assert torch.allclose(evaluate(carry_sum, a, b), a + 3 * b)
+
+    path: Path = CORE
+    name: str | None = "CarrySum"
+
+    def guard(self, state, problems):
+        carry_sum = state.entry_function()
+        a, b = torch.randn(4), torch.randn(4)
+        assert torch.allclose(evaluate(carry_sum, a, b), a + 3 * b)
 
 
-def test_multi_carry_accumulator():
+@case
+class MultiCarryAccumulator(CoreEvalCase):
     """Two carries projected through TupleGetItem (a TupleValue)."""
-    carry_two = load_authored_ir(f"{CORE}:CarryTwo").entry_function()
-    a, b = torch.randn(4), torch.randn(4)
-    out = evaluate(carry_two, a, b)
-    assert torch.allclose(out, (a + 2 * b) + (b + 2 * a))
+
+    path: Path = CORE
+    name: str | None = "CarryTwo"
+
+    def guard(self, state, problems):
+        carry_two = state.entry_function()
+        a, b = torch.randn(4), torch.randn(4)
+        out = evaluate(carry_two, a, b)
+        assert torch.allclose(out, (a + 2 * b) + (b + 2 * a))
+
+
+CASES = special(CoreEvalCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_core_eval_case(case: CoreEvalCase) -> None:
+    check_case(case)

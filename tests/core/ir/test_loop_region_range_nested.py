@@ -14,47 +14,79 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import torch
 
-from tilefoundry.cli.source import load_authored_ir
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.evaluator import evaluate
 
 LOOPS = Path(__file__).parents[1] / "fixtures" / "ir" / "loop_regions.py"
 
 
-def test_range_start_step():
+class LoopRegionCase(Case):
+    """A loop-region program evaluated against its torch reduction."""
+
+
+@case
+class RangeStartStep(LoopRegionCase):
     """The three-argument `range` surface.
 
     The three-argument `range` surface: a scalar loop var over a DimVar extent
     with a non-unit start and step, none of which is unrolled.
     """
-    range_start_step = load_authored_ir(f"{LOOPS}:RangeStartStep").entry_function()
-    n = 7
-    x = torch.arange(n, dtype=torch.float32)
-    out = evaluate(range_start_step, x)
-    assert torch.allclose(out.reshape(()), x[1:n:2].sum()), (n, out)
+
+    path: Path = LOOPS
+    name: str | None = "RangeStartStep"
+
+    def guard(self, state, problems):
+        range_start_step = state.entry_function()
+        n = 7
+        x = torch.arange(n, dtype=torch.float32)
+        out = evaluate(range_start_step, x)
+        assert torch.allclose(out.reshape(()), x[1:n:2].sum()), (n, out)
 
 
-def test_nested_loop_region_outer_carry_in_inner():
-    nested_sum = load_authored_ir(f"{LOOPS}:NestedSum").entry_function()
-    x = torch.randn(4, 5)
-    out = evaluate(nested_sum, x)
-    assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), out
+@case
+class OuterCarryInInnerLoop(LoopRegionCase):
+    path: Path = LOOPS
+    name: str | None = "NestedSum"
+
+    def guard(self, state, problems):
+        nested_sum = state.entry_function()
+        x = torch.randn(4, 5)
+        out = evaluate(nested_sum, x)
+        assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), out
 
 
-def test_dim_expression_extent():
-    dim_expr_half_sum = load_authored_ir(f"{LOOPS}:DimExprHalfSum").entry_function()
-    n = 8
-    x = torch.arange(n, dtype=torch.float32)
-    out = evaluate(dim_expr_half_sum, x)
-    assert torch.allclose(out.reshape(()), x[: n // 2].sum()), (n, out)
+@case
+class DimExpressionExtent(LoopRegionCase):
+    path: Path = LOOPS
+    name: str | None = "DimExprHalfSum"
+
+    def guard(self, state, problems):
+        dim_expr_half_sum = state.entry_function()
+        n = 8
+        x = torch.arange(n, dtype=torch.float32)
+        out = evaluate(dim_expr_half_sum, x)
+        assert torch.allclose(out.reshape(()), x[: n // 2].sum()), (n, out)
 
 
-def test_interleaved_partial_reduction_equals_flat():
-    interleaved_two_partial_sum = load_authored_ir(
-        f"{LOOPS}:InterleavedTwoPartialSum"
-    ).entry_function()
-    n = 6
-    x = torch.randn(n)
-    out = evaluate(interleaved_two_partial_sum, x)
-    assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), (n, out)
+@case
+class InterleavedPartialReductionEqualsFlat(LoopRegionCase):
+    path: Path = LOOPS
+    name: str | None = "InterleavedTwoPartialSum"
+
+    def guard(self, state, problems):
+        interleaved_two_partial_sum = state.entry_function()
+        n = 6
+        x = torch.randn(n)
+        out = evaluate(interleaved_two_partial_sum, x)
+        assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), (n, out)
+
+
+CASES = special(LoopRegionCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_loop_region_case(case: LoopRegionCase) -> None:
+    check_case(case)

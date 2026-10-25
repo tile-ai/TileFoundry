@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import reload
+from tests.core._corpus import Case, case, check_case, reload, special
 from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
@@ -131,18 +131,26 @@ def test_a_held_child_takes_its_own_owners_target_types():
     assert all(expr.type is stored for expr, stored in parsed)
 
 
-def test_prim_func_host_resolves_sibling_device_in_class_body():
+class ModuleDecoratorCase(Case):
+    """A program whose ``@module`` class body the decorator collected into a Module."""
+
+
+@case
+class PrimFuncSiblingLaunch(ModuleDecoratorCase):
     """Test prim func host resolves sibling device in class body.
 
     A ``@prim_func`` cpu host can ``launch`` a sibling cuda device kernel
     defined above it in the same ``@module`` class body — class-local sibling
     resolution works for prim_func, not only @func.
     """
-    _Launch = load_authored_ir(str(DSL / "prim_func_sibling_launch.py"))
-    assert isinstance(_Launch, Module)
-    assert [fn.name for fn in _Launch.functions] == ["dev", "host"]
-    assert _Launch.entry == "host"
-    assert _Launch.lookup("host").target == CpuTarget()
+
+    path: Path = DSL / "prim_func_sibling_launch.py"
+
+    def guard(self, state, problems):
+        assert isinstance(state, Module)
+        assert [fn.name for fn in state.functions] == ["dev", "host"]
+        assert state.entry == "host"
+        assert state.lookup("host").target == CpuTarget()
 
 
 @pytest.mark.parametrize(
@@ -181,3 +189,11 @@ def test_an_unused_module_without_entry_can_occupy_a_slot_and_be_replaced():
     root = Module("Container", (), None, children={"unused": slot})
     assert dataclasses.replace(root).children["unused"] is slot
     assert slot.elements[0].entry is None
+
+
+CASES = special(ModuleDecoratorCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_module_decorator_case(case: ModuleDecoratorCase) -> None:
+    check_case(case)

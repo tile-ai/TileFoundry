@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.analysis.check import check_program
 from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.evaluator import evaluate
@@ -46,15 +47,23 @@ def test_specialising_nothing_is_refused() -> None:
         check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), ENTRY, dims={})[1]
 
 
-def test_a_call_through_a_prototype_selects_by_the_callers_dimensions() -> None:
-    """The rebuilt call records which variant it chose, not the prototype."""
-    specialize_through_call = Path(__file__).parents[2] / "fixtures/placed/specialize_through_call.py"
-    ToCallee = load_authored_ir(f"{specialize_through_call}:ToCallee")
-    run = ToCallee.entry_function()
+class SpecializeCase(Case):
+    """A dispatching program resolved at chosen sizes."""
 
-    for extent, expected in ((64, "pick_small"), (512, "pick_big")):
-        rebuilt = check_program(replace(ToCallee, target=CudaTarget("nvidia.h200_sxm")), run, dims={"n": extent})[1].body.target
-        assert display_name(origin_of(rebuilt)) == expected
+
+@case
+class CallThroughPrototype(SpecializeCase):
+    """The rebuilt call records which variant it chose, not the prototype."""
+
+    path: Path = Path(__file__).parents[2] / "fixtures/placed/specialize_through_call.py"
+    name: str | None = "ToCallee"
+
+    def guard(self, state, problems):
+        run = state.entry_function()
+
+        for extent, expected in ((64, "pick_small"), (512, "pick_big")):
+            rebuilt = check_program(replace(state, target=CudaTarget("nvidia.h200_sxm")), run, dims={"n": extent})[1].body.target
+            assert display_name(origin_of(rebuilt)) == expected
 
 
 def test_specialising_through_a_call_says_which_dimension_is_missing() -> None:
@@ -68,19 +77,24 @@ def test_specialising_through_a_call_says_which_dimension_is_missing() -> None:
         check_program(replace(_MissingCalleeDimension, target=CudaTarget("nvidia.h200_sxm")), caller, dims={"call_m": 4})[1]
 
 
-def test_specialising_follows_dispatch_variants_into_nested_dispatches() -> None:
+@case
+class NestedDispatch(SpecializeCase):
     """Selecting a variant keeps rebuilding through dispatches in its body."""
-    _NestedDispatch = load_authored_ir(f"{IR / 'nested_dispatch.py'}:_NestedDispatch")
-    run = _NestedDispatch.entry_function()
 
-    for extent, suffix in ((64, "small"), (512, "big")):
-        concrete = check_program(replace(_NestedDispatch, target=CudaTarget("nvidia.h200_sxm")), run, dims={"nested_n": extent})[1]
-        middle = concrete.body.target
-        inner = middle.body.target
+    path: Path = IR / "nested_dispatch.py"
+    name: str | None = "_NestedDispatch"
 
-        assert display_name(origin_of(middle)) == f"mid_{suffix}"
-        assert display_name(origin_of(inner)) == f"inner_{suffix}"
-        assert residual_dims(concrete) == ()
+    def guard(self, state, problems):
+        run = state.entry_function()
+
+        for extent, suffix in ((64, "small"), (512, "big")):
+            concrete = check_program(replace(state, target=CudaTarget("nvidia.h200_sxm")), run, dims={"nested_n": extent})[1]
+            middle = concrete.body.target
+            inner = middle.body.target
+
+            assert display_name(origin_of(middle)) == f"mid_{suffix}"
+            assert display_name(origin_of(inner)) == f"inner_{suffix}"
+            assert residual_dims(concrete) == ()
 
 
 def test_a_specialised_function_states_extents_everywhere() -> None:
@@ -236,49 +250,65 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     torch.testing.assert_close(got.float(), expected.float(), atol=0, rtol=0)
 
 
-def test_a_dimension_only_the_body_uses_is_still_substituted() -> None:
-    """Whether to rebuild follows where the dimension occurs, not whether the signature moved.
+@case
+class BodyOnlyLoopDimension(SpecializeCase):
+    """A dimension that only a loop bound in the body uses, never the signature."""
 
-    Whether to rebuild follows where the dimension occurs, not whether the
-    signature moved. Deciding it from the parameters returns this function
-    untouched -- shaped correctly, and still scanning a range.
-    """
-    _LoopOnly = load_authored_ir(f"{IR / 'body_only_loop_dimension.py'}:_LoopOnly")
-    authored = _LoopOnly.entry_function()
-    assert residual_dims(authored) == ("loop_ctx",)
-    assert all(
-        isinstance(extent, int) for param in authored.params for extent in param.type.shape
-    ), "the signature is already concrete, which is the point"
+    path: Path = IR / "body_only_loop_dimension.py"
+    name: str | None = "_LoopOnly"
 
-    concrete = check_program(replace(_LoopOnly, target=CudaTarget("nvidia.h200_sxm")), authored, dims={"loop_ctx": 512})[1]
+    def guard(self, state, problems):
+        problems.run("still substituted", self.still_substituted, state)
+        problems.run("two sizes told apart", self.two_sizes_told_apart, state)
 
-    assert concrete is not authored
-    assert residual_dims(concrete) == ()
+    def still_substituted(self, state):
+        """Whether to rebuild follows where the dimension occurs, not whether the signature moved.
+
+        Whether to rebuild follows where the dimension occurs, not whether the
+        signature moved. Deciding it from the parameters returns this function
+        untouched -- shaped correctly, and still scanning a range.
+        """
+        authored = state.entry_function()
+        assert residual_dims(authored) == ("loop_ctx",)
+        assert all(
+            isinstance(extent, int) for param in authored.params for extent in param.type.shape
+        ), "the signature is already concrete, which is the point"
+
+        concrete = check_program(replace(state, target=CudaTarget("nvidia.h200_sxm")), authored, dims={"loop_ctx": 512})[1]
+
+        assert concrete is not authored
+        assert residual_dims(concrete) == ()
+
+    def two_sizes_told_apart(self, state):
+        """A rebuild records the extents it was built at, and has to.
+
+        A rebuild records the extents it was built at, and has to: for this
+        function the signature is identical at every size.
+
+        Anything holding two derived functions and asking whether they are the same
+        program -- a report gathering several analyses of one selection -- would
+        otherwise merge measurements of two different programs, because the only
+        place the size occurs is a loop bound the signature never mentions.
+        """
+        authored = state.entry_function()
+
+        small = check_program(replace(state, target=CudaTarget("nvidia.h200_sxm")), authored, dims={"loop_ctx": 8})[1]
+        large = check_program(replace(state, target=CudaTarget("nvidia.h200_sxm")), authored, dims={"loop_ctx": 512})[1]
+
+        assert origin_of(small) is authored
+        assert origin_of(large) is authored
+
+        assert [param.type for param in small.params] == [param.type for param in large.params]
+        assert small.return_type == large.return_type
+
+        assert bound_dims_of(small) == (("loop_ctx", 8),)
+        assert bound_dims_of(large) == (("loop_ctx", 512),)
+        assert bound_dims_of(small) != bound_dims_of(large)
 
 
-def test_two_sizes_of_a_body_only_dimension_are_told_apart() -> None:
-    """A rebuild records the extents it was built at, and has to.
+CASES = special(SpecializeCase)
 
-    A rebuild records the extents it was built at, and has to: for this
-    function the signature is identical at every size.
 
-    Anything holding two derived functions and asking whether they are the same
-    program -- a report gathering several analyses of one selection -- would
-    otherwise merge measurements of two different programs, because the only
-    place the size occurs is a loop bound the signature never mentions.
-    """
-    _LoopOnly = load_authored_ir(f"{IR / 'body_only_loop_dimension.py'}:_LoopOnly")
-    authored = _LoopOnly.entry_function()
-
-    small = check_program(replace(_LoopOnly, target=CudaTarget("nvidia.h200_sxm")), authored, dims={"loop_ctx": 8})[1]
-    large = check_program(replace(_LoopOnly, target=CudaTarget("nvidia.h200_sxm")), authored, dims={"loop_ctx": 512})[1]
-
-    assert origin_of(small) is authored
-    assert origin_of(large) is authored
-
-    assert [param.type for param in small.params] == [param.type for param in large.params]
-    assert small.return_type == large.return_type
-
-    assert bound_dims_of(small) == (("loop_ctx", 8),)
-    assert bound_dims_of(large) == (("loop_ctx", 512),)
-    assert bound_dims_of(small) != bound_dims_of(large)
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_specialize_case(case: SpecializeCase) -> None:
+    check_case(case)

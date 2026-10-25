@@ -13,9 +13,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import torch
 
-from tilefoundry.cli.source import load_authored_ir
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.evaluator import evaluate
 
 _DEV = "cpu"
@@ -39,48 +40,81 @@ class _Weights:
         )
 
 
-def test_a_child_module_call_runs_against_that_child_reading() -> None:
-    x = torch.arange(4, dtype=torch.float32)
-    w = torch.tensor([2.0, 3.0, 4.0, 5.0])
-    FusedScaledParent = load_authored_ir(f"{SCALED_MODULES}:FusedScaledParent")
-    reading = FusedScaledParent.load(_Weights({"scaled.w": w}))
-
-    assert torch.equal(evaluate(reading.fused, x), x * w)
+class ChildReadingCase(Case):
+    """A composed program whose child calls read the constants their own reading holds."""
 
 
-def test_one_module_read_twice_yields_two_independent_readings() -> None:
-    x = torch.ones(4)
-    FusedScaledParent = load_authored_ir(f"{SCALED_MODULES}:FusedScaledParent")
-    first = FusedScaledParent.load(_Weights({"scaled.w": torch.full((4,), 2.0)}))
-    second = FusedScaledParent.load(_Weights({"scaled.w": torch.full((4,), 5.0)}))
+@case
+class FusedScaledParent(ChildReadingCase):
+    path: Path = SCALED_MODULES
+    name: str | None = "FusedScaledParent"
 
-    assert torch.equal(evaluate(second.fused, x), torch.full((4,), 5.0))
-    assert torch.equal(evaluate(first.fused, x), torch.full((4,), 2.0))
+    def guard(self, state, problems):
+        problems.run("runs against the child reading", self.runs_against_the_child_reading, state)
+        problems.run("two independent readings", self.two_independent_readings, state)
 
+    def runs_against_the_child_reading(self, state):
+        x = torch.arange(4, dtype=torch.float32)
+        w = torch.tensor([2.0, 3.0, 4.0, 5.0])
+        reading = state.load(_Weights({"scaled.w": w}))
 
-def test_two_bindings_of_one_child_read_their_own_constants() -> None:
-    x = torch.ones(4)
-    PairedScaledParent = load_authored_ir(f"{SCALED_MODULES}:PairedScaledParent")
-    reading = PairedScaledParent.load(
-        _Weights({"left.w": torch.full((4,), 2.0), "right.w": torch.full((4,), 7.0)})
-    )
+        assert torch.equal(evaluate(reading.fused, x), x * w)
 
-    assert torch.equal(evaluate(reading.both, x), torch.full((4,), 9.0))
+    def two_independent_readings(self, state):
+        x = torch.ones(4)
+        first = state.load(_Weights({"scaled.w": torch.full((4,), 2.0)}))
+        second = state.load(_Weights({"scaled.w": torch.full((4,), 5.0)}))
 
-
-def test_a_child_call_inside_a_loop_keeps_its_reading_on_every_trip() -> None:
-    _Looped = load_authored_ir(f"{EVALUATOR / 'looped_child_call.py'}:_Looped")
-    x = torch.ones(4)
-    w = torch.full((4,), 2.0)
-    reading = _Looped.load(_Weights({"scaled.w": w}))
-
-    assert torch.equal(evaluate(reading.looped, x), x * w * w * w)
+        assert torch.equal(evaluate(second.fused, x), torch.full((4,), 5.0))
+        assert torch.equal(evaluate(first.fused, x), torch.full((4,), 2.0))
 
 
-def test_a_variant_body_reaches_its_child_the_same_way() -> None:
-    _Dispatch = load_authored_ir(f"{EVALUATOR / 'dispatch_variant_child_call.py'}:_Dispatch")
-    child = _Dispatch.children["scaled"]
-    (variant,) = _Dispatch.entry_function().variants
-    assert variant.body.target is child
-    assert len(variant.body.args) == 1
-    assert [p.is_const for p in variant.body.target.elements[0].entry_function().params] == [False, True]
+@case
+class TwoBindingsOfOneChild(ChildReadingCase):
+    path: Path = SCALED_MODULES
+    name: str | None = "PairedScaledParent"
+
+    def guard(self, state, problems):
+        x = torch.ones(4)
+        reading = state.load(
+            _Weights({"left.w": torch.full((4,), 2.0), "right.w": torch.full((4,), 7.0)})
+        )
+
+        assert torch.equal(evaluate(reading.both, x), torch.full((4,), 9.0))
+
+
+@case
+class LoopedChildCall(ChildReadingCase):
+    path: Path = EVALUATOR / "looped_child_call.py"
+    name: str | None = "_Looped"
+
+    def guard(self, state, problems):
+        x = torch.ones(4)
+        w = torch.full((4,), 2.0)
+        reading = state.load(_Weights({"scaled.w": w}))
+
+        assert torch.equal(evaluate(reading.looped, x), x * w * w * w)
+
+
+@case
+class DispatchVariantChildCall(ChildReadingCase):
+    path: Path = EVALUATOR / "dispatch_variant_child_call.py"
+    name: str | None = "_Dispatch"
+
+    def guard(self, state, problems):
+        child = state.children["scaled"]
+        (variant,) = state.entry_function().variants
+        assert variant.body.target is child
+        assert len(variant.body.args) == 1
+        assert [p.is_const for p in variant.body.target.elements[0].entry_function().params] == [
+            False,
+            True,
+        ]
+
+
+CASES = special(ChildReadingCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_child_reading_case(case: ChildReadingCase) -> None:
+    check_case(case)

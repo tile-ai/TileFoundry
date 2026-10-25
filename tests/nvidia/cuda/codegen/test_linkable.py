@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tilefoundry.cli.source import load_authored_ir
+import pytest
+
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.context_builder import build_codegen_context
 from tilefoundry.codegen.linkable_function import LinkableFunction
@@ -33,7 +35,9 @@ def _host_unit(square) -> LinkableModule:
     root = build_codegen_context(square)
     group = next(group for group in root.groups if entry in group.functions)
     view = root.for_group(group)
-    return entry.target.resolve(LinkableModule, square, (entry,), entry.target.resolve(EmitContext, view))
+    return entry.target.resolve(
+        LinkableModule, square, (entry,), entry.target.resolve(EmitContext, view)
+    )
 
 
 def test_a_unit_is_its_preamble_then_every_declaration_then_every_definition() -> None:
@@ -56,15 +60,37 @@ def test_a_unit_is_its_preamble_then_every_declaration_then_every_definition() -
     assert written == sorted(written)
 
 
-def test_a_declaration_and_its_definition_cannot_disagree_on_the_parameters() -> None:
-    entry = _host_unit(load_authored_ir(f"{SQUARE}:TirSquare")).functions[0]
-    assert _param_types(entry.declaration) == _param_types(entry.definition.split("{")[0])
+class LinkableCase(Case):
+    """The host translation unit emitted for one program."""
 
 
-def test_the_host_entry_is_declared_before_the_unit_defines_it() -> None:
-    TirSquare = load_authored_ir(f"{SQUARE}:TirSquare")
-    unit = _host_unit(TirSquare)
-    entry = unit.functions[0]
-    assert entry.name == TirSquare.entry
-    assert unit.source.index(entry.declaration) < unit.source.index(entry.definition)
-    assert entry.declaration not in unit.preamble
+@case
+class SquareHostUnit(LinkableCase):
+    path: Path = SQUARE
+
+    def guard(self, state, problems):
+        unit = _host_unit(state)
+        problems.run("declaration matches definition", self.declaration_matches_definition, unit)
+        problems.run(
+            "entry declared before defined", self.entry_declared_before_defined, unit, state
+        )
+
+    @staticmethod
+    def declaration_matches_definition(unit):
+        entry = unit.functions[0]
+        assert _param_types(entry.declaration) == _param_types(entry.definition.split("{")[0])
+
+    @staticmethod
+    def entry_declared_before_defined(unit, program):
+        entry = unit.functions[0]
+        assert entry.name == program.entry
+        assert unit.source.index(entry.declaration) < unit.source.index(entry.definition)
+        assert entry.declaration not in unit.preamble
+
+
+CASES = special(LinkableCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_linkable_case(case: LinkableCase) -> None:
+    check_case(case)

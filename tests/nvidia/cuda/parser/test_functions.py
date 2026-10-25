@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.parser import ParseError
@@ -16,13 +17,38 @@ PARSER = FIXTURES / "parser"
 DIAGNOSTICS = FIXTURES / "diagnostics"
 
 
-def test_a_return_annotation_validates_a_layout_inferred_from_the_body() -> None:
-    annotated = load_authored_ir(str(PARSER / "reshard_return_annotation.py"))
+class FunctionCase(Case):
+    """A function checked by the types its annotations give."""
 
-    fn = annotated.entry_function()
-    assert fn.return_type == fn.body.type
-    assert fn.return_type.storage is StorageKind.GMEM
-    assert fn.return_type.layout is not None
+
+@case
+class ReturnAnnotationChecksLayout(FunctionCase):
+    path: Path = PARSER / "reshard_return_annotation.py"
+
+    def guard(self, state, problems):
+        fn = state.entry_function()
+        assert fn.return_type == fn.body.type
+        assert fn.return_type.storage is StorageKind.GMEM
+        assert fn.return_type.layout is not None
+
+
+@case
+class TuplePrototypeContract(FunctionCase):
+    path: Path = PARSER / "tuple_dispatch_prototype.py"
+
+    def guard(self, state, problems):
+        prototype = state.entry_function()
+        assert isinstance(prototype.return_type, TupleType)
+        assert prototype.return_type == prototype.variants[0].return_type
+        assert prototype.type.return_type == prototype.return_type
+
+
+CASES = special(FunctionCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_function_case(case: FunctionCase) -> None:
+    check_case(case)
 
 
 def test_an_incompatible_return_annotation_reports_annotation_and_body_types() -> None:
@@ -45,15 +71,6 @@ def test_an_incompatible_return_annotation_reports_annotation_and_body_types() -
 def test_a_dispatch_prototype_requires_a_return_annotation() -> None:
     with pytest.raises(ParseError, match="prototype requires a return annotation"):
         load_authored_ir(str(DIAGNOSTICS / "parser_dispatch_prototype_without_return.py"))
-
-
-def test_a_dispatch_prototype_uses_its_tuple_annotation_as_a_variant_contract() -> None:
-    TupleDispatch = load_authored_ir(str(PARSER / "tuple_dispatch_prototype.py"))
-
-    prototype = TupleDispatch.entry_function()
-    assert isinstance(prototype.return_type, TupleType)
-    assert prototype.return_type == prototype.variants[0].return_type
-    assert prototype.type.return_type == prototype.return_type
 
 
 def test_a_variant_body_must_satisfy_its_dispatch_return_contract() -> None:

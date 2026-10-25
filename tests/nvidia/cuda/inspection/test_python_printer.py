@@ -9,7 +9,9 @@ left-hand side carries, and the target header, whose value must rebuild the
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
-from tests.core._corpus import reload
+import pytest
+
+from tests.core._corpus import Case, case, check_case, reload, special
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.inspection import PythonPrintOptions, as_script
@@ -19,7 +21,8 @@ from tilefoundry.utils.python_source import PythonExpr
 from tilefoundry_nvidia.cuda.target import CudaArchitecture
 from tilefoundry_nvidia.cuda.target import CudaTarget as BuiltinCudaTarget
 
-RMSNORM = f"{Path(__file__).parents[1] / 'fixtures' / 'placed' / 'rmsnorm.py'}:RmsnormModule"
+PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
+RMSNORM = f"{PLACED / 'rmsnorm.py'}:RmsnormModule"
 
 
 class CudaTarget(BuiltinCudaTarget):
@@ -31,17 +34,35 @@ class ExtendedCudaArchitecture(CudaArchitecture):
     thirteenth_field: int
 
 
-def test_inspection_types_are_opt_in_same_line_comments():
-    fn = load_authored_ir(RMSNORM).entry_function()
-    canonical = as_script(fn)
-    annotated = as_script(fn, options=PythonPrintOptions(show_types=True))
+class PythonPrinterCase(Case):
+    """A program checked by the source the printer emits for it."""
 
-    assert canonical != annotated
-    assert "# Tensor[" in annotated
 
-    assert all(
-        line.split("# Tensor[")[0].strip() for line in annotated.splitlines() if "# Tensor[" in line
-    )
+@case
+class TypesAreOptInComments(PythonPrinterCase):
+    path: Path = PLACED / "rmsnorm.py"
+
+    def guard(self, state, problems):
+        fn = state.entry_function()
+        canonical = as_script(fn)
+        annotated = as_script(fn, options=PythonPrintOptions(show_types=True))
+
+        assert canonical != annotated
+        assert "# Tensor[" in annotated
+
+        assert all(
+            line.split("# Tensor[")[0].strip()
+            for line in annotated.splitlines()
+            if "# Tensor[" in line
+        )
+
+
+CASES = special(PythonPrinterCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_python_printer_case(case: PythonPrinterCase) -> None:
+    check_case(case)
 
 
 def _rebuild(rendered: PythonExpr):

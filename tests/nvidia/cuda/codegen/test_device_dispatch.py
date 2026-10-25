@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tilefoundry.cli.source import load_authored_ir
+import pytest
+
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.context_builder import build_codegen_context, mangle
 from tilefoundry.codegen.linkable_module import LinkableModule
@@ -29,40 +31,58 @@ def _view(square, target):
 
 def _device_source(square) -> str:
     _root, group, view = _view(square, _CUDA)
-    return _CUDA.resolve(LinkableModule, square, group.functions, _CUDA.resolve(EmitContext, view)).source
+    return _CUDA.resolve(
+        LinkableModule, square, group.functions, _CUDA.resolve(EmitContext, view)
+    ).source
 
 
 def _host_source(square) -> str:
     entry = square.entry_function()
     _root, group, view = _view(square, entry.target)
-    return entry.target.resolve(LinkableModule, square, (entry,), entry.target.resolve(EmitContext, view)).source
+    return entry.target.resolve(
+        LinkableModule, square, (entry,), entry.target.resolve(EmitContext, view)
+    ).source
 
 
-def test_a_prototype_becomes_one_kernel_and_one_shim() -> None:
-    TirSquare = load_authored_ir(f"{SQUARE}:TirSquare")
-    source = _device_source(TirSquare)
-    assert source.count("__global__") == 1
-    assert (
-        source.count(
-            f'extern "C" const char* {launcher_symbol(mangle(TirSquare, TirSquare.square_device))}('
-        )
-        == 2
-    )
-    assert "square_small" not in source
-    assert "square_large" not in source
+class DeviceDispatchCase(Case):
+    """The device and host sources emitted for one shape-dispatched program."""
 
 
-def test_the_kernel_branches_on_the_extent_the_call_carries() -> None:
-    """The subject is a parameter, because the type said that axis was open."""
-    source = _device_source(load_authored_ir(f"{SQUARE}:TirSquare"))
-    assert "if ((1 <= x_shape_0) && (x_shape_0 <= 127))" in source
-    assert "} else if ((128 <= x_shape_0) && (x_shape_0 <= 255))" in source
-    assert "__trap();" in source
+@case
+class SquareDispatch(DeviceDispatchCase):
+    path: Path = SQUARE
+
+    def guard(self, state, problems):
+        device = _device_source(state)
+        launcher = launcher_symbol(mangle(state, state.square_device))
+        problems.run("one kernel and one shim", self.one_kernel_one_shim, device, launcher)
+        problems.run("kernel branches on the extent", self.kernel_branches_on_extent, device)
+        problems.run("host makes one call", self.host_makes_one_call, _host_source(state), launcher)
+
+    @staticmethod
+    def one_kernel_one_shim(source, launcher):
+        assert source.count("__global__") == 1
+        assert source.count(f'extern "C" const char* {launcher}(') == 2
+        assert "square_small" not in source
+        assert "square_large" not in source
+
+    @staticmethod
+    def kernel_branches_on_extent(source):
+        """The subject is a parameter, because the type said that axis was open."""
+        assert "if ((1 <= x_shape_0) && (x_shape_0 <= 127))" in source
+        assert "} else if ((128 <= x_shape_0) && (x_shape_0 <= 255))" in source
+        assert "__trap();" in source
+
+    @staticmethod
+    def host_makes_one_call(source, launcher):
+        """No ``if`` / ``else`` over N shims: the host writes the one call the table names."""
+        assert source.count(f"{launcher}(") == 2
+        assert "else" not in source
 
 
-def test_the_host_makes_one_call_and_chooses_nothing() -> None:
-    """No ``if`` / ``else`` over N shims: the host writes the one call the table names."""
-    TirSquare = load_authored_ir(f"{SQUARE}:TirSquare")
-    source = _host_source(TirSquare)
-    assert source.count(f"{launcher_symbol(mangle(TirSquare, TirSquare.square_device))}(") == 2
-    assert "else" not in source
+CASES = special(DeviceDispatchCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_device_dispatch_case(case: DeviceDispatchCase) -> None:
+    check_case(case)

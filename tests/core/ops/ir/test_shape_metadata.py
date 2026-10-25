@@ -9,8 +9,8 @@ import isl
 import pytest
 import torch
 
+from tests.core._corpus import Case, case, check_case, special
 from tests.core.ops.ir.op_case import Cost, OpCase, check_op_case
-from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Var
@@ -69,22 +69,42 @@ def test_shape_metadata_cost(case):
         assert written.is_empty()
 
 
-def test_shape_metadata_uses_runtime_shape_and_host_types() -> None:
-    _shape_metadata = load_authored_ir(f"{SHAPE_METADATA}:ShapeMetadata").entry_function()
-    actual_shape, actual_rank = evaluate(_shape_metadata, torch.zeros(3, 4))
-    torch.testing.assert_close(actual_shape, torch.tensor([3, 4], dtype=torch.int64))
-    torch.testing.assert_close(actual_rank, torch.tensor(2, dtype=torch.int64))
-    calls = [expr for expr in collect_exprs(_shape_metadata.body) if isinstance(expr, Call)]
-    metadata_calls = [call for call in calls if isinstance(call.target, (Rank, ShapeOf))]
-    assert metadata_calls
-    assert all((call.type.storage is StorageKind.UMAT for call in metadata_calls))
-    assert all((call.type.layout == Layout(call.type.shape) for call in metadata_calls))
+class ShapeMetadataCase(Case):
+    """A shape-metadata program evaluated on a concrete runtime tensor."""
 
 
-def test_shape_element_path_has_the_canonical_type() -> None:
-    _shape_element_paths = load_authored_ir(
-        f"{SHAPE_METADATA}:ShapeElementPaths"
-    ).entry_function()
-    assert _shape_element_paths.body.type == TensorType.umat_scalar()
-    actual = evaluate(_shape_element_paths, torch.zeros(3, 4))
-    torch.testing.assert_close(actual, torch.tensor(4, dtype=torch.int64))
+@case
+class RuntimeShapeAndHostTypes(ShapeMetadataCase):
+    path: Path = SHAPE_METADATA
+    name: str | None = "ShapeMetadata"
+
+    def guard(self, state, problems):
+        _shape_metadata = state.entry_function()
+        actual_shape, actual_rank = evaluate(_shape_metadata, torch.zeros(3, 4))
+        torch.testing.assert_close(actual_shape, torch.tensor([3, 4], dtype=torch.int64))
+        torch.testing.assert_close(actual_rank, torch.tensor(2, dtype=torch.int64))
+        calls = [expr for expr in collect_exprs(_shape_metadata.body) if isinstance(expr, Call)]
+        metadata_calls = [call for call in calls if isinstance(call.target, (Rank, ShapeOf))]
+        assert metadata_calls
+        assert all((call.type.storage is StorageKind.UMAT for call in metadata_calls))
+        assert all((call.type.layout == Layout(call.type.shape) for call in metadata_calls))
+
+
+@case
+class ShapeElementPathHasTheCanonicalType(ShapeMetadataCase):
+    path: Path = SHAPE_METADATA
+    name: str | None = "ShapeElementPaths"
+
+    def guard(self, state, problems):
+        _shape_element_paths = state.entry_function()
+        assert _shape_element_paths.body.type == TensorType.umat_scalar()
+        actual = evaluate(_shape_element_paths, torch.zeros(3, 4))
+        torch.testing.assert_close(actual, torch.tensor(4, dtype=torch.int64))
+
+
+CASES = special(ShapeMetadataCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_shape_metadata_case(case: ShapeMetadataCase) -> None:
+    check_case(case)

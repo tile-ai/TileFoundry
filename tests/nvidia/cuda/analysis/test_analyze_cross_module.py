@@ -16,6 +16,7 @@ from typing import ClassVar
 
 import pytest
 
+from tests.core._corpus import Case, case, check_case, special
 from tests.nvidia.cuda.models.qwen3_1_7b.case import CASE as QWEN_CASE
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
@@ -171,29 +172,61 @@ def test_a_reached_child_resolving_another_hierarchy_is_invalid() -> None:
     assert "launch" not in str(caught.value)
 
 
-def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
-    _Agreeing = load_authored_ir(f"{ANALYSIS / 'child_on_caller_hierarchy.py'}:_Agreeing")
-    result = analyze(
-        *check_program(_Agreeing, _Agreeing.entry_function(), dims={"child_topology_extent": 132}),
-        analysis=("compute-cost", "memory"),
-    )
-    assert set(result.metadata_types) >= {ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata}
+class CrossModuleCase(Case):
+    """A root reaching child Modules, analysed as one kernel."""
 
 
-@pytest.mark.parametrize(
-    "name,root",
-    (("same_module", "SameModule"), ("cross_module", "CrossModule"), ("fused", "Fused")),
-    ids=("same_module", "cross_module", "fused"),
-)
-def test_each_reference_program_is_one_analysable_kernel(name, root) -> None:
+@case
+class ChildOnCallerHierarchy(CrossModuleCase):
+    """A child declaring the caller's hierarchy is accepted."""
+
+    path: Path = ANALYSIS / "child_on_caller_hierarchy.py"
+    name: str | None = "_Agreeing"
+
+    def guard(self, state, problems):
+        result = analyze(
+            *check_program(state, state.entry_function(), dims={"child_topology_extent": 132}),
+            analysis=("compute-cost", "memory"),
+        )
+        assert set(result.metadata_types) >= {
+            ComputeCostMetadata,
+            MemoryMetadata,
+            RegionMemoryMetadata,
+        }
+
+
+class ReferenceProgram(CrossModuleCase):
     """The shared programs measure as one root each; what a call means is not restated."""
-    root = load_authored_ir(f"{HIR_COMPOSITION}:{root}")
-    result = analyze(
-        *check_program(root, root.entry_function()),
-        analysis=("compute-cost", "memory"),
-    )
 
-    assert set(result.metadata_types) >= {ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata}
+    def guard(self, state, problems):
+        result = analyze(
+            *check_program(state, state.entry_function()),
+            analysis=("compute-cost", "memory"),
+        )
+
+        assert set(result.metadata_types) >= {
+            ComputeCostMetadata,
+            MemoryMetadata,
+            RegionMemoryMetadata,
+        }
+
+
+@case
+class SameModuleReference(ReferenceProgram):
+    path: Path = HIR_COMPOSITION
+    name: str | None = "SameModule"
+
+
+@case
+class CrossModuleReference(ReferenceProgram):
+    path: Path = HIR_COMPOSITION
+    name: str | None = "CrossModule"
+
+
+@case
+class FusedReference(ReferenceProgram):
+    path: Path = HIR_COMPOSITION
+    name: str | None = "Fused"
 
 
 def _placed_primitives(fn) -> list[tuple[str, object]]:
@@ -210,29 +243,32 @@ def _placed_primitives(fn) -> list[tuple[str, object]]:
     return found
 
 
-def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
+@case
+class MoEMegaKernelBranches(CrossModuleCase):
     """A lexical Mesh scope places nothing; the reshard into it is what does.
 
     So the branch is read from what its results retained: the sub-box the slice
     selected, as its own extent and origin rather than an extent alone.
     """
-    expected = {"routed_expert": ((120,), 0), "shared_expert": ((12,), 120)}
-    MoEMegaKernel = load_authored_ir(f"{FIXTURES / 'placed' / 'moe_mega_kernel.py'}:MoEMegaKernel")
-    reached = {
-        fn.name: _placed_primitives(fn)
-        for frame in list_call_paths(
-            check_program(MoEMegaKernel, MoEMegaKernel.entry_function())[0]
-        ).values()
-        for fn in (frame.function,)
-    }
 
-    for branch, (shape, offset) in expected.items():
-        placed = reached[branch]
-        assert placed, branch
-        assert {op for op, _ in placed} - {"Reshard"}, branch
-        for _op, layout in placed:
-            assert flatten(layout.outer).shape == shape
-            assert layout.offset == offset
+    path: Path = FIXTURES / "placed" / "moe_mega_kernel.py"
+    name: str | None = "MoEMegaKernel"
+
+    def guard(self, state, problems):
+        expected = {"routed_expert": ((120,), 0), "shared_expert": ((12,), 120)}
+        reached = {
+            fn.name: _placed_primitives(fn)
+            for frame in list_call_paths(check_program(state, state.entry_function())[0]).values()
+            for fn in (frame.function,)
+        }
+
+        for branch, (shape, offset) in expected.items():
+            placed = reached[branch]
+            assert placed, branch
+            assert {op for op, _ in placed} - {"Reshard"}, branch
+            for _op, layout in placed:
+                assert flatten(layout.outer).shape == shape
+                assert layout.offset == offset
 
 
 def _stacked_program(count, trips=None):
@@ -584,3 +620,11 @@ def test_repeated_callee_placement_compares_alias_even_at_the_same_offset():
     ]
     assert len(buffers) == 2
     assert all(len(record.offsets) == 1 for record in buffers)
+
+
+CASES = special(CrossModuleCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_cross_module_case(case: CrossModuleCase) -> None:
+    check_case(case)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,7 +14,7 @@ import tilefoundry.cli.schedule as schedule_cli
 import tilefoundry.ir.hir.schedule as schedules
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 import tilefoundry.visitor_registry.instruction as instructions
-from tests.core._corpus import reload
+from tests.core._corpus import Case, case, check_case, reload, special
 from tests.nvidia.cuda.schedule._support import (
     _finalized,
     _RetainedStatements,
@@ -176,132 +176,179 @@ def test_lowering_rejects_nonidentity_inverse_for_a_written_return():
         _finalized(module)
 
 
-def test_zero_trip_carry_keeps_direct_address_proofs_and_the_loop():
-    module = load_authored_ir(str(VARIANTS / "zero_trip_carry.py"))
-    result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
-    summary = get_metadata(result.function, AllocationSummaryMetadata)
-    carry = [
-        proof
-        for value in summary.values
-        for proof in value.aliases
-        if proof.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD)
-    ]
-    assert {proof.kind for proof in carry} == {AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD}
-    assert all(proof.relation.relation.is_identity() for proof in carry)
-    lowered = _finalized(module)
-    verify_module(lowered)
-    verify_module(reload(as_script(lowered), lowered.name))
-    visitor = _RetainedStatements()
-    visitor.visit(lowered.entry_function().body)
-    assert len(visitor.loops) == 1
-    loop = visitor.loops[0]
-    assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
-        0,
-        0,
-        1,
-    )
-    body = _RetainedStatements()
-    body.visit(loop.body)
-    assert sum(isinstance(op, Copy) for op in body.operations) == 1
+class LoweringCase(Case):
+    """A scheduling variant whose memory placement or lowered TIR keeps what it must."""
 
 
-def test_dynamic_window_keeps_a_mixed_scalar_and_constant_key():
-    module = load_authored_ir(str(VARIANTS / "dynamic_window.py"))
-    lowered = _finalized(module)
-    verify_module(lowered)
-    printed = as_script(lowered)
-    verify_module(reload(printed, lowered.name))
-    visitor = _RetainedStatements()
-    visitor.visit(lowered.entry_function().body)
-    views = [
-        value
-        for value in visitor.bindings.values()
-        if isinstance(value, Call)
-        and isinstance(value.target, TensorView)
-        and value.type.shape == (8, 8)
-    ]
-    assert any(
-        view.type.layout.strides == (8, 1)
-        and any(
-            isinstance(expr, Call)
-            and isinstance(expr.target, Slice)
-            and expr.target.sizes == (1, 1)
-            and isinstance(expr.args[1].elements[0], Call)
-            and expr.args[1].elements[1].value == 0
-            for expr in collect_exprs(view)
+@case
+class ZeroTripCarry(LoweringCase):
+    path: Path = VARIANTS / "zero_trip_carry.py"
+
+    def guard(self, state, problems):
+        result = analyze(*check_program(state, state.entry_function()), analysis=("memory",))
+        summary = get_metadata(result.function, AllocationSummaryMetadata)
+        carry = [
+            proof
+            for value in summary.values
+            for proof in value.aliases
+            if proof.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD)
+        ]
+        assert {proof.kind for proof in carry} == {AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD}
+        assert all(proof.relation.relation.is_identity() for proof in carry)
+        lowered = _finalized(state)
+        verify_module(lowered)
+        verify_module(reload(as_script(lowered), lowered.name))
+        visitor = _RetainedStatements()
+        visitor.visit(lowered.entry_function().body)
+        assert len(visitor.loops) == 1
+        loop = visitor.loops[0]
+        assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
+            0,
+            0,
+            1,
         )
-        for view in views
-    )
+        body = _RetainedStatements()
+        body.visit(loop.body)
+        assert sum(isinstance(op, Copy) for op in body.operations) == 1
 
 
-def test_register_row_pointer_keeps_the_split_axis_whole():
-    module = load_authored_ir(str(VARIANTS / "register_rows.py"))
-    lowered = _finalized(module)
-    verify_module(lowered)
-    verify_module(reload(as_script(lowered), lowered.name))
-    visitor = _RetainedStatements()
-    visitor.visit(lowered.entry_function().body)
-    slices = [
-        expr
-        for value in visitor.bindings.values()
-        for expr in collect_exprs(value)
-        if isinstance(expr, Call)
-        and isinstance(expr.target, Slice)
-        and isinstance(expr.args[0].type.layout, ShardLayout)
-    ]
-    assert slices and all(expr.target.sizes[1] == 16 for expr in slices)
+@case
+class DynamicWindow(LoweringCase):
+    path: Path = VARIANTS / "dynamic_window.py"
+
+    def guard(self, state, problems):
+        lowered = _finalized(state)
+        verify_module(lowered)
+        printed = as_script(lowered)
+        verify_module(reload(printed, lowered.name))
+        visitor = _RetainedStatements()
+        visitor.visit(lowered.entry_function().body)
+        views = [
+            value
+            for value in visitor.bindings.values()
+            if isinstance(value, Call)
+            and isinstance(value.target, TensorView)
+            and value.type.shape == (8, 8)
+        ]
+        assert any(
+            view.type.layout.strides == (8, 1)
+            and any(
+                isinstance(expr, Call)
+                and isinstance(expr.target, Slice)
+                and expr.target.sizes == (1, 1)
+                and isinstance(expr.args[1].elements[0], Call)
+                and expr.args[1].elements[1].value == 0
+                for expr in collect_exprs(view)
+            )
+            for view in views
+        )
 
 
-@pytest.mark.parametrize("start,offset", [(0, 0), (64, 4096)])
-def test_composed_view_keeps_its_layout_when_logical_rank_changes(start, offset):
-    module = load_authored_ir(str(VARIANTS / f"composed_rank_{start}.py"))
-    lowered = _finalized(module)
-    verify_module(lowered)
-    verify_module(reload(as_script(lowered), lowered.name))
-    visitor = _RetainedStatements()
-    visitor.visit(lowered.entry_function().body)
-    views = [
-        value
-        for value in visitor.bindings.values()
-        if isinstance(value, Call)
-        and isinstance(value.target, TensorView)
-        and value.type.shape == (8, 8, 16, 4)
-    ]
-    assert any(
-        value.type.layout
-        == ComposedLayout(Swizzle(3, 4, 3), offset, Layout((8, 8, 16, 4), (512, 64, 4, 1)))
-        for value in views
-    )
+@case
+class RegisterRows(LoweringCase):
+    path: Path = VARIANTS / "register_rows.py"
+
+    def guard(self, state, problems):
+        lowered = _finalized(state)
+        verify_module(lowered)
+        verify_module(reload(as_script(lowered), lowered.name))
+        visitor = _RetainedStatements()
+        visitor.visit(lowered.entry_function().body)
+        slices = [
+            expr
+            for value in visitor.bindings.values()
+            for expr in collect_exprs(value)
+            if isinstance(expr, Call)
+            and isinstance(expr.target, Slice)
+            and isinstance(expr.args[0].type.layout, ShardLayout)
+        ]
+        assert slices and all(expr.target.sizes[1] == 16 for expr in slices)
 
 
-@pytest.mark.parametrize(
-    "width,start,shape,modes,strides,offset",
-    [
-        (256, 0, (16, 8, 16, 16), (16, 8, (4, 4), 16), (512, 64, (8192, 16), 1), 0),
-        (32, 0, (16, 8, 2, 16), (16, 8, 2, 16), (512, 64, 16, 1), 0),
-        (128, 128, (16, 8, 8, 16), (16, 8, (2, 4), 16), (512, 64, (8192, 16), 1), 16384),
-    ],
-)
-def test_composed_reshape_retains_non_affine_outer_modes(
-    width, start, shape, modes, strides, offset
-):
-    module = load_authored_ir(str(VARIANTS / f"composed_outer_{width}_{start}.py"))
-    lowered = _finalized(module)
-    verify_module(reload(as_script(lowered), lowered.name))
-    visitor = _RetainedStatements()
-    visitor.visit(lowered.entry_function().body)
-    expected = ComposedLayout(Swizzle(3, 4, 3), offset, Layout(modes, strides))
-    assert any(
-        isinstance(value, Call)
-        and isinstance(value.target, TensorView)
-        and value.type.layout == expected
-        for value in visitor.bindings.values()
-    )
+@dataclass(frozen=True)
+class ComposedRankView(LoweringCase):
+    offset: int = 0
+
+    def guard(self, state, problems):
+        lowered = _finalized(state)
+        verify_module(lowered)
+        verify_module(reload(as_script(lowered), lowered.name))
+        visitor = _RetainedStatements()
+        visitor.visit(lowered.entry_function().body)
+        views = [
+            value
+            for value in visitor.bindings.values()
+            if isinstance(value, Call)
+            and isinstance(value.target, TensorView)
+            and value.type.shape == (8, 8, 16, 4)
+        ]
+        assert any(
+            value.type.layout
+            == ComposedLayout(Swizzle(3, 4, 3), self.offset, Layout((8, 8, 16, 4), (512, 64, 4, 1)))
+            for value in views
+        )
 
 
-def test_address_origin_can_divide_a_runtime_loop_index():
-    lowered = _finalized(load_authored_ir(str(VARIANTS / "modular_window.py")))
-    verify_module(reload(as_script(lowered), lowered.name))
+@case
+class ComposedRankFrom0(ComposedRankView):
+    path: Path = VARIANTS / "composed_rank_0.py"
+
+
+@case
+class ComposedRankFrom64(ComposedRankView):
+    path: Path = VARIANTS / "composed_rank_64.py"
+    offset: int = 4096
+
+
+@dataclass(frozen=True)
+class ComposedOuterReshape(LoweringCase):
+    modes: tuple = ()
+    strides: tuple = ()
+    offset: int = 0
+
+    def guard(self, state, problems):
+        lowered = _finalized(state)
+        verify_module(reload(as_script(lowered), lowered.name))
+        visitor = _RetainedStatements()
+        visitor.visit(lowered.entry_function().body)
+        expected = ComposedLayout(Swizzle(3, 4, 3), self.offset, Layout(self.modes, self.strides))
+        assert any(
+            isinstance(value, Call)
+            and isinstance(value.target, TensorView)
+            and value.type.layout == expected
+            for value in visitor.bindings.values()
+        )
+
+
+@case
+class ComposedOuter256From0(ComposedOuterReshape):
+    path: Path = VARIANTS / "composed_outer_256_0.py"
+    modes: tuple = (16, 8, (4, 4), 16)
+    strides: tuple = (512, 64, (8192, 16), 1)
+
+
+@case
+class ComposedOuter32From0(ComposedOuterReshape):
+    path: Path = VARIANTS / "composed_outer_32_0.py"
+    modes: tuple = (16, 8, 2, 16)
+    strides: tuple = (512, 64, 16, 1)
+
+
+@case
+class ComposedOuter128From128(ComposedOuterReshape):
+    path: Path = VARIANTS / "composed_outer_128_128.py"
+    modes: tuple = (16, 8, (2, 4), 16)
+    strides: tuple = (512, 64, (8192, 16), 1)
+    offset: int = 16384
+
+
+@case
+class ModularWindow(LoweringCase):
+    path: Path = VARIANTS / "modular_window.py"
+
+    def guard(self, state, problems):
+        lowered = _finalized(state)
+        verify_module(reload(as_script(lowered), lowered.name))
 
 
 @pytest.mark.parametrize("coordinate_division", [False, True])
@@ -516,37 +563,42 @@ def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(read_old
     assert not any(stmt.args[0].type.shape == (2, 4) for stmt in copies)
 
 
-def test_read_only_call_before_an_update_keeps_the_input_storage():
-    path = VARIANTS / "read_before_update.py"
-    lowered = _finalized(load_authored_ir(str(path)))
-    verify_module(lowered)
-    visitor = _RetainedStatements()
-    visitor.visit(lowered.entry_function().body)
-    update = visitor.calls[0].callable
-    body = _RetainedStatements()
-    body.visit(update.body)
-    assert len(body.calls) == 1
-    identity = body.calls[0]
-    assert body.storage(identity.args[0]) is update.params[0]
-    assert body.storage(identity.args[-1]) is update.params[0]
-    copies = [stmt for stmt in body.statements if isinstance(stmt.callable, Copy)]
-    assert body.storage(copies[0].args[0]) is update.params[0]
-    assert body.storage(copies[-1].args[-1]) is update.params[-1]
+@case
+class ReadBeforeUpdate(LoweringCase):
+    path: Path = VARIANTS / "read_before_update.py"
+
+    def guard(self, state, problems):
+        lowered = _finalized(state)
+        verify_module(lowered)
+        visitor = _RetainedStatements()
+        visitor.visit(lowered.entry_function().body)
+        update = visitor.calls[0].callable
+        body = _RetainedStatements()
+        body.visit(update.body)
+        assert len(body.calls) == 1
+        identity = body.calls[0]
+        assert body.storage(identity.args[0]) is update.params[0]
+        assert body.storage(identity.args[-1]) is update.params[0]
+        copies = [stmt for stmt in body.statements if isinstance(stmt.callable, Copy)]
+        assert body.storage(copies[0].args[0]) is update.params[0]
+        assert body.storage(copies[-1].args[-1]) is update.params[-1]
 
 
-def test_staged_smem_keeps_logical_capacity_and_aligns_each_slot():
-    path = VARIANTS / "broadcast_stages.py"
-    module = load_authored_ir(str(path))
-    result = analyze(*check_program(module, module.entry_function()), analysis="memory")
-    staged = next(
-        expr
-        for expr in collect_exprs(result.function.body)
-        if isinstance(expr, Call) and getattr(expr.target, "buffers", 1) == 2
-    )
-    memory = get_metadata(staged, MemoryMetadata)
-    assert len(memory.offsets) == 2
-    assert all(offset % 16 == 0 for offset in memory.offsets)
-    assert memory.buffer_bytes >= 2 * 3 * DType.f32.bit_width // 8
+@case
+class BroadcastStages(LoweringCase):
+    path: Path = VARIANTS / "broadcast_stages.py"
+
+    def guard(self, state, problems):
+        result = analyze(*check_program(state, state.entry_function()), analysis="memory")
+        staged = next(
+            expr
+            for expr in collect_exprs(result.function.body)
+            if isinstance(expr, Call) and getattr(expr.target, "buffers", 1) == 2
+        )
+        memory = get_metadata(staged, MemoryMetadata)
+        assert len(memory.offsets) == 2
+        assert all(offset % 16 == 0 for offset in memory.offsets)
+        assert memory.buffer_bytes >= 2 * 3 * DType.f32.bit_width // 8
 
 
 @pytest.mark.parametrize("later_use", [None, "callee", "caller"])
@@ -618,52 +670,70 @@ def test_insert_slice_and_retained_call_keep_parameter_storage(later_use, nested
         copy.assert_not_called()
 
 
-def test_retained_update_translates_an_actual_window():
-    path = VARIANTS / "retained_window.py"
-    module = load_authored_ir(str(path))
-    result = analyze(*check_program(module, module.entry_function()), analysis="memory")
-    call = next(
-        value
-        for value in collect_exprs(result.function.body)
-        if isinstance(value, Call) and isinstance(value.target, Function)
-    )
-    memory = get_metadata(call, MemoryMetadata)
-    values = {
-        value.value: value
-        for value in get_metadata(result.function, AllocationSummaryMetadata).values
-    }
-    composed = AllocationSummaryMetadata(tuple(values.values())).address_alias(
-        values[SSAValue(call)]
-    )
-    assert composed.target.expr is result.function.params[0]
-    expected = isl.map("{ [i, j] -> [i + 1, j] : 0 <= i < 2 and 0 <= j < 4 }")
-    assert composed.relation.relation.is_equal(expected)
-    assert memory.buffer_bytes is None and memory.offsets == ()
+@case
+class RetainedWindow(LoweringCase):
+    path: Path = VARIANTS / "retained_window.py"
+
+    def guard(self, state, problems):
+        result = analyze(*check_program(state, state.entry_function()), analysis="memory")
+        call = next(
+            value
+            for value in collect_exprs(result.function.body)
+            if isinstance(value, Call) and isinstance(value.target, Function)
+        )
+        memory = get_metadata(call, MemoryMetadata)
+        values = {
+            value.value: value
+            for value in get_metadata(result.function, AllocationSummaryMetadata).values
+        }
+        composed = AllocationSummaryMetadata(tuple(values.values())).address_alias(
+            values[SSAValue(call)]
+        )
+        assert composed.target.expr is result.function.params[0]
+        expected = isl.map("{ [i, j] -> [i + 1, j] : 0 <= i < 2 and 0 <= j < 4 }")
+        assert composed.relation.relation.is_equal(expected)
+        assert memory.buffer_bytes is None and memory.offsets == ()
 
 
-@pytest.mark.parametrize("returned", ["out", "out[1:2, :]"])
-def test_read_only_call_return_keeps_storage_despite_later_actual_use(returned):
-    path = VARIANTS / ("readonly_whole.py" if returned == "out" else "readonly_window.py")
-    module = load_authored_ir(str(path))
-    result = analyze(*check_program(module, module.entry_function()), analysis="memory")
-    call = next(
-        value
-        for value in collect_exprs(result.function.body)
-        if isinstance(value, Call) and isinstance(value.target, Function)
-    )
-    memory = get_metadata(call, MemoryMetadata)
-    values = {
-        value.value: value
-        for value in get_metadata(result.function, AllocationSummaryMetadata).values
-    }
-    composed = AllocationSummaryMetadata(tuple(values.values())).address_alias(
-        values[SSAValue(call)]
-    )
-    assert composed.target.expr is result.function.params[0]
-    expected = (
-        isl.map("{ [i, j] -> [i, j] : 0 <= i < 2 and 0 <= j < 4 }")
-        if returned == "out"
-        else isl.map("{ [i, j] -> [i + 1, j] : i = 0 and 0 <= j < 4 }")
-    )
-    assert composed.relation.relation.is_equal(expected)
-    assert memory.buffer_bytes is None and memory.offsets == ()
+@dataclass(frozen=True)
+class ReadOnlyReturn(LoweringCase):
+    relation: str = ""
+
+    def guard(self, state, problems):
+        result = analyze(*check_program(state, state.entry_function()), analysis="memory")
+        call = next(
+            value
+            for value in collect_exprs(result.function.body)
+            if isinstance(value, Call) and isinstance(value.target, Function)
+        )
+        memory = get_metadata(call, MemoryMetadata)
+        values = {
+            value.value: value
+            for value in get_metadata(result.function, AllocationSummaryMetadata).values
+        }
+        composed = AllocationSummaryMetadata(tuple(values.values())).address_alias(
+            values[SSAValue(call)]
+        )
+        assert composed.target.expr is result.function.params[0]
+        assert composed.relation.relation.is_equal(isl.map(self.relation))
+        assert memory.buffer_bytes is None and memory.offsets == ()
+
+
+@case
+class ReadOnlyWholeReturn(ReadOnlyReturn):
+    path: Path = VARIANTS / "readonly_whole.py"
+    relation: str = "{ [i, j] -> [i, j] : 0 <= i < 2 and 0 <= j < 4 }"
+
+
+@case
+class ReadOnlyWindowReturn(ReadOnlyReturn):
+    path: Path = VARIANTS / "readonly_window.py"
+    relation: str = "{ [i, j] -> [i + 1, j] : i = 0 and 0 <= j < 4 }"
+
+
+CASES = special(LoweringCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_lowering_case(case: LoweringCase) -> None:
+    check_case(case)
