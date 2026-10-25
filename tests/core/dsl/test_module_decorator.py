@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+from pathlib import Path
 
 import pytest
 import torch
 
-from tilefoundry.dsl import *
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core.errors import VerifyError
@@ -16,17 +17,10 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.runtime.resource import DictResource
 from tilefoundry.utils.spec_ref import spec_ref_render
 
-
-@module(entry="composed")
-class _Demo:
-    @func
-    def leaf(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-        return tf.rms_norm(x, g)
-
-    @func
-    def composed(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-        y = leaf(x, g)
-        return tf.add(y, y)
+FIXTURES = Path(__file__).parents[1] / "fixtures"
+CLASS_BODIES = FIXTURES / "dsl" / "class_body_modules.py"
+WEIGHTED = FIXTURES / "dsl" / "weighted_modules.py"
+DIAGNOSTICS = FIXTURES / "diagnostics"
 
 
 def test_module_collects_functions_in_order_and_resolves_them_by_name():
@@ -37,6 +31,7 @@ def test_module_collects_functions_in_order_and_resolves_them_by_name():
     instead returns a runnable callable, see ``ir.core.module.Module``); a name
     the class never declared raises ``AttributeError``.
     """
+    _Demo = load_authored_ir(f"{CLASS_BODIES}:_Demo")
     assert _Demo.name == "_Demo"
     assert [fn.name for fn in _Demo.functions] == ["leaf", "composed"]
     assert _Demo.lookup("leaf").name == "leaf"
@@ -52,7 +47,7 @@ def test_attribute_access_ambiguous_name_and_real_fields():
     real Module fields are never intercepted, and ``lookup`` refuses ambiguous
     matches — the core-ir [parser §2](docs/spec/parser.md#2-syntax-and-rules) ambiguity rule.
     """
-    base = _Demo.lookup("leaf")
+    base = load_authored_ir(f"{CLASS_BODIES}:_Demo").lookup("leaf")
     dup_a = dataclasses.replace(base, name="dup")
     dup_b = dataclasses.replace(base, name="dup")
     mod = Module(name="Dup", functions=(dup_a, dup_b), entry="dup")
@@ -71,27 +66,12 @@ def test_collects_orchestration_method_and_rejects_other_members():
     bound on the resulting Module. A member that is none of the three kinds
     (DSL function / child Module / plain function) is still rejected.
     """
-
-    @module(entry="only")
-    class _WithMethod:
-        @func
-        def only(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-            return tf.rms_norm(x, g)
-
-        def describe(self):  # noqa: ANN001 — orchestration method, bound on the Module
-            return f"{self.name}/{self.entry}"
+    _WithMethod = load_authored_ir(f"{CLASS_BODIES}:_WithMethod")
 
     assert _WithMethod.describe() == "_WithMethod/only"
 
     with pytest.raises(TypeError, match="only these three member kinds"):
-
-        @module(entry="only")
-        class _BadMember:
-            @func
-            def only(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-                return tf.rms_norm(x, g)
-
-            budget = 3
+        load_authored_ir(str(DIAGNOSTICS / "dsl_module_constant_member.py"))
 
 
 def test_what_a_class_body_must_declare_to_be_a_module():
@@ -103,37 +83,18 @@ def test_what_a_class_body_must_declare_to_be_a_module():
     is refused rather than dropped.
     """
     with pytest.raises(TypeError, match="empty class body"):
+        load_authored_ir(str(DIAGNOSTICS / "dsl_module_empty_body.py"))
 
-        @module
-        class _Empty:
-            pass
-
-    @module
-    class _MethodsOnly:
-        def walk(self, x):
-            return x
+    _MethodsOnly = load_authored_ir(f"{CLASS_BODIES}:_MethodsOnly")
 
     assert _MethodsOnly.entry is None
     assert _MethodsOnly.walk(3) == 3
 
     with pytest.raises(ValueError, match=r"entry 'absent' names no collected function"):
-
-        @module(entry="absent")
-        class _WrongEntry:
-            @func
-            def only(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-                return tf.rms_norm(x, g)
+        load_authored_ir(str(DIAGNOSTICS / "dsl_module_absent_entry.py"))
 
     with pytest.raises(TypeError, match=r"__call__ has no effect"):
-
-        @module(entry="only")
-        class _OwnCall:
-            @func
-            def only(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-                return tf.rms_norm(x, g)
-
-            def __call__(self, x):
-                raise AssertionError("never reached")
+        load_authored_ir(str(DIAGNOSTICS / "dsl_module_class_call.py"))
 
 
 def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
@@ -143,12 +104,7 @@ def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
     answered by saying there is no default step. Neither may read as ``entry``
     being wrong, which is what ``None`` reaching the entry lookup produces.
     """
-
-    @module
-    class _NoStep:
-        @func
-        def helper(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-            return tf.rms_norm(x, g)
+    _NoStep = load_authored_ir(f"{CLASS_BODIES}:_NoStep")
 
     with pytest.raises(ValueError, match=r"declares no entry"):
         _NoStep()
@@ -167,11 +123,7 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     list is refused naming the runner it wanted, and neither is sent to the
     other's.
     """
-    @module(entry="scale")
-    class _Weighted:
-        @func
-        def scale(x: Tensor[(2,), "f32"], w: ConstTensor[(2,), "f32"]):
-            return x * w
+    _Weighted = load_authored_ir(f"{WEIGHTED}:_Weighted")
 
     ones = torch.ones(2, dtype=torch.float32)
     weight = torch.full((2,), 3.0)
@@ -205,19 +157,7 @@ def test_one_shared_child_binds_once_per_owner():
     Two owners over one child IR read their own subtrees rather than the last
     one loaded winning.
     """
-    @module(entry="scale")
-    class _Leaf:
-        @func
-        def scale(x: Tensor[(2,), "f32"], w: ConstTensor[(2,), "f32"]):
-            return x * w
-
-    @module(entry="twice")
-    class _Owner:
-        leaf = _Leaf
-
-        @func
-        def twice(x: Tensor[(2,), "f32"]):
-            return x + x
+    _Owner = load_authored_ir(f"{WEIGHTED}:_Owner")
 
     def aliasing(name):
 
@@ -245,14 +185,4 @@ def test_forward_reference_sibling_fails_loudly():
     silently mis-parsing the call.
     """
     with pytest.raises(VerifyError):
-
-        @module(entry="caller")
-        class _Forward:
-            @func
-            def caller(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-                y = callee(x, g)  # noqa: F821 — defined below, unresolved on purpose
-                return tf.add(y, y)
-
-            @func
-            def callee(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-                return tf.rms_norm(x, g)
+        load_authored_ir(str(DIAGNOSTICS / "dsl_module_forward_sibling.py"))

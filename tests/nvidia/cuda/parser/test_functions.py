@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.parser import ParseError
-from tilefoundry_nvidia import CudaTarget
+
+FIXTURES = Path(__file__).parents[1] / "fixtures"
+PARSER = FIXTURES / "parser"
+DIAGNOSTICS = FIXTURES / "diagnostics"
 
 
 def test_a_return_annotation_validates_a_layout_inferred_from_the_body() -> None:
-    @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2),))
-    def annotated(
-        x: Tensor[(8, 16), "f32"],
-    ) -> Tensor[(8, 16), "f32"]:
-        with Mesh(("cta",), layout=(2,), names=("lane",)) as cta:
-            return tf.reshard(x, (8 @ cta.lane, 16), "gmem")
+    annotated = load_authored_ir(str(PARSER / "reshard_return_annotation.py"))
 
     fn = annotated.entry_function()
     assert fn.return_type == fn.body.type
@@ -27,12 +27,7 @@ def test_a_return_annotation_validates_a_layout_inferred_from_the_body() -> None
 
 def test_an_incompatible_return_annotation_reports_annotation_and_body_types() -> None:
     with pytest.raises(ParseError) as raised:
-
-        @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-        def annotated(
-            x: Tensor[(8, 16), "f32"],
-        ) -> Tensor[(8, 16), "f32", None, "smem"]:
-            return tf.mul(x, x)
+        load_authored_ir(str(DIAGNOSTICS / "parser_return_annotation_storage_mismatch.py"))
 
     message = str(raised.value)
     assert "return annotation is not compatible with the inferred body type" in message
@@ -41,43 +36,19 @@ def test_an_incompatible_return_annotation_reports_annotation_and_body_types() -
     assert "StorageKind.SMEM" in message
     assert "StorageKind.GMEM" in message
     assert "(role 'func')" in message
-    assert "tests/nvidia/cuda/parser/test_functions.py:" in message
+    assert (
+        "tests/nvidia/cuda/fixtures/diagnostics/parser_return_annotation_storage_mismatch.py:"
+        in message
+    )
 
 
 def test_a_dispatch_prototype_requires_a_return_annotation() -> None:
     with pytest.raises(ParseError, match="prototype requires a return annotation"):
-
-        @module(
-            entry="root",
-            target=CudaTarget("nvidia.h200_sxm"),
-            topologies=(Topology("cta", 1),),
-        )
-        class NoReturn:
-            @func
-            def root(x: Tensor[(8, 16), "f32"]):
-                pass
+        load_authored_ir(str(DIAGNOSTICS / "parser_dispatch_prototype_without_return.py"))
 
 
 def test_a_dispatch_prototype_uses_its_tuple_annotation_as_a_variant_contract() -> None:
-    size = DimVar("prototype_size", 1, 8)
-
-    @module(
-        entry="root",
-        target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1),),
-    )
-    class TupleDispatch:
-        @func
-        def root(
-            x: Tensor[(size,), "f32"],
-        ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
-            pass
-
-        @root.specialize(RangePattern("prototype_size", 1, 8))
-        def both(
-            x: Tensor[(size,), "f32"],
-        ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
-            return x, x
+    TupleDispatch = load_authored_ir(str(PARSER / "tuple_dispatch_prototype.py"))
 
     prototype = TupleDispatch.entry_function()
     assert isinstance(prototype.return_type, TupleType)
@@ -86,25 +57,8 @@ def test_a_dispatch_prototype_uses_its_tuple_annotation_as_a_variant_contract() 
 
 
 def test_a_variant_body_must_satisfy_its_dispatch_return_contract() -> None:
-    size = DimVar("prototype_mismatch_size", 1, 8)
-
     with pytest.raises(ParseError, match="variant body type .*dispatch return contract"):
-
-        @module(
-            entry="root",
-            target=CudaTarget("nvidia.h200_sxm"),
-            topologies=(Topology("cta", 1),),
-        )
-        class IncompatibleVariant:
-            @func
-            def root(
-                x: Tensor[(size,), "f32"],
-            ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
-                pass
-
-            @root.specialize(RangePattern("prototype_mismatch_size", 1, 8))
-            def scalar(x: Tensor[(size,), "f32"]):
-                return x
+        load_authored_ir(str(DIAGNOSTICS / "parser_dispatch_variant_return_mismatch.py"))
 
 
 def test_a_storage_the_target_does_not_have_is_refused() -> None:
@@ -112,37 +66,22 @@ def test_a_storage_the_target_does_not_have_is_refused() -> None:
         "storage tmem is not allowed by hardware context ('gmem', 'smem', 'rmem', 'umat')"
     )
     with pytest.raises(ParseError, match=refusal):
-
-        @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-        def wrong(x: Tensor[(4,), "f32", None, "tmem"]):
-            return x
+        load_authored_ir(str(DIAGNOSTICS / "parser_param_storage_not_on_target.py"))
 
     with pytest.raises(ParseError, match=refusal):
-
-        @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-        def wrong_body(x: Tensor[(4,), "f32"]):
-            return tf.zeros(Tensor[(4,), "f32", None, "tmem"])
+        load_authored_ir(str(DIAGNOSTICS / "parser_body_storage_not_on_target.py"))
 
 
 def test_a_storage_the_target_has_is_accepted() -> None:
-    @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-    def fine(x: Tensor[(4,), "f32", None, "smem"]):
-        return x
+    fine = load_authored_ir(str(PARSER / "smem_param_h200.py"))
 
     assert fine.entry_function().params[0].annotation.storage is StorageKind.SMEM
 
-    @func(target=CudaTarget("nvidia.b200_sxm"), topologies=(Topology("cta", 1),))
-    def blackwell(x: Tensor[(4,), "f32", None, "tmem"]):
-        return x
+    blackwell = load_authored_ir(str(PARSER / "tmem_param_b200.py"))
 
     assert blackwell.entry_function().params[0].annotation.storage is StorageKind.TMEM
 
 
 def test_a_nested_block_does_not_gain_function_docstring_semantics() -> None:
     with pytest.raises(ParseError):
-
-        @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-        def nested(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            with Mesh(("cta",), layout=(1,), names=("unit",)) as _mesh:
-                """A string in a with body remains an ordinary statement."""
-                return x
+        load_authored_ir(str(DIAGNOSTICS / "parser_with_body_docstring.py"))

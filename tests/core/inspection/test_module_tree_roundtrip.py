@@ -2,26 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from tests.core._corpus import reload
-from tilefoundry.dsl import *
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.inspection import as_script
 
-
-@module(entry="caller")
-class _Siblings:
-    """A callee declared above its caller.
-
-    A callee declared above its caller, which is what the printer emits for
-    any multi-function Module.
-    """
-
-    @func
-    def callee(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.relu(x)
-
-    @func
-    def caller(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return callee(x)
+SIBLINGS = Path(__file__).parents[1] / "fixtures" / "logical" / "sibling_call.py"
 
 
 def test_a_sibling_call_survives_the_round_trip() -> None:
@@ -30,6 +17,7 @@ def test_a_sibling_call_survives_the_round_trip() -> None:
     A body calling an earlier sibling is canonical output, so importing it
     must resolve the callee to that sibling rather than read it as an op name.
     """
+    _Siblings = load_authored_ir(str(SIBLINGS))
     imported = reload(as_script(_Siblings), "_Siblings")
 
     assert [fn.name for fn in imported.functions] == ["callee", "caller"]

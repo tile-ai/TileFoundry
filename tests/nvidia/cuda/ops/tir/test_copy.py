@@ -5,101 +5,24 @@ See [runtime §2.6](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 import tilefoundry
 import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tests.core.fixtures.tir.layouts import split_pairs, split_rows, split_short_rows
-from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry_nvidia import CudaTarget
 
+OPS = Path(__file__).parents[2] / "fixtures" / "ops"
 _CUDA = CudaTarget("nvidia.h200_sxm")
-
-
-@module(entry="copy_storage_host", target=_CUDA, topologies=(Topology("thread", 128),))
-class CopyStorage:
-    """Five operand pairs in one device function, one per thing that can differ."""
-
-    @prim_func(target=_CUDA)
-    def copy_storage_device(
-        a_smem: Tensor[(128, 4), "f32"],
-        b_smem: Tensor[(128, 4), "f32"],
-        a_rmem: Tensor[(128, 4), "f32"],
-        b_rmem: Tensor[(128, 4), "f32"],
-        a_bcast: Tensor[(32, 4), "f32"],
-        b_bcast: Tensor[(32, 4), "f32"],
-        a_wide: Tensor[(128, 4), "f32"],
-        b_wide: Tensor[(128, 4), "f32"],
-        a_narrow: Tensor[(128, 2), "f32"],
-        b_narrow: Tensor[(128, 2), "f32"],
-    ):
-        with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
-            smem_src = T.tensor_view(T.ptr_of(a_smem), layout=split_rows(m))
-            smem_dst = T.tensor_view(T.ptr_of(b_smem), layout=split_rows(m))
-            smem_tile = T.alloc_tensor(Tensor[(128, 4), "f32", split_rows(m), "smem"])
-            T.copy(smem_src, smem_tile)
-            T.sync(m)
-            T.copy(smem_tile, smem_dst)
-            rmem_src = T.tensor_view(T.ptr_of(a_rmem), layout=split_rows(m))
-            rmem_dst = T.tensor_view(T.ptr_of(b_rmem), layout=split_rows(m))
-            rmem_tile = T.alloc_tensor(Tensor[(128, 4), "f32", split_rows(m), "smem"])
-            rmem_frag = T.alloc_tensor(Tensor[(128, 4), "f32", split_rows(m), "rmem"])
-            T.copy(rmem_src, rmem_tile)
-            T.sync(m)
-            T.copy(rmem_tile, rmem_frag)
-            T.copy(rmem_frag, rmem_dst)
-            wide_src = T.tensor_view(T.ptr_of(a_wide), layout=split_rows(m))
-            wide_dst = T.tensor_view(T.ptr_of(b_wide), layout=split_rows(m))
-            wide_frag = T.alloc_tensor(Tensor[(128, 4), "f32", split_rows(m), "rmem"])
-            T.copy(wide_src, wide_frag)
-            T.copy(wide_frag, wide_dst)
-            narrow_src = T.tensor_view(T.ptr_of(a_narrow), layout=split_pairs(m))
-            narrow_dst = T.tensor_view(T.ptr_of(b_narrow), layout=split_pairs(m))
-            narrow_frag = T.alloc_tensor(Tensor[(128, 2), "f32", split_pairs(m), "rmem"])
-            T.copy(narrow_src, narrow_frag)
-            T.copy(narrow_frag, narrow_dst)
-        with Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",)) as mb:
-            bcast_src = T.tensor_view(T.ptr_of(a_bcast), layout=split_short_rows(mb))
-            bcast_dst = T.tensor_view(T.ptr_of(b_bcast), layout=split_short_rows(mb))
-            bcast_frag = T.alloc_tensor(Tensor[(32, 4), "f32", split_short_rows(mb), "rmem"])
-            T.copy(bcast_src, bcast_frag)
-            T.copy(bcast_frag, bcast_dst)
-
-    @prim_func(target=CpuTarget())
-    def copy_storage_host(
-        a_smem: Tensor[(128, 4), "f32"],
-        b_smem: Tensor[(128, 4), "f32"],
-        a_rmem: Tensor[(128, 4), "f32"],
-        b_rmem: Tensor[(128, 4), "f32"],
-        a_bcast: Tensor[(32, 4), "f32"],
-        b_bcast: Tensor[(32, 4), "f32"],
-        a_wide: Tensor[(128, 4), "f32"],
-        b_wide: Tensor[(128, 4), "f32"],
-        a_narrow: Tensor[(128, 2), "f32"],
-        b_narrow: Tensor[(128, 2), "f32"],
-    ):
-        launch(  # noqa: F821
-            copy_storage_device,  # noqa: F821
-            a_smem,
-            b_smem,
-            a_rmem,
-            b_rmem,
-            a_bcast,
-            b_bcast,
-            a_wide,
-            b_wide,
-            a_narrow,
-            b_narrow,
-            grid=(1, 1, 1),
-            block=(128, 1, 1),
-        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_every_crossing_round_trips_the_input_bit_for_bit() -> None:
     """One compile behind five assertions, each naming the pair that failed."""
+    CopyStorage = load_authored_ir(f"{OPS / 'copy_storage.py'}:CopyStorage")
     rm = tilefoundry.compile(CopyStorage, target=_CUDA)
     torch.manual_seed(0)
     a_smem = torch.randn(128, 4, dtype=torch.float32, device="cuda")
@@ -154,64 +77,6 @@ def test_every_crossing_round_trips_the_input_bit_for_bit() -> None:
     )
 
 
-@module(
-    target=_CUDA,
-    topologies=(Topology("cta", 1), Topology("thread", 256)),
-)
-class _RegisterRoundTrip:
-    """The optimize tutorial's register round trip, at its own mesh and shard.
-
-    A (2, 5120) bf16 window on cta 1 x thread (2, 4, 32): the row axis over
-    ``x``, the 40 blocks over ``y``, the 128-wide block over ``t`` -- a
-    40-element fragment per thread, and both crossings of the plain/shard
-    boundary, since the tutorial's output copy keeps its window plain.
-    """
-
-    @prim_func(target=_CUDA)
-    def round_trip(a: Tensor[(2, 5120), "bf16"], out: Tensor[(2, 5120), "bf16"]):
-        with Mesh((Topology("cta", 1),), layout=(1,), names=("tile",)) as _cta:
-            with Mesh(
-                (Topology("thread", 256),), layout=(2, 4, 32), names=("x", "y", "t")
-            ) as scope:
-                value = T.alloc_tensor(
-                    tensor_type=Tensor[
-                        (2, 5120),
-                        "bf16",
-                        (2 @ scope.x, 40 @ scope.y, 128 @ scope.t),
-                        "rmem",
-                    ]
-                )
-                dst_view = T.tensor_view(
-                    T.ptr_of(value),
-                    layout=(2 @ scope.x, 40 @ scope.y, 128 @ scope.t),
-                    shape=(2, 5120),
-                )
-                T.copy(a, dst_view)
-                src_view = T.tensor_view(
-                    T.ptr_of(value),
-                    layout=(2 @ scope.x, 40 @ scope.y, 128 @ scope.t),
-                    shape=(2, 5120),
-                )
-                T.copy(src_view, out)
-
-
-@module(entry="round_trip_host", target=_CUDA)
-class RegisterRoundTrip:
-    """Launch the one CTA the shard is written for."""
-
-    round_trip = _RegisterRoundTrip
-
-    @prim_func(target=CpuTarget())
-    def round_trip_host(a: Tensor[(2, 5120), "bf16"], out: Tensor[(2, 5120), "bf16"]):
-        launch(  # noqa: F821
-            round_trip.round_trip,  # noqa: F821
-            a,
-            out,
-            grid=(1, 1, 1),
-            block=(256, 1, 1),
-        )
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_a_plain_window_round_trips_through_thread_fragments() -> None:
     """A copy with one plain and one sharded operand moves the instance's slice.
@@ -223,6 +88,7 @@ def test_a_plain_window_round_trips_through_thread_fragments() -> None:
     of bounds -- the tutorial's ``Invalid __local__ read of size 2``). The
     plain side is the slice the shard side's layout hands this instance.
     """
+    RegisterRoundTrip = load_authored_ir(f"{OPS / 'register_round_trip.py'}:RegisterRoundTrip")
     rm = tilefoundry.compile(RegisterRoundTrip, target=_CUDA)
     torch.manual_seed(0)
     a = torch.randn(2, 5120, dtype=torch.bfloat16, device="cuda")
@@ -237,48 +103,6 @@ def test_a_plain_window_round_trips_through_thread_fragments() -> None:
     )
 
 
-@module(
-    target=_CUDA,
-    topologies=(Topology("thread", 32),),
-)
-class _OneWay:
-    """A plain (4, 64) tile entering a column-pair shard, one direction only.
-
-    Lane ``t`` of 32 owns columns ``2t`` and ``2t+1`` of every row: the
-    plain->shard leg takes the ``local_as`` projection, the shard->shard leg
-    the path that predates it, so a slice placed wrong on the way in lands in
-    the wrong output columns directly.
-    """
-
-    @prim_func(target=_CUDA)
-    def one_way(a: Tensor[(4, 64), "f32"], out: Tensor[(4, 64), "f32"]):
-        with Mesh((Topology("thread", 32),), layout=(32,), names=("t",)) as m:
-            src = T.tensor_view(T.ptr_of(a), layout=((4, 64), (64, 1)))
-            reg = T.alloc_tensor(
-                tensor_type=Tensor[(4, 64), "f32", ((4, 32 @ m.t, 2), (64, 2, 1)), "rmem"]
-            )
-            dst = T.tensor_view(T.ptr_of(out), layout=((4, 32 @ m.t, 2), (64, 2, 1)))
-            T.copy(src, reg)
-            T.copy(reg, dst)
-
-
-@module(entry="one_way_host", target=_CUDA)
-class OneWay:
-    """Launch the one warp the shard is written for."""
-
-    one_way = _OneWay
-
-    @prim_func(target=CpuTarget())
-    def one_way_host(a: Tensor[(4, 64), "f32"], out: Tensor[(4, 64), "f32"]):
-        launch(  # noqa: F821
-            one_way.one_way,  # noqa: F821
-            a,
-            out,
-            grid=(1, 1, 1),
-            block=(32, 1, 1),
-        )
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_a_plain_window_enters_thread_fragments_in_row_major_order() -> None:
     """The projection's row-major steps must not come out transposed.
@@ -290,6 +114,7 @@ def test_a_plain_window_enters_thread_fragments_in_row_major_order() -> None:
     hides it -- write and read share the permutation -- so this test copies
     in once and compares against the input.
     """
+    OneWay = load_authored_ir(f"{OPS / 'one_way_column_pairs.py'}:OneWay")
     rm = tilefoundry.compile(OneWay, target=_CUDA)
     a = torch.arange(4 * 64, dtype=torch.float32, device="cuda").view(4, 64)
     out = torch.zeros_like(a)

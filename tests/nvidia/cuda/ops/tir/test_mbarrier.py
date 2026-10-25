@@ -12,7 +12,6 @@ from tilefoundry.dsl import *
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
-from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
 from tilefoundry_nvidia import CudaTarget
 from tilefoundry_nvidia.cuda.ir.tir.sync.mbarrier import (
@@ -89,20 +88,3 @@ def test_arrive_expect_tx_refuses_a_non_positive_byte_count(tx: int) -> None:
 
 def test_wait_parity_accepts_a_shared_barrier_and_a_phase() -> None:
     verify_prim_function(_pf(MBarrierWaitParity(), _SMEM_BAR, _PHASE))
-
-
-@module(entry="mbarrier_ring_host", target=CudaTarget("nvidia.h200_sxm"))
-class MBarrierRing:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
-    def mbarrier_ring_device(a: Tensor[(4,), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
-            bar = T.alloc_tensor(Tensor[(1,), "i64", None, "smem"])
-            T.mbarrier_init(bar, arrive_count=1)
-            T.sync(m)
-            T.mbarrier_arrive_expect_tx(bar, tx_bytes=1024)
-            T.mbarrier_wait_parity(bar, 0)
-            T.mbarrier_invalidate(bar)
-
-    @prim_func(target=CpuTarget())
-    def mbarrier_ring_host(a: Tensor[(4,), "f32"]):
-        launch(mbarrier_ring_device, a, grid=(1, 1, 1), block=(128, 1, 1))  # noqa: F821

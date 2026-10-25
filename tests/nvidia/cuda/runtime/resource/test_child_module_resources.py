@@ -22,9 +22,9 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.visitor import ExprCloner
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.runtime.resource import DictResource
-from tilefoundry_nvidia import CudaTarget
 
 SCALED_MODULES = Path(__file__).parents[2] / "fixtures" / "shapes" / "scaled_modules.py"
+RUNTIME = Path(__file__).parents[2] / "fixtures" / "runtime"
 
 
 class _Weights:
@@ -68,20 +68,7 @@ def test_a_child_weight_elsewhere_is_refused_before_anything_runs() -> None:
 
 
 def test_a_converter_may_call_a_child_staged_before_it(tmp_path) -> None:
-    ScaledChild = load_authored_ir(f"{SCALED_MODULES}:ScaledChild")
-
-    @module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
-    class _Converted:
-        scaled = ScaledChild
-
-        @func
-        def run(x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return tf.add(x, w)
-
-        @run.converter("w")
-        def _convert_w(w: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return scaled(w)  # noqa: F821
-
+    _Converted = load_authored_ir(f"{RUNTIME / 'converter_calls_child.py'}:_Converted")
     raw = _Weights({"w": torch.full((4,), 3.0), "scaled.w": torch.full((4,), 2.0)})
     _Converted.prepare(raw, str(tmp_path), device="cpu")
 
@@ -94,17 +81,7 @@ def test_a_converter_may_call_a_child_staged_before_it(tmp_path) -> None:
 
 def test_preparation_stages_on_the_device_it_was_given() -> None:
     """A converter runs on the requested device, and what it produced stays there."""
-
-    @module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
-    class _Doubled:
-        @func
-        def run(x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return tf.add(x, w)
-
-        @run.converter("w")
-        def _convert_w(w: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return tf.mul(w, w)
-
+    _Doubled = load_authored_ir(str(RUNTIME / "squaring_converter.py"))
     staged: dict[str, object] = {}
     reading = _Doubled._prepare_into(
         _Weights({"w": torch.full((4,), 3.0)}), "", staged, "meta"

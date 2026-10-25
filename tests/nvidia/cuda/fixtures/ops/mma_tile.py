@@ -1,0 +1,117 @@
+"""One sm80 bf16 MMA atom on per-lane fragments gathered through shared memory."""
+
+from __future__ import annotations
+
+from tilefoundry.dsl import *
+from tilefoundry.ir.types.shard_layout import Broadcast
+from tilefoundry.target import CpuTarget
+from tilefoundry_nvidia import CudaTarget
+
+_CUDA = CudaTarget("nvidia.h200_sxm")
+_MESH_LAYOUT = Layout(shape=(4, 8), strides=(1, 4))
+
+
+@module(entry="tile_host", target=_CUDA, topologies=(Topology("thread", 32),))
+class MmaTile:
+    """A 16x16 by 16x8 product done as one atom."""
+
+    @prim_func(target=_CUDA)
+    def tile_device(
+        a: Tensor[(256,), "bf16"],
+        b: Tensor[(128,), "bf16"],
+        c: Tensor[(128,), "f32"],
+    ):
+        with Mesh(
+            (Topology("thread", 32),),
+            _MESH_LAYOUT,
+            names=("warp", "lane"),
+        ) as m:
+            a_view = T.tensor_view(
+                T.ptr_of(a),
+                shape=(16, 16),
+                layout=ShardLayout(
+                    layout=Layout(shape=(16, 16), strides=(16, 1)),
+                    attrs=(Broadcast(), Broadcast()),
+                    mesh=m,
+                ),
+            )
+            b_view = T.tensor_view(
+                T.ptr_of(b),
+                shape=(16, 8),
+                layout=ShardLayout(
+                    layout=Layout(shape=(16, 8), strides=(8, 1)),
+                    attrs=(Broadcast(), Broadcast()),
+                    mesh=m,
+                ),
+            )
+            a_tile = T.alloc_tensor(
+                Tensor[
+                    (16, 16),
+                    "bf16",
+                    ShardLayout(
+                        layout=Layout(shape=(16, 16), strides=(16, 1)),
+                        attrs=(Broadcast(), Broadcast()),
+                        mesh=m,
+                    ),
+                    "smem",
+                ]
+            )
+            b_tile = T.alloc_tensor(
+                Tensor[
+                    (16, 8),
+                    "bf16",
+                    ShardLayout(
+                        layout=Layout(shape=(16, 8), strides=(8, 1)),
+                        attrs=(Broadcast(), Broadcast()),
+                        mesh=m,
+                    ),
+                    "smem",
+                ]
+            )
+            a_frag = T.alloc_tensor(
+                Tensor[
+                    (16, 16),
+                    "bf16",
+                    ((2, 8 @ m.lane, 2, 4 @ m.warp, 2), (128, 16, 8, 2, 1)),
+                    "rmem",
+                ]
+            )
+            b_frag = T.alloc_tensor(
+                Tensor[
+                    (16, 8),
+                    "bf16",
+                    ((2, 4 @ m.warp, 2, 8 @ m.lane), (64, 16, 8, 1)),
+                    "rmem",
+                ]
+            )
+            acc = T.alloc_tensor(
+                Tensor[
+                    (16, 8),
+                    "f32",
+                    ((2, 8 @ m.lane, 4 @ m.warp, 2), (64, 8, 2, 1)),
+                    "rmem",
+                ]
+            )
+            T.copy(a_view, a_tile)
+            T.copy(b_view, b_tile)
+            T.sync(m)
+            b_fragment_view = T.tensor_view(
+                T.ptr_of(b_tile),
+                layout=((2, 4 @ m.warp, 2, 8 @ m.lane), (64, 16, 8, 1)),
+            )
+            T.ldmatrix(a_tile, a_frag)
+            T.copy(b_fragment_view, b_frag)
+            T.fill(acc, 0.0)
+            T.tiled_mma(acc, a_frag, b_frag, atom=T.cuda.sm80.Mma())
+            c_view = T.tensor_view(
+                T.ptr_of(c), shape=(16, 8), layout=((2, 8 @ m.lane, 4 @ m.warp, 2), (64, 8, 2, 1))
+            )
+            T.copy(acc, c_view)
+
+    @prim_func(target=CpuTarget())
+    def tile_host(
+        a: Tensor[(256,), "bf16"],
+        b: Tensor[(128,), "bf16"],
+        c: Tensor[(128,), "f32"],
+    ):
+        launch(tile_device, a, b, c, grid=(1, 1, 1), block=(32, 1, 1))  # noqa: F821

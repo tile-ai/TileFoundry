@@ -5,12 +5,15 @@ See [runtime §2.6](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import isl
 import pytest
 import torch
 
 import tilefoundry
 import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.kinds import ReduceKind
@@ -21,10 +24,10 @@ from tilefoundry.ir.tir.reduce import Reduce
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.ir.types.stride import compact_row_major
-from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry.verify import verify_prim_function
 from tilefoundry_nvidia import CudaTarget
 
+OPS = Path(__file__).parents[2] / "fixtures" / "ops"
 _CUDA = CudaTarget("nvidia.h200_sxm")
 _MESH = Mesh((Topology("thread", 32),), Layout((32,), (1,)), ("t",))
 _OTHER_MESH = Mesh((Topology("thread", 32),), Layout((4, 8), (8, 1)), ("w", "t"))
@@ -186,128 +189,13 @@ def test_refuses_operands_on_different_meshes() -> None:
         verify_prim_function(_pf(_sharded(8), _sharded(1, mesh=_OTHER_MESH)))
 
 
-@module(topologies=(Topology("thread", 128),))
-class _Plain:
-    @prim_func(target=_CUDA)
-    def plain(a_plain: Tensor[(128, 8), "f32"], out_plain: Tensor[(128,), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as mp:
-            plain_src = T.tensor_view(
-                T.ptr_of(a_plain), layout=ShardLayout(Layout((128, 8), (8, 1)), (Split(0),), mp)
-            )
-            plain_dst = T.tensor_view(
-                T.ptr_of(out_plain), layout=ShardLayout(Layout((128,), (1,)), (Split(0),), mp)
-            )
-            T.reduce(
-                plain_src,
-                plain_dst,
-                axes=(1,),
-                keepdim=False,
-                kind=ReduceKind.MEAN,
-            )
-
-
-@module(topologies=(Topology("thread", 32),))
-class _Warp:
-    @prim_func(target=_CUDA)
-    def intra_warp(a_warp: Tensor[(32, 4), "f32"], out_warp: Tensor[(1,), "f32"]):
-        with Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",)) as mw:
-            warp_src = T.tensor_view(
-                T.ptr_of(a_warp), layout=ShardLayout(Layout((32, 4), (4, 1)), (Split(0),), mw)
-            )
-            warp_dst = T.tensor_view(
-                T.ptr_of(out_warp), layout=ShardLayout(Layout((1,), (1,)), (Broadcast(),), mw)
-            )
-            T.reduce(
-                warp_src,
-                warp_dst,
-                axes=(1,),
-                keepdim=False,
-                kind=ReduceKind.ABS_MAX,
-            )
-
-
-@module(topologies=(Topology("thread", 128),))
-class _Cta:
-    @prim_func(target=_CUDA)
-    def intra_cta(a_cta: Tensor[(4, 32, 8), "f32"], out_cta: Tensor[(1,), "f32"]):
-        with Mesh(
-            (Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")
-        ) as mc:
-            cta_src = T.tensor_view(
-                T.ptr_of(a_cta),
-                layout=ShardLayout(Layout((4, 32, 8), (256, 8, 1)), (Split(0), Split(1)), mc),
-            )
-            cta_dst = T.tensor_view(
-                T.ptr_of(out_cta),
-                layout=ShardLayout(Layout((1,), (1,)), (Broadcast(), Broadcast()), mc),
-            )
-            cta_ws = T.alloc_tensor(Tensor[(4,), "f32", None, "smem"])
-            T.reduce(
-                cta_src,
-                cta_dst,
-                cta_ws,
-                axes=(2,),
-                keepdim=False,
-                kind=ReduceKind.MEAN,
-            )
-
-
-@module(topologies=(Topology("thread", 128),))
-class _Cross:
-    @prim_func(target=_CUDA)
-    def cross_warp(a_cross: Tensor[(4, 32), "f32"], out_cross: Tensor[(1, 32), "f32"]):
-        with Mesh(
-            (Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")
-        ) as mx:
-            cross_src = T.tensor_view(
-                T.ptr_of(a_cross),
-                layout=ShardLayout(Layout((4, 32), (32, 1)), (Split(0), Split(1)), mx),
-            )
-            cross_dst = T.tensor_view(
-                T.ptr_of(out_cross),
-                layout=ShardLayout(Layout((1, 32), (32, 1)), (Broadcast(), Split(1)), mx),
-            )
-            cross_ws = T.alloc_tensor(Tensor[(128,), "f32", None, "smem"])
-            T.reduce(
-                cross_src,
-                cross_dst,
-                cross_ws,
-                axes=(0,),
-                keepdim=True,
-                kind=ReduceKind.ABS_MAX,
-            )
-
-
-@module(entry="reduce_tiers_host", target=_CUDA)
-class ReduceTiers:
-    plain = _Plain
-    warp = _Warp
-    cta = _Cta
-    cross = _Cross
-
-    @prim_func(target=CpuTarget())
-    def reduce_tiers_host(
-        a_plain: Tensor[(128, 8), "f32"],
-        out_plain: Tensor[(128,), "f32"],
-        a_warp: Tensor[(32, 4), "f32"],
-        out_warp: Tensor[(1,), "f32"],
-        a_cta: Tensor[(4, 32, 8), "f32"],
-        out_cta: Tensor[(1,), "f32"],
-        a_cross: Tensor[(4, 32), "f32"],
-        out_cross: Tensor[(1, 32), "f32"],
-    ):
-        launch(plain.plain, a_plain, out_plain, grid=(1, 1, 1), block=(128, 1, 1))
-        launch(warp.intra_warp, a_warp, out_warp, grid=(1, 1, 1), block=(32, 1, 1))
-        launch(cta.intra_cta, a_cta, out_cta, grid=(1, 1, 1), block=(128, 1, 1))
-        launch(cross.cross_warp, a_cross, out_cross, grid=(1, 1, 1), block=(128, 1, 1))
-
-
 _ENTRY = r"tilefoundry::ops::reduce<tilefoundry::ops::"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_every_tier_answers_what_torch_answers() -> None:
     """One compile behind four assertions, each naming the tier that failed."""
+    ReduceTiers = load_authored_ir(f"{OPS / 'reduce_tiers.py'}:ReduceTiers")
     rm = tilefoundry.compile(ReduceTiers, target=_CUDA)
     torch.manual_seed(0)
     a_plain = torch.randn(128, 8, dtype=torch.float32, device="cuda")
@@ -344,60 +232,6 @@ def test_every_tier_answers_what_torch_answers() -> None:
     )
 
 
-@module(topologies=(Topology("cta", 4), Topology("thread", 128)))
-class _TwoLevel:
-    """A reduce sharded over a cta×thread mesh, as a multi-CTA finalize writes it.
-
-    The CTA level takes its rows through coordinate arithmetic on the view, so
-    both operands leave it broadcast; the thread level alone splits a reduced
-    axis. That is the operand shape every nested cta/thread scope produces.
-    """
-
-    @prim_func(target=_CUDA)
-    def two_level(a_two: Tensor[(8, 4, 128, 4), "f32"], out_two: Tensor[(8, 4, 1, 1), "f32"]):
-        with Mesh(
-            (Topology("cta", 4), Topology("thread", 128)),
-            Layout(shape=(4, 128), strides=(128, 1)),
-            ("c", "t"),
-        ) as ml:
-            two_src = T.tensor_view(
-                T.ptr_of(a_two[ml.c * 2 : ml.c * 2 + 2, 0:4, 0:128, 0:4]),
-                layout=ShardLayout(
-                    Layout((2, 4, 128, 4), (2048, 512, 4, 1)), (Broadcast(), Split(2)), ml
-                ),
-                shape=(2, 4, 128, 4),
-            )
-            two_dst = T.tensor_view(
-                T.ptr_of(out_two[ml.c * 2 : ml.c * 2 + 2, 0:4, 0:1, 0:1]),
-                layout=ShardLayout(
-                    Layout((2, 4, 1, 1), (4, 1, 1, 1)), (Broadcast(), Broadcast()), ml
-                ),
-                shape=(2, 4, 1, 1),
-            )
-            two_ws = T.alloc_tensor(Tensor[(4,), "f32", None, "smem"])
-            T.reduce(
-                two_src,
-                two_dst,
-                two_ws,
-                axes=(2, 3),
-                keepdim=True,
-                kind=ReduceKind.MEAN,
-            )
-
-
-@module(entry="two_level_host", target=_CUDA)
-class TwoLevelReduce:
-    """Launch one CTA per two rows, 128 threads each."""
-
-    two_level = _TwoLevel
-
-    @prim_func(target=CpuTarget())
-    def two_level_host(
-        a_two: Tensor[(8, 4, 128, 4), "f32"], out_two: Tensor[(8, 4, 1, 1), "f32"]
-    ):
-        launch(two_level.two_level, a_two, out_two, grid=(4, 1, 1), block=(128, 1, 1))
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_a_cta_thread_mesh_reduces_across_the_thread_level() -> None:
     """On a composed cta×thread mesh, the warp count comes from the thread level.
@@ -410,6 +244,7 @@ def test_a_cta_thread_mesh_reduces_across_the_thread_level() -> None:
     intra-CTA tier: 32 lanes and 4 warps per group, one slot per warp, and
     eight kept cells combined one at a time.
     """
+    TwoLevelReduce = load_authored_ir(f"{OPS / 'two_level_reduce.py'}:TwoLevelReduce")
     rm = tilefoundry.compile(TwoLevelReduce, target=_CUDA)
     torch.manual_seed(0)
     a_two = torch.randn(8, 4, 128, 4, dtype=torch.float32, device="cuda")

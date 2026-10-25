@@ -8,17 +8,17 @@ to read the runtime extent.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 import tilefoundry
-from tilefoundry.dsl import *
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.target import CpuTarget
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry_nvidia import CudaTarget
 
+INTEGRATION = Path(__file__).parents[1] / "fixtures" / "integration"
 _TILE = 12
-_NT = DimVar("Ntile", 1, 63)
 _DYNAMIC_CTA_LOWERING_WAIT = (
     "waiting for the follow-up dynamic-CTA runtime-lowering plan: lowering must "
     "preserve symbolic topology extents"
@@ -32,40 +32,7 @@ def test_handwritten_tir_dynamic_cta_matches_torch_at_several_shapes() -> None:
     One compiled artifact squares the tensor at three ``Ntile`` shapes via
     the host-computed grid; all match torch with no recompile.
     """
-
-    @module(entry="dyn_square_host")
-    class DynSquare:
-        @prim_func(target=CudaTarget("nvidia.h200_sxm"))
-        def dyn_square(a: Tensor[(_NT, _TILE), "f32"]):
-            with Mesh((Topology("cta", _NT),), Layout(shape=(_NT,), strides=(1,))) as cta:
-                a_view = T.tensor_view(
-                    T.ptr_of(a),
-                    layout=ShardLayout(
-                        layout=Layout(shape=(_NT, _TILE), strides=(_TILE, 1)),
-                        attrs=(Split(0),),
-                        mesh=cta,
-                    ),
-                )
-                reg = T.alloc_tensor(
-                    TensorType(
-                        shape=(_NT, _TILE),
-                        dtype=DType.f32,
-                        layout=ShardLayout(
-                            layout=Layout(shape=(_NT, _TILE), strides=(_TILE, 1)),
-                            attrs=(Split(0),),
-                            mesh=cta,
-                        ),
-                        storage=StorageKind.RMEM,
-                    )
-                )
-                T.copy(a_view, reg)
-                T.binary(reg, reg, reg, kind=BinaryKind.MUL)
-                T.copy(reg, a_view)
-
-        @prim_func(target=CpuTarget())
-        def dyn_square_host(a: Tensor[(_NT, _TILE), "f32"]):
-            launch(dyn_square, a, grid=(_NT, 1, 1), block=(1, 1, 1))  # noqa: F821
-
+    DynSquare = load_authored_ir(f"{INTEGRATION / 'dynamic_cta_square.py'}:DynSquare")
     rm = tilefoundry.compile(DynSquare, target=CudaTarget("nvidia.h200_sxm"))
     for nt in (4, 8, 17):
         torch.manual_seed(nt)

@@ -10,7 +10,6 @@ import torch
 
 from tilefoundry.analysis.check import check_program
 from tilefoundry.cli.source import load_authored_ir, load_namespace
-from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import (
@@ -24,12 +23,7 @@ from tilefoundry.ir.hir.specialize import (
 from tilefoundry_nvidia import CudaTarget
 
 GQA_DECODE = Path(__file__).parents[4] / "core" / "fixtures" / "placed" / "gqa_decode.py"
-_LOOP_CTX = DimVar("loop_ctx", 1, 4096)
-_CALL_M = DimVar("call_m", 1, 16)
-_N_MAX = 1023
-_CALL_N = DimVar("call_n", 1, _N_MAX)
-_NESTED_N = DimVar("nested_n", 1, _N_MAX)
-_DISPATCH_BOUND = 128
+IR = Path(__file__).parents[2] / "fixtures" / "ir"
 
 
 def _gqa():
@@ -38,62 +32,6 @@ def _gqa():
     GqaOnline = load_authored_ir(f"{GQA_DECODE}:GqaOnline")
     steady = {"ctx_len": constants["SMALL_CONTEXT_T"] + constants["NUM_SPLITS"]}
     return GqaOnline, GqaOnline.entry_function(), steady, constants["NUM_SPLITS"]
-
-
-@module(entry="run")
-class _MissingCalleeDimension:
-    """A caller dimension independent of the dimension its callee dispatches on."""
-
-    @func
-    def pick(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
-        pass
-
-    @pick.specialize(RangePattern("call_n", 1, _DISPATCH_BOUND - 1))
-    def pick_small(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
-        return tf.add(x, x)
-
-    @pick.specialize(RangePattern("call_n", _DISPATCH_BOUND, _N_MAX))
-    def pick_big(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
-        return tf.add(tf.add(x, x), x)
-
-    @func
-    def run(
-        x: Tensor[(_CALL_M,), "f32"], k: Tensor[(_CALL_N,), "f32"]
-    ) -> Tensor[(_CALL_N,), "f32"]:
-        return pick(k)  # noqa: F821
-
-
-@module(entry="run")
-class _NestedDispatch:
-    """A dispatch variant whose body calls a second dispatch prototype."""
-
-    @func
-    def inner(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
-        pass
-
-    @inner.specialize(RangePattern("nested_n", 1, _DISPATCH_BOUND - 1))
-    def inner_small(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
-        return tf.add(x, x)
-
-    @inner.specialize(RangePattern("nested_n", _DISPATCH_BOUND, _N_MAX))
-    def inner_big(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
-        return tf.add(tf.add(x, x), x)
-
-    @func
-    def mid(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
-        pass
-
-    @mid.specialize(RangePattern("nested_n", 1, _DISPATCH_BOUND - 1))
-    def mid_small(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
-        return inner(x)  # noqa: F821
-
-    @mid.specialize(RangePattern("nested_n", _DISPATCH_BOUND, _N_MAX))
-    def mid_big(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
-        return inner(x)  # noqa: F821
-
-    @func
-    def run(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
-        return mid(x)  # noqa: F821
 
 
 def test_a_dimension_the_function_does_not_have_is_refused() -> None:
@@ -121,6 +59,9 @@ def test_a_call_through_a_prototype_selects_by_the_callers_dimensions() -> None:
 
 def test_specialising_through_a_call_says_which_dimension_is_missing() -> None:
     """A callee dispatching on an unbound dimension names that dimension."""
+    _MissingCalleeDimension = load_authored_ir(
+        f"{IR / 'missing_callee_dimension.py'}:_MissingCalleeDimension"
+    )
     caller = _MissingCalleeDimension.entry_function()
 
     with pytest.raises(SpecializationError, match="'call_n'.*was not given a size"):
@@ -129,6 +70,7 @@ def test_specialising_through_a_call_says_which_dimension_is_missing() -> None:
 
 def test_specialising_follows_dispatch_variants_into_nested_dispatches() -> None:
     """Selecting a variant keeps rebuilding through dispatches in its body."""
+    _NestedDispatch = load_authored_ir(f"{IR / 'nested_dispatch.py'}:_NestedDispatch")
     run = _NestedDispatch.entry_function()
 
     for extent, suffix in ((64, "small"), (512, "big")):
@@ -294,22 +236,6 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     torch.testing.assert_close(got.float(), expected.float(), atol=0, rtol=0)
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-class _LoopOnly:
-    """A context length that appears nowhere in the signature.
-
-    The loop scans it. Nothing about the parameters or the return says how long
-    it is, which is what makes this the case a signature-driven rebuild misses.
-    """
-
-    @func
-    def main(x: Tensor[(8,), "f32"]):
-        total = tf.zeros(Tensor[(8,), "f32"])
-        for _ in range(_LOOP_CTX):
-            total = tf.add(total, x)
-        return total
-
-
 def test_a_dimension_only_the_body_uses_is_still_substituted() -> None:
     """Whether to rebuild follows where the dimension occurs, not whether the signature moved.
 
@@ -317,6 +243,7 @@ def test_a_dimension_only_the_body_uses_is_still_substituted() -> None:
     signature moved. Deciding it from the parameters returns this function
     untouched -- shaped correctly, and still scanning a range.
     """
+    _LoopOnly = load_authored_ir(f"{IR / 'body_only_loop_dimension.py'}:_LoopOnly")
     authored = _LoopOnly.entry_function()
     assert residual_dims(authored) == ("loop_ctx",)
     assert all(
@@ -340,6 +267,7 @@ def test_two_sizes_of_a_body_only_dimension_are_told_apart() -> None:
     otherwise merge measurements of two different programs, because the only
     place the size occurs is a loop bound the signature never mentions.
     """
+    _LoopOnly = load_authored_ir(f"{IR / 'body_only_loop_dimension.py'}:_LoopOnly")
     authored = _LoopOnly.entry_function()
 
     small = check_program(replace(_LoopOnly, target=CudaTarget("nvidia.h200_sxm")), authored, dims={"loop_ctx": 8})[1]

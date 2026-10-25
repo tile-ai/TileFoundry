@@ -5,9 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tilefoundry import func
 from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.dsl import Tensor
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.core.kinds import UnaryKind
@@ -46,34 +44,21 @@ def test_gqa_correction_reads_the_old_carry_and_unique_yield() -> None:
     assert lines[end] == f'{loop_indent}k_n = tf.cast(k_new, dtype="f32")'
 
 
-def negative_float_literal(x: Tensor[(), "f32"]):
-    return -1.0
-
-
-def negative_integer_literal(x: Tensor[(), "f32"]):
-    return -3
-
-
-def negative_infinity_literal(x: Tensor[(), "f32"]):
-    return -1e999
-
-
-def negated_value(x: Tensor[(), "f32"]):
-    return -x
+SIGNED_LITERALS = Path(__file__).parents[1] / "fixtures" / "parser" / "signed_literals.py"
 
 
 @pytest.mark.parametrize(
     ("program", "expected"),
     (
-        pytest.param(negative_float_literal, -1.0, id="negative_float_literal"),
-        pytest.param(negative_integer_literal, -3, id="negative_integer_literal"),
-        pytest.param(negative_infinity_literal, float("-inf"), id="negative_infinity_literal"),
-        pytest.param(negated_value, None, id="negated_value"),
+        pytest.param("NegativeFloatLiteral", -1.0, id="negative_float_literal"),
+        pytest.param("NegativeIntegerLiteral", -3, id="negative_integer_literal"),
+        pytest.param("NegativeInfinityLiteral", float("-inf"), id="negative_infinity_literal"),
+        pytest.param("NegatedValue", None, id="negated_value"),
     ),
 )
 def test_signed_literals_are_constants_and_negated_values_are_calls(program, expected) -> None:
     """Literal signs belong to constants; negating a runtime value remains a call."""
-    function = func(program)
+    function = load_authored_ir(f"{SIGNED_LITERALS}:{program}").entry_function()
     result = function.body
     if expected is None:
         assert isinstance(result, Call)

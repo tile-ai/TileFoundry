@@ -15,13 +15,12 @@ from pathlib import Path
 
 import torch
 
-from tilefoundry.cli.source import load_authored_ir, load_namespace
-from tilefoundry.dsl import *
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.evaluator import evaluate
-from tilefoundry_nvidia import CudaTarget
 
 _DEV = "cpu"
 SCALED_MODULES = Path(__file__).parents[1] / "fixtures" / "shapes" / "scaled_modules.py"
+EVALUATOR = Path(__file__).parents[1] / "fixtures" / "evaluator"
 
 
 class _Weights:
@@ -70,19 +69,7 @@ def test_two_bindings_of_one_child_read_their_own_constants() -> None:
 
 
 def test_a_child_call_inside_a_loop_keeps_its_reading_on_every_trip() -> None:
-    ScaledChild = load_authored_ir(f"{SCALED_MODULES}:ScaledChild")
-
-    @module(entry="looped", target=CudaTarget("nvidia.h200_sxm"))
-    class _Looped:
-        scaled = ScaledChild
-
-        @func
-        def looped(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            acc = x
-            for _ in range(3):
-                acc = scaled(acc)  # noqa: F821
-            return acc
-
+    _Looped = load_authored_ir(f"{EVALUATOR / 'looped_child_call.py'}:_Looped")
     x = torch.ones(4)
     w = torch.full((4,), 2.0)
     reading = _Looped.load(_Weights({"scaled.w": w}))
@@ -91,21 +78,7 @@ def test_a_child_call_inside_a_loop_keeps_its_reading_on_every_trip() -> None:
 
 
 def test_a_variant_body_reaches_its_child_the_same_way() -> None:
-    DynamicScaledChild = load_authored_ir(f"{SCALED_MODULES}:DynamicScaledChild")
-    _N_EVAL = load_namespace(str(SCALED_MODULES))[0]["EVALUATOR_N"]
-
-    @module(entry="dispatch", target=CudaTarget("nvidia.h200_sxm"))
-    class _Dispatch:
-        scaled = DynamicScaledChild
-
-        @func
-        def dispatch(x: Tensor[(_N_EVAL,), "f32"]) -> Tensor[(_N_EVAL,), "f32"]:
-            pass
-
-        @dispatch.specialize(RangePattern("N_eval", 1, 7))
-        def dynamic_variant(x: Tensor[(_N_EVAL,), "f32"]) -> Tensor[(_N_EVAL,), "f32"]:
-            return scaled(x)  # noqa: F821
-
+    _Dispatch = load_authored_ir(f"{EVALUATOR / 'dispatch_variant_child_call.py'}:_Dispatch")
     child = _Dispatch.children["scaled"]
     (variant,) = _Dispatch.entry_function().variants
     assert variant.body.target is child

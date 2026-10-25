@@ -13,41 +13,11 @@ from tilefoundry.analysis import (
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.metadata import shares
 from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry_nvidia import CudaTarget
 
-_TARGET = CudaTarget("nvidia.h200_sxm")
-_TOPOLOGIES = (Topology("cta", 2), Topology("thread", 4))
-
-
-@module(entry="f", target=_TARGET, topologies=_TOPOLOGIES)
-class NoScope:
-    @func
-    def f(x: Tensor[(8, 16), "f32"]):
-        return x + x
-
-
-@module(entry="f", target=_TARGET, topologies=_TOPOLOGIES)
-class WithScope:
-    @func
-    def f(x: Tensor[(8, 16), "f32"]):
-        with Mesh(("cta",), (2,), ("tile",)) as _cta:
-            with Mesh(("thread",), (4,), ("t",)) as thread:
-                local = tf.reshard(x, (8, 16 @ thread.t), "rmem")
-                return tf.reshard(local + local, (8, 16), "gmem")
-
-
-@module(entry="f", target=_TARGET, topologies=_TOPOLOGIES)
-class UnshardedInScope:
-    @func
-    def f(x: Tensor[(8, 16), "f32"]):
-        with Mesh(("cta",), (2,), ("tile",)) as _cta:
-            with Mesh(("thread",), (4,), ("t",)) as _thread:
-                local = tf.zeros(Tensor[(8, 16), "f32", "rmem"])
-                return tf.reshard(local + local, (8, 16), "gmem")
+ANALYSIS = Path(__file__).parents[1] / "fixtures" / "analysis"
 
 
 def _cost(owner) -> tuple[int, int, int, int]:
@@ -74,6 +44,11 @@ def _cost(owner) -> tuple[int, int, int, int]:
 
 
 def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
+    NoScope = load_authored_ir(f"{ANALYSIS / 'add_outside_mesh_scope.py'}:NoScope")
+    WithScope = load_authored_ir(f"{ANALYSIS / 'add_sharded_in_mesh_scope.py'}:WithScope")
+    UnshardedInScope = load_authored_ir(
+        f"{ANALYSIS / 'add_unsharded_in_mesh_scope.py'}:UnshardedInScope"
+    )
     assert _cost(NoScope) == (128, 128, 1536, 1024)
     assert _cost(WithScope) == (256, 32, 2048, 2048)
     assert _cost(UnshardedInScope) == (1024, 128, 4096, 1024)

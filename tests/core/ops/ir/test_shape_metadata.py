@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import isl
 import pytest
 import torch
 
 from tests.core.ops.ir.op_case import Cost, OpCase, check_op_case
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Var
@@ -23,11 +25,7 @@ from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _S = DimVar("runtime_shape", 1, 8)
-
-
-@func
-def _shape_metadata(x: Tensor[(_S, 4), "f32"]):
-    return (tf.shape_of(x), tf.rank(x))
+SHAPE_METADATA = Path(__file__).parents[2] / "fixtures" / "ops" / "shape_metadata.py"
 
 
 def _idle(arity: int) -> tuple[TrafficBytes, ...]:
@@ -72,6 +70,7 @@ def test_shape_metadata_cost(case):
 
 
 def test_shape_metadata_uses_runtime_shape_and_host_types() -> None:
+    _shape_metadata = load_authored_ir(f"{SHAPE_METADATA}:ShapeMetadata").entry_function()
     actual_shape, actual_rank = evaluate(_shape_metadata, torch.zeros(3, 4))
     torch.testing.assert_close(actual_shape, torch.tensor([3, 4], dtype=torch.int64))
     torch.testing.assert_close(actual_rank, torch.tensor(2, dtype=torch.int64))
@@ -82,12 +81,10 @@ def test_shape_metadata_uses_runtime_shape_and_host_types() -> None:
     assert all((call.type.layout == Layout(call.type.shape) for call in metadata_calls))
 
 
-@func
-def _shape_element_paths(x: Tensor[(_S, 4), "f32"]):
-    return tf.shape_of(x)[1]
-
-
 def test_shape_element_path_has_the_canonical_type() -> None:
+    _shape_element_paths = load_authored_ir(
+        f"{SHAPE_METADATA}:ShapeElementPaths"
+    ).entry_function()
     assert _shape_element_paths.body.type == TensorType.umat_scalar()
     actual = evaluate(_shape_element_paths, torch.zeros(3, 4))
     torch.testing.assert_close(actual, torch.tensor(4, dtype=torch.int64))

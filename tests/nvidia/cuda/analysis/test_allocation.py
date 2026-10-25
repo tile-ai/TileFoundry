@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from tilefoundry import func, module
 from tilefoundry.analysis import (
     MemoryMetadata,
     RegionMemoryMetadata,
@@ -15,7 +14,6 @@ from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.liveness import LivenessMetadata
 from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.hir.function import Function
@@ -25,7 +23,8 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.schedule import finalize
 from tilefoundry.visitor_registry.verify import verify_module
-from tilefoundry_nvidia import CudaTarget
+
+ANALYSIS = Path(__file__).parents[1] / "fixtures" / "analysis"
 
 
 def test_insert_slice_keeps_its_address_through_sequential_carry_loops():
@@ -79,25 +78,7 @@ def test_retained_elementwise_return_overwrites_only_a_dead_actual(later_use):
 
 def test_dynamic_selection_stays_resident() -> None:
     """A captured dynamic view pins both possible leaves without enabling reuse."""
-
-    @module(
-        entry="choose",
-        target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1),),
-    )
-    class DynamicSelection:
-        @func
-        def choose(k: Tensor[(), "i32"]):
-            with Mesh(("cta",), (1,), names=("block",)) as cta:
-                first = tf.zeros(Tensor[(4,), "bf16", (4,), "smem"])
-                second = tf.zeros(Tensor[(4,), "bf16", (4,), "smem"])
-                choices = (first, second)
-                selected = choices[k]
-                with cta[:] as _inner:
-                    picked = selected
-                result = tf.add(picked, picked)
-                return result
-
+    DynamicSelection = load_authored_ir(f"{ANALYSIS / 'dynamic_selection.py'}:DynamicSelection")
     result = analyze(
         *check_program(DynamicSelection, DynamicSelection.entry_function()),
         analysis="memory",

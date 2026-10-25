@@ -8,9 +8,11 @@ moved by a compile-time offset reads a fused ``[gate | up]`` tensor on GPU.
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.ir.core import Call, Constant, Tuple, TypeInferContext, Var
@@ -273,21 +275,8 @@ import torch  # noqa: E402
 
 from tilefoundry.evaluator import evaluate  # noqa: E402
 
-_HALF, _COLS, _STEP = 4, 4, 2
-
-
-@module(entry="moved_copy", topologies=(Topology("thread", 1),))
-class _MovedWindow:
-    """Read the far half of a fused tensor through a window moved by a constant."""
-
-    @func
-    def moved_copy(gu: Tensor[(2 * _HALF, _COLS), "f32"]):
-        with Mesh(("thread",), (1,), ("t",)) as m:
-            gr = tf.reshard(gu, (2 * _HALF, _COLS @ m.t), "rmem")
-            acc = tf.full_like(gr, 0.0)
-            for r in tf.tile(_HALF, _STEP):
-                acc = tf.insert_slice(acc, gr[r + _HALF, :], (r, 0))
-            return tf.reshard(acc, (2 * _HALF, _COLS @ m.t), "gmem")
+_HALF, _COLS = 4, 4
+MOVED_WINDOW = Path(__file__).parents[2] / "fixtures" / "ops" / "moved_window.py"
 
 
 def _moved_reference(gu):
@@ -297,6 +286,7 @@ def _moved_reference(gu):
 def test_a_moved_window_reads_the_far_half_of_one_tensor():
     gu = torch.arange(2 * _HALF * _COLS, dtype=torch.float32).reshape(2 * _HALF, _COLS)
 
+    _MovedWindow = load_authored_ir(str(MOVED_WINDOW))
     actual = evaluate(_MovedWindow.lookup("moved_copy"), gu)
 
     torch.testing.assert_close(actual, _moved_reference(gu))

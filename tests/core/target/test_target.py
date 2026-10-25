@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import typing
+from pathlib import Path
 
 import pytest
 
 from tests.core.fixtures.target_plugins.vendor_npu import VendorNpuTarget
+from tilefoundry.cli.source import load_namespace
 from tilefoundry.codegen.linkable_module import LinkableModule
 from tilefoundry.dsl import *
 from tilefoundry.ir.core.module import Module
@@ -25,6 +27,8 @@ from tilefoundry.target import (
     registered_targets,
 )
 from tilefoundry.target.base import bind
+
+UNREGISTERED = Path(__file__).parents[1] / "fixtures" / "target" / "unregistered_target.py"
 
 
 def test_target_registration_and_service_annotations_resolve() -> None:
@@ -72,17 +76,11 @@ def test_document_free_target_enforces_projection_and_capability_boundaries() ->
 
 
 def test_authored_target_boundaries_accept_unregistered_target_instances() -> None:
-    class UnregisteredTarget(Target):
-        name = "tests.core.target.unregistered"
-
-    target = UnregisteredTarget()
+    program = load_namespace(str(UNREGISTERED))[0]
+    target = program["target"]
     module_value = Module("unregistered", (), target=target)
     function = PrimFunction("unregistered", (), Sequential(()), target=target)
-
-    @module(target=target)
-    class Decorated:
-        def forward(self):
-            return None
+    Decorated = program["Decorated"]
 
     assert module_value.target is target
     assert function.target is target

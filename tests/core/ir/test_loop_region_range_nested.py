@@ -12,49 +12,14 @@ to the same ``LoopRegion``; they differ only in the loop-var binding
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 
-from tilefoundry.dsl import *
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core.kinds import ReduceKind
 
-_M = DimVar("m", 1, 63)
-_K = DimVar("k", 1, 63)
-_SUM = ReduceKind.SUM
-
-
-@func
-def _range_start_step(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
-    acc = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
-    acc = tf.full_like(acc, value=0.0)
-    for i in range(1, _M, 2):  # noqa: F821 — odd indices
-        selected = tf.index_select(x, tf.reshape(i, new_shape=(1,)), dim=0)
-        acc = acc + tf.reshape(selected, new_shape=())
-    return acc
-
-
-@func
-def _nested_sum(x: Tensor[(_M, _K), "f32"]) -> Tensor[(), "f32"]:
-
-    total = tf.reduce(x, axes=(0, 1), keepdim=False, kind=_SUM)
-    total = tf.full_like(total, value=0.0)
-    for r in range(_M):  # noqa: F821
-        selected_row = tf.index_select(x, tf.reshape(r, new_shape=(1,)), dim=0)
-        row = tf.reshape(selected_row, new_shape=(_K,))
-        for c in range(_K):  # noqa: F821
-            selected = tf.index_select(row, tf.reshape(c, new_shape=(1,)), dim=0)
-            total = total + tf.reshape(selected, new_shape=())
-    return total
-
-
-@func
-def _dim_expr_half_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
-    acc = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
-    acc = tf.full_like(acc, value=0.0)
-    for i in range(_M // 2):  # noqa: F821 — dim-expression extent
-        selected = tf.index_select(x, tf.reshape(i, new_shape=(1,)), dim=0)
-        acc = acc + tf.reshape(selected, new_shape=())
-    return acc
+LOOPS = Path(__file__).parents[1] / "fixtures" / "ir" / "loop_regions.py"
 
 
 def test_range_start_step():
@@ -63,45 +28,33 @@ def test_range_start_step():
     The three-argument `range` surface: a scalar loop var over a DimVar extent
     with a non-unit start and step, none of which is unrolled.
     """
+    range_start_step = load_authored_ir(f"{LOOPS}:RangeStartStep").entry_function()
     n = 7
     x = torch.arange(n, dtype=torch.float32)
-    out = evaluate(_range_start_step, x)
+    out = evaluate(range_start_step, x)
     assert torch.allclose(out.reshape(()), x[1:n:2].sum()), (n, out)
 
 
 def test_nested_loop_region_outer_carry_in_inner():
+    nested_sum = load_authored_ir(f"{LOOPS}:NestedSum").entry_function()
     x = torch.randn(4, 5)
-    out = evaluate(_nested_sum, x)
+    out = evaluate(nested_sum, x)
     assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), out
 
 
 def test_dim_expression_extent():
+    dim_expr_half_sum = load_authored_ir(f"{LOOPS}:DimExprHalfSum").entry_function()
     n = 8
     x = torch.arange(n, dtype=torch.float32)
-    out = evaluate(_dim_expr_half_sum, x)
+    out = evaluate(dim_expr_half_sum, x)
     assert torch.allclose(out.reshape(()), x[: n // 2].sum()), (n, out)
 
 
-_NSPLIT = 2
-
-
-@func
-def _interleaved_two_partial_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
-    g = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
-    g = tf.full_like(g, value=0.0)
-    for p in range(_NSPLIT):  # noqa: F821 — outer: one partial per split
-        pacc = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
-        pacc = tf.full_like(pacc, value=0.0)
-        for i in range(_M // _NSPLIT):  # noqa: F821 — inner: this partial's indices
-            idx = p + i * _NSPLIT
-            selected = tf.index_select(x, tf.reshape(idx, new_shape=(1,)), dim=0)
-            pacc = pacc + tf.reshape(selected, new_shape=())
-        g = g + pacc
-    return g
-
-
 def test_interleaved_partial_reduction_equals_flat():
+    interleaved_two_partial_sum = load_authored_ir(
+        f"{LOOPS}:InterleavedTwoPartialSum"
+    ).entry_function()
     n = 6
     x = torch.randn(n)
-    out = evaluate(_interleaved_two_partial_sum, x)
+    out = evaluate(interleaved_two_partial_sum, x)
     assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), (n, out)

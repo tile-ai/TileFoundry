@@ -8,7 +8,6 @@ import pytest
 
 from tilefoundry.analysis.check import check_program
 from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
@@ -16,7 +15,6 @@ from tilefoundry.ir.visitor import collect_exprs, expr_children
 from tilefoundry.parser import ParseError
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
-from tilefoundry_nvidia import CudaTarget
 
 PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
 
@@ -68,36 +66,9 @@ def test_region_boundaries_capture_external_regions_through_args() -> None:
 
 def test_sibling_region_chain_captures_each_value_at_the_next_boundary() -> None:
     """An accumulator crosses each sibling region through fresh parameters."""
-
-    @module(
-        entry="run",
-        target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1), Topology("thread", 256)),
+    SiblingRegionChain = load_authored_ir(
+        str(Path(__file__).parents[1] / "fixtures" / "parser" / "sibling_region_chain.py")
     )
-    class SiblingRegionChain:
-        @func
-        def run(
-            a: Tensor[(64, 32), "bf16"],
-            c: Tensor[(64, 32), "bf16"],
-        ) -> Tensor[(64, 32), "bf16"]:
-            with Mesh(("cta",), (1,), names=("block",)) as _cta:
-                with Mesh(
-                    ("thread",),
-                    (2, 128),
-                    names=("role", "participant"),
-                ) as threads:
-                    with threads[1, :] as _compute:
-                        acc = tf.zeros(Tensor[(64, 32), "bf16"])
-                    with threads[0, :32] as _loader:
-                        lhs = tf.cast(a, dtype="bf16")
-                    with threads[1, :] as _compute:
-                        acc = acc + lhs
-                    with threads[0, :32] as _loader:
-                        rhs = tf.cast(c, dtype="bf16")
-                    with threads[1, :] as _compute:
-                        acc = acc + rhs
-                    return acc
-
     entry = SiblingRegionChain.entry_function()
     check_program(SiblingRegionChain, entry)
     regions = [expr for expr in collect_exprs(entry.body) if isinstance(expr, MeshRegion)]

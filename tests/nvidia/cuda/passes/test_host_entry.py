@@ -12,59 +12,17 @@ from pathlib import Path
 import pytest
 
 from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.dsl import *
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.target import CpuTarget
 from tilefoundry_nvidia import CudaTarget
 from tilefoundry_nvidia.cuda.passes.transforms import insert_default_host_entry
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
-_S = DimVar("S", 1, 255)
-
-
-def _rows(threads: int) -> ShardLayout:
-    """One element per thread of a *threads*-wide block."""
-    return ShardLayout(
-        layout=Layout(shape=(threads,), strides=(1,)),
-        attrs=(S(0),),
-        mesh=Mesh(topologies=(Topology("thread", threads),), layout=Layout((threads,), (1,))),
-    )
-
-
-@module(entry="copy_one", topologies=(Topology("thread", 128),))
-class _OneKernel:
-    """A single kernel, and no host entry to call it."""
-
-    @prim_func(target=_CUDA)
-    def copy_one(x: Tensor[(128,), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
-            view = T.tensor_view(T.ptr_of(x), layout=_rows(128))
-            T.copy(view, view)
-            T.sync(thread)
-
-
-@module(entry="square", topologies=(Topology("thread", 128),))
-class _Prototype:
-    """A prototype with no body of its own, and two variants that have one."""
-
-    @prim_func(target=_CUDA)
-    def square(x: Tensor[(_S,), "f32"]):
-        pass
-
-    @square.specialize(RangePattern("S", 1, 127))
-    def small(x: Tensor[(_S,), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
-            view = T.tensor_view(T.ptr_of(x), layout=_rows(128), shape=(128,))
-            T.copy(view, view)
-            T.sync(thread)
-
-    @square.specialize(RangePattern("S", 128, 255))
-    def large(x: Tensor[(_S,), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
-            view = T.tensor_view(T.ptr_of(x), layout=_rows(128), shape=(128,))
-            T.copy(view, view)
-            T.sync(thread)
+DEVICE_ENTRIES = Path(__file__).parents[1] / "fixtures" / "passes" / "device_entries_without_host.py"
+AUTHORED = [
+    pytest.param("_OneKernel", id="authored0"),
+    pytest.param("_Prototype", id="authored1"),
+]
 
 
 def _launch_of(mod):
@@ -80,8 +38,9 @@ def _geometry(evaluate) -> tuple[tuple[int, ...], tuple[int, ...]]:
     return extents[:3], extents[3:]
 
 
-@pytest.mark.parametrize("authored", [_OneKernel, _Prototype])
+@pytest.mark.parametrize("authored", AUTHORED)
 def test_a_device_entry_gains_a_host_entry_that_launches_it(authored) -> None:
+    authored = load_authored_ir(f"{DEVICE_ENTRIES}:{authored}")
     lowered = insert_default_host_entry(authored)
     entry = lowered.entry_function()
     assert lowered.entry == "main"
@@ -90,18 +49,21 @@ def test_a_device_entry_gains_a_host_entry_that_launches_it(authored) -> None:
     assert _launch_of(lowered).args[0].name == authored.entry
 
 
-@pytest.mark.parametrize("authored", [_OneKernel, _Prototype])
+@pytest.mark.parametrize("authored", AUTHORED)
 def test_the_pass_leaves_every_recorded_target_alone(authored) -> None:
+    authored = load_authored_ir(f"{DEVICE_ENTRIES}:{authored}")
     lowered = insert_default_host_entry(authored)
     assert isinstance(lowered.lookup(authored.entry).target, CudaTarget)
 
 
 def test_a_prototype_reads_its_geometry_off_the_variants_that_have_a_body() -> None:
     """The prototype's own body is empty, so a launch of it would run one thread."""
+    _Prototype = load_authored_ir(f"{DEVICE_ENTRIES}:_Prototype")
     assert _geometry(_launch_of(insert_default_host_entry(_Prototype))) == ((1, 1, 1), (128, 1, 1))
 
 
 def test_a_lone_kernel_reads_its_geometry_off_its_own_body() -> None:
+    _OneKernel = load_authored_ir(f"{DEVICE_ENTRIES}:_OneKernel")
     assert _geometry(_launch_of(insert_default_host_entry(_OneKernel))) == ((1, 1, 1), (128, 1, 1))
 
 

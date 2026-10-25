@@ -14,7 +14,9 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.parser import ParseError
-from tilefoundry_nvidia import CudaTarget
+
+FIXTURES = Path(__file__).parents[1] / "fixtures"
+PARSER = FIXTURES / "parser"
 
 
 @pytest.mark.parametrize(
@@ -34,19 +36,7 @@ def test_layout_states_reject_invalid_forms(fixture: str, message: str) -> None:
 
 
 def test_composed_layout_states_parse_round_trip_and_reshard() -> None:
-    @module(entry="f", target=CudaTarget("nvidia.h200_sxm"))
-    class Model:
-        @func(mesh=Mesh((Topology("thread", 8),), layout=(8,), names=("lane",)))
-        def f(
-            x: Tensor[
-                (8, 16), "f32",
-                ((8, 16) + 4 | Swizzle(2, 4, 3)) @ {mesh.lane @ P("sum")},
-                "rmem",
-            ],
-        ):
-            return tf.reshard(
-                x, ((8, 16) + 4 | Swizzle(2, 4, 3)) @ {B()}, "smem"
-            )
+    Model = load_authored_ir(str(PARSER / "composed_swizzled_layout_states.py"))
 
     function = Model.entry_function()
     execution_mesh = Mesh((Topology("thread", 8),), (8,), ("lane",))
@@ -61,23 +51,7 @@ def test_composed_layout_states_parse_round_trip_and_reshard() -> None:
 
 
 def test_body_local_integer_arithmetic_is_normalized_before_layout_construction() -> None:
-    @module(
-        entry="f",
-        target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 128),),
-    )
-    class Model:
-        @func
-        def f(
-            x: Tensor[(1, 16, 8192), "f32"],
-        ):
-            with Mesh(("cta",), layout=(128,), names=("unit",)) as mesh:
-                width = 4096 + 4096
-                return tf.reshard(
-                    x,
-                    (1, 16, width @ mesh.unit),
-                    "smem",
-                )
+    Model = load_authored_ir(str(PARSER / "body_local_width_arithmetic.py"))
 
     scope = Model.functions[0].body
     assert isinstance(scope, MeshRegion)
@@ -89,19 +63,4 @@ def test_body_local_integer_arithmetic_is_normalized_before_layout_construction(
 def test_one_layout_cannot_split_the_same_topology_through_two_meshes() -> None:
     """The layout parser reports duplicate levels before composing mesh axes."""
     with pytest.raises(ParseError, match="a layout can split one level once"):
-
-        @module(
-            entry="f",
-            target=CudaTarget("nvidia.h200_sxm"),
-            topologies=(Topology("cta", 128),),
-        )
-        class Model:
-            @func
-            def f(x: Tensor[(4, 64), "f32"]):
-                with Mesh(("cta",), layout=(4, 32), names=("x", "y")) as first:
-                    with Mesh(("cta",), layout=(2, 64), names=("p", "q")) as second:
-                        return tf.reshard(
-                            x,
-                            (4 @ first.x, 64 @ second.q),
-                            "gmem",
-                        )
+        load_authored_ir(str(FIXTURES / "diagnostics" / "parser_layout_split_level_twice.py"))

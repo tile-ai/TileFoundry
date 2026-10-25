@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from tilefoundry.dsl import *
-from tilefoundry.dsl.tf import add as _tf_add  # noqa: F401  -- closure capture
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.op_registry import (
@@ -20,6 +21,8 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.pattern import is_ranked_tensor
+
+ALIAS_CALL = Path(__file__).parents[2] / "fixtures" / "ir" / "alias_call.py"
 
 
 @pytest.fixture
@@ -76,17 +79,8 @@ def test_register_op_rejects_duplicate_name(clean_schema_registry) -> None:
     assert children("T", ()).count("testdup_relu") == 1
 
 
-@func
-def _alias_call(
-    a: Tensor[(8,), DType.f32],
-    b: Tensor[(8,), DType.f32],
-) -> Tensor[(8,), DType.f32]:
-
-    return _tf_add(a, b)
-
-
 def test_bare_add_routes_through_alias() -> None:
-    body = _alias_call.body
+    body = load_authored_ir(str(ALIAS_CALL)).entry_function().body
     assert isinstance(body, Call)
     assert isinstance(body.target, Binary)
     assert body.target.kind is BinaryKind.ADD

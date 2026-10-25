@@ -62,6 +62,7 @@ _CTA = (Topology("cta", 132),)
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 HIR_COMPOSITION = FIXTURES / "logical" / "hir_composition.py"
 SCALED_MODULES = FIXTURES / "shapes" / "scaled_modules.py"
+ANALYSIS = FIXTURES / "analysis"
 
 
 def _matmul_records(
@@ -107,17 +108,8 @@ def _traffic(records) -> dict[str, int]:
 
 
 def test_a_repeated_call_site_counts_its_work_again() -> None:
-    Expert = load_authored_ir(f"{HIR_COMPOSITION}:Expert")
     CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
-
-    @module(entry="twice", target=CudaTarget(_H200), topologies=_CTA)
-    class _Twice:
-        mm = Expert
-
-        @func
-        def twice(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            return tf.add(mm(x), mm(x))  # noqa: F821
-
+    _Twice = load_authored_ir(f"{ANALYSIS / 'expert_called_twice.py'}:_Twice")
     one_result = analyze(
         *check_program(CrossModule, CrossModule.entry_function()),
         analysis="compute-cost",
@@ -133,20 +125,8 @@ def test_a_repeated_call_site_counts_its_work_again() -> None:
 
 
 def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
-    Expert = load_authored_ir(f"{HIR_COMPOSITION}:Expert")
     CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
-
-    @module(entry="looped", target=CudaTarget(_H200), topologies=_CTA)
-    class _Looped:
-        mm = Expert
-
-        @func
-        def looped(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            acc = x
-            for _ in range(3):
-                acc = mm(acc)  # noqa: F821
-            return acc
-
+    _Looped = load_authored_ir(f"{ANALYSIS / 'expert_called_in_loop.py'}:_Looped")
     one_result = analyze(
         *check_program(CrossModule, CrossModule.entry_function()),
         analysis="compute-cost",
@@ -168,14 +148,7 @@ def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
 
 
 def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
-    @module(entry="direct", target=CudaTarget(_H200), topologies=_CTA)
-    class _Direct:
-        @func
-        def direct(
-            x: Tensor[(4, 8), "f32"], w: ConstTensor[(8, 8), "f32"]
-        ) -> Tensor[(4, 8), "f32"]:
-            return tf.matmul(x, w)
-
+    _Direct = load_authored_ir(f"{ANALYSIS / 'direct_weight_matmul.py'}:_Direct")
     direct_result = analyze(
         *check_program(_Direct, _Direct.entry_function()),
         analysis=("compute-cost", "memory"),
@@ -192,43 +165,14 @@ def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
 
 
 def test_a_reached_child_resolving_another_hierarchy_is_invalid() -> None:
-    @module(entry="run", topologies=(Topology("warp", 4),))
-    class _Warped:
-        @func
-        def run(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            return tf.add(x, x)
-
-    @module(entry="fused", target=CudaTarget(_H200), topologies=_CTA)
-    class _Mismatch:
-        warped = _Warped
-
-        @func
-        def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            return warped(x)  # noqa: F821
-
+    _Mismatch = load_authored_ir(f"{ANALYSIS / 'child_on_another_hierarchy.py'}:_Mismatch")
     with pytest.raises(AnalysisError, match="different topology hierarchy") as caught:
         analyze(*check_program(_Mismatch, _Mismatch.entry_function()), analysis="compute-cost")
     assert "launch" not in str(caught.value)
 
 
 def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
-    extent = DimVar("child_topology_extent", 1, 132)
-    hierarchy = (Topology("cta", extent),)
-
-    @module(entry="run", topologies=hierarchy)
-    class _Declared:
-        @func
-        def run(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            return tf.add(x, x)
-
-    @module(entry="fused", target=CudaTarget(_H200), topologies=hierarchy)
-    class _Agreeing:
-        declared = _Declared
-
-        @func
-        def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            return declared(x)  # noqa: F821
-
+    _Agreeing = load_authored_ir(f"{ANALYSIS / 'child_on_caller_hierarchy.py'}:_Agreeing")
     result = analyze(
         *check_program(_Agreeing, _Agreeing.entry_function(), dims={"child_topology_extent": 132}),
         analysis=("compute-cost", "memory"),
@@ -292,20 +236,10 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
 
 
 def _stacked_program(count, trips=None):
+    """The ScaledChild stack with *count* layers whose loop reaches *trips* of them."""
     trips = count if trips is None else trips
-    ScaledChild = load_authored_ir(f"{SCALED_MODULES}:ScaledChild")
-
-    @module(entry="run", target=CudaTarget(_H200), topologies=_CTA)
-    class Stack:
-        layers = ModuleList(ScaledChild, count)
-
-        @func
-        def run(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            for i in range(trips):
-                x = layers[i](x)  # noqa: F821 -- class-body binding
-            return x
-
-    return Stack
+    reached = "" if trips == count else f"_reaching_{trips}"
+    return load_authored_ir(f"{ANALYSIS / f'scaled_child_stack_{count}{reached}.py'}:Stack")
 
 
 def _call_program(definition, *, count=1, indexed=False, name="run"):

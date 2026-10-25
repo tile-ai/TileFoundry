@@ -2,46 +2,26 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from tests.core.ops.ir.test_cache_update import (
     _GLOBAL_TRAFFIC,
-    _NEW_SHAPE,
     _WINDOW_BYTES,
 )
 from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
 from tilefoundry.visitor_registry.visitors import CostEvaluator
-from tilefoundry_nvidia import CudaTarget
 
-_CACHE_SHAPE = (2, 64, 4, 8)
-
-
+OPS = Path(__file__).parents[2] / "fixtures" / "ops"
 _CTA = Topology("cta", 2)
 _CTA_MESH = Mesh((_CTA,), Layout((2,), (1,)), ("g",))
-
-
-@module(
-    entry="append",
-    target=CudaTarget("nvidia.h200_sxm"),
-    topologies=(_CTA,),
-)
-class _KVCacheAppend:
-    @func
-    def append(
-        cache: Tensor[_CACHE_SHAPE, "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        s: Tensor[(1,), "i32"],
-        new: Tensor[_NEW_SHAPE, "bf16"],
-    ):
-        with Mesh(("cta",), layout=(2,), names=("tile",)) as cta:
-            local_cache = tf.reshard(cache, (2 @ cta.tile, 64, 4, 8), "gmem")
-            local_new = tf.reshard(new, (2 @ cta.tile, 4, 4, 8), "gmem")
-            return tf.cache_update(local_cache, cur_pos, s, local_new)
 
 
 def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
@@ -52,6 +32,7 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
     is the footprint family's question, and raising a single crossing to cover
     them would be answering it here.
     """
+    _KVCacheAppend = load_authored_ir(f"{OPS / 'kv_cache_append.py'}:_KVCacheAppend")
     entry = _KVCacheAppend.entry_function()
     update = next(
         expr

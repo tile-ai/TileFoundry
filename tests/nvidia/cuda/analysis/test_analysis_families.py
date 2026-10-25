@@ -38,7 +38,6 @@ from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import MemoryOptions
 from tilefoundry.analysis.metadata import shifted
 from tilefoundry.cli.source import load_authored_ir, load_namespace
-from tilefoundry.dsl import *
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
 from tilefoundry.ir.core import (
     Call,
@@ -52,8 +51,8 @@ from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 from tilefoundry_nvidia import CudaTarget
 
-_ROUNDING_M = 14_593
 PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
+ANALYSIS = Path(__file__).parents[1] / "fixtures" / "analysis"
 ACCESS_FOOTPRINT = Path(__file__).parents[1] / "models" / "access_footprint" / "model.py"
 
 
@@ -92,14 +91,7 @@ def test_reshard_compares_address_boxes_without_participant_ownership() -> None:
     )
 
 
-_ROUNDING_N = 11_489
-_ROUNDING_K = 298_224_413
-_H200 = CudaTarget("nvidia.h200_sxm")
 _ALL_FAMILIES = ("compute-cost", "memory", "roofline", "performance")
-_LARGE_H200 = CudaTarget(
-    replace(_H200.device, hbm_capacity_bytes=300_000_000_000_000_000),
-    architecture=_H200.architecture,
-)
 
 
 class _RestatedCapacity(CudaTarget):
@@ -134,68 +126,6 @@ class _RoomyShared(_RestatedCapacity):
 class _RoomierShared(_RestatedCapacity):
     name = "test.roomier_shared"
     levels = {"smem": 845_000}
-
-
-_GRID = DimVar("grid", 1, 396)
-
-
-@module(entry="main", target=_LARGE_H200, topologies=(Topology("cta", 1),))
-class _LargeRooflineRounding:
-    @func
-    def main(
-        lhs: Tensor[(_ROUNDING_M, _ROUNDING_K), "f32"],
-        rhs: ConstTensor[(_ROUNDING_K, _ROUNDING_N), "f32"],
-    ):
-        return tf.matmul(lhs, rhs)
-
-
-@module(
-    entry="unpriced_only",
-    target=CudaTarget("nvidia.h200_sxm"),
-    topologies=(Topology("cta", 1),),
-)
-class _PricingBoundary:
-    @func
-    def unpriced_only(source: Tensor[(1,), "f32"]):
-        with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
-            local = tf.reshard(source, (1 @ cta.tile,), "rmem")
-            moved = tf.reshard(local, (1 @ cta.tile,), "rmem")
-            return tf.add(moved, moved)
-
-    @func
-    def mixed(source: Tensor[(64,), "f32"]):
-        with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
-            placed = tf.reshard(source, (64 @ cta.tile,), "gmem")
-            local = tf.reshard(placed, (64 @ cta.tile,), "rmem")
-            return tf.add(local, local)
-
-    @func
-    def serviced_predicate(source: Tensor[(64,), "f32"]):
-        with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
-            placed = tf.reshard(source, (64 @ cta.tile,), "gmem")
-            return placed <= placed
-
-
-@module(entry="split", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
-class _SharedTile:
-    @func
-    def split(source: Tensor[(1056, 6600), "f32"]):
-        with Mesh(("cta",), layout=(132,), names=("tile",)) as cta:
-            local = tf.reshard(source, (1056 @ cta.tile, 6600), "smem")
-            return tf.add(local, local)
-
-    @func
-    def broadcast(source: Tensor[(1056, 6600), "f32"]):
-        with Mesh(("cta",), layout=(132,), names=("tile",)) as _cta:
-            local = tf.reshard(source, (1056, 6600), "smem")
-            return tf.add(local, local)
-
-    @func
-    def viewed(source: Tensor[(1056, 6600), "f32"]):
-        with Mesh(("cta",), layout=(132,), names=("tile",)) as cta:
-            local = tf.reshard(source, (1056 @ cta.tile, 6600), "smem")
-            view = tf.reshape(local, new_shape=(1056, 100, 66))
-            return tf.add(view, view)
 
 
 def _calls(function) -> tuple[Call, ...]:
@@ -326,6 +256,9 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
 
 
 def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:
+    _LargeRooflineRounding = load_authored_ir(
+        f"{ANALYSIS / 'large_roofline_rounding.py'}:_LargeRooflineRounding"
+    )
     result = analyze(
         *check_program(_LargeRooflineRounding, _LargeRooflineRounding.entry_function()),
         analysis="roofline",
@@ -338,44 +271,6 @@ def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:
 
 
 _SPLIT_GRID = 128
-_SPLIT_HIDDEN = 2048
-_SPLIT_OUT = 12288
-_SPLIT_PER = _SPLIT_OUT // _SPLIT_GRID
-_SPLIT_BLOCK = 128
-
-
-@module(entry="last_axis", target=_H200, topologies=(Topology("cta", _SPLIT_GRID),))
-class _SplitLastAxis:
-    """The weight's N on the mesh, so the result's last axis is the split one."""
-
-    @func
-    def last_axis(
-        x: Tensor[(1, _SPLIT_BLOCK, _SPLIT_HIDDEN), "bf16"],
-        w: ConstTensor[(_SPLIT_HIDDEN, _SPLIT_OUT), "bf16"],
-    ):
-        with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
-            rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem")
-            strip = tf.reshard(w[0:_SPLIT_BLOCK, :], (_SPLIT_BLOCK, _SPLIT_OUT @ mesh.unit), "smem")
-            return tf.matmul(rows, strip, out_dtype="f32")
-
-
-@module(entry="strip_major", target=_H200, topologies=(Topology("cta", _SPLIT_GRID),))
-class _SplitStripMajor:
-    """The same gemm with the split axis leading, inside the matmul's batch."""
-
-    @func
-    def strip_major(
-        x: Tensor[(1, _SPLIT_BLOCK, _SPLIT_HIDDEN), "bf16"],
-        w: ConstTensor[(_SPLIT_GRID, _SPLIT_HIDDEN, _SPLIT_PER), "bf16"],
-    ):
-        with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
-            rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem")
-            strip = tf.reshard(
-                w[:, 0:_SPLIT_BLOCK, :],
-                (_SPLIT_GRID @ mesh.unit, _SPLIT_BLOCK, _SPLIT_PER),
-                "smem",
-            )
-            return tf.matmul(rows, strip, out_dtype="f32")
 
 
 def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
@@ -386,6 +281,10 @@ def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
     divides by the grid. Counting the result's elements does not care where the
     axis went, and the two spellings agree on the work and the predicted time.
     """
+    _SplitLastAxis = load_authored_ir(f"{ANALYSIS / 'split_gemm_last_axis.py'}:_SplitLastAxis")
+    _SplitStripMajor = load_authored_ir(
+        f"{ANALYSIS / 'split_gemm_strip_major.py'}:_SplitStripMajor"
+    )
     per_layout = {}
     for owner, name in ((_SplitLastAxis, "last_axis"), (_SplitStripMajor, "strip_major")):
         function = next(item for item in owner.functions if item.name == name)
@@ -418,6 +317,7 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
     buffer, then reports that solved high-water against capacity. Restating
     capacity changes only the error, not the logical lifetimes or placement.
     """
+    _SharedTile = load_authored_ir(f"{ANALYSIS / 'shared_tile.py'}:_SharedTile")
     tight = replace(_SharedTile, target=_TightShared("nvidia.h200_sxm"))
     split = next(function for function in tight.functions if function.name == "split")
     roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
@@ -480,6 +380,7 @@ def test_local_pricing_requires_compute_rates_and_uses_available_memory_rates() 
     error. Memory traffic is timed only at levels with a stated bandwidth; the
     independently overlappable levels set a maximum rather than a sum.
     """
+    _PricingBoundary = load_authored_ir(f"{ANALYSIS / 'pricing_boundary.py'}:_PricingBoundary")
     target = _PricingBoundary.resolve_target()
     throughput = target.get_facts(ThroughputFacts)
     services = target.get_facts(PerformanceServiceFacts)

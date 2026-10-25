@@ -23,7 +23,8 @@ from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.target import CpuTarget
 from tilefoundry_nvidia import CudaTarget
 
-MODULE_CONTEXT = Path(__file__).parents[1] / "fixtures" / "logical" / "module_context.py"
+FIXTURES = Path(__file__).parents[1] / "fixtures"
+MODULE_CONTEXT = FIXTURES / "logical" / "module_context.py"
 
 
 def _context():
@@ -79,13 +80,16 @@ def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
         replaces.resolve_topology("cta")
 
 
-@pytest.mark.parametrize("invalid", [[Topology("cta", 132)], (Topology("cta", 132), object())])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        pytest.param("dsl_module_topologies_list.py", id="invalid0"),
+        pytest.param("dsl_module_topologies_non_topology.py", id="invalid1"),
+    ],
+)
 def test_module_rejects_a_non_topology_tuple(invalid) -> None:
     with pytest.raises(TypeError, match="topologies must be a tuple of Topology"):
-
-        @module(topologies=invalid)
-        class Invalid:
-            pass
+        load_authored_ir(str(FIXTURES / "diagnostics" / invalid))
 
 
 def test_topology_resolution_failures_name_what_the_domain_holds() -> None:
@@ -116,18 +120,8 @@ def test_declaring_context_on_a_function_yields_its_own_module() -> None:
     Module that owns it, and a plain ``@func`` stays a Function.
     """
     _, _CTA, _, _ = _context()
-
-    @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
-    def standalone(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.relu(x)
-
-    @func(topologies=())
-    def empty(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.relu(x)
-
-    @func
-    def plain(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.relu(x)
+    namespace = load_namespace(str(FIXTURES / "dsl" / "function_context.py"))[0]
+    standalone, empty, plain = (namespace[name] for name in ("standalone", "empty", "plain"))
 
     assert isinstance(standalone, Module) and isinstance(empty, Module)
     assert (standalone.name, standalone.entry) == ("standalone", "standalone")
