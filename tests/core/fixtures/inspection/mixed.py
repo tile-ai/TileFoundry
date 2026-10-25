@@ -2,7 +2,7 @@ from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget
 
 
-@module()
+@module(target=CpuTarget())
 class Mixed:
     @func
     def h(a: Tensor[(1,), 'f32']):

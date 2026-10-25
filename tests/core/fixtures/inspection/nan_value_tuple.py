@@ -1,8 +1,11 @@
 import math
 
 from tilefoundry.dsl import *
+from tilefoundry.target import CpuTarget
 
 
-@func
-def nan_value(x: Tensor[(8,), "f32"]):
-    return (x, math.nan)
+@module(entry="nan_value", target=CpuTarget())
+class NanValue:
+    @func
+    def nan_value(x: Tensor[(8,), "f32"]):
+        return (x, math.nan)

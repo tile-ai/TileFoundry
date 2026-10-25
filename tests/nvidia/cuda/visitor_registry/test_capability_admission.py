@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.nvidia.cuda.fixtures.schedule.tir.wgmma_b_nk import gemm as wgmma_gemm
+from tests.nvidia.cuda.fixtures.schedule.tir.wgmma_b_nk import WgmmaBNk
 from tests.nvidia.cuda.fixtures.tir.mma import MmHandwritten
 from tests.nvidia.cuda.ops.tir.targets import retarget
 from tilefoundry.ir.core import Var, VerifyError
@@ -81,7 +81,7 @@ _REFUSED = [
         "cp.async.bulk",
         id="copy_async_bulk",
     ),
-    pytest.param(wgmma_gemm, "wgmma.mma_async", id="wgmma_atom"),
+    pytest.param(WgmmaBNk.entry_function(), "wgmma.mma_async", id="wgmma_atom"),
 ]
 
 

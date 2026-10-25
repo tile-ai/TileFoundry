@@ -6,7 +6,7 @@ import importlib
 import json
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
@@ -62,7 +62,6 @@ from tilefoundry.analysis.iteration_scope import IterationScope
 from tilefoundry.analysis.liveness import LivenessMetadata
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
-from tilefoundry.cli.source import load_namespace
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.module import Module
@@ -73,7 +72,6 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import TopologyFacts
-from tilefoundry_nvidia import CudaTarget
 
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 
@@ -121,25 +119,7 @@ def _published(path: Path):
         for name in dir(source)
         if not name.startswith("_") and isinstance(value := getattr(source, name), Module)
     ]
-    children = {
-        id(frame.module)
-        for _name, owner in named
-        for frame in list_call_paths(owner).values()
-        if frame.module is not owner
-    }
-    return tuple(
-        (name, value)
-        for name, value in named
-        if id(value) not in children or value.target is not None
-    )
-
-
-def _aim(owner):
-    try:
-        owner.resolve_target()
-    except Exception:
-        owner = replace(owner, target=CudaTarget("nvidia.h200_sxm"))
-    return owner
+    return tuple((name, value) for name, value in named if value.target is not None)
 
 
 @dataclass(frozen=True)
@@ -161,8 +141,7 @@ class AnalysisCase(Case):
     @classmethod
     def expand(cls, path: Path, corpus: Path) -> tuple["AnalysisCase", ...]:
         expanded = []
-        for name, published in _published(path):
-            owner = _aim(published)
+        for name, owner in _published(path):
             facts = owner.resolve_target().get_facts(TopologyFacts)
             if "cta" not in tuple(t.name for t in facts.topologies):
                 continue
@@ -178,7 +157,7 @@ class AnalysisCase(Case):
         return tuple(expanded)
 
     def program(self) -> tuple[Module, Function]:
-        owner = _aim(dict(_published(self.path))[self.root])
+        owner = dict(_published(self.path))[self.root]
         frame = list_call_paths(owner)[self.selector]
         return frame.module, frame.function
 
@@ -190,29 +169,9 @@ class Analyzed:
     scopes: tuple[IterationScope, ...] | None
 
 
-def _case_source(case: AnalysisCase, tmp_path: Path) -> str:
+def _case_source(case: AnalysisCase) -> str:
     """Name a corpus case through the same SOURCE selector the CLI accepts."""
-    identity = case.id.partition("[")[0].split(".")
-    file, root, *selection = identity
-    fixture = Path(__file__).parents[1] / "fixtures" / "placed" / f"{file}.py"
-    package = "tests.nvidia.cuda.fixtures.placed"
-    if not fixture.is_file():
-        fixture = Path(__file__).parents[3] / "core" / "fixtures" / "placed" / f"{file}.py"
-        package = "tests.core.fixtures.placed"
-    namespace, _selector = load_namespace(str(fixture))
-    module = namespace[root]
-    try:
-        module.resolve_target()
-        source = fixture
-    except ValueError:
-        source = tmp_path / f"{file}_{root}.py"
-        source.write_text(
-            "from dataclasses import replace\n"
-            f"from {package}.{file} import {root} as authored\n"
-            "from tilefoundry_nvidia import CudaTarget\n"
-            f"{root} = replace(authored, target=CudaTarget('nvidia.h200_sxm'))\n"
-        )
-    return f"{source}:{root}.{'.'.join(selection)}"
+    return f"{case.path}:{case.root}.{case.selector}"
 
 
 def _peaks_match(case, report):
@@ -244,7 +203,7 @@ def _cli_report(case, tmp_path, capsys):
     report_path = tmp_path / "analysis.json"
     command = [
         "analyze",
-        _case_source(case, tmp_path),
+        _case_source(case),
         str(report_path),
         "--memory",
         "--compute-cost",
@@ -505,9 +464,9 @@ EXPECTED = {
         },
         hooks=(_tile64,),
     ),
-    "gqa_decode.GqaOnline._ctx_combine[static]": dict(memory_peaks={"gmem": 291_968}),
-    "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": dict(memory_peaks={"gmem": 4_483_072}),
-    "gqa_decode.GqaOnline.gqa_online_attend[ctx_len=128]": dict(
+    "gqa_decode_cuda.GqaOnline._ctx_combine[static]": dict(memory_peaks={"gmem": 291_968}),
+    "gqa_decode_cuda.GqaOnline._ctx_partials[ctx_len=128]": dict(memory_peaks={"gmem": 4_483_072}),
+    "gqa_decode_cuda.GqaOnline.gqa_online_attend[ctx_len=128]": dict(
         memory_peaks={
             "gmem": 282688,
             "rmem": 0,
@@ -777,12 +736,11 @@ EXPECTED = {
     "tiny_tp_decoder.DecoderLayer.decode[static]": dict(memory_peaks={"gmem": 48, "rmem": 32}),
     "tiny_tp_decoder.DecoderLayer.project[static]": dict(memory_peaks={"gmem": 96}),
     "tp_all_to_all.TransposeShard.transpose_shard[static]": dict(memory_peaks={"gmem": 128}),
-    "weighted_twin.Weighted.scaled[static]": dict(memory_peaks={"gmem": 1_348, "rmem": 8}),
+    "weighted_cuda.Weighted.scaled[static]": dict(memory_peaks={"gmem": 1_348, "rmem": 8}),
 }
 
-CORE_PLACED = Path(__file__).parents[3] / "core" / "fixtures" / "placed"
-NVIDIA_PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
-CASES = cases(CORE_PLACED, NVIDIA_PLACED, case_type=AnalysisCase, expected=EXPECTED)
+PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
+CASES = cases(PLACED, case_type=AnalysisCase, expected=EXPECTED)
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)

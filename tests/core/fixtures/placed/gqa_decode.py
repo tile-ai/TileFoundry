@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 
 from tilefoundry.dsl import *
+from tilefoundry.target import CpuTarget
 
 HEAD_DIM = 128
 NUM_Q_HEADS = 32
@@ -44,7 +45,7 @@ _G = GQA_GROUP
 _SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
 
-@module(entry="gqa_online_attend", topologies=(Topology("cta", NUM_CTA),))
+@module(entry="gqa_online_attend", target=CpuTarget(), topologies=(Topology("cta", NUM_CTA),))
 class GqaOnline:
     """The two decode strategies and the shared context-split kernels, in one execution domain.
 

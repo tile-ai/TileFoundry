@@ -1,10 +1,12 @@
 """A tuple-valued sibling region can carry an outer region through its args."""
 
 from tilefoundry.dsl import *
+from tilefoundry.target import CpuTarget
 
 
 @module(
     entry="run",
+    target=CpuTarget(),
     topologies=(Topology("cta", 2), Topology("thread", 4)),
 )
 class RegionTupleRebind:

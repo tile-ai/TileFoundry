@@ -13,6 +13,7 @@ from tests.nvidia.cuda.parser._parser_hooks import (
     _dispatch_tree,
     _empty_child_entry,
     _flash_slices,
+    _nan_fill,
     _paired_calls,
     _prefill_variants,
     _region_escapes,
@@ -29,6 +30,7 @@ EXPECTED = {
     ),
     "inspection/device": dict(prints=("T.sync(thread)", "T.sync(thread[:])")),
     "inspection/launched": dict(prints=("cluster=(1, 1, 1), dynamic_smem=512)",)),
+    "inspection/nan_value_fill": dict(prints=("math.nan",), hooks=(_nan_fill,)),
     "tir/async_sync": dict(canonical=True),
     "tir/e4m3_gemm": dict(canonical=True),
     "tir/mma": dict(canonical=True),
@@ -51,9 +53,6 @@ NAMED = (
         path=FIXTURES / "logical/gqa_static.py",
         corpus=FIXTURES / "logical",
         name="static_online_attend",
-    ),
-    ParserCase(
-        path=FIXTURES / "logical/hir_composition.py", corpus=FIXTURES / "logical", name="Expert"
     ),
     ParserCase(
         path=FIXTURES / "placed/derived_prefill.py",

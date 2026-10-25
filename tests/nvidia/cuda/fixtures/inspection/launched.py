@@ -3,7 +3,7 @@ from tilefoundry.target import CpuTarget
 from tilefoundry_nvidia import CudaTarget
 
 
-@module(entry='host', topologies=(Topology('thread', 32),))
+@module(entry='host', target=CudaTarget('nvidia.h200_sxm'), topologies=(Topology('thread', 32),))
 class Launched:
     @prim_func(target=CudaTarget('nvidia.h200_sxm'))
     def device(a: Tensor[(32,), 'f32']):

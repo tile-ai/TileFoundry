@@ -10,7 +10,6 @@ from tests.core.parser._parser_hooks import (
     _carry_order,
     _dtype_names,
     _nan_attr,
-    _nan_fill,
     _nan_tuple,
     _nested_scan,
     _scalar_range,
@@ -32,24 +31,23 @@ EXPECTED = {
     "inspection/control": dict(prints=("for i in range(0, 2, 1):", "if i < 1:")),
     "inspection/nan_value_tuple": dict(prints=("math.nan",), hooks=(_nan_tuple,)),
     "inspection/nan_value_attr": dict(prints=("math.nan",), hooks=(_nan_attr,)),
-    "inspection/nan_value_fill": dict(prints=("math.nan",), hooks=(_nan_fill,)),
 }
 TILE_WINDOWS = FIXTURES / "shapes/tile_window_syntax.py"
 NAMED = (
     ParserCase(
-        path=TILE_WINDOWS, corpus=TILE_WINDOWS.parent, name="scan_copy", prints=("x[row, :]",)
+        path=TILE_WINDOWS, corpus=TILE_WINDOWS.parent, name="ScanCopy", prints=("x[row, :]",)
     ),
     ParserCase(
         path=TILE_WINDOWS,
         corpus=TILE_WINDOWS.parent,
-        name="nested_scan_copy",
+        name="NestedScanCopy",
         prints=("x[row, col]",),
         hooks=(_nested_scan,),
     ),
     ParserCase(
         path=TILE_WINDOWS,
         corpus=TILE_WINDOWS.parent,
-        name="sequential_scan_copy",
+        name="SequentialScanCopy",
         prints=("x[row, :]",),
         hooks=(_sequential_scan,),
     ),

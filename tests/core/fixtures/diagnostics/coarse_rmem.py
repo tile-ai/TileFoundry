@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
+from tilefoundry.target import CpuTarget
 
 
 @module(
     entry="run",
+    target=CpuTarget(),
     topologies=(Topology("cta", 2), Topology("thread", 4)),
 )
 class CoarseRmem:

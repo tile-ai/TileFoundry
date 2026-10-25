@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from tests.nvidia.cuda.fixtures.logical import module_context as context_fixture
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Constant, Var, binding_name
@@ -283,3 +285,12 @@ def _region_escapes(state, problems):
         assert sum(producer in expr_children(expr) for expr in collect_exprs(body)) == 2
 
     problems.run("_region_escapes", check, state.rebuilt)
+
+
+def _nan_fill(state, problems):
+    def check(rebuilt):
+        value = rebuilt.entry_function().body[0].body[0].args[1]
+        assert isinstance(value, Constant)
+        assert math.isnan(value.value)
+
+    problems.run("_nan_fill", check, state.rebuilt)

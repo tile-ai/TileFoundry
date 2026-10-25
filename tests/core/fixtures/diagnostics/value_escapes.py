@@ -1,10 +1,12 @@
 """A thread-placed value consumed after escaping into a CTA-only scope."""
 
 from tilefoundry.dsl import *
+from tilefoundry.target import CpuTarget
 
 
 @module(
     entry="run",
+    target=CpuTarget(),
     topologies=(Topology("cta", 2), Topology("thread", 4)),
 )
 class ValueEscapes:
