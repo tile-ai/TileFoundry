@@ -1,4 +1,5 @@
-/// The runtime's compile-time refusals, one per translation unit.
+/// The runtime's compile-time refusals, one per CASE; `-DCASE=ALL` compiles
+/// every refused case in one translation unit.
 #include <tilefoundry/runtime/cuda/runtime.cuh>
 
 namespace tilefoundry {
@@ -15,6 +16,21 @@ CUTE_HOST_DEVICE constexpr auto program_dim<TopologyScope::cta>() noexcept {
 using namespace tilefoundry;
 using namespace tilefoundry::ops;
 using namespace tilefoundry::primitive;
+
+/// ALL needs a value of its own: an undefined name reads as 0 in `#if`, which
+/// is CASE 0.
+#ifndef ALL
+#define ALL (-1)
+#endif
+
+/// T, named through D. A case whose error the front end would report while it
+/// parses the case's body takes its offending type through D instead, so the
+/// error waits for the case's instantiation at the end of the unit. The front
+/// end does not do those instantiations after an error in the parse.
+template <class T, class D> struct dep {
+    using type = T;
+};
+template <class T, class D> using dep_t = typename dep<T, D>::type;
 
 template <int... Es> __device__ auto tmesh() {
     return make_mesh<TopologyScope::thread>(
@@ -129,33 +145,40 @@ __global__ void k() {
 }
 #endif
 
-#if CASE == 1
+#if CASE == 1 || CASE == ALL
+namespace case_1 {
 /// Mesh::offset: a swizzle where identity belongs.
-__global__ void k() {
+template <class D = void> __global__ void k() {
     using inner = cute::Swizzle<1, 0, 1>;
     using box =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
     using ml = cute::ComposedLayout<inner, cute::Int<0>, box>;
-    using mesh = Mesh<ml, TopologyScope::thread>;
+    using mesh = dep_t<Mesh<ml, TopologyScope::thread>, D>;
     static_assert(tilefoundry::offset(mesh{}) == 0, "unreachable");
+}
+void use() { (void)&k<>; }
 }
 #endif
 
-#if CASE == 2
+#if CASE == 2 || CASE == ALL
+namespace case_2 {
 /// Mesh::offset: a run-time slice origin.
-__global__ void k() {
+template <class D = void> __global__ void k() {
     using box =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
     using ml = cute::ComposedLayout<cute::identity, int, box>;
-    using mesh = Mesh<ml, TopologyScope::thread>;
+    using mesh = dep_t<Mesh<ml, TopologyScope::thread>, D>;
     static_assert(tilefoundry::offset(mesh{}) == 0, "unreachable");
+}
+void use() { (void)&k<>; }
 }
 #endif
 
-#if CASE == 3
+#if CASE == 3 || CASE == ALL
+namespace case_3 {
 /// local(): two attrs for a one-axis mesh, which used to read as a full
-__global__ void k(float *p) {
-    auto mesh = tmesh<256>();
+template <class D = void> __global__ void k(float *p) {
+    dep_t<decltype(tmesh<256>()), D> mesh = tmesh<256>();
     auto layout = cute::make_layout(cute::make_shape(cute::Int<256>{}));
     auto t = cute::make_tensor(cute::make_gmem_ptr(p), layout);
     ShardLayout<decltype(layout), cute::tuple<shard::S<0>, shard::B>,
@@ -165,23 +188,29 @@ __global__ void k(float *p) {
     auto v = tilefoundry::local_tensor(st);
     v(0) = 1.f;
 }
+void use() { (void)&k<>; }
+}
 #endif
 
-#if CASE == 4
+#if CASE == 4 || CASE == ALL
+namespace case_4 {
 /// make_shard_layout: the same mismatch, refused at construction.
-__global__ void k(float *p) {
-    auto mesh = tmesh<8, 32>();
+template <class D = void> __global__ void k(float *p) {
+    dep_t<decltype(tmesh<8, 32>()), D> mesh = tmesh<8, 32>();
     auto layout = cute::make_layout(cute::make_shape(cute::Int<256>{}));
     auto sl = make_shard_layout(layout, mesh, cute::make_tuple(shard::S<0>{}));
     (void)sl;
     (void)p;
 }
+void use() { (void)&k<>; }
+}
 #endif
 
-#if CASE == 5
+#if CASE == 5 || CASE == ALL
+namespace case_5 {
 /// the offset arithmetic itself, reached without going through local().
-__global__ void k(float *p) {
-    auto mesh = tmesh<8, 32>();
+template <class D = void> __global__ void k(float *p) {
+    dep_t<decltype(tmesh<8, 32>()), D> mesh = tmesh<8, 32>();
     auto layout = cute::make_layout(cute::make_shape(cute::Int<256>{}));
     ShardLayout<decltype(layout), cute::tuple<shard::S<0>>, decltype(mesh)> sl{
         layout, mesh};
@@ -189,12 +218,15 @@ __global__ void k(float *p) {
         sl,
         tilefoundry::mesh_coords(sl.mesh_value, tilefoundry::program_ids()))));
 }
+void use() { (void)&k<>; }
+}
 #endif
 
-#if CASE == 6
+#if CASE == 6 || CASE == ALL
+namespace case_6 {
 /// mesh_axis_term: a Dynamic attr, which used to be dropped as a broadcast.
-__global__ void k(float *p) {
-    auto mesh = tmesh<256>();
+template <class D = void> __global__ void k(float *p) {
+    dep_t<decltype(tmesh<256>()), D> mesh = tmesh<256>();
     auto layout = cute::make_layout(cute::make_shape(cute::Int<256>{}));
     auto t = cute::make_tensor(cute::make_gmem_ptr(p), layout);
     ShardLayout<decltype(layout), cute::tuple<shard::Dynamic>, decltype(mesh)>
@@ -202,9 +234,12 @@ __global__ void k(float *p) {
     auto st = make_shard_tensor(t, layout, sl);
     tilefoundry::local_tensor(st)(0) = 1.f;
 }
+void use() { (void)&k<>; }
+}
 #endif
 
-#if CASE == 7
+#if CASE == 7 || CASE == ALL
+namespace case_7 {
 /// Item 1 at the entry: a mesh spanning 8 warps, reduced with no workspace.
 __global__ void k(float *p) {
     float a = p[0], b = 0.f;
@@ -213,9 +248,11 @@ __global__ void k(float *p) {
     reduce<add_op, cute::tuple<cute::Int<1>>>(src, dst);
     p[0] = b;
 }
+}
 #endif
 
-#if CASE == 8
+#if CASE == 8 || CASE == ALL
+namespace case_8 {
 /// Item 1 at the tier: IntraWarp asked to cross warps directly.
 __global__ void k(float *p) {
     float a = p[0], b = 0.f;
@@ -224,9 +261,11 @@ __global__ void k(float *p) {
     reduce_impl::IntraWarp<add_op, cute::tuple<cute::Int<1>>>{}(src, dst);
     p[0] = b;
 }
+}
 #endif
 
-#if CASE == 9
+#if CASE == 9 || CASE == ALL
+namespace case_9 {
 /// Item 8: a packed 64-bit key cannot be folded in float.
 __global__ void k(unsigned long long *p) {
     unsigned long long a = p[0], b = 0;
@@ -235,9 +274,11 @@ __global__ void k(unsigned long long *p) {
     reduce<max_op, cute::tuple<cute::Int<0>>>(src, dst);
     p[0] = b;
 }
+}
 #endif
 
-#if CASE == 10
+#if CASE == 10 || CASE == ALL
+namespace case_10 {
 /// Item 3's guard: a composed source layout has no kept/reduced split.
 __global__ void k(float *p) {
     float b = 0.f;
@@ -249,9 +290,11 @@ __global__ void k(float *p) {
     reduce<add_op, cute::tuple<cute::Int<0>>>(src, dst);
     p[0] = b;
 }
+}
 #endif
 
-#if CASE == 11
+#if CASE == 11 || CASE == ALL
+namespace case_11 {
 /// reduce_dispatch: two operands, two different meshes.
 __global__ void k(float *p) {
     float a = p[0], b = 0.f;
@@ -260,9 +303,11 @@ __global__ void k(float *p) {
     reduce<add_op, cute::tuple<cute::Int<1>>>(src, dst);
     p[0] = b;
 }
+}
 #endif
 
-#if CASE == 12
+#if CASE == 12 || CASE == ALL
+namespace case_12 {
 /// reduce_dispatch: a mesh whose scope is neither cta nor thread.
 __global__ void k(float *p) {
     float a = p[0], b = 0.f;
@@ -283,9 +328,11 @@ __global__ void k(float *p) {
     reduce<add_op, cute::tuple<cute::Int<0>>>(src, dst);
     p[0] = b;
 }
+}
 #endif
 
-#if CASE == 14
+#if CASE == 14 || CASE == ALL
+namespace case_14 {
 /// Item 6: a pair of views cp.async cannot move a wide word of.
 __global__ void k(float *g, int n) {
     __shared__ float s[64];
@@ -293,9 +340,11 @@ __global__ void k(float *g, int n) {
     auto dst = cute::make_tensor(cute::make_smem_ptr(s), cute::make_layout(n));
     copy_async(src, dst);
 }
+}
 #endif
 
-#if CASE == 15
+#if CASE == 15 || CASE == ALL
+namespace case_15 {
 /// Item 7: a destination wider than the source, with no offset to borrow.
 __global__ void k(float *g) {
     __shared__ float s[64];
@@ -303,9 +352,11 @@ __global__ void k(float *g) {
     auto dst = cute::make_tensor(cute::make_smem_ptr(s), cute::Int<8>{});
     copy_async(src, dst);
 }
+}
 #endif
 
-#if CASE == 16
+#if CASE == 16 || CASE == ALL
+namespace case_16 {
 /// dot's warp tier: a mesh whose lane axis is half a warp.
 __global__ void k(float *p) {
     float o = 0.f;
@@ -328,9 +379,11 @@ __global__ void k(float *p) {
     dot(lhs, rhs, out);
     p[0] = o;
 }
+}
 #endif
 
-#if CASE == 17
+#if CASE == 17 || CASE == ALL
+namespace case_17 {
 /// dot's block tier: a mesh that is not a whole number of warps.
 __global__ void k(float *p) {
     __shared__ float ws[8];
@@ -350,9 +403,11 @@ __global__ void k(float *p) {
     dot(lhs, rhs, out, slots);
     p[0] = o;
 }
+}
 #endif
 
-#if CASE == 18
+#if CASE == 18 || CASE == ALL
+namespace case_18 {
 /// mma: operands that are not the atom's fragments.
 __global__ void k(float *p) {
     float a[3] = {}, b[3] = {}, c[3] = {};
@@ -362,9 +417,11 @@ __global__ void k(float *p) {
     mma(at, bt, ct);
     p[0] = c[0];
 }
+}
 #endif
 
-#if CASE == 19
+#if CASE == 19 || CASE == ALL
+namespace case_19 {
 /// ops::sync: a mesh whose scope is neither cta nor thread names no barrier.
 __global__ void k() {
     using wlayout =
@@ -372,17 +429,21 @@ __global__ void k() {
     Mesh<wlayout, TopologyScope::scope_count> mesh{wlayout{}};
     sync(mesh);
 }
+}
 #endif
 
-#if CASE == 20
+#if CASE == 20 || CASE == ALL
+namespace case_20 {
 /// ops::sync: a CTA mesh handed no grid-barrier counter.
 __global__ void k() {
     auto mesh = make_mesh<TopologyScope::cta>(cute::make_shape(cute::Int<8>{}));
     sync(mesh);
 }
+}
 #endif
 
-#if CASE == 22
+#if CASE == 22 || CASE == ALL
+namespace case_22 {
 /// A reduced axis that divides into neither whole lanes nor whole warps.
 __global__ void k(float *p) {
     float a = p[0], b = 0.f;
@@ -391,9 +452,11 @@ __global__ void k(float *p) {
     reduce<add_op, cute::tuple<cute::Int<0>>>(src, dst);
     p[0] = b;
 }
+}
 #endif
 
-#if CASE == 24
+#if CASE == 24 || CASE == ALL
+namespace case_24 {
 /// A ``copy_async_bulk`` source a mesh really does divide.
 __global__ void k(float *p, float *q, uint64_t *bar) {
     auto mesh = tmesh<128>();
@@ -410,32 +473,41 @@ __global__ void k(float *p, float *q, uint64_t *bar) {
         make_shard_layout(dst_lay, mesh, cute::make_tuple(shard::B{})));
     tilefoundry::ops::copy_async_bulk(src, dst, bar);
 }
+}
 #endif
 
-#if CASE == 25
+#if CASE == 25 || CASE == ALL
+namespace case_25 {
 /// Warps 0 and 2 of a block: two whole warps, and a gap between them.
-__global__ void k() {
+template <class D = void> __global__ void k() {
     using layout = cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
                                 cute::Stride<cute::Int<64>, cute::Int<1>>>;
-    using mesh = Mesh<layout, TopologyScope::thread>;
+    using mesh = dep_t<Mesh<layout, TopologyScope::thread>, D>;
     static_assert(tilefoundry::is_warped(mesh{}), "whole warps, so warped");
     static_assert(int(cute::size(tilefoundry::as_warped(mesh{}).layout)) == 64);
     static_assert(sync_impl::warps_run_together<mesh>(),
                   "ops::sync: a mesh that skips warps names no barrier");
 }
+void use() { (void)&k<>; }
+}
 #endif
-#if CASE == 26
+#if CASE == 26 || CASE == ALL
+namespace case_26 {
 /// The level a mesh does not name.
-__global__ void k() {
-    using mesh = Mesh<
-        cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>,
-        TopologyScope::thread>;
+template <class D = void> __global__ void k() {
+    using mesh = dep_t<Mesh<cute::Layout<cute::Shape<cute::Int<32>>,
+                                         cute::Stride<cute::Int<1>>>,
+                            TopologyScope::thread>,
+                       D>;
     constexpr auto cta = tilefoundry::get<TopologyScope::cta>(mesh{});
     static_assert(int(cute::size(cta.layout)) == 32, "unreachable");
 }
+void use() { (void)&k<>; }
+}
 #endif
 
-#if CASE == 27
+#if CASE == 27 || CASE == ALL
+namespace case_27 {
 /// mma: an e4m3 A with a bf16 B of the e4m3 atom's length.
 __global__ void k(float *p) {
     __nv_fp8_e4m3 a[16] = {};
@@ -447,9 +519,11 @@ __global__ void k(float *p) {
     mma(at, bt, ct);
     p[0] = c[0];
 }
+}
 #endif
 
-#if CASE == 28
+#if CASE == 28 || CASE == ALL
+namespace case_28 {
 /// mma: e4m3 A and B with a C that is not f32.
 __global__ void k(double *p) {
     __nv_fp8_e4m3 a[16] = {}, b[8] = {};
@@ -460,9 +534,11 @@ __global__ void k(double *p) {
     mma(at, bt, ct);
     p[0] = c[0];
 }
+}
 #endif
 
-#if CASE == 29
+#if CASE == 29 || CASE == ALL
+namespace case_29 {
 /// mma: e4m3 operands whose B has the bf16 atom's length.
 __global__ void k(float *p) {
     __nv_fp8_e4m3 a[16] = {}, b[4] = {};
@@ -472,5 +548,6 @@ __global__ void k(float *p) {
     auto ct = cute::make_tensor(cute::make_rmem_ptr(&c[0]), cute::Int<4>{});
     mma(at, bt, ct);
     p[0] = c[0];
+}
 }
 #endif

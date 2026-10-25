@@ -5,6 +5,7 @@ See [runtime §2.6](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -48,12 +49,17 @@ CASES: dict[int, str | None] = {
     29: "operands must be one atom's lane fragments",
 }
 
+_DIAGNOSTIC = re.compile(r"\n(?=\S+\(\d+\): (?!note))")
+_ERROR = re.compile(r"(\S+)\((\d+)\): (?:catastrophic )?error")
+_CONTEXT = re.compile(r" at line (\d+)(?: of (\S+))?$", re.M)
+_CASE_BLOCK = re.compile(r"^#if CASE == (\d+) \|\| CASE == ALL$.*?^#endif$", re.M | re.S)
+
 pytestmark = pytest.mark.skipif(
     shutil.which("nvcc") is None, reason="the refusals are nvcc diagnostics"
 )
 
 
-def _compile(case: int, arch: str = "sm_90a") -> subprocess.CompletedProcess:
+def _compile(case: int | str, arch: str = "sm_90a") -> subprocess.CompletedProcess:
     """Compile the one translation unit at ``-DCASE=case`` for *arch*."""
     return subprocess.run(
         [
@@ -73,8 +79,25 @@ def _compile(case: int, arch: str = "sm_90a") -> subprocess.CompletedProcess:
     )
 
 
+def _case_lines() -> dict[int, range]:
+    """The lines of each refused case's ``#if`` block in the ``.cu``."""
+    text = _SOURCE.read_text()
+    lines = {}
+    for block in _CASE_BLOCK.finditer(text):
+        first = text.count("\n", 0, block.start()) + 1
+        lines[int(block[1])] = range(first, first + block[0].count("\n") + 1)
+    return lines
+
+
+def _source_line(error: str) -> int | None:
+    """The ``.cu`` line of *error*'s outermost instantiation context, else of *error* itself."""
+    file, line = _ERROR.match(error).groups()
+    *_, (line, of) = [(line, file), *_CONTEXT.findall(error)]
+    return int(line) if Path(of or file).name == _SOURCE.name else None
+
+
 @pytest.mark.parametrize("arch", ["sm_90a", CudaTarget("nvidia.rtx_6000_ada").arch])
-def test_the_corrected_arithmetic_still_compiles(arch: str) -> None:
+def test_static_asserts_baseline(arch: str) -> None:
     """The positive control, so that failing everywhere cannot read as passing.
 
     On sm_89 it also shows the runtime headers compile for an architecture
@@ -85,14 +108,27 @@ def test_the_corrected_arithmetic_still_compiles(arch: str) -> None:
     assert proc.returncode == 0, proc.stderr
 
 
-@pytest.mark.parametrize("case", [c for c in CASES if c != 0])
-def test_the_wrong_usage_does_not_compile(case: int) -> None:
-    """Each case violates one constraint and is refused by its own sentence."""
-    proc = _compile(case)
-    assert proc.returncode != 0, f"CASE {case} compiled; the constraint is not enforced"
-    expected = CASES[case]
-    assert expected is not None
-    assert expected in proc.stderr, (
-        f"CASE {case} failed for a different reason than the constraint it pins;\n"
-        f"expected to find: {expected!r}\nstderr:\n{proc.stderr}"
-    )
+def test_static_asserts_refuse() -> None:
+    """Each case violates one constraint and is refused by its own sentence.
+
+    All refused cases compile in one unit. A diagnostic starts at column 0 as
+    ``file(line): kind`` and keeps its notes; it belongs to the case whose ``#if``
+    block holds its outermost ``at line N`` (a context without ``of file`` is in
+    the diagnostic's own file), and an error of no case fails.
+    """
+    proc = _compile("ALL")
+    case_lines = _case_lines()
+    errors: dict[int, list[str]] = {case: [] for case, sentence in CASES.items() if sentence}
+    problems = []
+    for error in filter(_ERROR.match, _DIAGNOSTIC.split(proc.stderr)):
+        line = _source_line(error)
+        owner = next((case for case, lines in case_lines.items() if line in lines), None)
+        if owner in errors:
+            errors[owner].append(error)
+        else:
+            problems.append(f"an error of no refused case (line {line}):\n{error}")
+    for case, owned in errors.items():
+        if not any(CASES[case] in error for error in owned):
+            heads = "".join(f"\n  {error.splitlines()[0]}" for error in owned) or " none"
+            problems.append(f"CASE {case} is not refused by {CASES[case]!r}; its errors:{heads}")
+    assert not problems, "\n\n".join(problems)
