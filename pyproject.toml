@@ -35,7 +35,8 @@ Repository = "https://github.com/tile-ai/TileFoundry"
 tilefoundry = "tilefoundry.cli:main"
 
 [tool.coverage.run]
-branch = true
+branch = false
+core = "sysmon"
 source = ["src", "targets"]
 
 [tool.coverage.report]

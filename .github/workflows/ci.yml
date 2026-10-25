@@ -67,8 +67,8 @@ jobs:
           COVERAGE_FILE: test_results/.coverage
           CCACHE_STATSLOG: ${{ runner.temp }}/ccache-stats.log
         run: |
-          pytest tests/ -n 4 \
-            --cov --cov-branch --cov-context=test \
+          pytest tests/ -n 8 \
+            --cov \
             --cov-report=xml:test_results/coverage-source.xml --cov-report=
       - name: Report compile cache use
         if: always()
@@ -96,7 +96,8 @@ jobs:
           {
             cat <<EOF
           [run]
-          branch = True
+          branch = False
+          core = sysmon
           parallel = True
           source =
           EOF
@@ -133,7 +134,7 @@ jobs:
         if: always()
         run: |
           if [ -f test_results/.coverage ]; then
-            coverage html --show-contexts -d test_results/htmlcov \
+            coverage html -d test_results/htmlcov \
               --data-file=test_results/.coverage
           fi
       - uses: actions/upload-artifact@v4
