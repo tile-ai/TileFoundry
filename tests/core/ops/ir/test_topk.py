@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 import torch
 
-from tests.core._corpus import load_program
 from tests.core.ops.ir.op_case import (
     ExpectedError,
     OpCase,
@@ -24,6 +23,7 @@ from tests.core.ops.ir.op_case import (
     op_case_test,
     raw_shard_tensor_type,
 )
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Constant, Var
@@ -127,7 +127,9 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
 
 
 def test_topk_parser_preserves_largest_sorted():
-    program = load_program(Path(__file__).parents[2] / "fixtures/logical/topk_largest_sorted.py")
+    program = load_authored_ir(
+        str(Path(__file__).parents[2] / "fixtures/logical/topk_largest_sorted.py")
+    )
     topk = program.entry_function().body.target
     assert isinstance(topk, TopK)
     assert topk.k == 6 and topk.axis == -1

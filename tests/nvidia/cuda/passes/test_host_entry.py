@@ -7,9 +7,11 @@ on the way.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from tests.nvidia.cuda.fixtures.tir.square import TirSquare
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.stmts import Evaluate
@@ -104,4 +106,5 @@ def test_a_lone_kernel_reads_its_geometry_off_its_own_body() -> None:
 
 
 def test_a_module_that_already_has_a_host_entry_is_left_alone() -> None:
+    TirSquare = load_authored_ir(str(Path(__file__).parents[1] / "fixtures/tir/square.py"))
     assert insert_default_host_entry(TirSquare) is TirSquare

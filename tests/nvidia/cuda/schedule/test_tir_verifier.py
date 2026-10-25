@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import load_program
 from tests.nvidia.cuda.schedule._support import (
     _finalized,
 )
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import (
     Call,
     Constant,
@@ -48,9 +48,8 @@ def test_verifier_rejects_malformed_retained_tir_calls(wrong, refused):
 
 
 def test_verifier_rejects_non_integer_indexed_tir_target():
-    lowered = _finalized(
-        load_program(Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py")
-    )
+    source = Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py"
+    lowered = _finalized(load_authored_ir(str(source)))
     slot = lowered.children["layers"]
     target = Call(
         TupleGetItem(),

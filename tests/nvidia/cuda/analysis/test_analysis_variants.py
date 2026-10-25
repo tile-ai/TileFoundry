@@ -7,21 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import load_program
 from tests.nvidia.cuda.analysis._contracts import (
     _footprint_bytes,
     _reuse_conclusions,
     _working_set_bytes,
 )
-from tests.nvidia.cuda.fixtures.placed import persistent_gemm_tiled
-from tests.nvidia.cuda.fixtures.placed.gemm_schedules import (
-    Gemm_MNK_NN128x128x64_w12x11_k16384,
-)
-from tests.nvidia.cuda.fixtures.placed.hand_checked import (
-    CapacityExceeded,
-    WaveTruncation,
-)
-from tests.nvidia.cuda.fixtures.placed.persistent_gemm_tiled import PersistentGemmTiled
 from tilefoundry.analysis import (
     AnalysisPrecision,
     allocation,
@@ -31,8 +21,11 @@ from tilefoundry.analysis import footprint as footprint_analysis
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.report import report_data
+from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry_nvidia import CudaTarget
+
+PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
 
 
 def _report(module, *, analysis=("memory",)) -> dict:
@@ -58,7 +51,9 @@ def test_persistent_gemm_over_reuse_conclusions_match_the_reviewed_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(footprint_analysis, "counted_precision", lambda items: precision)
-    memory = _memory_record(Gemm_MNK_NN128x128x64_w12x11_k16384)
+    memory = _memory_record(
+        load_authored_ir(f"{PLACED / 'gemm_schedules.py'}:Gemm_MNK_NN128x128x64_w12x11_k16384")
+    )
 
     assert _reuse_conclusions(memory) == [
         {
@@ -97,7 +92,7 @@ def test_capacity_exceeded_matches_the_written_ratio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(footprint_analysis, "counted_precision", lambda items: precision)
-    data = _report(CapacityExceeded)
+    data = _report(load_authored_ir(f"{PLACED / 'hand_checked.py'}:CapacityExceeded"))
     memory = data["functions"][0]["function_records"]["memory"]
     used = _working_set_bytes(memory)
     capacity = 1_048_576
@@ -118,7 +113,9 @@ def test_capacity_exceeded_matches_the_written_ratio(
 
 
 def test_runtime_loop_start_names_the_unbounded_value() -> None:
-    module = load_program(Path(__file__).parents[1] / "fixtures/diagnostics/analysis_runtime_start.py")
+    module = load_authored_ir(
+        str(Path(__file__).parents[1] / "fixtures/diagnostics/analysis_runtime_start.py")
+    )
     with pytest.raises(
         AnalysisError,
         match=r"loop 'n' takes its start from 'start'.*analysis needs a literal start or a stated value range",
@@ -127,13 +124,16 @@ def test_runtime_loop_start_names_the_unbounded_value() -> None:
 
 
 def test_symbolic_divisor_loop_start_does_not_block_typing() -> None:
-    module = load_program(Path(__file__).parents[1] / "fixtures/logical/symbolic_loop_start.py")
+    module = load_authored_ir(
+        str(Path(__file__).parents[1] / "fixtures/logical/symbolic_loop_start.py")
+    )
     with pytest.raises(SpecializationError, match=r"still states \['chunks'\] as ranges"):
         check_program(module, module.entry_function())
     check_program(module, module.entry_function(), dims={"chunks": 8})
 
 
 def test_wave_truncation_counts_only_the_resident_ctas() -> None:
+    WaveTruncation = load_authored_ir(f"{PLACED / 'hand_checked.py'}:WaveTruncation")
     wide_target = CudaTarget(
         replace(WaveTruncation.target.device, sm_count=256),
         architecture=WaveTruncation.target.architecture,
@@ -159,6 +159,10 @@ def test_persistent_tiled_unseeded(monkeypatch: pytest.MonkeyPatch) -> None:
     nothing: the solver still finds a placement.
     """
     monkeypatch.setattr(allocation, "_first_fit", lambda *args, **kwargs: None)
+    persistent_gemm_tiled = PLACED / "persistent_gemm_tiled.py"
+    constants = load_namespace(str(persistent_gemm_tiled))[0]
+    BM, BN, BK = constants["BM"], constants["BN"], constants["BK"]
+    PersistentGemmTiled = load_authored_ir(f"{persistent_gemm_tiled}:PersistentGemmTiled")
     data = _report(PersistentGemmTiled, analysis=("memory", "compute-cost"))
     memory = data["functions"][0]["function_records"]["memory"]
     assert _footprint_bytes(memory, "a") == 12 * 64 * 32 * 2
@@ -169,20 +173,15 @@ def test_persistent_tiled_unseeded(monkeypatch: pytest.MonkeyPatch) -> None:
         for call in data["functions"][0]["calls"]
         if [operand["type"] for operand in call["memory"]["operands"]]
         == [
-            f"bf16[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BK}] smem",
-            f"bf16[{persistent_gemm_tiled.BK},{persistent_gemm_tiled.BN}] smem",
-            f"f32[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BN}] rmem",
+            f"bf16[{BM},{BK}] smem",
+            f"bf16[{BK},{BN}] smem",
+            f"f32[{BM},{BN}] rmem",
         ]
     )
-    tile_bytes = persistent_gemm_tiled.BM * persistent_gemm_tiled.BN * 4
+    tile_bytes = BM * BN * 4
     assert product["memory"]["operands"][-1]["write"] == tile_bytes
     flops = product["compute-cost"]["flops"]["bf16"]["per_unit"]
-    assert flops == [
-        2 * persistent_gemm_tiled.BM * persistent_gemm_tiled.BN * persistent_gemm_tiled.BK
-    ]
-    operands = (
-        persistent_gemm_tiled.BM * persistent_gemm_tiled.BK * 2,
-        persistent_gemm_tiled.BK * persistent_gemm_tiled.BN * 2,
-    )
+    assert flops == [2 * BM * BN * BK]
+    operands = (BM * BK * 2, BK * BN * 2)
     peaks = {peak["memory_level"]: peak["peak_bytes"] for peak in memory["peaks"]}
     assert peaks["smem"] >= sum(operands)

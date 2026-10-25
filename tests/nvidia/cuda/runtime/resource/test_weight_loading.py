@@ -10,27 +10,17 @@ tensor already held.
 
 from __future__ import annotations
 
+from pathlib import Path
 from threading import Thread
 
 import pytest
 import torch
 
-from tests.nvidia.cuda.fixtures.placed.cyclic_split_weight import (
-    CyclicSplitWeight,
-    CyclicSplitWeightTwin,
-    MeshOrderWeight,
-    MeshOrderWeightTwin,
-)
-from tests.nvidia.cuda.fixtures.placed.tiny_tp_decoder import (
-    DECODE_FULL,
-    PROJECT_FULL,
-    C,
-    R,
-    TinyTPDecoderLM,
-    TinyTPDecoderLMTwin,
-)
+from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.ir.types import Placement
 from tilefoundry.runtime.resource import DictResource, SafetensorsResource
+
+PLACED = Path(__file__).parents[2] / "fixtures" / "placed"
 
 
 class _Counted:
@@ -65,6 +55,11 @@ def test_distributed_weight_loading(tmp_path) -> None:
             "nothing to get wrong, so a skip here would report a pass it never earned"
         )
 
+    tiny_tp_decoder = load_namespace(str(PLACED / "tiny_tp_decoder.py"))[0]
+    PROJECT_FULL, DECODE_FULL = tiny_tp_decoder["PROJECT_FULL"], tiny_tp_decoder["DECODE_FULL"]
+    R, C = tiny_tp_decoder["R"], tiny_tp_decoder["C"]
+    TinyTPDecoderLMTwin = tiny_tp_decoder["TinyTPDecoderLMTwin"]
+    TinyTPDecoderLM = load_authored_ir(f"{PLACED / 'tiny_tp_decoder.py'}:TinyTPDecoderLM")
     TinyTPDecoderLM.prepare(
         DictResource(
             {"layer.project_weight": PROJECT_FULL, "layer.decode_weight": DECODE_FULL}
@@ -107,10 +102,9 @@ def test_distributed_weight_loading(tmp_path) -> None:
 @pytest.mark.parametrize("case", ("cyclic", "mesh_order"))
 def test_weight_loading_refuses_noncanonical_local_axes(tmp_path, case):
     """Reject two unsupported views instead of silently loading the wrong elements."""
-    program, twin_type, size = {
-        "cyclic": (CyclicSplitWeight, CyclicSplitWeightTwin, 8),
-        "mesh_order": (MeshOrderWeight, MeshOrderWeightTwin, 32),
-    }[case]
+    root, size = {"cyclic": ("CyclicSplitWeight", 8), "mesh_order": ("MeshOrderWeight", 32)}[case]
+    program = load_authored_ir(f"{PLACED / 'cyclic_split_weight.py'}:{root}")
+    twin_type = load_namespace(str(PLACED / "cyclic_split_weight.py"))[0][f"{root}Twin"]
     program.prepare(DictResource({"weight": torch.arange(size, dtype=torch.float32)}), str(tmp_path))
     twin = twin_type()
     twin.load(SafetensorsResource(str(tmp_path), device="cpu"), placement=Placement({"gpu": 1}))

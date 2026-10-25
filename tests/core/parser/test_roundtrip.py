@@ -1,10 +1,12 @@
 """Parser-owned checks for canonical grid-loop bindings."""
 
 
+from pathlib import Path
+
 import pytest
 
-from tests.core.fixtures.placed.gqa_decode import GqaOnline
 from tilefoundry import func
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import Tensor
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant
@@ -14,7 +16,9 @@ from tilefoundry.ir.hir.specialize import InstantiateDimensionCloner
 
 
 def test_gqa_correction_reads_the_old_carry_and_unique_yield() -> None:
-    function = InstantiateDimensionCloner({"ctx_len": 8}).function(GqaOnline.entry_function())
+    gqa_decode = Path(__file__).parents[1] / "fixtures" / "placed" / "gqa_decode.py"
+    entry = load_authored_ir(f"{gqa_decode}:GqaOnline").entry_function()
+    function = InstantiateDimensionCloner({"ctx_len": 8}).function(entry)
     printed = as_script(function)
 
     assert printed.count("        m_new = tf.max(m, score)") == 1

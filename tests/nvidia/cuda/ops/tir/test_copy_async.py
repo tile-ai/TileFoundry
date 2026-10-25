@@ -11,14 +11,15 @@ See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 import tilefoundry
 import tilefoundry_nvidia.cuda.codegen  # noqa: F401 — trigger emitter autodiscovery
-from tests.nvidia.cuda.fixtures.tir.async_sync import AsyncStage
-from tests.nvidia.cuda.fixtures.tir.split_stage import SplitStage
 from tests.nvidia.cuda.ops.tir.targets import CUDA_TARGETS, retarget
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.async_copy import CopyAsync, CpAsyncWait
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -26,6 +27,8 @@ from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.ir.types import DType, Layout, Mesh, TensorType, Topology, make_tensor_type
 from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
 from tilefoundry_nvidia import CudaTarget
+
+TIR = Path(__file__).parents[2] / "fixtures" / "tir"
 
 
 def _copy_async_pf(src_ty: TensorType, dst_ty: TensorType) -> PrimFunction:
@@ -109,6 +112,7 @@ def test_async_copy_stage_matches_input(target: CudaTarget) -> None:
     torch.manual_seed(3)
     source = torch.randn(128, 4, dtype=torch.float32, device="cuda")
     out = torch.empty_like(source)
+    AsyncStage = load_authored_ir(f"{TIR / 'async_sync.py'}:AsyncStage")
     runtime = tilefoundry.compile(retarget(AsyncStage, target), target=target)
     runtime(source, out)
     torch.cuda.synchronize()
@@ -119,7 +123,7 @@ def test_async_copy_stage_matches_input(target: CudaTarget) -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_async_copy_stages_two_separate_runs_per_thread(target: CudaTarget) -> None:
     """Each thread's second run lands 512 elements after its first, as the destination states."""
-    module = retarget(SplitStage, target)
+    module = retarget(load_authored_ir(f"{TIR / 'split_stage.py'}:SplitStage"), target)
     verify_module(module)
     runtime = tilefoundry.compile(module, target=target)
     torch.manual_seed(4)

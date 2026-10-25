@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 import tilefoundry
-from tests.nvidia.cuda.fixtures.tir.square import TirSquare
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry_nvidia import CudaTarget
 
 
@@ -15,6 +17,7 @@ def test_authored_for_if_square_matches_torch() -> None:
     torch.manual_seed(0)
     x = torch.randn(128, dtype=torch.float32, device="cuda")
     expected = x.square()
+    TirSquare = load_authored_ir(str(Path(__file__).parents[1] / "fixtures/tir/square.py"))
     runtime = tilefoundry.compile(TirSquare, target=CudaTarget("nvidia.h200_sxm"))
     assert runtime.name == "TirSquare.square_host"
     runtime(x)

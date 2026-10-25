@@ -5,17 +5,7 @@ with ``eps = 1e-6``. Full GPU compile + run + numerical compare
 against ``torch.nn.functional.rms_norm``.
 """
 
-import pytest
 import torch
-
-from tests.nvidia.cuda.fixtures.placed.rmsnorm import RmsnormModule
-from tests.nvidia.cuda.fixtures.placed.rmsnorm_quant_seq2 import RmsnormQuantSeq2Module
-from tests.nvidia.cuda.fixtures.placed.rmsnorm_seq2 import RmsnormSeq2Module
-
-NORMALISED = [
-    pytest.param(RmsnormModule, 1, id="one_reduced_axis"),
-    pytest.param(RmsnormSeq2Module, 2, id="seq_2_multi_axis_split"),
-]
 
 
 def _rmsnorm_quant_seq_2_reference(
@@ -39,21 +29,26 @@ def _rmsnorm_quant_seq_2_reference(
 
 if __name__ == "__main__":
     import sys
+    from pathlib import Path
 
+    from tilefoundry.cli.source import load_authored_ir
     from tilefoundry.inspection.viewer import Viewer
 
     target_name = sys.argv[1] if len(sys.argv) > 1 else "rmsnorm_quant_seq_2"
+    placed = Path(__file__).parents[1] / "fixtures" / "placed"
     _fns = {
-        "rmsnorm": RmsnormModule.rmsnorm,
-        "rmsnorm_seq_2": RmsnormSeq2Module.rmsnorm_seq_2,
-        "rmsnorm_quant_seq_2": RmsnormQuantSeq2Module.rmsnorm_quant_seq_2,
+        "rmsnorm": f"{placed / 'rmsnorm.py'}:RmsnormModule",
+        "rmsnorm_seq_2": f"{placed / 'rmsnorm_seq2.py'}:RmsnormSeq2Module",
+        "rmsnorm_quant_seq_2": f"{placed / 'rmsnorm_quant_seq2.py'}:RmsnormQuantSeq2Module",
     }
-    fn_obj = _fns.get(target_name)
-    if fn_obj is None or not hasattr(fn_obj, "params"):
+    source = _fns.get(target_name)
+    if source is None:
         print(
             f"unknown function {target_name!r}; available: "
             "rmsnorm, rmsnorm_seq_2, rmsnorm_quant_seq_2",
             file=sys.stderr,
         )
         sys.exit(1)
-    Viewer(fn_obj).serve(port=0, open_browser=True)
+    Viewer(load_authored_ir(f"{source}.{target_name}").entry_function()).serve(
+        port=0, open_browser=True
+    )

@@ -12,10 +12,10 @@ from pathlib import Path
 import pytest
 import torch
 
-from tests.core._corpus import load_program
 from tests.core.ops.ir.op_case import (
     infer_call,
 )
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
@@ -63,13 +63,13 @@ ROUNDTRIPS = [
 def test_a_double_roundtrip_matches_torch(io_dtype, mid_dtype, io_torch, mid_torch, values):
     x = torch.tensor(values, dtype=io_torch)
 
-    function = load_program(FIXTURES / f"logical/cast_{mid_dtype}.py").entry_function()
+    function = load_authored_ir(str(FIXTURES / f"logical/cast_{mid_dtype}.py")).entry_function()
     out = evaluate(function, x)
 
     torch.testing.assert_close(out, x.to(mid_torch).to(io_torch))
 
 
 def test_cast_f4e2m1_has_no_evaluator_support():
-    fn = load_program(FIXTURES / "diagnostics/evaluator_cast_f4e2m1.py").entry_function()
+    fn = load_authored_ir(str(FIXTURES / "diagnostics/evaluator_cast_f4e2m1.py")).entry_function()
     with pytest.raises(EvalError, match=r"unsupported dtype.*f4e2m1"):
         evaluate(fn, torch.randn(4))

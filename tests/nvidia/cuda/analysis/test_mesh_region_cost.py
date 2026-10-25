@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from tests.nvidia.cuda.fixtures.placed.region_boundaries import RegionBoundaries
+from pathlib import Path
+
 from tilefoundry.analysis import (
     ComputeCostMetadata,
     RegionMemoryMetadata,
@@ -11,6 +12,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.metadata import shares
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.math.binary import Binary
@@ -79,6 +81,8 @@ def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
 
 def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
     """Stepping into occurrences preserves repetition and counts the escaped value once."""
+    region_boundaries = Path(__file__).parents[1] / "fixtures/placed/region_boundaries.py"
+    RegionBoundaries = load_authored_ir(f"{region_boundaries}:RegionBoundaries")
     helper = analyze(
         *check_program(RegionBoundaries, RegionBoundaries.lookup("helper"), topology_level="thread"),
         analysis="compute-cost",

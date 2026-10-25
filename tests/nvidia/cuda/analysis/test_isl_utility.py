@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from tests.nvidia.cuda.fixtures.placed.persistent_gemm_tiled import BX, PersistentGemmTiled
+from pathlib import Path
+
+from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.ir.core import RangeMetadata, attach_metadata
 from tilefoundry.ir.core.expr import Call, Var
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -20,6 +22,8 @@ def test_dim_range_prefers_metadata_and_unknown_leaves_return_none():
     attach_metadata(unknown, RangeMetadata(3, 11))
     assert dim_range(unknown) == (3, 11)
 
+    persistent_gemm_tiled = Path(__file__).parents[1] / "fixtures/placed/persistent_gemm_tiled.py"
+    PersistentGemmTiled = load_authored_ir(f"{persistent_gemm_tiled}:PersistentGemmTiled")
     outer = PersistentGemmTiled.entry_function().body.body
     assert isinstance(outer, LoopRegion)
 
@@ -29,4 +33,4 @@ def test_dim_range_prefers_metadata_and_unknown_leaves_return_none():
         return (value, *(nested for arg in value.args for nested in calls(arg)))
 
     coordinate = next(call for call in calls(outer.start) if isinstance(call.target, MeshCoord))
-    assert dim_range(coordinate) == (0, BX)
+    assert dim_range(coordinate) == (0, load_namespace(str(persistent_gemm_tiled))[0]["BX"])

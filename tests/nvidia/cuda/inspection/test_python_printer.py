@@ -7,9 +7,10 @@ left-hand side carries, and the target header, whose value must rebuild the
 """
 
 from dataclasses import dataclass, fields, replace
+from pathlib import Path
 
-from tests.core._corpus import reload_program
-from tests.nvidia.cuda.fixtures.placed.rmsnorm import RmsnormModule
+from tests.core._corpus import reload
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.ir.core.module import Module
@@ -17,6 +18,8 @@ from tilefoundry.target import Target, register_target
 from tilefoundry.utils.python_source import PythonExpr
 from tilefoundry_nvidia.cuda.target import CudaArchitecture
 from tilefoundry_nvidia.cuda.target import CudaTarget as BuiltinCudaTarget
+
+RMSNORM = f"{Path(__file__).parents[1] / 'fixtures' / 'placed' / 'rmsnorm.py'}:RmsnormModule"
 
 
 class CudaTarget(BuiltinCudaTarget):
@@ -29,7 +32,7 @@ class ExtendedCudaArchitecture(CudaArchitecture):
 
 
 def test_inspection_types_are_opt_in_same_line_comments():
-    fn = RmsnormModule.entry_function()
+    fn = load_authored_ir(RMSNORM).entry_function()
     canonical = as_script(fn)
     annotated = as_script(fn, options=PythonPrintOptions(show_types=True))
 
@@ -86,7 +89,7 @@ def test_direct_hardware_values_keep_added_fields_in_canonical_source():
 
 
 def test_external_same_named_cuda_target_keeps_its_provider_in_module_source():
-    function = RmsnormModule.entry_function()
+    function = load_authored_ir(RMSNORM).entry_function()
     register_target(CudaTarget)
     target = CudaTarget("nvidia.h200_sxm")
     module = Module("external", (function,), function.name, target=target)
@@ -94,7 +97,7 @@ def test_external_same_named_cuda_target_keeps_its_provider_in_module_source():
 
     assert "from tests.nvidia.cuda.inspection.test_python_printer import CudaTarget" in canonical
     assert "from tilefoundry_nvidia.cuda.target import CudaTarget" not in canonical
-    rebuilt = reload_program(canonical)
+    rebuilt = reload(canonical, "external")
     assert type(rebuilt.target) is CudaTarget
     assert rebuilt.target == target
 
@@ -106,7 +109,7 @@ def test_printer_emits_provider_expression_without_interpreting_it():
         def to_python(self) -> PythonExpr:
             return PythonExpr(("from nobody import unknown",), "unknown !!!")
 
-    function = RmsnormModule.entry_function()
+    function = load_authored_ir(RMSNORM).entry_function()
     canonical = as_script(
         Module(
             "uninterpretable",

@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
 
-from tests.nvidia.cuda.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.registry import Analyzer
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import Target
@@ -30,8 +31,11 @@ class _AnalysisTarget(Target):
         return super().get_analyzer(selector)
 
 
+RMSNORM = f"{Path(__file__).parents[1] / 'fixtures/placed/rmsnorm.py'}:RmsnormModule"
+
+
 def _module(target: Target) -> tuple[Module, object]:
-    function = RmsnormModule.entry_function()
+    function = load_authored_ir(RMSNORM).entry_function()
     return Module("rmsnorm", (function,), function.name, target=target), function
 
 
@@ -116,7 +120,7 @@ def test_analyze_keeps_a_provider_value_error_and_rejects_over_limit_topology() 
     with pytest.raises(ValueError, match="provider analysis failure"):
         analyze(*check_program(module, function), analysis="broken")
 
-    function = RmsnormModule.entry_function()
+    function = load_authored_ir(RMSNORM).entry_function()
     over_limit = Module(
         "over-limit",
         (function,),

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from tests.core._corpus import reload_program
+from tests.core._corpus import reload
 from tests.core.schedule._fixtures import (
     CliCase,
     _quiet_json,
@@ -241,7 +241,7 @@ def _check_facts_refusal(out: Path, captured: pytest.CaptureResult[str], *, mess
 
 def _check_finalized_rows(out: Path, captured: pytest.CaptureResult[str]) -> None:
     assert captured == ("", "")
-    lowered = reload_program(out.read_text()).entry_function()
+    lowered = reload(out.read_text(), "RowCopy").entry_function()
     assert isinstance(lowered, PrimFunction)
     assert lowered.params[-1].type.shape == (128,)
 

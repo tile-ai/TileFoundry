@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.core._corpus import Case, Problems, load_program, reload_program
+from tests.core._corpus import Case, Problems, reload
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, SourceSpanMetadata, get_metadata
 from tilefoundry.ir.core.module import Module
@@ -13,36 +13,26 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
+from tilefoundry.visitor_registry.verify import verify_module
 
 
 @dataclass(frozen=True)
 class ParserCase(Case):
-    name: str | None = None
     canonical: bool = False
     golden: Path | None = None
     prints: tuple[str, ...] = ()
     same_as: Path | None = None
 
-    @property
-    def id(self) -> str:
-        return super().id + (f".{self.name}" if self.name else "")
-
-    def load(self) -> Module | Function | PrimFunction:
-        return load_program(self.path, name=self.name)
-
 
 @dataclass(frozen=True)
 class Parsed:
-    ir: Module | Function | PrimFunction | None
+    ir: Module | None
     printed: str | None
-    rebuilt: Module | Function | PrimFunction | None
+    rebuilt: Module | None
 
 
 def _functions(ir):
-    if isinstance(ir, Module):
-        return tuple(frame.function for frame in list_call_paths(ir).values())
-    return (ir,)
+    return tuple(frame.function for frame in list_call_paths(ir).values())
 
 
 def require_call_spans(ir) -> None:
@@ -54,7 +44,7 @@ def require_call_spans(ir) -> None:
 
 
 def _reparse(ir, printed):
-    return reload_program(printed, name=ir.name)
+    return reload(printed, ir.name)
 
 
 def _const_parameters(ir, printed, rebuilt):
@@ -68,14 +58,11 @@ def _const_parameters(ir, printed, rebuilt):
 
 def _verify_tir(ir):
     if any(isinstance(fn, PrimFunction) for fn in _functions(ir)):
-        if isinstance(ir, Module):
-            verify_module(ir)
-        else:
-            verify_prim_function(ir)
+        verify_module(ir)
 
 
 def _same_print(printed, path):
-    other = ParserCase(path=path, corpus=path.parent).load()
+    other = Case(path=path).load()
     assert as_script(other) == printed
 
 

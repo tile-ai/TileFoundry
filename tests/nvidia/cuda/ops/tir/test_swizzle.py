@@ -10,7 +10,7 @@ import torch
 
 import tilefoundry
 import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tests.core._corpus import reload_program
+from tests.core._corpus import reload
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -87,7 +87,7 @@ def test_swizzled_smem_load_compiles_and_executes() -> None:
     dropped entirely.
     """
     source = as_script(SwizzledSquare)
-    restored = reload_program(source, name="SwizzledSquare")
+    restored = reload(source, "SwizzledSquare")
     assert as_script(restored) == source
 
     preamble, _ = render_shard_layout_value("tile", _swizzled_rows(_THREADS))

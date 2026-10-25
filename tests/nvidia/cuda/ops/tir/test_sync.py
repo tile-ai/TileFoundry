@@ -5,11 +5,13 @@ See [tir §1.5](docs/spec/tir.md#15-sync).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 import tilefoundry
-from tests.nvidia.cuda.fixtures.tir.sync import SyncSquare
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.target import CpuTarget
 from tilefoundry_nvidia import CudaTarget
@@ -75,6 +77,7 @@ def test_sync_kernel_runs_and_squares() -> None:
     torch.manual_seed(4)
     x = torch.randn(4, 32, dtype=torch.float32, device="cuda")
     expected = x.square()
+    SyncSquare = load_authored_ir(str(Path(__file__).parents[2] / "fixtures/tir/sync.py"))
     runtime = tilefoundry.compile(SyncSquare, target=CudaTarget("nvidia.h200_sxm"))
     runtime(x)
     torch.cuda.synchronize()

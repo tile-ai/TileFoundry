@@ -11,27 +11,18 @@ No GPU, no codegen, no runtime.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
 
-from tests.nvidia.cuda.fixtures.logical.hir_composition import (
-    REFERENCE_PROGRAMS,
-    CrossModule,
-    Expert,
-)
-from tests.nvidia.cuda.fixtures.placed.moe_mega_kernel import MoEMegaKernel
-from tests.nvidia.cuda.fixtures.shapes.scaled_modules import (
-    FusedScaledParent,
-    ScaledChild,
-    StackedScaledParent,
-)
 from tests.nvidia.cuda.models.qwen3_1_7b.case import CASE as QWEN_CASE
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.metadata import ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata
 from tilefoundry.analysis.registry import Analyzer
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import (
     Call,
@@ -68,6 +59,9 @@ from tilefoundry_nvidia.cuda.models.qwen3_1_7b.model import Qwen3_1_7B
 
 _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)
+FIXTURES = Path(__file__).parents[1] / "fixtures"
+HIR_COMPOSITION = FIXTURES / "logical" / "hir_composition.py"
+SCALED_MODULES = FIXTURES / "shapes" / "scaled_modules.py"
 
 
 def _matmul_records(
@@ -113,6 +107,9 @@ def _traffic(records) -> dict[str, int]:
 
 
 def test_a_repeated_call_site_counts_its_work_again() -> None:
+    Expert = load_authored_ir(f"{HIR_COMPOSITION}:Expert")
+    CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
+
     @module(entry="twice", target=CudaTarget(_H200), topologies=_CTA)
     class _Twice:
         mm = Expert
@@ -136,6 +133,9 @@ def test_a_repeated_call_site_counts_its_work_again() -> None:
 
 
 def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
+    Expert = load_authored_ir(f"{HIR_COMPOSITION}:Expert")
+    CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
+
     @module(entry="looped", target=CudaTarget(_H200), topologies=_CTA)
     class _Looped:
         mm = Expert
@@ -180,6 +180,7 @@ def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
         *check_program(_Direct, _Direct.entry_function()),
         analysis=("compute-cost", "memory"),
     )
+    CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
     fused_result = analyze(
         *check_program(CrossModule, CrossModule.entry_function()),
         analysis=("compute-cost", "memory"),
@@ -235,9 +236,14 @@ def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
     assert set(result.metadata_types) >= {ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata}
 
 
-@pytest.mark.parametrize("name,root", REFERENCE_PROGRAMS, ids=[n for n, _ in REFERENCE_PROGRAMS])
+@pytest.mark.parametrize(
+    "name,root",
+    (("same_module", "SameModule"), ("cross_module", "CrossModule"), ("fused", "Fused")),
+    ids=("same_module", "cross_module", "fused"),
+)
 def test_each_reference_program_is_one_analysable_kernel(name, root) -> None:
     """The shared programs measure as one root each; what a call means is not restated."""
+    root = load_authored_ir(f"{HIR_COMPOSITION}:{root}")
     result = analyze(
         *check_program(root, root.entry_function()),
         analysis=("compute-cost", "memory"),
@@ -267,6 +273,7 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
     selected, as its own extent and origin rather than an extent alone.
     """
     expected = {"routed_expert": ((120,), 0), "shared_expert": ((12,), 120)}
+    MoEMegaKernel = load_authored_ir(f"{FIXTURES / 'placed' / 'moe_mega_kernel.py'}:MoEMegaKernel")
     reached = {
         fn.name: _placed_primitives(fn)
         for frame in list_call_paths(
@@ -286,6 +293,7 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
 
 def _stacked_program(count, trips=None):
     trips = count if trips is None else trips
+    ScaledChild = load_authored_ir(f"{SCALED_MODULES}:ScaledChild")
 
     @module(entry="run", target=CudaTarget(_H200), topologies=_CTA)
     class Stack:
@@ -359,6 +367,11 @@ def _call_program(definition, *, count=1, indexed=False, name="run"):
 def test_retained_calls_match_the_memory_and_work_acceptance_values(
     kind, flops, traffic, peak, persistent, occurrences
 ):
+    Expert = load_authored_ir(f"{HIR_COMPOSITION}:Expert")
+    CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
+    ScaledChild = load_authored_ir(f"{SCALED_MODULES}:ScaledChild")
+    FusedScaledParent = load_authored_ir(f"{SCALED_MODULES}:FusedScaledParent")
+    StackedScaledParent = load_authored_ir(f"{SCALED_MODULES}:StackedScaledParent")
     roots = {
         "cross": CrossModule,
         "twice": _call_program(Expert, count=2, name="twice"),
@@ -484,6 +497,7 @@ def test_an_analyzer_cannot_write_records_on_a_shared_derived_callee():
     target = _WriteGuardTarget(
         Analyzer("bad", write_on_definition, produces=(ComputeCostMetadata,))
     )
+    CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
     root = replace(CrossModule, target=target, topologies=None)
     with pytest.raises(AnalysisError, match="changed Metadata it does not declare"):
         analyze(*check_program(root, root.entry_function()), analysis="bad")

@@ -1,7 +1,7 @@
 """Three minimal shapes of one composed kernel, as authored programs.
 
 A root calling its own helper, a root calling an attached child, and a root
-reaching both from one entry, exported together as ``REFERENCE_PROGRAMS``.
+reaching both from one entry.
 These are reference programs, not a behaviour matrix: what a composed call
 means is asserted where that behaviour lives.
 """
@@ -63,10 +63,3 @@ class Fused:
     @func
     def root(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
         return tf.add(scale(x), expert(x))  # noqa: F821
-
-
-REFERENCE_PROGRAMS = (
-    ("same_module", SameModule),
-    ("cross_module", CrossModule),
-    ("fused", Fused),
-)

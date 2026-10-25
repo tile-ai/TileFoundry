@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.runtime.resource import DrawnResource, _resolved_device
 
 
@@ -13,8 +16,8 @@ def cpu_gen() -> torch.Generator:
 
 
 def test_drawn_resource_never_redraws():
-    from tests.nvidia.cuda.fixtures.placed.leaf_weights import Small  # noqa: PLC0415
-
+    leaf_weights = Path(__file__).parents[2] / "fixtures/placed/leaf_weights.py"
+    Small = load_authored_ir(f"{leaf_weights}:Small")
     resource = DrawnResource(Small, cpu_gen(), "cpu")
     assert resource.load("w") is resource.load("w")
 

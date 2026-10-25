@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from tests.nvidia.cuda.fixtures.tir.square import TirSquare
+from pathlib import Path
+
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.context_builder import build_codegen_context
 from tilefoundry.codegen.linkable_function import LinkableFunction
 from tilefoundry.codegen.linkable_module import LinkableModule
+
+SQUARE = Path(__file__).parents[1] / "fixtures" / "tir" / "square.py"
 
 
 def _linkable_function(name: str) -> LinkableFunction:
@@ -23,13 +27,13 @@ def _param_types(parameter_list: str) -> list[str]:
     return [part.strip().rsplit(" ", 1)[0].strip() for part in inner.split(",")]
 
 
-def _host_unit() -> LinkableModule:
+def _host_unit(square) -> LinkableModule:
     """The host translation unit of a module whose entry launches a shape-dispatched kernel."""
-    entry = TirSquare.entry_function()
-    root = build_codegen_context(TirSquare)
+    entry = square.entry_function()
+    root = build_codegen_context(square)
     group = next(group for group in root.groups if entry in group.functions)
     view = root.for_group(group)
-    return entry.target.resolve(LinkableModule, TirSquare, (entry,), entry.target.resolve(EmitContext, view))
+    return entry.target.resolve(LinkableModule, square, (entry,), entry.target.resolve(EmitContext, view))
 
 
 def test_a_unit_is_its_preamble_then_every_declaration_then_every_definition() -> None:
@@ -53,12 +57,13 @@ def test_a_unit_is_its_preamble_then_every_declaration_then_every_definition() -
 
 
 def test_a_declaration_and_its_definition_cannot_disagree_on_the_parameters() -> None:
-    entry = _host_unit().functions[0]
+    entry = _host_unit(load_authored_ir(f"{SQUARE}:TirSquare")).functions[0]
     assert _param_types(entry.declaration) == _param_types(entry.definition.split("{")[0])
 
 
 def test_the_host_entry_is_declared_before_the_unit_defines_it() -> None:
-    unit = _host_unit()
+    TirSquare = load_authored_ir(f"{SQUARE}:TirSquare")
+    unit = _host_unit(TirSquare)
     entry = unit.functions[0]
     assert entry.name == TirSquare.entry
     assert unit.source.index(entry.declaration) < unit.source.index(entry.definition)

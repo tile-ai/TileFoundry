@@ -10,19 +10,14 @@ holds data narrowed for the card it was loaded on.
 
 from __future__ import annotations
 
+from pathlib import Path
 from threading import Thread
 
 import pytest
 import torch
 
 import tilefoundry
-from tests.nvidia.cuda.fixtures.placed.gpu_placed_rows import (
-    COLS,
-    GPUS,
-    ROWS,
-    ROWS_PER_CARD,
-    GpuPlacedRows,
-)
+from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.ir.types import Placement
 from tilefoundry.runtime.resource import DictResource
 
@@ -35,6 +30,12 @@ def test_a_placed_kernel_writes_the_rows_its_card_holds() -> None:
     once, and each module knows which program it is because it was told when it
     was loaded rather than because it asks the process.
     """
+    gpu_placed_rows = Path(__file__).parents[2] / "fixtures/placed/gpu_placed_rows.py"
+    constants = load_namespace(str(gpu_placed_rows))[0]
+    COLS, GPUS, ROWS, ROWS_PER_CARD = (
+        constants[name] for name in ("COLS", "GPUS", "ROWS", "ROWS_PER_CARD")
+    )
+    GpuPlacedRows = load_authored_ir(f"{gpu_placed_rows}:GpuPlacedRows")
     if torch.cuda.device_count() < GPUS:
         pytest.fail(
             "a placed launch is a claim about two cards; with one there is "

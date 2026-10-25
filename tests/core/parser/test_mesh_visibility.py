@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import load_program
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.parser import ParseError
@@ -198,7 +198,7 @@ def test_a_layout_finer_than_the_running_scope_is_rejected() -> None:
             "write it inside that scope, or reshard it back first"
         ),
     ):
-        load_program(_DIAGNOSTICS / "value_escapes.py")
+        load_authored_ir(str(_DIAGNOSTICS / "value_escapes.py"))
 
 
 def test_rmem_does_not_reach_finer_units_than_its_layout() -> None:
@@ -209,7 +209,7 @@ def test_rmem_does_not_reach_finer_units_than_its_layout() -> None:
             "reach the units this runs on; reshard it to smem or gmem first"
         ),
     ):
-        load_program(_DIAGNOSTICS / "coarse_rmem.py")
+        load_authored_ir(str(_DIAGNOSTICS / "coarse_rmem.py"))
 
 
 def test_reshard_is_the_one_consumer_allowed_to_move_an_invisible_value() -> None:

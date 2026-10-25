@@ -15,16 +15,16 @@ import torch
 from safetensors.torch import load_file, save_file
 
 from tests.core.cli._check import MESH_CHECK_ARGS
-from tests.nvidia.cuda.fixtures.placed import leaf_weights
 from tests.nvidia.cuda.models.corpus import MODELS_ROOT
 from tilefoundry import cli
-from tilefoundry.cli.source import load_namespace, select_ir
+from tilefoundry.cli.source import load_authored_ir, load_namespace, select_ir
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.runtime import DictResource
 from tilefoundry.runtime.resource import DrawnResource
 
 ROUTING = f"{MODELS_ROOT / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5Router.routing"
+LEAF_WEIGHTS = Path(__file__).parents[1] / "fixtures" / "placed" / "leaf_weights.py"
 
 
 def cpu_gen() -> torch.Generator:
@@ -47,10 +47,13 @@ class RecordingResource:
 
 
 def test_load_asks_the_resource_for_nothing():
+    Mod = load_authored_ir(f"{LEAF_WEIGHTS}:Mod")
+    Small = load_authored_ir(f"{LEAF_WEIGHTS}:Small")
+    SmallTwin = load_namespace(str(LEAF_WEIGHTS))[0]["SmallTwin"]
     for mod, mk in (
-        (leaf_weights.Mod, leaf_weights.Mod.load),
-        (leaf_weights.Small, leaf_weights.Small.load),
-        (leaf_weights.Small, leaf_weights.SmallTwin().load),
+        (Mod, Mod.load),
+        (Small, Small.load),
+        (Small, SmallTwin().load),
     ):
         rec = RecordingResource(DrawnResource(mod, cpu_gen(), "cpu"))
         mk(rec)
@@ -58,45 +61,52 @@ def test_load_asks_the_resource_for_nothing():
 
 
 def test_a_run_asks_for_exactly_the_functions_own_consts():
-    rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
-    evaluate(leaf_weights.Small.load(rec).leaf, torch.zeros(1, leaf_weights.D))
+    Small = load_authored_ir(f"{LEAF_WEIGHTS}:Small")
+    D = load_namespace(str(LEAF_WEIGHTS))[0]["D"]
+    rec = RecordingResource(DrawnResource(Small, cpu_gen(), "cpu"))
+    evaluate(Small.load(rec).leaf, torch.zeros(1, D))
     assert rec.asked == []
-    evaluate(leaf_weights.Small.load(rec), torch.zeros(1, leaf_weights.D))
+    evaluate(Small.load(rec), torch.zeros(1, D))
     assert rec.asked == ["w"]
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a second device")
 def test_a_weight_on_another_device_is_named_at_first_use():
-    rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
+    Small = load_authored_ir(f"{LEAF_WEIGHTS}:Small")
+    D = load_namespace(str(LEAF_WEIGHTS))[0]["D"]
+    rec = RecordingResource(DrawnResource(Small, cpu_gen(), "cpu"))
     with pytest.raises(ValueError, match=r"'w'"):
         evaluate(
-            leaf_weights.Small.load(rec),
-            torch.zeros(1, leaf_weights.D, device="cuda"),
+            Small.load(rec),
+            torch.zeros(1, D, device="cuda"),
         )
 
 
 def test_a_missing_weight_is_named_at_first_use():
-    loaded = leaf_weights.Small.load(DictResource({}))
+    loaded = load_authored_ir(f"{LEAF_WEIGHTS}:Small").load(DictResource({}))
     with pytest.raises(KeyError, match=r"missing declared weight 'w'"):
-        evaluate(loaded, torch.zeros(1, leaf_weights.D))
+        evaluate(loaded, torch.zeros(1, load_namespace(str(LEAF_WEIGHTS))[0]["D"]))
 
 
 def test_a_twin_binds_once_and_keeps_it():
-    rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
-    twin = leaf_weights.SmallTwin()
+    Small = load_authored_ir(f"{LEAF_WEIGHTS}:Small")
+    leaf_weights = load_namespace(str(LEAF_WEIGHTS))[0]
+    D = leaf_weights["D"]
+    rec = RecordingResource(DrawnResource(Small, cpu_gen(), "cpu"))
+    twin = leaf_weights["SmallTwin"]()
     twin.load(rec)
-    twin.entry(torch.zeros(1, leaf_weights.D))
-    twin.entry(torch.zeros(1, leaf_weights.D))
+    twin.entry(torch.zeros(1, D))
+    twin.entry(torch.zeros(1, D))
     assert rec.asked == ["w"]
 
 
 def test_the_two_input_axes_are_independent(tmp_path):
     from tilefoundry.cli import build_parser  # noqa: PLC0415 -- existing parser shape changes in M4
 
-    source = f"{leaf_weights.__file__}:Small.entry"
+    source = f"{LEAF_WEIGHTS}:Small.entry"
     a, b = tmp_path / "a.pt", tmp_path / "b.pt"
     for path in (a, b):
-        torch.save(torch.zeros(1, leaf_weights.D), path)
+        torch.save(torch.zeros(1, load_namespace(str(LEAF_WEIGHTS))[0]["D"]), path)
     for inputs in ("random", f"files:{a},{b}"):
         for weights in ("random", f"ckpt:{tmp_path}"):
             build_parser().parse_args(

@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import load_program, reload_program
+from tests.core._corpus import reload
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call
@@ -29,7 +30,7 @@ from tilefoundry_nvidia import CudaTarget
 def test_layout_states_reject_invalid_forms(fixture: str, message: str) -> None:
     source = Path(__file__).parents[1] / f"fixtures/diagnostics/parser_layout_states_{fixture}.py"
     with pytest.raises(ParseError, match=message):
-        load_program(source)
+        load_authored_ir(str(source))
 
 
 def test_composed_layout_states_parse_round_trip_and_reshard() -> None:
@@ -56,7 +57,7 @@ def test_composed_layout_states_parse_round_trip_and_reshard() -> None:
     assert function.body.type.layout == ShardLayout(composed, (B(),), execution_mesh)
     assert function.body.type.storage is StorageKind.SMEM
     printed = as_script(Model)
-    assert as_script(reload_program(printed, "Model")) == printed
+    assert as_script(reload(printed, "Model")) == printed
 
 
 def test_body_local_integer_arithmetic_is_normalized_before_layout_construction() -> None:

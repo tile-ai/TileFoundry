@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import torch
 
 from tests.core.cli._check import MESH_CHECK_ARGS
-from tests.core.fixtures.logical import callee_dim
-from tests.core.fixtures.placed import gqa_decode
 from tilefoundry import cli
 
-DISPATCHING = f"{gqa_decode.__file__}:GqaOnline.gqa_online_attend"
+FIXTURES = Path(__file__).parents[1] / "fixtures"
+DISPATCHING = f"{FIXTURES / 'placed' / 'gqa_decode.py'}:GqaOnline.gqa_online_attend"
 
 
 def test_inputs_must_be_stated(capsys) -> None:
@@ -132,7 +132,7 @@ def test_a_dim_binds_where_a_reached_function_declares_it(
     code = cli.main(
         [
             "check",
-            f"{callee_dim.__file__}:{selector}",
+            f"{FIXTURES / 'logical' / 'callee_dim.py'}:{selector}",
             "--inputs",
             f"files:{tmp_path / 'x.pt'}",
             "--expected",

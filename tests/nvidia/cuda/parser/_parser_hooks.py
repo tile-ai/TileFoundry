@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
-from tests.nvidia.cuda.fixtures.logical import module_context as context_fixture
+from tilefoundry.cli.source import load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, Constant, Var, binding_name
 from tilefoundry.ir.core.module import Module
@@ -18,6 +19,8 @@ from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.visitor import collect_exprs, expr_children
 from tilefoundry_nvidia import CudaTarget
+
+MODULE_CONTEXT = Path(__file__).parents[1] / "fixtures" / "logical" / "module_context.py"
 
 
 def _child(mod: Module, name: str) -> Module:
@@ -98,11 +101,12 @@ def _derived_geometry(state, problems):
 
 def _root_context(state, problems):
     def check(printed, rebuilt):
+        context = load_namespace(str(MODULE_CONTEXT))[0]
         assert isinstance(rebuilt, Module)
         assert rebuilt.name == "ContextTree"
         assert rebuilt.entry == "forward"
         assert rebuilt.target == CudaTarget("nvidia.h200_sxm")
-        assert rebuilt.topologies == (_CTA, _WARP)
+        assert rebuilt.topologies == (context["CONTEXT_CTA"], context["CONTEXT_WARP"])
 
         assert [fn.name for fn in rebuilt.functions] == ["spare", "forward"]
         assert rebuilt.entry_function().name == "forward"
@@ -112,6 +116,7 @@ def _root_context(state, problems):
 
 def _child_contexts(state, problems):
     def check(printed, rebuilt):
+        context = load_namespace(str(MODULE_CONTEXT))[0]
         assert sorted(rebuilt.children) == [
             "inherits",
             "nominates_nothing",
@@ -125,11 +130,14 @@ def _child_contexts(state, problems):
         assert inherits.target is None
         assert inherits.topologies is None
         assert list_call_paths(rebuilt)["inherits.step"].target == CudaTarget("nvidia.h200_sxm")
-        assert list_call_paths(rebuilt)["inherits.step"].topologies == (_CTA, _WARP)
+        assert list_call_paths(rebuilt)["inherits.step"].topologies == (
+            context["CONTEXT_CTA"],
+            context["CONTEXT_WARP"],
+        )
 
         replaces = _child(rebuilt, "replaces")
-        assert replaces.topologies == (_THREAD,)
-        assert replaces.effective_topologies() == (_THREAD,)
+        assert replaces.topologies == (context["CONTEXT_THREAD"],)
+        assert replaces.effective_topologies() == (context["CONTEXT_THREAD"],)
 
         topology_free = _child(rebuilt, "topology_free")
         assert topology_free.topologies == ()
@@ -145,11 +153,6 @@ def _empty_child_entry(state, problems):
         assert _child(rebuilt, "nominates_nothing").entry is None
 
     problems.run("_empty_child_entry", check, state.printed, state.rebuilt)
-
-
-_CTA = context_fixture.CONTEXT_CTA
-_WARP = context_fixture.CONTEXT_WARP
-_THREAD = context_fixture.CONTEXT_THREAD
 
 
 def _prefill_variants(state, problems):

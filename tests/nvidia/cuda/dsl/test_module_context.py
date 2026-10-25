@@ -15,8 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import load_program
-from tests.nvidia.cuda.fixtures.logical import module_context as context_fixture
+from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -24,14 +23,21 @@ from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.target import CpuTarget
 from tilefoundry_nvidia import CudaTarget
 
-_CTA = context_fixture.CONTEXT_CTA
-_WARP = context_fixture.CONTEXT_WARP
-_THREAD = context_fixture.CONTEXT_THREAD
-_Root = context_fixture.ContextTree
+MODULE_CONTEXT = Path(__file__).parents[1] / "fixtures" / "logical" / "module_context.py"
+
+
+def _context():
+    """The tree and the topologies it declares, from one run of the fixture."""
+    namespace = load_namespace(str(MODULE_CONTEXT))[0]
+    return tuple(
+        namespace[name]
+        for name in ("ContextTree", "CONTEXT_CTA", "CONTEXT_WARP", "CONTEXT_THREAD")
+    )
 
 
 def test_a_target_declaration_defines_its_own_execution_domain() -> None:
     """A child's target can differ; an undeclared standalone root has no target."""
+    _Root, *_ = _context()
     target = _Root.resolve_target()
     assert target == CudaTarget("nvidia.h200_sxm")
     assert all(frame.target is target for frame in list_call_paths(_Root).values())
@@ -53,6 +59,7 @@ def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
     topology-free domain (it does not fall back to the owner), and an explicit
     tuple replaces the inherited hierarchy whole rather than extending it.
     """
+    _Root, _CTA, _WARP, _THREAD = _context()
     assert _Root.inherits.topologies is None
     inherits = _Root.inherits
     frame = next(frame for frame in list_call_paths(_Root).values() if frame.module is inherits)
@@ -72,7 +79,7 @@ def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
         replaces.resolve_topology("cta")
 
 
-@pytest.mark.parametrize("invalid", [[_CTA], (_CTA, object())])
+@pytest.mark.parametrize("invalid", [[Topology("cta", 132)], (Topology("cta", 132), object())])
 def test_module_rejects_a_non_topology_tuple(invalid) -> None:
     with pytest.raises(TypeError, match="topologies must be a tuple of Topology"):
 
@@ -88,6 +95,7 @@ def test_topology_resolution_failures_name_what_the_domain_holds() -> None:
     rejected at construction -- a duplicate name would make lexical resolution
     answer with whichever declaration happened to come first.
     """
+    _Root, _CTA, _, _ = _context()
     with pytest.raises(ValueError, match="effective topology levels are cta, warp"):
         _Root.resolve_topology("block")
 
@@ -107,6 +115,7 @@ def test_declaring_context_on_a_function_yields_its_own_module() -> None:
     Target or a topology declaration (including an explicit empty one) yields the
     Module that owns it, and a plain ``@func`` stays a Function.
     """
+    _, _CTA, _, _ = _context()
 
     @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
     def standalone(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
@@ -130,7 +139,9 @@ def test_declaring_context_on_a_function_yields_its_own_module() -> None:
 
 
 def test_member_context_builds_its_own_runtime_domain() -> None:
-    imported = load_program(Path(__file__).parents[1] / "fixtures/logical/member_context.py")
+    imported = load_authored_ir(
+        str(Path(__file__).parents[1] / "fixtures/logical/member_context.py")
+    )
 
     assert [function.name for function in imported.functions] == ["attention"]
     assert list(imported.children) == ["softmax"]

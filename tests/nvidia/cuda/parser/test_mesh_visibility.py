@@ -6,11 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import load_program
-from tests.nvidia.cuda.fixtures.placed.fused_boundary import FusedBoundary
-from tests.nvidia.cuda.fixtures.placed.region_boundaries import RegionBoundaries
-from tests.nvidia.cuda.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.analysis.check import check_program
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, binding_name
 from tilefoundry.ir.hir.function import Function
@@ -21,9 +18,11 @@ from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 from tilefoundry_nvidia import CudaTarget
 
+PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
+
 
 def test_a_function_mesh_is_an_outer_region_around_its_body() -> None:
-    stage = FusedBoundary.stage
+    stage = load_authored_ir(f"{PLACED / 'fused_boundary.py'}:FusedBoundary").stage
     assert isinstance(stage.body, MeshRegion)
     assert [topology.name for topology in stage.body.mesh.topologies] == ["cta"]
     assert isinstance(stage.body.body, MeshRegion)
@@ -31,13 +30,14 @@ def test_a_function_mesh_is_an_outer_region_around_its_body() -> None:
 
 
 def test_an_inner_level_layout_is_covered_by_the_whole_running_scope() -> None:
-    body = RmsnormModule.rmsnorm.body
+    body = load_authored_ir(f"{PLACED / 'rmsnorm.py'}:RmsnormModule").rmsnorm.body
     assert isinstance(body, MeshRegion)
     TypeInferVisitor().visit(body, TypeInferContext())
 
 
 def test_region_boundaries_capture_external_regions_through_args() -> None:
     """A sibling region receives an earlier region value through its boundary."""
+    RegionBoundaries = load_authored_ir(f"{PLACED / 'region_boundaries.py'}:RegionBoundaries")
     body = RegionBoundaries.entry_function().body
     scopes = [expr for expr in collect_exprs(body) if isinstance(expr, MeshRegion)]
     helper_call = next(
@@ -62,8 +62,8 @@ def test_region_boundaries_capture_external_regions_through_args() -> None:
     assert any(isinstance(parent, MeshRegion) and producer in parent.args for parent in parents)
 
     core_diagnostics = Path(__file__).parents[3] / "core" / "fixtures" / "diagnostics"
-    load_program(core_diagnostics / "region_rebind.py")
-    load_program(core_diagnostics / "region_tuple_rebind.py")
+    load_authored_ir(str(core_diagnostics / "region_rebind.py"))
+    load_authored_ir(str(core_diagnostics / "region_tuple_rebind.py"))
 
 
 def test_sibling_region_chain_captures_each_value_at_the_next_boundary() -> None:
@@ -120,7 +120,7 @@ def test_unscoped_initialization_is_rejected_at_the_authored_call() -> None:
     source = path.read_text()
     line = next(i for i, text in enumerate(source.splitlines(), 1) if "out = tf.zeros" in text)
     with pytest.raises(ParseError, match="runs outside every mesh scope") as raised:
-        load_program(path)
+        load_authored_ir(str(path))
     assert f"unscoped_call_loop.py:{line}:" in str(raised.value)
     assert "tf.zeros" in str(raised.value)
     assert "inside with Mesh(...)" in str(raised.value)

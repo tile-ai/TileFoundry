@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import isl
 import pytest
 
-from tests.nvidia.cuda.fixtures.placed.hand_checked import (
-    InvariantReuse,
-)
 from tilefoundry.analysis import (
     AnalysisPrecision,
 )
 from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.types import DType
+
+INVARIANT_REUSE = f"{Path(__file__).parents[1] / 'fixtures/placed/hand_checked.py'}:InvariantReuse"
 
 
 @pytest.mark.parametrize("counted_precision", tuple(AnalysisPrecision))
@@ -24,7 +26,7 @@ def test_uncounted_boundary_marks_the_footprint_incomplete(
     counted_precision: AnalysisPrecision,
     missing_precision: AnalysisPrecision,
 ) -> None:
-    buffer = InvariantReuse.entry_function().params[0]
+    buffer = load_authored_ir(INVARIANT_REUSE).entry_function().params[0]
     uncounted = ReachedAddresses(
         target=SSAValue(buffer),
         output_index=0,
@@ -62,7 +64,7 @@ def test_tuple_output_boundaries_add_instead_of_union(
     left: AnalysisPrecision,
     right: AnalysisPrecision,
 ) -> None:
-    buffer = InvariantReuse.entry_function().params[0]
+    buffer = load_authored_ir(INVARIANT_REUSE).entry_function().params[0]
     addresses = isl.set("{ [i] : 0 <= i < 4 }")
     reached = tuple(
         ReachedAddresses(

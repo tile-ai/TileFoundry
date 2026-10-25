@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
@@ -13,7 +11,7 @@ from types import MappingProxyType
 
 import pytest
 
-from tests.core._corpus import Case, Problems, cases
+from tests.core._corpus import Case, Problems
 from tests.nvidia.cuda.analysis._contracts import (
     PersistentSchedule,
     _assert_persistent_schedule,
@@ -45,8 +43,6 @@ from tests.nvidia.cuda.analysis._exact import (
     _window_datastart,
     _window_meshstart,
 )
-from tests.nvidia.cuda.fixtures.placed.mha_decode_paged import ShorterCache
-from tests.nvidia.cuda.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
 from tilefoundry.analysis import (
     AnalysisPrecision,
     AnalysisResult,
@@ -57,11 +53,12 @@ from tilefoundry.analysis import (
 from tilefoundry.analysis.access import eliminate_parameters
 from tilefoundry.analysis.allocation import aligned
 from tilefoundry.analysis.api import _build_context
-from tilefoundry.analysis.check import check_program, program_dim_vars
+from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.iteration_scope import IterationScope
 from tilefoundry.analysis.liveness import LivenessMetadata
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.module import Module
@@ -69,9 +66,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import TopologyFacts
 
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 
@@ -85,47 +80,11 @@ _MHA_SHORTER_GMEM_WITH_20_BYTES_ALIGNMENT_PADDING = 1_049_612 + 524_288 + 20
 
 _MHA_SINGLE_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_198_420 + 2_097_152 + 12
 
-STATED_DIMS: "Mapping[tuple[str, str], tuple[Mapping[str, int], ...]]" = {
-    ("qwen3_1_7b_pd", "model"): (
-        {"ctx_len": 0, "seq": 512},
-        {"ctx_len": 512, "seq": 512},
-        {"ctx_len": 512, "seq": 1},
-        {"ctx_len": 4608, "seq": 1},
-    ),
-}
-
-_PROBE = 128
-
-
-def _probe_dims(owner: Module, function: Function) -> "Mapping[str, int] | None":
-    """One concrete extent per open dimension, from its own declared range."""
-    declared = program_dim_vars(owner, function)
-    if not declared:
-        return None
-    return {
-        name: max(int(var.lo), min(_PROBE, int(var.hi))) for name, var in sorted(declared.items())
-    }
-
-
-def _published(path: Path):
-    package = ".".join(path.relative_to(Path(__file__).parents[4]).with_suffix("").parts)
-    sys.path.insert(0, str(path.parent))
-    try:
-        source = importlib.import_module(package)
-    finally:
-        sys.path.pop(0)
-    named = [
-        (name, value)
-        for name in dir(source)
-        if not name.startswith("_") and isinstance(value := getattr(source, name), Module)
-    ]
-    return tuple((name, value) for name, value in named if value.target is not None)
+PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
 
 
 @dataclass(frozen=True)
 class AnalysisCase(Case):
-    root: str = ""
-    selector: str = ""
     dims: Mapping[str, int] | None = None
     memory_peaks: Mapping[str, int] = MappingProxyType({})
     over_bound: frozenset[str] = frozenset()
@@ -136,30 +95,11 @@ class AnalysisCase(Case):
     @property
     def id(self) -> str:
         shown = ",".join(f"{k}={v}" for k, v in (self.dims or {}).items()) or "static"
-        return f"{self.path.stem}.{self.root}.{self.selector}[{shown}]"
-
-    @classmethod
-    def expand(cls, path: Path, corpus: Path) -> tuple["AnalysisCase", ...]:
-        expanded = []
-        for name, owner in _published(path):
-            facts = owner.resolve_target().get_facts(TopologyFacts)
-            if "cta" not in tuple(t.name for t in facts.topologies):
-                continue
-            for selector, frame in list_call_paths(owner).items():
-                if frame.module is not owner or not isinstance(frame.function, Function):
-                    continue
-                for dims in STATED_DIMS.get((path.stem, selector)) or (
-                    _probe_dims(owner, frame.function),
-                ):
-                    expanded.append(
-                        cls(path=path, corpus=corpus, root=name, selector=selector, dims=dims)
-                    )
-        return tuple(expanded)
+        return f"{self.path.stem}.{self.name}[{shown}]"
 
     def program(self) -> tuple[Module, Function]:
-        owner = dict(_published(self.path))[self.root]
-        frame = list_call_paths(owner)[self.selector]
-        return frame.module, frame.function
+        module = self.load()
+        return module, module.entry_function()
 
 
 @dataclass(frozen=True)
@@ -171,7 +111,7 @@ class Analyzed:
 
 def _case_source(case: AnalysisCase) -> str:
     """Name a corpus case through the same SOURCE selector the CLI accepts."""
-    return f"{case.path}:{case.root}.{case.selector}"
+    return f"{case.path}:{case.name}"
 
 
 def _peaks_match(case, report):
@@ -314,7 +254,8 @@ def _more_work(smaller, dims, state, problems):
     def check(report):
         summary = report["functions"][0]["function_records"]["performance"]
         timeline = summary["timeline"]
-        assert _predicted_ns(smaller, dims=dims) <= timeline["end_ns"] - timeline["start_ns"]
+        module = load_authored_ir(str(PLACED / smaller))
+        assert _predicted_ns(module, dims=dims) <= timeline["end_ns"] - timeline["start_ns"]
 
     problems.run("more work", check, state.report)
 
@@ -569,7 +510,7 @@ EXPECTED = {
             "rmem": 24_840,
             "smem": 8_192,
         },
-        hooks=(partial(_more_work, ShorterCache, None),),
+        hooks=(partial(_more_work, "mha_decode_paged.py:ShorterCache", None),),
     ),
     "mha_decode_paged.ShorterCache.mha_decode_paged[static]": dict(
         memory_peaks={
@@ -686,7 +627,7 @@ EXPECTED = {
             "rmem": 1552,
             "smem": 65_792,
         },
-        hooks=(partial(_more_work, PrefillLayer, {"ctx_len": 512, "seq": 1}),),
+        hooks=(partial(_more_work, "qwen3_1_7b_pd.py:PrefillLayer", {"ctx_len": 512, "seq": 1}),),
     ),
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]": dict(
         memory_peaks={
@@ -701,7 +642,7 @@ EXPECTED = {
             "rmem": 198656,
             "smem": 3 * 128 * 128 * 2,
         },
-        hooks=(partial(_more_work, PrefillLayer, {"ctx_len": 0, "seq": 512}),),
+        hooks=(partial(_more_work, "qwen3_1_7b_pd.py:PrefillLayer", {"ctx_len": 0, "seq": 512}),),
     ),
     "region_boundaries.RegionBoundaries.helper[static]": dict(
         memory_peaks={"gmem": 64, "rmem": 32}
@@ -739,8 +680,30 @@ EXPECTED = {
     "weighted_cuda.Weighted.scaled[static]": dict(memory_peaks={"gmem": 1_348, "rmem": 8}),
 }
 
-PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
-CASES = cases(PLACED, case_type=AnalysisCase, expected=EXPECTED)
+UNANALYZED = {
+    "gpu_placed_rows": "TIR only; analysis reads a HIR entry",
+    "symbolic_offset": "private roots, analyzed by name in test_analysis_families",
+}
+
+
+def _case(key: str) -> AnalysisCase:
+    """The case `{file}.{Root}.{selector}[{dim=extent,...}|static]` names."""
+    head, shown = key.removesuffix("]").split("[")
+    stem, name = head.split(".", 1)
+    dims = None
+    if shown != "static":
+        dims = {dim: int(extent) for dim, extent in (item.split("=") for item in shown.split(","))}
+    return AnalysisCase(path=PLACED / f"{stem}.py", name=name, dims=dims, **EXPECTED[key])
+
+
+CASES = tuple(_case(key) for key in sorted(EXPECTED))
+UNCOVERED = sorted(
+    {path.stem for path in PLACED.glob("*.py") if path.name != "__init__.py"}
+    - {case.path.stem for case in CASES}
+    - UNANALYZED.keys()
+)
+if UNCOVERED:
+    raise ValueError(f"placed files without an analysis case: {', '.join(UNCOVERED)}")
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)

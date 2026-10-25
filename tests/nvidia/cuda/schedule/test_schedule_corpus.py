@@ -12,7 +12,7 @@ from types import MappingProxyType
 import pytest
 import torch
 
-from tests.core._corpus import Case, Problems, cases, reload_program
+from tests.core._corpus import Case, Problems, cases, reload
 from tests.nvidia.cuda.schedule._plain import SiteCounts, check_plain_report
 from tests.nvidia.cuda.schedule._support import (
     _assert_live_smem_views_do_not_overlap,
@@ -74,7 +74,7 @@ from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.passes.transforms.convert_hir_to_tir import LoweringError
 from tilefoundry.schedule import candidates, finalize
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
+from tilefoundry.visitor_registry.verify import verify_module
 from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
 from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensor
 from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
@@ -517,7 +517,7 @@ def _grouped_addresses(state, problems):
 
 def _authored_views(state, problems):
     def check(lowered):
-        _verify(lowered)
+        verify_module(lowered)
         function = entry_function(lowered)
         visitor = _RetainedStatements()
         visitor.visit(function.body)
@@ -572,7 +572,7 @@ def _physical_slots(state, problems):
 
 def _retained_shapes(state, problems):
     def check(lowered):
-        _verify(lowered)
+        verify_module(lowered)
         frames = list_call_paths(lowered)
         assert len(frames) == 3
         assert all(isinstance(frame.function, PrimFunction) for frame in frames.values())
@@ -608,9 +608,8 @@ def _retained_shapes(state, problems):
 
 def _loop_outputs(state, problems):
     def check(lowered):
-        function = entry_function(lowered)
-        assert function.output_count == 3
-        assert reload_program(as_script(function)).output_count == 3
+        assert entry_function(lowered).output_count == 3
+        assert reload(as_script(lowered), lowered.name).entry_function().output_count == 3
 
     problems.run("_loop_outputs", check, state.lowered)
 
@@ -749,14 +748,14 @@ def _hir(case, problems):
     report = problems.run("memory report", lambda r: render_analysis(r).data, result)
     problems.run("memory allocations", _memory_report, case, module, report)
     printed = problems.run("print HIR", as_script, module)
-    problems.run("reload HIR", reload_program, printed)
+    problems.run("reload HIR", lambda text: reload(text, module.name), printed)
     candidates_report = problems.run("candidates", _candidates, case, checked)
     if case.candidates_refusal is None:
         problems.run("candidate sites", _hir_candidates, candidates_report)
     lowered = problems.run("finalize", _finalize, case, module, result)
     if case.finalize_refusal is None:
         printed = problems.run("print TIR", as_script, lowered)
-        lowered = problems.run("reload TIR", reload_program, printed)
+        lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         problems.run("TIR operands", _tir_checks, lowered, case.path)
     state = Scheduled(result, module, lowered, candidates_report)
     for hook in case.hooks:
@@ -783,25 +782,18 @@ def _plain(case, problems):
     report = problems.run("candidates", _candidates, case, checked)
     problems.run("plain sites", check_plain_report, report, str(case.path), case.sites)
     printed = problems.run("print plain", as_script, module)
-    problems.run("reload plain", reload_program, printed)
+    problems.run("reload plain", lambda text: reload(text, module.name), printed)
 
 
 def _dim(case, problems):
     module = problems.run("load", case.load)
     printed = problems.run("print", as_script, module)
-    problems.run("reload", reload_program, printed)
-
-
-def _verify(program):
-    if isinstance(program, Module):
-        verify_module(program)
-    else:
-        verify_prim_function(program)
+    problems.run("reload", lambda text: reload(text, module.name), printed)
 
 
 def _tir(case, problems):
     program = problems.run("load", case.load)
-    problems.run("verify", _verify, program)
+    problems.run("verify", verify_module, program)
     printed = problems.run("print", as_script, program)
     problems.expect("canonical text", lambda text: text == case.path.read_text(), printed)
 
@@ -1353,5 +1345,5 @@ STAGES = {"hir": _hir, "plain": _plain, "tir": _tir, "dim": _dim}
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
 def test_schedule_case(case: ScheduleCase) -> None:
     problems = Problems(case)
-    STAGES[case.corpus.name](case, problems)
+    STAGES[case.path.parent.name](case, problems)
     problems.dump()

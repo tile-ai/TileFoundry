@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
-from tests.core.fixtures.placed.gqa_decode import GqaOnline
 from tests.nvidia.cuda.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import (
     ComputeCostMetadata,
@@ -14,6 +14,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import get_metadata
 from tilefoundry.ir.hir.specialize import (
     SpecializationError,
@@ -37,6 +38,8 @@ FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 
 def _aimed():
     """The decode example, aimed at one machine."""
+    gqa_decode = Path(__file__).parents[3] / "core/fixtures/placed/gqa_decode.py"
+    GqaOnline = load_authored_ir(f"{gqa_decode}:GqaOnline")
     return replace(
         GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)
     )

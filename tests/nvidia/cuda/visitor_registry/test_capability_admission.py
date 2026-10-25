@@ -5,11 +5,12 @@ See [target §4](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/target.md#4-cu
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from tests.nvidia.cuda.fixtures.schedule.tir.wgmma_b_nk import WgmmaBNk
-from tests.nvidia.cuda.fixtures.tir.mma import MmHandwritten
 from tests.nvidia.cuda.ops.tir.targets import retarget
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.schedule import match_instruction
@@ -29,6 +30,8 @@ from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import Wgmma
 from tilefoundry_nvidia.cuda.ir.tir.sync.mbarrier import MBarrierArriveExpectTx, MBarrierWaitParity
 
 SM89 = CudaTarget("nvidia.rtx_6000_ada")
+FIXTURES = Path(__file__).parents[1] / "fixtures"
+MM_HANDWRITTEN = f"{FIXTURES / 'tir' / 'mma.py'}:MmHandwritten"
 
 _SMEM_BAR = make_tensor_type((1,), DType.from_name("i64"), storage="smem")
 _PHASE = make_tensor_type((), DType.from_name("i32"), storage="rmem")
@@ -81,15 +84,21 @@ _REFUSED = [
         "cp.async.bulk",
         id="copy_async_bulk",
     ),
-    pytest.param(WgmmaBNk.entry_function(), "wgmma.mma_async", id="wgmma_atom"),
+    pytest.param(
+        f"{FIXTURES / 'schedule' / 'tir' / 'wgmma_b_nk.py'}:WgmmaBNk",
+        "wgmma.mma_async",
+        id="wgmma_atom",
+    ),
 ]
 
 
 @pytest.mark.parametrize(("function", "capability"), _REFUSED)
 def test_an_instruction_the_architecture_lacks_is_refused_naming_its_capability(
-    function: PrimFunction, capability: str
+    function: PrimFunction | str, capability: str
 ) -> None:
     """On sm_89 the call is refused, naming the capability it needs."""
+    if isinstance(function, str):
+        function = load_authored_ir(function).entry_function()
     with pytest.raises(
         VerifyError, match=f"needs {capability}, which nvidia.rtx_6000_ada does not list"
     ):
@@ -98,7 +107,7 @@ def test_an_instruction_the_architecture_lacks_is_refused_naming_its_capability(
 
 def test_only_the_selected_atom_is_checked() -> None:
     """The SM80 atom is admitted on sm_89, although the same op also declares WGMMA."""
-    module = retarget(MmHandwritten, SM89)
+    module = retarget(load_authored_ir(MM_HANDWRITTEN), SM89)
     for function in module.functions:
         verify_prim_function(function, module_fns=module)
 
@@ -125,7 +134,9 @@ class _MmaSite(StmtVisitor[None]):
 
 def test_an_open_wgmma_atom_is_refused_on_sm89() -> None:
     """Schedule matching names the missing capability for an atom given as a class."""
-    device = next(fn for fn in MmHandwritten.functions if fn.name == "mm_device")
+    device = next(
+        fn for fn in load_authored_ir(MM_HANDWRITTEN).functions if fn.name == "mm_device"
+    )
     site = _MmaSite()
     site.visit(device.body)
     args, meshes = site.site

@@ -34,19 +34,15 @@ EXPECTED = {
 }
 TILE_WINDOWS = FIXTURES / "shapes/tile_window_syntax.py"
 NAMED = (
-    ParserCase(
-        path=TILE_WINDOWS, corpus=TILE_WINDOWS.parent, name="ScanCopy", prints=("x[row, :]",)
-    ),
+    ParserCase(path=TILE_WINDOWS, name="ScanCopy", prints=("x[row, :]",)),
     ParserCase(
         path=TILE_WINDOWS,
-        corpus=TILE_WINDOWS.parent,
         name="NestedScanCopy",
         prints=("x[row, col]",),
         hooks=(_nested_scan,),
     ),
     ParserCase(
         path=TILE_WINDOWS,
-        corpus=TILE_WINDOWS.parent,
         name="SequentialScanCopy",
         prints=("x[row, :]",),
         hooks=(_sequential_scan,),

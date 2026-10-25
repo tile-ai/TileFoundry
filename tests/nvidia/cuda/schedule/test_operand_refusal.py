@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import load_program
 from tests.nvidia.cuda.schedule._support import (
     _OperandMatchVisitor,
     entry_function,
 )
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.inspection import PatternPrinter
 from tilefoundry.ir.core import (
     Var,
@@ -30,8 +30,8 @@ from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import Wgmma
 
 def test_operand_match_refusal_names_the_failed_pattern() -> None:
     function = entry_function(
-        load_program(
-            Path(__file__).parents[1] / "fixtures" / "schedule" / "tir" / "wgmma_a_k_major.py"
+        load_authored_ir(
+            str(Path(__file__).parents[1] / "fixtures" / "schedule" / "tir" / "wgmma_a_k_major.py")
         )
     )
     rejected = None
@@ -61,8 +61,8 @@ def test_wgmma_stride_refusal_names_operand_and_descriptor_position(
     row_scale, leading, position
 ) -> None:
     function = entry_function(
-        load_program(
-            Path(__file__).parents[1] / "fixtures" / "schedule" / "tir" / "wgmma_a_k_major.py"
+        load_authored_ir(
+            str(Path(__file__).parents[1] / "fixtures" / "schedule" / "tir" / "wgmma_a_k_major.py")
         )
     )
 

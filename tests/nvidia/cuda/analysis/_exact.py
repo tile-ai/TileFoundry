@@ -2,24 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from tests.nvidia.cuda.analysis._contracts import (
     _footprint_bytes,
     _reuse_conclusions,
     _working_set_bytes,
-)
-from tests.nvidia.cuda.fixtures.placed import persistent_gemm_tiled
-from tests.nvidia.cuda.fixtures.placed.data_started_window import C, D, DataStart, MeshStart, W
-from tests.nvidia.cuda.fixtures.placed.gemm_schedules import (
-    WAVE_BK,
-    WAVE_BM,
-    WAVE_BN,
-    WAVE_C,
-    WAVE_G,
-    WAVE_OTHER,
-)
-from tests.nvidia.cuda.fixtures.placed.hand_checked import (
-    BN,
-    N,
 )
 from tilefoundry.analysis import (
     ComputeCostMetadata,
@@ -29,12 +17,20 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.iteration_scope import build_scopes
+from tilefoundry.cli.source import load_namespace
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import PerformanceServiceFacts, ThroughputFacts
+
+PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
+
+
+def _constants(stem: str, *names: str) -> tuple:
+    namespace = load_namespace(str(PLACED / f"{stem}.py"))[0]
+    return tuple(namespace[name] for name in names)
 
 
 def _first_duration(result, kind) -> int:
@@ -225,6 +221,9 @@ def _mesh_started_loop_keeps_an_unknown_reuse_row(state, problems):
 
 def _window_datastart(state, problems):
     def check(report):
+        C, D, W, DataStart, MeshStart = _constants(
+            "data_started_window", "C", "D", "W", "DataStart", "MeshStart"
+        )
         module = DataStart
         start_bytes = 8
         precision = "upper_bound"
@@ -243,6 +242,9 @@ def _window_datastart(state, problems):
 
 def _window_meshstart(state, problems):
     def check(report):
+        C, D, W, DataStart, MeshStart = _constants(
+            "data_started_window", "C", "D", "W", "DataStart", "MeshStart"
+        )
         module = MeshStart
         start_bytes = 0
         precision = "exact"
@@ -274,6 +276,7 @@ def _invariant_reuse(state, problems):
         assert data["functions"][0]["function_records"]["roofline"]["memory_ns"] == -(
             -(footprint_total * 1_000_000_000) // four_ctas_in_flight
         )
+        N, BN = _constants("hand_checked", "N", "BN")
         assert N // BN == 3
         assert data["functions"][0]["function_records"]["compute-cost"]["flops"]["bf16"] == {
             "logical": 32,
@@ -325,6 +328,7 @@ def _resident_wave(state, problems):
 
 def _persistent_tiled_seeded(state, problems):
     def check(report):
+        BM, BN, BK = _constants("persistent_gemm_tiled", "BM", "BN", "BK")
         data = report
         memory = data["functions"][0]["function_records"]["memory"]
 
@@ -336,21 +340,16 @@ def _persistent_tiled_seeded(state, problems):
             for call in data["functions"][0]["calls"]
             if [operand["type"] for operand in call["memory"]["operands"]]
             == [
-                f"bf16[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BK}] smem",
-                f"bf16[{persistent_gemm_tiled.BK},{persistent_gemm_tiled.BN}] smem",
-                f"f32[{persistent_gemm_tiled.BM},{persistent_gemm_tiled.BN}] rmem",
+                f"bf16[{BM},{BK}] smem",
+                f"bf16[{BK},{BN}] smem",
+                f"f32[{BM},{BN}] rmem",
             ]
         )
-        tile_bytes = persistent_gemm_tiled.BM * persistent_gemm_tiled.BN * 4
+        tile_bytes = BM * BN * 4
         assert product["memory"]["operands"][-1]["write"] == tile_bytes
         flops = product["compute-cost"]["flops"]["bf16"]["per_unit"]
-        assert flops == [
-            2 * persistent_gemm_tiled.BM * persistent_gemm_tiled.BN * persistent_gemm_tiled.BK
-        ]
-        operands = (
-            persistent_gemm_tiled.BM * persistent_gemm_tiled.BK * 2,
-            persistent_gemm_tiled.BK * persistent_gemm_tiled.BN * 2,
-        )
+        assert flops == [2 * BM * BN * BK]
+        operands = (BM * BK * 2, BK * BN * 2)
         peaks = {peak["memory_level"]: peak["peak_bytes"] for peak in memory["peaks"]}
         assert peaks["smem"] == sum(operands), "the tiles fit in the most bytes ever live at once"
 
@@ -377,6 +376,9 @@ def _tile128(state, problems):
 
 def _wave_w1x132(state, problems):
     def check(report):
+        WAVE_BM, WAVE_BN, WAVE_BK, WAVE_C = _constants(
+            "gemm_schedules", "WAVE_BM", "WAVE_BN", "WAVE_BK", "WAVE_C"
+        )
         memory = report["functions"][0]["function_records"]["memory"]
         assert memory["traffic"]["storage"]["gmem"]["total"]["read"] == 428_212_224
         assert _working_set_bytes(memory) == (WAVE_BM + WAVE_C * WAVE_BN) * WAVE_BK * 2
@@ -386,6 +388,9 @@ def _wave_w1x132(state, problems):
 
 def _wave_w11x12(state, problems):
     def check(report):
+        WAVE_BM, WAVE_BN, WAVE_BK, WAVE_G, WAVE_OTHER = _constants(
+            "gemm_schedules", "WAVE_BM", "WAVE_BN", "WAVE_BK", "WAVE_G", "WAVE_OTHER"
+        )
         memory = report["functions"][0]["function_records"]["memory"]
         assert memory["traffic"]["storage"]["gmem"]["total"]["read"] == 428_212_224
         assert (
@@ -399,6 +404,9 @@ def _wave_w11x12(state, problems):
 
 def _wave_w12x11(state, problems):
     def check(report):
+        WAVE_BM, WAVE_BN, WAVE_BK, WAVE_G, WAVE_OTHER = _constants(
+            "gemm_schedules", "WAVE_BM", "WAVE_BN", "WAVE_BK", "WAVE_G", "WAVE_OTHER"
+        )
         memory = report["functions"][0]["function_records"]["memory"]
         assert memory["traffic"]["storage"]["gmem"]["total"]["read"] == 428_212_224
         assert (

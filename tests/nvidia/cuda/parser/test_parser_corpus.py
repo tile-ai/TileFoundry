@@ -41,7 +41,6 @@ EXPECTED = {
 NAMED = (
     ParserCase(
         path=FIXTURES / "logical/module_context.py",
-        corpus=FIXTURES / "logical",
         name="ContextTree",
         hooks=(
             _root_context,
@@ -49,44 +48,34 @@ NAMED = (
             _empty_child_entry,
         ),
     ),
-    ParserCase(
-        path=FIXTURES / "logical/gqa_static.py",
-        corpus=FIXTURES / "logical",
-        name="static_online_attend",
-    ),
+    ParserCase(path=FIXTURES / "logical/gqa_static.py", name="static_online_attend"),
     ParserCase(
         path=FIXTURES / "placed/derived_prefill.py",
-        corpus=FIXTURES / "placed",
         name="DerivedPrefill",
         hooks=(_derived_geometry,),
     ),
     ParserCase(
         path=FIXTURES / "placed/flash_split_k_decode.py",
-        corpus=FIXTURES / "placed",
         name="FlashSplitKDecode",
         hooks=(_flash_slices,),
     ),
     ParserCase(
         path=FIXTURES / "placed/prefill_decode_attention.py",
-        corpus=FIXTURES / "placed",
         name="PrefillDecodeAttention",
         hooks=(_prefill_variants,),
     ),
     ParserCase(
         path=FIXTURES / "placed/rmsnorm.py",
-        corpus=FIXTURES / "placed",
         name="RmsnormModule",
         hooks=(_rms_structure,),
     ),
     ParserCase(
         path=FIXTURES / "placed/region_boundaries.py",
-        corpus=FIXTURES / "placed",
         name="RegionBoundaries",
         hooks=(_region_escapes,),
     ),
     ParserCase(
         path=FIXTURES / "shapes/scaled_modules.py",
-        corpus=FIXTURES / "shapes",
         name="PairedScaledParent",
         hooks=(
             _scaled_common,
@@ -95,31 +84,25 @@ NAMED = (
     ),
     ParserCase(
         path=FIXTURES / "shapes/scaled_modules.py",
-        corpus=FIXTURES / "shapes",
         name="StackedScaledParent",
         hooks=(
             _scaled_common,
             _stacked_calls,
         ),
     ),
-    ParserCase(
-        path=FIXTURES / "scaffold/tir_dispatch.py", corpus=FIXTURES / "scaffold", name="Root"
-    ),
+    ParserCase(path=FIXTURES / "scaffold/tir_dispatch.py", name="Root"),
     ParserCase(
         path=FIXTURES / "scaffold/tir_launches.py",
-        corpus=FIXTURES / "scaffold",
         name="Root",
         prints=("launch(child.run,",),
     ),
     ParserCase(
         path=FIXTURES / "inspection/composed.py",
-        corpus=FIXTURES / "inspection",
         name="_Composed",
         hooks=(_composed_tree,),
     ),
     ParserCase(
         path=FIXTURES / "inspection/dispatching.py",
-        corpus=FIXTURES / "inspection",
         name="_Dispatching",
         hooks=(_dispatch_tree,),
     ),

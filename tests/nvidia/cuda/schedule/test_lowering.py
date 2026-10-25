@@ -14,7 +14,7 @@ import tilefoundry.cli.schedule as schedule_cli
 import tilefoundry.ir.hir.schedule as schedules
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 import tilefoundry.visitor_registry.instruction as instructions
-from tests.core._corpus import load_program, reload_program
+from tests.core._corpus import reload
 from tests.nvidia.cuda.schedule._support import (
     _finalized,
     _RetainedStatements,
@@ -77,7 +77,7 @@ INPLACE = FIXTURES / "schedule" / "hir" / "inplace_output_update.py"
 
 def _m1_analysis():
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
-    module = load_program(source)
+    module = load_authored_ir(str(source))
     return (
         source,
         module,
@@ -133,7 +133,7 @@ def test_schedule_finalize_json_carries_the_same_source(
     assert capsys.readouterr() == ("", "")
     payload = json.loads(out.read_text())
     assert set(payload) == {"source"}
-    verify_prim_function(entry_function(reload_program(payload["source"])))
+    verify_prim_function(entry_function(reload(payload["source"], "WGMMA_A_K_MAJOR")))
 
 
 def test_lowering_reports_smem_placement_above_capacity(
@@ -144,11 +144,11 @@ def test_lowering_reports_smem_placement_above_capacity(
     out = tmp_path / "finalized.py"
     assert cli_main(["schedule", "finalize", str(four_stage), str(out)]) == 0
     assert capsys.readouterr() == ("", "")
-    module = load_program(four_stage)
+    module = load_authored_ir(str(four_stage))
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
     memory = get_metadata(result.function, RegionMemoryMetadata)
     assert "smem placement peak 256.00KiB exceeds capacity 227.00KiB" in memory.errors
-    verify_prim_function(entry_function(load_program(out)))
+    verify_prim_function(entry_function(load_authored_ir(str(out))))
 
 
 def test_lowering_rejects_instruction_without_access_relation(
@@ -169,7 +169,7 @@ def test_lowering_rejects_instruction_without_access_relation(
 
 
 def test_lowering_rejects_nonidentity_inverse_for_a_written_return():
-    module = load_program(FIXTURES / "diagnostics" / "lowering_written_return_window.py")
+    module = load_authored_ir(str(FIXTURES / "diagnostics" / "lowering_written_return_window.py"))
     with pytest.raises(
         lowering_module.LoweringError, match="requires a non-identity inverse relation"
     ):
@@ -177,7 +177,7 @@ def test_lowering_rejects_nonidentity_inverse_for_a_written_return():
 
 
 def test_zero_trip_carry_keeps_direct_address_proofs_and_the_loop():
-    module = load_program(VARIANTS / "zero_trip_carry.py")
+    module = load_authored_ir(str(VARIANTS / "zero_trip_carry.py"))
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
     summary = get_metadata(result.function, AllocationSummaryMetadata)
     carry = [
@@ -190,7 +190,7 @@ def test_zero_trip_carry_keeps_direct_address_proofs_and_the_loop():
     assert all(proof.relation.relation.is_identity() for proof in carry)
     lowered = _finalized(module)
     verify_module(lowered)
-    verify_module(reload_program(as_script(lowered)))
+    verify_module(reload(as_script(lowered), lowered.name))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     assert len(visitor.loops) == 1
@@ -206,11 +206,11 @@ def test_zero_trip_carry_keeps_direct_address_proofs_and_the_loop():
 
 
 def test_dynamic_window_keeps_a_mixed_scalar_and_constant_key():
-    module = load_program(VARIANTS / "dynamic_window.py")
+    module = load_authored_ir(str(VARIANTS / "dynamic_window.py"))
     lowered = _finalized(module)
     verify_module(lowered)
     printed = as_script(lowered)
-    verify_module(reload_program(printed))
+    verify_module(reload(printed, lowered.name))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     views = [
@@ -235,10 +235,10 @@ def test_dynamic_window_keeps_a_mixed_scalar_and_constant_key():
 
 
 def test_register_row_pointer_keeps_the_split_axis_whole():
-    module = load_program(VARIANTS / "register_rows.py")
+    module = load_authored_ir(str(VARIANTS / "register_rows.py"))
     lowered = _finalized(module)
     verify_module(lowered)
-    verify_module(reload_program(as_script(lowered)))
+    verify_module(reload(as_script(lowered), lowered.name))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     slices = [
@@ -254,10 +254,10 @@ def test_register_row_pointer_keeps_the_split_axis_whole():
 
 @pytest.mark.parametrize("start,offset", [(0, 0), (64, 4096)])
 def test_composed_view_keeps_its_layout_when_logical_rank_changes(start, offset):
-    module = load_program(VARIANTS / f"composed_rank_{start}.py")
+    module = load_authored_ir(str(VARIANTS / f"composed_rank_{start}.py"))
     lowered = _finalized(module)
     verify_module(lowered)
-    verify_module(reload_program(as_script(lowered)))
+    verify_module(reload(as_script(lowered), lowered.name))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     views = [
@@ -285,9 +285,9 @@ def test_composed_view_keeps_its_layout_when_logical_rank_changes(start, offset)
 def test_composed_reshape_retains_non_affine_outer_modes(
     width, start, shape, modes, strides, offset
 ):
-    module = load_program(VARIANTS / f"composed_outer_{width}_{start}.py")
+    module = load_authored_ir(str(VARIANTS / f"composed_outer_{width}_{start}.py"))
     lowered = _finalized(module)
-    verify_module(reload_program(as_script(lowered)))
+    verify_module(reload(as_script(lowered), lowered.name))
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)
     expected = ComposedLayout(Swizzle(3, 4, 3), offset, Layout(modes, strides))
@@ -300,8 +300,8 @@ def test_composed_reshape_retains_non_affine_outer_modes(
 
 
 def test_address_origin_can_divide_a_runtime_loop_index():
-    module = load_program(VARIANTS / "modular_window.py")
-    verify_module(reload_program(as_script(_finalized(module))))
+    lowered = _finalized(load_authored_ir(str(VARIANTS / "modular_window.py")))
+    verify_module(reload(as_script(lowered), lowered.name))
 
 
 @pytest.mark.parametrize("coordinate_division", [False, True])
@@ -381,7 +381,7 @@ def test_lowering_rejects_unscheduled_gmem_cast(
 
 def test_shared_projection_rejects_partial_atom_tiles() -> None:
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/wgmma_repeat_along_k.py"
-    module = load_program(source)
+    module = load_authored_ir(str(source))
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
     schedule = next(
         expr
@@ -404,7 +404,7 @@ def test_shared_projection_rejects_partial_atom_tiles() -> None:
 @pytest.mark.parametrize("failure", ("leftmost", "factor"))
 def test_grouped_projection_names_incompatible_repeat_mode(failure):
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/wgmma_n16_within_warpgroup_share.py"
-    module = load_program(source)
+    module = load_authored_ir(str(source))
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
     schedule = next(
         value
@@ -436,7 +436,7 @@ def test_grouped_projection_names_incompatible_repeat_mode(failure):
 )
 def test_lowering_writes_static_issues_without_readmitting(name, issues, monkeypatch):
     source = Path(__file__).parents[1] / f"fixtures/schedule/hir/{name}.py"
-    module = load_program(source)
+    module = load_authored_ir(str(source))
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
 
     def reject(*args, **kwargs):
@@ -495,9 +495,9 @@ def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(read_old
         with pytest.raises(
             lowering_module.LoweringError, match="requires a non-identity inverse relation"
         ):
-            _finalized(load_program(source))
+            _finalized(load_authored_ir(str(source)))
         return
-    lowered = _finalized(load_program(source))
+    lowered = _finalized(load_authored_ir(str(source)))
     verify_module(lowered)
     function = lowered.entry_function()
     visitor = _RetainedStatements()
@@ -518,7 +518,7 @@ def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(read_old
 
 def test_read_only_call_before_an_update_keeps_the_input_storage():
     path = VARIANTS / "read_before_update.py"
-    lowered = _finalized(load_program(path))
+    lowered = _finalized(load_authored_ir(str(path)))
     verify_module(lowered)
     visitor = _RetainedStatements()
     visitor.visit(lowered.entry_function().body)

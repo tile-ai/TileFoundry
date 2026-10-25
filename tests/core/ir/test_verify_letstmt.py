@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import load_program
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Call, Constant, Var, VerifyError
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.memory.ptr_of import PtrOf
@@ -147,7 +147,7 @@ def test_verify_rejects_a_non_ir_node():
 
 def test_variant_cannot_use_its_parents_parameter():
     """Each specialization owns its parameters; the parent's Var is invisible."""
-    program = load_program(Path(__file__).parents[1] / "fixtures/tir/parent_parameter.py")
+    program = load_authored_ir(str(Path(__file__).parents[1] / "fixtures/tir/parent_parameter.py"))
     function = program.entry_function()
     variant = function.variants[0]
     assert variant.params[0] is not function.params[0]

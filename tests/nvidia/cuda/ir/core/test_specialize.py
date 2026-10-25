@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 import torch
 
-from tests.core.fixtures.placed.gqa_decode import (
-    NUM_SPLITS,
-    SMALL_CONTEXT_T,
-    GqaOnline,
-)
-from tests.core.ir.core.test_specialize import ENTRY
-from tests.nvidia.cuda.fixtures.placed.specialize_through_call import ToCallee
 from tilefoundry.analysis.check import check_program
+from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import (
     SpecializationError,
     bound_dims_of,
@@ -27,13 +23,21 @@ from tilefoundry.ir.hir.specialize import (
 )
 from tilefoundry_nvidia import CudaTarget
 
-STEADY = {"ctx_len": SMALL_CONTEXT_T + NUM_SPLITS}
+GQA_DECODE = Path(__file__).parents[4] / "core" / "fixtures" / "placed" / "gqa_decode.py"
 _LOOP_CTX = DimVar("loop_ctx", 1, 4096)
 _CALL_M = DimVar("call_m", 1, 16)
 _N_MAX = 1023
 _CALL_N = DimVar("call_n", 1, _N_MAX)
 _NESTED_N = DimVar("nested_n", 1, _N_MAX)
 _DISPATCH_BOUND = 128
+
+
+def _gqa():
+    """The decode Module, its entry, a context past the short strategy, and the split count."""
+    constants = load_namespace(str(GQA_DECODE))[0]
+    GqaOnline = load_authored_ir(f"{GQA_DECODE}:GqaOnline")
+    steady = {"ctx_len": constants["SMALL_CONTEXT_T"] + constants["NUM_SPLITS"]}
+    return GqaOnline, GqaOnline.entry_function(), steady, constants["NUM_SPLITS"]
 
 
 @module(entry="run")
@@ -93,17 +97,21 @@ class _NestedDispatch:
 
 
 def test_a_dimension_the_function_does_not_have_is_refused() -> None:
+    GqaOnline, ENTRY, STEADY, _ = _gqa()
     with pytest.raises(SpecializationError, match="no dimension named"):
         check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), ENTRY, dims={**STEADY, "batch": 4})[1]
 
 
 def test_specialising_nothing_is_refused() -> None:
+    GqaOnline, ENTRY, _, _ = _gqa()
     with pytest.raises(SpecializationError, match="non-empty mapping"):
         check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), ENTRY, dims={})[1]
 
 
 def test_a_call_through_a_prototype_selects_by_the_callers_dimensions() -> None:
     """The rebuilt call records which variant it chose, not the prototype."""
+    specialize_through_call = Path(__file__).parents[2] / "fixtures/placed/specialize_through_call.py"
+    ToCallee = load_authored_ir(f"{specialize_through_call}:ToCallee")
     run = ToCallee.entry_function()
 
     for extent, expected in ((64, "pick_small"), (512, "pick_big")):
@@ -139,6 +147,7 @@ def test_a_specialised_function_states_extents_everywhere() -> None:
     Nothing may still be a range -- including inside the callees, and in the
     shape-valued attributes their operations carry, which no signature shows.
     """
+    GqaOnline, ENTRY, STEADY, _ = _gqa()
     concrete = check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1]
 
     assert residual_dims(concrete) == ()
@@ -146,6 +155,7 @@ def test_a_specialised_function_states_extents_everywhere() -> None:
 
 def test_specialising_only_substitutes_dimensions() -> None:
     """The signature keeps its rank, dtype and storage; only extents move."""
+    GqaOnline, ENTRY, STEADY, _ = _gqa()
     chosen = variant_for(ENTRY, STEADY)
     concrete = check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1]
 
@@ -164,6 +174,7 @@ def test_a_derived_extent_follows_the_dimension_it_derives_from() -> None:
     The per-split block length is the context length over the splits. It has
     to arrive at that number without being told it.
     """
+    GqaOnline, ENTRY, STEADY, NUM_SPLITS = _gqa()
     concrete = check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1]
     shapes = {tuple(param.type.shape) for param in concrete.params}
 
@@ -182,6 +193,7 @@ def test_the_same_request_gives_the_same_answer_every_time() -> None:
     reads a type belonging to something else -- which showed up as the same
     call returning a different shape, or failing, from one run to the next.
     """
+    GqaOnline, ENTRY, STEADY, _ = _gqa()
     first = check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1]
     others = [check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1] for _ in range(4)]
 
@@ -197,6 +209,7 @@ def test_specialising_one_function_does_not_disturb_the_next() -> None:
     The callees are shared, so a rebuild that left state on them would show
     up here rather than where it was caused.
     """
+    GqaOnline, ENTRY, STEADY, _ = _gqa()
     partials = check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), GqaOnline.lookup("_ctx_partials"), dims=STEADY)[1]
     assert residual_dims(partials) == ()
 
@@ -217,7 +230,7 @@ def _reshape_targets(fn) -> list[tuple]:
         target = getattr(expr, "target", None)
         if target is not None and type(target).__name__ == "Reshape":
             found.append(tuple(target.new_shape))
-        if isinstance(target, type(ENTRY)):
+        if isinstance(target, Function):
             walk(target.body, depth + 1)
         for name in ("args", "elements", "yield_values"):
             for child in getattr(expr, name, ()) or ():
@@ -233,6 +246,7 @@ def test_a_derived_extent_reaches_the_operation_that_states_it() -> None:
 
     Nothing supplies it, and it has to arrive inside the callee's own reshape.
     """
+    GqaOnline, ENTRY, STEADY, NUM_SPLITS = _gqa()
     concrete = check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1]
     block = STEADY["ctx_len"] // NUM_SPLITS
 
@@ -257,6 +271,7 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     A small context keeps this runnable on a CPU; the size is in the first
     strategy's range, and the assertion below is that both routes choose it.
     """
+    GqaOnline, ENTRY, _, _ = _gqa()
     context = 32
     dims = {"ctx_len": context}
 

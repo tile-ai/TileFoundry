@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from tests.core._corpus import reload_program
-from tests.nvidia.cuda.fixtures.shapes.tile_window_syntax import (
-    MeshInsideTileWindow,
-    NestedScaledTileWindows,
-)
+from pathlib import Path
+
+from tests.core._corpus import reload
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Var
@@ -17,6 +16,8 @@ from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.types.dim import DimMul, DimSub, simplify_dim
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import collect_exprs
+
+TILE_WINDOW_SYNTAX = Path(__file__).parents[1] / "fixtures" / "shapes" / "tile_window_syntax.py"
 
 
 def _loops(owner) -> dict[str, LoopRegion]:
@@ -44,6 +45,7 @@ def _scaled_start(sliced: Call, induction: Var) -> tuple[Call, int]:
 
 
 def test_nested_tile_windows_capture_and_transform_the_outer_window() -> None:
+    NestedScaledTileWindows = load_authored_ir(f"{TILE_WINDOW_SYNTAX}:NestedScaledTileWindows")
     loops = _loops(NestedScaledTileWindows)
     outer, inner = loops["m"], loops["n"]
     outer_param = next(
@@ -83,7 +85,7 @@ def test_nested_tile_windows_capture_and_transform_the_outer_window() -> None:
         "x[m * 2 - 1, n]",
     ):
         assert index in printed
-    restored = reload_program(printed, "NestedScaledTileWindows")
+    restored = reload(printed, "NestedScaledTileWindows")
     assert as_script(restored) == printed
     assert {
         name: (len(loop.params), len(loop.args)) for name, loop in _loops(restored).items()
@@ -91,6 +93,7 @@ def test_nested_tile_windows_capture_and_transform_the_outer_window() -> None:
 
 
 def test_a_mesh_inside_a_tile_loop_captures_the_outer_window() -> None:
+    MeshInsideTileWindow = load_authored_ir(f"{TILE_WINDOW_SYNTAX}:MeshInsideTileWindow")
     loop = _loops(MeshInsideTileWindow)["m"]
     mesh = next(
         expr
@@ -112,7 +115,7 @@ def test_a_mesh_inside_a_tile_loop_captures_the_outer_window() -> None:
 
     printed = as_script(MeshInsideTileWindow)
     assert "x[m * 2 + 1, :]" in printed
-    restored = reload_program(printed, "MeshInsideTileWindow")
+    restored = reload(printed, "MeshInsideTileWindow")
     assert as_script(restored) == printed
     restored_loop = _loops(restored)["m"]
     restored_mesh = next(

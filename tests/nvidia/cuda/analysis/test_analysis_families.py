@@ -11,16 +11,10 @@ disagree with itself.
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
-from tests.nvidia.cuda.fixtures.placed.performance_findings import _CrossScopePerformance
-from tests.nvidia.cuda.fixtures.placed.symbolic_offset import (
-    _LiteralStoreOffset,
-    _SymbolicStoreOffset,
-)
-from tests.nvidia.cuda.fixtures.placed.tp_all_to_all import HELD_BYTES, TransposeShard
-from tests.nvidia.cuda.models.access_footprint.model import TiledQKVProjection
 from tilefoundry.analysis import (
     Breakdown,
     ComputeCostMetadata,
@@ -43,6 +37,7 @@ from tilefoundry.analysis.compute_cost import (
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import MemoryOptions
 from tilefoundry.analysis.metadata import shifted
+from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
 from tilefoundry.ir.core import (
@@ -58,10 +53,13 @@ from tilefoundry.visitor_registry.contexts import TrafficBytes
 from tilefoundry_nvidia import CudaTarget
 
 _ROUNDING_M = 14_593
+PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
+ACCESS_FOOTPRINT = Path(__file__).parents[1] / "models" / "access_footprint" / "model.py"
 
 
 def test_invariant_gemm_operands_repeat_in_total_traffic() -> None:
     """The QKV tiles load again even when one operand is invariant in one loop."""
+    TiledQKVProjection = load_authored_ir(f"{ACCESS_FOOTPRINT}:TiledQKVProjection")
     result = analyze(
         *check_program(TiledQKVProjection, TiledQKVProjection.entry_function()),
         analysis="memory",
@@ -75,6 +73,7 @@ def test_invariant_gemm_operands_repeat_in_total_traffic() -> None:
 
 
 def test_reshard_compares_address_boxes_without_participant_ownership() -> None:
+    TransposeShard = load_authored_ir(f"{PLACED / 'tp_all_to_all.py'}:TransposeShard")
     result = analyze(
         *check_program(TransposeShard, TransposeShard.entry_function()), analysis="memory"
     )
@@ -89,7 +88,7 @@ def test_reshard_compares_address_boxes_without_participant_ownership() -> None:
     assert record.traffic.communication.of("gpu") is None
     assert (
         get_metadata(result.function, RegionMemoryMetadata).peak_for("gmem").peak_bytes
-        == HELD_BYTES
+        == load_namespace(str(PLACED / "tp_all_to_all.py"))[0]["HELD_BYTES"]
     )
 
 
@@ -206,6 +205,9 @@ def _calls(function) -> tuple[Call, ...]:
 def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> None:
     """The outer stage waits for the inner stage to complete."""
     results = {}
+    _CrossScopePerformance = load_authored_ir(
+        f"{PLACED / 'performance_findings.py'}:_CrossScopePerformance"
+    )
     for name in ("cross_scope", "nested_control"):
         function = next(fn for fn in _CrossScopePerformance.functions if fn.name == name)
         results[name] = analyze(
@@ -292,10 +294,11 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
     Address arithmetic executes in each of the 32 position iterations.
     """
     observed = {}
-    for name, owner in (
-        ("literal", _LiteralStoreOffset),
-        ("symbolic", _SymbolicStoreOffset),
+    for name, root in (
+        ("literal", "_LiteralStoreOffset"),
+        ("symbolic", "_SymbolicStoreOffset"),
     ):
+        owner = load_authored_ir(f"{PLACED / 'symbolic_offset.py'}:{root}")
         result = analyze(
             *check_program(owner, owner.entry_function(), dims={"seq_len": 8192}),
             analysis=_ALL_FAMILIES,

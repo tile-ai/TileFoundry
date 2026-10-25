@@ -11,15 +11,15 @@ is asked during a compilation.
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from tests.core.target.test_target import _provider_target
-from tests.nvidia.cuda.fixtures.placed.moe_mega_kernel import MoEMegaKernel
-from tests.nvidia.cuda.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry import CompilerOptions, build, jit
 from tilefoundry.analysis import AnalysisError, analyze
 from tilefoundry.analysis.check import check_program
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.codegen.linkable_module import LinkableModule
 from tilefoundry.dsl import *
 from tilefoundry.ir.core.module import Module
@@ -38,6 +38,8 @@ from tilefoundry.target.base import bind
 from tilefoundry_nvidia import CudaTarget
 from tilefoundry_nvidia.cuda.codegen.tir.stmts.mesh_scope import validate_cuda_topology_levels
 from tilefoundry_nvidia.cuda.target.spec import SM90_ID
+
+PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
 
 
 class ExternalCudaTarget(CudaTarget):
@@ -106,6 +108,7 @@ def test_cuda_projects_one_ctas_share_from_device_rates() -> None:
 
 def test_performance_refuses_a_target_without_its_required_compute_rate() -> None:
     target = _NoComputeUnitRateCudaTarget("nvidia.h200_sxm")
+    MoEMegaKernel = load_authored_ir(f"{PLACED / 'moe_mega_kernel.py'}:MoEMegaKernel")
     subject = replace(MoEMegaKernel, target=target)
     function = subject.entry_function()
 
@@ -219,7 +222,7 @@ def test_build_rejects_unequal_device_targets_before_emitting() -> None:
 
 
 def test_target_conflict_diagnostics_use_stable_summaries() -> None:
-    function = RmsnormModule.entry_function()
+    function = load_authored_ir(f"{PLACED / 'rmsnorm.py'}:RmsnormModule").entry_function()
     declared_target = CudaTarget("nvidia.h200_sxm")
     explicit_target = CudaTarget(
         "nvidia.h200_sxm",

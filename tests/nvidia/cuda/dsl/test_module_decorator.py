@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import import_program, load_program, reload_program
-from tests.nvidia.cuda.fixtures.shapes import scaled_modules
+from tests.core._corpus import reload
+from tilefoundry.cli.source import load_authored_ir, load_namespace
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call
@@ -42,9 +42,8 @@ def test_a_held_child_takes_its_own_owners_target_types():
     Target and the call's storage, and a call the Target refuses fails where the
     root makes it, leaving the child's types as they were.
     """
-    namespace = import_program(
-        Path(__file__).parents[1] / "fixtures/logical/child_matmul_inherited_target.py"
-    )
+    source = Path(__file__).parents[1] / "fixtures/logical/child_matmul_inherited_target.py"
+    namespace = load_namespace(str(source))[0]
     K_LEN, K, M, N = (namespace[name] for name in ("K_LEN", "K", "M", "N"))
 
     def storages(owner):
@@ -77,7 +76,7 @@ def test_a_held_child_takes_its_own_owners_target_types():
         (function,) = (function for function in owner.functions if function.name == name)
         return function.body.type.storage
 
-    cuda_root = namespace["ChildMatmulRoot"]
+    cuda_root = load_authored_ir(f"{source}:ChildMatmulRoot")
     held = tuple(slot.elements[0] for slot in cuda_root.children.values())
     for child in held:
         assert child.target is None
@@ -117,7 +116,7 @@ def test_a_held_child_takes_its_own_owners_target_types():
     ]
     assert all(any(target is slot for target in callees) for slot in _CpuRoot.children.values())
 
-    imported = reload_program(as_script(cuda_root), "ChildMatmulRoot")
+    imported = reload(as_script(cuda_root), "ChildMatmulRoot")
     for slot in imported.children.values():
         child = slot.elements[0]
         assert child.target is None
@@ -212,11 +211,13 @@ def test_prim_func_host_resolves_sibling_device_in_class_body():
 def test_module_rejects_invalid_instance_declarations_and_calls(fixture, refused):
     source = Path(__file__).parents[1] / f"fixtures/diagnostics/parser_module_instance_{fixture}.py"
     with pytest.raises((TypeError, ValueError, VerifyError), match=refused):
-        load_program(source)
+        load_authored_ir(str(source))
 
 
 def test_an_unused_module_without_entry_can_occupy_a_slot_and_be_replaced():
-    slot = ModuleList(dataclasses.replace(scaled_modules.ScaledChild, entry=None))
+    scaled_modules = Path(__file__).parents[1] / "fixtures/shapes/scaled_modules.py"
+    ScaledChild = load_authored_ir(f"{scaled_modules}:ScaledChild")
+    slot = ModuleList(dataclasses.replace(ScaledChild, entry=None))
     root = Module("Container", (), None, children={"unused": slot})
     assert dataclasses.replace(root).children["unused"] is slot
     assert slot.elements[0].entry is None

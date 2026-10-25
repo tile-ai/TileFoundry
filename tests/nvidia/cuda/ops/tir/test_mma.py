@@ -5,14 +5,15 @@ See [runtime §2.6](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 import tilefoundry
 import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tests.nvidia.cuda.fixtures.tir.e4m3_gemm import Fp8Gemm
-from tests.nvidia.cuda.fixtures.tir.mma import MmHandwritten
 from tests.nvidia.cuda.ops.tir.targets import CUDA_TARGETS, retarget
+from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dsl import *
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CpuTarget
@@ -21,6 +22,7 @@ from tilefoundry_nvidia import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 _MESH_LAYOUT = Layout(shape=(4, 8), strides=(1, 4))
+TIR = Path(__file__).parents[2] / "fixtures" / "tir"
 
 
 @pytest.mark.parametrize("target", CUDA_TARGETS)
@@ -30,6 +32,7 @@ def test_handwritten_mma_matches_torch(target: CudaTarget) -> None:
     a = torch.randn(16, 16, dtype=torch.bfloat16, device="cuda")
     b = torch.randn(16, 8, dtype=torch.bfloat16, device="cuda")
     out = torch.empty(16, 8, dtype=torch.float32, device="cuda")
+    MmHandwritten = load_authored_ir(f"{TIR / 'mma.py'}:MmHandwritten")
     runtime = tilefoundry.compile(retarget(MmHandwritten, target), target=target)
     runtime(a, b, out)
     torch.cuda.synchronize()
@@ -230,7 +233,7 @@ def test_fp8_fragment_mma_matches_torch_matmul(target: CudaTarget) -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_e4m3_gemm_through_shared_memory_equals_the_f32_product(target: CudaTarget) -> None:
     """Integer inputs keep every partial sum exact, so the tile must equal the F32 product."""
-    module = retarget(Fp8Gemm, target)
+    module = retarget(load_authored_ir(f"{TIR / 'e4m3_gemm.py'}:Fp8Gemm"), target)
     verify_module(module)
     runtime = tilefoundry.compile(module, target=target)
     torch.manual_seed(0)
