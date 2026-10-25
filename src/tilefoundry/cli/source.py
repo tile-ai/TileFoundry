@@ -24,7 +24,6 @@ class Program:
     authored: Function
     module: Module
     entry: Function
-    dims: Mapping[str, int] | None
 
 
 def bind_dims(stated: Sequence[str] | None) -> dict[str, int] | None:
@@ -45,7 +44,7 @@ def checked_program(
         checked, entry = check_program(module, authored, topology_level=topology_level, dims=bound)
     except SpecializationError as error:
         raise ValueError(f"{command}: {error}") from None
-    return Program(authored, checked, entry, bound)
+    return Program(authored, checked, entry)
 
 
 def _split_source(source: str) -> tuple[Path, str | None]:
