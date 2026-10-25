@@ -473,9 +473,10 @@ tilefoundry schedule candidates SOURCE PATH [--json] [--dim NAME=EXTENT ...]
 
 `analyze`, `candidates` and `finalize` share one front end: load the source, bind
 one extent per `--dim`, and check the entry. `finalize` then runs memory analysis
-and writes canonical
-TIR following [passes §7.1](./passes.md#71-converthirtotir). With `--json`, `PATH` instead contains an object whose `source`
-field is that same canonical TIR. `facts` describes the instructions admitted
+and writes the lowered Module as canonical TIR source following
+[passes §7.1](./passes.md#71-converthirtotir), also when it holds a single
+PrimFunction. With `--json`, `PATH` instead
+contains an object whose `source` field is that same canonical TIR. `facts` describes the instructions admitted
 by the exact `TARGET` identity, optionally narrowed to one fully-qualified
 `INSTRUCTION` name. With no `INSTRUCTION`, it lists every registered TIR Op
 that owns a class-level instruction-capability declaration. A named capability

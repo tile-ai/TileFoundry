@@ -241,7 +241,7 @@ def _check_facts_refusal(out: Path, captured: pytest.CaptureResult[str], *, mess
 
 def _check_finalized_rows(out: Path, captured: pytest.CaptureResult[str]) -> None:
     assert captured == ("", "")
-    lowered = import_dsl(out.read_text())
+    lowered = import_dsl(out.read_text()).entry_function()
     assert isinstance(lowered, PrimFunction)
     assert lowered.params[-1].type.shape == (128,)
 

@@ -34,7 +34,6 @@ from tilefoundry.analysis.metadata import (
     RegionMemoryMetadata,
     RooflineMetadata,
 )
-from tilefoundry.cli.schedule import finalized_ir
 from tilefoundry.codegen.emitter import CppEmitter
 from tilefoundry.evaluator import evaluate
 from tilefoundry.inspection import as_script
@@ -117,7 +116,7 @@ class ScheduleCase(Case):
 class Scheduled:
     result: AnalysisResult | None
     module: Module | None
-    lowered: Module | PrimFunction | None
+    lowered: Module | None
     candidates: dict | None
 
 
@@ -610,8 +609,9 @@ def _retained_shapes(state, problems):
 
 def _loop_outputs(state, problems):
     def check(lowered):
-        assert lowered.output_count == 3
-        assert import_dsl(as_script(lowered)).output_count == 3
+        function = entry_function(lowered)
+        assert function.output_count == 3
+        assert import_dsl(as_script(function)).output_count == 3
 
     problems.run("_loop_outputs", check, state.lowered)
 
@@ -683,11 +683,7 @@ def _memory_report(case, program, report):
 
 
 def _tir_checks(lowered, source):
-    functions = (
-        tuple(frame.function for frame in list_call_paths(lowered).values())
-        if isinstance(lowered, Module)
-        else (lowered,)
-    )
+    functions = tuple(frame.function for frame in list_call_paths(lowered).values())
     found = []
     for function in functions:
         _assert_live_smem_views_do_not_overlap(function, source)
@@ -760,7 +756,7 @@ def _hir(case, problems):
         problems.run("candidate sites", _hir_candidates, candidates_report)
     lowered = problems.run("finalize", _finalize, case, module, result)
     if case.finalize_refusal is None:
-        printed = problems.run("print TIR", lambda m: as_script(finalized_ir(m)), lowered)
+        printed = problems.run("print TIR", as_script, lowered)
         lowered = problems.run("reload TIR", import_dsl, printed)
         problems.run("TIR operands", _tir_checks, lowered, case.path)
     state = Scheduled(result, module, lowered, candidates_report)

@@ -10,9 +10,6 @@ from tilefoundry.analysis import analyze
 from tilefoundry.cli.source import checked_program
 from tilefoundry.cli.target import target_by_identity
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.schedule import (
     candidates,
     finalize,
@@ -30,12 +27,6 @@ def _write(out: str, text: str) -> None:
     temporary.replace(destination)
 
 
-def finalized_ir(module: Module) -> Module | PrimFunction:
-    """Select the IR representation written by schedule finalize."""
-    functions = tuple(fn for frame in list_call_paths(module).values() for fn in (frame.function,) if isinstance(fn, PrimFunction))
-    return module.entry_function() if len(functions) == 1 else module
-
-
 def run_finalize(
     source: str, out: str, *, as_json: bool = False, dims: Sequence[str] | None = None
 ) -> int:
@@ -43,7 +34,7 @@ def run_finalize(
     program = checked_program(source, dims, command="schedule finalize")
     analyzed = analyze(program.module, program.entry, analysis=("memory",))
     module = finalize(analyzed, authored=program.authored)
-    rendered = as_script(finalized_ir(module))
+    rendered = as_script(module)
     text = json.dumps({"source": rendered}, indent=2) if as_json else rendered
     _write(out, text)
     return 0
@@ -79,4 +70,4 @@ def run_candidates(
     return 0
 
 
-__all__ = ["finalized_ir", "run_candidates", "run_facts", "run_finalize"]
+__all__ = ["run_candidates", "run_facts", "run_finalize"]
