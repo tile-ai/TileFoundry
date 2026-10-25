@@ -86,9 +86,7 @@ def check_parser_case(case: ParserCase) -> None:
         problems.expect(f"contains {fragment!r}", lambda text: fragment in text, printed)
     if case.same_as is not None:
         problems.run("same print", _same_print, printed, case.same_as)
-    state = Parsed(ir, printed, rebuilt)
-    for hook in case.hooks:
-        problems.run(hook.__name__, hook, state, problems)
+    problems.run("guard", case.guard, Parsed(ir, printed, rebuilt), problems)
     problems.dump()
 
 

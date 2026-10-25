@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import partial
 from math import prod
 from pathlib import Path
 from types import MappingProxyType
@@ -12,7 +11,7 @@ from types import MappingProxyType
 import pytest
 import torch
 
-from tests.core._corpus import Case, Problems, cases, reload
+from tests.core._corpus import Case, Problems, case, cases, reload
 from tests.nvidia.cuda.schedule._plain import SiteCounts, check_plain_report
 from tests.nvidia.cuda.schedule._support import (
     _assert_live_smem_views_do_not_overlap,
@@ -91,6 +90,8 @@ ANALYSES = (
 _TENSOR_CLOCK_HZ = 1_830_000_000
 
 _SHARED_BYTES_PER_CLOCK = 128
+
+ROOT = Path(__file__).parents[1] / "fixtures" / "schedule"
 
 
 @dataclass(frozen=True)
@@ -246,397 +247,6 @@ def _region_records(records, placement):
         assert not record.advisories
 
 
-def _module_instances(state, problems):
-    def check(result):
-        for analysis, metadata_type in ANALYSES:
-            record_type = PerformanceMetadata if analysis == "performance" else metadata_type
-            for function in result.functions[1:]:
-                schedules = [
-                    expr
-                    for expr in collect_exprs(function.body)
-                    if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
-                ]
-                assert any(get_metadata(expr, record_type) is not None for expr in schedules)
-
-    problems.run("_module_instances", check, state.result)
-
-
-def _three_stage_lifetimes(state, problems):
-    def check(result):
-        assert RegionMemoryMetadata in result.metadata_types
-        lifetimes = get_metadata(result.function, RegionMemoryMetadata).lifetimes
-        smem = sorted(item.bytes for item in lifetimes if item.memory_level == "smem")
-        rmem = sorted(item.bytes for item in lifetimes if item.memory_level == "rmem")
-        assert smem == sorted((512 * 3, 4096 * 3))
-        assert rmem == [4096, 8192, 8192]
-
-    problems.run("_three_stage_lifetimes", check, state.result)
-
-
-def _tma_regions(state, problems):
-    def check(result):
-        liveness = get_metadata(result.function, LivenessMetadata)
-        local = {id(expr) for expr in collect_exprs(result.function.body)}
-        records = tuple(
-            record
-            for window in liveness.regions
-            if id(window.region) in local
-            and (record := get_metadata(window.region, RegionMemoryMetadata)) is not None
-        )
-        assert len(records) == 7
-        schedule = next(
-            expr
-            for expr in collect_exprs(result.function.body)
-            if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
-        )
-        timeline = get_metadata(schedule, PerformanceMetadata).timeline
-        assert timeline.end_ns - timeline.start_ns == 118
-
-    problems.run("_tma_regions", check, state.result)
-
-
-def _captured_storage(state, problems):
-    def check(result):
-        liveness = get_metadata(result.function, LivenessMetadata)
-        local = {id(expr) for expr in collect_exprs(result.function.body)}
-        occurrences = {}
-        observed_smem = {}
-        for window in liveness.regions:
-            if id(window.region) not in local:
-                continue
-            key = _region_key(window.region, occurrences)
-            record = get_metadata(window.region, RegionMemoryMetadata)
-            peak = record.peak_for("smem") if record is not None else None
-            if peak is not None:
-                observed_smem[key] = peak.peak_bytes
-        assert observed_smem["thread@0:32#0"] == 24
-
-    problems.run("_captured_storage", check, state.result)
-
-
-def _wgmma_price(n, bound_by, state, problems):
-    def check(result):
-        schedule = next(
-            expr
-            for expr in collect_exprs(result.function.body)
-            if isinstance(expr, Call)
-            and isinstance(expr.target, ScheduleOp)
-            and getattr(getattr(expr.target.op, "atom", None), "bindings", {}).get("n") == n
-        )
-        spread = get_metadata(schedule, ComputeCostMetadata).flops.of("bf16")
-        issues = prod(schedule.target.repeat or (1,))
-        flops_per_issue = spread.logical // issues
-        timeline = get_metadata(schedule, PerformanceMetadata).timeline
-        duration_ns = timeline.end_ns - timeline.start_ns
-        shared_bytes = sum(
-            prod(operand.type.shape) * operand.type.dtype.bit_width // 8
-            for operand in schedule.args
-            if operand.type.storage is StorageKind.SMEM
-        )
-        tensor_ns = -(-(n * issues * 1_000_000_000) // (2 * _TENSOR_CLOCK_HZ))
-        shared_ns = -(
-            -(shared_bytes * 1_000_000_000) // (_SHARED_BYTES_PER_CLOCK * _TENSOR_CLOCK_HZ)
-        )
-
-        assert flops_per_issue == 2 * 64 * n * 16
-        assert (shared_ns > tensor_ns) == (bound_by == "smem")
-        assert duration_ns == max(tensor_ns, shared_ns)
-
-    problems.run("wgmma price", check, state.result)
-
-
-def _fp8_reference(state, problems):
-    def check(module):
-        m, n, k, block = 128, 128, 512, 128
-        generator = torch.Generator().manual_seed(0)
-        a = torch.randn(m, k, generator=generator).to(torch.float8_e4m3fn)
-        weight = torch.randn(n, k, generator=generator).to(torch.float8_e4m3fn)
-        b = weight.t()
-        a_scale = torch.rand(m, k // block, generator=generator) + 0.5
-        b_scale = torch.rand(k // block, n // block, generator=generator) + 0.5
-
-        scheduled = evaluate(module.entry_function(), a, b, a_scale, b_scale)
-
-        reference = sum(
-            (a[:, kb * block : (kb + 1) * block].float() @ b[kb * block : (kb + 1) * block].float())
-            * a_scale[:, kb : kb + 1]
-            * b_scale[kb, :].repeat_interleave(block)
-            for kb in range(k // block)
-        ).to(torch.bfloat16)
-        torch.testing.assert_close(scheduled.float(), reference.float(), rtol=2**-7, atol=0)
-
-    problems.run("_fp8_reference", check, state.module)
-
-
-def _reduce_scope(state, problems):
-    def check(lowered):
-        class Scope(StmtVisitor[None]):
-            def __init__(self):
-                self.scopes = []
-                self.found = 0
-
-            def visit_MeshScope(self, stmt, ctx=None):
-                self.scopes.append(stmt.mesh)
-                self.visit(stmt.body)
-                self.scopes.pop()
-
-            def visit_Evaluate(self, stmt, ctx=None):
-                if isinstance(stmt.callable, CopyReduceAsyncTensor):
-                    assert tuple(topology.name for topology in self.scopes[-1].topologies) == (
-                        "thread",
-                    )
-                    assert prod(flatten(self.scopes[-1].layout).shape) == 32
-                    self.found += 1
-
-        visitor = Scope()
-        visitor.visit(entry_function(lowered).body)
-        assert visitor.found == 1
-
-    problems.run("_reduce_scope", check, state.lowered)
-
-
-def _grouped_addresses(state, problems):
-    def check(result, lowered):
-        schedule = next(
-            value
-            for value in collect_exprs(result.function.body)
-            if isinstance(value, Call)
-            and isinstance(value.target, ScheduleOp)
-            and isinstance(value.target.op, TiledMma)
-        )
-        original_c, _, original_b = (arg.type for arg in schedule.args)
-        visitor = _RetainedStatements()
-        function = entry_function(lowered)
-        visitor.visit(function.body)
-        issues = [stmt for stmt in visitor.statements if isinstance(stmt.callable, TiledMma)]
-        assert len(issues) == 36
-        readers, pointers = {}, {}
-
-        def dimension(value, group):
-            if (literal := static_dim_value(value)) is not None:
-                return literal
-            if isinstance(value, Var):
-                return dimension(visitor.bindings[id(value)], group)
-            assert isinstance(value, Call)
-            if isinstance(value.target, MeshCoord):
-                assert value.target.mesh.names[static_dim_value(value.args[0])] == "group"
-                return group
-            a, b = (dimension(arg, group) for arg in value.args)
-            if isinstance(value.target, DimAdd):
-                return a + b
-            assert isinstance(value.target, DimMul)
-            return a * b
-
-        def address(type_, coordinates, group):
-            key = id(type_), group
-            if key not in readers:
-                eb = type_.dtype.bit_width // 8
-
-                def reader(layout):
-                    if isinstance(layout, ShardLayout):
-                        return reader(layout.layout)
-                    if isinstance(layout, ComposedLayout):
-                        outer = reader(layout.outer)
-                        offset = dimension(layout.offset, group) * eb
-                        if isinstance(layout.inner, Swizzle):
-                            return lambda linear: layout.inner(outer(linear) + offset)
-                        return lambda linear: outer(linear) + offset
-                    flat = flatten(layout)
-                    grouped = unflatten(flat, compatible_profile(flat.shape, type_.shape))
-                    return lambda linear: crd2idx(linear, grouped.shape, grouped.strides) * eb
-
-                readers[key] = reader(type_.layout)
-            linear = sum(
-                coordinate * prod(type_.shape[axis + 1 :])
-                for axis, coordinate in enumerate(coordinates)
-            )
-            return readers[key](linear)
-
-        def pointer(value, group):
-            key = id(value), group
-            if key not in pointers:
-                if isinstance(value, Var):
-                    result = pointer(visitor.bindings[id(value)], group)
-                elif isinstance(value, Constant):
-                    result = value.value
-                elif isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf)):
-                    result = pointer(value.args[0], group)
-                elif isinstance(value, Call) and isinstance(value.target, Slice):
-                    base = value.args[0]
-                    layout = base.type.layout
-                    layout = layout.layout if isinstance(layout, ShardLayout) else layout
-                    result = pointer(base, group)
-                    if not isinstance(layout, ComposedLayout):
-                        starts = tuple(dimension(start, group) for start in value.args[1].elements)
-                        result += address(base.type, starts, group)
-                else:
-                    assert isinstance(value, Call) and type(value.target).__name__ == "AllocTensor"
-                    result = 0
-                pointers[key] = result
-            return pointers[key]
-
-        def pointer_root(value):
-            if isinstance(value, Var):
-                return pointer_root(visitor.bindings[id(value)])
-            if isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf, Slice)):
-                return pointer_root(value.args[0])
-            return value
-
-        c_root = pointer_root(issues[0].args[0])
-        b_root = pointer_root(issues[0].args[2])
-        copied_k = next(
-            stmt.args[1]
-            for stmt in visitor.statements
-            if isinstance(stmt.callable, CopyAsyncTensor) and stmt.args[0] is function.params[1]
-        )
-        assert isinstance(b_root, Constant)
-        assert b_root.value == pointer_root(copied_k).value
-        assert c_root.type.shape == original_c.shape
-        assert c_root.type.storage is StorageKind.RMEM
-        for ordinal, issue in enumerate(issues):
-            step, k = divmod(ordinal, 12)
-            c, _, b = issue.args
-            assert pointer_root(c) is c_root
-            assert pointer_root(b) is b_root
-            assert c.type.shape == (64, 16)
-            assert b.type.shape == (16, 16)
-            for group in range(2):
-                for i in range(16):
-                    n = 48 * group + 16 * step + i
-                    for row in range(64):
-                        assert pointer(c, group) + address(c.type, (row, i), group) == address(
-                            original_c, (row, 16 * step + i), group
-                        )
-                    for j in range(16):
-                        assert pointer(b, group) + address(
-                            b.type, (j, i), group
-                        ) == b_root.value + address(original_b, (16 * k + j, n), group)
-
-    problems.run("_grouped_addresses", check, state.result, state.lowered)
-
-
-def _authored_views(state, problems):
-    def check(lowered):
-        verify_module(lowered)
-        function = entry_function(lowered)
-        visitor = _RetainedStatements()
-        visitor.visit(function.body)
-        views = [
-            value
-            for value in visitor.bindings.values()
-            if isinstance(value, Call) and isinstance(value.target, TensorView)
-        ]
-        assert [view.type.shape for view in views] == [(1,), (), (16, 8), (1, 8)]
-        identity = views[2]
-        assert isinstance(identity.args[0].target, PtrOf)
-        assert identity.args[0].args[0] is function.params[0]
-        assert len(visitor.statements) == 1
-        assert isinstance(visitor.statements[0].callable, Copy)
-        assert visitor.statements[0].args[1] is function.params[-1]
-
-    problems.run("_authored_views", check, state.lowered)
-
-
-def _physical_slots(state, problems):
-    def check(result, lowered):
-        peak = get_metadata(result.function, RegionMemoryMetadata).peak_for("smem").peak_bytes
-        function = entry_function(lowered)
-        visitor = _RetainedStatements()
-        visitor.visit(function.body)
-        slots = []
-        for value in visitor.bindings.values():
-            fields = value.elements if isinstance(value, Tuple) else (value,)
-            for slot in fields:
-                if (
-                    isinstance(slot, Call)
-                    and isinstance(slot.target, TensorView)
-                    and slot.target.storage is StorageKind.SMEM
-                    and isinstance(slot.args[0], Constant)
-                ):
-                    held = slot.type
-                    offset = slot.args[0].value
-                    assert offset % 16 == 0
-                    slots.append(
-                        {
-                            offset + (apply(held.layout, index) * held.dtype.bit_width + bit) // 8
-                            for index in range(prod(flatten(held.layout).shape))
-                            for bit in range(held.dtype.bit_width)
-                        }
-                    )
-        assert len(slots) == 2
-        assert slots[0].isdisjoint(slots[1])
-        assert all(min(slot) >= 0 and max(slot) < peak for slot in slots)
-
-    problems.run("_physical_slots", check, state.result, state.lowered)
-
-
-def _retained_shapes(state, problems):
-    def check(lowered):
-        verify_module(lowered)
-        frames = list_call_paths(lowered)
-        assert len(frames) == 3
-        assert all(isinstance(frame.function, PrimFunction) for frame in frames.values())
-        layers, mm = lowered.children["layers"], lowered.children["mm"]
-        assert len(layers.elements) == 3
-        assert all(element is mm.elements[0] for element in layers.elements)
-        visitor = _RetainedStatements()
-        visitor.visit(entry_function(lowered).body)
-        assert len(visitor.loops) == 1
-        assert len(visitor.calls) == 5
-        assert (
-            sum(
-                isinstance(call.callable, ModuleList) and call.callable.key == mm.key
-                for call in visitor.calls
-            )
-            == 2
-        )
-        indexed = [call for call in visitor.calls if isinstance(call.callable, Call)]
-        assert len(indexed) == 2
-        assert all(call.callable.args[0].key == layers.key for call in indexed)
-        assert any(isinstance(call.callable.args[1], Var) for call in indexed)
-        assert any(
-            isinstance(call.callable.args[1], Constant) and call.callable.args[1].value == 0
-            for call in indexed
-        )
-        for call in visitor.calls:
-            assert len(call.args) == (3 if isinstance(call.callable, PrimFunction) else 2)
-            with pytest.raises(RuntimeError, match="no codegen handler for Op"):
-                CppEmitter(context=CudaCodegenContext(target=lowered.target)).visit_Evaluate(call)
-
-    problems.run("_retained_shapes", check, state.lowered)
-
-
-def _loop_outputs(state, problems):
-    def check(lowered):
-        assert entry_function(lowered).output_count == 3
-        assert reload(as_script(lowered), lowered.name).entry_function().output_count == 3
-
-    problems.run("_loop_outputs", check, state.lowered)
-
-
-def _zero_trip(state, problems):
-    def check(lowered):
-        visitor = _RetainedStatements()
-        visitor.visit(entry_function(lowered).body)
-        assert len(visitor.loops) == 1
-        loop = visitor.loops[0]
-        assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
-            0,
-            0,
-            1,
-        )
-
-    problems.run("_zero_trip", check, state.lowered)
-
-
-def _cast_candidates(state, problems):
-    def check(report):
-        ops = [row["op"] for row in report["lines"]]
-        assert ops.count("tf.reduce") == 1
-
-    problems.run("_cast_candidates", check, state.candidates)
-
-
 def _structural_layouts(program):
     structural = [
         expr
@@ -758,8 +368,7 @@ def _hir(case, problems):
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         problems.run("TIR operands", _tir_checks, lowered, case.path)
     state = Scheduled(result, module, lowered, candidates_report)
-    for hook in case.hooks:
-        problems.run(getattr(hook, "__name__", "wgmma price"), hook, state, problems)
+    problems.run("guard", case.guard, state, problems)
 
 
 def _plain(case, problems):
@@ -798,17 +407,611 @@ def _tir(case, problems):
     problems.expect("canonical text", lambda text: text == case.path.read_text(), printed)
 
 
+@dataclass(frozen=True)
+class WgmmaPrice(ScheduleCase):
+    wgmma_n: int = 0
+    bound_by: str = ""
+
+    def guard(self, state, problems):
+        n, bound_by, result = self.wgmma_n, self.bound_by, state.result
+        schedule = next(
+            expr
+            for expr in collect_exprs(result.function.body)
+            if isinstance(expr, Call)
+            and isinstance(expr.target, ScheduleOp)
+            and getattr(getattr(expr.target.op, "atom", None), "bindings", {}).get("n") == n
+        )
+        spread = get_metadata(schedule, ComputeCostMetadata).flops.of("bf16")
+        issues = prod(schedule.target.repeat or (1,))
+        flops_per_issue = spread.logical // issues
+        timeline = get_metadata(schedule, PerformanceMetadata).timeline
+        duration_ns = timeline.end_ns - timeline.start_ns
+        shared_bytes = sum(
+            prod(operand.type.shape) * operand.type.dtype.bit_width // 8
+            for operand in schedule.args
+            if operand.type.storage is StorageKind.SMEM
+        )
+        tensor_ns = -(-(n * issues * 1_000_000_000) // (2 * _TENSOR_CLOCK_HZ))
+        shared_ns = -(
+            -(shared_bytes * 1_000_000_000) // (_SHARED_BYTES_PER_CLOCK * _TENSOR_CLOCK_HZ)
+        )
+
+        assert flops_per_issue == 2 * 64 * n * 16
+        assert (shared_ns > tensor_ns) == (bound_by == "smem")
+        assert duration_ns == max(tensor_ns, shared_ns)
+
+
+@dataclass(frozen=True)
+class PhysicalSlots(ScheduleCase):
+    def guard(self, state, problems):
+        result, lowered = state.result, state.lowered
+        peak = get_metadata(result.function, RegionMemoryMetadata).peak_for("smem").peak_bytes
+        function = entry_function(lowered)
+        visitor = _RetainedStatements()
+        visitor.visit(function.body)
+        slots = []
+        for value in visitor.bindings.values():
+            fields = value.elements if isinstance(value, Tuple) else (value,)
+            for slot in fields:
+                if (
+                    isinstance(slot, Call)
+                    and isinstance(slot.target, TensorView)
+                    and slot.target.storage is StorageKind.SMEM
+                    and isinstance(slot.args[0], Constant)
+                ):
+                    held = slot.type
+                    offset = slot.args[0].value
+                    assert offset % 16 == 0
+                    slots.append(
+                        {
+                            offset + (apply(held.layout, index) * held.dtype.bit_width + bit) // 8
+                            for index in range(prod(flatten(held.layout).shape))
+                            for bit in range(held.dtype.bit_width)
+                        }
+                    )
+        assert len(slots) == 2
+        assert slots[0].isdisjoint(slots[1])
+        assert all(min(slot) >= 0 and max(slot) < peak for slot in slots)
+
+
+@case
+class BulkReduceStore(ScheduleCase):
+    path: Path = ROOT / "hir/bulk_reduce_store.py"
+    smem_peak: int = 16_384
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+    def guard(self, state, problems):
+        lowered = state.lowered
+
+        class Scope(StmtVisitor[None]):
+            def __init__(self):
+                self.scopes = []
+                self.found = 0
+
+            def visit_MeshScope(self, stmt, ctx=None):
+                self.scopes.append(stmt.mesh)
+                self.visit(stmt.body)
+                self.scopes.pop()
+
+            def visit_Evaluate(self, stmt, ctx=None):
+                if isinstance(stmt.callable, CopyReduceAsyncTensor):
+                    assert tuple(topology.name for topology in self.scopes[-1].topologies) == (
+                        "thread",
+                    )
+                    assert prod(flatten(self.scopes[-1].layout).shape) == 32
+                    self.found += 1
+
+        visitor = Scope()
+        visitor.visit(entry_function(lowered).body)
+        assert visitor.found == 1
+
+
+@case
+class CapturedInsertUpdate(ScheduleCase):
+    path: Path = ROOT / "hir/captured_insert_update.py"
+    smem_peak: int = 24
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+    def guard(self, state, problems):
+        result = state.result
+        liveness = get_metadata(result.function, LivenessMetadata)
+        local = {id(expr) for expr in collect_exprs(result.function.body)}
+        occurrences = {}
+        observed_smem = {}
+        for window in liveness.regions:
+            if id(window.region) not in local:
+                continue
+            key = _region_key(window.region, occurrences)
+            record = get_metadata(window.region, RegionMemoryMetadata)
+            peak = record.peak_for("smem") if record is not None else None
+            if peak is not None:
+                observed_smem[key] = peak.peak_bytes
+        assert observed_smem["thread@0:32#0"] == 24
+
+
+@case
+class Fp8BlockScaledGemm(ScheduleCase):
+    path: Path = ROOT / "hir/fp8_block_scaled_gemm.py"
+    smem_peak: int = 65_536
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "cta@0:1#0": RmemPeak(
+                4,
+                "the 1x1 f32 tile-scale copy is unsplit; thread-split accumulators "
+                "do not contribute to the CTA record",
+            ),
+            "thread@128:256#0": RmemPeak(65_536, "128x128 f32 zero accumulator"),
+            "thread@128:256#1": RmemPeak(
+                131584,
+                "independent live Buffers: 1 * 512B + 2 * 65536B",
+            ),
+            "thread@128:256#2": RmemPeak(65_536, "f32 loop result/bf16 cast alias"),
+            "thread@0:384#0": RmemPeak(131584, "independent live Buffers: 1 * 512B + 2 * 65536B"),
+        }
+    )
+
+    def guard(self, state, problems):
+        module = state.module
+        m, n, k, block = 128, 128, 512, 128
+        generator = torch.Generator().manual_seed(0)
+        a = torch.randn(m, k, generator=generator).to(torch.float8_e4m3fn)
+        weight = torch.randn(n, k, generator=generator).to(torch.float8_e4m3fn)
+        b = weight.t()
+        a_scale = torch.rand(m, k // block, generator=generator) + 0.5
+        b_scale = torch.rand(k // block, n // block, generator=generator) + 0.5
+
+        scheduled = evaluate(module.entry_function(), a, b, a_scale, b_scale)
+
+        reference = sum(
+            (a[:, kb * block : (kb + 1) * block].float() @ b[kb * block : (kb + 1) * block].float())
+            * a_scale[:, kb : kb + 1]
+            * b_scale[kb, :].repeat_interleave(block)
+            for kb in range(k // block)
+        ).to(torch.bfloat16)
+        torch.testing.assert_close(scheduled.float(), reference.float(), rtol=2**-7, atol=0)
+
+
+@case
+class GemmRegisterStore(WgmmaPrice):
+    path: Path = ROOT / "hir/gemm_8192x17408x5120_register_store.py"
+    smem_peak: int = 196_608
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
+            "thread@128:256#1": RmemPeak(131_072, "f32 phi/mma alias chain"),
+            "thread@128:256#2": RmemPeak(131_072, "f32 loop result/bf16 cast alias"),
+            "thread@0:384#0": RmemPeak(131_072, "parent envelope of one alias chain"),
+        }
+    )
+    wgmma_n: int = 256
+    bound_by: str = "tensor"
+
+
+@case
+class GemmTmaStore(ScheduleCase):
+    path: Path = ROOT / "hir/gemm_8192x17408x5120_tma_store.py"
+    smem_peak: int = 212_992
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
+            "thread@128:256#1": RmemPeak(131_072, "f32 phi/mma alias chain"),
+            "thread@128:256#2": RmemPeak(131_072, "f32 loop result/bf16 cast alias"),
+            "thread@0:384#0": RmemPeak(131_072, "parent envelope of one alias chain"),
+        }
+    )
+
+    def guard(self, state, problems):
+        result = state.result
+        liveness = get_metadata(result.function, LivenessMetadata)
+        local = {id(expr) for expr in collect_exprs(result.function.body)}
+        records = tuple(
+            record
+            for window in liveness.regions
+            if id(window.region) in local
+            and (record := get_metadata(window.region, RegionMemoryMetadata)) is not None
+        )
+        assert len(records) == 7
+        schedule = next(
+            expr
+            for expr in collect_exprs(result.function.body)
+            if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
+        )
+        timeline = get_metadata(schedule, PerformanceMetadata).timeline
+        assert timeline.end_ns - timeline.start_ns == 118
+
+
+@case
+class LoopOutputs(ScheduleCase):
+    path: Path = ROOT / "hir/loop_outputs.py"
+    smem_peak: int = 8
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+    def guard(self, state, problems):
+        lowered = state.lowered
+        assert entry_function(lowered).output_count == 3
+        assert reload(as_script(lowered), lowered.name).entry_function().output_count == 3
+
+
+@case
+class ModuleInstances(ScheduleCase):
+    path: Path = ROOT / "hir/module_instances.py"
+    child_regions: bool = True
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "cta@0:1#0": RmemPeak(
+                384, "three independent 128-byte callee operand/result Buffers in the CTA window"
+            ),
+        }
+    )
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+    def guard(self, state, problems):
+        problems.run("module instances", self.module_instances, state.result)
+        problems.run("retained shapes", self.retained_shapes, state.lowered)
+
+    def module_instances(self, result):
+        for analysis, metadata_type in ANALYSES:
+            record_type = PerformanceMetadata if analysis == "performance" else metadata_type
+            for function in result.functions[1:]:
+                schedules = [
+                    expr
+                    for expr in collect_exprs(function.body)
+                    if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
+                ]
+                assert any(get_metadata(expr, record_type) is not None for expr in schedules)
+
+    def retained_shapes(self, lowered):
+        verify_module(lowered)
+        frames = list_call_paths(lowered)
+        assert len(frames) == 3
+        assert all(isinstance(frame.function, PrimFunction) for frame in frames.values())
+        layers, mm = lowered.children["layers"], lowered.children["mm"]
+        assert len(layers.elements) == 3
+        assert all(element is mm.elements[0] for element in layers.elements)
+        visitor = _RetainedStatements()
+        visitor.visit(entry_function(lowered).body)
+        assert len(visitor.loops) == 1
+        assert len(visitor.calls) == 5
+        assert (
+            sum(
+                isinstance(call.callable, ModuleList) and call.callable.key == mm.key
+                for call in visitor.calls
+            )
+            == 2
+        )
+        indexed = [call for call in visitor.calls if isinstance(call.callable, Call)]
+        assert len(indexed) == 2
+        assert all(call.callable.args[0].key == layers.key for call in indexed)
+        assert any(isinstance(call.callable.args[1], Var) for call in indexed)
+        assert any(
+            isinstance(call.callable.args[1], Constant) and call.callable.args[1].value == 0
+            for call in indexed
+        )
+        for call in visitor.calls:
+            assert len(call.args) == (3 if isinstance(call.callable, PrimFunction) else 2)
+            with pytest.raises(RuntimeError, match="no codegen handler for Op"):
+                CppEmitter(context=CudaCodegenContext(target=lowered.target)).visit_Evaluate(call)
+
+
+@case
+class SmemPaddedStages(PhysicalSlots):
+    path: Path = ROOT / "hir/smem_padded_stages.py"
+    smem_peak: int = 96
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+
+@case
+class ViewVisitMemo(ScheduleCase):
+    path: Path = ROOT / "hir/view_visit_memo.py"
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@0:1#0": RmemPeak(32, "one eight-element f32 row"),
+            "cta@0:1#0": RmemPeak(32, "parent envelope of the output row"),
+        }
+    )
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+    def guard(self, state, problems):
+        lowered = state.lowered
+        verify_module(lowered)
+        function = entry_function(lowered)
+        visitor = _RetainedStatements()
+        visitor.visit(function.body)
+        views = [
+            value
+            for value in visitor.bindings.values()
+            if isinstance(value, Call) and isinstance(value.target, TensorView)
+        ]
+        assert [view.type.shape for view in views] == [(1,), (), (16, 8), (1, 8)]
+        identity = views[2]
+        assert isinstance(identity.args[0].target, PtrOf)
+        assert identity.args[0].args[0] is function.params[0]
+        assert len(visitor.statements) == 1
+        assert isinstance(visitor.statements[0].callable, Copy)
+        assert visitor.statements[0].args[1] is function.params[-1]
+
+
+@case
+class WgmmaBMnMajorGroupedN64(PhysicalSlots):
+    path: Path = ROOT / "hir/wgmma_b_mn_major_grouped_n64.py"
+    smem_peak: int = 18432
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@0:256#0": RmemPeak(32768, "two 64x64 f32 accumulator groups; MMA aliases acc"),
+        }
+    )
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+
+@case
+class WgmmaBMnMajorWideLbo(PhysicalSlots):
+    path: Path = ROOT / "hir/wgmma_b_mn_major_wide_lbo.py"
+    smem_peak: int = 16384
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@0:128#0": RmemPeak(32768, "64x128 f32 accumulator and MMA result alias"),
+        }
+    )
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+
+@case
+class WgmmaBMnMajorWindowUnitMode(PhysicalSlots):
+    path: Path = ROOT / "hir/wgmma_b_mn_major_window_unit_mode.py"
+    smem_peak: int = 34_816
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@0:256#0": RmemPeak(32768, "two 64x64 f32 accumulator groups; MMA aliases acc"),
+        }
+    )
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+
+@case
+class WgmmaCastBetweenSchedules(ScheduleCase):
+    path: Path = ROOT / "hir/wgmma_cast_between_schedules.py"
+    smem_peak: int = 6_144
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
+            "thread@128:128#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
+            "thread@128:128#2": RmemPeak(16384, "independent live Buffers: 2 * 8192B"),
+            "thread@0:32#1": RmemPeak(
+                2_048,
+                "f32 loader tile (2048); bf16 cast follows its last read",
+            ),
+            "thread@0:256#0": RmemPeak(
+                16384,
+                "independent live Buffers: 2 * 8192B",
+            ),
+        }
+    )
+
+    def guard(self, state, problems):
+        report = state.candidates
+        ops = [row["op"] for row in report["lines"]]
+        assert ops.count("tf.reduce") == 1
+
+
+@case
+class WgmmaN16WithinWarpgroupShare(ScheduleCase):
+    path: Path = ROOT / "hir/wgmma_n16_within_warpgroup_share.py"
+    smem_peak: int = 61_440
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@128:256#0": RmemPeak(
+                24_576, "64x96 f32 accumulator across two warpgroups; MMA aliases acc"
+            ),
+            "thread@0:384#0": RmemPeak(24_576, "parent envelope of the accumulator"),
+        }
+    )
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+    def guard(self, state, problems):
+        result, lowered = state.result, state.lowered
+        schedule = next(
+            value
+            for value in collect_exprs(result.function.body)
+            if isinstance(value, Call)
+            and isinstance(value.target, ScheduleOp)
+            and isinstance(value.target.op, TiledMma)
+        )
+        original_c, _, original_b = (arg.type for arg in schedule.args)
+        visitor = _RetainedStatements()
+        function = entry_function(lowered)
+        visitor.visit(function.body)
+        issues = [stmt for stmt in visitor.statements if isinstance(stmt.callable, TiledMma)]
+        assert len(issues) == 36
+        readers, pointers = {}, {}
+
+        def dimension(value, group):
+            if (literal := static_dim_value(value)) is not None:
+                return literal
+            if isinstance(value, Var):
+                return dimension(visitor.bindings[id(value)], group)
+            assert isinstance(value, Call)
+            if isinstance(value.target, MeshCoord):
+                assert value.target.mesh.names[static_dim_value(value.args[0])] == "group"
+                return group
+            a, b = (dimension(arg, group) for arg in value.args)
+            if isinstance(value.target, DimAdd):
+                return a + b
+            assert isinstance(value.target, DimMul)
+            return a * b
+
+        def address(type_, coordinates, group):
+            key = id(type_), group
+            if key not in readers:
+                eb = type_.dtype.bit_width // 8
+
+                def reader(layout):
+                    if isinstance(layout, ShardLayout):
+                        return reader(layout.layout)
+                    if isinstance(layout, ComposedLayout):
+                        outer = reader(layout.outer)
+                        offset = dimension(layout.offset, group) * eb
+                        if isinstance(layout.inner, Swizzle):
+                            return lambda linear: layout.inner(outer(linear) + offset)
+                        return lambda linear: outer(linear) + offset
+                    flat = flatten(layout)
+                    grouped = unflatten(flat, compatible_profile(flat.shape, type_.shape))
+                    return lambda linear: crd2idx(linear, grouped.shape, grouped.strides) * eb
+
+                readers[key] = reader(type_.layout)
+            linear = sum(
+                coordinate * prod(type_.shape[axis + 1 :])
+                for axis, coordinate in enumerate(coordinates)
+            )
+            return readers[key](linear)
+
+        def pointer(value, group):
+            key = id(value), group
+            if key not in pointers:
+                if isinstance(value, Var):
+                    result = pointer(visitor.bindings[id(value)], group)
+                elif isinstance(value, Constant):
+                    result = value.value
+                elif isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf)):
+                    result = pointer(value.args[0], group)
+                elif isinstance(value, Call) and isinstance(value.target, Slice):
+                    base = value.args[0]
+                    layout = base.type.layout
+                    layout = layout.layout if isinstance(layout, ShardLayout) else layout
+                    result = pointer(base, group)
+                    if not isinstance(layout, ComposedLayout):
+                        starts = tuple(dimension(start, group) for start in value.args[1].elements)
+                        result += address(base.type, starts, group)
+                else:
+                    assert isinstance(value, Call) and type(value.target).__name__ == "AllocTensor"
+                    result = 0
+                pointers[key] = result
+            return pointers[key]
+
+        def pointer_root(value):
+            if isinstance(value, Var):
+                return pointer_root(visitor.bindings[id(value)])
+            if isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf, Slice)):
+                return pointer_root(value.args[0])
+            return value
+
+        c_root = pointer_root(issues[0].args[0])
+        b_root = pointer_root(issues[0].args[2])
+        copied_k = next(
+            stmt.args[1]
+            for stmt in visitor.statements
+            if isinstance(stmt.callable, CopyAsyncTensor) and stmt.args[0] is function.params[1]
+        )
+        assert isinstance(b_root, Constant)
+        assert b_root.value == pointer_root(copied_k).value
+        assert c_root.type.shape == original_c.shape
+        assert c_root.type.storage is StorageKind.RMEM
+        for ordinal, issue in enumerate(issues):
+            step, k = divmod(ordinal, 12)
+            c, _, b = issue.args
+            assert pointer_root(c) is c_root
+            assert pointer_root(b) is b_root
+            assert c.type.shape == (64, 16)
+            assert b.type.shape == (16, 16)
+            for group in range(2):
+                for i in range(16):
+                    n = 48 * group + 16 * step + i
+                    for row in range(64):
+                        assert pointer(c, group) + address(c.type, (row, i), group) == address(
+                            original_c, (row, 16 * step + i), group
+                        )
+                    for j in range(16):
+                        assert pointer(b, group) + address(
+                            b.type, (j, i), group
+                        ) == b_root.value + address(original_b, (16 * k + j, n), group)
+
+
+@case
+class WgmmaRepeatAlongNOrder(WgmmaPrice):
+    path: Path = ROOT / "hir/wgmma_repeat_along_n_order.py"
+    smem_peak: int = 24_576
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
+            "thread@128:256#1": RmemPeak(131_072, "f32 phi/mma alias chain"),
+            "thread@128:256#2": RmemPeak(131_072, "f32 loop result/bf16 cast alias"),
+            "thread@0:384#0": RmemPeak(131_072, "parent envelope of one alias chain"),
+        }
+    )
+    wgmma_n: int = 64
+    bound_by: str = "tensor"
+
+
+@case
+class WgmmaRsAFromAccumulator(WgmmaPrice):
+    path: Path = ROOT / "hir/wgmma_rs_a_from_accumulator.py"
+    smem_peak: int = 5_120
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@128:128#0": RmemPeak(4_096, "64x16 f32 p initializer"),
+            "thread@128:128#1": RmemPeak(4_096, "p phi/first mma alias chain"),
+            "thread@128:128#2": RmemPeak(
+                10_240,
+                "2048-byte narrowed p alias plus independent 8192-byte acc initializer",
+            ),
+            "thread@128:128#3": RmemPeak(
+                10_240, "8192-byte acc phi/mma chain plus the live 2048-byte RS lhs"
+            ),
+            "thread@128:128#4": RmemPeak(8_192, "acc loop result/bf16 cast alias"),
+            "thread@0:256#0": RmemPeak(10_240, "parent envelope of p/acc transition"),
+        }
+    )
+    wgmma_n: int = 16
+    bound_by: str = "smem"
+
+
+@case
+class WgmmaTma3Stage(ScheduleCase):
+    path: Path = ROOT / "hir/wgmma_tma_3stage.py"
+    smem_peak: int = 13_824
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@128:256#0": RmemPeak(8_192, "128x16 f32 zero accumulator"),
+            "thread@128:256#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
+            "thread@128:256#2": RmemPeak(8_192, "f32 loop result/bf16 cast alias"),
+            "thread@0:384#0": RmemPeak(8_192, "parent envelope of one alias chain"),
+        }
+    )
+
+    def guard(self, state, problems):
+        result = state.result
+        assert RegionMemoryMetadata in result.metadata_types
+        lifetimes = get_metadata(result.function, RegionMemoryMetadata).lifetimes
+        smem = sorted(item.bytes for item in lifetimes if item.memory_level == "smem")
+        rmem = sorted(item.bytes for item in lifetimes if item.memory_level == "rmem")
+        assert smem == sorted((512 * 3, 4096 * 3))
+        assert rmem == [4096, 8192, 8192]
+
+
+@case
+class ZeroTripInsertSlice(ScheduleCase):
+    path: Path = ROOT / "hir/zero_trip_insert_slice.py"
+    rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
+        {
+            "thread@0:1#0": RmemPeak(16, "one four-element f32 update row"),
+            "cta@0:1#0": RmemPeak(16, "parent envelope of the update row"),
+        }
+    )
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+    def guard(self, state, problems):
+        lowered = state.lowered
+        visitor = _RetainedStatements()
+        visitor.visit(entry_function(lowered).body)
+        assert len(visitor.loops) == 1
+        loop = visitor.loops[0]
+        assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
+            0,
+            0,
+            1,
+        )
+
+
 EXPECTED = {
-    "hir/bulk_reduce_store": dict(
-        smem_peak=16_384,
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(_reduce_scope,),
-    ),
-    "hir/captured_insert_update": dict(
-        smem_peak=24,
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(_captured_storage,),
-    ),
     "hir/child_weight": dict(
         rmem_peaks={
             "thread@0:32#0": RmemPeak(384, "independent live Buffers: 3 * 128B"),
@@ -834,44 +1037,6 @@ EXPECTED = {
             "thread@0:32#1": RmemPeak(256, "32 f32 accumulator and loaded row elements"),
             "cta@0:4#1": RmemPeak(8, "one i64 output offset"),
         },
-    ),
-    "hir/fp8_block_scaled_gemm": dict(
-        smem_peak=65_536,
-        rmem_peaks={
-            "cta@0:1#0": RmemPeak(
-                4,
-                "the 1x1 f32 tile-scale copy is unsplit; thread-split accumulators "
-                "do not contribute to the CTA record",
-            ),
-            "thread@128:256#0": RmemPeak(65_536, "128x128 f32 zero accumulator"),
-            "thread@128:256#1": RmemPeak(
-                131584,
-                "independent live Buffers: 1 * 512B + 2 * 65536B",
-            ),
-            "thread@128:256#2": RmemPeak(65_536, "f32 loop result/bf16 cast alias"),
-            "thread@0:384#0": RmemPeak(131584, "independent live Buffers: 1 * 512B + 2 * 65536B"),
-        },
-        hooks=(_fp8_reference,),
-    ),
-    "hir/gemm_8192x17408x5120_register_store": dict(
-        smem_peak=196_608,
-        rmem_peaks={
-            "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
-            "thread@128:256#1": RmemPeak(131_072, "f32 phi/mma alias chain"),
-            "thread@128:256#2": RmemPeak(131_072, "f32 loop result/bf16 cast alias"),
-            "thread@0:384#0": RmemPeak(131_072, "parent envelope of one alias chain"),
-        },
-        hooks=(partial(_wgmma_price, 256, "tensor"),),
-    ),
-    "hir/gemm_8192x17408x5120_tma_store": dict(
-        smem_peak=212_992,
-        rmem_peaks={
-            "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
-            "thread@128:256#1": RmemPeak(131_072, "f32 phi/mma alias chain"),
-            "thread@128:256#2": RmemPeak(131_072, "f32 loop result/bf16 cast alias"),
-            "thread@0:384#0": RmemPeak(131_072, "parent envelope of one alias chain"),
-        },
-        hooks=(_tma_regions,),
     ),
     "hir/inplace_output_update": dict(
         rmem_peaks={
@@ -900,11 +1065,6 @@ EXPECTED = {
         },
         candidates_refusal="source has no unscheduled candidate site",
     ),
-    "hir/loop_outputs": dict(
-        smem_peak=8,
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(_loop_outputs,),
-    ),
     "hir/loop_variable_rebound": dict(
         rmem_peaks={
             "thread@0:1#0": RmemPeak(64, "two independent live 2x4 f32 buffers"),
@@ -922,19 +1082,6 @@ EXPECTED = {
     ),
     "hir/mesh_zeros_submesh": dict(
         smem_peak=128, candidates_refusal="source has no unscheduled candidate site"
-    ),
-    "hir/module_instances": dict(
-        child_regions=True,
-        rmem_peaks={
-            "cta@0:1#0": RmemPeak(
-                384, "three independent 128-byte callee operand/result Buffers in the CTA window"
-            ),
-        },
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(
-            _module_instances,
-            _retained_shapes,
-        ),
     ),
     "hir/persistent_tile_union_count": dict(
         smem_peak=163_840,
@@ -1025,11 +1172,6 @@ EXPECTED = {
         },
         candidates_refusal="source has no unscheduled candidate site",
     ),
-    "hir/smem_padded_stages": dict(
-        smem_peak=96,
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(_physical_slots,),
-    ),
     "hir/sparse_decode": dict(
         smem_peak=16_384,
         rmem_peaks={
@@ -1073,14 +1215,6 @@ EXPECTED = {
     "hir/submesh_slice_in_sibling": dict(
         smem_peak=32, candidates_refusal="source has no unscheduled candidate site"
     ),
-    "hir/view_visit_memo": dict(
-        rmem_peaks={
-            "thread@0:1#0": RmemPeak(32, "one eight-element f32 row"),
-            "cta@0:1#0": RmemPeak(32, "parent envelope of the output row"),
-        },
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(_authored_views,),
-    ),
     "hir/wgmma_a_k_major": dict(
         smem_peak=6_144,
         rmem_peaks={
@@ -1107,14 +1241,6 @@ EXPECTED = {
             ),
         },
     ),
-    "hir/wgmma_b_mn_major_grouped_n64": dict(
-        smem_peak=18432,
-        rmem_peaks={
-            "thread@0:256#0": RmemPeak(32768, "two 64x64 f32 accumulator groups; MMA aliases acc"),
-        },
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(_physical_slots,),
-    ),
     "hir/wgmma_b_mn_major_one_atom_column_slice": dict(
         smem_peak=49_152,
         rmem_peaks={
@@ -1131,22 +1257,6 @@ EXPECTED = {
         },
         candidates_refusal="source has no unscheduled candidate site",
     ),
-    "hir/wgmma_b_mn_major_wide_lbo": dict(
-        smem_peak=16384,
-        rmem_peaks={
-            "thread@0:128#0": RmemPeak(32768, "64x128 f32 accumulator and MMA result alias"),
-        },
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(_physical_slots,),
-    ),
-    "hir/wgmma_b_mn_major_window_unit_mode": dict(
-        smem_peak=34_816,
-        rmem_peaks={
-            "thread@0:256#0": RmemPeak(32768, "two 64x64 f32 accumulator groups; MMA aliases acc"),
-        },
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(_physical_slots,),
-    ),
     "hir/wgmma_b_nk": dict(
         smem_peak=2_560,
         rmem_peaks={
@@ -1154,23 +1264,6 @@ EXPECTED = {
                 4096, "64x16 f32 C fragment, shared by zeros and MMA result"
             ),
         },
-    ),
-    "hir/wgmma_cast_between_schedules": dict(
-        smem_peak=6_144,
-        rmem_peaks={
-            "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
-            "thread@128:128#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
-            "thread@128:128#2": RmemPeak(16384, "independent live Buffers: 2 * 8192B"),
-            "thread@0:32#1": RmemPeak(
-                2_048,
-                "f32 loader tile (2048); bf16 cast follows its last read",
-            ),
-            "thread@0:256#0": RmemPeak(
-                16384,
-                "independent live Buffers: 2 * 8192B",
-            ),
-        },
-        hooks=(_cast_candidates,),
     ),
     "hir/wgmma_cp_async_loads": dict(
         smem_peak=6_144,
@@ -1208,17 +1301,6 @@ EXPECTED = {
             "thread@0:256#0": RmemPeak(8_192, "parent envelope of one alias chain"),
         },
     ),
-    "hir/wgmma_n16_within_warpgroup_share": dict(
-        smem_peak=61_440,
-        rmem_peaks={
-            "thread@128:256#0": RmemPeak(
-                24_576, "64x96 f32 accumulator across two warpgroups; MMA aliases acc"
-            ),
-            "thread@0:384#0": RmemPeak(24_576, "parent envelope of the accumulator"),
-        },
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(_grouped_addresses,),
-    ),
     "hir/wgmma_one_tile_of_larger_output": dict(
         smem_peak=6_144,
         rmem_peaks={
@@ -1236,33 +1318,6 @@ EXPECTED = {
             "thread@128:256#2": RmemPeak(8_192, "f32 loop result/bf16 cast alias"),
             "thread@0:384#0": RmemPeak(8_192, "parent envelope of one alias chain"),
         },
-    ),
-    "hir/wgmma_repeat_along_n_order": dict(
-        smem_peak=24_576,
-        rmem_peaks={
-            "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
-            "thread@128:256#1": RmemPeak(131_072, "f32 phi/mma alias chain"),
-            "thread@128:256#2": RmemPeak(131_072, "f32 loop result/bf16 cast alias"),
-            "thread@0:384#0": RmemPeak(131_072, "parent envelope of one alias chain"),
-        },
-        hooks=(partial(_wgmma_price, 64, "tensor"),),
-    ),
-    "hir/wgmma_rs_a_from_accumulator": dict(
-        smem_peak=5_120,
-        rmem_peaks={
-            "thread@128:128#0": RmemPeak(4_096, "64x16 f32 p initializer"),
-            "thread@128:128#1": RmemPeak(4_096, "p phi/first mma alias chain"),
-            "thread@128:128#2": RmemPeak(
-                10_240,
-                "2048-byte narrowed p alias plus independent 8192-byte acc initializer",
-            ),
-            "thread@128:128#3": RmemPeak(
-                10_240, "8192-byte acc phi/mma chain plus the live 2048-byte RS lhs"
-            ),
-            "thread@128:128#4": RmemPeak(8_192, "acc loop result/bf16 cast alias"),
-            "thread@0:256#0": RmemPeak(10_240, "parent envelope of p/acc transition"),
-        },
-        hooks=(partial(_wgmma_price, 16, "smem"),),
     ),
     "hir/wgmma_rs_a_from_smem": dict(
         smem_peak=6_144,
@@ -1285,16 +1340,6 @@ EXPECTED = {
             "thread@0:256#0": RmemPeak(8_192, "parent envelope of one alias chain"),
         },
     ),
-    "hir/wgmma_tma_3stage": dict(
-        smem_peak=13_824,
-        rmem_peaks={
-            "thread@128:256#0": RmemPeak(8_192, "128x16 f32 zero accumulator"),
-            "thread@128:256#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
-            "thread@128:256#2": RmemPeak(8_192, "f32 loop result/bf16 cast alias"),
-            "thread@0:384#0": RmemPeak(8_192, "parent envelope of one alias chain"),
-        },
-        hooks=(_three_stage_lifetimes,),
-    ),
     "hir/wgmma_two_schedules": dict(
         smem_peak=12_288,
         rmem_peaks={
@@ -1304,14 +1349,6 @@ EXPECTED = {
             "thread@128:128#3": RmemPeak(8_192, "f32 loop result/bf16 cast alias"),
             "thread@0:256#0": RmemPeak(8_192, "parent envelope of both mma chains"),
         },
-    ),
-    "hir/zero_trip_insert_slice": dict(
-        rmem_peaks={
-            "thread@0:1#0": RmemPeak(16, "one four-element f32 update row"),
-            "cta@0:1#0": RmemPeak(16, "parent envelope of the update row"),
-        },
-        candidates_refusal="source has no unscheduled candidate site",
-        hooks=(_zero_trip,),
     ),
     "plain/chunk_rmsnorm": dict(
         sites=SiteCounts(0, 7, detailed=True, binaries=5), dims={"chunks": 16}
@@ -1330,7 +1367,6 @@ EXPECTED = {
     ),
 }
 
-ROOT = Path(__file__).parents[1] / "fixtures" / "schedule"
 CASES = cases(
     ROOT / "hir",
     ROOT / "hir" / "dim",

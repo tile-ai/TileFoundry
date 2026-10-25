@@ -4,21 +4,23 @@ from __future__ import annotations
 
 import traceback
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import MISSING, dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MappingProxyType
+from typing import TypeVar
 
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core.module import Module
+
+C = TypeVar("C", bound="Case")
 
 
 @dataclass(frozen=True)
 class Case:
     path: Path
     name: str | None = None
-    hooks: tuple[Callable[[object, "Problems"], None], ...] = ()
 
     @property
     def id(self) -> str:
@@ -28,6 +30,28 @@ class Case:
     def load(self) -> Module:
         """Load a fresh program through the CLI; lowering mutates its module."""
         return load_authored_ir(f"{self.path}:{self.name}" if self.name else str(self.path))
+
+    def guard(self, state, problems: Problems) -> None:
+        """A case's own checks; the base has none."""
+
+
+def case(cls: type[C]) -> type[C]:
+    """Make *cls* a frozen dataclass case whose fields' defaults are its expectations.
+
+    Its ``path`` default names the fixture it owns; ``cases()`` uses it in place of the
+    plain case for that file.
+    """
+    return dataclass(frozen=True)(cls)
+
+
+def _owners(case_type: type[C]) -> tuple[type[C], ...]:
+    """Subclasses of *case_type*, at any depth, whose ``path`` has a default."""
+    owners = []
+    for subclass in case_type.__subclasses__():
+        if subclass.__dataclass_fields__["path"].default is not MISSING:
+            owners.append(subclass)
+        owners.extend(_owners(subclass))
+    return tuple(owners)
 
 
 def reload(printed: str, name: str) -> Module:
@@ -79,12 +103,25 @@ class Problems:
 
 def cases(
     *roots: Path,
-    case_type: type[Case] = Case,
+    case_type: type[C] = Case,
     pattern: str = "*.py",
     expected: Mapping[str, Mapping[str, object]] = MappingProxyType({}),
-) -> tuple[Case, ...]:
-    """One case per root file, unexecuted; apply expectations by id and refuse stale ids."""
-    found: dict[str, Case] = {}
+) -> tuple[C, ...]:
+    """One case per file; the ``@case`` subclass that owns a file replaces its plain case.
+
+    A subclass of *case_type* owns the file its ``path`` default names. An ``expected`` row
+    for a file that a subclass owns, a subclass whose file does not exist, and two subclasses
+    owning one file are errors.
+    """
+    owners: dict[Path, type[C]] = {}
+    for owner in _owners(case_type):
+        path = owner.__dataclass_fields__["path"].default
+        if not any(path.is_relative_to(root) for root in roots):
+            continue
+        if path in owners:
+            raise ValueError(f"{owners[path].__name__} and {owner.__name__} both own {path}")
+        owners[path] = owner
+    found: dict[str, C] = {}
     for root in roots:
         for path in sorted(root.glob(pattern)):
             if path.name == "__init__.py" or not path.is_file():
@@ -92,8 +129,29 @@ def cases(
             case = case_type(path=path)
             if case.id in found:
                 raise ValueError(f"duplicate case id {case.id!r}: {found[case.id].path}, {path}")
-            found[case.id] = case
+            if path in owners and case.id in expected:
+                raise ValueError(f"{owners[path].__name__} owns {case.id!r}; drop its expected row")
+            found[case.id] = owners.pop(path)() if path in owners else case
+    if owners:
+        stale = ", ".join(f"{owner.__name__} ({path})" for path, owner in owners.items())
+        raise ValueError(f"case classes own missing files: {stale}")
     missing = expected.keys() - found.keys()
     if missing:
         raise ValueError(f"expectations name missing cases: {', '.join(sorted(missing))}")
     return tuple(replace(found[key], **expected.get(key, {})) for key in sorted(found))
+
+
+def special(case_type: type[C]) -> tuple[C, ...]:
+    """Instances of every ``@case`` subclass of *case_type*, sorted by id.
+
+    They are the table of a file whose tests each load one program and assert.
+    """
+    found: dict[str, C] = {}
+    for owner in _owners(case_type):
+        case = owner()
+        if case.id in found:
+            raise ValueError(
+                f"{type(found[case.id]).__name__} and {owner.__name__} own {case.id!r}"
+            )
+        found[case.id] = case
+    return tuple(found[key] for key in sorted(found))
