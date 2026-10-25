@@ -51,7 +51,7 @@ LAYOUT_CASES = [
 
 
 @pytest.mark.parametrize(("op", "lhs_shape", "rhs_shape"), LAYOUT_CASES)
-def test_matmul_layouts_share_shape_and_cost(op, lhs_shape, rhs_shape):
+def test_matmul_layouts_share_cost(op, lhs_shape, rhs_shape):
     lhs = make_tensor_type(lhs_shape, DType.f32)
     rhs = make_tensor_type(rhs_shape, DType.f32)
     assert infer_call(op, lhs, rhs) == make_tensor_type((2, 4), DType.f32)
@@ -170,7 +170,7 @@ CARRIES = [
 
 
 @pytest.mark.parametrize(("lhs", "rhs", "shape", "attrs"), CARRIES)
-def test_a_sharded_operand_carries_to_the_output(lhs, rhs, shape, attrs):
+def test_matmul_carries_operand_shard(lhs, rhs, shape, attrs):
     out = infer_call(_MM, lhs, rhs)
     assert out.shape == shape
     assert out.layout.attrs == attrs
@@ -205,7 +205,7 @@ def test_a_sharded_operand_carries_to_the_output(lhs, rhs, shape, attrs):
         ),
     ),
 )
-def test_layout_literals_map_sharding_through_access_relations(op, lhs, rhs, attrs):
+def test_matmul_layout_literals_map_sharding(op, lhs, rhs, attrs):
     out = infer_call(op, lhs, rhs)
     assert out.shape == (16, 32)
     assert out.layout.attrs == attrs

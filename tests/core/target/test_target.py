@@ -31,7 +31,7 @@ from tilefoundry.target.base import bind
 UNREGISTERED = Path(__file__).parents[1] / "fixtures" / "target" / "unregistered_target.py"
 
 
-def test_target_registration_and_service_annotations_resolve() -> None:
+def test_target_service_annotations_resolve() -> None:
     assert typing.get_type_hints(register_target)
     assert typing.get_type_hints(PrimFunction)
     for getter in (
@@ -42,7 +42,7 @@ def test_target_registration_and_service_annotations_resolve() -> None:
         assert typing.get_type_hints(getter)
 
 
-def test_document_free_target_projects_facts_and_inherits_standard_analysis() -> None:
+def test_documentless_target_projects_facts() -> None:
     target = VendorNpuTarget()
 
     assert target.get_analyzer("roofline").selector == "roofline"
@@ -56,7 +56,7 @@ def test_document_free_target_projects_facts_and_inherits_standard_analysis() ->
         target.validate_program_topology(Topology("core", 257))
 
 
-def test_document_free_target_enforces_projection_and_capability_boundaries() -> None:
+def test_documentless_target_enforces_boundaries() -> None:
     class BrokenFactsTarget(Target):
         name = "tests.core.target.broken_facts"
 
@@ -75,7 +75,7 @@ def test_document_free_target_enforces_projection_and_capability_boundaries() ->
     assert str(error.value) == "VendorNpuTarget (vendor.npu): no code generator"
 
 
-def test_authored_target_boundaries_accept_unregistered_target_instances() -> None:
+def test_unregistered_target_instances_accepted() -> None:
     program = load_namespace(str(UNREGISTERED))[0]
     target = program["target"]
     module_value = Module("unregistered", (), target=target)
@@ -99,7 +99,7 @@ def _provider_target(module_name: str, provider_name: str, registered_name: str)
     )
 
 
-def test_registration_is_one_class_boundary_and_reload_is_idempotent() -> None:
+def test_target_reload_registration_idempotent() -> None:
     registered_name = "tests.core.target.reload"
     first = _provider_target("tests.providers.reload", "ReloadTarget", registered_name)
     second = _provider_target("tests.providers.reload", "ReloadTarget", registered_name)

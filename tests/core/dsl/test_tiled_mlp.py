@@ -41,7 +41,7 @@ def _drawn(device="cpu", seed=0):
     return loaded, x
 
 
-def test_the_tiled_mlp_computes_what_the_naive_one_does() -> None:
+def test_tiled_mlp_matches_naive() -> None:
     """The blocked K walk reassociates the reduction and changes nothing else."""
     loaded, x = _drawn()
 

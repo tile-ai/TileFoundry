@@ -81,7 +81,7 @@ class InvariantGemmOperands(FamilyCase):
         assert gmem.total == TrafficBytes(read=18_824_036_352, write=2_214_592_512)
 
 
-def test_reshard_compares_address_boxes_without_participant_ownership() -> None:
+def test_reshard_aliases_input_buffer() -> None:
     TransposeShard = load_authored_ir(f"{PLACED / 'tp_all_to_all.py'}:TransposeShard")
     result = analyze(
         *check_program(TransposeShard, TransposeShard.entry_function()), analysis="memory"
@@ -231,7 +231,7 @@ class CrossScopePerformance(FamilyCase):
         assert outer_index.timeline.end_ns == outer_load.timeline.start_ns
 
 
-def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
+def test_symbolic_stride_adds_address_ops() -> None:
     """Group_index * 32 is an address, not an unbound parameter.
 
     Address arithmetic executes in each of the 32 position iterations.
@@ -288,7 +288,7 @@ class LargeRooflineRounding(FamilyCase):
 _SPLIT_GRID = 128
 
 
-def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
+def test_matmul_work_ignores_split_axis() -> None:
     """One gemm, two layouts of the weight, one per-unit answer.
 
     Split the result's last axis and the axis sharding adds lands where a batch
@@ -324,7 +324,7 @@ def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
     assert per_layout["last_axis"] == per_layout["strip_major"]
 
 
-def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
+def test_capacity_overflow_reports_error() -> None:
     """A placement error is report data rather than an aborted analysis.
 
     One shared tile of this program is twice what the tight machine states for
@@ -388,7 +388,7 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
     ]
 
 
-def test_local_pricing_requires_compute_rates_and_uses_available_memory_rates() -> None:
+def test_local_duration_prices_stated_rates() -> None:
     """Compute holes fail while unstated memory levels remain unpriced.
 
     A compute kind promises work the machine must price, so a missing rate is an

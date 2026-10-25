@@ -72,7 +72,7 @@ def _rebuild(rendered: PythonExpr):
     return namespace["result"]
 
 
-def test_an_installed_target_reports_its_public_constructor():
+def test_installed_target_prints_constructor():
     installed = BuiltinCudaTarget("nvidia.h200_sxm")
     rendered = installed.to_python()
 
@@ -83,7 +83,7 @@ def test_an_installed_target_reports_its_public_constructor():
     assert _rebuild(rendered) == installed
 
 
-def test_direct_hardware_values_keep_added_fields_in_canonical_source():
+def test_hardware_values_keep_added_fields():
     installed = BuiltinCudaTarget("nvidia.h200_sxm")
     architecture = ExtendedCudaArchitecture(
         **{
@@ -109,7 +109,7 @@ def test_direct_hardware_values_keep_added_fields_in_canonical_source():
     assert rebuilt.architecture.thirteenth_field == 13
 
 
-def test_external_same_named_cuda_target_keeps_its_provider_in_module_source():
+def test_external_cuda_target_keeps_provider():
     function = load_authored_ir(RMSNORM).entry_function()
     register_target(CudaTarget)
     target = CudaTarget("nvidia.h200_sxm")
@@ -123,7 +123,7 @@ def test_external_same_named_cuda_target_keeps_its_provider_in_module_source():
     assert rebuilt.target == target
 
 
-def test_printer_emits_provider_expression_without_interpreting_it():
+def test_printer_emits_provider_expression():
     class UninterpretableTarget(Target):
         name = "tests.printer.uninterpretable"
 

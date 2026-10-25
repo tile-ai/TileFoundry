@@ -42,7 +42,7 @@ class _Counted:
         return _Counted(self.inner.subtree(seg), self.counts, f"{self.prefix}{seg}.")
 
 
-def test_distributed_weight_loading(tmp_path) -> None:
+def test_weight_shard_per_card(tmp_path) -> None:
     """One thread and one module per card; each body sees only its own shard.
 
     Two modules rather than one moving between cards: a module is told which
@@ -100,7 +100,7 @@ def test_distributed_weight_loading(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("case", ("cyclic", "mesh_order"))
-def test_weight_loading_refuses_noncanonical_local_axes(tmp_path, case):
+def test_weight_load_refuses_noncanonical_axes(tmp_path, case):
     """Reject two unsupported views instead of silently loading the wrong elements."""
     root, size = {"cyclic": ("CyclicSplitWeight", 8), "mesh_order": ("MeshOrderWeight", 32)}[case]
     program = load_authored_ir(f"{PLACED / 'cyclic_split_weight.py'}:{root}")

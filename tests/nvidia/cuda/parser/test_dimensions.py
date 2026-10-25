@@ -74,7 +74,7 @@ def test_dimension_case(case: DimensionCase) -> None:
     check_case(case)
 
 
-def test_one_layout_cannot_split_the_same_topology_through_two_meshes() -> None:
+def test_layout_rejects_level_split_twice() -> None:
     """The layout parser reports duplicate levels before composing mesh axes."""
     with pytest.raises(ParseError, match="a layout can split one level once"):
         load_authored_ir(str(FIXTURES / "diagnostics" / "parser_layout_split_level_twice.py"))

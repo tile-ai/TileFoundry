@@ -1,4 +1,4 @@
-"""Parser contracts for explicit variadic input sequences."""
+"""Parser contracts for op calls: operand literals, variadic sequences, and refusals."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ class CallCase(Case):
     """A parsed call checked by the IR it builds."""
 
 
-def test_matmul_layout_literals_are_parser_checked() -> None:
+def test_matmul_layout_literals_checked() -> None:
     assert get_args(MatMul.a_layout.annotation) == ("MK", "KM")
     assert get_args(MatMul.b_layout.annotation) == ("NK", "KN")
 
@@ -61,7 +61,7 @@ def test_matmul_layout_literals_are_parser_checked() -> None:
         load_authored_ir(str(DIAGNOSTICS / "parser_matmul_bad_layout.py"))
 
 
-def test_variadic_list_and_tuple_literals_flatten_to_call_args() -> None:
+def test_variadic_literals_flatten_to_args() -> None:
     for annotation in (Concat.inputs.annotation, Stack.inputs.annotation):
         assert get_origin(annotation) is tuple
         assert get_args(annotation) == (is_ranked_tensor(),)
@@ -88,7 +88,7 @@ class StackUsesTheVariadicListContract(CallCase):
         assert len(stack_rows.body.args) == 2
 
 
-def test_an_empty_variadic_list_reaches_the_operation_verifier() -> None:
+def test_empty_variadic_list_reaches_verifier() -> None:
     with pytest.raises(VerifyError, match="Concat requires at least one input"):
         load_authored_ir(str(DIAGNOSTICS / "parser_concat_empty_list.py"))
 
@@ -117,7 +117,7 @@ class StaticRangeComprehensionInSourceOrder(CallCase):
         assert indices == [0, 1]
 
 
-def test_variadic_direct_positional_inputs_are_rejected() -> None:
+def test_variadic_positional_inputs_rejected() -> None:
     with pytest.raises(ParseError, match="require exactly one list, tuple"):
         load_authored_ir(str(DIAGNOSTICS / "parser_concat_direct_inputs.py"))
 
@@ -125,7 +125,7 @@ def test_variadic_direct_positional_inputs_are_rejected() -> None:
         load_authored_ir(str(DIAGNOSTICS / "parser_concat_positional_axis.py"))
 
 
-def test_variadic_generator_and_starred_inputs_name_the_unsupported_form() -> None:
+def test_variadic_generator_starred_rejected() -> None:
     with pytest.raises(ParseError, match="do not support generator expressions"):
         load_authored_ir(str(DIAGNOSTICS / "parser_stack_generator.py"))
 
@@ -136,7 +136,7 @@ def test_variadic_generator_and_starred_inputs_name_the_unsupported_form() -> No
         load_authored_ir(str(DIAGNOSTICS / "parser_concat_expanded_name.py"))
 
 
-def test_variadic_sequence_names_are_not_implicitly_expanded() -> None:
+def test_variadic_sequence_name_rejected() -> None:
     with pytest.raises(ParseError, match="require an explicit list, tuple"):
         load_authored_ir(str(DIAGNOSTICS / "parser_concat_sequence_name.py"))
 
@@ -151,7 +151,7 @@ def test_variadic_sequence_names_are_not_implicitly_expanded() -> None:
         ("bound", "range arguments must be static integers"),
     ],
 )
-def test_unsupported_list_comprehension_shapes_are_named(program: str, message: str) -> None:
+def test_unsupported_comprehension_names_shape(program: str, message: str) -> None:
     with pytest.raises(ParseError, match=message):
         load_authored_ir(str(DIAGNOSTICS / COMPREHENSIONS[program]))
 
@@ -171,7 +171,7 @@ class PythonFloatLiteralIsF32(CallCase):
         assert constant.type.dtype is DType.f32
 
 
-def test_a_mismatched_literal_is_rejected_and_names_the_cast() -> None:
+def test_mismatched_literal_names_cast() -> None:
     """The remedy is the one the author writes, not one the parser guesses."""
     with pytest.raises(VerifyError, match=re.escape("tf.cast(<operand>, dtype='bf16')")):
         load_authored_ir(str(DIAGNOSTICS / "parser_bf16_float_literal.py"))
@@ -189,17 +189,17 @@ class ExplicitCastGivesTheOperandDtype(CallCase):
         assert scale.body.type.dtype is DType.bf16
 
 
-def test_a_python_integer_operand_is_not_adopted() -> None:
+def test_python_integer_operand_rejected() -> None:
     with pytest.raises(VerifyError, match="dtype mismatch \\(bf16 vs i64\\)"):
         load_authored_ir(str(DIAGNOSTICS / "parser_bf16_integer_operand.py"))
 
 
-def test_two_tensor_operands_are_never_promoted() -> None:
+def test_mixed_dtype_operands_rejected() -> None:
     with pytest.raises(VerifyError, match="dtype mismatch \\(bf16 vs f32\\)"):
         load_authored_ir(str(DIAGNOSTICS / "parser_mixed_dtype_operands.py"))
 
 
-def test_the_at_operator_builds_a_matmul() -> None:
+def test_at_operator_builds_matmul() -> None:
     infix = load_authored_ir(f"{MATMULS}:InfixMatmul").entry_function()
     spelled = load_authored_ir(f"{MATMULS}:SpelledMatmul").entry_function()
 
@@ -208,7 +208,7 @@ def test_the_at_operator_builds_a_matmul() -> None:
     assert infix.body.type == spelled.body.type
 
 
-def test_an_unresolved_callee_is_named() -> None:
+def test_unresolved_callee_named() -> None:
     with pytest.raises(VerifyError, match="unsupported call 'tf.no_such_op'"):
         load_authored_ir(str(DIAGNOSTICS / "parser_unknown_op.py"))
 
@@ -225,13 +225,13 @@ def test_an_unresolved_callee_is_named() -> None:
         ("twice", "attribute 'a_layout' is already bound by a positional argument"),
     ],
 )
-def test_a_refused_call_states_what_was_wrong_with_it(program: str, message: str) -> None:
+def test_refused_call_states_reason(program: str, message: str) -> None:
     """A call the parser recognized and refused names its own reason, not a shape mismatch."""
     with pytest.raises(ParseError, match=re.escape(message)):
         load_authored_ir(str(DIAGNOSTICS / REFUSED_MATMULS[program]))
 
 
-def test_a_refused_call_reports_one_reason_rather_than_every_alternative() -> None:
+def test_refused_call_reports_one_reason() -> None:
     """A choice drops the alternatives that stated nothing instead of listing them."""
     with pytest.raises(ParseError) as raised:
         load_authored_ir(str(DIAGNOSTICS / "parser_matmul_one_input.py"))
@@ -242,7 +242,7 @@ def test_a_refused_call_reports_one_reason_rather_than_every_alternative() -> No
     assert message.count("matmul takes 2 inputs, got 1") == 1
 
 
-def test_a_call_nobody_claims_is_named_without_taking_a_turn() -> None:
+def test_unclaimed_call_named_last() -> None:
     """Position is the whole claim for the report of last resort.
 
     The report runs only after every alternative has declined, so it names any
@@ -257,7 +257,7 @@ def test_a_call_nobody_claims_is_named_without_taking_a_turn() -> None:
     assert host.body is not None
 
 
-def test_function_mesh_requires_a_module_topology_declaration() -> None:
+def test_function_mesh_requires_declared_topology() -> None:
     with pytest.raises(ParseError, match="topology 'cta' not declared by @module"):
         load_authored_ir(str(DIAGNOSTICS / "parser_undeclared_topology.py"))
 

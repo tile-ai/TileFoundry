@@ -40,7 +40,7 @@ def _host_unit(square) -> LinkableModule:
     )
 
 
-def test_a_unit_is_its_preamble_then_every_declaration_then_every_definition() -> None:
+def test_unit_orders_declarations_before_definitions() -> None:
     unit = LinkableModule(
         target="cuda",
         language="cu",

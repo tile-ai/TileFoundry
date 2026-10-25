@@ -15,7 +15,7 @@ FIXTURES = Path(__file__).parents[1] / "fixtures"
 DISPATCHING = f"{FIXTURES / 'placed' / 'gqa_decode.py'}:GqaOnline.gqa_online_attend"
 
 
-def test_inputs_must_be_stated(capsys) -> None:
+def test_check_requires_inputs(capsys) -> None:
     """Activations have no default form."""
     assert (
         cli.main(
@@ -35,7 +35,7 @@ def test_inputs_must_be_stated(capsys) -> None:
     assert "no inputs stated" in capsys.readouterr().err
 
 
-def test_a_json_target_without_a_parent_is_a_usage_error(capsys) -> None:
+def test_check_json_requires_parent_dir(capsys) -> None:
     """A misspelt report path is refused at parse time, before any comparison runs."""
     with pytest.raises(SystemExit) as stopped:
         cli.main(
@@ -60,7 +60,7 @@ def test_a_json_target_without_a_parent_is_a_usage_error(capsys) -> None:
     assert "/nonexistent-dir/report.json: its parent directory does not exist" in refused.err
 
 
-def test_without_a_reference_only_a_one_sided_predicate_is_admitted(capsys) -> None:
+def test_no_reference_admits_one_sided(capsys) -> None:
     """Running the evaluator alone measures the candidate, and says only that."""
     assert (
         cli.main(
@@ -118,7 +118,7 @@ def test_without_a_reference_only_a_one_sided_predicate_is_admitted(capsys) -> N
         ("DeadScratch.main", "BT=8", "no function it reaches declares a dimension"),
     ),
 )
-def test_a_dim_binds_where_a_reached_function_declares_it(
+def test_dim_binds_declaring_function(
     selector, dim, refusal, tmp_path, capsys
 ) -> None:
     """--dim binds a helper's own axis, here or behind a module boundary.
@@ -156,7 +156,7 @@ def test_a_dim_binds_where_a_reached_function_declares_it(
         assert code != 0 and refusal in captured.err
 
 
-def test_a_dimension_left_as_a_range_is_refused(capsys) -> None:
+def test_unbound_dim_range_refused(capsys) -> None:
     """An unstated range remains the caller's decision."""
     assert (
         cli.main(
@@ -173,7 +173,7 @@ def test_a_dimension_left_as_a_range_is_refused(capsys) -> None:
     assert "bind it with --dim" in refused
 
 
-def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys, tmp_path) -> None:
+def test_extents_report_dispatched_variant(capsys, tmp_path) -> None:
     """Four lengths across the boundary reach both implementations, each named.
 
     The label is what a person reads and the canonical signature is what anything
@@ -242,7 +242,7 @@ def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys, 
     )
 
 
-def test_an_extent_outside_the_envelope_is_a_dispatch_hole_not_a_pass(capsys) -> None:
+def test_extent_outside_envelope_refused(capsys) -> None:
     """One past the envelope: no implementation claims it, and the answer says so.
 
     Naming the ranges that are covered is the point -- a hole is only actionable

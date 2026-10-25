@@ -28,7 +28,7 @@ from tilefoundry.visitor_registry.instruction import ScheduleRefusal
 from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import Wgmma
 
 
-def test_operand_match_refusal_names_the_failed_pattern() -> None:
+def test_operand_refusal_names_failed_pattern() -> None:
     function = entry_function(
         load_authored_ir(
             str(Path(__file__).parents[1] / "fixtures" / "schedule" / "tir" / "wgmma_a_k_major.py")
@@ -57,7 +57,7 @@ def test_operand_match_refusal_names_the_failed_pattern() -> None:
 @pytest.mark.parametrize(
     "row_scale, leading, position", ((2, None, "a_stride_00"), (1, 1, "a_stride_11"))
 )
-def test_wgmma_stride_refusal_names_operand_and_descriptor_position(
+def test_wgmma_stride_refusal_names_position(
     row_scale, leading, position
 ) -> None:
     function = entry_function(

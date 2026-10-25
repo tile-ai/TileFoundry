@@ -30,7 +30,7 @@ _B = make_tensor_type((8,), _F)
 _W_PSUM = make_shard_tensor_type((8,), mesh=_M, attrs=(Partial("sum"),))
 
 
-def test_layer_norm_preserves_a_prefix_split() -> None:
+def test_layer_norm_preserves_prefix_split() -> None:
     x = make_shard_tensor_type((8, 3, 4), mesh=_M, attrs=(Split(0),))
     result = infer_call(
         LayerNorm(axis=1, eps=1e-05), x, make_tensor_type((3, 4)), make_tensor_type((3, 4))

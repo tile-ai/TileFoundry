@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.core.ir.test_copy_reduce_async_tensor import _types
+from tests.core.ir.test_partial_reshard import _types
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.types import (
@@ -18,7 +18,7 @@ from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTen
 from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
 
 
-def test_reduce_store_cost_dispatches_through_schedule():
+def test_reduce_store_cost_via_schedule():
     src, dst = _types()
     args = (Var("src", type=src), Var("dst", type=dst))
     call = Call(ScheduleOp(op=CopyReduceAsyncTensor()), args, type=dst)
@@ -30,7 +30,7 @@ def test_reduce_store_cost_dispatches_through_schedule():
 
 
 @pytest.mark.parametrize("reverse", (False, True))
-def test_tensor_map_copy_still_rejects_partial(reverse):
+def test_tensor_map_copy_rejects_partial(reverse):
     src, dst = _types()
     operands = (dst, src) if reverse else (src, dst)
     mesh = make_mesh(src.layout.mesh, Mesh((Topology("thread", 32),), Layout((32,), (1,))))

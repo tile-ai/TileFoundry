@@ -28,7 +28,7 @@ def test_silu_evaluate():
     )
 
 
-def test_silu_differs_from_decomposed_form_at_bf16():
+def test_silu_differs_from_decomposed():
     """The fused and decomposed forms are not bit-identical at bf16."""
     torch.manual_seed(0)
     x = (torch.randn(10000) * 0.003).to(torch.bfloat16)

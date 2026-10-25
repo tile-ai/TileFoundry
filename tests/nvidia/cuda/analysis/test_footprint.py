@@ -22,7 +22,7 @@ INVARIANT_REUSE = f"{Path(__file__).parents[1] / 'fixtures/placed/hand_checked.p
 @pytest.mark.parametrize(
     "missing_precision", (AnalysisPrecision.LOWER_BOUND, AnalysisPrecision.UNKNOWN)
 )
-def test_uncounted_boundary_marks_the_footprint_incomplete(
+def test_uncounted_boundary_lowers_precision(
     counted_precision: AnalysisPrecision,
     missing_precision: AnalysisPrecision,
 ) -> None:
@@ -60,7 +60,7 @@ def test_uncounted_boundary_marks_the_footprint_incomplete(
 
 @pytest.mark.parametrize("left", tuple(AnalysisPrecision))
 @pytest.mark.parametrize("right", tuple(AnalysisPrecision))
-def test_tuple_output_boundaries_add_instead_of_union(
+def test_tuple_output_footprints_add(
     left: AnalysisPrecision,
     right: AnalysisPrecision,
 ) -> None:

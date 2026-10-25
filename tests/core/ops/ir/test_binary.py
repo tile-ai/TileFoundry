@@ -45,7 +45,7 @@ _PSUM_AXIS0 = make_shard_tensor_type((16, 8), mesh=_MAB, attrs=(Partial("sum"), 
 _PSUM_AXIS1 = make_shard_tensor_type((16, 8), mesh=_MAB, attrs=(Broadcast(), Partial("sum")))
 
 
-def test_broadcast_layout_fallback_does_not_weaken_shard_mismatch():
+def test_broadcast_fallback_keeps_shard_mismatch():
     narrow = (1, 1, 16, 1, 128)
     wide = (1, 1, 16, 4, 128)
     lhs = make_tensor_type(narrow, _F, layout=Layout(narrow))
@@ -112,7 +112,7 @@ COST_CASES = [
 
 
 @pytest.mark.parametrize("case", COST_CASES, ids=lambda case: case.name)
-def test_binary_charges_the_kind_of_work_it_asks_for(case):
+def test_binary_charges_by_work_kind(case):
     """What a Binary costs follows from what it does, not from its result dtype.
 
     A comparison produces booleans and asks a machine for a predicate; an add

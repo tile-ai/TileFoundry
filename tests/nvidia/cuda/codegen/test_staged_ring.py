@@ -27,7 +27,7 @@ _CUDA = CudaTarget("nvidia.h200_sxm")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_the_counter_driven_ring_stages_the_tile_through_both_stages() -> None:
+def test_counter_ring_copies_tile() -> None:
     """The runtime index picks a stage per iteration; the tile arrives intact.
 
     A choice rendered wrong -- an index that does not read the counter, or
@@ -48,7 +48,7 @@ def test_the_counter_driven_ring_stages_the_tile_through_both_stages() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_every_row_stages_through_the_slot_its_index_arithmetic_picks() -> None:
+def test_row_ring_copies_rows() -> None:
     """Dim arithmetic over both loop counters drives the ring; rows arrive.
 
     The index is ``((i * 3) + j) % 2`` rendered for the card, over windows

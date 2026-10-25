@@ -19,7 +19,7 @@ OPS = Path(__file__).parents[2] / "fixtures" / "ops"
 _N = DimVar("arange_n", 1, 16)
 
 
-def test_arange_symbolic_extent_resolves_from_runtime_shape():
+def test_arange_symbolic_extent_resolves():
     SymbolicArange = load_authored_ir(f"{OPS / 'symbolic_arange.py'}:SymbolicArange")
     _symbolic_arange = SymbolicArange.entry_function()
     call = _symbolic_arange.body

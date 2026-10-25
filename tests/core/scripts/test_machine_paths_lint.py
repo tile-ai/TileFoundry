@@ -61,7 +61,7 @@ ALLOWED = [
 
 
 @pytest.mark.parametrize("line", CAUGHT, ids=range(len(CAUGHT)))
-def test_a_machine_specific_path_is_reported(lint, tmp_path, line) -> None:
+def test_machine_path_reported(lint, tmp_path, line) -> None:
     target = tmp_path / "leaky.py"
     target.write_text(line, encoding="utf-8")
 
@@ -72,14 +72,14 @@ def test_a_machine_specific_path_is_reported(lint, tmp_path, line) -> None:
 
 
 @pytest.mark.parametrize("line", ALLOWED, ids=range(len(ALLOWED)))
-def test_a_path_that_only_looks_like_one_is_left_alone(lint, tmp_path, line) -> None:
+def test_lookalike_path_ignored(lint, tmp_path, line) -> None:
     target = tmp_path / "fine.py"
     target.write_text(line, encoding="utf-8")
 
     assert lint.findings(target) == [], f"wrongly reported: {line}"
 
 
-def test_the_exit_status_and_the_report_name_the_line(lint, tmp_path, capsys) -> None:
+def test_report_names_line(lint, tmp_path, capsys) -> None:
     """The hook's own contract: non-zero, and enough on stdout to go fix it."""
     target = tmp_path / "leaky.py"
     target.write_text(f'a = 1\nCKPT = "{_SCRATCH}/someone/prepared"\n', encoding="utf-8")
@@ -92,7 +92,7 @@ def test_the_exit_status_and_the_report_name_the_line(lint, tmp_path, capsys) ->
     assert f"{_SCRATCH}/someone" in out
 
 
-def test_a_clean_file_passes(lint, tmp_path, capsys) -> None:
+def test_clean_file_passes(lint, tmp_path, capsys) -> None:
     target = tmp_path / "fine.py"
     target.write_text("\n".join(ALLOWED), encoding="utf-8")
 
@@ -100,8 +100,8 @@ def test_a_clean_file_passes(lint, tmp_path, capsys) -> None:
     assert capsys.readouterr().out == ""
 
 
-def test_this_repository_is_clean(lint) -> None:
-    """Test this repository is clean.
+def test_repository_clean(lint) -> None:
+    """No tracked file in this repository holds a machine-specific path.
 
     Every tracked file, so the guard is a fact about the tree and not only
     about the commit that happens to be in flight.

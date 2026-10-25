@@ -22,14 +22,14 @@ def test_drawn_resource_never_redraws():
     assert resource.load("w") is resource.load("w")
 
 
-def test_a_bare_cuda_resolves_to_the_device_the_process_selected() -> None:
+def test_bare_cuda_resolves_current_device() -> None:
     if not torch.cuda.is_available():
         assert _resolved_device("cuda") == "cuda"
         return
     assert _resolved_device("cuda") == f"cuda:{torch.cuda.current_device()}"
 
 
-def test_it_follows_the_selection_rather_than_reading_it_once() -> None:
+def test_resolved_device_tracks_set_device() -> None:
     """The resolved device tracks a later `set_device`.
 
     The resolved device tracks a later `set_device`, so a worker assigned a card

@@ -1,4 +1,4 @@
-"""Partial stores retain reduction semantics and charge only the hardware transfer."""
+"""A Partial -> Broadcast reshard is not a view; Broadcast -> plain still aliases."""
 
 from dataclasses import replace
 
@@ -33,7 +33,7 @@ def _types():
 
 
 @pytest.mark.parametrize("move_axis", (False, True), ids=("broadcast", "move_axis"))
-def test_partial_to_broadcast_reshard_is_not_a_view(move_axis):
+def test_partial_to_broadcast_not_aliased(move_axis):
     src, _ = _types()
     if move_axis:
         mesh = Mesh((Topology("cta", 4),), Layout((2, 2), (2, 1)))
@@ -48,7 +48,7 @@ def test_partial_to_broadcast_reshard_is_not_a_view(move_axis):
     assert aliased_operand(call) is None
 
 
-def test_broadcast_to_plain_reshard_still_aliases():
+def test_broadcast_to_plain_aliases():
     src, _ = _types()
     src = replace(src, layout=replace(src.layout, attrs=(Broadcast(),)))
     dst = replace(src, layout=src.layout.layout)

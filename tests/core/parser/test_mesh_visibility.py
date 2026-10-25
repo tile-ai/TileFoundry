@@ -35,24 +35,24 @@ _PARSER = Path(__file__).parents[1] / "fixtures" / "parser"
         "scalar_after_mesh",
     ),
 )
-def test_authored_runtime_expressions_require_a_mesh_scope(program) -> None:
+def test_runtime_expressions_require_mesh_scope(program) -> None:
     with pytest.raises(ParseError, match="runs outside every mesh scope"):
         load_authored_ir(str(_DIAGNOSTICS / f"parser_unscoped_{program}.py"))
 
 
-def test_a_return_expression_after_a_mesh_requires_a_scope() -> None:
+def test_return_after_mesh_requires_scope() -> None:
     with pytest.raises(ParseError, match="runs outside every mesh scope"):
         load_authored_ir(str(_DIAGNOSTICS / "parser_unscoped_return.py"))
 
 
-def test_logical_hir_and_tir_calls_remain_unscoped() -> None:
+def test_logical_tir_calls_stay_unscoped() -> None:
     logical = load_authored_ir(f"{_PARSER}/unscoped_calls.py:Logical").entry_function()
     tir = load_authored_ir(f"{_PARSER}/unscoped_calls.py:Tir").entry_function()
 
     assert logical.body is not None and tir.body is not None
 
 
-def test_a_layout_finer_than_the_running_scope_is_rejected() -> None:
+def test_finer_layout_than_scope_rejected() -> None:
     with pytest.raises(
         VerifyError,
         match=(
@@ -63,7 +63,7 @@ def test_a_layout_finer_than_the_running_scope_is_rejected() -> None:
         load_authored_ir(str(_DIAGNOSTICS / "value_escapes.py"))
 
 
-def test_rmem_does_not_reach_finer_units_than_its_layout() -> None:
+def test_coarse_rmem_layout_rejected() -> None:
     with pytest.raises(
         VerifyError,
         match=(
@@ -74,7 +74,7 @@ def test_rmem_does_not_reach_finer_units_than_its_layout() -> None:
         load_authored_ir(str(_DIAGNOSTICS / "coarse_rmem.py"))
 
 
-def test_reshard_is_the_one_consumer_allowed_to_move_an_invisible_value() -> None:
+def test_reshard_moves_invisible_value() -> None:
     ReshardEscape = load_authored_ir(str(_PARSER / "reshard_escape.py"))
 
     assert ReshardEscape.entry_function().body is not None

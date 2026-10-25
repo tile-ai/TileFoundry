@@ -45,14 +45,14 @@ from tilefoundry.visitor_registry.instruction import ScheduleRefusal
 from tilefoundry.visitor_registry.typeinfer import inference_type
 
 
-def test_arange_candidates_refuse_a_symbolic_start() -> None:
+def test_arange_candidates_refuse_symbolic_start() -> None:
     type_ = TensorType((8,), DType.i32, Layout((8,), (1,)), StorageKind.RMEM)
     call = Call(target=HirArange(type=type_, start=DimVar("start", 0, 8)), args=(), type=type_)
     with pytest.raises(ScheduleRefusal, match="start must be a static integer"):
         candidate_operands(call, TirArange)
 
 
-def test_single_issue_schedule_preserves_instruction_relations() -> None:
+def test_single_issue_keeps_instruction_relations() -> None:
     schedule = _copy_schedule_call(repeat=(1,), order=(0,))
     source = schedule.args[0]
     destination_type = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.SMEM)
@@ -87,7 +87,7 @@ def test_schedule_typeinfer_rejects_invalid_contract(call: Call, message: str) -
         )
 
 
-def test_schedule_typeinfer_requires_instruction_access_relations() -> None:
+def test_schedule_typeinfer_requires_access_relations() -> None:
     type_ = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.RMEM)
     call = Call(
         target=ScheduleOp(op=_UnstatedInstruction()),
@@ -129,7 +129,7 @@ def test_schedule_typeinfer_requires_instruction_verifier(monkeypatch) -> None:
         inference_type(call, replace(context, memo={}))
 
 
-def test_schedule_typeinfer_requires_whole_instruction_tiles(monkeypatch) -> None:
+def test_schedule_typeinfer_requires_whole_tiles(monkeypatch) -> None:
     type_ = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.RMEM)
     call = Call(
         target=ScheduleOp(op=_UnstatedInstruction()),
@@ -175,7 +175,7 @@ def test_schedule_typeinfer_requires_instruction_operands(monkeypatch) -> None:
         )
 
 
-def test_parameter_structure_does_not_repeat_its_name() -> None:
+def test_parameter_pattern_states_structure() -> None:
     declarations = {schema.op_class for schema in iter_schemas() if schema.op_class is not None}
     for schema in iter_schemas():
         if schema.op_class is None:
@@ -200,7 +200,7 @@ def test_parameter_structure_does_not_repeat_its_name() -> None:
                 )
 
 
-def test_instruction_requires_an_execution_mesh_declaration(monkeypatch) -> None:
+def test_instruction_requires_execution_mesh(monkeypatch) -> None:
     monkeypatch.delattr(_UnstatedInstruction, "execution_mesh")
     with pytest.raises(ValueError, match="_UnstatedInstruction execution_mesh must be"):
         declared_execution_mesh(_UnstatedInstruction)

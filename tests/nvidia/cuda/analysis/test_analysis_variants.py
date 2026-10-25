@@ -46,7 +46,7 @@ def _memory_record(module) -> dict:
 
 
 @pytest.mark.parametrize("precision", tuple(AnalysisPrecision))
-def test_persistent_gemm_over_reuse_conclusions_match_the_reviewed_report(
+def test_persistent_gemm_reports_reuse_overflow(
     precision: AnalysisPrecision,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -87,7 +87,7 @@ def test_persistent_gemm_over_reuse_conclusions_match_the_reviewed_report(
 
 
 @pytest.mark.parametrize("precision", tuple(AnalysisPrecision))
-def test_capacity_exceeded_matches_the_written_ratio(
+def test_working_set_overflow_reported(
     precision: AnalysisPrecision,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -112,7 +112,7 @@ def test_capacity_exceeded_matches_the_written_ratio(
     assert memory["advisories"] == (diagnosis if category == "advisories" else [])
 
 
-def test_runtime_loop_start_names_the_unbounded_value() -> None:
+def test_runtime_loop_start_names_value() -> None:
     module = load_authored_ir(
         str(Path(__file__).parents[1] / "fixtures/diagnostics/analysis_runtime_start.py")
     )
@@ -123,7 +123,7 @@ def test_runtime_loop_start_names_the_unbounded_value() -> None:
         _memory_record(module)
 
 
-def test_symbolic_divisor_loop_start_does_not_block_typing() -> None:
+def test_bound_symbolic_loop_start_typechecks() -> None:
     module = load_authored_ir(
         str(Path(__file__).parents[1] / "fixtures/logical/symbolic_loop_start.py")
     )
@@ -132,7 +132,7 @@ def test_symbolic_divisor_loop_start_does_not_block_typing() -> None:
     check_program(module, module.entry_function(), dims={"chunks": 8})
 
 
-def test_wave_truncation_counts_only_the_resident_ctas() -> None:
+def test_wave_truncation_counts_resident_ctas() -> None:
     WaveTruncation = load_authored_ir(f"{PLACED / 'hand_checked.py'}:WaveTruncation")
     wide_target = CudaTarget(
         replace(WaveTruncation.target.device, sm_count=256),

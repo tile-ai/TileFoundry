@@ -34,7 +34,7 @@ _HIR_LOWERING_ELSEWHERE = (
 
 
 @pytest.mark.skip(reason=_HIR_LOWERING_ELSEWHERE)
-def test_entry_dispatch_both_variants_in_one_session() -> None:
+def test_dispatch_runs_both_variants() -> None:
     """Both dispatch arms run through the same compiled binary in sequence.
 
     Both dispatch arms run through the same compiled binary in

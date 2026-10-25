@@ -98,8 +98,8 @@ def test_linear_attention_matches_hugging_face(tf, shipped_source, comparison_ca
 MOE = next(case for case in CASES if case.id.endswith("_moe"))
 
 
-def test_the_moe_block_matches_hugging_face(tf, shipped_source, comparison_cache) -> None:
-    """Test the moe block matches hugging face.
+def test_moe_block_matches_hugging_face(tf, shipped_source, comparison_cache) -> None:
+    """The MoE block matches Hugging Face's own.
 
     The whole block -- post_attention_layernorm plus `Qwen3_5MoeSparseMoeBlock`,
     routed experts and the shared expert together -- against Hugging Face's own.
@@ -153,7 +153,7 @@ ZEROED = ["recurrent_state", "conv_state"]
 
 
 @pytest.mark.parametrize("zeroed", ZEROED)
-def test_each_half_of_the_state_reaches_the_answer(tf, shipped_source, comparison_cache, zeroed) -> None:
+def test_zeroed_state_half_changes_answer(tf, shipped_source, comparison_cache, zeroed) -> None:
     step = reference.linear_step(device="cpu")
     loaded = reference.load_mixer("linear_attention", step.layer)
     held = {"conv_state": step.conv_state, "recurrent_state": step.recurrent_state}
@@ -169,7 +169,7 @@ def test_each_half_of_the_state_reaches_the_answer(tf, shipped_source, compariso
     )
 
 
-def test_the_output_gate_is_applied(tf, shipped_source, comparison_cache) -> None:
+def test_output_gate_applied(tf, shipped_source, comparison_cache) -> None:
     """Half of `q_proj`'s fan-out never reaches a score.
 
     Half of `q_proj`'s fan-out never reaches a score, and this measures that it

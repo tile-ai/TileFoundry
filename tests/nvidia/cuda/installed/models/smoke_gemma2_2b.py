@@ -12,7 +12,7 @@ MODEL = "gemma2_2b"
 CASES = contract.model_cases(MODEL)
 
 
-def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, comparison_cache) -> None:
+def test_decode_step_returns_cache_entry(tf, shipped_source, comparison_cache) -> None:
     """One decode step of one layer, and the state the step hands back.
 
     The whole layer is compared with ``Gemma2DecoderLayer.forward``. Returned cache
@@ -47,8 +47,8 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, c
     assert entry_k.shape[1] == 1 and entry_v.shape[1] == 1
 
 
-def test_the_attention_matches_hugging_face(tf, shipped_source, comparison_cache) -> None:
-    """Test the attention matches hugging face.
+def test_attention_matches_hugging_face(tf, shipped_source, comparison_cache) -> None:
+    """The attention matches Hugging Face at the decoded position.
 
     `self_attention` -- input_layernorm plus Gemma2's GQA, RoPE and soft-capped
     logits over the cache and the new token -- against Hugging Face's own attention

@@ -21,7 +21,7 @@ def _entry():
     return load_authored_ir(f"{GQA_DECODE}:GqaOnline").entry_function()
 
 
-def test_the_model_is_dynamic_in_its_context_length_alone() -> None:
+def test_ctx_len_sole_residual_dim() -> None:
     """A derived extent is an expression.
 
     A derived extent is an expression, so it is not a second dimension the
@@ -30,7 +30,7 @@ def test_the_model_is_dynamic_in_its_context_length_alone() -> None:
     assert set(residual_dims(_entry())) == {"ctx_len"}
 
 
-def test_a_size_selects_the_one_implementation_that_covers_it() -> None:
+def test_size_selects_covering_variant() -> None:
     constants = load_namespace(str(GQA_DECODE))[0]
     SMALL_CONTEXT_T, MAX_CTX = constants["SMALL_CONTEXT_T"], constants["MAX_CTX"]
     entry = _entry()
@@ -46,12 +46,12 @@ def test_a_size_selects_the_one_implementation_that_covers_it() -> None:
     ]
 
 
-def test_a_size_no_implementation_covers_is_refused() -> None:
+def test_uncovered_size_refused() -> None:
     with pytest.raises(SpecializationError, match="no variant covering"):
         variant_for(_entry(), {"ctx_len": load_namespace(str(GQA_DECODE))[0]["MAX_CTX"] + 1})
 
 
-def test_choosing_an_implementation_needs_the_dimension_it_turns_on() -> None:
+def test_selection_requires_variant_dim() -> None:
     """Selection reads the dimensions the variants name.
 
     Selection reads the dimensions the variants name. Skipping an unstated

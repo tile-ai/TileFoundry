@@ -77,7 +77,7 @@ class ExtraTopologyCudaTarget(CudaTarget):
         return super().get_facts(facts_type, query)
 
 
-def test_cuda_projects_one_ctas_share_from_device_rates() -> None:
+def test_cuda_projects_cta_rates() -> None:
     """One CTA's share of the float and memory peaks, and its own services.
 
     The float and bandwidth numbers are the device peaks divided among the SMs.
@@ -106,7 +106,7 @@ def test_cuda_projects_one_ctas_share_from_device_rates() -> None:
     assert all(rate > 0 for _kind, rate in services.unit_ops)
 
 
-def test_performance_refuses_a_target_without_its_required_compute_rate() -> None:
+def test_performance_refuses_missing_compute_rate() -> None:
     target = _NoComputeUnitRateCudaTarget("nvidia.h200_sxm")
     MoEMegaKernel = load_authored_ir(f"{PLACED / 'moe_mega_kernel.py'}:MoEMegaKernel")
     subject = replace(MoEMegaKernel, target=target)
@@ -116,7 +116,7 @@ def test_performance_refuses_a_target_without_its_required_compute_rate() -> Non
         analyze(*check_program(subject, function), analysis="performance")
 
 
-def test_cuda_mesh_topology_validation_uses_the_emission_target() -> None:
+def test_topology_validation_uses_emission_target() -> None:
     custom = ExtraTopologyCudaTarget("nvidia.h200_sxm")
 
     validate_cuda_topology_levels(custom, ("custom",))
@@ -124,7 +124,7 @@ def test_cuda_mesh_topology_validation_uses_the_emission_target() -> None:
         validate_cuda_topology_levels(custom, ("warp",))
 
 
-def test_registration_rejects_ambiguous_or_invalid_provider_classes() -> None:
+def test_registration_rejects_invalid_providers() -> None:
     inherited = type(
         "InheritedTarget",
         (CudaTarget,),
@@ -150,7 +150,7 @@ def test_registration_rejects_ambiguous_or_invalid_provider_classes() -> None:
         register_target(claimant)
 
 
-def test_authored_target_boundaries_reject_strings_and_keep_exact_instances() -> None:
+def test_target_rejects_strings_keeps_instances() -> None:
     target = CudaTarget("nvidia.h200_sxm")
     module = Module("exact", (), target=target)
 
@@ -162,7 +162,7 @@ def test_authored_target_boundaries_reject_strings_and_keep_exact_instances() ->
         PrimFunction("invalid", (), Sequential(()), target="cuda")
 
 
-def test_program_topologies_use_target_resource_facts() -> None:
+def test_topology_extent_checks_resource_facts() -> None:
     """A declared extent is validated against the level's own resource fact.
 
     A declared extent is validated against the level's own resource fact: a
@@ -186,7 +186,7 @@ def test_program_topologies_use_target_resource_facts() -> None:
     assert len(str(error.value)) < 120
 
 
-def test_build_rejects_unequal_device_targets_before_emitting() -> None:
+def test_build_rejects_mixed_device_targets() -> None:
     emitted: list[object] = []
 
     def unexpected_emit(*args):
@@ -221,7 +221,7 @@ def test_build_rejects_unequal_device_targets_before_emitting() -> None:
     assert emitted == []
 
 
-def test_target_conflict_diagnostics_use_stable_summaries() -> None:
+def test_target_conflict_summaries_stable() -> None:
     function = load_authored_ir(f"{PLACED / 'rmsnorm.py'}:RmsnormModule").entry_function()
     declared_target = CudaTarget("nvidia.h200_sxm")
     explicit_target = CudaTarget(
@@ -254,5 +254,5 @@ def test_target_conflict_diagnostics_use_stable_summaries() -> None:
         assert len(str(error.value)) < 220
 
 
-def test_registration_is_one_class_boundary_and_reload_is_idempotent() -> None:
+def test_cuda_target_registered() -> None:
     assert {"cuda"} <= registered_targets().keys()

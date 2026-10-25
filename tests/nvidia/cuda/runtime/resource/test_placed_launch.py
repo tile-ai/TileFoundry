@@ -22,7 +22,7 @@ from tilefoundry.ir.types import Placement
 from tilefoundry.runtime.resource import DictResource
 
 
-def test_a_placed_kernel_writes_the_rows_its_card_holds() -> None:
+def test_placed_kernel_writes_own_rows() -> None:
     """Each card writes its own rows and leaves every other card's alone.
 
     One thread and one loaded module per card, which is the shape every

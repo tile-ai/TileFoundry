@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 
-def test_added_documents_and_provider_drive_installed_commands(
+def test_registered_targets_drive_commands(
     tf, installation, tmp_path
 ) -> None:
     default_registry = installation / "share" / "tilefoundry" / "registry.toml"

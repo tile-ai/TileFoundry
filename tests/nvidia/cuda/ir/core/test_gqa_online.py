@@ -36,7 +36,7 @@ def _walk_ir(expr, seen=None):
         yield from _walk_ir(expr.body, seen)
 
 
-def test_static_fixture_has_one_fixed_online_softmax_region() -> None:
+def test_static_online_softmax_region_fixed() -> None:
     gqa_static = Path(__file__).parents[2] / "fixtures/logical/gqa_static.py"
     static_online_attend = load_authored_ir(f"{gqa_static}:static_online_attend")
     regions = tuple(

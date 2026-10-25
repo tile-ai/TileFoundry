@@ -15,7 +15,7 @@ from tilefoundry.ir.isl_interop import (
 from tilefoundry.ir.types import TensorType
 
 
-def test_dim_range_prefers_metadata_and_unknown_leaves_return_none():
+def test_dim_range_resolves_known_values():
     unknown = Var(type=TensorType.umat_scalar(), name="runtime")
     assert dim_range(unknown) is None
 

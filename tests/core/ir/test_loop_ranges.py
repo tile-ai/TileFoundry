@@ -1,4 +1,4 @@
-"""Define test grid region range nested behavior.
+"""Loop ranges: ``range`` / ``tile`` domains, nested LoopRegions, dim-expression bounds.
 
 End-to-end (parse + evaluate) tests for the unified ``range`` / ``tile``
 loop surface, nested LoopRegions, and dim-expression loop bounds.

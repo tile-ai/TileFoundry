@@ -79,7 +79,7 @@ def test_mesh_visibility_case(case: MeshVisibilityCase) -> None:
     check_case(case)
 
 
-def test_region_boundaries_capture_external_regions_through_args() -> None:
+def test_region_boundary_captures_sibling_value() -> None:
     """A sibling region receives an earlier region value through its boundary."""
     RegionBoundaries = load_authored_ir(f"{PLACED / 'region_boundaries.py'}:RegionBoundaries")
     body = RegionBoundaries.entry_function().body
@@ -110,7 +110,7 @@ def test_region_boundaries_capture_external_regions_through_args() -> None:
     load_authored_ir(str(core_diagnostics / "region_tuple_rebind.py"))
 
 
-def test_unscoped_initialization_is_rejected_at_the_authored_call() -> None:
+def test_unscoped_init_rejected_at_call() -> None:
     path = Path(__file__).parents[1] / "fixtures" / "diagnostics" / "unscoped_call_loop.py"
     source = path.read_text()
     line = next(i for i, text in enumerate(source.splitlines(), 1) if "out = tf.zeros" in text)

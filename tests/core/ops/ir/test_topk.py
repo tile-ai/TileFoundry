@@ -69,7 +69,7 @@ def test_topk_unsorted_selects_same_set():
         assert set(idx[r].long().tolist()) == set(torch.topk(x[r], 6).indices.tolist())
 
 
-def test_topk_output_layout_shrinks_selected_axis_preserving_split():
+def test_topk_keeps_unselected_split():
     """A Split on a non-selected axis must be preserved.
 
     A Split on a non-selected axis must be preserved, and the output shard
@@ -91,15 +91,15 @@ def test_topk_output_layout_shrinks_selected_axis_preserving_split():
         )
 
 
-def test_plain_topk_layout_describes_the_selected_result():
+def test_topk_layout_describes_selection():
     source = make_tensor_type((4, 256), _F32, layout=Layout(shape=(4, 256), strides=(256, 1)))
     values, indices = infer_call(TopK(k=6, axis=-1), source).fields
     assert values.layout == Layout(shape=(4, 6), strides=(6, 1))
     assert indices.layout == values.layout
 
 
-def test_topk_all_broadcast_layout_with_dynamic_dim():
-    """Test topk all broadcast layout with dynamic dim.
+def test_topk_broadcast_handles_dynamic_dim():
+    """An all-Broadcast TopK layout handles a dynamic dim.
 
     The canonical replicated fallback (an all-Broadcast layout has no
     Split/Partial to propagate, but must still shrink the selected axis to k
@@ -159,7 +159,7 @@ def _build_topk_fn(x_shape, k, *, axis: int = -1) -> tuple[Function, "TupleType"
 _BIG_K = DimVar("topk_dyn_big_k", 1, 1999)
 
 
-def test_topk_dynamic_k_evaluates_at_two_ctx_bindings():
+def test_topk_dynamic_k_evaluates():
     """Same built Function.
 
     Same built Function; k = min(512, pos // 4) resolves to a different
@@ -187,7 +187,7 @@ _D = 8
     (None, Layout((POS, _D), (_D, 1)), Layout((POS, _D), (1, POS))),
     ids=("logical", "row-major", "column-major"),
 )
-def test_topk_dynamic_k_downstream_index_select_shape_consistent(table_layout):
+def test_dynamic_k_feeds_index_select(table_layout):
     """Indices from a dynamic-k TopK feed ``index_select``.
 
     TopK retains its batch axis, so its indices flatten to torch's required 1-D

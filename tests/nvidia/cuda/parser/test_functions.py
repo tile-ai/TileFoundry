@@ -51,7 +51,7 @@ def test_function_case(case: FunctionCase) -> None:
     check_case(case)
 
 
-def test_an_incompatible_return_annotation_reports_annotation_and_body_types() -> None:
+def test_return_mismatch_reports_both_types() -> None:
     with pytest.raises(ParseError) as raised:
         load_authored_ir(str(DIAGNOSTICS / "parser_return_annotation_storage_mismatch.py"))
 
@@ -68,17 +68,17 @@ def test_an_incompatible_return_annotation_reports_annotation_and_body_types() -
     )
 
 
-def test_a_dispatch_prototype_requires_a_return_annotation() -> None:
+def test_prototype_requires_return_annotation() -> None:
     with pytest.raises(ParseError, match="prototype requires a return annotation"):
         load_authored_ir(str(DIAGNOSTICS / "parser_dispatch_prototype_without_return.py"))
 
 
-def test_a_variant_body_must_satisfy_its_dispatch_return_contract() -> None:
+def test_variant_rejects_return_mismatch() -> None:
     with pytest.raises(ParseError, match="variant body type .*dispatch return contract"):
         load_authored_ir(str(DIAGNOSTICS / "parser_dispatch_variant_return_mismatch.py"))
 
 
-def test_a_storage_the_target_does_not_have_is_refused() -> None:
+def test_storage_absent_from_target_refused() -> None:
     refusal = re.escape(
         "storage tmem is not allowed by hardware context ('gmem', 'smem', 'rmem', 'umat')"
     )
@@ -89,7 +89,7 @@ def test_a_storage_the_target_does_not_have_is_refused() -> None:
         load_authored_ir(str(DIAGNOSTICS / "parser_body_storage_not_on_target.py"))
 
 
-def test_a_storage_the_target_has_is_accepted() -> None:
+def test_storage_on_target_accepted() -> None:
     fine = load_authored_ir(str(PARSER / "smem_param_h200.py"))
 
     assert fine.entry_function().params[0].annotation.storage is StorageKind.SMEM
@@ -99,6 +99,6 @@ def test_a_storage_the_target_has_is_accepted() -> None:
     assert blackwell.entry_function().params[0].annotation.storage is StorageKind.TMEM
 
 
-def test_a_nested_block_does_not_gain_function_docstring_semantics() -> None:
+def test_with_body_docstring_rejected() -> None:
     with pytest.raises(ParseError):
         load_authored_ir(str(DIAGNOSTICS / "parser_with_body_docstring.py"))

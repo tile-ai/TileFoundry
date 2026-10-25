@@ -12,7 +12,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.target import CpuTarget
 
 
-def test_binding_metadata_names_the_emitted_binding():
+def test_binding_metadata_names_binding():
     tensor_type = TensorType.scalar(DType.f32)
     source = Var(name="source", type=tensor_type)
     result = Call(
@@ -66,7 +66,7 @@ def test_binding_metadata_names_the_emitted_binding():
     assert as_script(reload(reserved, "Reserved")) == reserved
 
 
-def test_umat_type_is_printed_and_round_trips() -> None:
+def test_umat_type_round_trips() -> None:
     tensor_type = TensorType.scalar(DType.i64, storage=StorageKind.UMAT)
     source = Var(name="source", type=tensor_type)
     function = Function.build(

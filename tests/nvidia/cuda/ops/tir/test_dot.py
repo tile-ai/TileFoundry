@@ -61,28 +61,28 @@ def _sharded(n, storage="rmem"):
     )
 
 
-def test_accepts_two_equal_runs_folded_into_one_cell() -> None:
+def test_dot_accepts_equal_runs() -> None:
     verify_prim_function(_pf(_ty(8), _ty(8), _ty(1)))
 
 
-def test_accepts_operands_of_different_element_types() -> None:
+def test_dot_accepts_mixed_dtypes() -> None:
     """The fold accumulates in f32 whatever it loads, so the two may differ."""
     verify_prim_function(_pf(_ty(8, DType.from_name("bf16")), _ty(8), _ty(1)))
 
 
-def test_refuses_operands_that_contract_over_different_lengths() -> None:
+def test_dot_refuses_length_mismatch() -> None:
     """The fold walks one operand's length and indexes the other with it."""
     with pytest.raises(VerifyError, match="contract over different lengths"):
         verify_prim_function(_pf(_ty(8), _ty(4), _ty(1)))
 
 
-def test_refuses_a_destination_wider_than_one_cell() -> None:
+def test_dot_refuses_wide_destination() -> None:
     """A contraction leaves a total, and a total is one number."""
     with pytest.raises(VerifyError, match="must be one cell"):
         verify_prim_function(_pf(_ty(8), _ty(8), _ty(4)))
 
 
-def test_refuses_a_workspace_outside_shared_memory() -> None:
+def test_dot_refuses_gmem_workspace() -> None:
     """One warp posts its partial and every thread reads the posted ones."""
     with pytest.raises(VerifyError, match=r"workspace: gmem does not match smem"):
         verify_prim_function(
@@ -90,14 +90,14 @@ def test_refuses_a_workspace_outside_shared_memory() -> None:
         )
 
 
-def test_refuses_a_block_contraction_over_an_unsharded_left_operand() -> None:
+def test_dot_refuses_unsharded_block_lhs() -> None:
     """The warps that post a partial are the ones lhs's mesh names."""
     with pytest.raises(VerifyError, match="must carry a ShardLayout"):
         verify_prim_function(_pf(_ty(8), _ty(8), _ty(1), _ty(4, storage="smem")))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_both_tiers_answer_what_torch_answers() -> None:
+def test_dot_tiers_match_torch() -> None:
     """One compile behind two assertions, each naming the tier that failed."""
     DotTiers = load_authored_ir(f"{OPS / 'dot_tiers.py'}:DotTiers")
     rm = tilefoundry.compile(DotTiers, target=CudaTarget("nvidia.h200_sxm"))

@@ -21,7 +21,7 @@ def _attention():
 
 
 @pytest.mark.parametrize("sequence", [128, 130])
-def test_prefill_matches_full_causal_attention_with_and_without_a_tail(sequence):
+def test_prefill_matches_causal_attention(sequence):
     HEADS, HEAD_DIM, attend = _attention()
     torch.manual_seed(0)
     query = torch.randn((1, sequence, HEADS, HEAD_DIM), dtype=torch.bfloat16)
@@ -44,7 +44,7 @@ def test_prefill_matches_full_causal_attention_with_and_without_a_tail(sequence)
 
 
 @pytest.mark.parametrize("context", [128, 130])
-def test_decode_matches_full_cache_attention_with_and_without_a_tail(context):
+def test_decode_matches_cache_attention(context):
     HEADS, HEAD_DIM, attend = _attention()
     torch.manual_seed(0)
     query = torch.randn((1, 1, HEADS, HEAD_DIM), dtype=torch.bfloat16)

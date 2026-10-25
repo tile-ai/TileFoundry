@@ -77,7 +77,7 @@ COST_CASES = [
 
 
 @pytest.mark.parametrize("case", COST_CASES, ids=lambda case: case.name)
-def test_unary_charges_the_unit_that_answers_it(case):
+def test_unary_charges_by_unit(case):
     """An exponential is served by a different unit than a negation.
 
     The special-function kinds have their own published throughput, a quarter of

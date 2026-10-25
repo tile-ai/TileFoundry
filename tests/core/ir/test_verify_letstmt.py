@@ -36,8 +36,8 @@ def _pf(*stmts) -> PrimFunction:
     return PrimFunction(name="fn", params=(), body=Sequential(body=stmts))
 
 
-def test_letstmt_requires_a_fresh_var_anywhere_in_the_function():
-    """Test letstmt requires a fresh var anywhere in the function.
+def test_letstmt_requires_fresh_var():
+    """A LetStmt binds a fresh Var anywhere in the function.
 
     Binding the same Var object twice must raise whether the second binding is
     nested inside the first or a sibling of it — fresh-Var applies across the whole
@@ -66,7 +66,7 @@ def test_letstmt_rejects_type_mismatch():
         verify_prim_function(_pf(_let(v, _alloc_call(t_reg))))
 
 
-def test_letstmt_rejects_alloc_nested_in_other_expr():
+def test_letstmt_rejects_nested_alloc():
     """Call may only appear directly as LetStmt.value, never nested inside another Expr operand.
 
     Call(AllocTensor, ...) may only appear directly as
@@ -84,7 +84,7 @@ def test_letstmt_rejects_alloc_nested_in_other_expr():
 
 
 @pytest.mark.parametrize("scope", ("let", "if", "for", "mesh"))
-def test_var_use_must_be_inside_its_binding_scope(scope):
+def test_var_escape_from_scope_refused(scope):
     """A sibling statement cannot consume a variable held only inside a scope."""
     scalar = make_tensor_type((), DType.i32, storage="rmem")
     local = Var(type=scalar, name="local")
@@ -113,7 +113,7 @@ def test_var_use_must_be_inside_its_binding_scope(scope):
 
 
 @pytest.mark.parametrize("self_reference", (False, True))
-def test_letstmt_value_cannot_use_an_unbound_var(self_reference):
+def test_letstmt_value_refuses_unbound_var(self_reference):
     """A value cannot read its own binding or a later statement's binding."""
     scalar = make_tensor_type((), DType.i32, storage="rmem")
     local = Var(type=scalar, name="local")
@@ -126,7 +126,7 @@ def test_letstmt_value_cannot_use_an_unbound_var(self_reference):
         verify_prim_function(_pf(consumer, binding))
 
 
-def test_verify_rejects_a_non_ir_node():
+def test_verify_rejects_non_ir_node():
     """Lowering recipes must be materialized before entering TIR expression fields."""
     tensor = make_tensor_type((4,), storage="rmem")
     source = Var(type=tensor, name="source")
@@ -145,7 +145,7 @@ def test_verify_rejects_a_non_ir_node():
         verify_prim_function(function)
 
 
-def test_variant_cannot_use_its_parents_parameter():
+def test_variant_refuses_parent_parameter():
     """Each specialization owns its parameters; the parent's Var is invisible."""
     program = load_authored_ir(str(Path(__file__).parents[1] / "fixtures/tir/parent_parameter.py"))
     function = program.entry_function()

@@ -13,7 +13,7 @@ from tilefoundry_nvidia import CudaTarget
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_authored_for_if_square_matches_torch() -> None:
+def test_for_if_square_matches_torch() -> None:
     torch.manual_seed(0)
     x = torch.randn(128, dtype=torch.float32, device="cuda")
     expected = x.square()

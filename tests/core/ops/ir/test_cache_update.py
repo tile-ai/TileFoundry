@@ -66,7 +66,7 @@ def _run(cur_pos, s):
     [(-1, 1, "must be >= 0"), (5, 5, "1 <= s"), (14, 4, "exceeds cache capacity")],
     ids=["neg_cur_pos", "s_over_cap", "cur_pos_plus_s_over_capacity"],
 )
-def test_cache_update_evaluate_rejects_bad_runtime(cur_pos, s, match):
+def test_cache_update_rejects_bad_runtime(cur_pos, s, match):
     with pytest.raises(EvalError, match=match):
         _run(cur_pos, s)
 

@@ -33,7 +33,7 @@ def _without_comments(source: str) -> str:
     ("fixture", "module_name", "golden", "families", "operands"),
     FIXTURES,
 )
-def test_analysis_annotates_the_printed_program_without_changing_it(
+def test_annotation_keeps_printed_program(
     fixture: Path,
     module_name: str | None,
     golden: Path,

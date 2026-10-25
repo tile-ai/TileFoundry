@@ -208,8 +208,8 @@ def _node_inputs(semantic, config):
     }
 
 
-def test_prepare_and_parity(config, raw_tensors, prepared, twins):
-    """Test prepare and parity.
+def test_prepared_checkpoint_matches_evaluator(config, raw_tensors, prepared, twins):
+    """The prepared checkpoint loads, and the twin matches the evaluator.
 
     ``prepare`` digests the checkpoint's naming and really converts, one leaf of
     the prepared store loads on its own, and the twin agrees with the evaluator node
@@ -321,7 +321,7 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
         assert "forward" not in vars(type(candidate)), name
 
 
-def test_the_decode_loop_threads_state_across_both_twins(config, twins):
+def test_decode_loop_threads_twin_state(config, twins):
     """One decode loop drives the loaded module and its runtime twin.
 
     State is held entirely by the caller and threaded functionally in and out, so
@@ -388,7 +388,7 @@ def test_the_decode_loop_threads_state_across_both_twins(config, twins):
     assert candidate_caches[0].shape[1] == seed_ctx + TWINNED_STEPS
 
 
-def test_decode_times_only_the_sampled_steps(monkeypatch):
+def test_decode_times_sampled_steps(monkeypatch):
     """The warm sample and detokenization sit outside the reported interval."""
     events = []
     timestamps = iter((10.0, 13.5))
@@ -433,7 +433,7 @@ def test_decode_times_only_the_sampled_steps(monkeypatch):
     assert decoded.prompt_steps == 1
 
 
-def test_structure_mismatch_rejected(config, twins):
+def test_runtime_module_rejects_mismatch(config, twins):
     """``@runtime_module`` rejects a missing, extra, or mismatched kernel/child at decoration time.
 
     ``@runtime_module`` rejects a missing, extra, or mismatched kernel/child

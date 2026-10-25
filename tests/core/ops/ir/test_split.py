@@ -31,7 +31,7 @@ from tilefoundry.ir.types.shard_layout import shard_layout_local_shape
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 
-def test_split_rebuilds_plain_and_sharded_result_layouts():
+def test_split_rebuilds_result_layouts():
     plain = make_tensor_type((16, 8), layout=Layout(shape=(16, 8), strides=(8, 1)))
     plain_parts = infer_call(Split(axis=0, num_splits=4), plain).fields
     assert all((part.layout == Layout(shape=(4, 8), strides=(8, 1)) for part in plain_parts))
@@ -49,14 +49,14 @@ def test_split_rebuilds_plain_and_sharded_result_layouts():
     )
 
 
-def test_split_evaluates_to_equal_tuple_fields() -> None:
+def test_split_evaluates_equal_fields() -> None:
     source = torch.arange(24, dtype=torch.float32).reshape(4, 6)
     expected = tuple(torch.chunk(source, 3, dim=1))
     check_op_case(OpCase("three_columns", Split(axis=1, num_splits=3), (source,), value=expected))
     assert torch.equal(torch.cat(expected, dim=1), source)
 
 
-def test_split_values_carry_their_exact_inferred_field_types() -> None:
+def test_split_values_carry_field_types() -> None:
     source_type = make_shard_tensor_type(
         (8, 4),
         dtype=DType.f32,

@@ -43,7 +43,7 @@ def _cost(owner) -> tuple[int, int, int, int]:
     )
 
 
-def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
+def test_mesh_scope_multiplies_unit_cost() -> None:
     NoScope = load_authored_ir(f"{ANALYSIS / 'add_outside_mesh_scope.py'}:NoScope")
     WithScope = load_authored_ir(f"{ANALYSIS / 'add_sharded_in_mesh_scope.py'}:WithScope")
     UnshardedInScope = load_authored_ir(
@@ -54,7 +54,7 @@ def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
     assert _cost(UnshardedInScope) == (1024, 128, 4096, 1024)
 
 
-def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
+def test_region_calls_priced_per_position() -> None:
     """Stepping into occurrences preserves repetition and counts the escaped value once."""
     region_boundaries = Path(__file__).parents[1] / "fixtures/placed/region_boundaries.py"
     RegionBoundaries = load_authored_ir(f"{region_boundaries}:RegionBoundaries")

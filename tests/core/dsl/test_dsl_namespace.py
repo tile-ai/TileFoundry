@@ -23,7 +23,7 @@ def _clean_schema_registry():
     _REGISTRY.update(snapshot)
 
 
-def test_a_dialect_namespace_resolves_only_its_own_ops() -> None:
+def test_dialect_resolves_own_ops() -> None:
     """``tf`` and ``T`` are two dialects behind one ``__getattr__``.
 
     ``tf`` and ``T`` are two dialects behind one ``__getattr__``. A name

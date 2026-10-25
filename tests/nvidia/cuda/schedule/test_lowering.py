@@ -123,7 +123,7 @@ def _returned_view(storage, chain=False):
     )
 
 
-def test_schedule_finalize_json_carries_the_same_source(
+def test_finalize_json_carries_source(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
@@ -136,7 +136,7 @@ def test_schedule_finalize_json_carries_the_same_source(
     verify_prim_function(entry_function(reload(payload["source"], "WGMMA_A_K_MAJOR")))
 
 
-def test_lowering_reports_smem_placement_above_capacity(
+def test_lowering_reports_smem_overflow(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     four_stage = VARIANTS / "four_stage_gemm.py"
@@ -151,7 +151,7 @@ def test_lowering_reports_smem_placement_above_capacity(
     verify_prim_function(entry_function(load_authored_ir(str(out))))
 
 
-def test_lowering_rejects_instruction_without_access_relation(
+def test_lowering_rejects_missing_access_relation(
     monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source, _module, result = _m1_analysis()
@@ -168,7 +168,7 @@ def test_lowering_rejects_instruction_without_access_relation(
     _assert_cli_lowering_error(source, "states no access relations", tmp_path, capsys)
 
 
-def test_lowering_rejects_nonidentity_inverse_for_a_written_return():
+def test_lowering_rejects_written_return_window():
     module = load_authored_ir(str(FIXTURES / "diagnostics" / "lowering_written_return_window.py"))
     with pytest.raises(
         lowering_module.LoweringError, match="requires a non-identity inverse relation"
@@ -290,13 +290,13 @@ class ComposedRankView(LoweringCase):
 
 
 @case
-class ComposedRankFrom0(ComposedRankView):
-    path: Path = VARIANTS / "composed_rank_0.py"
+class ComposedRankLeftHalf(ComposedRankView):
+    path: Path = VARIANTS / "composed_rank_left_half.py"
 
 
 @case
-class ComposedRankFrom64(ComposedRankView):
-    path: Path = VARIANTS / "composed_rank_64.py"
+class ComposedRankRightHalf(ComposedRankView):
+    path: Path = VARIANTS / "composed_rank_right_half.py"
     offset: int = 4096
 
 
@@ -321,22 +321,22 @@ class ComposedOuterReshape(LoweringCase):
 
 
 @case
-class ComposedOuter256From0(ComposedOuterReshape):
-    path: Path = VARIANTS / "composed_outer_256_0.py"
+class ComposedOuterFullWidth(ComposedOuterReshape):
+    path: Path = VARIANTS / "composed_outer_full_width.py"
     modes: tuple = (16, 8, (4, 4), 16)
     strides: tuple = (512, 64, (8192, 16), 1)
 
 
 @case
-class ComposedOuter32From0(ComposedOuterReshape):
-    path: Path = VARIANTS / "composed_outer_32_0.py"
+class ComposedOuterWithinGroup(ComposedOuterReshape):
+    path: Path = VARIANTS / "composed_outer_within_group.py"
     modes: tuple = (16, 8, 2, 16)
     strides: tuple = (512, 64, 16, 1)
 
 
 @case
-class ComposedOuter128From128(ComposedOuterReshape):
-    path: Path = VARIANTS / "composed_outer_128_128.py"
+class ComposedOuterRightHalf(ComposedOuterReshape):
+    path: Path = VARIANTS / "composed_outer_right_half.py"
     modes: tuple = (16, 8, (2, 4), 16)
     strides: tuple = (512, 64, (8192, 16), 1)
     offset: int = 16384
@@ -352,7 +352,7 @@ class ModularWindow(LoweringCase):
 
 
 @pytest.mark.parametrize("coordinate_division", [False, True])
-def test_view_strides_distinguish_coordinate_and_parameter_divisions(coordinate_division):
+def test_view_strides_distinguish_divisions(coordinate_division):
     source = Var("x", type=TensorType((64,), DType.f32, Layout((64,), (1,)), StorageKind.GMEM))
     desired = replace(source.type, shape=(8,), layout=Layout((8,), (1,)))
     relation = AccessRelation(isl.map("{ [i] -> [floor(i/2)] : 0 <= i < 8 }"))
@@ -372,7 +372,7 @@ def test_view_strides_distinguish_coordinate_and_parameter_divisions(coordinate_
         assert view.type.layout == Layout((8,), (1,))
 
 
-def test_lowering_rejects_addressable_result_without_offsets(
+def test_lowering_rejects_offsetless_result(
     monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     source, _module, result = _m1_analysis()
@@ -426,7 +426,7 @@ def test_lowering_rejects_unscheduled_gmem_cast(
     )
 
 
-def test_shared_projection_rejects_partial_atom_tiles() -> None:
+def test_projection_rejects_partial_atom_tiles() -> None:
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/wgmma_repeat_along_k.py"
     module = load_authored_ir(str(source))
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
@@ -449,7 +449,7 @@ def test_shared_projection_rejects_partial_atom_tiles() -> None:
 
 
 @pytest.mark.parametrize("failure", ("leftmost", "factor"))
-def test_grouped_projection_names_incompatible_repeat_mode(failure):
+def test_projection_names_bad_repeat_mode(failure):
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/wgmma_n16_within_warpgroup_share.py"
     module = load_authored_ir(str(source))
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
@@ -481,7 +481,7 @@ def test_grouped_projection_names_incompatible_repeat_mode(failure):
 @pytest.mark.parametrize(
     ("name", "issues"), (("wgmma_repeat_along_n_order", 4), ("wgmma_k_slices_of_wide_run", 2))
 )
-def test_lowering_writes_static_issues_without_readmitting(name, issues, monkeypatch):
+def test_lowering_issues_statically_without_readmission(name, issues, monkeypatch):
     source = Path(__file__).parents[1] / f"fixtures/schedule/hir/{name}.py"
     module = load_authored_ir(str(source))
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
@@ -511,7 +511,7 @@ def test_lowering_writes_static_issues_without_readmitting(name, issues, monkeyp
 
 @pytest.mark.parametrize("storage", [StorageKind.GMEM, StorageKind.SMEM])
 @pytest.mark.parametrize("chain", [False, True])
-def test_a_returned_view_passes_its_analyzed_storage_to_the_callee(storage, chain):
+def test_returned_view_passes_storage(storage, chain):
     lowered = _finalized(_returned_view(storage, chain))
     verify_module(lowered)
     function = lowered.entry_function()
@@ -533,11 +533,13 @@ def test_a_returned_view_passes_its_analyzed_storage_to_the_callee(storage, chai
 
 @pytest.mark.parametrize("read_old", [False, True])
 @pytest.mark.parametrize("reshape", [False, True])
-def test_inplace_output_reuses_storage_or_refuses_a_nonidentity_inverse(read_old, reshape):
-    source = INPLACE
-    if read_old or reshape:
-        variant = f"inplace_read_{int(read_old)}_reshape_{int(reshape)}.py"
-        source = FIXTURES / "diagnostics" / f"lowering_{variant}" if reshape else VARIANTS / variant
+def test_inplace_output_reuses_or_refuses(read_old, reshape):
+    source = {
+        (False, False): INPLACE,
+        (True, False): VARIANTS / "inplace_reads_old_output.py",
+        (False, True): FIXTURES / "diagnostics" / "lowering_reshaped_retained_update.py",
+        (True, True): FIXTURES / "diagnostics" / "lowering_reshaped_update_reads_old_output.py",
+    }[read_old, reshape]
     if reshape:
         with pytest.raises(
             lowering_module.LoweringError, match="requires a non-identity inverse relation"
@@ -603,10 +605,15 @@ class BroadcastStages(LoweringCase):
 
 @pytest.mark.parametrize("later_use", [None, "callee", "caller"])
 @pytest.mark.parametrize("nested", [False, True])
-def test_insert_slice_and_retained_call_keep_parameter_storage(later_use, nested):
-    path = INPLACE
-    if later_use is not None or nested:
-        path = VARIANTS / f"retained_{later_use}_{int(nested)}.py"
+def test_retained_insert_keeps_parameter_storage(later_use, nested):
+    path = {
+        (None, False): INPLACE,
+        (None, True): VARIANTS / "retained_update_via_relay.py",
+        ("callee", False): VARIANTS / "retained_callee_reuses_output.py",
+        ("callee", True): VARIANTS / "retained_callee_reuses_output_via_relay.py",
+        ("caller", False): VARIANTS / "retained_caller_returns_output.py",
+        ("caller", True): VARIANTS / "retained_caller_returns_output_via_relay.py",
+    }[later_use, nested]
     module = load_authored_ir(str(path))
     result = analyze(*check_program(module, module.entry_function()), analysis="memory")
     call = next(

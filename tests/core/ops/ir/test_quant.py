@@ -85,7 +85,7 @@ def test_quant_matches_exact_fp8e4m3_reference(source) -> None:
         torch.testing.assert_close(scale, torch.ones_like(scale), atol=0, rtol=0)
 
 
-def test_quant_plain_layouts_describe_each_result() -> None:
+def test_quant_layouts_describe_results() -> None:
     source = make_tensor_type((2, 256), _BF, layout=Layout(shape=(2, 256), strides=(256, 1)))
     quantized, scale = infer_call(Quant(group=128), source).fields
     assert quantized.layout == Layout(shape=(2, 256), strides=(256, 1))
@@ -115,7 +115,7 @@ def test_quant_propagates_representable_sharding(shape, split_axis, expected_sca
         assert math.prod(field.layout.layout.shape) == math.prod(field.shape)
 
 
-def test_quant_accepts_factorized_contiguous_whole_groups() -> None:
+def test_quant_accepts_factorized_groups() -> None:
     source = raw_shard_tensor_type(
         (2, 1024),
         (2, 256, 4),
@@ -130,7 +130,7 @@ def test_quant_accepts_factorized_contiguous_whole_groups() -> None:
     assert split_target_axes(scale.layout, scale.shape) == (1,)
 
 
-def test_quant_drops_fully_broadcast_mesh_ownership() -> None:
+def test_quant_drops_broadcast_ownership() -> None:
     source = make_shard_tensor_type(
         (2, 256),
         _BF,
@@ -145,7 +145,7 @@ def test_quant_drops_fully_broadcast_mesh_ownership() -> None:
 _SYMBOLIC_LAST = DimVar("quant_symbolic_last", 1, 1024)
 
 
-def test_quant_symbolic_scale_extent_and_runtime_divisibility() -> None:
+def test_quant_symbolic_scale_checks_divisibility() -> None:
     function, result_type = _quant_function((2, _SYMBOLIC_LAST), 4)
     scale_last = result_type.fields[1].shape[-1]
     assert isinstance(scale_last, Call)

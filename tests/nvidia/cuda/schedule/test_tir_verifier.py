@@ -36,7 +36,7 @@ from tilefoundry_nvidia import CudaTarget
         ("recursion", "recursion not allowed"),
     ],
 )
-def test_verifier_rejects_malformed_retained_tir_calls(wrong, refused):
+def test_verifier_rejects_malformed_tir_calls(wrong, refused):
     param = Var("x", type=TensorType.scalar(DType.f32))
     callee = PrimFunction("callee", (param,), Sequential(()), target=CudaTarget("nvidia.h200_sxm"))
     args = () if wrong == "count" else (Constant(0, type=TensorType.scalar(DType.i32)),)
@@ -47,7 +47,7 @@ def test_verifier_rejects_malformed_retained_tir_calls(wrong, refused):
         verify_prim_function(caller, module_fns=(caller, callee))
 
 
-def test_verifier_rejects_non_integer_indexed_tir_target():
+def test_verifier_rejects_noninteger_slot_index():
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py"
     lowered = _finalized(load_authored_ir(str(source)))
     slot = lowered.children["layers"]

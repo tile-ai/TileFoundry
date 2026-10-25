@@ -9,7 +9,7 @@ MODEL = "qwen2_5_1_5b"
 CASES = contract.model_cases(MODEL)
 
 
-def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, comparison_cache) -> None:
+def test_decode_step_returns_cache_entry(tf, shipped_source, comparison_cache) -> None:
     """One decode step of one layer, and the state the step hands back.
 
     The whole layer is compared with ``Qwen2DecoderLayer.forward``. Returned cache

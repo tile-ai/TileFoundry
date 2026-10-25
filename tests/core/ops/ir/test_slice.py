@@ -63,7 +63,7 @@ def _windowed_shard(source, shape, strides) -> ShardLayout:
     )
 
 
-def test_reversed_static_window_is_an_empty_slice() -> None:
+def test_reversed_window_slices_empty() -> None:
     scalar = make_tensor_type((), DType.i64)
     size = normalize_dim(
         slice_size(
@@ -78,7 +78,7 @@ def test_reversed_static_window_is_an_empty_slice() -> None:
     assert actual.shape == (0, 4)
 
 
-def test_slice_of_unbound_axis_preserves_the_shard_layout():
+def test_slice_unbound_axis_keeps_shard():
     source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
     actual = _slice_type(
         source,
@@ -90,7 +90,7 @@ def test_slice_of_unbound_axis_preserves_the_shard_layout():
     assert actual.layout == _windowed_shard(source, (4, 4, 16), (128, 32, 1))
 
 
-def test_slice_step_scales_the_unbound_layout_stride():
+def test_slice_step_scales_stride():
     source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
 
     actual = _slice_type(source, (0, 0), (16, 8), (1, 2))
@@ -98,7 +98,7 @@ def test_slice_step_scales_the_unbound_layout_stride():
     assert actual.layout == _windowed_shard(source, (4, 4, 8), (128, 32, 2))
 
 
-def test_slice_step_composes_with_a_symbolic_layout_stride():
+def test_slice_step_scales_symbolic_stride():
     stride_dim = DimVar("slice_stride", 1, 64)
     source = make_tensor_type(
         (16, 32),
@@ -120,7 +120,7 @@ def test_slice_step_composes_with_a_symbolic_layout_stride():
     assert resolve_dim(stride, {"slice_stride": 3}) == 12
 
 
-def test_slice_of_split_axis_is_rejected():
+def test_slice_split_axis_rejected():
     source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
 
     with pytest.raises(
@@ -133,7 +133,7 @@ def test_slice_of_split_axis_is_rejected():
         _slice_type(source, (0, 0), (8, 32), (1, 1))
 
 
-def test_runtime_window_preserves_distribution_without_claiming_an_offset():
+def test_runtime_window_keeps_distribution():
     source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
     start = Var(type=make_tensor_type((), DType.i64), name="start")
 
@@ -142,7 +142,7 @@ def test_runtime_window_preserves_distribution_without_claiming_an_offset():
     assert actual.layout == _windowed_shard(source, (4, 4, 16), (128, 32, 1))
 
 
-def test_runtime_window_before_a_split_axis_preserves_the_split_target():
+def test_runtime_window_keeps_split_target():
     seq = DimVar("slice_seq", 1, 4096)
     mesh = Mesh((Topology("gpu", 16),), Layout((16,), (1,)), ("g",))
     source = make_shard_tensor_type((1, seq, 16, 128), mesh=mesh, attrs=(Split(2),))
@@ -157,7 +157,7 @@ def test_runtime_window_before_a_split_axis_preserves_the_split_target():
     )
 
 
-def test_fused_gqa_qkv_slices_keep_distribution_visible_to_consumers():
+def test_qkv_slices_keep_distribution():
     """32 Q / 8 KV heads use group slices 4/1/1 and retain HKV sharding."""
     mesh = Mesh((Topology("gpu", 8),), Layout((8,), (1,)), ("g",))
     source = make_tensor_type(
@@ -209,7 +209,7 @@ def test_fused_gqa_qkv_slices_keep_distribution_visible_to_consumers():
     assert isinstance(kv_used.type.layout, ShardLayout)
 
 
-def test_slice_cost_charges_coordinates_but_not_the_view():
+def test_slice_charges_only_coordinates():
     call = _slice_call(
         make_tensor_type((64, 8, 6, 16), _F),
         (0, 0, 4, 0),
@@ -227,7 +227,7 @@ def test_slice_cost_charges_coordinates_but_not_the_view():
     )
 
 
-def test_nested_static_slices_keep_sharded_window_layouts():
+def test_nested_slices_keep_shard_window():
     source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
     first = _slice_type(source, (0, 4), (16, 16), (1, 1))
 
@@ -236,7 +236,7 @@ def test_nested_static_slices_keep_sharded_window_layouts():
     assert second.layout == _windowed_shard(source, (4, 4, 8), (128, 32, 1))
 
 
-def test_plain_row_and_column_slices_derive_subbox_layouts():
+def test_row_column_slices_derive_layouts():
     source = make_tensor_type(
         (1024, 2048),
         _F,
@@ -250,7 +250,7 @@ def test_plain_row_and_column_slices_derive_subbox_layouts():
     assert column.layout == Layout(shape=(1024, 512), strides=(2048, 1))
 
 
-def test_runtime_start_slice_preserves_static_strides():
+def test_runtime_start_keeps_static_strides():
     start = Var(type=make_tensor_type((), DType.i64), name="start")
 
     sliced = _slice_type(
@@ -283,7 +283,7 @@ def _moved_reference(gu):
     return torch.cat([gu[_HALF:, :], torch.zeros_like(gu[_HALF:, :])])
 
 
-def test_a_moved_window_reads_the_far_half_of_one_tensor():
+def test_moved_window_reads_far_half():
     gu = torch.arange(2 * _HALF * _COLS, dtype=torch.float32).reshape(2 * _HALF, _COLS)
 
     _MovedWindow = load_authored_ir(str(MOVED_WINDOW))

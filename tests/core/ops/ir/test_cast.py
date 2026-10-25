@@ -60,7 +60,7 @@ ROUNDTRIPS = [
 
 
 @pytest.mark.parametrize(("io_dtype", "mid_dtype", "io_torch", "mid_torch", "values"), ROUNDTRIPS)
-def test_a_double_roundtrip_matches_torch(io_dtype, mid_dtype, io_torch, mid_torch, values):
+def test_cast_roundtrip_matches_torch(io_dtype, mid_dtype, io_torch, mid_torch, values):
     x = torch.tensor(values, dtype=io_torch)
 
     function = load_authored_ir(str(FIXTURES / f"logical/cast_{mid_dtype}.py")).entry_function()
@@ -69,7 +69,7 @@ def test_a_double_roundtrip_matches_torch(io_dtype, mid_dtype, io_torch, mid_tor
     torch.testing.assert_close(out, x.to(mid_torch).to(io_torch))
 
 
-def test_cast_f4e2m1_has_no_evaluator_support():
+def test_cast_f4e2m1_evaluation_refused():
     fn = load_authored_ir(str(FIXTURES / "diagnostics/evaluator_cast_f4e2m1.py")).entry_function()
     with pytest.raises(EvalError, match=r"unsupported dtype.*f4e2m1"):
         evaluate(fn, torch.randn(4))

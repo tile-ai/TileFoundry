@@ -39,7 +39,7 @@ def _module(target: Target) -> tuple[Module, object]:
     return Module("rmsnorm", (function,), function.name, target=target), function
 
 
-def test_analyze_orders_the_union_of_target_selected_dependency_roots_once() -> None:
+def test_analyze_runs_dependency_union_once() -> None:
     ran: list[tuple[str, int]] = []
 
     def service(selector: str, requires: tuple[str, ...] = ()) -> Analyzer:
@@ -67,7 +67,7 @@ def test_analyze_orders_the_union_of_target_selected_dependency_roots_once() -> 
     assert {function for _selector, function in ran} == {id(result.function)}
 
 
-def test_analyze_reports_missing_root_and_missing_dependency_from_the_target() -> None:
+def test_analyze_reports_missing_analyzers() -> None:
     module, function = _module(_AnalysisTarget())
     with pytest.raises(AnalysisError, match="no analyzer for 'missing'"):
         analyze(*check_program(module, function), analysis="missing")
@@ -95,7 +95,7 @@ def test_analyze_reports_missing_root_and_missing_dependency_from_the_target() -
         analyze(*check_program(module, function), analysis="needs-facts")
 
 
-def test_analyze_detects_cycles_declared_by_target_services() -> None:
+def test_analyze_detects_dependency_cycles() -> None:
     target = _AnalysisTarget(
         (
             Analyzer("a", lambda *_args: None, requires=("b",)),
@@ -108,7 +108,7 @@ def test_analyze_detects_cycles_declared_by_target_services() -> None:
         analyze(*check_program(module, function), analysis="a")
 
 
-def test_analyze_keeps_a_provider_value_error_and_rejects_over_limit_topology() -> None:
+def test_analyze_raises_provider_value_errors() -> None:
     @dataclass(frozen=True)
     class _BrokenTarget(Target):
         name: ClassVar[str] = "test.broken-analysis"

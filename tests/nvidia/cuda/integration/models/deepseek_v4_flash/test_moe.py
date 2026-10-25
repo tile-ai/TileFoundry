@@ -38,7 +38,7 @@ N_ACT = REAL.n_act
 N_ROUTED = REAL.n_routed
 
 
-def test_root_helpers_and_constraints_keep_real_model_contract() -> None:
+def test_moe_root_keeps_model_shapes() -> None:
     deepseek_v4_flash_moe = deepseek_v4_flash_module.lookup("deepseek_v4_flash_moe")
 
     assert tuple(
@@ -70,7 +70,7 @@ def test_root_helpers_and_constraints_keep_real_model_contract() -> None:
     assert combined.bindings == (("cta", Broadcast()),)
 
 
-def test_routed_path_is_ordinary_batched_dataflow() -> None:
+def test_routed_path_is_batched_dataflow() -> None:
     deepseek_v4_flash_moe = deepseek_v4_flash_module.lookup("deepseek_v4_flash_moe")
     moe_experts_core = deepseek_v4_flash_module.lookup("moe_experts_core")
     moe_topk = deepseek_v4_flash_module.lookup("moe_topk")
@@ -108,7 +108,7 @@ def test_routed_path_is_ordinary_batched_dataflow() -> None:
     )
 
 
-def test_root_printer_keeps_explicit_input_contracts() -> None:
+def test_printer_keeps_input_contracts() -> None:
     printed = as_script(deepseek_v4_flash_module)
     assert 'entry="deepseek_v4_flash_moe"' in printed
     assert f"routed_experts: where(layout=(_, 6 @ cta, {DIM}))" in printed

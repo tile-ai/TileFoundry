@@ -9,7 +9,7 @@ from tests.core.installed._analyze import check_usage_error
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 
-def test_usage_errors_print_usage_before_error(tf) -> None:
+def test_analyze_usage_error_prints_usage(tf) -> None:
     done = tf("analyze")
     check_usage_error(done)
     assert "tilefoundry analyze: error: the following arguments are required: SOURCE" in done.stderr
@@ -17,7 +17,7 @@ def test_usage_errors_print_usage_before_error(tf) -> None:
     assert "model.py[:Module[.child_module...][.function]]" not in done.stderr
 
 
-def test_analyze_names_the_source_directory_when_a_sibling_is_missing(tf, tmp_path) -> None:
+def test_analyze_names_missing_sibling_directory(tf, tmp_path) -> None:
     source = FIXTURES / "cli/missing_sibling/runtime_model.py"
 
     done = tf("analyze", str(source), str(tmp_path / "missing.py"), "--memory")
@@ -27,7 +27,7 @@ def test_analyze_names_the_source_directory_when_a_sibling_is_missing(tf, tmp_pa
     assert "a sibling module must sit in that directory" in done.stderr
 
 
-def test_the_cli_reports_a_duplicate_dimension_and_analyses_nothing(tf, tmp_path) -> None:
+def test_analyze_refuses_duplicate_dim(tf, tmp_path) -> None:
     done = tf(
         "analyze",
         str(FIXTURES / "cli/empty.py"),

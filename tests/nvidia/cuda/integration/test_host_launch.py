@@ -30,8 +30,8 @@ def _dynamic_cta_module(*, explicit_host: bool) -> Module:
 
 
 @pytest.mark.skip(reason=_DYNAMIC_CTA_LOWERING_WAIT)
-def test_dynamic_cta_two_shapes_one_compile() -> None:
-    """Test dynamic cta two shapes one compile.
+def test_dynamic_cta_runs_two_shapes() -> None:
+    """One compiled dynamic-CTA kernel runs at two shapes.
 
     One compiled artifact launches the dynamic-CTA kernel at two different
     ``Ntile`` shapes via the host-computed grid; both match torch with no

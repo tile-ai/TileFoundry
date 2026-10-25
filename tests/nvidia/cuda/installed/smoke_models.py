@@ -20,7 +20,7 @@ def _listed_names(output: str) -> set[str]:
     return {line.split(maxsplit=1)[0] for line in output.splitlines()[1:]}
 
 
-def test_models_lists_every_shipped_model_and_ranks_none(tf) -> None:
+def test_models_lists_shipped_models(tf) -> None:
     """The listing says what ships and how big each forest is, and grades nothing."""
     done = tf("models")
     assert done.returncode == 0, done.stderr
@@ -33,7 +33,7 @@ def test_models_lists_every_shipped_model_and_ranks_none(tf) -> None:
         assert absent not in listed
 
 
-def test_models_renders_the_whole_forest_with_leaf_modules_marked(tf) -> None:
+def test_models_renders_marked_forest(tf) -> None:
     done = tf("models", "qwen3_1_7b")
     assert done.returncode == 0, done.stderr
     forest = done.stdout
@@ -46,7 +46,7 @@ def test_models_renders_the_whole_forest_with_leaf_modules_marked(tf) -> None:
     assert 'input_rms_norm(hidden: Tensor[(1, 1, 2048), "bf16"]' in forest
 
 
-def test_models_source_names_the_shipped_directory_and_its_files(
+def test_models_source_names_shipped_files(
     tf, shipped, installation, tmp_path
 ) -> None:
     done = tf("models", "qwen3_1_7b", "--source")
@@ -137,7 +137,7 @@ def test_models_source_names_the_shipped_directory_and_its_files(
     "name",
     ("qwen3_1_7b", "qwen2_5_1_5b", "gemma2_2b", "minicpm3_4b", "qwen3_5_35b_a3b"),
 )
-def test_models_source_lists_each_shipped_hf_alias(tf, capsys, name) -> None:
+def test_models_source_lists_hf_alias(tf, capsys, name) -> None:
     """A raw-checkpoint model ships its own table in stable filename order."""
     done = tf("models", name, "--source")
     assert done.returncode == 0, done.stderr
@@ -154,7 +154,7 @@ def test_models_source_lists_each_shipped_hf_alias(tf, capsys, name) -> None:
     assert capsys.readouterr().out.splitlines()[1:] == lines[1:]
 
 
-def test_models_source_reads_target_resources_without_importing_files(
+def test_models_source_reads_target_resources(
     tmp_path, monkeypatch, capsys
 ) -> None:
     root = tmp_path / "target"
@@ -179,7 +179,7 @@ def test_models_source_reads_target_resources_without_importing_files(
     assert "config.json  -" in output
 
 
-def test_models_rejects_a_name_the_catalog_does_not_have(tf) -> None:
+def test_models_rejects_unknown_name(tf) -> None:
     done = tf("models", "nope")
     assert done.returncode == 1
     assert "no model named 'nope'" in done.stderr

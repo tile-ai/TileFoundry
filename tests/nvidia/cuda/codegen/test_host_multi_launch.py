@@ -79,7 +79,7 @@ def _source(devices, launches, params) -> str:
     return host.target.resolve(LinkableModule, mod, (host,), host.target.resolve(EmitContext, view)).source
 
 
-def test_two_launches_keep_order_and_each_block_size() -> None:
+def test_launches_keep_order_and_blocks() -> None:
     a, b = _tensor("a"), _tensor("b")
     first, second = _device("first"), _device("second")
     source = _source(
@@ -96,7 +96,7 @@ def test_two_launches_keep_order_and_each_block_size() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_two_launches_compile_and_write_both_outputs() -> None:
+def test_two_launches_write_outputs() -> None:
     """Both compiled objects retain their callable and library after registration override."""
     _TwoCopyLaunches = load_authored_ir(f"{CODEGEN / 'two_copy_launches.py'}:_TwoCopyLaunches")
     torch.manual_seed(0)
@@ -117,21 +117,21 @@ def test_two_launches_compile_and_write_both_outputs() -> None:
         torch.testing.assert_close(out1, x1, rtol=0, atol=0)
 
 
-def test_same_entry_parameter_may_feed_two_launches() -> None:
+def test_entry_parameter_feeds_two_launches() -> None:
     a = _tensor("a")
     first, second = _device("first"), _device("second")
     source = _source((first, second), (_launch(first, a), _launch(second, a)), (a,))
     assert source.count("a.data_ptr()") == 2
 
 
-def test_a_launch_arg_the_entry_does_not_declare_is_rejected() -> None:
+def test_undeclared_launch_arg_rejected() -> None:
     device = _device("device")
     outside = _tensor("outside")
     with pytest.raises(ValueError, match="is not a parameter of entry"):
         _source((device,), (_launch(device, outside),), (_tensor("a"),))
 
 
-def test_same_device_function_can_be_launched_twice() -> None:
+def test_device_function_launches_twice() -> None:
     a = _tensor("a")
     device = _device("device")
     source = _source((device,), (_launch(device, a, block=32), _launch(device, a, block=64)), (a,))
@@ -141,7 +141,7 @@ def test_same_device_function_can_be_launched_twice() -> None:
     assert source.count(f"{symbol}(a.data_ptr()") == 2
 
 
-def test_a_parameter_named_like_an_extent_is_still_a_parameter() -> None:
+def test_extent_like_name_stays_parameter() -> None:
     """An open axis is stated by the type, so no name is reserved for one."""
     a, looks_hidden = _tensor("a"), _tensor("a_shape_0")
     device = PrimFunction(

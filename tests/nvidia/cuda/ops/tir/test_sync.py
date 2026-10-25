@@ -31,7 +31,7 @@ def test_sync_kernel_runs_and_squares() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_warp_slices_exchange_every_participants_value() -> None:
+def test_warp_slices_exchange_values() -> None:
     one = torch.arange(32, dtype=torch.float32, device="cuda").reshape(1, 32)
     two = torch.arange(64, dtype=torch.float32, device="cuda").reshape(2, 32) + 1000
     one_out = torch.full((1, 32), -1.0, device="cuda")

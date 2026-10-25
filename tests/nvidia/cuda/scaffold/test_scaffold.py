@@ -17,7 +17,7 @@ CASES = ("hir_moe", "hir_layers", "tir_launches", "tir_dispatch")
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize("fixture", CASES)
-def test_skeleton_builds_and_every_export_is_callable(fixture, tmp_path):
+def test_scaffold_skeleton_builds_and_runs(fixture, tmp_path):
     source = f"{FIXTURES / (fixture + '.py')}:Root"
     project = tmp_path / "project"
     assert cli_main(["scaffold", source, str(project)]) == 0
@@ -66,7 +66,7 @@ def test_codegen_reports_unsupported_scaffold_targets(target, tmp_path, capsys):
 
 
 @pytest.mark.parametrize("fixture", ("hir_moe", "hir_layers"))
-def test_full_refuses_hir(fixture):
+def test_scaffold_full_refuses_hir(fixture):
     module = load_authored_ir(f"{FIXTURES / (fixture + '.py')}:Root")
     with pytest.raises(ValueError, match='emit="skeleton" or lowering to TIR'):
         tilefoundry.compile(module)

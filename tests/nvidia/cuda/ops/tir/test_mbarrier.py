@@ -46,18 +46,18 @@ def _pf(op, *types) -> PrimFunction:
     )
 
 
-def test_init_accepts_a_shared_barrier_and_a_positive_count() -> None:
+def test_mbarrier_init_accepts_shared_barrier() -> None:
     verify_prim_function(_pf(MBarrierInit(arrive_count=1), _SMEM_BAR))
 
 
 @pytest.mark.parametrize("count", [0, -1])
-def test_init_refuses_a_non_positive_arrive_count(count: int) -> None:
+def test_mbarrier_init_refuses_nonpositive_count(count: int) -> None:
     """A non-positive arrive count is refused."""
     with pytest.raises(VerifyError, match="arrive_count: could not satisfy arrive_count > 0"):
         verify_prim_function(_pf(MBarrierInit(arrive_count=count), _SMEM_BAR))
 
 
-def test_invalidate_accepts_a_shared_barrier() -> None:
+def test_mbarrier_invalidate_accepts_shared_barrier() -> None:
     verify_prim_function(_pf(MBarrierInvalidate(), _SMEM_BAR))
 
 
@@ -70,21 +70,21 @@ def test_invalidate_accepts_a_shared_barrier() -> None:
         pytest.param(_pf(MBarrierInvalidate(), _GMEM_BAR), id="invalidate"),
     ],
 )
-def test_every_entry_refuses_a_barrier_outside_shared_memory(stated) -> None:
+def test_mbarrier_refuses_gmem_barrier(stated) -> None:
     """A barrier outside shared memory is refused."""
     with pytest.raises(VerifyError, match="barrier: gmem does not match smem"):
         verify_prim_function(stated)
 
 
-def test_arrive_expect_tx_accepts_a_positive_byte_count() -> None:
+def test_expect_tx_accepts_positive_bytes() -> None:
     verify_prim_function(_pf(MBarrierArriveExpectTx(tx_bytes=4096), _SMEM_BAR))
 
 
 @pytest.mark.parametrize("tx", [0, -16])
-def test_arrive_expect_tx_refuses_a_non_positive_byte_count(tx: int) -> None:
+def test_expect_tx_refuses_nonpositive_bytes(tx: int) -> None:
     with pytest.raises(VerifyError, match="tx_bytes: could not satisfy tx_bytes > 0"):
         verify_prim_function(_pf(MBarrierArriveExpectTx(tx_bytes=tx), _SMEM_BAR))
 
 
-def test_wait_parity_accepts_a_shared_barrier_and_a_phase() -> None:
+def test_wait_parity_accepts_shared_barrier() -> None:
     verify_prim_function(_pf(MBarrierWaitParity(), _SMEM_BAR, _PHASE))

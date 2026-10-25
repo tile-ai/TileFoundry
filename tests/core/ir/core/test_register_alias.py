@@ -34,7 +34,7 @@ def clean_schema_registry():
     _REGISTRY.update(snapshot)
 
 
-def test_kinded_alias_registers_one_schema_no_legacy_op() -> None:
+def test_kinded_alias_registers_one_schema() -> None:
     """A kinded sugar name resolves to exactly one schema.
 
     A kinded sugar name resolves to exactly one schema — the alias — with

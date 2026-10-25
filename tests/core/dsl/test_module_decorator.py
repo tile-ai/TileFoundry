@@ -23,8 +23,8 @@ WEIGHTED = FIXTURES / "dsl" / "weighted_modules.py"
 DIAGNOSTICS = FIXTURES / "diagnostics"
 
 
-def test_module_collects_functions_in_order_and_resolves_them_by_name():
-    """Test module collects functions in order and resolves them by name.
+def test_module_collects_functions_in_order():
+    """Collected functions keep definition order and resolve by name.
 
     Members land on the Module in definition order and each collected name
     resolves through ``lookup`` (the IR-node path — bare attribute access
@@ -40,8 +40,8 @@ def test_module_collects_functions_in_order_and_resolves_them_by_name():
         _Demo.not_a_function
 
 
-def test_attribute_access_ambiguous_name_and_real_fields():
-    """Test attribute access ambiguous name and real fields.
+def test_module_refuses_ambiguous_attribute():
+    """A duplicated function name is ambiguous; real Module fields are not.
 
     A duplicated function name is ambiguous under attribute access (raises),
     real Module fields are never intercepted, and ``lookup`` refuses ambiguous
@@ -59,7 +59,7 @@ def test_attribute_access_ambiguous_name_and_real_fields():
         mod.lookup("dup")
 
 
-def test_collects_orchestration_method_and_rejects_other_members():
+def test_module_accepts_three_member_kinds():
     """A plain Python method is the third member kind.
 
     A plain Python method is the third member kind — an orchestration method,
@@ -74,7 +74,7 @@ def test_collects_orchestration_method_and_rejects_other_members():
         load_authored_ir(str(DIAGNOSTICS / "dsl_module_constant_member.py"))
 
 
-def test_what_a_class_body_must_declare_to_be_a_module():
+def test_module_refuses_empty_body():
     """Only an empty body is refused: one function, one child, or one plain method is enough.
 
     Only an empty body is refused: one function, one child, or one plain method
@@ -97,7 +97,7 @@ def test_what_a_class_body_must_declare_to_be_a_module():
         load_authored_ir(str(DIAGNOSTICS / "dsl_module_class_call.py"))
 
 
-def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
+def test_stepless_module_reports_no_entry():
     """A bare call is answered by naming what to call.
 
     A bare call is answered by naming what to call; asking for the entry is
@@ -115,7 +115,7 @@ def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
     assert _NoStep.lookup("helper").name == "helper"
 
 
-def test_the_runner_on_an_authored_module_takes_the_weights_too():
+def test_module_runner_takes_weights():
     """A Module's callable takes every declared param, a ``ConstTensor`` one included.
 
     A Module's callable takes every declared param, a ``ConstTensor`` one
@@ -151,7 +151,7 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     )
 
 
-def test_one_shared_child_binds_once_per_owner():
+def test_shared_child_binds_per_owner():
     """Two owners over one child IR read their own subtrees rather than the last one loaded winning.
 
     Two owners over one child IR read their own subtrees rather than the last

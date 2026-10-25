@@ -93,7 +93,7 @@ _REFUSED = [
 
 
 @pytest.mark.parametrize(("function", "capability"), _REFUSED)
-def test_an_instruction_the_architecture_lacks_is_refused_naming_its_capability(
+def test_missing_capability_refused_by_name(
     function: PrimFunction | str, capability: str
 ) -> None:
     """On sm_89 the call is refused, naming the capability it needs."""
@@ -105,7 +105,7 @@ def test_an_instruction_the_architecture_lacks_is_refused_naming_its_capability(
         _verify(function, SM89)
 
 
-def test_only_the_selected_atom_is_checked() -> None:
+def test_selected_atom_only_checked() -> None:
     """The SM80 atom is admitted on sm_89, although the same op also declares WGMMA."""
     module = retarget(load_authored_ir(MM_HANDWRITTEN), SM89)
     for function in module.functions:
@@ -132,7 +132,7 @@ class _MmaSite(StmtVisitor[None]):
             self.site = (stmt.args, self.meshes)
 
 
-def test_an_open_wgmma_atom_is_refused_on_sm89() -> None:
+def test_open_wgmma_refused_on_sm89() -> None:
     """Schedule matching names the missing capability for an atom given as a class."""
     device = next(
         fn for fn in load_authored_ir(MM_HANDWRITTEN).functions if fn.name == "mm_device"

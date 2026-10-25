@@ -35,7 +35,7 @@ def _gqa():
     return GqaOnline, GqaOnline.entry_function(), steady, constants["NUM_SPLITS"]
 
 
-def test_a_dimension_the_function_does_not_have_is_refused() -> None:
+def test_specialize_refuses_unknown_dimension() -> None:
     GqaOnline, ENTRY, STEADY, _ = _gqa()
     with pytest.raises(SpecializationError, match="no dimension named"):
         check_program(replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm")), ENTRY, dims={**STEADY, "batch": 4})[1]
@@ -66,7 +66,7 @@ class CallThroughPrototype(SpecializeCase):
             assert display_name(origin_of(rebuilt)) == expected
 
 
-def test_specialising_through_a_call_says_which_dimension_is_missing() -> None:
+def test_specialize_names_missing_callee_dimension() -> None:
     """A callee dispatching on an unbound dimension names that dimension."""
     _MissingCalleeDimension = load_authored_ir(
         f"{IR / 'missing_callee_dimension.py'}:_MissingCalleeDimension"
@@ -97,7 +97,7 @@ class NestedDispatch(SpecializeCase):
             assert residual_dims(concrete) == ()
 
 
-def test_a_specialised_function_states_extents_everywhere() -> None:
+def test_specialize_leaves_no_ranges() -> None:
     """Nothing may still be a range -- including inside the callees.
 
     Nothing may still be a range -- including inside the callees, and in the
@@ -124,7 +124,7 @@ def test_specialising_only_substitutes_dimensions() -> None:
     assert concrete.return_type.dtype == chosen.return_type.dtype
 
 
-def test_a_derived_extent_follows_the_dimension_it_derives_from() -> None:
+def test_derived_extent_follows_dimension() -> None:
     """The per-split block length is the context length over the splits.
 
     The per-split block length is the context length over the splits. It has
@@ -141,7 +141,7 @@ def test_a_derived_extent_follows_the_dimension_it_derives_from() -> None:
     assert steady_context % NUM_SPLITS == 0
 
 
-def test_the_same_request_gives_the_same_answer_every_time() -> None:
+def test_specialize_is_deterministic() -> None:
     """Rebuilding asks a type cache keyed on node identity for the types of nodes it then discards.
 
     Rebuilding asks a type cache keyed on node identity for the types of
@@ -159,7 +159,7 @@ def test_the_same_request_gives_the_same_answer_every_time() -> None:
         assert residual_dims(other) == ()
 
 
-def test_specialising_one_function_does_not_disturb_the_next() -> None:
+def test_specialize_keeps_shared_callees_clean() -> None:
     """The callees are shared.
 
     The callees are shared, so a rebuild that left state on them would show
@@ -197,7 +197,7 @@ def _reshape_targets(fn) -> list[tuple]:
     return found
 
 
-def test_a_derived_extent_reaches_the_operation_that_states_it() -> None:
+def test_derived_extent_reaches_reshape() -> None:
     """At the split strategy the block length is the context over the splits.
 
     Nothing supplies it, and it has to arrive inside the callee's own reshape.
@@ -216,7 +216,7 @@ def test_a_derived_extent_reaches_the_operation_that_states_it() -> None:
     )
 
 
-def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
+def test_specialized_function_matches_prototype() -> None:
     """The witness that shapes cannot give.
 
     The witness that shapes cannot give. Substituting an extent must not

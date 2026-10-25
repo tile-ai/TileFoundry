@@ -20,7 +20,7 @@ _CUDA = CudaTarget("nvidia.h200_sxm")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_every_crossing_round_trips_the_input_bit_for_bit() -> None:
+def test_copy_crossings_round_trip_exactly() -> None:
     """One compile behind five assertions, each naming the pair that failed."""
     CopyStorage = load_authored_ir(f"{OPS / 'copy_storage.py'}:CopyStorage")
     rm = tilefoundry.compile(CopyStorage, target=_CUDA)
@@ -78,7 +78,7 @@ def test_every_crossing_round_trips_the_input_bit_for_bit() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_a_plain_window_round_trips_through_thread_fragments() -> None:
+def test_plain_window_round_trips_fragments() -> None:
     """A copy with one plain and one sharded operand moves the instance's slice.
 
     ``local_tensor`` projects each operand through its own shard layout, so a
@@ -104,7 +104,7 @@ def test_a_plain_window_round_trips_through_thread_fragments() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_a_plain_window_enters_thread_fragments_in_row_major_order() -> None:
+def test_plain_window_enters_row_major() -> None:
     """The projection's row-major steps must not come out transposed.
 
     CuTe decodes an integer index first-mode-fastest, so composing the

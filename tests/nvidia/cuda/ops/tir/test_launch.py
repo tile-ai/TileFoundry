@@ -22,7 +22,7 @@ from tilefoundry.visitor_registry.verify import verify_module
 from tilefoundry_nvidia import CudaTarget
 
 
-def test_launch_rejects_forwarded_type_that_differs_from_device_param() -> None:
+def test_launch_rejects_forwarded_type_mismatch() -> None:
     device_type = Tensor[(8,), 'f32', None, 'gmem']
     host_type = Tensor[(8,), "f32", Layout(shape=(8,), strides=(2,)), "gmem"]
     device_arg = Var(type=device_type, name="device_arg")
@@ -54,7 +54,7 @@ _CUDA = CudaTarget("nvidia.h200_sxm")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_a_launch_the_device_refuses_raises() -> None:
+def test_refused_launch_raises() -> None:
     OverAskingLaunch = load_authored_ir(f"{OPS / 'over_asking_launch.py'}:OverAskingLaunch")
     runtime = tilefoundry.compile(OverAskingLaunch, target=_CUDA)
     with pytest.raises(RuntimeError, match=r"tilefoundry: launch of \w+ failed: "):

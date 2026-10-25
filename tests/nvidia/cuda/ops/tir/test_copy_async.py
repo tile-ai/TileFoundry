@@ -101,7 +101,7 @@ REJECTED = [
 
 
 @pytest.mark.parametrize(("stated", "refusal"), REJECTED)
-def test_verify_rejects_what_the_instruction_cannot_do(stated, refusal) -> None:
+def test_verify_rejects_invalid_async_copy(stated, refusal) -> None:
     with pytest.raises(VerifyError, match=refusal):
         verify_prim_function(stated)
 
@@ -121,7 +121,7 @@ def test_async_copy_stage_matches_input(target: CudaTarget) -> None:
 
 @pytest.mark.parametrize("target", CUDA_TARGETS)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_async_copy_stages_two_separate_runs_per_thread(target: CudaTarget) -> None:
+def test_async_copy_stages_two_runs(target: CudaTarget) -> None:
     """Each thread's second run lands 512 elements after its first, as the destination states."""
     module = retarget(load_authored_ir(f"{TIR / 'split_stage.py'}:SplitStage"), target)
     verify_module(module)

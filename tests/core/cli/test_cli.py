@@ -16,7 +16,7 @@ from tilefoundry.target import registered_targets
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 
-def test_parse_dims_reads_one_extent_per_dimension() -> None:
+def test_parse_dims_reads_extents() -> None:
     """Nothing stated is not the same as nothing chosen."""
     assert cli.parse_dims(None) is None
     assert cli.parse_dims([]) == {}
@@ -35,12 +35,12 @@ def test_parse_dims_reads_one_extent_per_dimension() -> None:
     "stated",
     [["=8"], ["ctx_len=1.5"]],
 )
-def test_parse_dims_rejects_an_argument_that_states_no_extent(stated) -> None:
+def test_parse_dims_rejects_missing_extent(stated) -> None:
     with pytest.raises(ValueError):
         cli.parse_dims(stated)
 
 
-def test_parse_dims_rejects_one_dimension_stated_twice() -> None:
+def test_parse_dims_rejects_repeated_dim() -> None:
     """Repeating the flag states another dimension, not another value for one already stated.
 
     Repeating the flag states another dimension, not another value for one
@@ -57,7 +57,7 @@ def test_parse_dims_rejects_one_dimension_stated_twice() -> None:
         cli.parse_dims(["ctx_len=8", "ctx_len=8"])
 
 
-def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
+def test_analyze_help_explains_traffic_assumptions(capsys) -> None:
     with pytest.raises(SystemExit) as stopped:
         cli.main(["analyze", "--help"])
 
@@ -72,7 +72,7 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     assert "is an observation, not a bound" in help_text
 
 
-def test_cli_overviews_and_version_are_parser_surfaces(capsys) -> None:
+def test_cli_prints_help_and_version(capsys) -> None:
     with pytest.raises(SystemExit) as stopped:
         cli.main(["--help"])
     assert stopped.value.code == 0
@@ -113,7 +113,7 @@ def test_cli_overviews_and_version_are_parser_surfaces(capsys) -> None:
     assert capsys.readouterr().out.startswith("tilefoundry ")
 
 
-def test_spec_names_unknown_topic_and_available_aliases(capsys) -> None:
+def test_spec_refuses_unknown_topic(capsys) -> None:
     assert cli.main(["spec", "nope"]) == 1
     refused = capsys.readouterr()
     assert "no spec named 'nope'; there are " in refused.err
@@ -122,7 +122,7 @@ def test_spec_names_unknown_topic_and_available_aliases(capsys) -> None:
     assert "dsl" in refused.err
 
 
-def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys, tmp_path) -> None:
+def test_analyze_json_requires_analysis_flag(capsys, tmp_path) -> None:
     with pytest.raises(SystemExit) as stopped:
         cli.main(["analyze", "missing.py", str(tmp_path / "report.json"), "--json"])
 
@@ -134,7 +134,7 @@ def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys, tmp_path
     assert "source file not found" not in refused.err
 
 
-def test_repeated_source_loads_keep_one_logical_target_registration() -> None:
+def test_reload_keeps_one_target_registration() -> None:
     source = FIXTURES / "cli/reload_target/model.py"
 
     first = load_authored_ir(f"{source}:Model")
@@ -144,7 +144,7 @@ def test_repeated_source_loads_keep_one_logical_target_registration() -> None:
     assert registered_targets()["tests.cli.reload_target"] is type(first.target)
 
 
-def test_named_provider_registers_only_decorated_targets_and_replays_them(
+def test_provider_registers_decorated_targets(
     tmp_path, monkeypatch, capsys
 ) -> None:
     provider_name = "decorated_target_provider"

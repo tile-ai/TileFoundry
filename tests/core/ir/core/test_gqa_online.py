@@ -71,7 +71,7 @@ EVALUATED = [
 
 
 @pytest.mark.parametrize(("selected", "ctx"), EVALUATED)
-def test_what_is_selected_matches_the_reference(selected, ctx):
+def test_selected_variant_matches_reference(selected, ctx):
     heads = _heads()
     Hq, _, D, _ = heads
     step = _inputs(heads, ctx)
@@ -81,7 +81,7 @@ def test_what_is_selected_matches_the_reference(selected, ctx):
     assert torch.allclose(out.float(), _ref(heads, *step), atol=2e-2, rtol=2e-2)
 
 
-def test_context_variant_fails_closed_on_unaligned_ctx():
+def test_splitkv_refuses_unaligned_ctx():
     (NUM_SPLITS,) = _constants("NUM_SPLITS")
     ctx = NUM_SPLITS + 1
     assert ctx % NUM_SPLITS != 0

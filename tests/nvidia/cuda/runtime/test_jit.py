@@ -15,7 +15,7 @@ from tilefoundry.cli.source import load_authored_ir
 from tilefoundry_nvidia import CudaTarget
 
 
-def test_jit_rejects_non_ir_inputs_and_string_targets() -> None:
+def test_jit_rejects_bad_arguments() -> None:
     """Raw Python, authored string Targets, and unexpected kwargs all raise."""
 
     def raw_fn(a):

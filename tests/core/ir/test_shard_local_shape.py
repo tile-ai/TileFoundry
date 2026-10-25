@@ -67,7 +67,7 @@ DIVIDED = [
 
 
 @pytest.mark.parametrize(("sharded", "expected"), DIVIDED)
-def test_only_a_mesh_axis_that_owns_a_dim_divides_it(sharded, expected) -> None:
+def test_owning_mesh_axis_divides_dim(sharded, expected) -> None:
     assert shard_layout_local_shape(sharded) == expected
 
 
@@ -86,7 +86,7 @@ def _symbolic_layout(axis_extent, mesh_extent, *, split: bool) -> ShardLayout:
     )
 
 
-def test_unconsumed_symbolic_axis_is_available_to_type_inference() -> None:
+def test_unconsumed_symbolic_axis_reaches_typeinfer() -> None:
     layout = _symbolic_layout(_N, 8, split=False)
 
     assert shard_layout_local_shape(layout, require_static=False) == (_N, 8)
@@ -107,7 +107,7 @@ def test_unconsumed_symbolic_axis_is_available_to_type_inference() -> None:
         pytest.param(_N * 64 + 1, None, True, id="canonical_undecidable"),
     ],
 )
-def test_matching_symbolic_split_has_decidable_local_extent(
+def test_symbolic_split_local_extent_decidable(
     require_static, extent, expected, canonical
 ) -> None:
     if canonical:

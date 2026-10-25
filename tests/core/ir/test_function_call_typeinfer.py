@@ -58,7 +58,7 @@ def _add_callee(param_type):
     )
 
 
-def test_plain_formal_specializes_per_call_site():
+def test_plain_formal_specializes_per_call():
 
     f = _add_callee(_PLAIN)
     assert infer_call(f, _PLAIN) == _PLAIN
@@ -160,7 +160,7 @@ def test_carrying_loop_propagates_split(formal, actual, yielded, extent, yields,
     assert [expr.type for expr in region] == [formal, formal, formal, y_formal, formal, formal]
 
 
-def test_explicit_sharded_formal_constrains_its_actual():
+def test_sharded_formal_constrains_actual():
 
     f = _add_callee(_SPLIT0)
     assert infer_call(f, _SPLIT0) == _SPLIT0
@@ -170,7 +170,7 @@ def test_explicit_sharded_formal_constrains_its_actual():
         infer_call(f, make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(1),)))
 
 
-def test_broadcast_formal_accepts_reshaped_runtime_slice():
+def test_broadcast_formal_accepts_reshaped_slice():
     packed = make_shard_tensor_type((4, 8, 16), _F, mesh=_M, attrs=(Broadcast(),))
     sliced_type = make_shard_tensor_type((1, 8, 16), _F, mesh=_M, attrs=(Broadcast(),))
     formal = make_shard_tensor_type((8, 16), _F, mesh=_M, attrs=(Broadcast(),))
@@ -194,7 +194,7 @@ def test_broadcast_formal_accepts_reshaped_runtime_slice():
     assert TypeInferVisitor().visit(call, TypeInferContext()) == formal
 
 
-def test_symbolic_arithmetic_signature_matches_inferred_argument():
+def test_symbolic_signature_matches_argument():
     seq = DimVar("call_seq", 1, 4096)
     authored_dim = simplify_dim(DimMul, (seq, 2))
     authored_type = make_tensor_type((authored_dim, 8), _F)
@@ -213,7 +213,7 @@ def test_symbolic_arithmetic_signature_matches_inferred_argument():
     assert TypeInferVisitor().visit(call, TypeInferContext()) == stage.return_type
 
 
-def test_plain_formal_rejects_shape_or_dtype_mismatch():
+def test_plain_formal_rejects_mismatch():
 
     f = _add_callee(_PLAIN)
     with pytest.raises(VerifyError, match="type mismatch"):
@@ -222,7 +222,7 @@ def test_plain_formal_rejects_shape_or_dtype_mismatch():
         infer_call(f, make_tensor_type((4, 8), DType.bf16))
 
 
-def test_function_call_preserves_partial_in_tuple_return():
+def test_call_preserves_partial_tuple_return():
     mesh_ab = Mesh((Topology("gpu", 8),), Layout((2, 4), (4, 1)), ("a", "b"))
     partial = make_shard_tensor_type((4, 8), mesh=mesh_ab, attrs=(Broadcast(), Partial("max")))
     param = Var(type=_PLAIN, annotation=replace(_PLAIN, layout=None), name="x")
@@ -241,7 +241,7 @@ def test_function_call_preserves_partial_in_tuple_return():
     assert result.fields[0].layout.attrs == (Broadcast(), Partial("max"))
 
 
-def test_bind_error_reports_call_site_binding():
+def test_bind_error_names_call_binding():
 
     f = _add_callee(_SPLIT0)
     arg = Var(type=_PLAIN, name="x_arg")

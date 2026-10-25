@@ -20,7 +20,7 @@ LOOP_ITERATORS = {
 }
 
 
-def test_a_function_may_have_a_leading_docstring() -> None:
+def test_function_accepts_leading_docstring() -> None:
     documented = load_authored_ir(
         f"{FIXTURES}/parser/documented_function.py:Documented"
     ).entry_function()
@@ -40,7 +40,7 @@ def test_a_function_may_have_a_leading_docstring() -> None:
         ("steps(1, 2)", "loop iterator must be tf.tile(...) or range(...)"),
     ),
 )
-def test_a_loop_iterator_states_why_its_arity_is_invalid(iterator: str, expected: str) -> None:
+def test_loop_iterator_names_arity_error(iterator: str, expected: str) -> None:
     """The shape-exact syntax must not reduce these to a bare match failure.
 
     Encoding each iterator's arity is what lets the generated grammar show the

@@ -26,8 +26,8 @@ _DYNAMIC_CTA_LOWERING_WAIT = (
 
 
 @pytest.mark.skip(reason=_DYNAMIC_CTA_LOWERING_WAIT)
-def test_handwritten_tir_dynamic_cta_matches_torch_at_several_shapes() -> None:
-    """Test handwritten tir dynamic cta matches torch at several shapes.
+def test_dynamic_cta_kernel_matches_torch() -> None:
+    """A handwritten TIR dynamic-CTA kernel matches torch at several shapes.
 
     One compiled artifact squares the tensor at three ``Ntile`` shapes via
     the host-computed grid; all match torch with no recompile.

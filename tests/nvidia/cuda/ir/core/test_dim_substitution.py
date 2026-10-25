@@ -13,7 +13,7 @@ from tilefoundry.ir.types.substitute import (
 )
 
 
-def test_only_dim_vars_make_dimension_arithmetic_symbolic() -> None:
+def test_dim_var_makes_arithmetic_symbolic() -> None:
     persistent_gemm_tiled = Path(__file__).parents[2] / "fixtures/placed/persistent_gemm_tiled.py"
     PersistentGemmTiled = load_authored_ir(f"{persistent_gemm_tiled}:PersistentGemmTiled")
     outer = PersistentGemmTiled.entry_function().body.body

@@ -17,7 +17,7 @@ _FACTS = (
 )
 
 
-def test_builtin_dtype_facts() -> None:
+def test_dtype_facts_match_declarations() -> None:
     for name, expected in _FACTS:
         member = getattr(DType, name)
         assert member == expected
@@ -25,7 +25,7 @@ def test_builtin_dtype_facts() -> None:
         assert repr(member) == repr(expected)
 
 
-def test_dtype_members_are_canonically_named_singletons() -> None:
+def test_dtype_members_are_singletons() -> None:
     """A dtype is addressed by exactly one name and interned by its facts.
 
     A dtype is addressed by exactly one name and interned by its facts, so a

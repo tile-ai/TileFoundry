@@ -23,14 +23,14 @@ from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 
 
 @pytest.mark.parametrize("storage", [StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM])
-def test_compact_and_factored_plain_layouts_share_locations(storage):
+def test_compact_factored_layouts_alias(storage):
     compact = make_tensor_type((64,), layout=Layout((64,), (1,)), storage=storage)
     factored = make_tensor_type((64,), layout=Layout(((8, 8),), ((8, 1),)), storage=storage)
     assert aliases(compact, factored) == 0
     assert aliases(factored, compact) == 0
 
 
-def test_large_gmem_factorization_reuses_the_source():
+def test_large_gmem_factorization_aliases_source():
     compact = make_tensor_type(
         (1, 2048, 8192),
         layout=Layout((1, 2048, 8192), (16777216, 8192, 1)),
@@ -53,7 +53,7 @@ def aliases(source, result):
 
 
 @pytest.mark.parametrize("storage", (StorageKind.GMEM, StorageKind.RMEM))
-def test_broadcast_split_transitions_follow_address_spaces(storage):
+def test_broadcast_split_alias_follows_storage(storage):
     mesh = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("unit",))
     broadcast = make_tensor_type(
         (64,), layout=ShardLayout(Layout((4, 16), (16, 1)), (Broadcast(),), mesh), storage=storage
@@ -95,7 +95,7 @@ def test_reshard_transpose_requires_data_movement(storage):
     assert aliases(source, result) is None
 
 
-def test_equivalent_private_split_factorizations_reuse_storage():
+def test_private_split_factorizations_alias():
     mesh = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("unit",))
     source = make_tensor_type(
         (64,),

@@ -29,7 +29,7 @@ from tilefoundry.ir.types.shard_layout import Split, split_target_axes
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 
-def test_stack_plain_result_has_a_fresh_layout_and_value() -> None:
+def test_stack_result_has_fresh_layout() -> None:
     source_type = make_tensor_type((2, 3), layout=Layout(shape=(2, 3), strides=(3, 1)))
     result = infer_call(Stack(axis=1), source_type, source_type)
     assert result.shape == (2, 2, 3)
@@ -43,7 +43,7 @@ def test_stack_plain_result_has_a_fresh_layout_and_value() -> None:
     )
 
 
-def test_stack_relation_carries_a_single_split_past_the_inserted_axis() -> None:
+def test_stack_shifts_split_past_axis() -> None:
     mesh = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
     plain = make_tensor_type((2, 8))
     sharded = make_shard_tensor_type((2, 8), mesh=mesh, attrs=(Split(1),))
@@ -54,7 +54,7 @@ def test_stack_relation_carries_a_single_split_past_the_inserted_axis() -> None:
     assert split_target_axes(result.layout, result.shape) == (2,)
 
 
-def test_stack_relation_carries_uniform_partial_slices() -> None:
+def test_stack_carries_uniform_partial() -> None:
     partial = make_shard_tensor_type(
         (2, 8),
         mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),

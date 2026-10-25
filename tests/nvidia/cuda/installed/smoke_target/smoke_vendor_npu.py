@@ -18,7 +18,7 @@ def _vendor_npu_model(tmp_path: Path) -> Path:
     return model
 
 
-def test_document_free_target_analyzes_with_its_declared_target(tf, tmp_path) -> None:
+def test_document_free_target_analyzes(tf, tmp_path) -> None:
     model = _vendor_npu_model(tmp_path)
     analyzed = tf(
         "analyze",

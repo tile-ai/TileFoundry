@@ -22,7 +22,7 @@ from tilefoundry.ir.types.shard_layout import Partial, Split
 _I64 = DType.i64
 
 
-def test_argmax_layout_describes_result_and_preserves_surviving_split():
+def test_argmax_layout_keeps_surviving_split():
     plain = make_tensor_type((4, 256), DType.f32, layout=Layout(shape=(4, 256), strides=(256, 1)))
     assert infer_call(ArgMax(axis=-1), plain).layout == Layout(shape=(4,), strides=(1,))
     sharded = make_shard_tensor_type(

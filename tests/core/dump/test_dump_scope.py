@@ -36,7 +36,7 @@ def test_file_dumper_writes_files(tmp_path, content) -> None:
     assert not (tmp_path / "scope" / "nested" / "ir.txt").exists()
 
 
-def test_dump_scope_isolation_across_threads_and_asyncio_tasks() -> None:
+def test_dump_scope_isolates_tasks() -> None:
     """Child thread / asyncio.Task with its own ``DumpScope`` writes only into that scope's dumper.
 
     Child thread / asyncio.Task with its own ``DumpScope`` writes only

@@ -33,7 +33,7 @@ _CTAS, _THREADS = 4, 8
 _ROWS = _CTAS * _THREADS
 
 
-def test_binary_refuses_an_operand_outside_register_memory() -> None:
+def test_binary_refuses_smem_operand() -> None:
     types = (
         make_tensor_type((8,), storage="smem"),
         make_tensor_type((8,), storage="rmem"),
@@ -61,7 +61,7 @@ def test_binary_refuses_an_operand_outside_register_memory() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_a_mesh_names_what_holds_a_tile_three_ways() -> None:
+def test_elementwise_mesh_cuts_match_torch() -> None:
     """Broadcast, two levels over one tile, and two axes over one tensor axis.
 
     The last two cut the same tile the same way and must agree: a CTA taking a
@@ -91,7 +91,7 @@ def test_a_mesh_names_what_holds_a_tile_three_ways() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_a_cast_window_and_a_filled_parameter_emit_and_execute() -> None:
+def test_cast_and_fill_execute() -> None:
     """Effect-form Cast, Fill on a kernel parameter, and a mesh-coordinate window."""
     CastWindowHost = load_authored_ir(f"{OPS / 'cast_window.py'}:CastWindowHost")
     rm = tilefoundry.compile(CastWindowHost, target=_CUDA)

@@ -32,7 +32,7 @@ def _infer(op: Arange) -> TensorType:
     return TypeInferVisitor().visit(call, TypeInferContext())
 
 
-def test_arange_static_type_evaluation_and_cost():
+def test_arange_infers_evaluates_and_costs():
     type_ = TensorType(shape=(3,), dtype=DType.i64, layout=Layout((3,)), storage=StorageKind.GMEM)
     op = Arange(type=type_, start=2, step=2)
     assert _infer(op) is type_
@@ -69,7 +69,7 @@ def test_arange_rejects_unsupported_attributes(op, message):
         _infer(op)
 
 
-def test_a_bound_mesh_coordinate_is_one_number_without_placement() -> None:
+def test_bound_mesh_coord_is_scalar() -> None:
     inferred = TypeInferVisitor().visit(_coord(), TypeInferContext(current_mesh=_COORD_MESH))
     assert inferred.shape == ()
     assert inferred.dtype == DType.i64
@@ -77,12 +77,12 @@ def test_a_bound_mesh_coordinate_is_one_number_without_placement() -> None:
     assert inferred.storage is StorageKind.RMEM
 
 
-def test_an_unbound_mesh_coordinate_is_rejected() -> None:
+def test_unbound_mesh_coord_rejected() -> None:
     with pytest.raises(ValueError, match="must be bound by the current mesh scope"):
         TypeInferVisitor().visit(_coord(), TypeInferContext())
 
 
-def test_an_inner_mesh_coordinate_is_bound_by_a_multilevel_scope() -> None:
+def test_inner_mesh_coord_binds_multilevel() -> None:
     cta = Mesh((Topology("cta", 2),), Layout((2,), (1,)), ("c",))
     current = make_mesh(cta, _COORD_MESH)
     assert (
@@ -90,7 +90,7 @@ def test_an_inner_mesh_coordinate_is_bound_by_a_multilevel_scope() -> None:
     )
 
 
-def test_mesh_coordinate_evaluation_is_explicitly_unmodelled() -> None:
+def test_mesh_coord_evaluation_refused() -> None:
     handler = eval_registry.lookup(MeshCoord)
     with pytest.raises(EvalError, match="one mesh participant"):
         handler(None)

@@ -37,7 +37,7 @@ def _context():
     )
 
 
-def test_a_target_declaration_defines_its_own_execution_domain() -> None:
+def test_target_declaration_defines_domain() -> None:
     """A child's target can differ; an undeclared standalone root has no target."""
     _Root, *_ = _context()
     target = _Root.resolve_target()
@@ -53,7 +53,7 @@ def test_a_target_declaration_defines_its_own_execution_domain() -> None:
         Module("bare", (forward,), "forward").resolve_target()
 
 
-def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
+def test_topology_tuple_inherits_or_replaces() -> None:
     """The three declaration forms are three different domains.
 
     The three declaration forms are three different domains: omitting the
@@ -88,12 +88,12 @@ def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
         pytest.param("dsl_module_topologies_non_topology.py", id="invalid1"),
     ],
 )
-def test_module_rejects_a_non_topology_tuple(invalid) -> None:
+def test_module_rejects_non_topology_tuple(invalid) -> None:
     with pytest.raises(TypeError, match="topologies must be a tuple of Topology"):
         load_authored_ir(str(FIXTURES / "diagnostics" / invalid))
 
 
-def test_topology_resolution_failures_name_what_the_domain_holds() -> None:
+def test_topology_resolution_names_levels() -> None:
     """An unresolved level lists the levels in scope.
 
     An unresolved level lists the levels in scope, and a repeated level is
@@ -113,7 +113,7 @@ def test_topology_resolution_failures_name_what_the_domain_holds() -> None:
         )
 
 
-def test_declaring_context_on_a_function_yields_its_own_module() -> None:
+def test_function_context_yields_module() -> None:
     """A Function never carries execution context of its own.
 
     A Function never carries execution context of its own: ``@func`` with a

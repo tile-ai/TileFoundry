@@ -42,7 +42,7 @@ class CallBindsCalleeParams(CoreEvalCase):
         assert torch.allclose(evaluate(caller, a, b), (a + b) * b)
 
 
-def test_structurally_equal_params_keep_distinct_ssa_bindings():
+def test_equal_params_keep_distinct_bindings():
     tensor_type = TensorType((1,), DType.f32, layout=None, storage="gmem")
     first = Var(name="same", type=tensor_type)
     second = Var(name="same", type=tensor_type)

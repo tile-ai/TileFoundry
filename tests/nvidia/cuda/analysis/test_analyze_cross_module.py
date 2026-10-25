@@ -108,7 +108,7 @@ def _traffic(records) -> dict[str, int]:
     return total
 
 
-def test_a_repeated_call_site_counts_its_work_again() -> None:
+def test_repeated_call_counts_twice() -> None:
     CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
     _Twice = load_authored_ir(f"{ANALYSIS / 'expert_called_twice.py'}:_Twice")
     one_result = analyze(
@@ -125,7 +125,7 @@ def test_a_repeated_call_site_counts_its_work_again() -> None:
     assert one and two == {name: 2 * value for name, value in one.items()}
 
 
-def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
+def test_looped_call_counts_per_trip() -> None:
     CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
     _Looped = load_authored_ir(f"{ANALYSIS / 'expert_called_in_loop.py'}:_Looped")
     one_result = analyze(
@@ -148,7 +148,7 @@ def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
     }
 
 
-def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
+def test_fused_weight_traffic_matches_callees() -> None:
     _Direct = load_authored_ir(f"{ANALYSIS / 'direct_weight_matmul.py'}:_Direct")
     direct_result = analyze(
         *check_program(_Direct, _Direct.entry_function()),
@@ -165,7 +165,7 @@ def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
     assert direct and fused == direct
 
 
-def test_a_reached_child_resolving_another_hierarchy_is_invalid() -> None:
+def test_child_hierarchy_mismatch_rejected() -> None:
     _Mismatch = load_authored_ir(f"{ANALYSIS / 'child_on_another_hierarchy.py'}:_Mismatch")
     with pytest.raises(AnalysisError, match="different topology hierarchy") as caught:
         analyze(*check_program(_Mismatch, _Mismatch.entry_function()), analysis="compute-cost")
@@ -334,7 +334,7 @@ def _call_program(definition, *, count=1, indexed=False, name="run"):
         ("stacked", 12, 144, 80, 64, 1),
     ],
 )
-def test_retained_calls_match_the_memory_and_work_acceptance_values(
+def test_retained_calls_match_acceptance_values(
     kind, flops, traffic, peak, persistent, occurrences
 ):
     Expert = load_authored_ir(f"{HIR_COMPOSITION}:Expert")
@@ -381,7 +381,7 @@ def test_retained_calls_match_the_memory_and_work_acceptance_values(
         )
 
 
-def test_derived_nodes_and_bodies_do_not_grow_with_indexed_instance_count():
+def test_derived_size_ignores_instance_count():
     sizes = []
     for count in (3, 28):
         root = _stacked_program(count)
@@ -395,7 +395,7 @@ def test_derived_nodes_and_bodies_do_not_grow_with_indexed_instance_count():
     assert sizes[0][1] == 2
 
 
-def test_the_published_qwen_stack_shares_its_layer_definition_and_fits_the_budget():
+def test_qwen_stack_shares_layer_definition():
     elements = Qwen3_1_7B.children["layers"].elements
     assert len(elements) == 28
     assert all(element is elements[0] for element in elements)
@@ -416,7 +416,7 @@ def _direct_program(callee, params, calls):
 
 
 @pytest.mark.parametrize("difference", ["layout", "storage", "mesh"])
-def test_one_definition_rejects_different_call_signatures(difference):
+def test_callee_rejects_different_signatures(difference):
     type_ = TensorType((4, 8), DType.f32, None, StorageKind.UMAT)
     left = Var("left", type=type_)
     changed = {
@@ -439,7 +439,7 @@ def test_one_definition_rejects_different_call_signatures(difference):
         check_program(root, root.entry_function())
 
 
-def test_recursive_call_paths_and_missing_callee_bodies_are_diagnosed():
+def test_bodiless_and_recursive_callees_rejected():
     type_ = TensorType((4,), DType.f32, None, StorageKind.UMAT)
     param = Var("x", type=type_)
     callee = Function.build(name="helper", params=(param,), body=None, return_type=type_)
@@ -460,7 +460,7 @@ class _WriteGuardTarget(Target):
         return self.algorithm
 
 
-def test_an_analyzer_cannot_write_records_on_a_shared_derived_callee():
+def test_undeclared_metadata_write_rejected():
     def write_on_definition(_function, context):
         attach_metadata(_function.body, MemoryMetadata())
 
@@ -473,7 +473,7 @@ def test_an_analyzer_cannot_write_records_on_a_shared_derived_callee():
         analyze(*check_program(root, root.entry_function()), analysis="bad")
 
 
-def test_repeated_callee_temporaries_require_one_shared_memory_placement():
+def test_repeated_callee_shares_placement():
     type_ = TensorType((32,), DType.f32, Layout((32,)), StorageKind.GMEM)
     scalar = TensorType.scalar(DType.i32)
     zero = Constant(0, type=scalar)
@@ -539,14 +539,14 @@ def test_repeated_callee_temporaries_require_one_shared_memory_placement():
     assert all(len(held) == 1 for held in offsets)
 
 
-def test_partial_indexed_loop_counts_only_reached_persistent_weights():
+def test_partial_loop_counts_reached_weights():
     root = _stacked_program(3, trips=2)
     result = analyze(*check_program(root, root.entry_function()), analysis="memory")
     peak = get_metadata(result.function, RegionMemoryMetadata).peak_for("gmem")
     assert (peak.persistent_bytes, peak.peak_bytes) == (48, 64)
 
 
-def test_repeated_callee_placement_compares_alias_even_at_the_same_offset():
+def test_callee_alias_placement_agrees():
     type_ = TensorType((32,), DType.f32, Layout((32,)), StorageKind.GMEM)
     short = replace(type_, shape=(16,), layout=Layout((16,)))
     scalar = TensorType.scalar(DType.i32)

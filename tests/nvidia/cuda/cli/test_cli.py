@@ -50,7 +50,7 @@ def _copy(source: Path, destination: Path) -> Path:
         ("Unsound", ("--compute-cost",), 1),
     ],
 )
-def test_analyze_disarms_its_watchdog_on_every_exit(
+def test_analyze_disarms_watchdog(
     tmp_path, monkeypatch, root, flags, expected
 ) -> None:
     """Neither successful returns nor raised errors leave a timer armed in the caller."""
@@ -66,7 +66,7 @@ def test_analyze_disarms_its_watchdog_on_every_exit(
     assert disarmed.is_set()
 
 
-def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(tmp_path, capsys) -> None:
+def test_root_selector_ignores_sibling_roots(tmp_path, capsys) -> None:
     """A selector names one root, and the rest of the file is a different question.
 
     The unsound root here states an entry naming no function it collected, and it
@@ -101,7 +101,7 @@ def test_models_source_names_checkout_directory(capsys) -> None:
     assert "manifest" not in source.out
 
 
-def test_target_list_expressions_execute_and_show_accepts_their_identities(
+def test_target_list_shows_identities(
     capsys, monkeypatch
 ) -> None:
     identities = listed_identities(capsys, monkeypatch)
@@ -139,7 +139,7 @@ def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
     }
 
 
-def test_persisted_targets_drive_every_command_without_touching_the_default_registry(
+def test_persisted_targets_drive_commands(
     tmp_path,
 ) -> None:
     registry = tmp_path / "registry.toml"
@@ -270,7 +270,7 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
         assert default.read_bytes() == default_before
 
 
-def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
+def test_registration_isolates_bad_entries(
     tmp_path,
 ) -> None:
     source_architecture = (_SMOKE_TARGET / "hw" / "vendor_sm70.toml").read_text(encoding="utf-8")
@@ -388,7 +388,7 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     assert "vendor.bad_sm70" in repaired_list.stdout
 
 
-def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> None:
+def test_analyze_binds_composed_root_extent(tmp_path, capsys) -> None:
     """Choosing a size for a composed root keeps its child call activation-only."""
     source = FIXTURES / "cli/composed_leaf_n_cli.py"
 
@@ -403,7 +403,7 @@ def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys
     assert "leaf(x)" in expanded
 
 
-def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> None:
+def test_analyze_reports_retained_occurrences(tmp_path) -> None:
     source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
     selector = f"{source}:MoEMegaKernel"
     flags = ["--compute-cost", "--memory", "--roofline", "--performance"]
@@ -571,13 +571,13 @@ def test_analyze_reports_retained_occurrences_from_one_rendering(tmp_path) -> No
     assert "units=" not in annotated
 
 
-def test_analyze_without_a_path_writes_the_report_to_stdout(capsys) -> None:
+def test_analyze_writes_stdout_without_path(capsys) -> None:
     source = Path(__file__).parents[1] / "fixtures" / "placed" / "rmsnorm.py"
     assert cli.main(["analyze", f"{source}:RmsnormModule", "--memory"]) == 0
     assert "# memory traffic=" in capsys.readouterr().out
 
 
-def test_analyze_memory_lines_state_json_totals(tmp_path) -> None:
+def test_memory_lines_match_json_totals(tmp_path) -> None:
     """Each Function's # memory @total is that Function's JSON totals."""
     source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
     selector = f"{source}:MoEMegaKernel"

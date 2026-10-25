@@ -26,7 +26,7 @@ _THREADS = Mesh((Topology("thread", _ROWS),), Layout((_ROWS,), (1,)), ("t",))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_swizzled_smem_load_compiles_and_executes() -> None:
+def test_swizzled_smem_load_executes() -> None:
     """One kernel through print, parse, codegen, nvcc and the device.
 
     The emitted layout is asserted as well, because running the kernel cannot

@@ -147,7 +147,7 @@ def _replicated(shape: tuple, storage: str = "rmem"):
         ),
     ],
 )
-def test_a_workspace_holds_one_slot_per_warp(operands, axes, refused) -> None:
+def test_workspace_holds_slot_per_warp(operands, axes, refused) -> None:
     """A workspace is shared memory with one slot per warp of the source's mesh.
 
     What every source coordinate reaches there is those slots, all of them and
@@ -167,7 +167,7 @@ def test_a_workspace_holds_one_slot_per_warp(operands, axes, refused) -> None:
     assert reached.is_equal(isl.map.from_domain_and_range(source, isl.set("{ [s] : 0 <= s < 4 }")))
 
 
-def test_refuses_a_dtype_that_does_not_fold_in_float() -> None:
+def test_reduce_refuses_nonfloat_dtype() -> None:
     with pytest.raises(
         VerifyError,
         match=r"could not satisfy src_dtype in \{f32, f16, bf16\}",
@@ -175,7 +175,7 @@ def test_refuses_a_dtype_that_does_not_fold_in_float() -> None:
         verify_prim_function(_pf(_sharded(8, dtype=DType.fp8e4m3), _sharded(1)))
 
 
-def test_refuses_a_swizzled_source_layout() -> None:
+def test_reduce_refuses_swizzled_source() -> None:
     swizzled = ComposedLayout(Swizzle(2, 2, 2), 0, Layout((8,), (1,)))
     with pytest.raises(
         VerifyError,
@@ -193,7 +193,7 @@ _ENTRY = r"tilefoundry::ops::reduce<tilefoundry::ops::"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_every_tier_answers_what_torch_answers() -> None:
+def test_reduce_tiers_match_torch() -> None:
     """One compile behind four assertions, each naming the tier that failed."""
     ReduceTiers = load_authored_ir(f"{OPS / 'reduce_tiers.py'}:ReduceTiers")
     rm = tilefoundry.compile(ReduceTiers, target=_CUDA)
@@ -233,7 +233,7 @@ def test_every_tier_answers_what_torch_answers() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_a_cta_thread_mesh_reduces_across_the_thread_level() -> None:
+def test_cta_thread_mesh_reduces() -> None:
     """On a composed cta×thread mesh, the warp count comes from the thread level.
 
     The dispatch used to keep one ``is_thread`` per mesh, so a cta-scoped

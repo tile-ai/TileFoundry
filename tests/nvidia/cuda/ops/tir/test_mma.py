@@ -52,7 +52,7 @@ def test_fragment_mma_matches_torch_matmul(target: CudaTarget) -> None:
 
 @pytest.mark.parametrize("target", CUDA_TARGETS)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_fp8_fragment_mma_matches_torch_matmul(target: CudaTarget) -> None:
+def test_fp8_mma_matches_torch(target: CudaTarget) -> None:
     """E4M3 operands give the F32 product of the same values."""
     torch.manual_seed(1)
     a = torch.randn(16, 32, device="cuda").to(torch.float8_e4m3fn)
@@ -67,7 +67,7 @@ def test_fp8_fragment_mma_matches_torch_matmul(target: CudaTarget) -> None:
 
 @pytest.mark.parametrize("target", CUDA_TARGETS)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_e4m3_gemm_through_shared_memory_equals_the_f32_product(target: CudaTarget) -> None:
+def test_e4m3_smem_gemm_matches_f32(target: CudaTarget) -> None:
     """Integer inputs keep every partial sum exact, so the tile must equal the F32 product."""
     module = retarget(load_authored_ir(f"{TIR / 'e4m3_gemm.py'}:Fp8Gemm"), target)
     verify_module(module)

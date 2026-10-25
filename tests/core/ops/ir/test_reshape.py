@@ -69,7 +69,7 @@ def _partial_reductions(ty) -> dict:
     ),
     ids=("compact", "window-unit-axes"),
 )
-def test_plain_c_order_layout_is_derived_when_reshape_is_a_view(
+def test_view_reshape_derives_c_order(
     shape, strides, new_shape, expected
 ):
     source = make_tensor_type(shape, layout=Layout(shape=shape, strides=strides))
@@ -80,7 +80,7 @@ def test_plain_c_order_layout_is_derived_when_reshape_is_a_view(
     )
 
 
-def test_noncontiguous_plain_reshape_uses_default_strides():
+def test_noncontiguous_reshape_uses_default_strides():
     source = make_tensor_type((8, 16), layout=Layout(shape=(8, 16), strides=(1, 8)))
     assert infer_call(_reshape((128,)), source).layout == Layout(shape=(128,), strides=(1,))
 
@@ -92,7 +92,7 @@ def _make_unmaterialized_sharding_is_not_dropped_by_scalar_reshape():
     )
 
 
-def test_merge_carries():
+def test_reshape_merge_keeps_split():
     """Merge: layout (16, 8) -> (128,); the Split-bound mesh axis survives."""
     ty = infer_call(_reshape((128,)), make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)))
     assert tuple(ty.shape) == (128,)
@@ -119,7 +119,7 @@ def test_split_remaps_partial_carries():
     assert _partial_reductions(ty) == {1: "sum"}
 
 
-def test_split_divides_carries():
+def test_reshape_split_divides_shard():
     """Layout position 0 (size 16) divides across the new size-4 boundary.
 
     Layout position 0 (size 16) divides across the new size-4 boundary: the
@@ -132,7 +132,7 @@ def test_split_divides_carries():
     assert split_local_extents(ty) == [1]
 
 
-def test_reshape_then_reshard_rmem_no_split_aliasing():
+def test_reshape_reshard_keeps_split_unaliased():
     """A flat split dim (4096) splits into (32, 128).
 
     A flat split dim (4096) splits into (32, 128): the outer sub-factor (32)
@@ -167,7 +167,7 @@ def test_reshape_then_reshard_rmem_no_split_aliasing():
     )
 
 
-def test_broadcast_reshape_and_reshard_order_agree_in_smem():
+def test_broadcast_reshape_reshard_commute():
     source = make_tensor_type(
         (1, 32, 128), layout=Layout(shape=(1, 32, 128), strides=(4096, 128, 1))
     )

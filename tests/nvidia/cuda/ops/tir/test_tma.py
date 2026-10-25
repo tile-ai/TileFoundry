@@ -49,12 +49,12 @@ def _ty(n, dtype=DType.from_name("f32"), storage="gmem"):
     return make_tensor_type((n,), dtype, storage=storage)
 
 
-def test_accepts_a_whole_grain_gmem_to_smem_run() -> None:
+def test_tma_accepts_gmem_to_smem() -> None:
     """The shape this op is built for: a gmem run into a shared tile."""
     verify_prim_function(_pf(_ty(8), _ty(8, storage="smem")))
 
 
-def test_refuses_the_wrong_direction() -> None:
+def test_tma_refuses_wrong_direction() -> None:
     """Only gmem into smem is this instruction."""
     with pytest.raises(VerifyError, match="src: smem does not match gmem"):
         verify_prim_function(_pf(_ty(8, storage="smem"), _ty(8, storage="smem")))
@@ -62,7 +62,7 @@ def test_refuses_the_wrong_direction() -> None:
         verify_prim_function(_pf(_ty(8), _ty(8, storage="gmem")))
 
 
-def test_refuses_a_barrier_outside_shared_memory() -> None:
+def test_tma_refuses_gmem_barrier() -> None:
     with pytest.raises(VerifyError, match="barrier: gmem does not match smem"):
         verify_prim_function(
             _pf(
@@ -73,13 +73,13 @@ def test_refuses_a_barrier_outside_shared_memory() -> None:
         )
 
 
-def test_refuses_a_dtype_change() -> None:
+def test_tma_refuses_dtype_change() -> None:
     """A staging copy moves bytes; it does not convert them."""
     with pytest.raises(VerifyError, match="reads src.dtype = dst.dtype"):
         verify_prim_function(_pf(_ty(8), _ty(8, DType.from_name("bf16"), storage="smem")))
 
 
-def test_refuses_a_shape_change() -> None:
+def test_tma_refuses_shape_change() -> None:
     with pytest.raises(VerifyError, match="reads src.shape = dst.shape"):
         verify_prim_function(_pf(_ty(8), _ty(4, storage="smem")))
 
@@ -88,7 +88,7 @@ def test_refuses_a_shape_change() -> None:
     ("n", "dtype"),
     [(5, DType.from_name("f32")), (1, DType.from_name("f32")), (7, DType.from_name("bf16"))],
 )
-def test_admits_a_transfer_off_the_sixteen_byte_grain(n, dtype) -> None:
+def test_tma_admits_off_grain_transfer(n, dtype) -> None:
     """The grain belongs to one instruction, and the op does not name one.
 
     See [runtime §2.6](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#26-cudaops).
@@ -97,7 +97,7 @@ def test_admits_a_transfer_off_the_sixteen_byte_grain(n, dtype) -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_both_tiers_stage_the_input_unchanged() -> None:
+def test_tma_tiers_stage_input_unchanged() -> None:
     """One compile behind two assertions, each naming the tier that failed."""
     TmaTiers = load_authored_ir(f"{OPS / 'tma_tiers.py'}:TmaTiers")
     rm = tilefoundry.compile(TmaTiers, target=CudaTarget("nvidia.h200_sxm"))

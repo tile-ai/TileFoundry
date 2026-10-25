@@ -69,8 +69,8 @@ def _sum_loop_fn(extent, *, step=1, extra_params=()):
     )
 
 
-def test_dynamic_extent_and_step_resolve_from_the_argument_shapes():
-    """Test dynamic extent and step resolve from the argument shapes.
+def test_dynamic_bounds_resolve_from_shapes():
+    """A dynamic extent and step resolve from the argument shapes.
 
     A DimVar or dim `Expr` in either position resolves against the bindings the
     call's argument shapes provide, and nothing else: `resolve_dim` is given the

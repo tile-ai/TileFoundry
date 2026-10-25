@@ -74,7 +74,7 @@ def test_mla_matches_hugging_face(tf, shipped_source, comparison_cache, ctx_len,
     _mla(tf, comparison_cache, shipped_source(MODEL), step)
 
 
-def test_mla_scaling_is_qk_head_dim_not_v_head_dim(tf, shipped_source, comparison_cache) -> None:
+def test_mla_scales_by_qk_dim(tf, shipped_source, comparison_cache) -> None:
     """`qk_head_dim ** -0.5`, and the plausible wrong guess is detectable.
 
     Nothing in the published config says which dimension the score is scaled by, and
@@ -89,7 +89,7 @@ def test_mla_scaling_is_qk_head_dim_not_v_head_dim(tf, shipped_source, compariso
     _mla(tf, comparison_cache, shipped_source(MODEL), step, args=args, refuse=True)
 
 
-def test_mla_cache_pairing_is_load_bearing(tf, shipped_source, comparison_cache) -> None:
+def test_mla_cache_permutation_breaks_answer(tf, shipped_source, comparison_cache) -> None:
     """Permuting one side of the cache breaks the answer.
 
     Softmax attention over a cache is permutation-invariant if both sides are

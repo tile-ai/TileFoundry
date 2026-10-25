@@ -34,7 +34,7 @@ from tilefoundry_nvidia import CudaTarget
 DSL = Path(__file__).parents[1] / "fixtures" / "dsl"
 
 
-def test_a_held_child_takes_its_own_owners_target_types():
+def test_held_child_takes_owner_target():
     """A root types its own calls of a child under its Target; the child keeps its body.
 
     The children declare no Target, so their matmuls and loop accumulators,
@@ -176,13 +176,13 @@ class PrimFuncSiblingLaunch(ModuleDecoratorCase):
         ("unbound_slot", "instance calls must use a slot name"),
     ],
 )
-def test_module_rejects_invalid_instance_declarations_and_calls(fixture, refused):
+def test_module_rejects_invalid_instances(fixture, refused):
     source = Path(__file__).parents[1] / f"fixtures/diagnostics/parser_module_instance_{fixture}.py"
     with pytest.raises((TypeError, ValueError, VerifyError), match=refused):
         load_authored_ir(str(source))
 
 
-def test_an_unused_module_without_entry_can_occupy_a_slot_and_be_replaced():
+def test_entryless_module_occupies_slot():
     scaled_modules = Path(__file__).parents[1] / "fixtures/shapes/scaled_modules.py"
     ScaledChild = load_authored_ir(f"{scaled_modules}:ScaledChild")
     slot = ModuleList(dataclasses.replace(ScaledChild, entry=None))

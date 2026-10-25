@@ -24,7 +24,7 @@ _CTA = Topology("cta", 2)
 _CTA_MESH = Mesh((_CTA,), Layout((2,), (1,)), ("g",))
 
 
-def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
+def test_cache_update_cost_per_level() -> None:
     """One crossing is the first legal window, in both windows of the question.
 
     How many rows this writes is a runtime value, so one occurrence is the first

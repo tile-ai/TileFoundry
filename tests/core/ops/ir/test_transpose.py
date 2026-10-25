@@ -39,7 +39,7 @@ _B4 = (Broadcast(), Broadcast(), Broadcast(), Broadcast())
 _T10 = Transpose(perm=(1, 0))
 
 
-def test_plain_input_produces_a_compact_new_value():
+def test_transpose_writes_compact_result():
     """Transpose writes a new C-order result rather than preserving source strides."""
     source = make_tensor_type((16, 8), DType.bf16, layout=Layout(shape=(16, 8), strides=(8, 1)))
     ty = infer_call(_T10, source)
@@ -70,7 +70,7 @@ def test_factorized_split_reorders_subaxes():
     assert ty.layout.layout.strides == (4096, 32, 1)
 
 
-def test_implicit_source_strides_produce_fresh_result_strides():
+def test_transpose_derives_fresh_strides():
     """Implicit source strides do not leave a new value's strides unspecified."""
     x_ty = raw_shard_tensor_type(
         (16, 8),

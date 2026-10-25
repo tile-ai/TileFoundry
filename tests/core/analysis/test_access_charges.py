@@ -64,7 +64,7 @@ B, S, H, D = 1, 5, 2, 3
 HQ, HKV, HEAD_DIM, MAX_POS = 16, 8, 128, 8
 
 
-def test_every_callable_op_states_its_coordinates_exactly_once() -> None:
+def test_callable_op_states_relation_once() -> None:
     """One canonical relation per Op, enumerated rather than listed by hand.
 
     Where an Op reads and writes is stated once, so type inference, the loop
@@ -102,7 +102,7 @@ def test_every_callable_op_states_its_coordinates_exactly_once() -> None:
     )
 
 
-def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
+def test_unstated_op_relation_refused() -> None:
     """Which is why the gate above enumerates instead of listing.
 
     An Op that states no coordinates is refused by name rather than given a
@@ -190,7 +190,7 @@ def _nested(extent: int, *, wrapped: bool) -> TensorType:
         ),
     ],
 )
-def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed(
+def test_insert_read_held_to_window(
     destination, update, offsets, window, own, level
 ) -> None:
     """An insert reads its update only inside the window.
@@ -272,7 +272,7 @@ def _assert_shape(text: str, declared: object) -> None:
         raise AssertionError(f"{declared} has no rendering: {text}")
 
 
-def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> None:
+def test_reached_leaf_charged_own_level() -> None:
     """One tuple, two levels, and one boundary that only reached one of them.
 
     An operand's Type names every level its leaves live at, so grouping the
@@ -347,7 +347,7 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
     )
 
 
-def test_a_value_of_bits_is_charged_the_bytes_it_takes_up() -> None:
+def test_bit_values_charge_whole_bytes() -> None:
     """A boolean is a bit, and part of a byte is still a byte to fetch.
 
     Counting a packed value as a share of the whole rounds down, so one bool

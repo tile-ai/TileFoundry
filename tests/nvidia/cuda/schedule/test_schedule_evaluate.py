@@ -42,7 +42,7 @@ def test_schedule_arange_evaluates_static_coordinates(dtype) -> None:
     assert torch.equal(result, torch.tensor([3, 5, 7, 9, 11, 13, 15, 17], dtype=torch_dtype))
 
 
-def test_schedule_copy_evaluates_to_the_source_value() -> None:
+def test_schedule_copy_returns_source() -> None:
     layout = Layout((4,), (1,))
     source_type = TensorType((4,), DType.bf16, layout, StorageKind.GMEM)
     result_type = TensorType((4,), DType.bf16, layout, StorageKind.SMEM)
@@ -57,7 +57,7 @@ def test_schedule_copy_evaluates_to_the_source_value() -> None:
     assert torch.equal(result, source)
 
 
-def test_schedule_reduce_store_adds_to_an_explicit_nonzero_destination():
+def test_reduce_store_adds_to_destination():
     cta = Mesh((Topology("cta", 2),), Layout((2,), (1,)))
     source_type = TensorType(
         (64, 64),
@@ -88,7 +88,7 @@ def test_schedule_reduce_store_adds_to_an_explicit_nonzero_destination():
         ),
     ),
 )
-def test_schedule_mma_evaluates_like_matmul_plus_accumulator(atom, dtype, shape) -> None:
+def test_schedule_mma_accumulates_exact_product(atom, dtype, shape) -> None:
     """Products are summed in the accumulator dtype, not rounded to the operand dtype first.
 
     Column 0 of lhs holds 2**-8, so each sum carries bits an operand-dtype result drops.
@@ -115,7 +115,7 @@ def test_schedule_mma_evaluates_like_matmul_plus_accumulator(atom, dtype, shape)
     assert not torch.equal(scheduled, acc + exact.to(operand).float())
 
 
-def test_schedule_evaluation_rejects_an_unregistered_instruction() -> None:
+def test_schedule_evaluation_rejects_unregistered_instruction() -> None:
     type_ = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.RMEM)
     value = torch.arange(4, dtype=torch.bfloat16)
 

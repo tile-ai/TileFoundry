@@ -1,4 +1,4 @@
-"""Parser contracts for explicit variadic input sequences."""
+"""Parser contracts for mesh scopes and the boundaries they check."""
 
 from __future__ import annotations
 
@@ -82,33 +82,33 @@ def test_mesh_scope_case(case: MeshScopeCase) -> None:
     check_case(case)
 
 
-def test_mesh_binding_does_not_escape_its_with_scope() -> None:
+def test_mesh_binding_stays_in_scope() -> None:
     """A mesh alias is removed with its lexical frame after the with body."""
     with pytest.raises(ParseError, match="'mesh' is not a lexical Mesh binding"):
         load_authored_ir(str(DIAGNOSTICS / "parser_mesh_binding_escapes_scope.py"))
 
 
-def test_a_boundary_rejects_a_different_split_axis() -> None:
+def test_boundary_rejects_split_axis_mismatch() -> None:
     with pytest.raises(VerifyError, match="type mismatch.*param 'x'"):
         load_authored_ir(str(DIAGNOSTICS / "parser_boundary_split_axis_mismatch.py"))
 
 
-def test_a_boundary_rejects_a_different_storage() -> None:
+def test_boundary_rejects_storage_mismatch() -> None:
     with pytest.raises(VerifyError, match="type mismatch.*param 'x'"):
         load_authored_ir(str(DIAGNOSTICS / "parser_boundary_storage_mismatch.py"))
 
 
-def test_a_layout_undefined_boundary_still_constrains_storage() -> None:
+def test_layoutless_boundary_constrains_storage() -> None:
     with pytest.raises(VerifyError, match="type mismatch.*param 'x'"):
         load_authored_ir(str(DIAGNOSTICS / "parser_boundary_layout_undefined_storage.py"))
 
 
-def test_a_boundary_rejects_a_bare_undeclared_mesh_name() -> None:
+def test_boundary_rejects_undeclared_mesh() -> None:
     with pytest.raises(ParseError, match="'nope' is not a lexical Mesh binding"):
         load_authored_ir(str(DIAGNOSTICS / "parser_boundary_undeclared_mesh.py"))
 
 
-def test_placement_rejects_an_external_mesh_axis_binding() -> None:
+def test_placement_rejects_external_mesh() -> None:
     with pytest.raises(
         ParseError, match="'_EXTERNAL_PLACEMENT_MESH' is not a lexical Mesh binding"
     ):

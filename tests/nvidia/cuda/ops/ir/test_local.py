@@ -23,7 +23,7 @@ _N = DimVar("n", 1, 128)
 
 
 @pytest.mark.parametrize(("name", "shape", "dims"), (("main", (2,), None), ("symbolic", (_N,), {"n": 8})))
-def test_local_analyzes_as_a_zero_traffic_topology_view(name, shape, dims) -> None:
+def test_local_view_zero_traffic(name, shape, dims) -> None:
     _LocalProgram = load_authored_ir(f"{OPS / 'local_view.py'}:_LocalProgram")
     entry = next(fn for fn in _LocalProgram.functions if fn.name == name)
     local = next(

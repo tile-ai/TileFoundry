@@ -11,7 +11,7 @@ from tilefoundry.inspection import as_script
 SIBLINGS = Path(__file__).parents[1] / "fixtures" / "logical" / "sibling_call.py"
 
 
-def test_a_sibling_call_survives_the_round_trip() -> None:
+def test_sibling_call_survives_roundtrip() -> None:
     """A body calling an earlier sibling is canonical output.
 
     A body calling an earlier sibling is canonical output, so importing it

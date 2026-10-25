@@ -39,7 +39,7 @@ def _make_grouped_conv2d_matches_torch_reference() -> OpCase:
     return OpCase("grouped", _OP, (input_, weight, bias), value=expected)
 
 
-def test_conv2d_plain_layout_describes_the_result() -> None:
+def test_conv2d_layout_describes_result() -> None:
     result = infer_call(_OP, _X, _W, _BIAS)
     assert result.shape == (2, 6, 4, 5)
     assert result.layout == Layout(shape=result.shape, strides=(120, 20, 5, 1))
@@ -75,7 +75,7 @@ def test_conv2d_relation_propagates_surviving_splits(input_, weight, bias, attrs
     assert split_target_axes(result.layout, result.shape) == targets
 
 
-def test_conv2d_relation_accepts_exact_contraction_partial() -> None:
+def test_conv2d_accepts_contraction_partial() -> None:
     op = Conv2D(stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1)
     input_ = make_shard_tensor_type((1, 4, 8, 8), mesh=_MESH, attrs=(Split(1),))
     weight = make_shard_tensor_type((4, 4, 3, 3), mesh=_MESH, attrs=(Split(1),))
