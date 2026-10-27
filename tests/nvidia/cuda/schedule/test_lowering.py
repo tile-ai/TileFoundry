@@ -168,6 +168,15 @@ def test_lowering_rejects_missing_access_relation(
     _assert_cli_lowering_error(source, "states no access relations", tmp_path, capsys)
 
 
+def test_finalize_rejects_missing_memory_analysis():
+    module = load_authored_ir(str(FIXTURES / "schedule" / "hir" / "smem_padded_stages.py"))
+    result = analyze(
+        *check_program(module, module.entry_function()), analysis=("compute-cost",)
+    )
+    with pytest.raises(LoweringError, match="finalize needs the result of analyze"):
+        finalize(result)
+
+
 def test_lowering_rejects_written_return_window():
     module = load_authored_ir(str(FIXTURES / "diagnostics" / "lowering_written_return_window.py"))
     with pytest.raises(
@@ -673,7 +682,7 @@ def test_retained_insert_keeps_parameter_storage(later_use, nested):
             TirBuilder, "transfer", autospec=True, side_effect=TirBuilder.transfer
         ) as copy:
             with pytest.raises(LoweringError, match="cannot be placed"):
-                finalize(result, authored=module.entry_function())
+                finalize(result)
         copy.assert_not_called()
 
 

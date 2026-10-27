@@ -231,24 +231,24 @@ unified retype / verify is scheduled by `PassManager`.
 class ConvertHIRToTIR(ModulePass):
     """Replace one selected scheduled HIR entry with verified TIR."""
 
-    analyzed: AnalysisResult
-    authored: Function
+    visitor: ClassVar[type[Lowering]] = Lowering
     name: str = "convert-hir-to-tir"
     requires: tuple[str, ...] = ()
 
+    @classmethod
+    def create(cls, target: Target) -> ConvertHIRToTIR: ...
     def run(self, module: Module) -> Module: ...
 ```
 
 - constraints:
-  - The pass receives the result of `analyze(..., analysis=("memory",))` on a
-    checked program and never checks or analyzes again; it lowers that result's
-    Module, in place, and its retained calls. A result whose `executed` lacks
-    `memory`, or whose Module is not the one the pass receives, raises
-    `LoweringError`. `PassPoint.BEFORE_LOWER` passes run after that analysis and
-    before this pass. The authored function is
-    retained separately so `BindingMetadata`, keyed by `SourceSpanMetadata`,
-    remains the source of user-facing names after analysis has assigned its own
-    internal bindings.
+  - The pass lowers the entry function of the Module it receives, in place, and
+    its retained calls. That function MUST carry the memory analysis
+    (`AllocationSummaryMetadata`); otherwise the pass raises `LoweringError`. It
+    never checks or analyzes again, and it takes nothing but configuration at
+    construction. Generated names come from the `BindingMetadata` on that IR.
+  - A Target MAY bind a subclass with `@bind(TargetClass, ConvertHIRToTIR)`;
+    finalization obtains the pass through `Target.resolve(ConvertHIRToTIR)`. The
+    entry function and every callee are lowered by the same `visitor` class.
   - Address placement comes only from `MemoryMetadata`: integer shared-memory
     addresses are byte offsets, and every analyzed offset becomes one concrete
     buffer view. Multiple offsets form a staged tuple declared outside the

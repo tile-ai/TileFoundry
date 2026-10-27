@@ -12,10 +12,11 @@ from dataclasses import dataclass, field, replace
 from functools import cached_property
 from itertools import product
 from math import prod
+from typing import ClassVar
 
 import isl
 
-from tilefoundry.analysis import AnalysisResult, MemoryMetadata
+from tilefoundry.analysis import MemoryMetadata
 from tilefoundry.analysis.access import AliasKind, buffer_alias, forwarded_leaves
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.ir.core import (
@@ -23,7 +24,6 @@ from tilefoundry.ir.core import (
     Call,
     Constant,
     Expr,
-    SourceSpanMetadata,
     Tuple,
     Var,
     get_metadata,
@@ -39,7 +39,6 @@ from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
-from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import isl_to_dim, layout_to_isl_map
@@ -232,7 +231,7 @@ class TirBuilder:
             storage_type = replace(type_, layout=layout)
             stem = ctx.names.fresh(
                 expr.name if isinstance(expr, Var) else "value",
-                ctx.authored_values.get(id(expr)),
+                expr,
             )
             if type_.storage is StorageKind.RMEM:
                 storage_type = type_
@@ -403,8 +402,8 @@ class Names:
 
     used: set[str]
 
-    def fresh(self, stem: str, authored=None) -> str:
-        binding = get_metadata(authored, BindingMetadata) if authored is not None else None
+    def fresh(self, stem: str, expr=None) -> str:
+        binding = get_metadata(expr, BindingMetadata) if expr is not None else None
         stem = binding.name if binding is not None else stem
         if stem not in self.used:
             self.used.add(stem)
@@ -415,22 +414,6 @@ class Names:
         result = f"{stem}_{index}"
         self.used.add(result)
         return result
-
-    def pair(self, expr: Expr, ctx) -> None:
-        authored = ctx.authored_values.get(id(expr))
-        if authored is None:
-            return
-        actual_children = expr_children(expr)
-        authored_children = expr_children(authored)
-        if len(actual_children) != len(authored_children):
-            return
-        for actual, source in zip(actual_children, authored_children, strict=True):
-            actual_span = get_metadata(actual, SourceSpanMetadata)
-            source_span = get_metadata(source, SourceSpanMetadata)
-            if type(actual) is type(source) and (
-                actual_span is None or source_span is None or actual_span == source_span
-            ):
-                ctx.authored_values[id(actual)] = source
 
 
 def _label(call: Expr) -> str:
@@ -1137,7 +1120,6 @@ class LoweringContext(TypeInferContext):
     scratch: list[Var] = field(default_factory=list)
     allocations: dict = field(default_factory=dict)
     parameters: dict = field(default_factory=dict)
-    authored_values: dict = field(default_factory=dict)
 
     def value(self, leaf):
         result = self.memo[id(leaf.expr)][1]
@@ -1243,7 +1225,6 @@ class Lowering(ValuationVisitor[Expr | View]):
     """Mechanical lowering of one analyzed HIR function."""
 
     context: TypeInferContext
-    authored: Function
     callees: dict[int, Lowering] = field(default_factory=dict)
 
     def visit(self, expr, ctx=None, *, dimension=False):
@@ -1265,7 +1246,6 @@ class Lowering(ValuationVisitor[Expr | View]):
         known = ctx.memo.get(id(expr))
         if known is not None:
             return known[1]
-        ctx.names.pair(expr, ctx)
         if isinstance(expr, Constant):
             return expr
         if isinstance(expr, Var) and id(expr) not in self._memo:
@@ -1291,13 +1271,11 @@ class Lowering(ValuationVisitor[Expr | View]):
                 self.context.function, self.context, self.context.current_mesh
             ),
             builder=TirBuilder([TirScope(region=self.context.function)]),
-            names=Names({param.name for param in self.authored.params}),
+            names=Names({param.name for param in self.context.function.params}),
             issues=IssuePlan(),
         )
         ctx = self.context
         ctx.memo = self._memo
-        if ctx.function.body is not None and self.authored.body is not None:
-            ctx.authored_values[id(ctx.function.body)] = self.authored.body
         self.locations = self.index_contexts(ctx.function, self.context)
         for param in ctx.function.params:
             physical = Var(param.name, type=param.type, is_const=param.is_const)
@@ -1450,9 +1428,8 @@ class Lowering(ValuationVisitor[Expr | View]):
         frame = ctx._callee_context(call)
         lowering = self.callees.get(id(frame.function))
         if lowering is None:
-            lowering = Lowering(
+            lowering = type(self)(
                 TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies, owner=frame.function, current_mesh=ctx.current_mesh),
-                origin_of(frame.function) or frame.function,
                 self.callees,
             )
             lowering.lowered = lowering.run()
@@ -1747,28 +1724,31 @@ class Lowering(ValuationVisitor[Expr | View]):
 class ConvertHIRToTIR(ModulePass):
     """Replace one selected HIR entry with its scheduled TIR function."""
 
-    analyzed: AnalysisResult
-    authored: Function
+    visitor: ClassVar[type[Lowering]] = Lowering
 
     name = "convert-hir-to-tir"
     requires = ()
 
+    @classmethod
+    def create(cls, target) -> ConvertHIRToTIR:
+        """The pass a Target selects; it takes nothing beyond the Target."""
+        return cls()
+
     def run(self, module: Module) -> Module:
-        result = self.analyzed
-        if "memory" not in result.executed or module is not result.module:
+        function = module.entry_function()
+        if get_metadata(function, AllocationSummaryMetadata) is None:
             raise LoweringError(
                 "finalize needs the result of analyze(..., analysis=('memory',)) on a checked program"
             )
         lowered = {}
-        lowering = Lowering(
+        lowering = self.visitor(
             TypeInferContext(
-                module=result.module, function=result.function, owner=result.function
+                module=module, function=function, owner=function
             ),
-            self.authored,
             lowered,
         )
         lowering.lowered = lowering.run()
-        lowered[id(result.function)] = lowering
+        lowered[id(function)] = lowering
         modules = set()
 
         def lower_module(node):
@@ -1782,8 +1762,8 @@ class ConvertHIRToTIR(ModulePass):
                 lowered[id(fn)].lowered if id(fn) in lowered else fn for fn in node.functions
             )
 
-        lower_module(result.module)
-        return result.module
+        lower_module(module)
+        return module
 
 
 __all__ = ["ConvertHIRToTIR", "LoweringError"]

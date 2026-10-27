@@ -341,10 +341,10 @@ def _candidates(case, checked):
 def _finalize(case, module, result):
     if case.finalize_refusal:
         with pytest.raises(LoweringError) as refused:
-            finalize(result, authored=module.entry_function())
+            finalize(result)
         assert case.finalize_refusal in str(refused.value)
         return None
-    return finalize(result, authored=module.entry_function())
+    return finalize(result)
 
 
 def _hir(case, problems):

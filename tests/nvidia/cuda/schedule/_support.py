@@ -221,7 +221,7 @@ class _RetainedStatements(StmtVisitor[None]):
 def _finalized(module):
     authored = module.entry_function()
     result = analyze(*check_program(module, authored), analysis=("memory",))
-    return finalize(result, authored=authored)
+    return finalize(result)
 
 
 def _copy_schedule_call(

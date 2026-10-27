@@ -60,7 +60,7 @@ class SequentialCarries(AllocationCase):
             assert link.relation.relation.is_identity()
             assert link.target.expr is insert.args[0]
             assert memory.buffer_bytes is None and memory.offsets == ()
-        verify_module(finalize(result, authored=state.entry_function()))
+        verify_module(finalize(result))
 
 
 @dataclass(frozen=True)

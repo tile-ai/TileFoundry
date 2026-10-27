@@ -21,7 +21,6 @@ from tilefoundry.ir.hir.specialize import SpecializationError
 class Program:
     """What every single-size HIR command starts from."""
 
-    authored: Function
     module: Module
     entry: Function
 
@@ -44,7 +43,7 @@ def checked_program(
         checked, entry = check_program(module, authored, topology_level=topology_level, dims=bound)
     except SpecializationError as error:
         raise ValueError(f"{command}: {error}") from None
-    return Program(authored, checked, entry)
+    return Program(checked, entry)
 
 
 def _split_source(source: str) -> tuple[Path, str | None]:
