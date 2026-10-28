@@ -26,7 +26,9 @@ class RowRing:
     def row_ring_device(x: Tensor[(6, 8), "bf16"], out: Tensor[(6, 8), "bf16"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:  # noqa: F841
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
-
+                ring_0 = T.tensor_view(0, dtype='bf16', storage='smem', layout=(1, 8), shape=(1, 8))
+                ring_1 = T.tensor_view(16, dtype='bf16', storage='smem', layout=(1, 8), shape=(1, 8))
+                ring_stages = (ring_0, ring_1)
                 for i in range(0, 2, 1):
                     for j in range(0, 3, 1):
                         value = T.tensor_view(
@@ -34,12 +36,7 @@ class RowRing:
                             layout=((1, 8), (0, 1)),
                             shape=(1, 8),
                         )
-                        stage = T.tensor_view(
-                            (((i * 3) + j) % 2) * 16,
-                            dtype="bf16", storage="smem",
-                            layout=(1, 8),
-                            shape=(1, 8),
-                        )
+                        stage = ring_stages[(i * 3 + j) % 2]
                         T.copy_async(value, stage)
                         T.cp_async_commit()
                         T.cp_async_wait(n=0)

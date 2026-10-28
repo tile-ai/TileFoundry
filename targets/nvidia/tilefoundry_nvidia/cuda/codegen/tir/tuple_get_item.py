@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub
-from tilefoundry.ir.types.dtype import IntegerDType
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 from tilefoundry_nvidia.cuda import CudaTarget
@@ -48,7 +46,7 @@ def _index(expr, ctx: CudaCodegenContext) -> str:
     )
 
 
-def constant_index(index: Constant) -> int:
+def _constant_index(index: Constant) -> int:
     """The element a constant TupleGetItem index selects."""
     selected = index.value
     if not isinstance(selected, int) or isinstance(selected, bool):
@@ -58,36 +56,21 @@ def constant_index(index: Constant) -> int:
 
 @register_codegen(CudaTarget, Role.EMIT, Tuple)
 def _bind_tuple(let_stmt, ctx: CudaCodegenContext) -> None:
-    """Declare one array for a tuple whose elements share a type."""
+    """Declare one C++ variable for every tuple binding."""
     elements = let_stmt.value.elements
-    if not elements or any(element.type != elements[0].type for element in elements[1:]):
-        return
     rendered = tuple(_value(element, ctx) for element in elements)
-    type_ = elements[0].type
-    name = ctx.name_for(let_stmt.var)
-    values = ", ".join(rendered)
-    if (
-        isinstance(type_, TensorType)
-        and type_.shape == ()
-        and type_.storage is StorageKind.UMAT
-        and isinstance(type_.dtype, IntegerDType)
-    ):
-        ctx.emit(f"int64_t {name}[{len(elements)}] = {{{values}}};")
-    else:
+    name, values = ctx.name_for(let_stmt.var), ", ".join(rendered)
+    if elements and all(element.type == elements[0].type for element in elements[1:]):
         ctx.emit(f"cute::array<decltype({rendered[0]}), {len(elements)}> {name}{{{values}}};")
+    else:
+        ctx.emit(f"auto {name} = cute::make_tuple({values});")
 
 
 @register_codegen(CudaTarget, Role.EMIT, TupleGetItem)
 def _emit(let_stmt, ctx: CudaCodegenContext) -> None:
-    call = let_stmt.value
-    tuple_var, index = call.args
-    held = tuple_var
-    if isinstance(held, Var):
-        held = ctx.tuple_for(held)
-    if not isinstance(held, Tuple):
-        raise ValueError("CUDA TupleGetItem requires a tuple value")
-    result = ctx.name_for(let_stmt.var)
+    tuple_var, index = let_stmt.value.args
+    held, result = ctx.name_for(tuple_var), ctx.name_for(let_stmt.var)
     if isinstance(index, Constant):
-        ctx.emit(f"auto {result} = {_value(held.elements[constant_index(index)], ctx)};")
+        ctx.emit(f"auto {result} = cute::get<{_constant_index(index)}>({held});")
         return
-    ctx.emit(f"auto {result} = {ctx.name_for(tuple_var)}[{_index(index, ctx)}];")
+    ctx.emit(f"auto {result} = {held}[{_index(index, ctx)}];")

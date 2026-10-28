@@ -46,7 +46,6 @@ from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.arith import Binary as TirBinary
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
-from tilefoundry.ir.tir.memory.tensor_view import _byte_offset
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, For, LetStmt, MeshScope, Sequential
 from tilefoundry.ir.tir.symbol_ref import symbol_ref
@@ -281,6 +280,12 @@ class TirBuilder:
             if len(offsets) == 1:
                 pointer = Constant(offsets[0], type=PointerType(storage_type.dtype, storage_type.storage))
                 return View(pointer, (), tuple(storage_type.shape), storage_type, stem)
+            fields = tuple(
+                self.bind(Var(ctx.names.fresh(stem), type=storage_type), ctx.storage.view(offset, None, storage_type))
+                for offset in offsets
+            )
+            stages = Var(ctx.names.fresh(f"{stem}_stages"), type=TupleType(tuple(field.type for field in fields)))
+            self.bind(stages, Tuple(fields, type=stages.type))
             loops = ctx.storage.placement[id(expr)][1]
             if any(
                 static_dim_value(bound) is None
@@ -303,45 +308,34 @@ class TirBuilder:
                     self.stage_counters[key] = (counter, one)
                 counter, _one = self.stage_counters[key]
                 index = simplify_dim(DimMod, (counter, len(offsets)))
-                address = self.stage_address(offsets, index, stem, ctx=ctx)
-                return View(address, (), tuple(storage_type.shape), storage_type, stem)
-            index = i64_const(0)
-            for depth, loop in enumerate(loops):
-                induction = values.get(id(loop.induction_var))
-                if not isinstance(induction, Var):
-                    raise LoweringError(f"{_label(expr)} staged selection has no owning induction")
-                start = static_dim_value(loop.start)
-                stop = static_dim_value(loop.extent)
-                step = static_dim_value(loop.step)
-                if step is None:
-                    raise LoweringError(
-                        f"{_label(expr)} staged selection needs a literal step for "
-                        f"{loop.induction_var.name!r}"
+            else:
+                index = i64_const(0)
+                for depth, loop in enumerate(loops):
+                    induction = values.get(id(loop.induction_var))
+                    if not isinstance(induction, Var):
+                        raise LoweringError(f"{_label(expr)} staged selection has no owning induction")
+                    start = static_dim_value(loop.start)
+                    stop = static_dim_value(loop.extent)
+                    step = static_dim_value(loop.step)
+                    if step is None:
+                        raise LoweringError(
+                            f"{_label(expr)} staged selection needs a literal step for "
+                            f"{loop.induction_var.name!r}"
+                        )
+                    if depth:
+                        trips = max(0, (stop - start + step - 1) // step)
+                        index = simplify_dim(DimMul, (index, trips))
+                    moved = (
+                        induction
+                        if start == 0
+                        else simplify_dim(DimSub, (induction, values[id(loop.start)]))
                     )
-                if depth:
-                    trips = max(0, (stop - start + step - 1) // step)
-                    index = simplify_dim(DimMul, (index, trips))
-                moved = (
-                    induction
-                    if start == 0
-                    else simplify_dim(DimSub, (induction, values[id(loop.start)]))
-                )
-                ordinal = moved if step == 1 else simplify_dim(DimFloorDiv, (moved, step))
-                index = ordinal if depth == 0 else simplify_dim(DimAdd, (index, ordinal))
-            if loops:
-                index = simplify_dim(DimMod, (index, len(offsets)))
-            address = self.stage_address(offsets, index, stem, ctx=ctx)
-            return View(address, (), tuple(storage_type.shape), storage_type, stem)
-
-    def stage_address(self, offsets, index, stem, *, ctx):
-        """Select a stage by its byte offset, using one table for irregular placement."""
-        stride = offsets[1] - offsets[0]
-        if all(offset == offsets[0] + slot * stride for slot, offset in enumerate(offsets)):
-            return simplify_dim(DimAdd, (offsets[0], simplify_dim(DimMul, (index, stride))))
-        fields = tuple(i64_const(offset) for offset in offsets)
-        table = Var(ctx.names.fresh(f"{stem}_offsets"), type=TupleType(tuple(field.type for field in fields)))
-        self.bind(table, Tuple(fields, type=table.type))
-        return Call(TupleGetItem(), (table, index), type=fields[0].type)
+                    ordinal = moved if step == 1 else simplify_dim(DimFloorDiv, (moved, step))
+                    index = ordinal if depth == 0 else simplify_dim(DimAdd, (index, ordinal))
+                if loops:
+                    index = simplify_dim(DimMod, (index, len(offsets)))
+            selected = Call(TupleGetItem(), (stages, index), type=storage_type)
+            return View(selected, (), tuple(storage_type.shape), storage_type, stem)
 
     def value(self, value, *, ctx):
         """Materialize a recipe in its consuming scope without changing it."""
@@ -841,8 +835,10 @@ class StoragePlan:
     def materialization(self, view, base, loops):
         """Describe one physical TIR view without adding any statements."""
         desired = view.type
-        if _byte_offset(base):
-            return self.view(base, None, desired)
+        if isinstance(base, Constant) and isinstance(base.type, PointerType):
+            return self.view(base.value, None, desired)
+        if isinstance(base, Call) and isinstance(base.target, TupleGetItem):
+            return base
         held = base.type
         if len(view.starts) != len(held.shape):
             raise LoweringError(
@@ -898,11 +894,8 @@ class StoragePlan:
 
     def view(self, target, address, desired, *, values=None):
         """Derive an exact physical view; a proved composition carries its origin."""
-        if isinstance(target, int) or _byte_offset(target):
-            pointer = (
-                Constant(target, type=PointerType(desired.dtype, desired.storage))
-                if isinstance(target, int) else target
-            )
+        if isinstance(target, int):
+            pointer = Constant(target, type=PointerType(desired.dtype, desired.storage))
             return Call(
                 TensorView(
                     dtype=desired.dtype.name,

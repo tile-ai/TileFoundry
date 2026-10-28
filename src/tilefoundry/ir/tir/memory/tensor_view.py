@@ -9,10 +9,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Call, Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import DType, PointerType, StorageKind, TensorType, TupleType
-from tilefoundry.ir.types.dim import is_dim_op_call
-from tilefoundry.ir.types.dtype import IntegerDType
+from tilefoundry.ir.types import DType, PointerType, StorageKind, TensorType
 from tilefoundry.ir.types.layout import LayoutBase
 from tilefoundry.ir.types.storage import resolve_storage
 from tilefoundry.visitor_registry import register_typeinfer
@@ -24,8 +21,8 @@ class TensorView(Op):
 
     ``layout`` updates the ``ShardLayout`` / cute ``Layout``; the optional
     ``shape`` overrides the logical shape. When omitted, it is inherited only
-    from a syntactic ``PtrOf(tensor)`` input. Integer inputs and dimension arithmetic
-    are byte offsets from the dynamic shared-memory base and require dtype, storage, and shape.
+    from a syntactic ``PtrOf(tensor)`` input. Integer inputs are byte offsets
+    from the dynamic shared-memory base and require dtype, storage, and shape.
     """
 
     pointer = ParamDef(kind="input")
@@ -33,21 +30,6 @@ class TensorView(Op):
     storage = ParamDef(kind="attribute", annotation=StorageKind, optional=True, default=None)
     layout = ParamDef(kind="attribute", annotation=LayoutBase)
     shape = ParamDef(kind="attribute", annotation=tuple, default=None)
-
-
-def _byte_offset(expr) -> bool:
-    """An integer byte-offset recipe, rather than an addressable scalar tensor."""
-    if isinstance(expr, Constant):
-        return isinstance(expr.value, int) and not isinstance(expr.value, bool)
-    if is_dim_op_call(expr):
-        return True
-    if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem):
-        held = expr.args[0].type
-        return isinstance(held, TupleType) and bool(held.fields) and all(
-            isinstance(field, TensorType) and field.shape == () and isinstance(field.dtype, IntegerDType)
-            for field in held.fields
-        )
-    return False
 
 
 @register_typeinfer(TensorView)
@@ -69,7 +51,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     if not isinstance(pointer, PointerType):
         address = call.args[0]
-        if not _byte_offset(address):
+        if (
+            not isinstance(address, Constant)
+            or isinstance(address.value, bool)
+            or not isinstance(address.value, int)
+        ):
             ctx.error(call, "tensor_view input must be a pointer")
         if op.dtype is None or op.storage is None or op.shape is None:
             ctx.error(
@@ -83,8 +69,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             ctx.error(call, str(error))
         if pointer.storage is not StorageKind.SMEM:
             ctx.error(call, "integer tensor_view address requires storage='smem'")
-        if isinstance(address, Constant):
-            address.type = pointer
+        address.type = pointer
     elif op.dtype is not None or op.storage is not None:
         try:
             stated = PointerType(

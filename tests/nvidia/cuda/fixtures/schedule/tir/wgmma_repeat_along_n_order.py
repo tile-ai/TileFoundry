@@ -36,6 +36,42 @@ class WgmmaRepeatAlongNOrder:
                     scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
                 ) as scope_1:
                     T.fill(acc, 0.0)
+                lhs_ring_0 = T.tensor_view(
+                    16384,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))),
+                    shape=(128, 16),
+                )
+                lhs_ring_1 = T.tensor_view(
+                    20480,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))),
+                    shape=(128, 16),
+                )
+                lhs_ring_stages = (
+                lhs_ring_0,
+                lhs_ring_1,
+            )
+                rhs_ring_0 = T.tensor_view(
+                    0,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 8), (4, 8, 8)), ((64, 8), (1024, 128, 1))),
+                    shape=(16, 256),
+                )
+                rhs_ring_1 = T.tensor_view(
+                    8192,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 8), (4, 8, 8)), ((64, 8), (1024, 128, 1))),
+                    shape=(16, 256),
+                )
+                rhs_ring_stages = (
+                rhs_ring_0,
+                rhs_ring_1,
+            )
                 for k in range(0, 32, 16):
                     with scope[:1, :32] as scope_2:
                         value = T.tensor_view(
@@ -43,34 +79,12 @@ class WgmmaRepeatAlongNOrder:
                             layout=((128, 16), (32, 1)),
                             shape=(128, 16),
                         )
-                        lhs_ring_1 = T.tensor_view(
-                            ((4096 * (k // 16)) - (8192 * (k // 32))) + 16384,
-                            dtype="bf16",
-                            storage="smem",
-                            layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))),
-                            shape=(128, 16),
-                        )
-                        value_1 = T.tensor_view(
-                            T.ptr_of(lhs_ring_1),
-                            layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))),
-                            shape=(128, 16),
-                        )
+                        value_1 = lhs_ring_stages[(k // 16) % 2]
                         T.copy_async_tensor(value, value_1)
                         value_2 = T.tensor_view(
                             T.ptr_of(b[k:k + 1, 0:0 + 1]), layout=(16, 256), shape=(16, 256)
                         )
-                        rhs_ring_1 = T.tensor_view(
-                            (8192 * (k // 16)) - (16384 * (k // 32)),
-                            dtype="bf16",
-                            storage="smem",
-                            layout=Layout(((2, 8), (4, 8, 8)), ((64, 8), (1024, 128, 1))),
-                            shape=(16, 256),
-                        )
-                        value_3 = T.tensor_view(
-                            T.ptr_of(rhs_ring_1),
-                            layout=Layout(((2, 8), (4, 8, 8)), ((64, 8), (1024, 128, 1))),
-                            shape=(16, 256),
-                        )
+                        value_3 = rhs_ring_stages[(k // 16) % 2]
                         T.copy_async_tensor(value_2, value_3)
                     with Mesh(
                         scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
@@ -88,35 +102,13 @@ class WgmmaRepeatAlongNOrder:
                                         layout=((2 @ scope_3.d0, 4 @ scope_3.d1, 2, 8 @ scope_3.d2, 8, 4 @ scope_3.d3, 2), (16384, 16, 8, 1, 512, 128, 64)),
                                         shape=(128, 64),
                                     )
-                                    lhs_ring_2 = T.tensor_view(
-                                        ((4096 * (k // 16)) - (8192 * (k // 32))) + 16384,
-                                        dtype="bf16",
-                                        storage="smem",
-                                        layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))),
-                                        shape=(128, 16),
-                                    )
-                                    value_5 = T.tensor_view(
-                                        T.ptr_of(lhs_ring_2),
-                                        layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))),
-                                        shape=(128, 16),
-                                    )
+                                    value_5 = lhs_ring_stages[(k // 16) % 2]
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(value_5[0:0 + 128, 0:0 + 16]),
                                         layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))) @ {B()},
                                         shape=(128, 16),
                                     )
-                                    rhs_ring_2 = T.tensor_view(
-                                        (8192 * (k // 16)) - (16384 * (k // 32)),
-                                        dtype="bf16",
-                                        storage="smem",
-                                        layout=Layout(((2, 8), (4, 8, 8)), ((64, 8), (1024, 128, 1))),
-                                        shape=(16, 256),
-                                    )
-                                    value_6 = T.tensor_view(
-                                        T.ptr_of(rhs_ring_2),
-                                        layout=Layout(((2, 8), (4, 8, 8)), ((64, 8), (1024, 128, 1))),
-                                        shape=(16, 256),
-                                    )
+                                    value_6 = rhs_ring_stages[(k // 16) % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_6[o_k:o_k + 16, o_n:o_n + 64]),
                                         layout=Layout(((2, 8), (8, 8)), ((64, 8), (128, 1))) @ {B()},

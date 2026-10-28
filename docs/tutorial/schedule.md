@@ -399,6 +399,58 @@ class GEMM_8192X17408X5120_OPTIMAL:
                 (Topology("thread", 384),), layout=(3, 128), names=("warpgroup", "participant")
             ) as scope:
                 T.fill(out, 0.0)
+                lhs_ring_1 = T.tensor_view(
+                    98304,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                    shape=(128, 64),
+                )
+                lhs_ring_2 = T.tensor_view(
+                    114688,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                    shape=(128, 64),
+                )
+                lhs_ring_3 = T.tensor_view(
+                    131072,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                    shape=(128, 64),
+                )
+                lhs_ring_stages = (
+                lhs_ring_1,
+                lhs_ring_2,
+                lhs_ring_3,
+            )
+                rhs_ring_1 = T.tensor_view(
+                    0,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                    shape=(64, 256),
+                )
+                rhs_ring_2 = T.tensor_view(
+                    32768,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                    shape=(64, 256),
+                )
+                rhs_ring_3 = T.tensor_view(
+                    65536,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                    shape=(64, 256),
+                )
+                rhs_ring_stages = (
+                rhs_ring_1,
+                rhs_ring_2,
+                rhs_ring_3,
+            )
                 for task in range(cta.persistent, 4352, 132):
                     acc = T.alloc_tensor(
                         tensor_type=Tensor[
@@ -427,65 +479,13 @@ class GEMM_8192X17408X5120_OPTIMAL:
                                 layout=((128, 64), (5120, 1)),
                                 shape=(128, 64),
                             )
-                            lhs_ring_1 = T.tensor_view(
-                                98304 + ((((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3) * 16384),
-                                dtype="bf16",
-                                storage="smem",
-                                layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
-                                shape=(128, 64),
-                            )
-                            T.copy_async_tensor(value, lhs_ring_1)
+                            lhs_ring_4 = lhs_ring_stages[((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3]
+                            T.copy_async_tensor(value, lhs_ring_4)
                             value_1 = T.tensor_view(
                                 T.ptr_of(b[k:k + 1, ((task // 16) % 68) * 256:((task // 16) % 68) * 256 + 1]),
                                 layout=((64, 256), (17408, 1)),
                                 shape=(64, 256),
                             )
-                            rhs_ring_1 = T.tensor_view(
-                                0 + ((((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3) * 32768),
-                                dtype="bf16",
-                                storage="smem",
-                                layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
-                                shape=(64, 256),
-                            )
-                            T.copy_async_tensor(value_1, rhs_ring_1)
-                        with Mesh(
-                            scope[1:], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")
-                        ) as scope_3:
-                            acc_pointer = T.ptr_of(acc)
-                            lhs_ring_2 = T.tensor_view(
-                                98304 + ((((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3) * 16384),
-                                dtype="bf16",
-                                storage="smem",
-                                layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
-                                shape=(128, 64),
-                            )
-                            unit = scope_3.group
-                            lhs_pointer = T.ptr_of(lhs_ring_2)
-                            rhs_ring_2 = T.tensor_view(
-                                0 + ((((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3) * 32768),
-                                dtype="bf16",
-                                storage="smem",
-                                layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
-                                shape=(64, 256),
-                            )
-                            with Mesh(
-                                scope[1:2], layout=(4, 8, 4), names=("warp", "lane8", "lane4")
-                            ) as threads_4:
-                                acc_local = T.tensor_view(
-                                    acc_pointer,
-                                    layout=((4 @ threads_4.warp, 2, 8 @ threads_4.lane8, 32, 4 @ threads_4.lane4, 2), (16, 8, 1, 512, 128, 64)),
-                                    shape=(64, 256),
-                                )
-                                lhs_local = T.tensor_view(
-                                    lhs_pointer,
-                                    layout=Layout(((8, 8), (4, 16)), ((512, 64), (16, 1))) + (4096 * unit) | Swizzle(3, 4, 3),
-                                    shape=(64, 64),
-                                )
-                                lhs_view = T.tensor_view(
-                                    T.ptr_of(lhs_local[0:0 + 64, 0:0 + 16]),
-                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) + (4096 * unit) | Swizzle(3, 4, 3)) @ {B()},
-                                    shape=(64, 16),
-                                )
 ```
 
 The three `g / bn / mi` loops and `cta.d0` survive lowering. The three RHS slots

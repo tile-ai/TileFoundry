@@ -533,10 +533,9 @@ class TensorView(Op):
     when the input syntax is exactly `T.ptr_of(tensor)`, from that tensor's
     `TensorType.shape`. No other pointer provenance and no layout is inspected
     to guess a shape.
-  - An integer input, or integer dimension arithmetic over scalars, is a byte
-    offset from the kernel's dynamic shared-memory base. It MUST state `dtype`,
-    `storage="smem"`, and `shape`; booleans, non-integer numeric addresses and
-    tensor values are invalid.
+  - An integer input is a byte offset from the kernel's dynamic shared-memory
+    base. It MUST state `dtype`, `storage="smem"`, and `shape`; booleans and
+    non-integer numeric addresses are invalid.
   - A `PointerType` input MAY restate `dtype` or `storage`, but any stated value
     MUST equal the pointer descriptor.
   - Trailing coordinate inputs are not supported on pointer views.

@@ -34,6 +34,42 @@ class WgmmaKSlicesOfWideRun:
                 )
                 with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                     T.fill(acc, 0.0)
+                lhs_ring_0 = T.tensor_view(
+                    4096,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((8, 8), (2, 16)), ((256, 32), (16, 1))) | Swizzle(2, 4, 3),
+                    shape=(64, 32),
+                )
+                lhs_ring_1 = T.tensor_view(
+                    8192,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((8, 8), (2, 16)), ((256, 32), (16, 1))) | Swizzle(2, 4, 3),
+                    shape=(64, 32),
+                )
+                lhs_ring_stages = (
+                lhs_ring_0,
+                lhs_ring_1,
+            )
+                rhs_ring_0 = T.tensor_view(
+                    0,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))),
+                    shape=(32, 32),
+                )
+                rhs_ring_1 = T.tensor_view(
+                    2048,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))),
+                    shape=(32, 32),
+                )
+                rhs_ring_stages = (
+                rhs_ring_0,
+                rhs_ring_1,
+            )
                 for k in range(0, 64, 32):
                     with scope[:1, :32] as scope_2:
                         value = T.tensor_view(
@@ -41,34 +77,12 @@ class WgmmaKSlicesOfWideRun:
                             layout=((64, 32), (64, 1)),
                             shape=(64, 32),
                         )
-                        lhs_ring_1 = T.tensor_view(
-                            ((4096 * (k // 32)) - (8192 * (k // 64))) + 4096,
-                            dtype="bf16",
-                            storage="smem",
-                            layout=Layout(((8, 8), (2, 16)), ((256, 32), (16, 1))) | Swizzle(2, 4, 3),
-                            shape=(64, 32),
-                        )
-                        value_1 = T.tensor_view(
-                            T.ptr_of(lhs_ring_1),
-                            layout=Layout(((8, 8), (2, 16)), ((256, 32), (16, 1))) | Swizzle(2, 4, 3),
-                            shape=(64, 32),
-                        )
+                        value_1 = lhs_ring_stages[(k // 32) % 2]
                         T.copy_async_tensor(value, value_1)
                         value_2 = T.tensor_view(
                             T.ptr_of(b[k:k + 1, 0:0 + 1]), layout=(32, 32), shape=(32, 32)
                         )
-                        rhs_ring_1 = T.tensor_view(
-                            (2048 * (k // 32)) - (4096 * (k // 64)),
-                            dtype="bf16",
-                            storage="smem",
-                            layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))),
-                            shape=(32, 32),
-                        )
-                        value_3 = T.tensor_view(
-                            T.ptr_of(rhs_ring_1),
-                            layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))),
-                            shape=(32, 32),
-                        )
+                        value_3 = rhs_ring_stages[(k // 32) % 2]
                         T.copy_async_tensor(value_2, value_3)
                     with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_3:
                         for o_m in range(0, 64, 64):
@@ -79,35 +93,13 @@ class WgmmaKSlicesOfWideRun:
                                         layout=((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 4, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 32),
                                     )
-                                    lhs_ring_2 = T.tensor_view(
-                                        ((4096 * (k // 32)) - (8192 * (k // 64))) + 4096,
-                                        dtype="bf16",
-                                        storage="smem",
-                                        layout=Layout(((8, 8), (2, 16)), ((256, 32), (16, 1))) | Swizzle(2, 4, 3),
-                                        shape=(64, 32),
-                                    )
-                                    value_5 = T.tensor_view(
-                                        T.ptr_of(lhs_ring_2),
-                                        layout=Layout(((8, 8), (2, 16)), ((256, 32), (16, 1))) | Swizzle(2, 4, 3),
-                                        shape=(64, 32),
-                                    )
+                                    value_5 = lhs_ring_stages[(k // 32) % 2]
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(value_5[o_m:o_m + 64, o_k:o_k + 16]),
                                         layout=(Layout(((8, 8), 16), ((256, 32), 1)) | Swizzle(2, 4, 3)) @ {B()},
                                         shape=(64, 16),
                                     )
-                                    rhs_ring_2 = T.tensor_view(
-                                        (2048 * (k // 32)) - (4096 * (k // 64)),
-                                        dtype="bf16",
-                                        storage="smem",
-                                        layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))),
-                                        shape=(32, 32),
-                                    )
-                                    value_6 = T.tensor_view(
-                                        T.ptr_of(rhs_ring_2),
-                                        layout=Layout(((2, 2, 8), (4, 8)), ((512, 64, 8), (128, 1))),
-                                        shape=(32, 32),
-                                    )
+                                    value_6 = rhs_ring_stages[(k // 32) % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_6[o_k:o_k + 16, o_n:o_n + 32]),
                                         layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))) @ {B()},

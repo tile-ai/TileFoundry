@@ -90,9 +90,7 @@ class CppEmitter(StmtVisitor[None]):
     def visit_LetStmt(self, node: LetStmt) -> None:
         """Emit a call result or let the target materialize a tuple binding."""
         if isinstance(node.value, Tuple):
-            self.context.register_tuple(node.var, node.value)
-            if (handler := self.context.stmt_handler(Tuple)) is not None:
-                handler(node, self.context)
+            self.context.handler_for(Tuple)(node, self.context)
             return
         if not isinstance(node.value, Call):
             raise RuntimeError(

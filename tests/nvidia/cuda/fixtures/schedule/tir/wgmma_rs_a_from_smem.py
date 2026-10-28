@@ -34,6 +34,42 @@ class WgmmaRsAFromSmem:
                 )
                 with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                     T.fill(acc, 0.0)
+                lhs_ring_0 = T.tensor_view(
+                    2048,
+                    dtype="fp8e4m3",
+                    storage="smem",
+                    layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))),
+                    shape=(64, 32),
+                )
+                lhs_ring_1 = T.tensor_view(
+                    4096,
+                    dtype="fp8e4m3",
+                    storage="smem",
+                    layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))),
+                    shape=(64, 32),
+                )
+                lhs_ring_stages = (
+                lhs_ring_0,
+                lhs_ring_1,
+            )
+                rhs_ring_0 = T.tensor_view(
+                    0,
+                    dtype="fp8e4m3",
+                    storage="smem",
+                    layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))),
+                    shape=(32, 32),
+                )
+                rhs_ring_1 = T.tensor_view(
+                    1024,
+                    dtype="fp8e4m3",
+                    storage="smem",
+                    layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))),
+                    shape=(32, 32),
+                )
+                rhs_ring_stages = (
+                rhs_ring_0,
+                rhs_ring_1,
+            )
                 for k in range(0, 64, 32):
                     with scope[:1, :32] as scope_2:
                         value = T.tensor_view(
@@ -41,36 +77,14 @@ class WgmmaRsAFromSmem:
                             layout=((64, 32), (64, 1)),
                             shape=(64, 32),
                         )
-                        lhs_ring_1 = T.tensor_view(
-                            ((2048 * (k // 32)) - (4096 * (k // 64))) + 2048,
-                            dtype="fp8e4m3",
-                            storage="smem",
-                            layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))),
-                            shape=(64, 32),
-                        )
-                        value_1 = T.tensor_view(
-                            T.ptr_of(lhs_ring_1),
-                            layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))),
-                            shape=(64, 32),
-                        )
+                        value_1 = lhs_ring_stages[(k // 32) % 2]
                         T.copy_async_tensor(value, value_1)
                         value_2 = T.tensor_view(
                             T.ptr_of(b[k:k + 1, 0:0 + 1]),
                             layout=((32, 32), (1, 64)),
                             shape=(32, 32),
                         )
-                        rhs_ring_1 = T.tensor_view(
-                            (1024 * (k // 32)) - (2048 * (k // 64)),
-                            dtype="fp8e4m3",
-                            storage="smem",
-                            layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))),
-                            shape=(32, 32),
-                        )
-                        value_3 = T.tensor_view(
-                            T.ptr_of(rhs_ring_1),
-                            layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))),
-                            shape=(32, 32),
-                        )
+                        value_3 = rhs_ring_stages[(k // 32) % 2]
                         T.copy_async_tensor(value_2, value_3)
                     with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_3:
                         frag_dst = T.alloc_tensor(
@@ -81,18 +95,7 @@ class WgmmaRsAFromSmem:
                                 "rmem",
                             ]
                         )
-                        lhs_ring_2 = T.tensor_view(
-                            ((2048 * (k // 32)) - (4096 * (k // 64))) + 2048,
-                            dtype="fp8e4m3",
-                            storage="smem",
-                            layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))),
-                            shape=(64, 32),
-                        )
-                        value_4 = T.tensor_view(
-                            T.ptr_of(lhs_ring_2),
-                            layout=Layout(((8, 8), (2, 16)), ((256, 16), (128, 1))),
-                            shape=(64, 32),
-                        )
+                        value_4 = lhs_ring_stages[(k // 32) % 2]
                         value_5 = T.tensor_view(
                             T.ptr_of(frag_dst),
                             layout=((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 2, 4 @ scope_3.d2, 4), (16, 8, 1, 1024, 256, 64)),
@@ -112,18 +115,7 @@ class WgmmaRsAFromSmem:
                                         layout=((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 2, 4 @ scope_3.d2, 4), (16, 8, 1, 1024, 256, 64)),
                                         shape=(64, 32),
                                     )
-                                    rhs_ring_2 = T.tensor_view(
-                                        (1024 * (k // 32)) - (2048 * (k // 64)),
-                                        dtype="fp8e4m3",
-                                        storage="smem",
-                                        layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))),
-                                        shape=(32, 32),
-                                    )
-                                    value_8 = T.tensor_view(
-                                        T.ptr_of(rhs_ring_2),
-                                        layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))),
-                                        shape=(32, 32),
-                                    )
+                                    value_8 = rhs_ring_stages[(k // 32) % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_8[0:0 + 32, 0:0 + 32]),
                                         layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))) @ {B()},

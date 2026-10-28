@@ -54,20 +54,12 @@ class CudaCodegenContext(EmitContext):
   - Handlers obtain target type spellings and hardware counters through the
     context rather than rediscovering them from IR.
 
-CUDA value emission lowers `TupleGetItem` according to its index form. A constant
-index names the selected tuple element directly. A dynamic index requires the
-homogeneous tuple established by type inference and subscripts the array that
-tuple's binding declared; dimension arithmetic in the index remains runtime C++
-arithmetic.
-
-A `LetStmt` binding a `Tuple` whose elements share one type declares one C++
-array at the binding: `int64_t name[N]` for integer dimension values (UMAT scalars), otherwise
-`cute::array<decltype(e0), N>`. A heterogeneous `Tuple` stays structural: it
-emits no C++ variable, and only constant selection reaches it. The codegen
-context records the structural tuple by its fresh SSA `Var` identity so
-constant selection can recover its elements. The array holds element values
-at binding time: views still alias their original storage, while owning register
-tensors are copied.
+Every `LetStmt` binding a `Tuple` declares one C++ variable:
+`cute::array<decltype(e0), N>` when the elements share one type, otherwise
+`cute::make_tuple(e0, ...)`. A constant `TupleGetItem` reads `cute::get<i>(t)`;
+a dynamic one reads `t[i]` and requires the homogeneous tuple. The variable
+holds element values at binding time: views still alias their original storage,
+while owning register tensors are copied.
 
 CUDA emits `CopyAsyncBulk` and `LdMatrix` as the uniform runtime calls
 `tilefoundry::ops::copy_async_bulk(...)` and

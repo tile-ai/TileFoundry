@@ -36,6 +36,42 @@ class Fp8BlockScaledGemm:
                     scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
                 ) as scope_1:
                     T.fill(acc, 0.0)
+                lhs_ring_0 = T.tensor_view(
+                    32768,
+                    dtype="fp8e4m3",
+                    storage="smem",
+                    layout=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3),
+                    shape=(128, 128),
+                )
+                lhs_ring_1 = T.tensor_view(
+                    49152,
+                    dtype="fp8e4m3",
+                    storage="smem",
+                    layout=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3),
+                    shape=(128, 128),
+                )
+                lhs_ring_stages = (
+                lhs_ring_0,
+                lhs_ring_1,
+            )
+                rhs_ring_0 = T.tensor_view(
+                    0,
+                    dtype="fp8e4m3",
+                    storage="smem",
+                    layout=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3),
+                    shape=(128, 128),
+                )
+                rhs_ring_1 = T.tensor_view(
+                    16384,
+                    dtype="fp8e4m3",
+                    storage="smem",
+                    layout=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3),
+                    shape=(128, 128),
+                )
+                rhs_ring_stages = (
+                rhs_ring_0,
+                rhs_ring_1,
+            )
                 for kb in range(0, 4, 1):
                     with scope[:1, :32] as scope_2:
                         value = T.tensor_view(
@@ -43,36 +79,14 @@ class Fp8BlockScaledGemm:
                             layout=((128, 128), (512, 1)),
                             shape=(128, 128),
                         )
-                        lhs_ring_1 = T.tensor_view(
-                            ((16384 * kb) - (32768 * (kb // 2))) + 32768,
-                            dtype="fp8e4m3",
-                            storage="smem",
-                            layout=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3),
-                            shape=(128, 128),
-                        )
-                        value_1 = T.tensor_view(
-                            T.ptr_of(lhs_ring_1),
-                            layout=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3),
-                            shape=(128, 128),
-                        )
+                        value_1 = lhs_ring_stages[kb % 2]
                         T.copy_async_tensor(value, value_1)
                         value_2 = T.tensor_view(
                             T.ptr_of(b[kb * 128:kb * 128 + 1, 0:0 + 1]),
                             layout=((128, 128), (1, 512)),
                             shape=(128, 128),
                         )
-                        rhs_ring_1 = T.tensor_view(
-                            (16384 * kb) - (32768 * (kb // 2)),
-                            dtype="fp8e4m3",
-                            storage="smem",
-                            layout=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3),
-                            shape=(128, 128),
-                        )
-                        value_3 = T.tensor_view(
-                            T.ptr_of(rhs_ring_1),
-                            layout=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3),
-                            shape=(128, 128),
-                        )
+                        value_3 = rhs_ring_stages[kb % 2]
                         T.copy_async_tensor(value_2, value_3)
                     with Mesh(
                         scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
@@ -89,35 +103,13 @@ class Fp8BlockScaledGemm:
                         for o_m in range(0, 128, 128):
                             for o_n in range(0, 128, 128):
                                 for o_k in range(0, 128, 128):
-                                    lhs_ring_2 = T.tensor_view(
-                                        ((16384 * kb) - (32768 * (kb // 2))) + 32768,
-                                        dtype="fp8e4m3",
-                                        storage="smem",
-                                        layout=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3),
-                                        shape=(128, 128),
-                                    )
-                                    value_4 = T.tensor_view(
-                                        T.ptr_of(lhs_ring_2),
-                                        layout=Layout(((2, 8, 8), (4, 32)), ((8192, 1024, 128), (32, 1))) | Swizzle(3, 4, 3),
-                                        shape=(128, 128),
-                                    )
+                                    value_4 = lhs_ring_stages[kb % 2]
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(value_4[o_m:o_m + 128, o_k:o_k + 32]),
                                         layout=(Layout(((2, 8, 8), 32), ((8192, 1024, 128), 1)) | Swizzle(3, 4, 3)) @ {B()},
                                         shape=(128, 32),
                                     )
-                                    rhs_ring_2 = T.tensor_view(
-                                        (16384 * kb) - (32768 * (kb // 2)),
-                                        dtype="fp8e4m3",
-                                        storage="smem",
-                                        layout=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3),
-                                        shape=(128, 128),
-                                    )
-                                    value_5 = T.tensor_view(
-                                        T.ptr_of(rhs_ring_2),
-                                        layout=Layout(((4, 32), (16, 8)), ((32, 1), (1024, 128))) | Swizzle(3, 4, 3),
-                                        shape=(128, 128),
-                                    )
+                                    value_5 = rhs_ring_stages[kb % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_5[o_k:o_k + 32, o_n:o_n + 128]),
                                         layout=(Layout((32, (16, 8)), (1, (1024, 128))) | Swizzle(3, 4, 3)) @ {B()},

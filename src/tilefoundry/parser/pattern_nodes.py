@@ -3010,9 +3010,7 @@ class CallPattern(ElementPattern):
                 children.append(
                     AstChild(
                         f"input_{index}",
-                        IndexEndpointPattern()
-                        if schema.op_class is runtime.TensorView and index == 0 and isinstance(argument, ast.BinOp)
-                        else ExpressionPattern(),
+                        ExpressionPattern(),
                         argument,
                         "call_argument",
                         name,
@@ -3205,8 +3203,6 @@ class CallPattern(ElementPattern):
                 inputs = tuple(
                     value for name, value in children.items() if name.startswith("input_")
                 )
-            if schema.op_class is runtime.TensorView and inputs and isinstance(inputs[0], int):
-                inputs = (_constant(inputs[0]), *inputs[1:])
             attrs = {
                 name.removeprefix("attr_"): (
                     value.layout if isinstance(value, PlacedLayout) else value
