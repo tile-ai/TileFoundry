@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
+from tilefoundry.target import CpuTarget
 from tilefoundry_nvidia import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
@@ -13,11 +14,11 @@ def _rows(mesh) -> ShardLayout:
     return ShardLayout(Layout((128, 160), (160, 1)), (S(0),), mesh)
 
 
-@module(entry="wide_stage", target=_CUDA, topologies=(Topology("thread", 128),))
+@module(entry="main", target=_CUDA, topologies=(Topology("thread", 128),))
 class WideSharedStage:
     """One block stages a (128, 160) f32 tile, 80 KiB, through shared memory and back.
 
-    The module has no host entry, so the synthesized one decides what the launch asks for.
+    The host entry requests the 80 KiB its stage uses.
     """
 
     @prim_func(target=_CUDA)
@@ -31,3 +32,7 @@ class WideSharedStage:
             T.copy(source, stage)
             T.sync(thread)
             T.copy(stage, target)
+
+    @prim_func(target=CpuTarget())
+    def main(x: Tensor[(128, 160), "f32"], out: Tensor[(128, 160), "f32"]):
+        launch(wide_stage, x, out, grid=(1, 1, 1), block=(128, 1, 1), dynamic_smem=81920)

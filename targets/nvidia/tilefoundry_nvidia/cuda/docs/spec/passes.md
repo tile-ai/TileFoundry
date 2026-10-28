@@ -4,7 +4,7 @@
 
 ```python
 class InsertHostEntryPass(ModulePass):
-    """Give a device-only module a host-callable entry.
+    """Give launchable HIR Module entries a host-callable entry.
 
     Attributes:
         name: attribute; Stable dump and log name.
@@ -18,7 +18,7 @@ class InsertHostEntryPass(ModulePass):
 
 
 def insert_default_host_entry(module: Module) -> Module:
-    """Return a Module whose entry is host-callable.
+    """Preserve TIR and append host wrappers for launchable HIR entries.
 
     Args:
         module: Module to normalize.
@@ -31,11 +31,12 @@ def insert_default_host_entry(module: Module) -> Module:
 
 - constraints:
   - The pass is the scheduled form of the transform and states no rule of its
-    own. CUDA registers it at `PassPoint.BEFORE_CODEGEN`; compile and scaffold
+    own. CUDA registers it at `PassPoint.BEFORE_LOWER`; finalization and scaffold
     select it through `target_passes`.
   - A CPU entry MUST pass through unchanged.
   - With no CPU entry, an all-HIR tree MUST gain one CPU entry per Module
-    whose `entry` is set, root and children alike: Python begins a kernel
+    whose `entry` is set, whose result leaves are all GMEM or UMAT, and whose
+    call path crosses no indexed slot, root and children alike: Python begins a kernel
     invocation only by entering one ([hir §1.1](../../../../../../docs/spec/hir.md#11-function),
     [core-ir §1](../../../../../../docs/spec/core-ir.md#1-module)). Any other function gets no entry.
     The tree's resolved Target MUST be CUDA. Each entry launches the Module
@@ -52,25 +53,17 @@ def insert_default_host_entry(module: Module) -> Module:
     `<fn.name>_host`, with the same suffix rule on collisions; its emitted C++
     and registration names follow the HIR callee's path
     ([codegen §4.4](../../../../../../docs/spec/codegen.md#44-signatures)).
-  - HIR device calls into a direct child's function with implicit ConstTensor
-    arguments MUST be rejected, naming caller, callee and omitted weights and
-    requesting explicit weight parameters or orchestration calls.
+  - An entry whose call path crosses an indexed slot MUST receive no host
+    entry; indexed entry references await #235.
+  - An HIR entry with an rmem or smem result leaf MUST receive no host entry,
+    because a host cannot pass that storage.
+  - Each synthesized `Launch` MUST state the entry function's analyzed
+    shared-memory peak as `dynamic_smem`, and 0 when it carries no memory
+    analysis.
   - Mixed HIR/TIR device trees MUST be rejected.
-  - With no CPU entry and exactly one CUDA TIR device function, the transform MUST
-    synthesize a CPU entry that mirrors that function's parameters and launches
-    it. One rule covers both device shapes: whether the call reads as a launch
-    or as a dispatch follows from the callee's own shape, a lone kernel and a
-    specialization prototype taking the same route here.
+  - A TIR Module MUST pass through unchanged; it supplies its own CPU entry.
   - It MUST NOT rewrite the Target any function records. Which target a
     function runs on is what its author wrote.
   - The launch geometry MUST be settled here and written into the `Launch`, so
-    nothing downstream derives it again. A prototype states no body of its own,
-    so its variants state its geometry and they MUST agree.
-  - The synthesized TIR entry's `Launch` MUST ask for the dynamic shared memory
-    its device function reaches: the farthest byte any integer-address
-    shared-memory `TensorView` of the function or of its variants spans, each
-    view sized as a staged slot reserves it
-    ([analysis §1.2.2](../../../../../../docs/spec/analysis.md#122-memory)), and 0
-    when there is none. An authored host entry keeps the size its author wrote.
-  - It MUST reject ambiguous device-function sets, a non-entry CPU function, or
-    a launch-provided dynamic CTA extent.
+    nothing downstream derives it again.
+  - It MUST reject a launch-provided dynamic CTA extent.

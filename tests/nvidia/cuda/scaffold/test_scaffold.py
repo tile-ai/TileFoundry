@@ -65,6 +65,12 @@ def test_codegen_reports_unsupported_scaffold_targets(target, tmp_path, capsys):
     assert not project.exists()
 
 
+def test_scaffold_rejects_omitted_child_weights(tmp_path, capsys):
+    source = FIXTURES.parent / "schedule" / "hir" / "module_instances.py"
+    assert cli_main(["scaffold", str(source), str(tmp_path / "project")]) == 1
+    assert "omitted weights" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("fixture", ("hir_moe", "hir_layers"))
 def test_scaffold_full_refuses_hir(fixture):
     module = load_authored_ir(f"{FIXTURES / (fixture + '.py')}:Root")

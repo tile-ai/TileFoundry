@@ -42,10 +42,13 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import isl_to_dim, layout_to_isl_map
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.arith import Binary as TirBinary
+from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, For, LetStmt, MeshScope, Sequential
+from tilefoundry.ir.tir.symbol_ref import symbol_ref
 from tilefoundry.ir.types import (
     Broadcast,
     ComposedLayout,
@@ -84,8 +87,9 @@ from tilefoundry.ir.types.utils import (
     participant_layout,
     static_dim_value,
 )
-from tilefoundry.ir.visitor import collect_exprs, expr_children
+from tilefoundry.ir.visitor import StmtMutator, collect_exprs, expr_children
 from tilefoundry.passes.pass_base import ModulePass
+from tilefoundry.target import CpuTarget
 from tilefoundry.utils.isl_utils import as_multi_aff
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -1720,6 +1724,44 @@ class Lowering(ValuationVisitor[Expr | View]):
         return written
 
 
+def _relaunch(fn, lowered, module):
+    """Retype host launches and forward the scratch parameters lowering appended."""
+    if not isinstance(fn, PrimFunction):
+        return fn
+    params = list(fn.params)
+    names = Names({param.name for param in params})
+
+    class Relaunch(StmtMutator):
+        def visit_Evaluate(self, stmt):
+            if not isinstance(stmt.callable, Launch):
+                return stmt
+            ref = stmt.args[0]
+            lowering = lowered.get(".".join((*ref.nested, ref.name)))
+            if lowering is None:
+                return stmt
+            scratch = tuple(
+                Var(names.fresh(param.name), type=param.type)
+                for param in lowering.context.scratch
+            )
+            if isinstance(fn.target, CpuTarget) and not ref.nested and ref.name == module.entry:
+                module.entry = fn.name
+            inputs = len(lowering.context.function.params)
+            outputs = len(params) - fn.output_count
+            params[outputs:outputs] = scratch
+            return replace(
+                stmt,
+                args=(
+                    symbol_ref(lowering.lowered, ".".join((*ref.nested, ref.name))),
+                    *stmt.args[1:7 + inputs],
+                    *scratch,
+                    *stmt.args[7 + inputs:],
+                ),
+            )
+
+    body = Relaunch().visit(fn.body)
+    return replace(fn, params=tuple(params), body=body) if body is not fn.body else fn
+
+
 @dataclass
 class ConvertHIRToTIR(ModulePass):
     """Replace one selected HIR entry with its scheduled TIR function."""
@@ -1749,6 +1791,11 @@ class ConvertHIRToTIR(ModulePass):
         )
         lowering.lowered = lowering.run()
         lowered[id(function)] = lowering
+        launches = {
+            path: lowered[id(frame.function)]
+            for path, frame in list_call_paths(module).items()
+            if id(frame.function) in lowered
+        }
         modules = set()
 
         def lower_module(node):
@@ -1761,6 +1808,7 @@ class ConvertHIRToTIR(ModulePass):
             node.functions = tuple(
                 lowered[id(fn)].lowered if id(fn) in lowered else fn for fn in node.functions
             )
+            node.functions = tuple(_relaunch(fn, launches, module) for fn in node.functions)
 
         lower_module(module)
         return module

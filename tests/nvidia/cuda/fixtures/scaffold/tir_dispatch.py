@@ -1,17 +1,18 @@
-"""A single device prototype with three ranges and a synthesized CPU entry."""
+"""A device prototype with three ranges and an authored CPU entry."""
 
 import torch
 import tvm_ffi
 
 from tilefoundry.dsl import *
 from tilefoundry.runtime.module import RuntimeModule
+from tilefoundry.target import CpuTarget
 from tilefoundry_nvidia import CudaTarget
 
 S = DimVar("S", 1, 16)
 CUDA = CudaTarget("nvidia.h200_sxm")
 
 
-@module(entry="run", target=CUDA, topologies=(Topology("thread", 32),))
+@module(entry="main", target=CUDA, topologies=(Topology("thread", 32),))
 class Root:
     @prim_func(target=CUDA)
     def run(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]):
@@ -28,6 +29,10 @@ class Root:
     @run.specialize(RangePattern("S", 11, 16))
     def large(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]):
         pass
+
+    @prim_func(target=CpuTarget())
+    def main(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]):
+        launch(run, x, w, grid=(1, 1, 1), block=(32, 1, 1))
 
 
 class Runtime(RuntimeModule):

@@ -208,7 +208,7 @@ class ZeroTripCarry(LoweringCase):
         verify_module(lowered)
         verify_module(reload(as_script(lowered), lowered.name))
         visitor = _RetainedStatements()
-        visitor.visit(lowered.entry_function().body)
+        visitor.visit(lowered.lookup("gemm").body)
         assert len(visitor.loops) == 1
         loop = visitor.loops[0]
         assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
@@ -231,7 +231,7 @@ class DynamicWindow(LoweringCase):
         printed = as_script(lowered)
         verify_module(reload(printed, lowered.name))
         visitor = _RetainedStatements()
-        visitor.visit(lowered.entry_function().body)
+        visitor.visit(lowered.lookup("gemm").body)
         views = [
             value
             for value in visitor.bindings.values()
@@ -262,7 +262,7 @@ class RegisterRows(LoweringCase):
         verify_module(lowered)
         verify_module(reload(as_script(lowered), lowered.name))
         visitor = _RetainedStatements()
-        visitor.visit(lowered.entry_function().body)
+        visitor.visit(lowered.lookup("gemm").body)
         slices = [
             expr
             for value in visitor.bindings.values()
@@ -283,7 +283,7 @@ class ComposedRankView(LoweringCase):
         verify_module(lowered)
         verify_module(reload(as_script(lowered), lowered.name))
         visitor = _RetainedStatements()
-        visitor.visit(lowered.entry_function().body)
+        visitor.visit(lowered.lookup("gemm").body)
         views = [
             value
             for value in visitor.bindings.values()
@@ -319,7 +319,7 @@ class ComposedOuterReshape(LoweringCase):
         lowered = _finalized(state)
         verify_module(reload(as_script(lowered), lowered.name))
         visitor = _RetainedStatements()
-        visitor.visit(lowered.entry_function().body)
+        visitor.visit(lowered.lookup("gemm").body)
         expected = ComposedLayout(Swizzle(3, 4, 3), self.offset, Layout(self.modes, self.strides))
         assert any(
             isinstance(value, Call)
@@ -502,7 +502,6 @@ def test_lowering_issues_statically_without_readmission(name, issues, monkeypatc
     monkeypatch.setattr(instructions, "check_call", reject)
     lowered = lowering_module.Lowering(
         TypeInferContext(module=result.module, function=result.function, owner=result.function),
-        result.function,
     ).run()
     statements = _RetainedStatements()
     statements.visit(lowered.body)
@@ -523,7 +522,7 @@ def test_lowering_issues_statically_without_readmission(name, issues, monkeypatc
 def test_returned_view_passes_storage(storage, chain):
     lowered = _finalized(_returned_view(storage, chain))
     verify_module(lowered)
-    function = lowered.entry_function()
+    function = lowered.lookup("root")
     visitor = _RetainedStatements()
     visitor.visit(function.body)
     assert len(visitor.calls) == (2 if chain else 1)
@@ -557,7 +556,7 @@ def test_inplace_output_reuses_or_refuses(read_old, reshape):
         return
     lowered = _finalized(load_authored_ir(str(source)))
     verify_module(lowered)
-    function = lowered.entry_function()
+    function = lowered.lookup("gemm")
     visitor = _RetainedStatements()
     visitor.visit(function.body)
     assert len(visitor.calls) == 1
@@ -582,7 +581,7 @@ class ReadBeforeUpdate(LoweringCase):
         lowered = _finalized(state)
         verify_module(lowered)
         visitor = _RetainedStatements()
-        visitor.visit(lowered.entry_function().body)
+        visitor.visit(lowered.lookup("gemm").body)
         update = visitor.calls[0].callable
         body = _RetainedStatements()
         body.visit(update.body)

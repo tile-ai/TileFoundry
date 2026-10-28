@@ -249,6 +249,9 @@ class ConvertHIRToTIR(ModulePass):
   - A Target MAY bind a subclass with `@bind(TargetClass, ConvertHIRToTIR)`;
     finalization obtains the pass through `Target.resolve(ConvertHIRToTIR)`. The
     entry function and every callee are lowered by the same `visitor` class.
+  - When the root entry has a host entry, finalization MUST set the output
+    Module's `entry` to that host entry after lowering; otherwise it keeps the
+    device root entry.
   - Address placement comes only from `MemoryMetadata`: integer shared-memory
     addresses are byte offsets, and every analyzed offset becomes one concrete
     buffer view. Multiple offsets form a staged tuple declared outside the
@@ -422,16 +425,20 @@ def target_passes(module: Module, point: PassPoint) -> list[ModulePass]: ...
   - A pass class MUST be registered at most once per point; a duplicate MUST
     raise `ValueError` naming the Target and pass.
   - Finalization MUST run target passes before and after HIR-to-TIR lowering.
-    Compile and scaffold MUST run target passes at `BEFORE_CODEGEN`.
+    Scaffold MUST run target passes at `BEFORE_LOWER`; compile MUST run them at
+    `BEFORE_CODEGEN`.
 
 ### 7.3 `insert_default_host_entry`
 
-A target may register a `BEFORE_CODEGEN` pass that gives a device-only Module
+A target may register a `BEFORE_LOWER` pass that gives an HIR Module
 host-callable entries. The target owns the supported device shapes and launch
-geometry; compile and scaffold select the pass through `target_passes`.
+geometry; finalization and scaffold select the pass through `target_passes`. A
+TIR Module receives no entry: one without a CPU entry is rejected by compile.
 
 - constraints:
   - An existing CPU entry MUST pass through unchanged.
+  - A synthesized `Launch` MUST state the analyzed shared-memory peak as
+    `dynamic_smem`, and 0 when the Module carries no memory analysis.
   - Normalization MUST preserve each authored function's Target.
   - A synthesized `Launch` MUST carry its settled geometry so downstream
     codegen reads it without deriving it again.

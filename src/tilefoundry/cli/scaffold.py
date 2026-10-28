@@ -17,7 +17,7 @@ def run_scaffold(source: str, out_dir: str) -> int:
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise ValueError(f"scaffold: output directory {destination} must be empty")
     module = load_authored_ir(source)
-    prepared = PassManager(target_passes(module, PassPoint.BEFORE_CODEGEN)).run(module)
+    prepared = PassManager(target_passes(module, PassPoint.BEFORE_LOWER)).run(module)
     entries = tuple(
         fn
         for frame in list_call_paths(prepared).values() for fn in (frame.function,)

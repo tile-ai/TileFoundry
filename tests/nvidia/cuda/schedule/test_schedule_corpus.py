@@ -19,7 +19,6 @@ from tests.nvidia.cuda.schedule._support import (
     _direct_operand_matches,
     _region_key,
     _RetainedStatements,
-    entry_function,
 )
 from tilefoundry.analysis import AnalysisResult
 from tilefoundry.analysis.api import analyze
@@ -57,6 +56,7 @@ from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
+from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import Copy, PtrOf, TensorView
 from tilefoundry.ir.types import (
     ComposedLayout,
@@ -64,6 +64,7 @@ from tilefoundry.ir.types import (
     StorageKind,
     Swizzle,
     TensorType,
+    TupleType,
 )
 from tilefoundry.ir.types.dim import DimAdd, DimMul
 from tilefoundry.ir.types.int_tuple import compatible_profile
@@ -73,6 +74,7 @@ from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.passes.transforms.convert_hir_to_tir import LoweringError
 from tilefoundry.schedule import candidates, finalize
+from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.verify import verify_module
 from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
@@ -338,13 +340,40 @@ def _candidates(case, checked):
     return candidates(module, root, source=str(case.path))
 
 
-def _finalize(case, module, result):
+def _finalize(case, result):
     if case.finalize_refusal:
         with pytest.raises(LoweringError) as refused:
             finalize(result)
         assert case.finalize_refusal in str(refused.value)
         return None
     return finalize(result)
+
+
+def _host_launch(case, lowered, function):
+    return_type = function.return_type
+    def launchable(ty):
+        if isinstance(ty, TupleType):
+            return all(launchable(field) for field in ty.fields)
+        return not isinstance(ty, TensorType) or ty.storage in (StorageKind.GMEM, StorageKind.UMAT)
+
+    launches = []
+    for fn in lowered.functions:
+        if isinstance(fn, PrimFunction) and isinstance(fn.target, CpuTarget):
+            statements = _RetainedStatements()
+            statements.visit(fn.body)
+            launches.extend(
+                stmt for stmt in statements.statements
+                if isinstance(stmt.callable, Launch)
+                and not stmt.args[0].nested
+                and stmt.args[0].name == function.name
+            )
+    if launchable(return_type):
+        assert len(launches) == 1
+        assert launches[0].callable.dynamic_smem == case.smem_peak
+        assert isinstance(lowered.entry_function().target, CpuTarget)
+    else:
+        assert not launches
+        assert lowered.entry == function.name
 
 
 def _hir(case, problems):
@@ -363,11 +392,12 @@ def _hir(case, problems):
     candidates_report = problems.run("candidates", _candidates, case, checked)
     if case.candidates_refusal is None:
         problems.run("candidate sites", _hir_candidates, candidates_report)
-    lowered = problems.run("finalize", _finalize, case, module, result)
+    lowered = problems.run("finalize", _finalize, case, result)
     if case.finalize_refusal is None:
         printed = problems.run("print TIR", as_script, lowered)
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         problems.run("TIR operands", _tir_checks, lowered, case.path)
+        problems.run("host launch", _host_launch, case, lowered, result.function)
     state = Scheduled(result, module, lowered, candidates_report)
     problems.run("guard", case.guard, state, problems)
 
@@ -447,7 +477,7 @@ class PhysicalSlots(ScheduleCase):
     def guard(self, state, problems):
         result, lowered = state.result, state.lowered
         peak = get_metadata(result.function, RegionMemoryMetadata).peak_for("smem").peak_bytes
-        function = entry_function(lowered)
+        function = lowered.lookup(state.result.function.name)
         visitor = _RetainedStatements()
         visitor.visit(function.body)
         slots = []
@@ -503,7 +533,7 @@ class BulkReduceStore(ScheduleCase):
                     self.found += 1
 
         visitor = Scope()
-        visitor.visit(entry_function(lowered).body)
+        visitor.visit(lowered.lookup(state.result.function.name).body)
         assert visitor.found == 1
 
 
@@ -629,8 +659,8 @@ class LoopOutputs(ScheduleCase):
 
     def guard(self, state, problems):
         lowered = state.lowered
-        assert entry_function(lowered).output_count == 3
-        assert reload(as_script(lowered), lowered.name).entry_function().output_count == 3
+        assert lowered.lookup(state.result.function.name).output_count == 3
+        assert reload(as_script(lowered), lowered.name).lookup(state.result.function.name).output_count == 3
 
 
 @case
@@ -664,13 +694,13 @@ class ModuleInstances(ScheduleCase):
     def retained_shapes(self, lowered):
         verify_module(lowered)
         frames = list_call_paths(lowered)
-        assert len(frames) == 3
+        assert len(frames) == 4
         assert all(isinstance(frame.function, PrimFunction) for frame in frames.values())
         layers, mm = lowered.children["layers"], lowered.children["mm"]
         assert len(layers.elements) == 3
         assert all(element is mm.elements[0] for element in layers.elements)
         visitor = _RetainedStatements()
-        visitor.visit(entry_function(lowered).body)
+        visitor.visit(lowered.lookup("gemm").body)
         assert len(visitor.loops) == 1
         assert len(visitor.calls) == 5
         assert (
@@ -715,7 +745,7 @@ class ViewVisitMemo(ScheduleCase):
     def guard(self, state, problems):
         lowered = state.lowered
         verify_module(lowered)
-        function = entry_function(lowered)
+        function = lowered.lookup(state.result.function.name)
         visitor = _RetainedStatements()
         visitor.visit(function.body)
         views = [
@@ -819,7 +849,7 @@ class WgmmaN16WithinWarpgroupShare(ScheduleCase):
         )
         original_c, _, original_b = (arg.type for arg in schedule.args)
         visitor = _RetainedStatements()
-        function = entry_function(lowered)
+        function = lowered.lookup(state.result.function.name)
         visitor.visit(function.body)
         issues = [stmt for stmt in visitor.statements if isinstance(stmt.callable, TiledMma)]
         assert len(issues) == 36
@@ -1020,7 +1050,7 @@ class ZeroTripInsertSlice(ScheduleCase):
     def guard(self, state, problems):
         lowered = state.lowered
         visitor = _RetainedStatements()
-        visitor.visit(entry_function(lowered).body)
+        visitor.visit(lowered.lookup(state.result.function.name).body)
         assert len(visitor.loops) == 1
         loop = visitor.loops[0]
         assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (

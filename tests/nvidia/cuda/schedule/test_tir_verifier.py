@@ -56,9 +56,9 @@ def test_verifier_rejects_noninteger_slot_index():
         (slot, Constant(0.5, type=TensorType.scalar(DType.f32))),
         type=slot.type.fields[0],
     )
-    root = replace(lowered.entry_function(), body=Sequential((Evaluate(target, ()),)))
+    root = replace(lowered.lookup("gemm"), body=Sequential((Evaluate(target, ()),)))
     functions = tuple(
-        root if function is lowered.entry_function() else function for function in lowered.functions
+        root if function is lowered.lookup("gemm") else function for function in lowered.functions
     )
     malformed = replace(lowered, functions=functions)
     with pytest.raises(VerifyError, match="index must be an integer scalar"):

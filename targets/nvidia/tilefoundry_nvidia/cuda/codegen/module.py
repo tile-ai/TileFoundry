@@ -20,8 +20,11 @@ from pathlib import Path
 from tilefoundry.codegen.linkable_function import LinkableFunction
 from tilefoundry.codegen.linkable_module import LinkableModule
 from tilefoundry.codegen.signature import CallableSignature
-from tilefoundry.ir.core.module import ModuleFunction
+from tilefoundry.ir.core.module import Module, ModuleFunction
+from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target.base import UnsupportedCapabilityError, bind, target_summary
 from tilefoundry_nvidia.cuda import CudaTarget
 from tilefoundry_nvidia.cuda.codegen.abi import (
@@ -38,6 +41,36 @@ from tilefoundry_nvidia.cuda.codegen.templates import render
 Geometry = tuple[tuple[object, object, object], tuple[object, object, object]]
 
 _DEFAULT_DYNAMIC_SMEM = 48 * 1024
+
+
+def reject_omitted_child_weights(module: Module) -> None:
+    """Reject device calls that depend on implicit child-owner weight injection."""
+    frames = list_call_paths(module)
+    selectors = {id(frame.function): path for path, frame in frames.items()}
+
+    class Check(ExprVisitor[None]):
+        def default_visit_leaf(self, expr, operands, frame):
+            return None
+
+        def visit_Call(self, call, frame):
+            self.visit_operands(call, frame)
+            inner = frame._callee_context(call) if frame is not None else None
+            if inner is None or isinstance(call.target, Function):
+                return
+            callee = inner.function
+            weights = [param.name for param in callee.params if param.is_const]
+            if weights:
+                raise ValueError(
+                    f"CUDA skeleton: {selectors[id(frame.function)]} calls "
+                    f"{selectors[id(callee)]} with omitted weights {weights}; "
+                    "declare the weights as parameters or call from orchestration"
+                )
+
+    for frame in frames.values():
+        if isinstance(frame.function, Function):
+            for function in (frame.function, *frame.function.variants):
+                if function.body is not None:
+                    Check().visit(function.body, frame)
 
 
 def _emit_function(fn: ModuleFunction, ctx: CudaCodegenContext) -> LinkableFunction:
@@ -228,6 +261,8 @@ class CudaLinkableModule(LinkableModule):
                 f"{target_summary(target)}: skeleton emission supports only single-device CUDA "
                 "targets without device_count"
             )
+        if emit == "skeleton":
+            reject_omitted_child_weights(module)
         kernels = tuple(fn for fn in functions if ctx.codegen_context.targets[id(fn)] == target)
         if not kernels:
             raise ValueError(f"emit_cuda_module: module {module.name!r} has no CUDA device kernels")

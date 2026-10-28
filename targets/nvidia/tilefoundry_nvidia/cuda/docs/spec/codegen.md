@@ -106,6 +106,10 @@ there is no umbrella header or target-selection macro.
 
 ## 5. HIR skeletons
 
+Skeleton emission MUST reject an HIR device call into a direct child's function
+with implicit ConstTensor arguments, naming caller, callee and omitted weights
+and requesting explicit weight parameters or orchestration calls.
+
 `tilefoundry_nvidia/cuda/codegen/hir/function.py` owns HIR skeleton emission. An HIR function
 enters codegen only as the callee a `Launch` names; Python wraps any other
 function and calls the exported entries. Each launched function gets one

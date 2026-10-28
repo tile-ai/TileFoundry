@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
+from tilefoundry.target import CpuTarget
 from tilefoundry_nvidia import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 
 
 @module(
-    entry="two_loops",
+    entry="main",
     target=_CUDA,
     topologies=(Topology("cta", 1), Topology("thread", 1)),
 )
@@ -54,3 +55,7 @@ class TwoLoopStage:
                         T.ptr_of(second[row_2:row_2 + 1, 0:0 + 4]), layout=(1, 4), shape=(1, 4)
                     )
                     T.copy(landing_2, window_2)
+
+    @prim_func(target=CpuTarget())
+    def main(x: Tensor[(2, 4), "bf16"], first: Tensor[(2, 4), "bf16"], second: Tensor[(2, 4), "bf16"]):
+        launch(two_loops, x, first, second, grid=(1, 1, 1), block=(1, 1, 1), dynamic_smem=8)
