@@ -863,7 +863,7 @@ block_y, block_z, *forwarded_args)`:
   a device `PrimFunction` whose target is not CPU, or a HIR `Function` by its
   root-relative selector ([core-ir §1](./core-ir.md#1-module)).
   The host-entry pass writes and checks a HIR callee's forwarded args
-  ([passes §7.3](./passes.md#73-insert_default_host_entry)); verification
+  ([passes §7.3](./passes.md#73-inserthostentrypass)); verification
   resolves the selector and does not check them again.
 - **grid / block**: `args[1:7]` are the grid then block extents in the fixed
   order `grid_x, grid_y, grid_z, block_x, block_y, block_z`. Each is an `Expr`

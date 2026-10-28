@@ -136,7 +136,7 @@ capability checks to codegen ([codegen §2.1](./codegen.md#21-target-resolution)
 be rejected without overwriting files.
 
 The command runs host-entry normalization
-([passes §7.3](./passes.md#73-insert_default_host_entry)), selects all CPU entries,
+([passes §7.3](./passes.md#73-inserthostentrypass)), selects all CPU entries,
 and calls skeleton `codegen/link_module.py:link_program`
 ([codegen §4.3](./codegen.md#43-linkedmodule)). It writes `CMakeLists.txt` and
 the target-selected source files directly in `OUT_DIR`, compiles the project

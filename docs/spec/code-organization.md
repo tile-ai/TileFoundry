@@ -95,7 +95,7 @@ physical directory layout reflects that boundary directly.
 - Shared launch descriptors belong to `ir/tir/launch.py`; target-specific
   launch attributes live in their target package. The geometry a
   kernel is launched at is settled where the `Launch` is written
-  ([passes §7.3](./passes.md#73-insert_default_host_entry)) and read back off
+  ([passes §7.3](./passes.md#73-inserthostentrypass)) and read back off
   it by `codegen/topology.py`, rather than derived a second time inside
   codegen or carried past it as a runtime-owned metadata type. The two launch
   contracts are distinct even though both are consumed across the codegen
