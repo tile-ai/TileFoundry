@@ -1,8 +1,7 @@
 """The staged-ring schedule fixtures, compiled and run on the card.
 
 ``staged_dynamic_inner`` and ``staged_nested`` reach full CUDA emission
-through the tuple-choice pointer plumbing: two smem stages held as one
-tuple of tensor_views, subscripted by a runtime index. Their rings are
+through byte-offset expressions selecting one of two smem stages. Their rings are
 re-authored with what execution needs and the corpus does not state --
 the dynamic-smem carve-out, the cp.async commit/wait before read-back,
 and trip counts uniform across the warp.

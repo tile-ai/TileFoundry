@@ -725,10 +725,14 @@ class ModuleInstances(ScheduleCase):
 
 
 @case
-class SmemPaddedStages(PhysicalSlots):
+class SmemPaddedStages(ScheduleCase):
     path: Path = ROOT / "hir/smem_padded_stages.py"
     smem_peak: int = 96
     candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+
+    def guard(self, state, problems):
+        tilefoundry.compile(state.lowered)
 
 
 @case

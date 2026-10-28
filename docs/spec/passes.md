@@ -254,8 +254,11 @@ class ConvertHIRToTIR(ModulePass):
     device root entry.
   - Address placement comes only from `MemoryMetadata`: integer shared-memory
     addresses are byte offsets, and every analyzed offset becomes one concrete
-    buffer view. Multiple offsets form a staged tuple declared outside the
-    outermost enclosing HIR loop. Selection uses the linear iteration ordinal
+    buffer view. With multiple offsets, each consuming scope binds one view
+    whose address is the selected offset: `offsets[0] + (index % N) * stride`
+    when the offsets are equally spaced, otherwise an offset table bound
+    outside the outermost enclosing HIR loop, subscripted by `index % N`. The
+    index is the linear iteration ordinal
     from outermost to innermost, modulo the number of buffers, when inner loop
     trip counts are constant. Otherwise selection uses a rank-0 integer register
     counter modulo the number of buffers. It is initialized to zero before the

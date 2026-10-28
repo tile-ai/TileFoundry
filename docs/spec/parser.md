@@ -333,6 +333,14 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 ```
 <!-- parser-grammar:end -->
 
+The first positional input of `T.tensor_view` uses `slice-endpoint-binary` for binary
+arithmetic syntax; other forms keep the expression grammar:
+
+```ebnf
+tensor-view-address ::= expression | slice-endpoint-binary
+```
+
+
 ### 2.2 Rules
 
 <!-- parser-constraints:start -->

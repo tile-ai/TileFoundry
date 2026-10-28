@@ -34,14 +34,6 @@ class WgmmaCastBetweenSchedules:
                 )
                 with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                     T.fill(acc, 0.0)
-                lhs_ring_stages = (
-                T.tensor_view(2048, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
-                T.tensor_view(4096, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
-            )
-                rhs_ring_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
-                T.tensor_view(1024, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
-            )
                 for k in range(0, 32, 16):
                     with Mesh((Topology("thread", 256),), layout=(32,), names=("d0",)) as scope_2:
                         value = T.tensor_view(
@@ -49,8 +41,15 @@ class WgmmaCastBetweenSchedules:
                             layout=((64, 16), (32, 1)),
                             shape=(64, 16),
                         )
+                        lhs_ring_1 = T.tensor_view(
+                            ((2048 * (k // 16)) - (4096 * (k // 32))) + 2048,
+                            dtype="bf16",
+                            storage="smem",
+                            layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                            shape=(64, 16),
+                        )
                         value_1 = T.tensor_view(
-                            T.ptr_of(lhs_ring_stages[(k // 16) % 2]),
+                            T.ptr_of(lhs_ring_1),
                             layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                             shape=(64, 16),
                         )
@@ -76,8 +75,15 @@ class WgmmaCastBetweenSchedules:
                             ]
                         )
                         T.cast(value_3, b, dtype="bf16")
+                        rhs_ring_1 = T.tensor_view(
+                            (1024 * (k // 16)) - (2048 * (k // 32)),
+                            dtype="bf16",
+                            storage="smem",
+                            layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
+                            shape=(16, 32),
+                        )
                         value_4 = T.tensor_view(
-                            T.ptr_of(rhs_ring_stages[(k // 16) % 2]),
+                            T.ptr_of(rhs_ring_1),
                             layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
                             shape=(16, 32),
                         )
@@ -91,8 +97,15 @@ class WgmmaCastBetweenSchedules:
                                         layout=((4 @ scope_4.d0, 2, 8 @ scope_4.d1, 4, 4 @ scope_4.d2, 2), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 32),
                                     )
+                                    lhs_ring_2 = T.tensor_view(
+                                        ((2048 * (k // 16)) - (4096 * (k // 32))) + 2048,
+                                        dtype="bf16",
+                                        storage="smem",
+                                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                                        shape=(64, 16),
+                                    )
                                     value_6 = T.tensor_view(
-                                        T.ptr_of(lhs_ring_stages[(k // 16) % 2]),
+                                        T.ptr_of(lhs_ring_2),
                                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                                         shape=(64, 16),
                                     )
@@ -101,8 +114,15 @@ class WgmmaCastBetweenSchedules:
                                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                                         shape=(64, 16),
                                     )
+                                    rhs_ring_2 = T.tensor_view(
+                                        (1024 * (k // 16)) - (2048 * (k // 32)),
+                                        dtype="bf16",
+                                        storage="smem",
+                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
+                                        shape=(16, 32),
+                                    )
                                     value_7 = T.tensor_view(
-                                        T.ptr_of(rhs_ring_stages[(k // 16) % 2]),
+                                        T.ptr_of(rhs_ring_2),
                                         layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
                                         shape=(16, 32),
                                     )

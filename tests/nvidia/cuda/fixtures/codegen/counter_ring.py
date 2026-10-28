@@ -17,19 +17,15 @@ _CUDA = CudaTarget("nvidia.h200_sxm")
 class CounterRing:
     """``staged_dynamic_inner``'s ring, driven by its rmem stage counter.
 
-    The choice is as authored: two tensor_views over raw smem offsets held in
-    one tuple, subscripted by the counter modulo two, so the selected stage's
-    base pointer is decided on the card each iteration.
+    The counter modulo two selects a byte offset, so each iteration binds
+    one view over the selected stage.
     """
 
     @prim_func(target=_CUDA)
     def counter_ring_device(x: Tensor[(1, 8), "bf16"], out: Tensor[(1, 8), "bf16"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:  # noqa: F841
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
-                ring_stages = (
-                    T.tensor_view(0, dtype="bf16", storage="smem", layout=(1, 8), shape=(1, 8)),
-                    T.tensor_view(16, dtype="bf16", storage="smem", layout=(1, 8), shape=(1, 8)),
-                )
+
                 stage_counter = T.alloc_tensor(tensor_type=Tensor[(), "i64", "rmem"])
                 T.fill(stage_counter, 0)
                 stage_one = T.alloc_tensor(tensor_type=Tensor[(), "i64", "rmem"])
@@ -37,7 +33,7 @@ class CounterRing:
                 for i in range(0, 2, 1):
                     value = T.tensor_view(T.ptr_of(x), layout=(1, 8), shape=(1, 8))
                     stage = T.tensor_view(
-                        T.ptr_of(ring_stages[stage_counter % 2]), layout=(1, 8), shape=(1, 8)
+                        (stage_counter % 2) * 16, dtype="bf16", storage="smem", layout=(1, 8), shape=(1, 8)
                     )
                     T.copy_async(value, stage)
                     T.cp_async_commit()

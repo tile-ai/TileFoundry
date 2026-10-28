@@ -17,16 +17,6 @@ class Gemm8192x17408x5120TmaStore:
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             with Mesh((Topology("thread", 384),), layout=(3, 128), names=("d0", "d1")) as scope:
                 T.fill(out, 0.0)
-                lhs_ring_stages = (
-                T.tensor_view(98304, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
-                T.tensor_view(114688, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
-                T.tensor_view(131072, dtype="bf16", storage="smem", layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3), shape=(128, 64)),
-            )
-                rhs_ring_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)),
-                T.tensor_view(32768, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)),
-                T.tensor_view(65536, dtype="bf16", storage="smem", layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3), shape=(64, 256)),
-            )
                 for m in range(0, 8192, 128):
                     for n in range(0, 17408, 256):
                         acc = T.alloc_tensor(
@@ -56,8 +46,15 @@ class Gemm8192x17408x5120TmaStore:
                                     layout=((128, 64), (5120, 1)),
                                     shape=(128, 64),
                                 )
+                                lhs_ring_1 = T.tensor_view(
+                                    ((((16384 * (m // 128)) - (16384 * (n // 256))) + (16384 * (k // 64))) - (49152 * (((m - (128 * (n // 256))) + (128 * (k // 64))) // 384))) + 98304,
+                                    dtype="bf16",
+                                    storage="smem",
+                                    layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                                    shape=(128, 64),
+                                )
                                 value_1 = T.tensor_view(
-                                    T.ptr_of(lhs_ring_stages[(((((m // 128) * 68) + (n // 256)) * 80) + (k // 64)) % 3]),
+                                    T.ptr_of(lhs_ring_1),
                                     layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
                                     shape=(128, 64),
                                 )
@@ -67,8 +64,15 @@ class Gemm8192x17408x5120TmaStore:
                                     layout=((64, 256), (17408, 1)),
                                     shape=(64, 256),
                                 )
+                                rhs_ring_1 = T.tensor_view(
+                                    (((32768 * (m // 128)) - (32768 * (n // 256))) + (32768 * (k // 64))) - (98304 * (((m - (128 * (n // 256))) + (128 * (k // 64))) // 384)),
+                                    dtype="bf16",
+                                    storage="smem",
+                                    layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                                    shape=(64, 256),
+                                )
                                 value_3 = T.tensor_view(
-                                    T.ptr_of(rhs_ring_stages[(((((m // 128) * 68) + (n // 256)) * 80) + (k // 64)) % 3]),
+                                    T.ptr_of(rhs_ring_1),
                                     layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
                                     shape=(64, 256),
                                 )
@@ -84,8 +88,15 @@ class Gemm8192x17408x5120TmaStore:
                                                 layout=((2 @ scope_3.d0, 4 @ scope_3.d1, 2, 8 @ scope_3.d2, 32, 4 @ scope_3.d3, 2), (16384, 16, 8, 1, 512, 128, 64)),
                                                 shape=(128, 256),
                                             )
+                                            lhs_ring_2 = T.tensor_view(
+                                                ((((16384 * (m // 128)) - (16384 * (n // 256))) + (16384 * (k // 64))) - (49152 * (((m - (128 * (n // 256))) + (128 * (k // 64))) // 384))) + 98304,
+                                                dtype="bf16",
+                                                storage="smem",
+                                                layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                                                shape=(128, 64),
+                                            )
                                             value_5 = T.tensor_view(
-                                                T.ptr_of(lhs_ring_stages[(((((m // 128) * 68) + (n // 256)) * 80) + (k // 64)) % 3]),
+                                                T.ptr_of(lhs_ring_2),
                                                 layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
                                                 shape=(128, 64),
                                             )
@@ -94,8 +105,15 @@ class Gemm8192x17408x5120TmaStore:
                                                 layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) | Swizzle(3, 4, 3)) @ {B()},
                                                 shape=(128, 16),
                                             )
+                                            rhs_ring_2 = T.tensor_view(
+                                                (((32768 * (m // 128)) - (32768 * (n // 256))) + (32768 * (k // 64))) - (98304 * (((m - (128 * (n // 256))) + (128 * (k // 64))) // 384)),
+                                                dtype="bf16",
+                                                storage="smem",
+                                                layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                                                shape=(64, 256),
+                                            )
                                             value_6 = T.tensor_view(
-                                                T.ptr_of(rhs_ring_stages[(((((m // 128) * 68) + (n // 256)) * 80) + (k // 64)) % 3]),
+                                                T.ptr_of(rhs_ring_2),
                                                 layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
                                                 shape=(64, 256),
                                             )

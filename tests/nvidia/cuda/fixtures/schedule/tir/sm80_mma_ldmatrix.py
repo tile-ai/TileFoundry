@@ -32,14 +32,6 @@ class Sm80MmaLdmatrix:
                 )
                 with Mesh(scope[1:], layout=((4, 8), (1, 4)), names=("d0", "d1")) as scope_1:
                     T.fill(acc, 0.0)
-                lhs_ring_stages = (
-                T.tensor_view(512, dtype="bf16", storage="smem", layout=(16, 16), shape=(16, 16)),
-                T.tensor_view(1024, dtype="bf16", storage="smem", layout=(16, 16), shape=(16, 16)),
-            )
-                rhs_ring_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=(16, 8), shape=(16, 8)),
-                T.tensor_view(256, dtype="bf16", storage="smem", layout=(16, 8), shape=(16, 8)),
-            )
                 for k in range(0, 32, 16):
                     with scope[:1] as scope_2:
                         value = T.tensor_view(
@@ -47,18 +39,28 @@ class Sm80MmaLdmatrix:
                             layout=((16, 16), (32, 1)),
                             shape=(16, 16),
                         )
-                        value_1 = T.tensor_view(
-                            T.ptr_of(lhs_ring_stages[(k // 16) % 2]),
+                        lhs_ring_1 = T.tensor_view(
+                            ((512 * (k // 16)) - (1024 * (k // 32))) + 512,
+                            dtype="bf16",
+                            storage="smem",
                             layout=(16, 16),
                             shape=(16, 16),
+                        )
+                        value_1 = T.tensor_view(
+                            T.ptr_of(lhs_ring_1), layout=(16, 16), shape=(16, 16)
                         )
                         T.copy_async_tensor(value, value_1)
                         value_2 = T.tensor_view(
                             T.ptr_of(b[k:k + 1, 0:0 + 1]), layout=(16, 8), shape=(16, 8)
                         )
-                        value_3 = T.tensor_view(
-                            T.ptr_of(rhs_ring_stages[(k // 16) % 2]), layout=(16, 8), shape=(16, 8)
+                        rhs_ring_1 = T.tensor_view(
+                            (256 * (k // 16)) - (512 * (k // 32)),
+                            dtype="bf16",
+                            storage="smem",
+                            layout=(16, 8),
+                            shape=(16, 8),
                         )
+                        value_3 = T.tensor_view(T.ptr_of(rhs_ring_1), layout=(16, 8), shape=(16, 8))
                         T.copy_async_tensor(value_2, value_3)
                     with Mesh(scope[1:], layout=((4, 8), (1, 4)), names=("d0", "d1")) as scope_3:
                         lhs_frag_dst = T.alloc_tensor(
@@ -69,10 +71,15 @@ class Sm80MmaLdmatrix:
                                 "rmem",
                             ]
                         )
-                        value_4 = T.tensor_view(
-                            T.ptr_of(lhs_ring_stages[(k // 16) % 2]),
+                        lhs_ring_2 = T.tensor_view(
+                            ((512 * (k // 16)) - (1024 * (k // 32))) + 512,
+                            dtype="bf16",
+                            storage="smem",
                             layout=(16, 16),
                             shape=(16, 16),
+                        )
+                        value_4 = T.tensor_view(
+                            T.ptr_of(lhs_ring_2), layout=(16, 16), shape=(16, 16)
                         )
                         value_5 = T.tensor_view(
                             T.ptr_of(lhs_frag_dst),
@@ -88,9 +95,14 @@ class Sm80MmaLdmatrix:
                                 "rmem",
                             ]
                         )
-                        value_6 = T.tensor_view(
-                            T.ptr_of(rhs_ring_stages[(k // 16) % 2]), layout=(16, 8), shape=(16, 8)
+                        rhs_ring_2 = T.tensor_view(
+                            (256 * (k // 16)) - (512 * (k // 32)),
+                            dtype="bf16",
+                            storage="smem",
+                            layout=(16, 8),
+                            shape=(16, 8),
                         )
+                        value_6 = T.tensor_view(T.ptr_of(rhs_ring_2), layout=(16, 8), shape=(16, 8))
                         value_7 = T.tensor_view(
                             T.ptr_of(rhs_frag_dst),
                             layout=((2, 4 @ scope_3.d0, 2, 8 @ scope_3.d1), (64, 16, 8, 1)),

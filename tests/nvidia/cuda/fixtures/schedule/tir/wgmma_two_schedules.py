@@ -34,22 +34,6 @@ class WgmmaTwoSchedules:
                 )
                 with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                     T.fill(acc, 0.0)
-                lhs_ring_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
-                T.tensor_view(2048, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
-            )
-                rhs_ring_stages = (
-                T.tensor_view(8192, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
-                T.tensor_view(9216, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
-            )
-                lhs_2_ring_stages = (
-                T.tensor_view(4096, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
-                T.tensor_view(6144, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
-            )
-                rhs_2_ring_stages = (
-                T.tensor_view(10240, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
-                T.tensor_view(11264, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
-            )
                 for k in range(0, 32, 16):
                     with scope[:1, :32] as scope_2:
                         value = T.tensor_view(
@@ -57,8 +41,15 @@ class WgmmaTwoSchedules:
                             layout=((64, 16), (32, 1)),
                             shape=(64, 16),
                         )
+                        lhs_ring_1 = T.tensor_view(
+                            (2048 * (k // 16)) - (4096 * (k // 32)),
+                            dtype="bf16",
+                            storage="smem",
+                            layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                            shape=(64, 16),
+                        )
                         value_1 = T.tensor_view(
-                            T.ptr_of(lhs_ring_stages[(k // 16) % 2]),
+                            T.ptr_of(lhs_ring_1),
                             layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                             shape=(64, 16),
                         )
@@ -66,8 +57,15 @@ class WgmmaTwoSchedules:
                         value_2 = T.tensor_view(
                             T.ptr_of(b[k:k + 1, 0:0 + 1]), layout=(16, 32), shape=(16, 32)
                         )
+                        rhs_ring_1 = T.tensor_view(
+                            ((1024 * (k // 16)) - (2048 * (k // 32))) + 8192,
+                            dtype="bf16",
+                            storage="smem",
+                            layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
+                            shape=(16, 32),
+                        )
                         value_3 = T.tensor_view(
-                            T.ptr_of(rhs_ring_stages[(k // 16) % 2]),
+                            T.ptr_of(rhs_ring_1),
                             layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
                             shape=(16, 32),
                         )
@@ -81,8 +79,15 @@ class WgmmaTwoSchedules:
                                         layout=((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 4, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 32),
                                     )
+                                    lhs_ring_2 = T.tensor_view(
+                                        (2048 * (k // 16)) - (4096 * (k // 32)),
+                                        dtype="bf16",
+                                        storage="smem",
+                                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                                        shape=(64, 16),
+                                    )
                                     value_5 = T.tensor_view(
-                                        T.ptr_of(lhs_ring_stages[(k // 16) % 2]),
+                                        T.ptr_of(lhs_ring_2),
                                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                                         shape=(64, 16),
                                     )
@@ -91,8 +96,15 @@ class WgmmaTwoSchedules:
                                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                                         shape=(64, 16),
                                     )
+                                    rhs_ring_2 = T.tensor_view(
+                                        ((1024 * (k // 16)) - (2048 * (k // 32))) + 8192,
+                                        dtype="bf16",
+                                        storage="smem",
+                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
+                                        shape=(16, 32),
+                                    )
                                     value_6 = T.tensor_view(
-                                        T.ptr_of(rhs_ring_stages[(k // 16) % 2]),
+                                        T.ptr_of(rhs_ring_2),
                                         layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
                                         shape=(16, 32),
                                     )
@@ -113,8 +125,15 @@ class WgmmaTwoSchedules:
                             layout=((64, 16), (32, 1)),
                             shape=(64, 16),
                         )
+                        lhs_2_ring_1 = T.tensor_view(
+                            ((2048 * (k // 16)) - (4096 * (k // 32))) + 4096,
+                            dtype="bf16",
+                            storage="smem",
+                            layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                            shape=(64, 16),
+                        )
                         value_8 = T.tensor_view(
-                            T.ptr_of(lhs_2_ring_stages[(k // 16) % 2]),
+                            T.ptr_of(lhs_2_ring_1),
                             layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                             shape=(64, 16),
                         )
@@ -122,8 +141,15 @@ class WgmmaTwoSchedules:
                         value_9 = T.tensor_view(
                             T.ptr_of(d[k:k + 1, 0:0 + 1]), layout=(16, 32), shape=(16, 32)
                         )
+                        rhs_2_ring_1 = T.tensor_view(
+                            ((1024 * (k // 16)) - (2048 * (k // 32))) + 10240,
+                            dtype="bf16",
+                            storage="smem",
+                            layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
+                            shape=(16, 32),
+                        )
                         value_10 = T.tensor_view(
-                            T.ptr_of(rhs_2_ring_stages[(k // 16) % 2]),
+                            T.ptr_of(rhs_2_ring_1),
                             layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
                             shape=(16, 32),
                         )
@@ -137,8 +163,15 @@ class WgmmaTwoSchedules:
                                         layout=((4 @ scope_5.d0, 2, 8 @ scope_5.d1, 4, 4 @ scope_5.d2, 2), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 32),
                                     )
+                                    lhs_2_ring_2 = T.tensor_view(
+                                        ((2048 * (k // 16)) - (4096 * (k // 32))) + 4096,
+                                        dtype="bf16",
+                                        storage="smem",
+                                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                                        shape=(64, 16),
+                                    )
                                     value_12 = T.tensor_view(
-                                        T.ptr_of(lhs_2_ring_stages[(k // 16) % 2]),
+                                        T.ptr_of(lhs_2_ring_2),
                                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                                         shape=(64, 16),
                                     )
@@ -147,8 +180,15 @@ class WgmmaTwoSchedules:
                                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                                         shape=(64, 16),
                                     )
+                                    rhs_2_ring_2 = T.tensor_view(
+                                        ((1024 * (k // 16)) - (2048 * (k // 32))) + 10240,
+                                        dtype="bf16",
+                                        storage="smem",
+                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
+                                        shape=(16, 32),
+                                    )
                                     value_13 = T.tensor_view(
-                                        T.ptr_of(rhs_2_ring_stages[(k // 16) % 2]),
+                                        T.ptr_of(rhs_2_ring_2),
                                         layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
                                         shape=(16, 32),
                                     )

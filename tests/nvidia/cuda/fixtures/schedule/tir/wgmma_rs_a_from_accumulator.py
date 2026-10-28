@@ -34,14 +34,6 @@ class WgmmaRsAFromAccumulator:
                 )
                 with Mesh(scope[1:], layout=(4, 8, 4), names=("d0", "d1", "d2")) as scope_1:
                     T.fill(p, 0.0)
-                lhs_ring_stages = (
-                T.tensor_view(1024, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
-                T.tensor_view(3072, dtype="bf16", storage="smem", layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)),
-            )
-                rhs_ring_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))), shape=(16, 16)),
-                T.tensor_view(512, dtype="bf16", storage="smem", layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))), shape=(16, 16)),
-            )
                 for k in range(0, 32, 16):
                     with scope[:1, :32] as scope_2:
                         value = T.tensor_view(
@@ -49,8 +41,15 @@ class WgmmaRsAFromAccumulator:
                             layout=((64, 16), (32, 1)),
                             shape=(64, 16),
                         )
+                        lhs_ring_1 = T.tensor_view(
+                            ((2048 * (k // 16)) - (4096 * (k // 32))) + 1024,
+                            dtype="bf16",
+                            storage="smem",
+                            layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                            shape=(64, 16),
+                        )
                         value_1 = T.tensor_view(
-                            T.ptr_of(lhs_ring_stages[(k // 16) % 2]),
+                            T.ptr_of(lhs_ring_1),
                             layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                             shape=(64, 16),
                         )
@@ -58,8 +57,15 @@ class WgmmaRsAFromAccumulator:
                         value_2 = T.tensor_view(
                             T.ptr_of(b[k:k + 1, 0:0 + 1]), layout=(16, 16), shape=(16, 16)
                         )
+                        rhs_ring_1 = T.tensor_view(
+                            (512 * (k // 16)) - (1024 * (k // 32)),
+                            dtype="bf16",
+                            storage="smem",
+                            layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
+                            shape=(16, 16),
+                        )
                         value_3 = T.tensor_view(
-                            T.ptr_of(rhs_ring_stages[(k // 16) % 2]),
+                            T.ptr_of(rhs_ring_1),
                             layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
                             shape=(16, 16),
                         )
@@ -73,8 +79,15 @@ class WgmmaRsAFromAccumulator:
                                         layout=((4 @ scope_3.d0, 2, 8 @ scope_3.d1, 2, 4 @ scope_3.d2, 2), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 16),
                                     )
+                                    lhs_ring_2 = T.tensor_view(
+                                        ((2048 * (k // 16)) - (4096 * (k // 32))) + 1024,
+                                        dtype="bf16",
+                                        storage="smem",
+                                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
+                                        shape=(64, 16),
+                                    )
                                     value_5 = T.tensor_view(
-                                        T.ptr_of(lhs_ring_stages[(k // 16) % 2]),
+                                        T.ptr_of(lhs_ring_2),
                                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                                         shape=(64, 16),
                                     )
@@ -83,8 +96,15 @@ class WgmmaRsAFromAccumulator:
                                         layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
                                         shape=(64, 16),
                                     )
+                                    rhs_ring_2 = T.tensor_view(
+                                        (512 * (k // 16)) - (1024 * (k // 32)),
+                                        dtype="bf16",
+                                        storage="smem",
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
+                                        shape=(16, 16),
+                                    )
                                     value_6 = T.tensor_view(
-                                        T.ptr_of(rhs_ring_stages[(k // 16) % 2]),
+                                        T.ptr_of(rhs_ring_2),
                                         layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))),
                                         shape=(16, 16),
                                     )
@@ -139,15 +159,18 @@ class WgmmaRsAFromAccumulator:
                     )
                     T.cast(value_8, value_7, dtype="bf16")
                     T.fill(acc, 0.0)
-                rhs_ring_1_stages = (
-                T.tensor_view(0, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
-                T.tensor_view(1024, dtype="bf16", storage="smem", layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)),
-            )
                 for j in range(0, 16, 16):
                     with scope[:1, :32] as scope_5:
                         value_9 = T.tensor_view(T.ptr_of(b1), layout=(16, 32), shape=(16, 32))
+                        rhs_ring_1_1 = T.tensor_view(
+                            (1024 * (j // 16)) - (2048 * (j // 32)),
+                            dtype="bf16",
+                            storage="smem",
+                            layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
+                            shape=(16, 32),
+                        )
                         value_10 = T.tensor_view(
-                            T.ptr_of(rhs_ring_1_stages[(j // 16) % 2]),
+                            T.ptr_of(rhs_ring_1_1),
                             layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
                             shape=(16, 32),
                         )
@@ -166,8 +189,15 @@ class WgmmaRsAFromAccumulator:
                                         layout=((4 @ scope_6.d0, 2, 8 @ scope_6.d1, 2, 4 @ scope_6.d2, 2), (16, 8, 1, 512, 128, 64)),
                                         shape=(64, 16),
                                     )
+                                    rhs_ring_1_2 = T.tensor_view(
+                                        (1024 * (j // 16)) - (2048 * (j // 32)),
+                                        dtype="bf16",
+                                        storage="smem",
+                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
+                                        shape=(16, 32),
+                                    )
                                     value_13 = T.tensor_view(
-                                        T.ptr_of(rhs_ring_1_stages[(j // 16) % 2]),
+                                        T.ptr_of(rhs_ring_1_2),
                                         layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))),
                                         shape=(16, 32),
                                     )

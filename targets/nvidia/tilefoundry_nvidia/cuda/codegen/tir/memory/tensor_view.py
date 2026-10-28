@@ -16,7 +16,7 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.tir.memory.ptr_of import PtrOf
-from tilefoundry.ir.tir.memory.tensor_view import TensorView
+from tilefoundry.ir.tir.memory.tensor_view import TensorView, _byte_offset
 from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types import ComposedLayout
@@ -49,7 +49,7 @@ from tilefoundry_nvidia.cuda.codegen.tir.stmts.mesh_scope import (
     mesh_type,
     program_topologies,
 )
-from tilefoundry_nvidia.cuda.codegen.tir.tuple_get_item import constant_index, render_tuple_choice
+from tilefoundry_nvidia.cuda.codegen.tir.tuple_get_item import constant_index
 
 
 def _swizzle_args(swizzle) -> str:
@@ -346,6 +346,12 @@ class _CoordinateVisitor(ExprVisitor[str]):
             return f"({lhs} {operator} {rhs})"
         if isinstance(expr.target, MeshCoord):
             return _mesh_coord_value(expr, ctx)
+        if isinstance(expr.target, TupleGetItem):
+            held, index = expr.args
+            if isinstance(index, Constant):
+                values = ctx.tuple_for(held) if isinstance(held, Var) else held
+                return self.visit(values.elements[constant_index(index)], ctx)
+            return f"{ctx.name_for(held)}[{self.visit(index, ctx)}]"
         raise NotImplementedError(
             f"local_tile coordinate: Call target {type(expr.target).__name__!r} is not supported"
         )
@@ -354,7 +360,7 @@ class _CoordinateVisitor(ExprVisitor[str]):
         shape = getattr(getattr(expr, "type", None), "shape", ()) or ()
         dims = tuple(getattr(d, "value", d) for d in shape)
         if dims == ():
-            return ctx.name_for(expr)
+            return scalar_read(expr, ctx) if getattr(getattr(expr, "type", None), "storage", None) is StorageKind.RMEM else ctx.name_for(expr)
         if dims == (1,):
             return scalar_read(expr, ctx)
         raise NotImplementedError(
@@ -368,8 +374,8 @@ class _CoordinateVisitor(ExprVisitor[str]):
 def _coord_ref(index_var, ctx: CudaCodegenContext) -> str:
     """Render a compile-time, scalar, or one-element absolute coordinate.
 
-    Integer literals become static coordinates; rank-zero scalars use their
-    native names; one-element offset tensors read element zero. Dim arithmetic
+    Integer literals become static coordinates; scalar values use their native
+    names, while scalar register tensors and one-element offsets read element zero. Dim arithmetic
     renders as the arithmetic itself: a multiplication preserves grid output
     placement after an ordinal is converted to an element start, and an addition
     moves a window's base by a compile-time offset. A mesh coordinate reads this
@@ -383,51 +389,12 @@ def _tensor_ref(var, ctx: CudaCodegenContext) -> str:
     return f"{name}_tensor" if ctx.is_kernel_param(var) else name
 
 
-def _tensor_value_ref(element, ctx: CudaCodegenContext) -> str:
-    """The tensor one tuple element names: its bound name, or the view it calls.
-
-    An inline ``T.tensor_view(...)`` element has no binding of its own -- a
-    Tuple lowers at its consumers -- so the view expression is rendered in
-    place, in the words a plain ``TensorView`` let would have used.
-    """
-    if isinstance(element, Call) and isinstance(element.target, TensorView):
-        pointer_ref, _ = _pointer_ref(element.args[0], ctx)
-        layout = element.target.layout
-        if isinstance(layout, SL):
-            raise NotImplementedError(
-                "CUDA TupleGetItem pointer: an inline shard-layout tensor_view "
-                "element emits several statements and has no inline expression"
-            )
-        return f"tilefoundry::ops::tensor_view({pointer_ref}, {_plain_layout_value(layout)})"
-    return _tensor_ref(element, ctx)
-
-
-def _tuple_pointer_ref(call: Call, ctx: CudaCodegenContext) -> tuple[str, object | None]:
-    """Render a pointer chosen among a tuple's elements.
-
-    A constant index is decided here; anything else is decided on the card as
-    one array subscript, over the elements' tensors with ``.data()`` taking
-    the chosen one's pointer, or over the pointers themselves when the
-    elements name raw smem offsets. A runtime choice has no single syntactic
-    source, so no ``memory_var`` comes back for the coordinate forms to bind
-    to.
-    """
-    held, index = call.args
-    if isinstance(held, Var):
-        held = ctx.tuple_for(held)
-    if not isinstance(held, Tuple):
-        raise ValueError("CUDA TupleGetItem pointer requires a tuple value")
-    if isinstance(index, Constant):
-        selected = constant_index(index)
-        return _pointer_ref(Call(PtrOf(), (held.elements[selected],), type=call.type), ctx)
-    if any(isinstance(element, Constant) for element in held.elements):
-        refs = tuple(
-            _pointer_ref(Call(PtrOf(), (element,), type=call.type), ctx)[0]
-            for element in held.elements
-        )
-        return render_tuple_choice(refs, index, ctx), None
-    tensors = tuple(_tensor_value_ref(element, ctx) for element in held.elements)
-    return f"{render_tuple_choice(tensors, index, ctx)}.data()", None
+def _smem_offset_ref(pointer, dtype, ctx: CudaCodegenContext) -> tuple[str, None]:
+    cpp_type = ctx.dtype_to_cpp(dtype)
+    return (
+        f"cute::make_smem_ptr(reinterpret_cast<{cpp_type} *>({ctx.smem_base()} + {_coord_ref(pointer, ctx)}))",
+        None,
+    )
 
 
 def _pointer_ref(pointer, ctx: CudaCodegenContext) -> tuple[str, object | None]:
@@ -445,20 +412,11 @@ def _pointer_ref(pointer, ctx: CudaCodegenContext) -> tuple[str, object | None]:
             offset = f"{_plain_layout_value(layout)}(cute::make_coord({coords}))"
             pointer, root = _pointer_ref(Call(PtrOf(), (base,), type=pointer.type), ctx)
             return f"({pointer} + {offset})", root
-        if isinstance(source, Call) and isinstance(source.target, TupleGetItem):
-            return _tuple_pointer_ref(source, ctx)
         if isinstance(source, Call) and isinstance(source.target, TensorView):
             return _pointer_ref(source.args[0], ctx)
-        if isinstance(source, Constant):
-            return _pointer_ref(source, ctx)
+        if _byte_offset(source):
+            return _smem_offset_ref(source, pointer.type.dtype.name, ctx)
         return f"{_tensor_ref(source, ctx)}.data()", source
-    if isinstance(pointer, Constant):
-        cpp_type = ctx.dtype_to_cpp(pointer.type.dtype.name)
-        base = ctx.smem_base()
-        return (
-            f"cute::make_smem_ptr(reinterpret_cast<{cpp_type} *>({base} + {pointer.value}))",
-            None,
-        )
     return ctx.name_for(pointer), None
 
 
@@ -480,7 +438,10 @@ def _plain_layout_value(layout: LayoutBase) -> str:
 def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
     call = let.value
     pointer = call.args[0]
-    pointer_ref, memory_var = _pointer_ref(pointer, ctx)
+    pointer_ref, memory_var = (
+        _smem_offset_ref(pointer, call.type.dtype.name, ctx)
+        if _byte_offset(pointer) else _pointer_ref(pointer, ctx)
+    )
     var_name = ctx.name_for(let.var)
     layout = call.target.layout
 

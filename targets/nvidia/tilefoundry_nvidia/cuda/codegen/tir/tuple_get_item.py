@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub
+from tilefoundry.ir.types.dtype import IntegerDType
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 from tilefoundry_nvidia.cuda import CudaTarget
@@ -24,8 +26,7 @@ def _value(expr, ctx: CudaCodegenContext) -> str:
         if isinstance(expr.value, bool):
             return "true" if expr.value else "false"
         return str(expr.value)
-    name = ctx.name_for(expr)
-    return f"{name}_tensor" if ctx.is_kernel_param(expr) else name
+    return ctx.name_for(expr)
 
 
 def _index(expr, ctx: CudaCodegenContext) -> str:
@@ -54,22 +55,27 @@ def constant_index(index: Constant) -> int:
     return selected
 
 
-def render_tuple_choice(rendered: tuple[str, ...], index, ctx: CudaCodegenContext) -> str:
-    """One runtime choice among *rendered* elements, subscripted by *index*.
-
-    The choice is decided on the card: one ``cute::array`` of the elements,
-    subscripted by the index this function renders. ``cute::array`` has no
-    deduction guide, so the element type and count come from the first
-    element's spelling.
-    """
-    array = f"cute::array<decltype({rendered[0]}), {len(rendered)}>{{{', '.join(rendered)}}}"
-    return f"{array}[{_index(index, ctx)}]"
+@register_codegen(CudaTarget, Role.EMIT, Tuple)
+def _bind_tuple(let_stmt, ctx: CudaCodegenContext) -> None:
+    """Declare one array for a tuple whose elements share a type."""
+    elements = let_stmt.value.elements
+    if not elements or any(element.type != elements[0].type for element in elements[1:]):
+        return
+    rendered = tuple(_value(element, ctx) for element in elements)
+    type_ = elements[0].type
+    name = ctx.name_for(let_stmt.var)
+    values = ", ".join(rendered)
+    if isinstance(type_, TensorType) and type_.shape == () and isinstance(type_.dtype, IntegerDType):
+        ctx.emit(f"int64_t {name}[{len(elements)}] = {{{values}}};")
+    else:
+        ctx.emit(f"cute::array<decltype({rendered[0]}), {len(elements)}> {name}{{{values}}};")
 
 
 @register_codegen(CudaTarget, Role.EMIT, TupleGetItem)
 def _emit(let_stmt, ctx: CudaCodegenContext) -> None:
     call = let_stmt.value
-    held, index = call.args
+    tuple_var, index = call.args
+    held = tuple_var
     if isinstance(held, Var):
         held = ctx.tuple_for(held)
     if not isinstance(held, Tuple):
@@ -78,5 +84,4 @@ def _emit(let_stmt, ctx: CudaCodegenContext) -> None:
     if isinstance(index, Constant):
         ctx.emit(f"auto {result} = {_value(held.elements[constant_index(index)], ctx)};")
         return
-    rendered = tuple(_value(element, ctx) for element in held.elements)
-    ctx.emit(f"auto {result} = {render_tuple_choice(rendered, index, ctx)};")
+    ctx.emit(f"auto {result} = {ctx.name_for(tuple_var)}[{_index(index, ctx)}];")
