@@ -61,7 +61,7 @@ tuple's binding declared; dimension arithmetic in the index remains runtime C++
 arithmetic.
 
 A `LetStmt` binding a `Tuple` whose elements share one type declares one C++
-array at the binding: `int64_t name[N]` for integer scalars, otherwise
+array at the binding: `int64_t name[N]` for integer dimension values (UMAT scalars), otherwise
 `cute::array<decltype(e0), N>`. A heterogeneous `Tuple` stays structural: it
 emits no C++ variable, and only constant selection reaches it. The codegen
 context records the structural tuple by its fresh SSA `Var` identity so
