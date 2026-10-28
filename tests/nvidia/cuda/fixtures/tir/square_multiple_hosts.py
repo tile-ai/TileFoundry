@@ -1,0 +1,60 @@
+from __future__ import annotations
+
+from tilefoundry.dsl import *
+from tilefoundry.target import CpuTarget
+from tilefoundry_nvidia import CudaTarget
+
+_S = DimVar("S", 1, 255)
+
+
+@module(
+    entry="square_host", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 128),)
+)
+class TirSquareMultipleHosts:
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    def square_device(x: Tensor[(_S,), "f32"]):
+        pass
+
+    @square_device.specialize(RangePattern("S", 1, 127))
+    def square_small(x: Tensor[(_S,), "f32"]):
+        with Mesh((Topology("thread", 128),), layout=(128,), names=("t",)) as thread:
+            for index in range(thread.t, shape_of(x, axis=0), 128):
+                view = T.tensor_view(T.ptr_of(x[index:index + 1]), layout=(1,), shape=(1,))
+                reg = T.alloc_tensor(tensor_type=Tensor[(1,), "f32", "rmem"])
+                for phase in range(0, 2, 1):
+                    if phase < 1:
+                        T.copy(view, reg)
+                    else:
+                        T.binary(reg, reg, reg, kind=BinaryKind.MUL)
+                        T.copy(reg, view)
+            T.sync(thread)
+
+    @square_device.specialize(RangePattern("S", 128, 255))
+    def square_large(x: Tensor[(_S,), "f32"]):
+        with Mesh((Topology("thread", 128),), layout=(128,), names=("t",)) as thread:
+            for index in range(thread.t, shape_of(x, axis=0), 128):
+                view = T.tensor_view(T.ptr_of(x[index:index + 1]), layout=(1,), shape=(1,))
+                reg = T.alloc_tensor(tensor_type=Tensor[(1,), "f32", "rmem"])
+                for phase in range(0, 2, 1):
+                    if phase < 1:
+                        T.copy(view, reg)
+                    else:
+                        T.binary(reg, reg, reg, kind=BinaryKind.MUL)
+                        T.copy(reg, view)
+            T.sync(thread)
+
+    @prim_func(target=CpuTarget())
+    def secondary_host(x: Tensor[(_S,), "f32"]):
+        launch(square_device, x, grid=(1, 1, 1), block=(128, 1, 1))
+
+    @prim_func(target=CpuTarget())
+    def square_host(x: Tensor[(_S,), "f32"]):
+        launch(square_device, x, grid=(
+        1,
+        1,
+        1,
+    ), block=(
+        128,
+        1,
+        1,
+    ))  # noqa: F821

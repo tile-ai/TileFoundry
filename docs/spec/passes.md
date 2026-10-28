@@ -254,7 +254,9 @@ class ConvertHIRToTIR(ModulePass):
   - The pass lowers the device root: the callee of the `Launch` in `Module.entry`
     when that entry is a CPU host, otherwise `Module.entry` itself. It returns the
     Module unchanged under `CodegenOptions(emit="skeleton")` or when the Module
-    has no HIR function.
+    has no HIR function. When lowering HIR from a CPU host root, exactly one
+    `Launch` MUST resolve to an HIR function; otherwise `LoweringError` names
+    the host and the number of such launches.
   - Address placement comes only from `MemoryMetadata`: integer shared-memory
     addresses are byte offsets, and every analyzed offset becomes one concrete
     buffer view. Multiple offsets bind one view per offset and one tuple of

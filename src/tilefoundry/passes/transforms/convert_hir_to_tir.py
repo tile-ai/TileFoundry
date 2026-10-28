@@ -1766,10 +1766,17 @@ def _relaunch(fn, launches):
 def _device_root(module):
     function = module.entry_function()
     if isinstance(function, PrimFunction) and isinstance(function.target, CpuTarget):
-        (launch,) = (stmt for stmt in function.body
-                    if isinstance(stmt, Evaluate) and isinstance(stmt.callable, Launch))
-        reference = launch.args[0]
-        return resolve_symbol(module, reference.name, nested=reference.nested)
+        callees = (
+            resolve_symbol(module, stmt.args[0].name, nested=stmt.args[0].nested)
+            for stmt in function.body
+            if isinstance(stmt, Evaluate) and isinstance(stmt.callable, Launch)
+        )
+        roots = tuple(callee for callee in callees if isinstance(callee, Function))
+        if len(roots) != 1:
+            raise LoweringError(
+                f"host {function.name!r} launches {len(roots)} HIR functions; expected exactly one"
+            )
+        return roots[0]
     return function
 
 

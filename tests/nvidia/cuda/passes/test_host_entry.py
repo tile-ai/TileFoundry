@@ -8,8 +8,7 @@ import pytest
 
 import tilefoundry
 from tests.core._corpus import Case, case, check_case, special
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.ir.core.module import Module, ModuleList
+from tilefoundry.passes.transforms import LoweringError
 from tilefoundry_nvidia.cuda.passes.transforms import insert_default_host_entry
 
 
@@ -39,19 +38,29 @@ class MissingHostEntry(HostEntryCase):
             tilefoundry.compile(state)
 
 
+@case
+class ChildHostWithoutRootHost(HostEntryCase):
+    path: Path = Path(__file__).parents[1] / "fixtures/passes/child_host_without_root_host.py"
+    name: str | None = "NoRootHost"
+
+    def guard(self, state, problems):
+        with pytest.raises(ValueError, match=r"Module.entry 'device' is not a CPU host entry"):
+            tilefoundry.build(state)
+
+
+@case
+class AmbiguousHIRHost(HostEntryCase):
+    path: Path = Path(__file__).parents[1] / "fixtures/passes/ambiguous_hir_host.py"
+    name: str | None = "AmbiguousHIRHost"
+
+    def guard(self, state, problems):
+        with pytest.raises(LoweringError, match="host 'host' launches 2 HIR functions; expected exactly one"):
+            tilefoundry.compile(state)
+
+
 CASES = special(HostEntryCase)
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
 def test_host_entry_case(case: HostEntryCase) -> None:
     check_case(case)
-
-
-def test_build_does_not_use_a_child_host_as_the_root():
-    child = load_authored_ir(str(ExistingHostEntry().path))
-    root = Module(
-        "NoRootHost", (child.lookup("square_device"),), "square_device",
-        target=child.target, topologies=child.topologies, children={"child": ModuleList(child)},
-    )
-    with pytest.raises(ValueError, match=r"Module.entry 'square_device' is not a CPU host entry"):
-        tilefoundry.build(root)
