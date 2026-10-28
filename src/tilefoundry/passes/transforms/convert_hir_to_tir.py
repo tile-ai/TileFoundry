@@ -1724,7 +1724,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         return written
 
 
-def _relaunch(fn, lowered, module):
+def _relaunch(fn, launches, module):
     """Retype host launches and forward the scratch parameters lowering appended."""
     if not isinstance(fn, PrimFunction):
         return fn
@@ -1736,7 +1736,7 @@ def _relaunch(fn, lowered, module):
             if not isinstance(stmt.callable, Launch):
                 return stmt
             ref = stmt.args[0]
-            lowering = lowered.get(".".join((*ref.nested, ref.name)))
+            lowering = launches.get(".".join((*ref.nested, ref.name)))
             if lowering is None:
                 return stmt
             scratch = tuple(

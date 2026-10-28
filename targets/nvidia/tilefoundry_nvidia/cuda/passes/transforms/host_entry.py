@@ -56,11 +56,9 @@ def _smem_peak(fn: Function) -> int:
 
 
 def _launchable(ty) -> bool:
-    if isinstance(ty, TensorType):
-        return ty.storage in (StorageKind.GMEM, StorageKind.UMAT)
     if isinstance(ty, TupleType):
         return all(_launchable(field) for field in ty.fields)
-    return isinstance(ty, UnitType)
+    return not isinstance(ty, TensorType) or ty.storage in (StorageKind.GMEM, StorageKind.UMAT)
 
 
 def _fresh_name(stem: str, taken: set[str]) -> str:
