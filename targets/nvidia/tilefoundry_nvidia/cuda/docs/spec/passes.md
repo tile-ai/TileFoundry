@@ -3,16 +3,13 @@
 ### 7.3 `insert_default_host_entry`
 
 ```python
-class InsertHostEntryPass(ModulePass):
+class CudaInsertHostEntryPass(InsertHostEntryPass):
     """Give launchable HIR Module entries a host-callable entry.
 
     Attributes:
         name: attribute; Stable dump and log name.
         requires: attribute; Ordered dependency assertion.
     """
-
-    name: str = "insert_host_entry"
-    requires: tuple[str, ...] = ()
 
     def run(self, module: Module) -> Module: ...
 
@@ -31,8 +28,9 @@ def insert_default_host_entry(module: Module) -> Module:
 
 - constraints:
   - The pass is the scheduled form of the transform and states no rule of its
-    own. CUDA registers it at `PassPoint.BEFORE_LOWER`; finalization, compile and scaffold
-    select it through `target_passes`.
+    own. CUDA binds it to the core `InsertHostEntryPass` with
+    `@bind(CudaTarget, InsertHostEntryPass)`; finalization, compile and scaffold
+    obtain it through `Target.resolve`.
   - A CPU entry MUST pass through unchanged.
   - When the root Module entry receives a host entry, the pass sets `Module.entry`
     to that host entry.

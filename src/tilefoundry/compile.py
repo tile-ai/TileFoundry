@@ -16,7 +16,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.passes.pass_manager import PassManager, PassPoint, target_passes
-from tilefoundry.passes.transforms import ConvertHIRToTIR
+from tilefoundry.passes.transforms import ConvertHIRToTIR, InsertHostEntryPass
 from tilefoundry.runtime.loader import load_linked_module
 from tilefoundry.target import CpuTarget, Target, default_target
 from tilefoundry.target.base import target_instance, target_summary
@@ -67,10 +67,11 @@ def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module:
 
 def default_pipeline(module: Module, options: CodegenOptions = CodegenOptions()) -> PassManager:
     """The one pass list finalize, compile and scaffold run."""
-    convert = module.resolve_target().resolve(ConvertHIRToTIR, options)
+    target = module.resolve_target()
     return PassManager([
         *target_passes(module, PassPoint.BEFORE_LOWER),
-        convert,
+        target.resolve(InsertHostEntryPass, options),
+        target.resolve(ConvertHIRToTIR, options),
         *target_passes(module, PassPoint.AFTER_LOWER),
         *target_passes(module, PassPoint.BEFORE_CODEGEN),
     ])

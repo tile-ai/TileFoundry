@@ -1,5 +1,5 @@
 """CUDA transform registrations."""
 
-from .host_entry import InsertHostEntryPass, insert_default_host_entry
+from .host_entry import CudaInsertHostEntryPass, insert_default_host_entry
 
-__all__ = ["InsertHostEntryPass", "insert_default_host_entry"]
+__all__ = ["CudaInsertHostEntryPass", "insert_default_host_entry"]

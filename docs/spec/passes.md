@@ -71,7 +71,7 @@ class Pass(ABC):
 Runs over the whole `Module` and may add / remove / reorder
 functions. Examples: module-level inline, dead-function elimination,
 synthesizing an entry the module does not yet declare
-([§7.3](#73-insert_default_host_entry)).
+([§7.3](#73-inserthostentrypass)).
 
 ```python
 class ModulePass(Pass):
@@ -432,15 +432,28 @@ def target_passes(module: Module, point: PassPoint) -> list[ModulePass]: ...
   - A pass class MUST be registered at most once per point; a duplicate MUST
     raise `ValueError` naming the Target and pass.
   - Finalize, compile and scaffold MUST run the same pass list: `BEFORE_LOWER`
-    target passes, `ConvertHIRToTIR`, `AFTER_LOWER` target passes, `BEFORE_CODEGEN`
-    target passes. Scaffold passes `CodegenOptions(emit="skeleton")`.
+    target passes, `InsertHostEntryPass`, `ConvertHIRToTIR`, `AFTER_LOWER` target
+    passes, `BEFORE_CODEGEN` target passes. Scaffold passes `CodegenOptions(emit="skeleton")`.
 
-### 7.3 `insert_default_host_entry`
+### 7.3 `InsertHostEntryPass`
 
-A target may register a `BEFORE_LOWER` pass that gives an HIR Module
-host-callable entries. The target owns the supported device shapes and launch
-geometry; finalization, compile and scaffold select the pass through `target_passes`. A
-TIR Module receives no entry: one without a CPU entry is rejected by compile.
+```python
+class InsertHostEntryPass(ModulePass):
+    name: str = "insert-host-entry"
+    requires: tuple[str, ...] = ()
+
+    @classmethod
+    def create(cls, target: Target, options: CodegenOptions) -> InsertHostEntryPass: ...
+    def run(self, module: Module) -> Module: ...
+```
+
+Core defines the pass with `create(target, options)`; its default `run` returns
+its Module unchanged. A Target MAY bind a subclass with
+`@bind(TargetClass, InsertHostEntryPass)`; `default_pipeline` obtains it through
+`Target.resolve(InsertHostEntryPass, options)`. It runs after `BEFORE_LOWER`
+target passes and before `ConvertHIRToTIR`. The target owns the supported device
+shapes and launch geometry. A TIR Module receives no entry: one without a CPU
+entry is rejected by compile.
 
 - constraints:
   - An existing CPU entry MUST pass through unchanged.

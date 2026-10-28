@@ -16,9 +16,8 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types import StorageKind, TensorType, TupleType, UnitType
 from tilefoundry.ir.types.layout import Layout
-from tilefoundry.passes.pass_base import ModulePass
-from tilefoundry.passes.pass_manager import PassPoint, register_pass
-from tilefoundry.target import CpuTarget
+from tilefoundry.passes.transforms.host_entry import InsertHostEntryPass
+from tilefoundry.target import CpuTarget, bind
 from tilefoundry_nvidia.cuda import CudaTarget
 
 
@@ -149,15 +148,12 @@ def entries_for_hir_functions(module: Module) -> Module:
     return module
 
 
-@register_pass(CudaTarget, PassPoint.BEFORE_LOWER)
-class InsertHostEntryPass(ModulePass):
+@bind(CudaTarget, InsertHostEntryPass)
+class CudaInsertHostEntryPass(InsertHostEntryPass):
     """Give launchable HIR Module entries a host-callable entry before lowering."""
-
-    name: str = "insert_host_entry"
-    requires: tuple[str, ...] = ()
 
     def run(self, module: Module) -> Module:
         return insert_default_host_entry(module)
 
 
-__all__ = ["InsertHostEntryPass", "insert_default_host_entry"]
+__all__ = ["CudaInsertHostEntryPass", "insert_default_host_entry"]

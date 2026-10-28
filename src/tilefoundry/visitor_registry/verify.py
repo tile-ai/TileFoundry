@@ -832,7 +832,7 @@ def _verify_launch(stmt: Evaluate, fn, module_context, ctx):
     The launch is ``Evaluate(Launch(...), (SymbolRef(callee), grid_x, grid_y,
     grid_z, block_x, block_y, block_z, *forwarded))``. An HIR callee's arguments
     were written and checked by the host-entry pass that built the Launch
-    ([passes §7.3](docs/spec/passes.md#73-insert_default_host_entry)), so only
+    ([passes §7.3](docs/spec/passes.md#73-inserthostentrypass)), so only
     its selector is resolved here.
     """
     ref = stmt.args[0]
