@@ -118,7 +118,7 @@ def host_entry_for(frame, selector: str, fn: Function, taken: set[str]) -> PrimF
 
 
 def entries_for_hir_functions(module: Module) -> Module:
-    """Append a host entry per Module entry, retaining the authored root entry.
+    """Append host entries and select the root host as the Module entry.
 
     Python begins a kernel invocation only by entering a Module; any other
     function runs as a device call inside one, or is wrapped by Python itself.
@@ -130,6 +130,7 @@ def entries_for_hir_functions(module: Module) -> Module:
         )
     taken = {fn.name for fn in module.functions}
     entries = []
+    root = None
     for call_path, frame in list_call_paths(module).items():
         fn = frame.function
         if (
@@ -138,8 +139,13 @@ def entries_for_hir_functions(module: Module) -> Module:
             and not any(part.isdecimal() for part in call_path.split(".")[:-1])
             and _launchable(fn.return_type)
         ):
-            entries.append(host_entry_for(frame, call_path, fn, taken))
+            entry = host_entry_for(frame, call_path, fn, taken)
+            entries.append(entry)
+            if call_path == module.entry:
+                root = entry
     module.functions = (*module.functions, *entries)
+    if root is not None:
+        module.entry = root.name
     return module
 
 

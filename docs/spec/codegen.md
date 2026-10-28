@@ -299,9 +299,8 @@ class LinkedModule:
   - `LinkedFunction.name` MUST be the dotted registration name;
     `signature` MUST retain the host C++ calling convention and its C++ name
     ([§4.4](#44-signatures)). `link_function` creates this pair from a resolved `FunctionSymbol`.
-  - `LinkedModule.functions` MUST list every emitted host export, in emission
-    order. Compilation supplies one entry; scaffold projects supply every
-    synthesized or selected CPU entry. The compiled runtime loader requires one
+  - `LinkedModule.functions` MUST list all CPU hosts on the Module's call paths,
+    with the `Module.entry` host first when present; the loader binds the first
     ([runtime §1.4](./runtime.md#14-runtimeloaderpy)).
   - MUST carry the assembled host + device source — the diagnostic source the
     runtime exposes as `RuntimeModule.source` ([runtime](./runtime.md)).
@@ -312,7 +311,7 @@ class LinkedModule:
 ```python
 def link_program(
     mod: Module, *, workdir: str | Path,
-    options: CodegenOptions = CodegenOptions(), entries=None,
+    options: CodegenOptions = CodegenOptions(),
 ) -> LinkedModule: ...
 
 
@@ -356,8 +355,8 @@ class CMakeProject:
   - Each target MUST directly include its packaged runtime header. Runtime
     include directories MUST be located through `importlib.resources`.
 
-`link_program` emits and links without loading. `entries=None` selects the
-root entry; an explicit sequence selects those CPU entries, with launcher
+`link_program` emits and links all CPU hosts on the Module's call paths without
+loading, placing the `Module.entry` host first when present, with launcher
 declarations deduplicated. Sources are written directly in `workdir`; the
 library is `workdir/build/lib<root Module name>.so`. The link step compiles each
 source unit with its own toolchain and links the units into one library.

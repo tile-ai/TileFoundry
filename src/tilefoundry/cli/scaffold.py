@@ -5,10 +5,7 @@ from pathlib import Path
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.codegen.link_module import link_program
 from tilefoundry.codegen.options import CodegenOptions
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.passes.pass_manager import PassManager, PassPoint, target_passes
-from tilefoundry.target import CpuTarget
+from tilefoundry.compile import default_pipeline
 
 
 def run_scaffold(source: str, out_dir: str) -> int:
@@ -17,13 +14,8 @@ def run_scaffold(source: str, out_dir: str) -> int:
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise ValueError(f"scaffold: output directory {destination} must be empty")
     module = load_authored_ir(source)
-    prepared = PassManager(target_passes(module, PassPoint.BEFORE_LOWER)).run(module)
-    entries = tuple(
-        fn
-        for frame in list_call_paths(prepared).values() for fn in (frame.function,)
-        if isinstance(fn, PrimFunction) and isinstance(fn.target, CpuTarget)
-    )
+    options = CodegenOptions(emit="skeleton")
     link_program(
-        prepared, workdir=destination, options=CodegenOptions(emit="skeleton"), entries=entries
+        default_pipeline(module, options).run(module), workdir=destination, options=options
     )
     return 0

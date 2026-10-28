@@ -15,6 +15,7 @@ from tilefoundry.codegen.linked_module import LinkedModule
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.dump import DumpFlags, DumpScope, dump
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.target import CpuTarget
 
@@ -121,16 +122,17 @@ def link_modules(
 
 def link_program(
     mod: Module, *, workdir: str | Path,
-    options: CodegenOptions = CodegenOptions(), entries=None,
+    options: CodegenOptions = CodegenOptions(),
 ) -> LinkedModule:
     """Generate code for the whole Module tree and link it into one library."""
     codegen = build_codegen_context(mod, options)
-    entries = (mod.entry_function(),) if entries is None else tuple(entries)
+    entries = tuple(sorted(
+        (frame.function for frame in list_call_paths(mod).values()
+         if isinstance(frame.function, PrimFunction) and isinstance(frame.function.target, CpuTarget)),
+        key=lambda fn: fn.name != mod.entry,
+    ))
     if not entries:
         raise ValueError("link_program: expected at least one CPU host entry")
-    for entry in entries:
-        if not (isinstance(entry, PrimFunction) and isinstance(entry.target, CpuTarget)):
-            raise ValueError(f"link_program: entry {entry.name!r} is not a CPU host entry")
     groups = (
         *(group for group in codegen.groups if not isinstance(group.target, CpuTarget)),
         EmissionGroup(mod, entries[0].target, entries),

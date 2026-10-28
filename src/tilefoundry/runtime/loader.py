@@ -17,9 +17,7 @@ def load_linked_module(linked: "LinkedModule") -> CompiledModule:
     """Load *linked*'s shared library and bind its entry into a ``CompiledModule``."""
     import tvm_ffi  # noqa: PLC0415
 
-    if len(linked.functions) != 1:
-        raise ValueError(f"load_linked_module: expected one entry, got {len(linked.functions)}")
-    (entry,) = linked.functions
+    entry = linked.functions[0]
     loaded = tvm_ffi.load_module(str(linked.library_path))
     _LIBRARIES.append(loaded)
     try:

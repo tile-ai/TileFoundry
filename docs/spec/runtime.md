@@ -341,8 +341,8 @@ LinkedModule → load → CompiledModule (fully-loaded, public, callable Runtime
 `CompiledModule` is owned here. The loader and `LinkedModule` are not public
 API; only `CompiledModule` (a `RuntimeModule`) is. `load_linked_module` returns
 `CompiledModule(type=replace(entry.signature, name=entry.name), fn=entry_callable)`,
-where `entry` is the one `LinkedFunction`; `name` / `entry` are its registration
-name. Its `forward` implements the out-param calling
+where `entry` is the first `LinkedFunction`, the `Module.entry` host;
+`name` / `entry` are its registration name. Its `forward` implements the out-param calling
 convention directly ([§1.1](#11-runtimemodulepy)) — there is no separate function-body object it
 delegates to. The compiled path has no `resource` / `weights` / `states`
 (weights are ordinary entry arguments), so its `load` is the inherited no-op.

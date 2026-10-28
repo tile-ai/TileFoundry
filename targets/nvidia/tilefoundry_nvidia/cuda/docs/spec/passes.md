@@ -31,9 +31,11 @@ def insert_default_host_entry(module: Module) -> Module:
 
 - constraints:
   - The pass is the scheduled form of the transform and states no rule of its
-    own. CUDA registers it at `PassPoint.BEFORE_LOWER`; finalization and scaffold
+    own. CUDA registers it at `PassPoint.BEFORE_LOWER`; finalization, compile and scaffold
     select it through `target_passes`.
   - A CPU entry MUST pass through unchanged.
+  - When the root Module entry receives a host entry, the pass sets `Module.entry`
+    to that host entry.
   - With no CPU entry, an all-HIR tree MUST gain one CPU entry per Module
     whose `entry` is set, whose result leaves are all GMEM or UMAT, and whose
     call path crosses no indexed slot, root and children alike: Python begins a kernel
@@ -49,8 +51,7 @@ def insert_default_host_entry(module: Module) -> Module:
     with the declared names reserved. A unit result adds none; any other
     result type MUST be rejected. The pass checks these when it builds the
     `Launch`, so later stages read them and do not derive them again. The
-    authored root entry remains unchanged. The entry's IR name is
-    `<fn.name>_host`, with the same suffix rule on collisions; its emitted C++
+    entry's IR name is `<fn.name>_host`, with the same suffix rule on collisions; its emitted C++
     and registration names follow the HIR callee's path
     ([codegen §4.4](../../../../../../docs/spec/codegen.md#44-signatures)).
   - An entry whose call path crosses an indexed slot MUST receive no host

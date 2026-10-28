@@ -19,6 +19,7 @@ import isl
 from tilefoundry.analysis import MemoryMetadata
 from tilefoundry.analysis.access import AliasKind, buffer_alias, forwarded_leaves
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
+from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
@@ -31,7 +32,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, resolve_symbol
 from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -1726,7 +1727,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         return written
 
 
-def _relaunch(fn, launches, module):
+def _relaunch(fn, launches):
     """Retype host launches and forward the scratch parameters lowering appended."""
     if not isinstance(fn, PrimFunction):
         return fn
@@ -1745,8 +1746,6 @@ def _relaunch(fn, launches, module):
                 Var(names.fresh(param.name), type=param.type)
                 for param in lowering.context.scratch
             )
-            if isinstance(fn.target, CpuTarget) and not ref.nested and ref.name == module.entry:
-                module.entry = fn.name
             inputs = len(lowering.context.function.params)
             outputs = len(params) - fn.output_count
             params[outputs:outputs] = scratch
@@ -1764,22 +1763,37 @@ def _relaunch(fn, launches, module):
     return replace(fn, params=tuple(params), body=body) if body is not fn.body else fn
 
 
+def _device_root(module):
+    function = module.entry_function()
+    if isinstance(function, PrimFunction) and isinstance(function.target, CpuTarget):
+        (launch,) = (stmt for stmt in function.body
+                    if isinstance(stmt, Evaluate) and isinstance(stmt.callable, Launch))
+        reference = launch.args[0]
+        return resolve_symbol(module, reference.name, nested=reference.nested)
+    return function
+
+
 @dataclass
 class ConvertHIRToTIR(ModulePass):
     """Replace one selected HIR entry with its scheduled TIR function."""
 
     visitor: ClassVar[type[Lowering]] = Lowering
+    options: CodegenOptions = CodegenOptions()
 
     name = "convert-hir-to-tir"
     requires = ()
 
     @classmethod
-    def create(cls, target) -> ConvertHIRToTIR:
-        """The pass a Target selects; it takes nothing beyond the Target."""
-        return cls()
+    def create(cls, target, options) -> ConvertHIRToTIR:
+        """Create the configured pass selected by a Target."""
+        return cls(options)
 
     def run(self, module: Module) -> Module:
-        function = module.entry_function()
+        if self.options.emit == "skeleton" or not any(
+            isinstance(frame.function, Function) for frame in list_call_paths(module).values()
+        ):
+            return module
+        function = _device_root(module)
         if get_metadata(function, AllocationSummaryMetadata) is None:
             raise LoweringError(
                 "finalize needs the result of analyze(..., analysis=('memory',)) on a checked program"
@@ -1810,7 +1824,7 @@ class ConvertHIRToTIR(ModulePass):
             node.functions = tuple(
                 lowered[id(fn)].lowered if id(fn) in lowered else fn for fn in node.functions
             )
-            node.functions = tuple(_relaunch(fn, launches, module) for fn in node.functions)
+            node.functions = tuple(_relaunch(fn, launches) for fn in node.functions)
 
         lower_module(module)
         return module

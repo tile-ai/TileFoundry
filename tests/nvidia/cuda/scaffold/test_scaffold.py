@@ -74,5 +74,5 @@ def test_scaffold_rejects_omitted_child_weights(tmp_path, capsys):
 @pytest.mark.parametrize("fixture", ("hir_moe", "hir_layers"))
 def test_scaffold_full_refuses_hir(fixture):
     module = load_authored_ir(f"{FIXTURES / (fixture + '.py')}:Root")
-    with pytest.raises(ValueError, match='emit="skeleton" or lowering to TIR'):
+    with pytest.raises(ValueError, match="finalize needs the result of analyze"):
         tilefoundry.compile(module)

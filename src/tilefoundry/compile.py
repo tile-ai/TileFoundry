@@ -10,12 +10,15 @@ import tempfile
 from dataclasses import dataclass
 
 from tilefoundry.codegen.link_module import link_program
+from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.inspection import as_script as _as_script
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.passes.pass_manager import PassManager, PassPoint, target_passes
+from tilefoundry.passes.transforms import ConvertHIRToTIR
 from tilefoundry.runtime.loader import load_linked_module
-from tilefoundry.target import Target, default_target
+from tilefoundry.target import CpuTarget, Target, default_target
 from tilefoundry.target.base import target_instance, target_summary
 
 
@@ -62,8 +65,15 @@ def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module:
     )
 
 
-def _build_default_pipeline(module: Module) -> PassManager:
-    return PassManager(target_passes(module, PassPoint.BEFORE_CODEGEN))
+def default_pipeline(module: Module, options: CodegenOptions = CodegenOptions()) -> PassManager:
+    """The one pass list finalize, compile and scaffold run."""
+    convert = module.resolve_target().resolve(ConvertHIRToTIR, options)
+    return PassManager([
+        *target_passes(module, PassPoint.BEFORE_LOWER),
+        convert,
+        *target_passes(module, PassPoint.AFTER_LOWER),
+        *target_passes(module, PassPoint.BEFORE_CODEGEN),
+    ])
 
 
 def build(
@@ -93,6 +103,9 @@ def build(
             f"conflicts with the Module Target {target_summary(module_target)}"
         )
 
+    entry = mod.entry_function()
+    if not (isinstance(entry, PrimFunction) and isinstance(entry.target, CpuTarget)):
+        raise ValueError(f"tilefoundry.build: Module.entry {entry.name!r} is not a CPU host entry")
     workdir = tempfile.mkdtemp(prefix=f"tilefoundry_build_{mod.entry}_split_")
     return load_linked_module(link_program(mod, workdir=workdir))
 
@@ -103,11 +116,11 @@ def compile(
     *,
     target: Target | None = None,
 ) -> "RuntimeModule":
-    """``build(mod, target=target)`` -- the full compile entry.
+    """Run the shared pass pipeline, then build the resulting Module.
 
     *mod* must be a ``Module``.  Meshes are derived from the IR body.
     """
-    prepared = _build_default_pipeline(mod).run(mod)
+    prepared = default_pipeline(mod).run(mod)
     return build(prepared, target=target)
 
 
