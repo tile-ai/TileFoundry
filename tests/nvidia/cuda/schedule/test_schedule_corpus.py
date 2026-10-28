@@ -730,7 +730,6 @@ class SmemPaddedStages(ScheduleCase):
     smem_peak: int = 96
     candidates_refusal: str | None = "source has no unscheduled candidate site"
 
-
     def guard(self, state, problems):
         tilefoundry.compile(state.lowered)
 

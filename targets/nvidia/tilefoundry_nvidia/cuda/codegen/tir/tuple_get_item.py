@@ -26,7 +26,8 @@ def _value(expr, ctx: CudaCodegenContext) -> str:
         if isinstance(expr.value, bool):
             return "true" if expr.value else "false"
         return str(expr.value)
-    return ctx.name_for(expr)
+    name = ctx.name_for(expr)
+    return f"{name}_tensor" if ctx.is_kernel_param(expr) else name
 
 
 def _index(expr, ctx: CudaCodegenContext) -> str:
@@ -65,7 +66,12 @@ def _bind_tuple(let_stmt, ctx: CudaCodegenContext) -> None:
     type_ = elements[0].type
     name = ctx.name_for(let_stmt.var)
     values = ", ".join(rendered)
-    if isinstance(type_, TensorType) and type_.shape == () and isinstance(type_.dtype, IntegerDType):
+    if (
+        isinstance(type_, TensorType)
+        and type_.shape == ()
+        and type_.storage is StorageKind.UMAT
+        and isinstance(type_.dtype, IntegerDType)
+    ):
         ctx.emit(f"int64_t {name}[{len(elements)}] = {{{values}}};")
     else:
         ctx.emit(f"cute::array<decltype({rendered[0]}), {len(elements)}> {name}{{{values}}};")

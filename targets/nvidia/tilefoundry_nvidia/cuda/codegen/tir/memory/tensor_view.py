@@ -413,6 +413,8 @@ def _pointer_ref(pointer, ctx: CudaCodegenContext) -> tuple[str, object | None]:
             pointer, root = _pointer_ref(Call(PtrOf(), (base,), type=pointer.type), ctx)
             return f"({pointer} + {offset})", root
         if isinstance(source, Call) and isinstance(source.target, TensorView):
+            if _byte_offset(source.args[0]):
+                return _smem_offset_ref(source.args[0], source.type.dtype.name, ctx)
             return _pointer_ref(source.args[0], ctx)
         if _byte_offset(source):
             return _smem_offset_ref(source, pointer.type.dtype.name, ctx)

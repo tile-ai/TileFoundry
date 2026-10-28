@@ -340,7 +340,6 @@ arithmetic syntax; other forms keep the expression grammar:
 tensor-view-address ::= expression | slice-endpoint-binary
 ```
 
-
 ### 2.2 Rules
 
 <!-- parser-constraints:start -->

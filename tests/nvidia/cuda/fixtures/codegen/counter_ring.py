@@ -25,7 +25,6 @@ class CounterRing:
     def counter_ring_device(x: Tensor[(1, 8), "bf16"], out: Tensor[(1, 8), "bf16"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:  # noqa: F841
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
-
                 stage_counter = T.alloc_tensor(tensor_type=Tensor[(), "i64", "rmem"])
                 T.fill(stage_counter, 0)
                 stage_one = T.alloc_tensor(tensor_type=Tensor[(), "i64", "rmem"])

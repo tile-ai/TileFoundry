@@ -65,7 +65,9 @@ array at the binding: `int64_t name[N]` for integer scalars, otherwise
 `cute::array<decltype(e0), N>`. A heterogeneous `Tuple` stays structural: it
 emits no C++ variable, and only constant selection reaches it. The codegen
 context records the structural tuple by its fresh SSA `Var` identity so
-constant selection can recover its elements.
+constant selection can recover its elements. The array holds element values
+at binding time: views still alias their original storage, while owning register
+tensors are copied.
 
 CUDA emits `CopyAsyncBulk` and `LdMatrix` as the uniform runtime calls
 `tilefoundry::ops::copy_async_bulk(...)` and
