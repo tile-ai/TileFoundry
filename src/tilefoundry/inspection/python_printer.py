@@ -49,7 +49,7 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types import TensorType, TupleType
-from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
+from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar, is_dim_op_call
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
@@ -530,7 +530,7 @@ def _emit_def(
             target = expr.target
             if isinstance(target, HirFunction):
                 _op_names_set.add(target.name)
-            elif isinstance(target, Op):
+            elif isinstance(target, Op) and not is_dim_op_call(expr):
                 _op_names_set.add(get_registered_name(target).split(".")[-1])
 
     _forced_names: dict[int, str] = {}

@@ -202,5 +202,5 @@ def test_parameter_pattern_states_structure() -> None:
 
 def test_instruction_requires_execution_mesh(monkeypatch) -> None:
     monkeypatch.delattr(_UnstatedInstruction, "execution_mesh")
-    with pytest.raises(ValueError, match="_UnstatedInstruction execution_mesh must be"):
+    with pytest.raises(ValueError, match="T.unstated_instruction execution_mesh must be"):
         declared_execution_mesh(_UnstatedInstruction)

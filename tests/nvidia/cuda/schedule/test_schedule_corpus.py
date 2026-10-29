@@ -42,10 +42,12 @@ from tilefoundry.ir.core import (
     Tuple,
     Var,
     get_metadata,
+    get_registered_name,
 )
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.module import Module, ModuleList
+from tilefoundry.ir.core.op_registry import lookup
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp
@@ -311,7 +313,11 @@ def _tir_checks(lowered, source):
 
 def _hir_candidates(report):
     assert report["lines"]
-    ops = [row["op"] for row in report["lines"]]
+    ops = []
+    for row in report["lines"]:
+        dialect, *path, name = row["op"].split(".")
+        schema = lookup(dialect, tuple(path), name)
+        ops.append(get_registered_name(schema.alias_of or schema.op_class))
     assert "tf.matmul" not in ops
     assert "tf.reshard" not in ops
     assert any(
