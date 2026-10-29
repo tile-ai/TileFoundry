@@ -26,7 +26,6 @@ from .op import (
     OpCapability,
     ParameterInfo,
     capabilities_of,
-    op_identifier,
     supported_op_capabilities,
     target_capabilities,
 )
@@ -67,7 +66,7 @@ __all__ = [
     "OpCapability",
     "ParameterInfo",
     "capabilities_of",
-    "op_identifier",
+    "get_registered_name",
     "supported_op_capabilities",
     "target_capabilities",
     "TotalAndPerUnit",
@@ -84,3 +83,5 @@ __all__ = [
     "Printable",
     "PrinterBase",
 ]
+
+from .register import get_registered_name

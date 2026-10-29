@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tilefoundry.ir.core.register import get_registered_name
+
 from dataclasses import dataclass
 from enum import Enum
 
@@ -79,19 +81,17 @@ class MmaAtom(Printable):
 
     roles = ("C", "A", "B")
     parameters: tuple[ParamDef, ...] = ()
-    reference_name: str = ""
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls.parameters = tuple(value for value in vars(cls).values() if isinstance(value, ParamDef))
-        cls.reference_name = f"{cls.namespace}.{cls.__name__}"
         register_type(dialect="T", namespace=cls.namespace.removeprefix("T."))(cls)
 
     def __init__(self, *, mesh: Mesh | None = None, **bindings):
         unknown = set(bindings) - {param.name for param in self.parameters}
         if unknown:
             raise ValueError(
-                f"{self.reference_name} takes no parameter {', '.join(sorted(unknown))}"
+                f"{get_registered_name(self)} takes no parameter {', '.join(sorted(unknown))}"
             )
         held = {}
         for param in self.parameters:
@@ -101,7 +101,7 @@ class MmaAtom(Printable):
             if matched(param.pattern, value, held) is None:
                 shown = value.name if isinstance(value, DType) else repr(value)
                 raise ValueError(
-                    f"{self.reference_name}: {param.name}={shown} is not one "
+                    f"{get_registered_name(self)}: {param.name}={shown} is not one "
                     f"it takes{self._where(held)}; it takes {param.name} "
                     f"{param.pattern!r}"
                 )
@@ -120,7 +120,7 @@ class MmaAtom(Printable):
             return pattern
         if param.has_default:
             return param.default
-        raise ValueError(f"{cls.reference_name} needs {param.name}")
+        raise ValueError(f"{get_registered_name(cls)} needs {param.name}")
 
     @staticmethod
     def _where(held: dict) -> str:
@@ -140,7 +140,7 @@ class MmaAtom(Printable):
             for role in self.roles
         )
         if any(shape is None for shape in shapes):
-            raise ValueError(f"{self.reference_name} does not declare fixed operand shapes")
+            raise ValueError(f"{get_registered_name(self)} does not declare fixed operand shapes")
         return shapes
 
     @property
@@ -158,7 +158,7 @@ class MmaAtom(Printable):
         """This atom as importable DSL source, written with *printer*.
 
         The atom states its own name, every binding in parameter order and an
-        Enum's ``namespace`` spelling; every other value, the mesh included, is
+        Enum's registered type name; every other value, the mesh included, is
         printed by *printer* in the same import context.
         """
         stated = [
@@ -167,11 +167,11 @@ class MmaAtom(Printable):
         ]
         if self.mesh is not None:
             stated.append(f"mesh={printer.print(self.mesh, ctx)}")
-        return f"{self.reference_name}({', '.join(stated)})"
+        return f"{get_registered_name(self)}({', '.join(stated)})"
 
     def _printed_value(self, value, printer: PrinterBase, ctx) -> str:
         if isinstance(value, Enum):
-            return f"{self.namespace}.{type(value).__name__}.{value.name}"
+            return f"{get_registered_name(value)}.{value.name}"
         return printer.print(value, ctx)
 
     def __eq__(self, other):
@@ -188,11 +188,11 @@ class MmaAtom(Printable):
         stated = [f"{name}={self._repr_value(value)}" for name, value in self.bindings.items()]
         if self.mesh is not None:
             stated.append(f"mesh={self.mesh!r}")
-        return f"{self.reference_name}({', '.join(stated)})"
+        return f"{get_registered_name(self)}({', '.join(stated)})"
 
     def _repr_value(self, value) -> str:
         if isinstance(value, Enum):
-            return f"{self.namespace}.{type(value).__name__}.{value.name}"
+            return f"{get_registered_name(value)}.{value.name}"
         if isinstance(value, DType):
             return repr(value.name)
         return repr(value)

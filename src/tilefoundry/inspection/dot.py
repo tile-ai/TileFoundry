@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tilefoundry.ir.core import Call, Constant, Var, binding_name
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.register import get_registered_name
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
@@ -12,14 +13,6 @@ from tilefoundry.ir.visitor import ExprWalker
 
 from .print_context import HirPrintContext
 from .printer_base import PythonPrinter
-
-
-def _op_display_name(target) -> str:
-    cls = type(target).__name__
-    for suffix in ("Op", "Expr", "Stmt"):
-        if cls.endswith(suffix) and cls != suffix:
-            cls = cls[: -len(suffix)]
-    return cls
 
 
 def _type_lines(ty, printer: PythonPrinter, ctx: HirPrintContext) -> list[str]:
@@ -82,15 +75,11 @@ def hir_function_to_dot(fn: HirFunction) -> str:
         def visit_Call(self, expr: Call, current=None) -> None:
             nid = node_id(expr)
             target = expr.target
-            if isinstance(target, Reshard):
-                name = binding_name(expr)
-                header = f"{name}\\nReshard" if name else "Reshard"
-                emit_node(nid, [header, *_type_lines(expr.type, printer, ctx)], fill=shard_fill)
-            else:
-                name = binding_name(expr)
-                op_label = _op_display_name(target)
-                header = f"{name}\\n{op_label}" if name else op_label
-                emit_node(nid, [header, *_type_lines(expr.type, printer, ctx)], fill=call_fill)
+            op_label = target.name if isinstance(target, HirFunction) else get_registered_name(target)
+            name = binding_name(expr)
+            header = f"{name}\\n{op_label}" if name else op_label
+            emit_node(nid, [header, *_type_lines(expr.type, printer, ctx)],
+                      fill=shard_fill if isinstance(target, Reshard) else call_fill)
             for index, arg in enumerate(expr.args):
                 self.visit(arg, current)
                 emit_edge(node_id(arg), nid, f"arg[{index}]" if len(expr.args) > 1 else "")

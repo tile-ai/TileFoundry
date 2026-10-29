@@ -49,7 +49,26 @@ _LOGICAL_KINDS = {BinaryKind.AND, BinaryKind.OR}
 _INT_ONLY_KINDS = {BinaryKind.FLOOR_DIV, BinaryKind.MOD}
 
 
-@register_op(dialect='tf', category='math')
+@register_op(dialect="tf", category="math", aliases={
+    "add": {"kind": BinaryKind.ADD},
+    "sub": {"kind": BinaryKind.SUB},
+    "mul": {"kind": BinaryKind.MUL},
+    "div": {"kind": BinaryKind.DIV},
+    "floor_div": {"kind": BinaryKind.FLOOR_DIV},
+    "mod": {"kind": BinaryKind.MOD},
+    "min": {"kind": BinaryKind.MIN},
+    "max": {"kind": BinaryKind.MAX},
+    "minimum": {"kind": BinaryKind.MIN},
+    "maximum": {"kind": BinaryKind.MAX},
+    "cmp_eq": {"kind": BinaryKind.EQ},
+    "cmp_ne": {"kind": BinaryKind.NE},
+    "cmp_lt": {"kind": BinaryKind.LT},
+    "cmp_le": {"kind": BinaryKind.LE},
+    "cmp_gt": {"kind": BinaryKind.GT},
+    "cmp_ge": {"kind": BinaryKind.GE},
+    "logical_and": {"kind": BinaryKind.AND},
+    "logical_or": {"kind": BinaryKind.OR},
+})
 class Binary(Op):
     """Value-form pointwise binary operation."""
 

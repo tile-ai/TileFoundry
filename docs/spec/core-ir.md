@@ -557,8 +557,9 @@ def register_op(
     *,
     dialect: str,
     category: str,
-    name: str | None = None,
     namespace: str = "",
+    name: str | None = None,
+    aliases: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Any:
     """Expose an operation at a unique dialect namespace and name."""
     ...
@@ -605,43 +606,36 @@ class ReduceSum(Op):
   attribute values on the instance: `Binary(kind=BinaryKind.ADD)` /
   `ReduceSum(axis=1, keepdims=True)`.
 
-#### Surface aliases (`@register_alias`)
+#### Surface aliases (`register_op(..., aliases=...)`)
 
-A **surface alias** is a registry entry that has no IR class of its
-own; instead, its `OpSchema.builder` callback constructs a *target*
-Op with some attributes pre-fixed. Aliases let several user-callable
-surface names share a single kinded IR class without exposing the
-`kind=...` attribute at the call site.
+Aliases are declared together with their canonical operation:
 
 ```python
-# Registry coordinates select the surface bucket; ``params`` reuses the
-# target Op's static ParamDef references.
-@register_alias(dialect="...", category="...", name="...", params=[...])
-def builder() -> Op:
-    """Return a target Op with attributes pre-fixed; takes attribute kwargs only."""
+@register_op(dialect="tf", category="math", namespace="", name="binary",
+             aliases={"add": {"kind": BinaryKind.ADD}})
+class Binary(Op):
+    lhs = ParamDef(kind="input")
+    rhs = ParamDef(kind="input")
+    kind = ParamDef(kind="attribute", annotation=BinaryKind)
 ```
 
-- constraints:
-  - Alias schemas MUST have no IR class (`OpSchema.op_class is None`) and MUST
-    occupy their own unique name in the dialect root, under the same collision
-    rules as other registrations.
+The decorator parameters are `cls=None, *, dialect, category, namespace="",
+name=None, aliases=None`. Each alias inherits the canonical dialect, namespace
+and category, and fixes declared attribute values. Its signature reuses the
+canonical ParamDefs except for fixed attributes. The builder accepts remaining
+attributes only and MUST reject attempts to override fixed attributes.
+Alias schemas have `op_class=None`, `alias_of` equal to the canonical class and
+`fixed_attrs` recording the bindings. The class keeps its canonical `_op_schema`.
+Canonical and alias registration is atomic: any collision or invalid binding
+MUST leave the registry unchanged.
 
-Properties:
-
-- `params` reuses the **static `ParamDef` references** of the target
-  Op. The alias never re-declares ParamDef structures.
-- `builder` takes attribute kwargs only; input args still flow into
-  `Call.args` via the parser. For a value-form alias whose builder
-  fixes every attribute (e.g. `add` fixes `kind`), the builder takes
-  zero kwargs.
-
-```python
-# example
-@register_alias(dialect="tf", category="math", name="add",
-                params=[Binary.lhs, Binary.rhs])
-def _add() -> Op:
-    return Binary(kind=BinaryKind.ADD)
-```
+`get_registered_name(value)` in `ir.core.register` is the sole
+registered-name formatter for operations and exported declaration types. A registered
+class returns its canonical identity. An instance selects the first alias whose
+fixed attributes match its own parameters, in declaration order, and otherwise
+returns its class's canonical identity. Callers do not supply an attribute map. Unregistered classes, including
+unregistered subclasses of registered classes, MUST raise `ValueError`.
+Registered enum members print as their registered type name plus member name.
 
 #### Input position and form
 

@@ -15,7 +15,7 @@ from tilefoundry.ir.core import (
     Var,
     VerifyError,
     capabilities_of,
-    op_identifier,
+    get_registered_name,
     target_capabilities,
 )
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
@@ -26,7 +26,7 @@ from tilefoundry.ir.pattern.utils import (
     declared_shape,
     selected_pattern,
 )
-from tilefoundry.ir.types import ComposedLayout, Layout, Split, TensorType, UnitType
+from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, Split, TensorType, UnitType
 from tilefoundry.ir.types.int_tuple import axis_tiler, compatible_profile, flatten, mode_axes
 from tilefoundry.ir.types.int_tuple import unflatten as unflatten_tuple
 from tilefoundry.ir.types.layout import flatten as flatten_layout
@@ -64,7 +64,7 @@ class ScheduleRefusal(ValueError):
         declaration = (
             atom if isinstance(atom, type) else type(atom) if atom is not None else type(op)
         )
-        self.instruction = "" if op is None else op_identifier(declaration)
+        self.instruction = "" if op is None else get_registered_name(declaration)
         super().__init__(reason)
 
     def __str__(self):
@@ -233,9 +233,9 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
     participant = (
         declaration.execution_mesh
         if isinstance(declaration, type)
-        else getattr(declaration, "required_execution_mesh", None)
+        else getattr(declaration, "required_execution_mesh", getattr(declaration, "execution_mesh", None))
     )
-    if participant is None:
+    if not isinstance(participant, Mesh):
         return Projection(params, writes, patterns, whole_types, (), repeat, order, single_shape)
     if not fragments:
         inner_types = tuple(
@@ -513,6 +513,7 @@ def _admit_capabilities(op, target) -> None:
 
 def admit_fields(op, operands, mesh, matcher, *, target=None):
     """Admit attributes, execution mesh and operand fields before tile projection."""
+    matcher.bindings.update(getattr(op, "bindings", {}))
     _admit_capabilities(op, target)
     for param in type(op)._op_schema.signature:
         if param.kind != "attribute" or param.name == "execution_mesh":
@@ -594,7 +595,7 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
     for rule in between_rules(type(op)):
         if not rule.holds(named):
             raise ScheduleRefusal(rule.refused(named), path=matcher.bindings, op=op)
-    if not matcher.solve():
+    if matcher.solve() is not True:
         raise _pattern_refusal(matcher, op)
     if handler is not None:
         args = tuple(

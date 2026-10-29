@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from tilefoundry.ir.core.register import get_registered_name
+from tilefoundry.ir.core.op_registry import lookup
+
 from tilefoundry.inspection.print_context import TirPrintContext
 from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
@@ -108,10 +111,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], ExprVisitor[str]):
         return f"shape_of({self.visit(expr.param, ctx)}, axis={expr.axis})"
 
     def visit_Op(self, expr: Op, ctx=None) -> str:
-        schema = getattr(expr, "_op_schema", None)
-        if schema is not None:
-            return ".".join((schema.dialect, *schema.namespace, schema.name))
-        return f"T.{type(expr).__name__.lower()}"
+        return get_registered_name(expr)
 
     def visit_program_call(self, expr: Call, ctx=None) -> str:
         target = expr.target
@@ -129,13 +129,12 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], ExprVisitor[str]):
         kind = getattr(target, "kind", None)
         if kind in scalar_binary and len(expr.args) == 2 and expr.type.dtype is DType.bool:
             return f"{self.visit(expr.args[0])} {scalar_binary[kind]} {self.visit(expr.args[1])}"
-        name = (
-            getattr(getattr(target, "_op_schema", None), "name", None)
-            or re.sub(r"(?<!^)(?=[A-Z])", "_", type(target).__name__).lower()
-        )
+        name = get_registered_name(target)
+        dialect, *path, leaf = name.split(".")
+        selected = lookup(dialect, tuple(path), leaf)
         args = [self.visit(item) for item in expr.args]
         for param in type(target).params():
-            if param.kind == "attribute":
+            if param.kind == "attribute" and param.name not in selected.fixed_attrs:
                 value = getattr(target, param.name, None)
                 if value is not None:
                     with self.type_surface(indent=self.indent + "    "):
@@ -147,7 +146,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]], ExprVisitor[str]):
                             else self.print(value, self.context, self.indent + "    ")
                         )
                     args.append(f"{param.name}={rendered}")
-        return f"T.{name}({', '.join(args)})"
+        return f"{name}({', '.join(args)})"
 
     def _window_subscript(self, expr: Call, ctx=None) -> str:
         """A window as the subscript it was authored as, which reads back.
@@ -348,15 +347,17 @@ def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
     target = stmt.callable
     args = list(stmt.args)
     attrs = []
-    op_name = getattr(getattr(target, "_op_schema", None), "name", None)
+    name = get_registered_name(target)
+    dialect, *path, leaf = name.split(".")
+    selected = lookup(dialect, tuple(path), leaf)
     for p in type(target).params():
-        if p.kind != "attribute":
+        if p.kind != "attribute" or p.name in selected.fixed_attrs:
             continue
         value = getattr(target, p.name, None)
         if value is None:
             continue
         rendered = printer.print(value, printer.context, printer.indent + "    ")
-        attrs.append(rendered if op_name == "sync" and p.name == "mesh" else f"{p.name}={rendered}")
+        attrs.append(rendered if name == "T.sync" and p.name == "mesh" else f"{p.name}={rendered}")
     rendered_args = [printer.visit(arg) for arg in args]
     head = printer.visit_Op(target)
     arguments = rendered_args + attrs

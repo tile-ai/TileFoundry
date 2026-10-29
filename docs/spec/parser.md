@@ -141,7 +141,12 @@ child namespaces.
 places the operation at the root. Category organizes documentation, not lookup.
 `register_type(dialect=..., namespace=...)` MUST expose a type in the same tree
 without creating an `OpSchema` or attaching `_op_schema`. Aliases occupy a
-single record like operations. A duplicate path MUST raise `ValueError` naming
+single record like operations. `register_op(..., aliases={name: fixed_attrs})`
+MUST derive alias signatures by removing fixed attributes from the canonical
+signature, retain the canonical class identity, and reject fixed-attribute
+overrides. Parser and printers MUST use the same alias records; printers select
+the first applicable alias through `get_registered_name(op)`.
+Failed registration MUST leave no canonical or alias entries. A duplicate path MUST raise `ValueError` naming
 the existing owner; a record MUST NOT occupy a namespace prefix, in either
 registration order. Missing required decorator arguments MUST raise `TypeError`.
 

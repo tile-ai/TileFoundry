@@ -8,6 +8,8 @@ emitter in this stage
 """
 from __future__ import annotations
 
+from tilefoundry.ir.core.register import get_registered_name
+
 from tilefoundry.ir.core import Var
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 from tilefoundry_nvidia.cuda import CudaTarget
@@ -30,7 +32,7 @@ def _emit(call, ctx: CudaCodegenContext) -> None:
     atom = call.target.atom
     if not isinstance(atom, (Sm80Mma, Sm89Mma)):
         raise RuntimeError(
-            f"tir.cuda.nn.TiledMma: no codegen handler for atom {atom.reference_name}"
+            f"tir.cuda.nn.TiledMma: no codegen handler for atom {get_registered_name(atom)}"
         )
 
     ctx.emit(f"tilefoundry::ops::mma({l}, {r}, {a});")

@@ -58,7 +58,7 @@ target nvidia.h200_sxm
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),))))
     refused     T.cuda.sm89.Mma
                   mesh: Mesh((Topology("cta", 4352),), layout=(64, 68), names=("bm", "bn")) does not match Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),))))
-  acc:35  tf.binary  per cta  lhs=Tensor[(8192, 17408), "f32",
+  acc:35  tf.add  per cta  lhs=Tensor[(8192, 17408), "f32",
     ShardLayout(
         layout=Layout((64, 128, 68, 256), (0, 256, 0, 1)),
         attrs=(S(0), S(2)),

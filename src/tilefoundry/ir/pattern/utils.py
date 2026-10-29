@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tilefoundry.ir.core.register import get_registered_name
+
 from collections.abc import Callable
 from dataclasses import replace
 from enum import Enum
@@ -130,7 +132,7 @@ def declared_execution_mesh(op_type, target=None) -> MeshPattern | OrPattern:
         declared = stated.pattern if isinstance(stated, ParamDef) else stated
     choices = declared.patterns if isinstance(declared, OrPattern) else (declared,)
     if not choices or not all(isinstance(choice, MeshPattern) for choice in choices):
-        name = getattr(declaration, "reference_name", "") or declaration.__name__
+        name = get_registered_name(declaration)
         raise ValueError(
             f"{name} execution_mesh must be a constant, ParamDef, or operand mesh reference"
         )
@@ -203,8 +205,8 @@ def variants(
         for state in states:
             for value in options:
                 matcher = PatternMatcher(state)
-                if matcher.match(param.pattern, value) and matcher.solve():
-                    held.append({**state, param.name: value})
+                if matcher.match(param.pattern, value) and matcher.solve() is True:
+                    held.append({**matcher.bindings, param.name: value})
         states = tuple(held)
     return states
 

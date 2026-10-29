@@ -340,9 +340,11 @@ class PatternMatcher:
 
         if isinstance(subject_shape, tuple) or isinstance(subject_strides, tuple):
             return self._fail(owner, (subject_shape, subject_strides))
-        return self.match(pattern_shape, subject_shape) and self.match(
-            pattern_strides, subject_strides
-        )
+        if not self.match(pattern_shape, subject_shape):
+            return False
+        # A singleton coordinate is always zero, so its stride contributes no
+        # address. Do not bind a stride variable from this unconstrained mode.
+        return subject_shape == 1 or self.match(pattern_strides, subject_strides)
 
     def visit_LayoutPattern(self, pattern, subject) -> bool:
         structural = subject

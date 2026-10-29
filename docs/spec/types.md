@@ -306,12 +306,18 @@ The canonical descriptors are:
 
 | Surface | Descriptor class | `bit_width` | Family-specific facts |
 | --- | --- | ---: | --- |
+| `DType.f64` | `FloatDType` | 64 | `exponent_bits=11`, `mantissa_bits=52` |
 | `DType.f32` | `FloatDType` | 32 | `exponent_bits=8`, `mantissa_bits=23` |
 | `DType.f16` | `FloatDType` | 16 | `exponent_bits=5`, `mantissa_bits=10` |
 | `DType.bf16` | `FloatDType` | 16 | `exponent_bits=8`, `mantissa_bits=7` |
 | `DType.fp8e4m3` | `FloatDType` | 8 | `exponent_bits=4`, `mantissa_bits=3` |
 | `DType.f8e8m0` | `FloatDType` | 8 | `exponent_bits=8`, `mantissa_bits=0` |
 | `DType.f4e2m1` | `FloatDType` | 4 | `exponent_bits=2`, `mantissa_bits=1` |
+| `DType.i8` | `IntegerDType` | 8 | `signed=True` |
+| `DType.u8` | `IntegerDType` | 8 | `signed=False` |
+| `DType.i16` | `IntegerDType` | 16 | `signed=True` |
+| `DType.u16` | `IntegerDType` | 16 | `signed=False` |
+| `DType.u32` | `IntegerDType` | 32 | `signed=False` |
 | `DType.i32` | `IntegerDType` | 32 | `signed=True` |
 | `DType.i64` | `IntegerDType` | 64 | `signed=True` |
 | `DType.bool` | `BoolDType` | 1 | none |

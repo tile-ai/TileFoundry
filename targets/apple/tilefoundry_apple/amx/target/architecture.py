@@ -1,6 +1,6 @@
 """Apple AMX compilation capabilities.
 
-Every value is built from the installed ``apple.amx`` document; this module
+Every value is built from an installed AMX architecture document; this module
 holds the shape of an AMX architecture value, never a copy of its numbers.
 """
 

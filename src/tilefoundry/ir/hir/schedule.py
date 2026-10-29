@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tilefoundry.ir.core.register import get_registered_name
+
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -220,8 +222,9 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
         raise ScheduleRefusal(f"{op_type.__name__} schedule operands must be tensors", op=op)
     atom = getattr(op, "atom", None)
     if not isinstance(atom, type):
-        admit_fields(op, operand_types, mesh, PatternMatcher(dict(getattr(atom, "bindings", {}))), target=None if frame is None else frame.target)
-        tiles = project(op, operand_types, mesh, repeat=repeat, order=order)
+        matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
+        admit_fields(op, operand_types, mesh, matcher, target=None if frame is None else frame.target)
+        tiles = project(op, operand_types, mesh, bindings=matcher.bindings, repeat=repeat, order=order)
         bindings, _tiles = check_call(
             op, operand_types, mesh, frame=frame, repeat=repeat, order=order, projection=tiles
         )
@@ -288,7 +291,7 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
             accepted.append(InstructionMatch(instance, tuple(bindings.items())))
     if not accepted:
         raise refusal or ScheduleRefusal(
-            f"{atom.reference_name} has no admitted tile parameters", op=op
+            f"{get_registered_name(atom)} has no admitted tile parameters", op=op
         )
     return tuple(accepted)
 

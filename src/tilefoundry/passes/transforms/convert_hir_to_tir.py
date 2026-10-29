@@ -28,7 +28,7 @@ from tilefoundry.ir.core import (
     Tuple,
     Var,
     get_metadata,
-    op_identifier,
+    get_registered_name,
 )
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -1044,17 +1044,17 @@ class StoragePlan:
 class IssuePlan:
     """Instruction selection and one shared geometric projection, without admission."""
 
-    def op(self, call):
+    def op(self, call, *, target):
         if isinstance(call.target, ScheduleOp):
             return call.target.op
-        candidates = candidate_ops(type(call.target))
+        candidates = candidate_ops(type(call.target), target=target)
         if not candidates:
             raise LoweringError(
                 f"{_label(call)} uses unknown HIR call {type(call.target).__name__}"
             )
-        op = sole_candidate(call)
+        op = sole_candidate(call, target=target)
         if op is None:
-            available = ", ".join(op_identifier(candidate) for candidate in candidates)
+            available = ", ".join(get_registered_name(candidate) for candidate in candidates)
             raise LoweringError(
                 f"{_label(call)} has instruction candidates [{available}] but no automatic "
                 "selection; write tf.schedule to choose the instruction and its attributes"
@@ -1426,7 +1426,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             )
         if name == "InsertSlice":
             return self.visit_InsertSlice(call, operands, ctx)
-        op = ctx.issues.op(call)
+        op = ctx.issues.op(call, target=ctx.target)
         return getattr(self, f"visit_{type(op).__name__}", self.instruction)(
             call, op, operands, ctx
         )

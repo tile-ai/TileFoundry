@@ -23,7 +23,19 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 
-@register_op(dialect='tf', category='math')
+@register_op(dialect="tf", category="math", aliases={
+    "neg": {"kind": UnaryKind.NEG},
+    "abs": {"kind": UnaryKind.ABS},
+    "logical_not": {"kind": UnaryKind.NOT},
+    "rsqrt": {"kind": UnaryKind.RSQRT},
+    "exp": {"kind": UnaryKind.EXP},
+    "log": {"kind": UnaryKind.LOG},
+    "square": {"kind": UnaryKind.SQUARE},
+    "ceil": {"kind": UnaryKind.CEIL},
+    "round": {"kind": UnaryKind.ROUND},
+    "exp2": {"kind": UnaryKind.EXP2},
+    "log2": {"kind": UnaryKind.LOG2},
+})
 class Unary(Op):
     """Value-form pointwise unary operation."""
 

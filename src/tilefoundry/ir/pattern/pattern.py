@@ -19,7 +19,7 @@ class Pattern:
 
     def match(self, subject, captures=None) -> Match | None:
         held = PatternMatcher(dict(captures or {}))
-        return Match(dict(held.bindings)) if held.match(self, subject) and held.solve() else None
+        return Match(dict(held.bindings)) if held.match(self, subject) and held.solve() is True else None
 
 
 @dataclass(frozen=True)

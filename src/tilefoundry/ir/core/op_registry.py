@@ -7,6 +7,9 @@ from typing import Iterable
 from tilefoundry.ir.core.op_schema import OpSchema
 
 _VALID_DIALECTS = ("tf", "T")
+_CLASS_ALIASES: dict[type, tuple[tuple[str, tuple[str, ...], str], ...]] = {}
+_CLASS_REGISTRY: dict[type, tuple[str, tuple[str, ...], str]] = {}
+
 _REGISTRY: dict[tuple[str, tuple[str, ...], str], OpSchema | type] = {}
 
 
@@ -24,28 +27,29 @@ def children(dialect: str, path: tuple[str, ...]) -> list[str]:
     })
 
 
-def _register(dialect: str, path: tuple[str, ...], name: str, entry: OpSchema | type) -> None:
+def _register(dialect: str, path: tuple[str, ...], name: str, entry: OpSchema | type, *, registry=None) -> None:
+    table = _REGISTRY if registry is None else registry
     if dialect not in _VALID_DIALECTS:
         raise ValueError(f"dialect must be one of {_VALID_DIALECTS!r}, got {dialect!r}")
-    if not isinstance(name, str) or not name or any(not part for part in path):
+    if not isinstance(name, str) or not name or "." in name or any(not isinstance(part, str) or not part or "." in part for part in path):
         raise ValueError("registry names and namespace components must be non-empty")
     for depth, part in enumerate((*path, name)):
-        existing = lookup(dialect, path[:depth], part)
+        existing = table.get((dialect, path[:depth], part))
         if existing is not None:
             owner = existing.builder if isinstance(existing, OpSchema) else existing
             raise ValueError(
-                f"{'.'.join((dialect, *path[:depth], part))} is already owned by "
+                f"{(dialect, path[:depth], part)!r} is already owned by "
                 f"{owner.__module__}.{owner.__qualname__}"
             )
     prefix = (*path, name)
-    for (d, namespace, _), existing in _REGISTRY.items():
+    for (d, namespace, _), existing in table.items():
         if d == dialect and namespace[:len(prefix)] == prefix:
             owner = existing.builder if isinstance(existing, OpSchema) else existing
             raise ValueError(
-                f"{'.'.join((dialect, *prefix))} is already owned by namespace of "
+                f"{(dialect, prefix)!r} is already owned by namespace of "
                 f"{owner.__module__}.{owner.__qualname__}"
             )
-    _REGISTRY[dialect, path, name] = entry
+    table[dialect, path, name] = entry
 
 
 def iter_schemas() -> Iterable[OpSchema]:

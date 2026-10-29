@@ -49,13 +49,19 @@ class BoolDType(DType):
     pass
 
 
+DType.f64 = FloatDType(name="f64", bit_width=64, exponent_bits=11, mantissa_bits=52)
 DType.f32 = FloatDType(name="f32", bit_width=32, exponent_bits=8, mantissa_bits=23)
 DType.f16 = FloatDType(name="f16", bit_width=16, exponent_bits=5, mantissa_bits=10)
 DType.bf16 = FloatDType(name="bf16", bit_width=16, exponent_bits=8, mantissa_bits=7)
 DType.fp8e4m3 = FloatDType(name="fp8e4m3", bit_width=8, exponent_bits=4, mantissa_bits=3)
 DType.f8e8m0 = FloatDType(name="f8e8m0", bit_width=8, exponent_bits=8, mantissa_bits=0)
 DType.f4e2m1 = FloatDType(name="f4e2m1", bit_width=4, exponent_bits=2, mantissa_bits=1)
+DType.i8 = IntegerDType(name="i8", bit_width=8, signed=True)
+DType.u8 = IntegerDType(name="u8", bit_width=8, signed=False)
+DType.i16 = IntegerDType(name="i16", bit_width=16, signed=True)
+DType.u16 = IntegerDType(name="u16", bit_width=16, signed=False)
 DType.i32 = IntegerDType(name="i32", bit_width=32, signed=True)
+DType.u32 = IntegerDType(name="u32", bit_width=32, signed=False)
 DType.i64 = IntegerDType(name="i64", bit_width=64, signed=True)
 DType.bool = BoolDType(name="bool", bit_width=1)
 

@@ -145,3 +145,49 @@ class AmxTarget(Target):
     MUST NOT be admitted at either level.
   - Unsupported topology levels MUST raise an actionable error naming the
     supported levels, from both the limit lookup and topology validation.
+
+
+## Full instruction catalogue
+
+The installed architecture document admits each declared instruction capability
+as `amx_<mnemonic>`. Per-instruction Patterns check legal dtype/mode combinations;
+full catalogue support includes F16/BF16/F32/F64 and signed/unsigned8/16/32-bit
+views where the particular instruction defines them. A dtype listed by the
+architecture does not make every instruction accept it.
+
+X and Y each have the `staging_bytes` capacity, while Z has
+`accumulator_bytes`. The combined physical RMEM capacity is therefore
+`2 * staging_bytes + accumulator_bytes` (5120B for this architecture), not one
+staging bank plus Z. The evaluator's logical lifecycle token is excluded. Instruction operands describe logical issue fragments; the full physical bank state is internal to emulation.
+
+Instruction semantics are encoded by static versioned Ops, selected only by
+architecture capabilities. There are 39 registered Ops; each architecture lists
+24 capabilities: 15 unchanged instruction names and nine versioned names of the
+form `amx_<mnemonic>_vN`. Neither a public instruction version parameter nor a
+Target generation Facts bridge participates in selection.
+
+| Architecture ID | LDX/LDY | EXTRX/EXTRY | MATFP | VECFP | MATINT | VECINT | GENLUT |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `apple.amx_m1` | v1 | v1 | v1 | v1 | v1 | v1 | v1 |
+| `apple.amx` (M2) | v2 | v2 | v2 | v2 | v1 | v2 | v2 |
+| `apple.amx_m3` | v3 | v2 | v2 | v2 | v2 | v2 | v2 |
+| `apple.amx_m4` | v3 | v3 | v2 | v3 | v2 | v3 | v2 |
+
+The unchanged capabilities are SET, CLR, LDZ, LDZI, STX, STY, STZ, STZI,
+FMA16/32/64, FMS16/32/64, and MAC16, retaining names such as `amx_fma32`.
+The installed `apple.amx` ID remains the M2 capability catalogue, preserving the
+existing `apple.m2_pro` compatibility reference and default `AmxTarget()`.
+The additional architecture documents reuse the same schema and `AppleAmx`
+structure; they do not add M1/M3/M4 device specifications or measured rates.
+
+These capability partitions come from the original C emulator and its
+[emulate.h](https://github.com/corsix/amx/blob/main/emulate.h) convention
+`AMX_VER_M1=1`, `AMX_VER_M2=2`, `AMX_VER_M3=3`, `AMX_VER_M4=4`.
+The reference [README](https://github.com/corsix/amx/blob/main/README.md) records
+BF16 added with M2, extra load/MATINT modes with M3, and changed extraction/vector
+offset behavior with M4. They are reverse-engineered source claims, not native
+measurements, Apple's official ISA numbering, or proof of loadability. CPU
+oracle comparisons do not discover or exercise native AMX capabilities.
+Existing measured performance entries remain unchanged; no new per-instruction
+rate is invented. The runtime header is for agent reference and no AMX codegen
+or automatic native dispatch is provided.

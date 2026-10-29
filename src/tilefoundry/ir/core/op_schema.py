@@ -9,8 +9,8 @@ and TIR Ops (``dialect="t"``); HIR/TIR distinction is dialect-only.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable, Mapping
 
 from tilefoundry.ir.core.param_def import ParamDef
 
@@ -33,6 +33,10 @@ class OpSchema:
     builder: Callable[..., Any]
     op_class: type | None = None
     namespace: tuple[str, ...] = ()
+
+    alias_of: type | None = None
+    fixed_attrs: Mapping[str, Any] = field(default_factory=dict)
+
 
     @property
     def is_alias(self) -> bool:

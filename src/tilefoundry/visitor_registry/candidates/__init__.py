@@ -4,11 +4,36 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+from dataclasses import dataclass, field, replace
+from typing import Mapping
+
+from tilefoundry.ir.core.op_registry import iter_schemas
+from tilefoundry.ir.pattern import PatternMatcher, TensorPattern, SwitchPattern
+from tilefoundry.ir.pattern.predicates import _same
 
 from tilefoundry.ir.core.expr import Call
-from tilefoundry.ir.core.op import Op
+from tilefoundry.ir.core.op import Op, supported_op_capabilities
 from tilefoundry.ir.core.param_def import MemoryEffect, collect_param_defs
 from tilefoundry.ir.hir.schedule import ScheduleRefusal
+
+@dataclass(frozen=True)
+class HirMatch:
+    """A TIR declaration's HIR semantics, fixed modes and operand roles."""
+
+    op: type
+    when: Mapping[str, object] = field(default_factory=dict)
+    attributes: Mapping[str, object] = field(default_factory=dict)
+    operands: Mapping[str, str] = field(default_factory=dict)
+
+
+def _declarations(hir_op):
+    for schema in iter_schemas():
+        if schema.dialect != "T" or schema.op_class is None:
+            continue
+        for declaration in schema.op_class.__dict__.get("hir_matches", ()):
+            if declaration.op is hir_op:
+                yield schema.op_class, declaration
+
 
 _CANDIDATES: dict[type, list[type]] = {}
 _CALLBACKS: dict[type, object] = {}
@@ -30,9 +55,12 @@ def register_candidates(hir_op: type, tir_ops: tuple[type, ...]):
     return decorate
 
 
-def candidate_ops(hir_op: type) -> tuple[type, ...]:
+def candidate_ops(hir_op: type, *, target=None) -> tuple[type, ...]:
     """Return every registered TIR carrier for one HIR operation."""
-    return tuple(_CANDIDATES.get(hir_op, ()))
+    supported = None if target is None else {op for op, _ in supported_op_capabilities(target)}
+    return tuple(op for op in dict.fromkeys(
+        (*_CANDIDATES.get(hir_op, ()), *(op for op, _ in _declarations(hir_op)))
+    ) if supported is None or op in supported)
 
 
 def _instruction_attributes(hir_op: Op, op_type: type[Op]) -> dict:
@@ -65,7 +93,70 @@ def instruction_from_hir(hir_op: Op, op_type: type[Op]) -> Op | None:
     return op_type(**attributes)
 
 
+def candidate_bindings(call, op_type):
+    """Yield applicable data declarations, keeping historical callbacks as fallback."""
+    declarations = tuple(d for op, d in _declarations(type(call.target)) if op is op_type)
+    if not declarations:
+        yield _legacy_operands(call, op_type)
+        return
+    parameters = collect_param_defs(op_type)
+    source = {
+        param.name: arg.type
+        for param, arg in zip(
+            (p for p in collect_param_defs(type(call.target)) if p.kind == "input"),
+            call.args, strict=True,
+        )
+    }
+    source["result"] = call.type
+    for declaration in declarations:
+        condition = PatternMatcher()
+        if not all(condition.match(value, getattr(call.target, name)) for name, value in declaration.when.items()):
+            continue
+        if condition.solve() is not True:
+            continue
+        attributes = dict(declaration.attributes)
+        if any(name in condition.bindings and condition.bindings[name] != value
+               for name, value in attributes.items()):
+            continue
+        if any(
+            p.effect & MemoryEffect.WRITE and declaration.operands.get(p.name) not in (None, "result")
+            and source[declaration.operands[p.name]] != call.type
+            for p in parameters if p.kind == "input"
+        ):
+            continue
+        matcher = PatternMatcher({**condition.bindings, **attributes})
+        types = tuple(source[declaration.operands[p.name]] for p in parameters if p.kind == "input" and p.name in declaration.operands)
+        inputs = tuple(p for p in parameters if p.kind == "input" and p.name in declaration.operands)
+        # Capture field variables from actual operands before any public defaults.
+        for param, type_ in zip(inputs, types, strict=True):
+            def fields(pattern):
+                if isinstance(pattern, TensorPattern):
+                    return replace(pattern, shape=None, layout=None)
+                if isinstance(pattern, SwitchPattern):
+                    # This operand exists: inactive optional branches cannot
+                    # supply its dtype/storage captures.
+                    branches = {key: fields(value) for key, value in pattern.branches if value is not None}
+                    values = tuple(branches.values())
+                    if values and all(_same(value, values[0]) for value in values):
+                        return values[0]
+                    return SwitchPattern(pattern.param, branches)
+                return pattern
+            if not matcher.match(fields(param.pattern), type_):
+                break
+        else:
+            attributes.update((p.name, matcher.bindings[p.name]) for p in parameters if p.kind == "attribute" and p.name in matcher.bindings)
+            yield attributes, types
+
+
 def candidate_operands(call, op_type):
+    """Return the first applicable declaration for legacy single-instance callers."""
+    try:
+        return next(candidate_bindings(call, op_type))
+    except StopIteration:
+        raise ScheduleRefusal(f"{op_type.__name__} has no applicable HIR declaration") from None
+
+
+def _legacy_operands(call, op_type):
     """The registered callback, or the default instruction-order operand mapping."""
     callback = _CALLBACKS.get(type(call.target))
     if callback is not None:
@@ -80,15 +171,15 @@ def candidate_operands(call, op_type):
     return attributes, operands
 
 
-def sole_candidate(hir_op: Op) -> Op | None:
+def sole_candidate(hir_op: Op, *, target=None) -> Op | None:
     """Build the one registered instruction from same-named attributes, or None."""
     call = hir_op if isinstance(hir_op, Call) else None
-    target = call.target if call is not None else hir_op
-    candidates = candidate_ops(type(target))
+    hir_target = call.target if call is not None else hir_op
+    candidates = candidate_ops(type(hir_target), target=target)
     if len(candidates) != 1:
         return None
     if call is None:
-        return instruction_from_hir(target, candidates[0])
+        return instruction_from_hir(hir_target, candidates[0])
     attributes, _types = candidate_operands(call, candidates[0])
     if any(
         param.kind == "attribute" and not param.has_default and param.name not in attributes
@@ -107,6 +198,8 @@ def _auto_import(pkg_name: str) -> None:
 _auto_import(__name__)
 
 __all__ = [
+    "HirMatch",
+    "candidate_bindings",
     "candidate_operands",
     "instruction_from_hir",
     "sole_candidate",

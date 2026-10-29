@@ -2,6 +2,10 @@
 
 from dataclasses import dataclass
 
+from tilefoundry.ir.core import get_registered_name
+from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.hir.math.binary import Binary
+
 
 @dataclass(frozen=True)
 class SiteCounts:
@@ -35,7 +39,8 @@ def check_plain_report(report, source, sites):
             }
             assert all(item["reason"] for item in row["refused"])
     if sites.binaries is not None:
-        binaries = [row for row in report["lines"] if row["op"] == "tf.binary"]
+        binary_names = {get_registered_name(Binary(kind=kind)) for kind in BinaryKind}
+        binaries = [row for row in report["lines"] if row["op"] in binary_names]
         assert len(binaries) == sites.binaries
         assert all(any(c["id"] == "T.binary" for c in row["candidates"]) for row in binaries)
         assert all(row["op"] != "tf.schedule" for row in report["lines"])

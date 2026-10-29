@@ -32,12 +32,18 @@ class TupleValue(Value):
 
 
 _TORCH_DTYPE = {
+    DType.f64: "float64",
     DType.f32: "float32",
     DType.f16: "float16",
     DType.bf16: "bfloat16",
     DType.fp8e4m3: "float8_e4m3fn",
     DType.f8e8m0: "float8_e8m0fnu",
+    DType.i8: "int8",
+    DType.u8: "uint8",
+    DType.i16: "int16",
+    DType.u16: "uint16",
     DType.i32: "int32",
+    DType.u32: "uint32",
     DType.i64: "int64",
     DType.bool: "bool",
 }

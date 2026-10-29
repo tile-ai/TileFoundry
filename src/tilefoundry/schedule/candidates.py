@@ -6,7 +6,7 @@ from typing import Any
 
 from tilefoundry.analysis.metadata import ExecutionMeshMetadata
 from tilefoundry.inspection import PatternPrinter, PythonPrinter
-from tilefoundry.ir.core import Call, OpCapability, get_metadata, op_identifier, value_label
+from tilefoundry.ir.core import Call, OpCapability, get_metadata, get_registered_name, value_label
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
 from tilefoundry.ir.hir.schedule import ScheduleRefusal, match_instruction
 from tilefoundry.ir.types import StorageKind, TensorType
@@ -17,7 +17,7 @@ from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import access_relation_registry
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import (
-    candidate_operands,
+    candidate_bindings,
     candidate_ops,
     sole_candidate,
 )
@@ -79,12 +79,21 @@ def candidates(
         for op_type, capability in declared:
             if op_type not in instructions:
                 continue
-            identifier = op_identifier(capability.declaration or op_type)
+            identifier = get_registered_name(capability.declaration or op_type)
             try:
-                attributes, types = candidate_operands(call, op_type)
-                if capability.attribute is not None:
-                    attributes[capability.attribute] = capability.declaration
-                instances = match_instruction(op_type, attributes, types, mesh, frame=frame)
+                instances = []
+                rejection = None
+                for attributes, types in candidate_bindings(call, op_type):
+                    if capability.attribute is not None:
+                        attributes[capability.attribute] = capability.declaration
+                    try:
+                        instances.extend(match_instruction(op_type, attributes, types, mesh, frame=frame))
+                    except (ScheduleRefusal, ValueError, TypeError) as error:
+                        rejection = error
+                if not instances:
+                    raise rejection if isinstance(rejection, ScheduleRefusal) else ScheduleRefusal(
+                        str(rejection) if rejection is not None else "no applicable HIR declaration"
+                    )
             except ScheduleRefusal as error:
                 refused.append(
                     {"id": identifier, **pattern_printer.match_data((error.path,), error.reason)}
@@ -94,7 +103,7 @@ def candidates(
                 "id": identifier,
                 **pattern_printer.match_data(tuple(match.path for match in instances)),
             }
-            if sole_candidate(call) is not None:
+            if sole_candidate(call, target=target) is not None:
                 candidate["default"] = True
             usable.append(candidate)
         parameters = [
@@ -108,7 +117,7 @@ def candidates(
         rows.append(
             {
                 "line": value_label(call) or type(call.target)._op_schema.name,
-                "op": op_identifier(type(call.target)),
+                "op": get_registered_name(call.target),
                 "scope": "whole program" if level is None else f"per {level}",
                 "operands": operands,
                 "candidates": usable,

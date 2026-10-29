@@ -11,6 +11,8 @@ from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Tuple as HirTuple
 from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.core.register import get_registered_name
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard_layout import ShardLayout
@@ -199,7 +201,7 @@ def format_detail(
             name = target.name
             pnames = [p.name for p in target.params]
         else:
-            name = _op_display_name(target)
+            name = get_registered_name(target)
             try:
                 pnames = [p.name for p in type(target).params() if p.kind == "input"]
             except (AttributeError, TypeError):
@@ -611,7 +613,7 @@ class ViewerBuilder:
         local = f"c{local_counter[0]}"
         local_counter[0] += 1
         vid = self._visual_id(call_path, local)
-        op_label = _op_display_name(call.target)
+        op_label = get_registered_name(call.target)
         self.index.add(vid, DetailRef(hir_expr=call, kind=op_label, call_path=call_path))
 
         tbl = Table(cellpadding=6, bgcolor=PAPER, color=HAIR)
@@ -687,7 +689,7 @@ class ViewerBuilder:
 
         tuple_index = None
         if (
-            _op_display_name(call.target) == "TupleGetItem"
+            isinstance(call.target, TupleGetItem)
             and len(call.args) == 2
             and isinstance(call.args[1], Constant)
             and isinstance(call.args[1].value, int)

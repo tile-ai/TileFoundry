@@ -1,33 +1,19 @@
-"""CPU scheduling facts for target-neutral instructions."""
+"""CPU instruction details and constraints against a text golden."""
 
-from __future__ import annotations
+from pathlib import Path
 
-from functools import partial
+import pytest
 
-from tests.core.schedule._fixtures import CliCase, check_facts, cli_case_test
-
-_TARGET_NEUTRAL_FACTS = """\
-target {target}
-instructions
-  T.arange  all targets
-  T.binary  all targets
-  T.cast    all targets
-  T.clamp   all targets
-  T.unary   all targets
-  T.where   all targets
-  T.copy    all targets
-  T.relu    all targets
-  T.reduce  all targets
-"""
+from tests.core._corpus import case
+from tests.core.schedule._fixtures import FactsCase, check_facts_case
 
 
-FIXTURES = (
-    CliCase(
-        "CPU facts list only target neutral instructions",
-        ("schedule", "facts", "--target", "cpu", "{out}"),
-        partial(check_facts, expected=_TARGET_NEUTRAL_FACTS.format(target="cpu")),
-    ),
-)
+@case
+class CpuFacts(FactsCase):
+    path: Path = Path(__file__).with_name("fixtures") / "cpu.facts.txt"
+    target: str = "cpu"
 
 
-test_cli_case = cli_case_test(FIXTURES)
+@pytest.mark.parametrize("case", (CpuFacts(),), ids=lambda case: case.id)
+def test_facts_case(case, tmp_path, capsys):
+    check_facts_case(case, tmp_path, capsys)

@@ -1,5 +1,7 @@
 """Binding metadata and unmaterialized types in printed programs."""
 
+import pytest
+
 from tests.core._corpus import reload
 from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
@@ -88,3 +90,22 @@ def test_umat_type_round_trips() -> None:
 
 def test_analysis_report_names_umat_storage() -> None:
     assert _type_text(TensorType.umat_scalar()) == "i64[] umat"
+
+
+@pytest.mark.parametrize("kind, alias", [(BinaryKind.MUL, "mul"), (BinaryKind.MIN, "min")])
+def test_kinded_alias_round_trips(kind, alias):
+    tensor_type = TensorType.scalar(DType.f32)
+    source = Var(name="source", type=tensor_type)
+    function = Function.build(
+        name="alias_round_trip", params=(source,),
+        body=Call(target=Binary(kind=kind), args=(source, source), type=tensor_type),
+        return_type=tensor_type,
+    )
+    rendered = as_script(Module(
+        name="Aliases", functions=(function,), entry=function.name, target=CpuTarget(),
+    ))
+    assert f"tf.{alias}(source, source)" in rendered
+    rebuilt = reload(rendered, "Aliases").entry_function()
+    assert isinstance(rebuilt.body.target, Binary)
+    assert rebuilt.body.target.kind is kind
+    assert as_script(reload(rendered, "Aliases")) == rendered

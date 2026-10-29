@@ -8,7 +8,6 @@ from .unary import Unary
 from .softplus import Softplus
 
 
-from . import aliases as _aliases  # noqa: F401
 
 __all__ = [
     "Binary",

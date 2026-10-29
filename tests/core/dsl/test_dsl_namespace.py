@@ -8,7 +8,7 @@ from tilefoundry.dsl import *
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.op_registry import _REGISTRY
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.core.register import get_registered_name, register_op
 from tilefoundry.ir.hir.specialize import display_name
 from tilefoundry.ir.pattern import is_ranked_tensor
 
@@ -33,7 +33,8 @@ def test_dialect_resolves_own_ops() -> None:
     op.
     """
 
-    @register_op(dialect="tf", category="math", name="my_add")
+    @register_op(dialect="tf", category="math", name="my_add",
+                 aliases={"my_sum": {}})
     class _MyAdd:
         a = ParamDef(kind="input", pattern=is_ranked_tensor())
         b = ParamDef(kind="input", pattern=is_ranked_tensor())
@@ -44,6 +45,10 @@ def test_dialect_resolves_own_ops() -> None:
     obj = tf.my_add(a="X", b="Y")
     assert isinstance(obj, _MyAdd)
     assert obj.kw == {"a": "X", "b": "Y"}
+    assert get_registered_name(_MyAdd) == "tf.my_add"
+    assert get_registered_name(obj) == "tf.my_sum"
+    assert isinstance(tf.my_sum(a="X", b="Y"), _MyAdd)
+
     assert "my_add" in dir(tf)
     assert "my_add" not in dir(T)
 

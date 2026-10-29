@@ -24,19 +24,19 @@ from tilefoundry.ir.core import (
     Constant,
     Expr,
     IRMetadata,
+    Op,
     Tuple,
     Var,
     binding_name,
     get_metadata,
 )
 from tilefoundry.ir.core.expr import SSAValue
-from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
+from tilefoundry.ir.core.register import get_registered_name
+from tilefoundry.ir.core.op_registry import lookup
 from tilefoundry.ir.core.module import Module, ModuleList
 from tilefoundry.ir.core.param_def import variadic_item_annotation
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.specialize import (
     canonical_specialization_signature,
@@ -215,8 +215,10 @@ class HirPrinter(PythonPrinter):
                 )
             return f"{self.reference(expr.args[0])}[{', '.join(indexers)}]"
 
-        alias_name = _kinded_alias_name(target)
-        suppressed = frozenset({"kind"}) if alias_name is not None else frozenset()
+        registered_name = get_registered_name(target)
+        dialect, *path, name = registered_name.split(".")
+        selected = lookup(dialect, tuple(path), name)
+        suppressed = frozenset(selected.fixed_attrs)
         attrs = self.op_attributes(
             target,
             ctx,
@@ -231,8 +233,7 @@ class HirPrinter(PythonPrinter):
             if len(inputs) == 1 and variadic_item_annotation(inputs[0]) is not None
             else [self.reference(arg) for arg in expr.args]
         )
-        dialect = schema.dialect if schema is not None else "tf"
-        return f"{dialect}.{_op_name(target)}({', '.join([*arguments, *attrs])})"
+        return f"{registered_name}({', '.join([*arguments, *attrs])})"
 
 
 @dataclass(frozen=True)
@@ -336,106 +337,6 @@ def _tensor_import_names(fn: HirFunction) -> str:
     if any(p.is_const for f in (fn, *fn.variants) for p in f.params):
         return "ConstTensor, Tensor"
     return "Tensor"
-
-
-def _op_name(target) -> str:
-    """Return the Python DSL function name for an operation.
-
-    Prefer surface aliases for kinded binary and unary operations, then the
-    registered operation schema name, then a snake-case class-name fallback.
-    Surface aliases keep emitted source importable without enum names in scope.
-    """
-    if isinstance(target, HirFunction):
-        return target.name
-    alias_name = _kinded_alias_name(target)
-    if alias_name is not None:
-        return alias_name
-    schema = getattr(target, "_op_schema", None)
-    if schema is not None:
-        return ".".join((*schema.namespace, schema.name))
-    cls_name = type(target).__name__
-    s1 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cls_name)
-    name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s1).lower()
-    for suffix in ("_op", "_expr", "_stmt"):
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-    return name
-
-
-def _kinded_alias_name(target) -> str | None:
-    """Return the surface alias name for a kinded ``Binary`` / ``Unary`` instance, else ``None``.
-
-    Return the surface alias name (``add`` / ``neg`` / ...) for a
-    kinded ``Binary`` / ``Unary`` instance, else ``None``.
-
-    Per-name HIR math classes are gone; the IR instance is
-    ``Binary(kind=...)`` / ``Unary(kind=...)``. Round-trip printing
-    must emit the alias surface name so importing the regenerated DSL source
-    uses the same alias schema.
-    """
-    schema = getattr(target, "_op_schema", None)
-    if schema is not None and schema.namespace:
-        return None
-    if isinstance(target, Binary):
-        kind = getattr(target, "kind", None)
-        return _BINARY_KIND_TO_ALIAS.get(kind)
-    if isinstance(target, Unary):
-        kind = getattr(target, "kind", None)
-        return _UNARY_KIND_TO_ALIAS.get(kind)
-    return None
-
-
-def _build_kinded_alias_maps():
-    return (
-        {
-            BinaryKind.ADD: "add",
-            BinaryKind.SUB: "sub",
-            BinaryKind.MUL: "mul",
-            BinaryKind.DIV: "div",
-            BinaryKind.FLOOR_DIV: "floor_div",
-            BinaryKind.MOD: "mod",
-            BinaryKind.MIN: "min",
-            BinaryKind.MAX: "max",
-            BinaryKind.EQ: "cmp_eq",
-            BinaryKind.NE: "cmp_ne",
-            BinaryKind.LT: "cmp_lt",
-            BinaryKind.LE: "cmp_le",
-            BinaryKind.GT: "cmp_gt",
-            BinaryKind.GE: "cmp_ge",
-            BinaryKind.AND: "logical_and",
-            BinaryKind.OR: "logical_or",
-        },
-        {
-            UnaryKind.NEG: "neg",
-            UnaryKind.ABS: "abs",
-            UnaryKind.NOT: "logical_not",
-            UnaryKind.EXP: "exp",
-            UnaryKind.LOG: "log",
-            UnaryKind.CEIL: "ceil",
-            UnaryKind.ROUND: "round",
-            UnaryKind.EXP2: "exp2",
-            UnaryKind.LOG2: "log2",
-        },
-    )
-
-
-_BINARY_KIND_TO_ALIAS, _UNARY_KIND_TO_ALIAS = _build_kinded_alias_maps()
-
-
-def _op_display_name(target) -> str:
-    """Display-only op name for DOT / viewer graph labels.
-
-    Display-only op name for DOT / viewer graph labels: the target's class
-    name with a trailing ``Op`` / ``Expr`` / ``Stmt`` suffix stripped
-    (``MatMul``, ``TupleGetItem``, ...). Distinct from ``_op_name``, which
-    renders the round-trippable DSL callable name — this one is shared by
-    ``dot.py`` and ``viewer/builder.py`` for human-facing labels only.
-    """
-    cls = type(target).__name__
-    for suffix in ("Op", "Expr", "Stmt"):
-        if cls.endswith(suffix) and cls != suffix:
-            cls = cls[: -len(suffix)]
-    return cls
 
 
 def _sanitize_name(name: str) -> str:
@@ -626,7 +527,11 @@ def _emit_def(
     _op_names_set: set[str] = set()
     for expr in _order:
         if isinstance(expr, Call):
-            _op_names_set.add(_op_name(expr.target))
+            target = expr.target
+            if isinstance(target, HirFunction):
+                _op_names_set.add(target.name)
+            elif isinstance(target, Op):
+                _op_names_set.add(get_registered_name(target).split(".")[-1])
 
     _forced_names: dict[int, str] = {}
     _tile_window_steps: dict[int, object] = {}

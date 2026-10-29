@@ -52,7 +52,7 @@ def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchy
             ExplicitMemoryLevelFacts(
                 name="rmem",
                 capacity_bytes=(
-                    architecture.staging_bytes + architecture.accumulator_bytes
+                    2 * architecture.staging_bytes + architecture.accumulator_bytes
                 ),
                 scope="amx",
                 owner=architecture.rmem_owner,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tilefoundry.ir.core.op_registry import lookup
+
 import enum
 import json
 import math
@@ -17,7 +19,7 @@ from tilefoundry.ir.core import (
     PrinterBase,
     Tuple,
     Var,
-    op_identifier,
+    get_registered_name,
 )
 from tilefoundry.ir.core.param_def import MISSING
 from tilefoundry.ir.core.values import TripInterval
@@ -679,8 +681,11 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
 
     def op_value(self, value: Op, ctx=None, indent: str = "") -> str:
         """Render a schema-backed op value through its attribute values."""
-        attrs = self.op_attributes(value, ctx, indent)
-        return f"{op_identifier(type(value))}({', '.join(attrs)})"
+        name = get_registered_name(value)
+        dialect, *path, leaf = name.split(".")
+        schema = lookup(dialect, tuple(path), leaf)
+        attrs = self.op_attributes(value, ctx, indent, suppressed=frozenset(schema.fixed_attrs))
+        return f"{name}({', '.join(attrs)})"
 
     def visit_ComposedLayout(self, value: ComposedLayout, ctx=None) -> str:
         outer, child = self._indent, self._indent + "    "
@@ -743,6 +748,10 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
         if isinstance(value, StorageKind):
             return json.dumps(value.name.lower())
         if isinstance(value, enum.Enum):
+            try:
+                return f"{get_registered_name(value)}.{value.name}"
+            except ValueError:
+                pass
             if ctx is not None and type(value).__module__ != "tilefoundry.ir.core.kinds":
                 ctx.use(
                     PythonExpr(
