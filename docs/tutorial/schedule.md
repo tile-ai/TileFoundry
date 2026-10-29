@@ -215,33 +215,33 @@ sed -n '1,30p' Wgmma.facts.txt
 T.cuda.sm90.Wgmma
   target             nvidia.h200_sxm
   target capability  wgmma.mma_async
-  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),))))
-                       predicates:
-                         each top-level mode has no backward step
-                         each top-level mode reaches each of its own slots exactly once
-                         p0 % 128 == 0
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))) where each top-level mode has no backward step; each top-level mode reaches each of its own slots exactly once; p0 % 128 == 0
   parameters
-    n        any value
-               predicates:
-                 8 <= n <= 256
-                 n % 8 == 0
-    dtype    any value
-               predicates:
-                 dtype in {bf16, f16, fp8e4m3}
-    form     any value
-               predicates:
-                 form in {Form.SS, Form.RS}
-    a_major  dtype=bf16, form=SS  a_major in {Major.MN, Major.K} (default Major.MN)
-             dtype=bf16, form=RS  Major.K
-             dtype=f16, form=SS   a_major in {Major.MN, Major.K}
-             dtype=f16, form=RS   Major.K
-             dtype=fp8e4m3        Major.K
-    b_major  dtype=bf16     b_major in {Major.MN, Major.K} (default Major.MN)
-             dtype=f16      b_major in {Major.MN, Major.K}
-             dtype=fp8e4m3  Major.K
+    n        any value where 8 <= n <= 256; n % 8 == 0 (type int)
+    dtype    any value where one of {bf16; f16; fp8e4m3} (type DType)
+    form     any value where one of {T.cuda.sm90.Form.SS; T.cuda.sm90.Form.RS} in {T.cuda.sm90.Form.SS, T.cuda.sm90.Form.RS}
+    a_major  switch dtype: (default T.cuda.sm90.Major.MN)
+               dtype=bf16: switch form:
+                   form=T.cuda.sm90.Form.SS: one of {T.cuda.sm90.Major.MN; T.cuda.sm90.Major.K}
+                   form=T.cuda.sm90.Form.RS: T.cuda.sm90.Major.K
+               dtype=f16: switch form:
+                   form=T.cuda.sm90.Form.SS: one of {T.cuda.sm90.Major.MN; T.cuda.sm90.Major.K}
+                   form=T.cuda.sm90.Form.RS: T.cuda.sm90.Major.K
+               dtype=fp8e4m3: T.cuda.sm90.Major.K
+    b_major  switch dtype: (default T.cuda.sm90.Major.MN)
+               dtype=bf16: one of {T.cuda.sm90.Major.MN; T.cuda.sm90.Major.K}
+               dtype=f16: one of {T.cuda.sm90.Major.MN; T.cuda.sm90.Major.K}
+               dtype=fp8e4m3: T.cuda.sm90.Major.K
   operands
-    C  shape=(64, n) dtype=f32 storage=rmem, held in 1 arrangement:
-         ShardLayout(Layout((4, 2, 8, c, 4, 2), (16, 8, 1, 512, 128, 64)), (S(0), S(2), S(4)), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),)))))
+    C  Tensor(shape=(64, n), dtype=f32, storage=rmem, layout=ShardLayout(Layout((4, 2, 8, c, 4, 2), (16, 8, 1, 512, 128, 64)), (S(0), S(2), S(4)), Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),))))) where each top-level mode has no backward step; each top-level mode reaches each of its own slots exactly once; p0 % 128 == 0) where 8 * c == n
+    A  Tensor:
+         shape=(64, switch dtype:
+             dtype=bf16: 16
+             dtype=f16: 16
+             dtype=fp8e4m3: 32)
+         dtype=switch dtype:
+             dtype=bf16: bf16
+             dtype=f16: f16
 ```
 
 ## 5. Write the scheduled HIR

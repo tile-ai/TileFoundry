@@ -212,7 +212,7 @@ class Fast:
         scale = torch.empty((ROWS, BLOCKS), dtype=torch.float32, device=a.device)
         _rms_norm_quant[(ROWS,)](
             a, gamma, quant, scale, EPS, FP8_MAX,
-            H=H, BLOCK=BLOCK, BLOCKS=BLOCKS, TILE=_TILE,
+            H=H, BLOCK=BLOCK, BLOCKS=BLOCKS, TILE=_TILE, enable_fp_fusion=True,
         )
         return quant, scale
 ```
