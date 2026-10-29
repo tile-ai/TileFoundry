@@ -1,4 +1,4 @@
-"""Load the explicit AMX TIR declarations."""
-from . import tir
+"""Load AMX HIR and TIR registrations."""
 
-from . import hir as _hir
+from . import tir
+from .hir import cast as _cast
