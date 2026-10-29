@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from tilefoundry.analysis.facts import MemoryHierarchyFacts, PerformanceServiceFacts, ThroughputFacts
+from tilefoundry.analysis.facts import (
+    MemoryHierarchyFacts,
+    PerformanceServiceFacts,
+    ThroughputFacts,
+)
 from tilefoundry.target import TopologyFacts, TopologyLevelFacts
 from tilefoundry_apple import AmxTarget
 

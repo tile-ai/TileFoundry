@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core.register import get_registered_name
-
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -13,7 +11,7 @@ from tilefoundry.evaluator.registry import register_eval, schedule_eval_registry
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.core.register import get_registered_name, register_op
 from tilefoundry.ir.pattern import (
     PatternMatcher,
     is_ranked_tensor,

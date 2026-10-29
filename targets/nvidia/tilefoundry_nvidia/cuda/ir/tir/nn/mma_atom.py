@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core.register import get_registered_name
-
 from dataclasses import dataclass
 from enum import Enum
 
 from tilefoundry.ir.core.inspection import Printable, PrinterBase
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_type
+from tilefoundry.ir.core.register import get_registered_name, register_type
 from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
     LayoutPattern,

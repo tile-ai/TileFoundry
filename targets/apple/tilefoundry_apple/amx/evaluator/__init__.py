@@ -1,39 +1,54 @@
-"""AMX semantics translated from https://github.com/corsix/amx (MIT).
+"""AMX semantics from corsix/amx, Copyright (c) 2022 Peter Cawley (MIT).
 
-Copyright (c) 2022 Peter Cawley. See the native runtime's LICENSE.
-The Python reference never issues native AMX instructions.
-
-MIT License
-
-Copyright (c) 2022 Peter Cawley
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
+See ../include/tilefoundry/runtime/amx/LICENSE for the full license.
+The Python evaluator never emits native AMX instructions.
 """
-from .state import AMXState, emulate_AMX_SET, emulate_AMX_CLR
-from .memory import *
+
 from .extract import emulate_AMX_EXTRX, emulate_AMX_EXTRY
+from .fma import emulate_AMX_FMA16, emulate_AMX_FMA32, emulate_AMX_FMA64
+from .fms import emulate_AMX_FMS16, emulate_AMX_FMS32, emulate_AMX_FMS64
 from .genlut import emulate_AMX_GENLUT
 from .mac16 import emulate_AMX_MAC16
+from .matfp import emulate_AMX_MATFP
 from .matint import emulate_AMX_MATINT
+from .memory import (
+    emulate_AMX_LDX,
+    emulate_AMX_LDY,
+    emulate_AMX_LDZ,
+    emulate_AMX_LDZI,
+    emulate_AMX_STX,
+    emulate_AMX_STY,
+    emulate_AMX_STZ,
+    emulate_AMX_STZI,
+)
+from .state import AMXState, emulate_AMX_CLR, emulate_AMX_SET
+from .vecfp import emulate_AMX_VECFP
 from .vecint import emulate_AMX_VECINT
-from .fma import *
-from .fms import *
-from .matfp import *
-from .vecfp import *
+
+__all__ = [
+    "AMXState",
+    "emulate_AMX_SET",
+    "emulate_AMX_CLR",
+    "emulate_AMX_LDX",
+    "emulate_AMX_LDY",
+    "emulate_AMX_LDZ",
+    "emulate_AMX_LDZI",
+    "emulate_AMX_STX",
+    "emulate_AMX_STY",
+    "emulate_AMX_STZ",
+    "emulate_AMX_STZI",
+    "emulate_AMX_EXTRX",
+    "emulate_AMX_EXTRY",
+    "emulate_AMX_GENLUT",
+    "emulate_AMX_MAC16",
+    "emulate_AMX_MATINT",
+    "emulate_AMX_VECINT",
+    "emulate_AMX_FMA16",
+    "emulate_AMX_FMA32",
+    "emulate_AMX_FMA64",
+    "emulate_AMX_FMS16",
+    "emulate_AMX_FMS32",
+    "emulate_AMX_FMS64",
+    "emulate_AMX_MATFP",
+    "emulate_AMX_VECFP",
+]

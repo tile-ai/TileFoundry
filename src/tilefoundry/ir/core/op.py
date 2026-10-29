@@ -12,8 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from tilefoundry.ir.core.register import get_registered_name
 from tilefoundry.ir.core.param_def import ParamDef, _ParamKind, collect_param_defs
+from tilefoundry.ir.core.register import get_registered_name
 from tilefoundry.ir.types.storage import resolve_storage
 
 

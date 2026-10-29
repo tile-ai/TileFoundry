@@ -1,105 +1,361 @@
-from tilefoundry.visitor_registry.candidates import HirMatch
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.core import OpCapability
-from tilefoundry.ir.core.param_def import ParamDef,MemoryEffect
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import TensorPattern,LayoutPattern,SwitchPattern,WildcardPattern,OrPattern,RangePattern
-from tilefoundry.ir.types import DType,StorageKind
-from tilefoundry.ir.pattern.predicates import Bits, Table, In, variable
-from .common import (
-    instruction_versions,
-    AmxOp,
-    ProductMode,IndexMode,TransferCount,Repeat,Shuffle,FPMode,IntLane,
-    FPALU,IntALU,Bank,ExtractMode,LutMode,
-    FLOATS,TYPES,I8,I16,I32,
-    bind,encode,
-    vector_layout,xy_matrix_layout,z_matrix_layout,z_vector_layout,
-    vector_input_layout,packed_input_layout,int_matrix_layout,int_vector_layout,
-    extract_source_shape,extract_source_layout,
+from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
+from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.pattern import (
+    LayoutPattern,
+    RangePattern,
+    SwitchPattern,
+    TensorPattern,
+    WildcardPattern,
 )
-R=MemoryEffect.READ
-W=MemoryEffect.WRITE
+from tilefoundry.ir.pattern.predicates import Bits, In, Table, variable
+from tilefoundry.ir.types import DType, StorageKind
+from tilefoundry.visitor_registry.candidates import HirMatch
+
+from .common import (
+    FPALU,
+    AmxOp,
+    FPMode,
+    IndexMode,
+    Repeat,
+    Shuffle,
+    bind,
+    instruction_versions,
+)
+
+R = MemoryEffect.READ
+W = MemoryEffect.WRITE
+
 
 class Vecfp(AmxOp):
     hir_matches = tuple(
-        HirMatch(Binary, when={'kind': BinaryKind.MUL}, attributes={'fp_mode': mode, 'alu': FPALU.PRODUCT}, operands={'acc': 'result', 'lhs': 'lhs', 'rhs': 'rhs'})
+        HirMatch(
+            Binary,
+            when={"kind": BinaryKind.MUL},
+            attributes={"fp_mode": mode, "alu": FPALU.PRODUCT},
+            operands={"acc": "result", "lhs": "lhs", "rhs": "rhs"},
+        )
         for mode in FPMode
     ) + tuple(
-        HirMatch(Binary, when={'kind': kind}, attributes={'fp_mode': mode, 'alu': alu}, operands={'acc': 'lhs', 'lhs': 'rhs', 'rhs': 'rhs'})
+        HirMatch(
+            Binary,
+            when={"kind": kind},
+            attributes={"fp_mode": mode, "alu": alu},
+            operands={"acc": "lhs", "lhs": "rhs", "rhs": "rhs"},
+        )
         for mode in FPMode
-        for kind, alu in ((BinaryKind.ADD, FPALU.ADD_X), (BinaryKind.MIN, FPALU.MIN), (BinaryKind.MAX, FPALU.MAX),)
+        for kind, alu in (
+            (BinaryKind.ADD, FPALU.ADD_X),
+            (BinaryKind.MIN, FPALU.MIN),
+            (BinaryKind.MAX, FPALU.MAX),
+        )
     )
-    mnemonic='VECFP'
-    capability=OpCapability('amx_vecfp')
-    resource='amx_engine'
-    roles=('acc','lhs','rhs','table')
-    writes=('acc',)
-    register_roles={'acc':'z','lhs':'y','rhs':'x','table':'indexed_bank'}
-    fp_mode=ParamDef(kind='attribute',
+    mnemonic = "VECFP"
+    capability = OpCapability("amx_vecfp")
+    resource = "amx_engine"
+    roles = ("acc", "lhs", "rhs", "table")
+    writes = ("acc",)
+    register_roles = {"acc": "z", "lhs": "y", "rhs": "x", "table": "indexed_bank"}
+    fp_mode = ParamDef(
+        kind="attribute",
         annotation=FPMode,
-        pattern=WildcardPattern('fp_mode', predicates=((variable('amx_generation') >= 2) | ~In(variable('fp_mode'), (FPMode.BF16, FPMode.BF16_F32)),)),
-        default=FPMode.F32)
-    dtype=ParamDef(kind='attribute',
+        pattern=WildcardPattern(
+            "fp_mode",
+            predicates=(
+                (variable("amx_generation") >= 2)
+                | ~In(variable("fp_mode"), (FPMode.BF16, FPMode.BF16_F32)),
+            ),
+        ),
+        default=FPMode.F32,
+    )
+    dtype = ParamDef(
+        kind="attribute",
         annotation=DType,
-        pattern=WildcardPattern('dtype', predicates=((variable('dtype') == Table((DType.bf16, DType.bf16, DType.f16, DType.f16, DType.f32, DType.f64, DType.f64, DType.f64))[variable('fp_mode')]), (variable('x_lanes') == 512 // Bits('dtype')), (variable('y_lanes') == 512 // Bits('dtype')),)),
-        default=DType.f32)
-    acc_dtype=ParamDef(kind='attribute',
+        pattern=WildcardPattern(
+            "dtype",
+            predicates=(
+                (
+                    variable("dtype")
+                    == Table(
+                        (
+                            DType.bf16,
+                            DType.bf16,
+                            DType.f16,
+                            DType.f16,
+                            DType.f32,
+                            DType.f64,
+                            DType.f64,
+                            DType.f64,
+                        )
+                    )[variable("fp_mode")]
+                ),
+                (variable("x_lanes") == 512 // Bits("dtype")),
+                (variable("y_lanes") == 512 // Bits("dtype")),
+            ),
+        ),
+        default=DType.f32,
+    )
+    acc_dtype = ParamDef(
+        kind="attribute",
         annotation=DType,
-        pattern=WildcardPattern('acc_dtype', predicates=((variable('acc_dtype') == Table((DType.bf16, DType.f32, DType.f16, DType.f32, DType.f32, DType.f64, DType.f64, DType.f64))[variable('fp_mode')]),)),
-        default=DType.f32)
-    alu=ParamDef(kind='attribute',
+        pattern=WildcardPattern(
+            "acc_dtype",
+            predicates=(
+                (
+                    variable("acc_dtype")
+                    == Table(
+                        (
+                            DType.bf16,
+                            DType.f32,
+                            DType.f16,
+                            DType.f32,
+                            DType.f32,
+                            DType.f64,
+                            DType.f64,
+                            DType.f64,
+                        )
+                    )[variable("fp_mode")]
+                ),
+            ),
+        ),
+        default=DType.f32,
+    )
+    alu = ParamDef(
+        kind="attribute",
         annotation=FPALU,
-        pattern=WildcardPattern('alu', predicates=(In(variable('alu'), tuple(FPALU)), (variable('amx_generation') >= 2) | In(variable('alu'), (FPALU.ADD_PRODUCT, FPALU.SUB_PRODUCT, FPALU.POSITIVE_SELECT, FPALU.MIN, FPALU.MAX)),)),
-        default=FPALU.ADD_PRODUCT)
-    index_mode=ParamDef(kind='attribute',
+        pattern=WildcardPattern(
+            "alu",
+            predicates=(
+                In(variable("alu"), tuple(FPALU)),
+                (variable("amx_generation") >= 2)
+                | In(
+                    variable("alu"),
+                    (
+                        FPALU.ADD_PRODUCT,
+                        FPALU.SUB_PRODUCT,
+                        FPALU.POSITIVE_SELECT,
+                        FPALU.MIN,
+                        FPALU.MAX,
+                    ),
+                ),
+            ),
+        ),
+        default=FPALU.ADD_PRODUCT,
+    )
+    index_mode = ParamDef(
+        kind="attribute",
         annotation=IndexMode,
-        pattern=WildcardPattern('index_mode', predicates=((variable('alu') == FPALU.ADD_PRODUCT) | (variable('index_mode') == IndexMode.NONE),)),
-        default=IndexMode.NONE)
-    index_register=ParamDef(kind='attribute',
+        pattern=WildcardPattern(
+            "index_mode",
+            predicates=(
+                (variable("alu") == FPALU.ADD_PRODUCT) | (variable("index_mode") == IndexMode.NONE),
+            ),
+        ),
+        default=IndexMode.NONE,
+    )
+    index_register = ParamDef(
+        kind="attribute",
         annotation=int,
-        pattern=WildcardPattern('index_register', predicates=(RangePattern(lo=0, hi=7), (variable('index_mode') != IndexMode.NONE) | (variable('index_register') == 0),)),
-        default=0)
-    x_offset=ParamDef(kind='attribute',
+        pattern=WildcardPattern(
+            "index_register",
+            predicates=(
+                RangePattern(lo=0, hi=7),
+                (variable("index_mode") != IndexMode.NONE) | (variable("index_register") == 0),
+            ),
+        ),
+        default=0,
+    )
+    x_offset = ParamDef(
+        kind="attribute",
         annotation=int,
-        pattern=WildcardPattern('x_offset',predicates=(RangePattern(lo=0,hi=511),)),
-        default=0)
-    y_offset=ParamDef(kind='attribute',
+        pattern=WildcardPattern("x_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        default=0,
+    )
+    y_offset = ParamDef(
+        kind="attribute",
         annotation=int,
-        pattern=WildcardPattern('y_offset',predicates=(RangePattern(lo=0,hi=511),)),
-        default=64)
-    z_row=ParamDef(kind='attribute',
+        pattern=WildcardPattern("y_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        default=64,
+    )
+    z_row = ParamDef(
+        kind="attribute",
         annotation=int,
-        pattern=WildcardPattern('z_row',predicates=(RangePattern(lo=0,hi=63),)),
-        default=0)
-    mask=ParamDef(kind='attribute',
+        pattern=WildcardPattern("z_row", predicates=(RangePattern(lo=0, hi=63),)),
+        default=0,
+    )
+    mask = ParamDef(
+        kind="attribute",
         annotation=int,
-        pattern=WildcardPattern('mask',predicates=(RangePattern(lo=0,hi=511),)),
-        default=0)
-    y_mask=ParamDef(kind='attribute',
+        pattern=WildcardPattern("mask", predicates=(RangePattern(lo=0, hi=511),)),
+        default=0,
+    )
+    y_mask = ParamDef(
+        kind="attribute",
         annotation=int,
-        pattern=WildcardPattern('y_mask',predicates=(RangePattern(lo=0,hi=511),)),
-        default=0)
-    shuffle_x=ParamDef(kind='attribute',
+        pattern=WildcardPattern("y_mask", predicates=(RangePattern(lo=0, hi=511),)),
+        default=0,
+    )
+    shuffle_x = ParamDef(
+        kind="attribute",
         annotation=Shuffle,
-        pattern=WildcardPattern('shuffle_x'),
-        default=Shuffle.NONE)
-    shuffle_y=ParamDef(kind='attribute',
+        pattern=WildcardPattern("shuffle_x"),
+        default=Shuffle.NONE,
+    )
+    shuffle_y = ParamDef(
+        kind="attribute",
         annotation=Shuffle,
-        pattern=WildcardPattern('shuffle_y'),
-        default=Shuffle.NONE)
-    repeat=ParamDef(kind='attribute',
+        pattern=WildcardPattern("shuffle_y"),
+        default=Shuffle.NONE,
+    )
+    repeat = ParamDef(
+        kind="attribute",
         annotation=Repeat,
-        pattern=WildcardPattern('repeat', predicates=((variable('amx_generation') >= 2) | (variable('repeat') == Repeat.ONE),)),
-        default=Repeat.ONE)
-    broadcast_mode=ParamDef(kind='attribute',
+        pattern=WildcardPattern(
+            "repeat",
+            predicates=((variable("amx_generation") >= 2) | (variable("repeat") == Repeat.ONE),),
+        ),
+        default=Repeat.ONE,
+    )
+    broadcast_mode = ParamDef(
+        kind="attribute",
         annotation=int,
-        pattern=WildcardPattern('broadcast_mode', predicates=(RangePattern(lo=0, hi=7), (variable('repeat') != Repeat.ONE) | (variable('broadcast_mode') == 0), (variable('rows') == Table((0, 1, 2, 0, 4))[variable('repeat')]), (variable('z_step') == 512 // Bits('acc_dtype')), (((((variable('acc_rows') == Table((0, 1, 2, 0, 4))[variable('repeat')])) & ((variable('acc_lanes') == 512 // Bits('dtype'))) & ((variable('acc_ratio') == Bits('acc_dtype') // Bits('dtype'))) & ((variable('acc_inner') == 512 // Bits('acc_dtype'))) & ((variable('acc_wide') == Table((0, 0, 1, 1, 1))[Bits('acc_dtype') // Bits('dtype')])))) & ((variable('acc_step') == (64 // Table((0, 1, 2, 0, 4))[variable('repeat')]) * 512 // Bits('acc_dtype')))), (variable('table_side') == Table((0, 1, 1, 1, 1))[variable('index_mode')]), (variable('lhs_count') == ((512 // Bits('dtype')) * Table((8, 8, 2, 8, 4))[variable('index_mode')] + 7) // 8), (variable('lhs_packed') == Table((0, 0, 1, 0, 1))[variable('index_mode')]), (variable('lhs_row') == (((512 // Bits('dtype')) * Table((8, 8, 2, 8, 4))[variable('index_mode')] + 7) // 8) * Table((1, 1, 1, 0, 1, 1, 1, 0))[variable('broadcast_mode')]), (variable('rhs_count') == ((512 // Bits('dtype')) * Table((8, 2, 8, 4, 8))[variable('index_mode')] + 7) // 8), (variable('rhs_packed') == Table((0, 1, 0, 1, 0))[variable('index_mode')]), (variable('rhs_row') == (((512 // Bits('dtype')) * Table((8, 2, 8, 4, 8))[variable('index_mode')] + 7) // 8) * Table((1, 1, 0, 1, 1, 1, 0, 1))[variable('broadcast_mode')]),)),
-        default=0)
-    acc=ParamDef(kind='input', effect=R|W, pattern=TensorPattern(shape=(WildcardPattern('acc_rows'), WildcardPattern('acc_lanes')), dtype=WildcardPattern('acc_dtype'), storage=StorageKind.RMEM, layout=SwitchPattern('acc_wide', {0: LayoutPattern((WildcardPattern('acc_rows'), WildcardPattern('acc_lanes')), (WildcardPattern('acc_step'), 1)), 1: LayoutPattern((WildcardPattern('acc_rows'), (WildcardPattern('acc_ratio'), WildcardPattern('acc_inner'))), (WildcardPattern('acc_step'), (WildcardPattern('z_step'), 1)))})))
-    lhs=ParamDef(kind='input', effect=R, pattern=TensorPattern(shape=(WildcardPattern('rows'), WildcardPattern('lhs_count')), dtype=SwitchPattern('lhs_packed', {0: WildcardPattern('dtype'), 1: DType.u8}), storage=StorageKind.RMEM, layout=LayoutPattern((WildcardPattern('rows'), WildcardPattern('lhs_count')), (WildcardPattern('lhs_row'), 1))))
-    rhs=ParamDef(kind='input', effect=R, pattern=TensorPattern(shape=(WildcardPattern('rows'), WildcardPattern('rhs_count')), dtype=SwitchPattern('rhs_packed', {0: WildcardPattern('dtype'), 1: DType.u8}), storage=StorageKind.RMEM, layout=LayoutPattern((WildcardPattern('rows'), WildcardPattern('rhs_count')), (WildcardPattern('rhs_row'), 1))))
-    table=ParamDef(kind='input', effect=R, pattern=SwitchPattern('table_side', {0: None, 1: TensorPattern(shape=(WildcardPattern('x_lanes'),), dtype=WildcardPattern('dtype'), storage=StorageKind.RMEM, layout=LayoutPattern((WildcardPattern('x_lanes'),), (1,)))}), optional=True, default=None)
-    def __init__(self,**attrs): bind(self,attrs)
+        pattern=WildcardPattern(
+            "broadcast_mode",
+            predicates=(
+                RangePattern(lo=0, hi=7),
+                (variable("repeat") != Repeat.ONE) | (variable("broadcast_mode") == 0),
+                (variable("rows") == Table((0, 1, 2, 0, 4))[variable("repeat")]),
+                (variable("z_step") == 512 // Bits("acc_dtype")),
+                (
+                    (
+                        (variable("acc_rows") == Table((0, 1, 2, 0, 4))[variable("repeat")])
+                        & (variable("acc_lanes") == 512 // Bits("dtype"))
+                        & (variable("acc_ratio") == Bits("acc_dtype") // Bits("dtype"))
+                        & (variable("acc_inner") == 512 // Bits("acc_dtype"))
+                        & (
+                            variable("acc_wide")
+                            == Table((0, 0, 1, 1, 1))[Bits("acc_dtype") // Bits("dtype")]
+                        )
+                    )
+                    & (
+                        variable("acc_step")
+                        == (64 // Table((0, 1, 2, 0, 4))[variable("repeat")])
+                        * 512
+                        // Bits("acc_dtype")
+                    )
+                ),
+                (variable("table_side") == Table((0, 1, 1, 1, 1))[variable("index_mode")]),
+                (
+                    variable("lhs_count")
+                    == ((512 // Bits("dtype")) * Table((8, 8, 2, 8, 4))[variable("index_mode")] + 7)
+                    // 8
+                ),
+                (variable("lhs_packed") == Table((0, 0, 1, 0, 1))[variable("index_mode")]),
+                (
+                    variable("lhs_row")
+                    == (
+                        (
+                            (512 // Bits("dtype")) * Table((8, 8, 2, 8, 4))[variable("index_mode")]
+                            + 7
+                        )
+                        // 8
+                    )
+                    * Table((1, 1, 1, 0, 1, 1, 1, 0))[variable("broadcast_mode")]
+                ),
+                (
+                    variable("rhs_count")
+                    == ((512 // Bits("dtype")) * Table((8, 2, 8, 4, 8))[variable("index_mode")] + 7)
+                    // 8
+                ),
+                (variable("rhs_packed") == Table((0, 1, 0, 1, 0))[variable("index_mode")]),
+                (
+                    variable("rhs_row")
+                    == (
+                        (
+                            (512 // Bits("dtype")) * Table((8, 2, 8, 4, 8))[variable("index_mode")]
+                            + 7
+                        )
+                        // 8
+                    )
+                    * Table((1, 1, 0, 1, 1, 1, 0, 1))[variable("broadcast_mode")]
+                ),
+            ),
+        ),
+        default=0,
+    )
+    acc = ParamDef(
+        kind="input",
+        effect=R | W,
+        pattern=TensorPattern(
+            shape=(WildcardPattern("acc_rows"), WildcardPattern("acc_lanes")),
+            dtype=WildcardPattern("acc_dtype"),
+            storage=StorageKind.RMEM,
+            layout=SwitchPattern(
+                "acc_wide",
+                {
+                    0: LayoutPattern(
+                        (WildcardPattern("acc_rows"), WildcardPattern("acc_lanes")),
+                        (WildcardPattern("acc_step"), 1),
+                    ),
+                    1: LayoutPattern(
+                        (
+                            WildcardPattern("acc_rows"),
+                            (WildcardPattern("acc_ratio"), WildcardPattern("acc_inner")),
+                        ),
+                        (WildcardPattern("acc_step"), (WildcardPattern("z_step"), 1)),
+                    ),
+                },
+            ),
+        ),
+    )
+    lhs = ParamDef(
+        kind="input",
+        effect=R,
+        pattern=TensorPattern(
+            shape=(WildcardPattern("rows"), WildcardPattern("lhs_count")),
+            dtype=SwitchPattern("lhs_packed", {0: WildcardPattern("dtype"), 1: DType.u8}),
+            storage=StorageKind.RMEM,
+            layout=LayoutPattern(
+                (WildcardPattern("rows"), WildcardPattern("lhs_count")),
+                (WildcardPattern("lhs_row"), 1),
+            ),
+        ),
+    )
+    rhs = ParamDef(
+        kind="input",
+        effect=R,
+        pattern=TensorPattern(
+            shape=(WildcardPattern("rows"), WildcardPattern("rhs_count")),
+            dtype=SwitchPattern("rhs_packed", {0: WildcardPattern("dtype"), 1: DType.u8}),
+            storage=StorageKind.RMEM,
+            layout=LayoutPattern(
+                (WildcardPattern("rows"), WildcardPattern("rhs_count")),
+                (WildcardPattern("rhs_row"), 1),
+            ),
+        ),
+    )
+    table = ParamDef(
+        kind="input",
+        effect=R,
+        pattern=SwitchPattern(
+            "table_side",
+            {
+                0: None,
+                1: TensorPattern(
+                    shape=(WildcardPattern("x_lanes"),),
+                    dtype=WildcardPattern("dtype"),
+                    storage=StorageKind.RMEM,
+                    layout=LayoutPattern((WildcardPattern("x_lanes"),), (1,)),
+                ),
+            },
+        ),
+        optional=True,
+        default=None,
+    )
 
-VecfpV1, VecfpV2, VecfpV3 = instruction_versions(Vecfp, (1, 2, 4), name='vecfp', category='arith')
+    def __init__(self, **attrs):
+        bind(self, attrs)
+
+
+VecfpV1, VecfpV2, VecfpV3 = instruction_versions(Vecfp, (1, 2, 4), name="vecfp", category="arith")

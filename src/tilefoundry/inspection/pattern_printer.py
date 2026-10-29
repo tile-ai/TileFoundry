@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core.register import get_registered_name
-
 from dataclasses import replace
 from enum import Enum
 
 from tilefoundry.ir.clause.layout import is_layout_wildcard
 from tilefoundry.ir.core.param_def import collect_param_defs
+from tilefoundry.ir.core.register import get_registered_name
 from tilefoundry.ir.pattern.pattern import Pattern, WildcardPattern
 from tilefoundry.ir.pattern.predicates import Formula, failing
 from tilefoundry.ir.pattern.utils import declared_execution_mesh

@@ -1,5 +1,7 @@
 """Byte-addressed state for the AMX C-reference translation."""
+
 from dataclasses import dataclass, field
+
 
 @dataclass
 class AMXState:

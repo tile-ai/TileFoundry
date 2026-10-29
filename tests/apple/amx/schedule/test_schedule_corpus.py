@@ -10,14 +10,14 @@ from tests.core._corpus import Case, Problems, case, cases
 from tilefoundry.analysis.check import check_program
 from tilefoundry.ir.core import Call, get_registered_name, value_label
 from tilefoundry.ir.hir.schedule import ScheduleOp, match_instruction
+from tilefoundry.ir.types.layout import size
+from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.schedule import candidates
 from tilefoundry.visitor_registry.candidates import candidate_operands
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.instruction import check_call
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 from tilefoundry_apple.amx.ir.tir import Fma16, Fma32, Fma64
-from tilefoundry.ir.types.layout import size
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.schedule import candidates
 
 ROOT = Path(__file__).parents[1] / "fixtures"
 
@@ -176,8 +176,8 @@ class Memory(AmxCase):
         _requires(state, "float_extract", "T.amx.extrx_v2", mode="FLOAT", src_dtype="f32", dst_dtype="f16")
         _requires(state, "integer_extract", "T.amx.extrx_v2", mode="INTEGER", src_dtype="i32", dst_dtype="i16")
         _requires(state, "vertical_extract", "T.amx.extry_v2", mode="FLOAT", src_dtype="f32", dst_dtype="f16")
-        # The older whole-Z source has 64 logical elements, while one compact
-        # destination holds 32. It remains a real shape mismatch.
+
+
         for label in ("float_cast", "integer_cast"):
             for instruction in ("extrx_v2", "extry_v2"):
                 _rejects(state, label, "T.amx." + instruction)

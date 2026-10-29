@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core.op_registry import lookup
-
 import enum
 import json
 import math
@@ -21,6 +19,7 @@ from tilefoundry.ir.core import (
     Var,
     get_registered_name,
 )
+from tilefoundry.ir.core.op_registry import lookup
 from tilefoundry.ir.core.param_def import MISSING
 from tilefoundry.ir.core.values import TripInterval
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord

@@ -50,7 +50,7 @@ T.amx.genlut_v2
   execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode                  any value in {T.amx.LutMode.F32, T.amx.LutMode.F16, T.amx.LutMode.F64, T.amx.LutMode.I32, T.amx.LutMode.I16, T.amx.LutMode.U32, T.amx.LutMode.U16, T.amx.LutMode.LOOKUP32_2, T.amx.LutMode.LOOKUP16_2, T.amx.LutMode.LOOKUP8_2, T.amx.LutMode.LOOKUP64_4, T.amx.LutMode.LOOKUP32_4, T.amx.LutMode.LOOKUP16_4, T.amx.LutMode.LOOKUP8_4, T.amx.LutMode.LOOKUP16_5, T.amx.LutMode.LOOKUP8_5}
-    bf16                  any value where (bf16 == False) | (mode == T.amx.LutMode.F16) (type bool) (default False)
+    bf16                  any value where bf16 in {False} | (mode == T.amx.LutMode.F16) (type bool) (default False)
     dtype                 any value (type DType)
                             predicates:
                               switch mode:
@@ -219,9 +219,9 @@ T.amx.vecint_v2
     shift           any value where 0 <= shift <= 31 (type int) (default 0)
     mask            any value where 0 <= mask <= 511 (type int) (default 0)
     mask_y          any value where mask_y == False (type bool) (default False)
-    saturate        any value where saturate in {False, True}; (alu == T.amx.IntALU.SHIFT) | (saturate == False) (type bool) (default False)
-    rounding        any value where rounding in {False, True}; (alu == T.amx.IntALU.SHIFT) | (rounding == False) (type bool) (default False)
-    signed_output   any value where signed_output in {False, True}; (alu == T.amx.IntALU.SHIFT) | (signed_output == False) (type bool) (default False)
+    saturate        any value where saturate in {False, True}; (alu == T.amx.IntALU.SHIFT) | saturate in {False} (type bool) (default False)
+    rounding        any value where rounding in {False, True}; (alu == T.amx.IntALU.SHIFT) | rounding in {False} (type bool) (default False)
+    signed_output   any value where signed_output in {False, True}; (alu == T.amx.IntALU.SHIFT) | signed_output in {False} (type bool) (default False)
     shuffle_x       any value where (alu != T.amx.IntALU.SHIFT) | (shuffle_x == T.amx.Shuffle.NONE) in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
     shuffle_y       any value where (alu != T.amx.IntALU.SHIFT) | (shuffle_y == T.amx.Shuffle.NONE) in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
     repeat          any value in {T.amx.Repeat.ONE, T.amx.Repeat.TWO, T.amx.Repeat.FOUR} (default T.amx.Repeat.ONE)
@@ -339,11 +339,11 @@ T.amx.extrx_v2
     destination_register  any value where 0 <= destination_register <= 7; (mode == T.amx.ExtractMode.COPY) | (destination_register == 0) (type int) (default 0)
     destination_offset    any value where 0 <= destination_offset <= 511; (mode != T.amx.ExtractMode.COPY) | (destination_offset == 0) (type int) (default 0)
     repeat                any value where (repeat == T.amx.Repeat.ONE) | mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} in {T.amx.Repeat.ONE, T.amx.Repeat.TWO, T.amx.Repeat.FOUR} (default T.amx.Repeat.ONE)
-    alternating           any value where (alternating == False) | mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} & (Bits('src_dtype') == 32) (type bool) (default False)
-    low_byte_only         any value where (low_byte_only == False) | (mode == T.amx.ExtractMode.LEGACY) & (Bits('src_dtype') == 16) (type bool) (default False)
+    alternating           any value where alternating in {False} | mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} & (Bits('src_dtype') == 32) (type bool) (default False)
+    low_byte_only         any value where low_byte_only in {False} | (mode == T.amx.ExtractMode.LEGACY) & (Bits('src_dtype') == 16) (type bool) (default False)
     shift                 any value where 0 <= shift <= 31; (mode == T.amx.ExtractMode.INTEGER) | (shift == 0) (type int) (default 0)
-    rounding              any value where (rounding == False) | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
-    saturate              any value where (saturate == False) | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
+    rounding              any value where rounding in {False} | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
+    saturate              any value where saturate in {False} | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
     mask                  any value (type int) (default 0)
                             predicates:
                               switch mode:
@@ -420,11 +420,11 @@ T.amx.extry_v2
     destination_register  any value where 0 <= destination_register <= 7; (mode == T.amx.ExtractMode.COPY) | (destination_register == 0) (type int) (default 0)
     destination_offset    any value where 0 <= destination_offset <= 511; (mode != T.amx.ExtractMode.COPY) | (destination_offset == 0) (type int) (default 0)
     repeat                any value where (repeat == T.amx.Repeat.ONE) | mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} in {T.amx.Repeat.ONE, T.amx.Repeat.TWO, T.amx.Repeat.FOUR} (default T.amx.Repeat.ONE)
-    alternating           any value where (alternating == False) | mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} & (Bits('src_dtype') == 32) (type bool) (default False)
-    low_byte_only         any value where (low_byte_only == False) | (mode == T.amx.ExtractMode.LEGACY) & (Bits('src_dtype') == 16) (type bool) (default False)
+    alternating           any value where alternating in {False} | mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} & (Bits('src_dtype') == 32) (type bool) (default False)
+    low_byte_only         any value where low_byte_only in {False} | (mode == T.amx.ExtractMode.LEGACY) & (Bits('src_dtype') == 16) (type bool) (default False)
     shift                 any value where 0 <= shift <= 31; (mode == T.amx.ExtractMode.INTEGER) | (shift == 0) (type int) (default 0)
-    rounding              any value where (rounding == False) | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
-    saturate              any value where (saturate == False) | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
+    rounding              any value where rounding in {False} | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
+    saturate              any value where saturate in {False} | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
     mask                  any value (type int) (default 0)
                             predicates:
                               switch mode:
@@ -1016,9 +1016,9 @@ T.amx.matint_v1
     shift           any value where 0 <= shift <= 31 (type int) (default 0)
     mask            any value where 0 <= mask <= 511 (type int) (default 0)
     mask_y          any value where one of {False; True} (type bool) (default False)
-    saturate        any value where saturate in {False, True}; (alu == T.amx.IntALU.SHIFT) | (saturate == False) (type bool) (default False)
-    rounding        any value where rounding in {False, True}; (alu == T.amx.IntALU.SHIFT) | (rounding == False) (type bool) (default False)
-    signed_output   any value where signed_output in {False, True}; (alu == T.amx.IntALU.SHIFT) | (signed_output == False) (type bool) (default False)
+    saturate        any value where saturate in {False, True}; (alu == T.amx.IntALU.SHIFT) | saturate in {False} (type bool) (default False)
+    rounding        any value where rounding in {False, True}; (alu == T.amx.IntALU.SHIFT) | rounding in {False} (type bool) (default False)
+    signed_output   any value where signed_output in {False, True}; (alu == T.amx.IntALU.SHIFT) | signed_output in {False} (type bool) (default False)
     shuffle_x       any value where (alu != T.amx.IntALU.SHIFT) | (shuffle_x == T.amx.Shuffle.NONE) in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
     shuffle_y       any value where (alu != T.amx.IntALU.SHIFT) | (shuffle_y == T.amx.Shuffle.NONE) in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
     repeat          any value where repeat == T.amx.Repeat.ONE in {T.amx.Repeat.ONE, T.amx.Repeat.TWO, T.amx.Repeat.FOUR} (default T.amx.Repeat.ONE)

@@ -31,10 +31,10 @@ from tilefoundry.ir.core import (
     get_metadata,
 )
 from tilefoundry.ir.core.expr import SSAValue
-from tilefoundry.ir.core.register import get_registered_name
-from tilefoundry.ir.core.op_registry import lookup
 from tilefoundry.ir.core.module import Module, ModuleList
+from tilefoundry.ir.core.op_registry import lookup
 from tilefoundry.ir.core.param_def import variadic_item_annotation
+from tilefoundry.ir.core.register import get_registered_name
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion

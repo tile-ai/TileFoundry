@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core.register import get_registered_name
-from tilefoundry.ir.core.op_registry import lookup
-
 from tilefoundry.inspection.print_context import TirPrintContext
 from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module, ModuleList
+from tilefoundry.ir.core.op_registry import lookup
 from tilefoundry.ir.core.param_def import collect_param_defs
+from tilefoundry.ir.core.register import get_registered_name
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.tir.launch import Launch

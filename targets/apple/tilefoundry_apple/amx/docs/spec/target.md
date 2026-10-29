@@ -133,7 +133,7 @@ class AmxTarget(Target):
     that device document's ID.
   - `get_facts(TopologyFacts).topologies` MUST contain only `thread`, with logical
     and physical execution-position limits equal to performance plus efficiency
-    core counts (12 for the installed M2 Pro). It MUST NOT set `from_target`.
+    core counts (12 for the installed AppleM2 Pro). It MUST NOT set `from_target`.
     `parallel_level` MUST be `thread`. These limits describe program workers,
     not independent AMX matrix engines.
   - Declared extents MUST be positive and bounded by that limit, including the
@@ -165,23 +165,23 @@ Target generation Facts bridge participates in selection.
 | Architecture ID | LDX/LDY | EXTRX/EXTRY | MATFP | VECFP | MATINT | VECINT | GENLUT |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `apple.amx_m1` | v1 | v1 | v1 | v1 | v1 | v1 | v1 |
-| `apple.amx` (M2) | v2 | v2 | v2 | v2 | v1 | v2 | v2 |
+| `apple.amx` (AppleM2) | v2 | v2 | v2 | v2 | v1 | v2 | v2 |
 | `apple.amx_m3` | v3 | v2 | v2 | v2 | v2 | v2 | v2 |
 | `apple.amx_m4` | v3 | v3 | v2 | v3 | v2 | v3 | v2 |
 
 The unchanged capabilities are SET, CLR, LDZ, LDZI, STX, STY, STZ, STZI,
 FMA16/32/64, FMS16/32/64, and MAC16, retaining names such as `amx_fma32`.
-The installed `apple.amx` ID remains the M2 capability catalogue, preserving the
+The installed `apple.amx` ID remains the AppleM2 capability catalogue, preserving the
 existing `apple.m2_pro` compatibility reference and default `AmxTarget()`.
 The additional architecture documents reuse the same schema and `AppleAmx`
-structure; they do not add M1/M3/M4 device specifications or measured rates.
+structure; they do not add AppleM1/AppleM3/AppleM4 device specifications or measured rates.
 
 These capability partitions come from the original C emulator and its
 [emulate.h](https://github.com/corsix/amx/blob/main/emulate.h) convention
 `AMX_VER_M1=1`, `AMX_VER_M2=2`, `AMX_VER_M3=3`, `AMX_VER_M4=4`.
 The reference [README](https://github.com/corsix/amx/blob/main/README.md) records
-BF16 added with M2, extra load/MATINT modes with M3, and changed extraction/vector
-offset behavior with M4. They are reverse-engineered source claims, not native
+BF16 added with AppleM2, extra load/MATINT modes with AppleM3, and changed extraction/vector
+offset behavior with AppleM4. They are reverse-engineered source claims, not native
 measurements, Apple's official ISA numbering, or proof of loadability. CPU
 oracle comparisons do not discover or exercise native AMX capabilities.
 Existing measured performance entries remain unchanged; no new per-instruction

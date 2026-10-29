@@ -7,6 +7,7 @@ from tilefoundry.ir.core.op_registry import _CLASS_ALIASES, _CLASS_REGISTRY, _RE
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.param_def import collect_param_defs
 
+
 def get_registered_name(value: Any) -> str:
     """Return a canonical class name or the first applicable instance alias."""
     cls = value if isinstance(value, type) else type(value)

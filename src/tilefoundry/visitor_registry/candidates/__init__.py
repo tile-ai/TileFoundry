@@ -7,14 +7,14 @@ import pkgutil
 from dataclasses import dataclass, field, replace
 from typing import Mapping
 
-from tilefoundry.ir.core.op_registry import iter_schemas
-from tilefoundry.ir.pattern import PatternMatcher, TensorPattern, SwitchPattern
-from tilefoundry.ir.pattern.predicates import _same
-
 from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.core.op import Op, supported_op_capabilities
+from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import MemoryEffect, collect_param_defs
 from tilefoundry.ir.hir.schedule import ScheduleRefusal
+from tilefoundry.ir.pattern import PatternMatcher, SwitchPattern, TensorPattern
+from tilefoundry.ir.pattern.predicates import _same
+
 
 @dataclass(frozen=True)
 class HirMatch:
@@ -127,14 +127,11 @@ def candidate_bindings(call, op_type):
         matcher = PatternMatcher({**condition.bindings, **attributes})
         types = tuple(source[declaration.operands[p.name]] for p in parameters if p.kind == "input" and p.name in declaration.operands)
         inputs = tuple(p for p in parameters if p.kind == "input" and p.name in declaration.operands)
-        # Capture field variables from actual operands before any public defaults.
         for param, type_ in zip(inputs, types, strict=True):
             def fields(pattern):
                 if isinstance(pattern, TensorPattern):
                     return replace(pattern, shape=None, layout=None)
                 if isinstance(pattern, SwitchPattern):
-                    # This operand exists: inactive optional branches cannot
-                    # supply its dtype/storage captures.
                     branches = {key: fields(value) for key, value in pattern.branches if value is not None}
                     values = tuple(branches.values())
                     if values and all(_same(value, values[0]) for value in values):

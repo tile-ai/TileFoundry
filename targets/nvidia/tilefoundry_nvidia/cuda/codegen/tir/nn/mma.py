@@ -8,9 +8,8 @@ emitter in this stage
 """
 from __future__ import annotations
 
-from tilefoundry.ir.core.register import get_registered_name
-
 from tilefoundry.ir.core import Var
+from tilefoundry.ir.core.register import get_registered_name
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 from tilefoundry_nvidia.cuda import CudaTarget
 from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext

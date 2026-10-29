@@ -2,6 +2,7 @@
 from tilefoundry.dsl import *
 from tilefoundry_apple import AmxTarget
 
+
 @module(entry="hir_elementwise", target=AmxTarget(), topologies=(Topology("thread", 12),))
 class Program:
     @func

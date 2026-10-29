@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core.register import get_registered_name
-
 from collections.abc import Callable
 from dataclasses import replace
 from enum import Enum
 
 from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.register import get_registered_name
 from tilefoundry.ir.types import (
     DType,
     StorageKind,

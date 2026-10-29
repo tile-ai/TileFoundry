@@ -81,7 +81,7 @@ class Clr(Op):
   - `Clr` writes a disabled token, value 0. Register contents after disabling
     are not defined by the token contract.
 
-## 3. Transfers: Ldx, Ldy, Ldz, Ldzi, Stx, Sty, Stz, Stzi
+## 3. Transfers
 
 ```python
 class Transfer(Op):  # common signature of the classes in this section
@@ -102,8 +102,8 @@ class Transfer(Op):  # common signature of the classes in this section
     `f16`, `bf16`, `f32`, or `f64`. LDZI/STZI admit `u32`, `i32`, or `f32`, default `u32`.
   - `memory_offset ∈ [0,511]`. X/Y `register ∈ [0,7]`; Z register numbers
     are in `[0,63]`.
-  - `LdxV1`/`LdyV1` admit count 1 or 2. V2 additionally admits 4.
-    V3 additionally admits `nonconsecutive=True` for count 2 or 4.
+  - `LdxV1`/`LdyV1` admit count 1 or 2. version 2 additionally admits 4.
+    version 3 additionally admits `nonconsecutive=True` for count 2 or 4.
   - LDZ/STX/STY/STZ admit count 1 or 2; LDZI/STZI require count 1.
     All unsuffixed transfers require `nonconsecutive=False`.
   - For noninterleaved transfers, let `c=int(count)`, `n=lanes(dtype)`.
@@ -189,14 +189,14 @@ class FloatingProduct(Op):
   - MATRIX shapes are `[32,32]`, `[32,1]`, `[1,32]`; VECTOR shapes are
     `[1,32]`. Equal-width accumulator layout is `(64,1)` in MATRIX mode;
     widened layout is `Layout((32,(2,16)),(32,(16,1)))`.
-  - Offset, row, mask and skip domains match §4.
+  - Offset, row, mask and skip domains match [tir §4](./tir.md#4-fma163264-and-fms163264).
 - semantics:
   - Multiply integer inputs and add into the declared accumulator lanes,
     preserving the instruction's finite-width integer result. MATRIX is an
     outer product; VECTOR is lane-wise. Skip controls and masks select the
     corresponding accumulation/additive forms and written lanes.
 
-## 6. MatfpV1/V2 and VecfpV1/V2/V3
+## 6. Matfp and Vecfp
 
 ```python
 class FloatingALU(Op):
@@ -231,14 +231,14 @@ class FloatingALU(Op):
 | BF16_F32 | bf16 | f32 |
 
 - constraints:
-  - V1 excludes BF16 modes. MATFP admits `ADD_PRODUCT`, `SUB_PRODUCT`,
-    `POSITIVE_SELECT`. VECFP additionally admits `MIN`, `MAX`; V2/V3 also
+  - version 1 excludes BF16 modes. MATFP admits `ADD_PRODUCT`, `SUB_PRODUCT`,
+    `POSITIVE_SELECT`. VECFP additionally admits `MIN`, `MAX`; version 2/version 3 also
     admit `PRODUCT`, `ADD_X`, `ADD_Y`.
   - Indexed addressing requires `alu=ADD_PRODUCT`. `IndexMode` is `NONE`,
     `X2`, `Y2`, `X4`, or `Y4`; the suffix denotes bits per packed index.
     `index_register ∈ [0,7]`, and is zero when indexing is disabled.
   - MATFP requires `repeat=ONE`, `broadcast_mode=0`, `z_row ∈ [0,7]`.
-    VECFP has `z_row ∈ [0,63]`; V1 requires repeat 1, V2/V3 admit 1, 2, 4.
+    VECFP has `z_row ∈ [0,63]`; version 1 requires repeat 1, version 2/version 3 admit 1, 2, 4.
     `broadcast_mode ∈ [0,7]` and is zero when repeat is 1.
   - `x_offset,y_offset ∈ [0,511]`; both masks are in `[0,511]`.
   - Let `n=lanes(dtype)`, `q=bits(acc_dtype)/bits(dtype)`.
@@ -263,14 +263,14 @@ class FloatingALU(Op):
   - MATFP applies the operation to matrix fragments; VECFP applies it to
     vector rows. Shuffles permute X/Y lanes before arithmetic. Masks preserve
     unselected destinations and encode the instruction's zero/broadcast forms.
-  - VECFP V3 aligns repeated X/Y origins to register boundaries, with the
+  - VECFP version 3 aligns repeated X/Y origins to register boundaries, with the
     lane/index alignment exceptions selected by broadcast and index mode;
-    V2 retains byte-offset origins.
+    version 2 retains byte-offset origins.
 
-## 7. MatintV1/V2 and VecintV1/V2/V3
+## 7. Matint and Vecint
 
 These Ops use operand order `(acc: RW, lhs: R, rhs: R, table: optional R)`
-with the same Z/Y/X/indexed-bank roles as §6.
+with the same Z/Y/X/indexed-bank roles as [tir §6](./tir.md#6-matfp-and-vecfp).
 
 ```python
 class IntegerALU(Op):
@@ -299,7 +299,7 @@ class IntegerALU(Op):
 - constraints:
   - Both families admit ADD_PRODUCT, SUB_PRODUCT, ADD_SUM, SUB_SUM, SHIFT,
     SQRDMLAH and SQRDMLSH. MATINT additionally admits WIDE_PRODUCT and POPCOUNT.
-    VECINT V2/V3 additionally admit PRODUCT, ADD_X and ADD_Y; VECINT V1
+    VECINT version 2/version 3 additionally admit PRODUCT, ADD_X and ADD_Y; VECINT version 1
     excludes these three. VECINT does not admit WIDE_PRODUCT or POPCOUNT.
   - MATINT ordinary arithmetic uses NARROW16 or WIDE16 lanes. SHIFT also
     admits I32, I8_I8_I32 and I8_I8_I16. WIDE_PRODUCT admits NARROW16,
@@ -312,16 +312,16 @@ class IntegerALU(Op):
     I8 8/8/8, I8_I8_I32 8/8/32, I8_I8_I16 8/8/16,
     I8_I16_I32 8/16/32, I16_I8_I32 16/8/32.
     MATINT WIDE_PRODUCT uses 8-bit X/Y except I8_I16_I32: that mode is
-    8/8/16 on V1 and 8/16/32 on V2. NARROW16 WIDE_PRODUCT is 8/8/16.
+    8/8/16 on version 1 and 8/16/32 on version 2. NARROW16 WIDE_PRODUCT is 8/8/16.
   - SHIFT consumes only the accumulator, not X/Y/table. Its dtype placeholders
     are `u8`; `saturate`, `rounding`, and `signed_output` are available only
     for SHIFT. SHIFT requires both shuffles NONE.
   - Indexing is allowed only for ADD_PRODUCT or WIDE_PRODUCT; packed operand
-    counts and table presence follow §6, using each side's actual lane width.
+    counts and table presence follow [tir §6](./tir.md#6-matfp-and-vecfp), using each side's actual lane width.
   - `shift ∈ [0,31]`, `mask ∈ [0,511]`, X/Y offsets in `[0,511]`.
     `mask_y` chooses whether the mask applies on the Y dimension.
     MATINT `z_row ∈ [0,3]`, repeat 1 and broadcast 0.
-    VECINT `z_row ∈ [0,63]`; V1 repeat 1, V2/V3 repeat 1/2/4,
+    VECINT `z_row ∈ [0,63]`; version 1 repeat 1, version 2/version 3 repeat 1/2/4,
     broadcast in `[0,7]`, zero for repeat 1.
   - Matrix and vector fragments use the declared nested Z lane decomposition:
     widening ratio `q=max(1,bits(acc_dtype)/bits(input_lane_dtype))` splits
@@ -342,10 +342,10 @@ class IntegerALU(Op):
     signed-output controls. SQRDMLAH/SQRDMLSH perform the signed saturating
     rounded doubling multiply-accumulate/subtract operation. WIDE_PRODUCT
     widens products; POPCOUNT uses the integer bit-count operation.
-  - VECINT V3 changes repeated X/Y origin alignment in the same manner as
-    VECFP V3; earlier versions preserve their byte-offset origins.
+  - VECINT version 3 changes repeated X/Y origin alignment in the same manner as
+    VECFP version 3; earlier versions preserve their byte-offset origins.
 
-## 8. ExtrxV1/V2/V3 and ExtryV1/V2/V3
+## 8. Extrx and Extry
 
 ```python
 class Extract(Op):
@@ -368,13 +368,13 @@ class Extract(Op):
 ```
 
 - constraints:
-  - COPY admits the ten noninterleaved transfer dtypes in §3; LEGACY admits
+  - COPY admits the ten noninterleaved transfer dtypes in [tir §3](./tir.md#3-transfers); LEGACY admits
     `i16`, `u16`, `f16`, `i32`, `u32`, `f32`, `f64`. Both require
     `dst_dtype=src_dtype` and the family's default destination bank.
   - INTEGER admits signed/unsigned 8/16/32-bit dtypes, with
     `bits(dst_dtype) <= bits(src_dtype)`. FLOAT admits f16→f16,
-    f32→f32/f16/bf16, f64→f64; V1 FLOAT requires equal source/destination dtype.
-  - INTEGER/FLOAT allow destination X or Y. V1 requires repeat 1; V2/V3
+    f32→f32/f16/bf16, f64→f64; version 1 FLOAT requires equal source/destination dtype.
+  - INTEGER/FLOAT allow destination X or Y. version 1 requires repeat 1; version 2/version 3
     allow repeat 1/2/4 in these modes. COPY/LEGACY require repeat 1.
   - COPY has `z_selector ∈ [0,7]`, `destination_register ∈ [0,7]`,
     `destination_offset=0`, mask 0. Other modes have `z_selector ∈ [0,63]`,
@@ -399,11 +399,11 @@ class Extract(Op):
     COPY/LEGACY preserve element representation, with legacy byte selection
     controlled by `low_byte_only`. INTEGER applies narrowing/shift/rounding/
     saturation controls; FLOAT converts to the selected floating format.
-  - Masks preserve untouched destination bytes. V3 aligns a repeated
-    destination origin down to a 64-byte register boundary; V2 preserves the
+  - Masks preserve untouched destination bytes. version 3 aligns a repeated
+    destination origin down to a 64-byte register boundary; version 2 preserves the
     requested byte offset.
 
-## 9. GenlutV1/V2
+## 9. Genlut
 
 ```python
 class GenerateLookup(Op):
@@ -426,7 +426,7 @@ class GenerateLookup(Op):
     modes may additionally write Z. X/Y destination register is in `[0,7]`,
     Z register in `[0,63]`; table register is in `[0,7]`, source offset `[0,511]`.
   - F32/F16/F64/I32/I16/U32/U16 select the corresponding dtype. F16 with
-    `bf16=True` requires V2 and dtype bf16. All other modes require bf16 false.
+    `bf16=True` requires version 2 and dtype bf16. All other modes require bf16 false.
   - LOOKUP32_2/_4 admit i32/u32/f32; LOOKUP16_2/_4/_5 admit
     i16/u16/f16/bf16; LOOKUP8_2/_4/_5 admit i8/u8;
     LOOKUP64_4 requires f64.

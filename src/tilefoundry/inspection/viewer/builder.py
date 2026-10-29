@@ -10,10 +10,10 @@ from tilefoundry.inspection.print_context import HirPrintContext
 from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Tuple as HirTuple
 from tilefoundry.ir.core.expr import Call, Constant, Var
-from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.core.register import get_registered_name
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType
