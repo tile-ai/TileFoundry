@@ -11,18 +11,43 @@ source = "https://github.com/corsix/amx"
 conditions = "Apple publishes no AMX documentation, so the architecture is described from a reverse-engineered reference"
 
 [facts.capabilities]
-value = ["amx_outer_product", "amx_resident_accumulator"]
+value = [
+    "amx_set",
+    "amx_clr",
+    "amx_ldx_v2",
+    "amx_ldy_v2",
+    "amx_ldz",
+    "amx_ldzi",
+    "amx_stx",
+    "amx_sty",
+    "amx_stz",
+    "amx_stzi",
+    "amx_fma16",
+    "amx_fma32",
+    "amx_fma64",
+    "amx_fms16",
+    "amx_fms32",
+    "amx_fms64",
+    "amx_mac16",
+    "amx_matfp_v2",
+    "amx_vecfp_v2",
+    "amx_matint_v1",
+    "amx_vecint_v2",
+    "amx_extrx_v2",
+    "amx_extry_v2",
+    "amx_genlut_v2",
+]
 unit = "name"
 origin = "reference"
-source = "https://github.com/corsix/amx"
-conditions = "instruction families the AMX code path may select"
+source = "https://github.com/corsix/amx/blob/main/emulate.h; https://github.com/corsix/amx/blob/main/README.md; https://github.com/corsix/amx"
+conditions = "M2 instruction semantics from the original C emulator: 15 unchanged instruction capabilities and nine statically versioned capabilities, selecting 24 of the 39 registered Ops. Version suffixes identify distinct instruction semantics, not Apple official ISA version numbers. This is reference-derived capability data, not native hardware measurement or a loadability claim."
 
 [facts.instruction.compute_dtypes]
-value = ["f16", "f32"]
+value = ["f16", "bf16", "f32", "f64", "i8", "u8", "i16", "u16", "i32", "u32"]
 unit = "name"
 origin = "reference"
 source = "https://github.com/corsix/amx"
-conditions = "dtypes with a modelled AMX compute instruction"
+conditions = "compute dtypes admitted by the M2 static instruction catalogue; each selected instruction Pattern checks its legal operand tuples"
 
 [facts.compute.units_per_core]
 value = 1

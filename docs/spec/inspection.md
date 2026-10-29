@@ -428,7 +428,7 @@ take a print context:
 printer = PatternPrinter()
 printer.written(pattern)       # value shape, with named holes
 printer.rules(pattern)         # ordered, de-duplicated condition lines
-printer.described(pattern)     # value shape plus an indented predicates line
+printer.described(pattern)     # value shape with its declared conditions
 printer.alternatives(pattern)  # flattened structural Or/Switch branches
 printer.declaration(op_type)   # rendered declaration sections, still structured
 printer.refusal(refusal)       # consumer-facing match failure
@@ -439,12 +439,17 @@ Layout values use single-line positional forms such as `Layout((r, W), (l,
 `ShardLayout(Layout(...), (B(), B(), B()), Mesh(...))`. Named wildcards print
 their names, unnamed wildcards print `_`, and star captures print `*name`.
 Predicate conditions retain structural traversal and authored declaration
-order; de-duplication keeps the first occurrence. Alternative bindings retain
-declaration order. An `OrPattern` containing only ordinary
-values is one set-valued alternative rather than several structural branches.
-For tensor arrangements, rules shared by every alternative appear in the
-common predicates block; rules unique to one alternative remain indented under
-that arrangement. Parameter defaults are stated on their parameter line.
+order; de-duplication keeps the first occurrence. Declaration rendering MUST
+traverse the authored pattern directly: nested switches retain every branch
+condition, and `OrPattern` lists its alternatives as a set. Tensor shape, dtype,
+storage and layout retain their symbolic constraints. Parameter lines include
+declared Enum domains, optionality and defaults. Ordinary boolean and other
+literal predicates retain their value constraints.
+
+`PatternPrinter()` has one rendering behavior. `written()`, `rules()`,
+`described()` and `declaration()` MUST NOT enumerate Cartesian products or
+hoist conditions across branches. `alternatives()` is an explicit enumeration
+API, separate from declaration rendering; its bindings retain declaration order.
 Every `Pattern` carries its own `predicates` slot. The structural line comes
 only from that pattern's structural fields, while its predicate block comes
 only from `pattern.predicates`; the printer MUST NOT infer one role from the

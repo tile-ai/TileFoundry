@@ -1,0 +1,1069 @@
+target apple.m2_pro
+instructions
+
+T.arange
+  target             apple.m2_pro
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    start  any value (type int) (default 0)
+    step   any value (type int) (default 1)
+  operands
+    dst  Tensor(shape=(None,), dtype=one of {i32; i64}, storage=rmem, layout=any arrangement)
+
+T.binary
+  target             apple.m2_pro
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    kind  any value in {BinaryKind.ADD, BinaryKind.SUB, BinaryKind.MUL, BinaryKind.DIV, BinaryKind.FLOOR_DIV, BinaryKind.MOD, BinaryKind.MIN, BinaryKind.MAX, BinaryKind.EQ, BinaryKind.NE, BinaryKind.LT, BinaryKind.LE, BinaryKind.GT, BinaryKind.GE, BinaryKind.AND, BinaryKind.OR}
+  operands
+    lhs  Tensor(storage=rmem, layout=any arrangement)
+    rhs  Tensor(storage=rmem, layout=any arrangement)
+    dst  Tensor(storage=rmem, layout=any arrangement)
+
+T.cast
+  target             apple.m2_pro
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    dtype  cast_dtype (type DType)
+  operands
+    src  Tensor(storage=rmem, layout=one of {ShardLayout(_, _, Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout})
+    dst  Tensor(dtype=cast_dtype, storage=rmem, layout=one of {ShardLayout(_, _, Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout})
+  between operands
+    src.shape = dst.shape
+    src.dtype != dst.dtype
+
+T.clamp
+  target             apple.m2_pro
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    min_val  any value (type float)
+    max_val  any value (type float)
+  operands
+    src  Tensor(storage=rmem, layout=any arrangement)
+    dst  Tensor(storage=rmem, layout=any arrangement)
+  between operands
+    src.dtype = dst.dtype
+
+T.amx.genlut_v2
+  target             apple.m2_pro
+  target capability  amx_genlut_v2
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    mode                  any value in {T.amx.LutMode.F32, T.amx.LutMode.F16, T.amx.LutMode.F64, T.amx.LutMode.I32, T.amx.LutMode.I16, T.amx.LutMode.U32, T.amx.LutMode.U16, T.amx.LutMode.LOOKUP32_2, T.amx.LutMode.LOOKUP16_2, T.amx.LutMode.LOOKUP8_2, T.amx.LutMode.LOOKUP64_4, T.amx.LutMode.LOOKUP32_4, T.amx.LutMode.LOOKUP16_4, T.amx.LutMode.LOOKUP8_4, T.amx.LutMode.LOOKUP16_5, T.amx.LutMode.LOOKUP8_5}
+    bf16                  any value where (bf16 == False) | (mode == T.amx.LutMode.F16) (type bool) (default False)
+    dtype                 any value (type DType)
+                            predicates:
+                              switch mode:
+                                mode=T.amx.LutMode.F32: f32
+                                mode=T.amx.LutMode.F16: switch bf16:
+                                    bf16=False: f16
+                                    bf16=True: bf16
+                                mode=T.amx.LutMode.F64: f64
+                                mode=T.amx.LutMode.I32: i32
+                                mode=T.amx.LutMode.I16: i16
+                                mode=T.amx.LutMode.U32: u32
+                                mode=T.amx.LutMode.U16: u16
+                                mode=T.amx.LutMode.LOOKUP32_2: one of {i32; u32; f32}
+                                mode=T.amx.LutMode.LOOKUP16_2: one of {i16; u16; f16; bf16}
+                                mode=T.amx.LutMode.LOOKUP8_2: one of {i8; u8}
+                                mode=T.amx.LutMode.LOOKUP64_4: f64
+                                mode=T.amx.LutMode.LOOKUP32_4: one of {i32; u32; f32}
+                                mode=T.amx.LutMode.LOOKUP16_4: one of {i16; u16; f16; bf16}
+                                mode=T.amx.LutMode.LOOKUP8_4: one of {i8; u8}
+                                mode=T.amx.LutMode.LOOKUP16_5: one of {i16; u16; f16; bf16}
+                                mode=T.amx.LutMode.LOOKUP8_5: one of {i8; u8}
+    source_bank           any value where one of {T.amx.Bank.X; T.amx.Bank.Y} in {T.amx.Bank.X, T.amx.Bank.Y, T.amx.Bank.Z} (default T.amx.Bank.X)
+    table_bank            any value where one of {T.amx.Bank.X; T.amx.Bank.Y} in {T.amx.Bank.X, T.amx.Bank.Y, T.amx.Bank.Z} (default T.amx.Bank.Y)
+    destination           any value where one of {T.amx.Bank.X; T.amx.Bank.Y; T.amx.Bank.Z}; (destination != T.amx.Bank.Z) | (mode >= T.amx.LutMode.LOOKUP32_2) in {T.amx.Bank.X, T.amx.Bank.Y, T.amx.Bank.Z} (default T.amx.Bank.X)
+    source_offset         any value where 0 <= source_offset <= 511 (type int) (default 0)
+    table_register        any value where 0 <= table_register <= 7 (type int) (default 1)
+    destination_register  any value (type int) (default 2)
+                            predicates:
+                              switch destination:
+                                destination=T.amx.Bank.X: destination_register where 0 <= destination_register <= 7
+                                destination=T.amx.Bank.Y: destination_register where 0 <= destination_register <= 7
+                                destination=T.amx.Bank.Z: destination_register where 0 <= destination_register <= 63
+                              table_lanes == 512 // Bits('dtype')
+                              switch mode:
+                                mode=T.amx.LutMode.F32: destination_register where source_lanes == 512 // Bits('dtype'); destination_lanes == 64
+                                mode=T.amx.LutMode.F16: destination_register where source_lanes == 512 // Bits('dtype'); destination_lanes == 64
+                                mode=T.amx.LutMode.F64: destination_register where source_lanes == 512 // Bits('dtype'); destination_lanes == 64
+                                mode=T.amx.LutMode.I32: destination_register where source_lanes == 512 // Bits('dtype'); destination_lanes == 64
+                                mode=T.amx.LutMode.I16: destination_register where source_lanes == 512 // Bits('dtype'); destination_lanes == 64
+                                mode=T.amx.LutMode.U32: destination_register where source_lanes == 512 // Bits('dtype'); destination_lanes == 64
+                                mode=T.amx.LutMode.U16: destination_register where source_lanes == 512 // Bits('dtype'); destination_lanes == 64
+                                mode=T.amx.LutMode.LOOKUP32_2: destination_register where source_lanes == 4; destination_lanes == 512 // Bits('dtype')
+                                mode=T.amx.LutMode.LOOKUP16_2: destination_register where source_lanes == 8; destination_lanes == 512 // Bits('dtype')
+                                mode=T.amx.LutMode.LOOKUP8_2: destination_register where source_lanes == 16; destination_lanes == 512 // Bits('dtype')
+                                mode=T.amx.LutMode.LOOKUP64_4: destination_register where source_lanes == 4; destination_lanes == 512 // Bits('dtype')
+                                mode=T.amx.LutMode.LOOKUP32_4: destination_register where source_lanes == 8; destination_lanes == 512 // Bits('dtype')
+                                mode=T.amx.LutMode.LOOKUP16_4: destination_register where source_lanes == 16; destination_lanes == 512 // Bits('dtype')
+                                mode=T.amx.LutMode.LOOKUP8_4: destination_register where source_lanes == 32; destination_lanes == 512 // Bits('dtype')
+                                mode=T.amx.LutMode.LOOKUP16_5: destination_register where source_lanes == 20; destination_lanes == 512 // Bits('dtype')
+                                mode=T.amx.LutMode.LOOKUP8_5: destination_register where source_lanes == 40; destination_lanes == 512 // Bits('dtype')
+  operands
+    source  Tensor:
+              shape=(source_lanes,)
+              dtype=switch mode:
+                  mode=T.amx.LutMode.F32: dtype
+                  mode=T.amx.LutMode.F16: dtype
+                  mode=T.amx.LutMode.F64: dtype
+                  mode=T.amx.LutMode.I32: dtype
+                  mode=T.amx.LutMode.I16: dtype
+                  mode=T.amx.LutMode.U32: dtype
+                  mode=T.amx.LutMode.U16: dtype
+                  mode=T.amx.LutMode.LOOKUP32_2: u8
+                  mode=T.amx.LutMode.LOOKUP16_2: u8
+                  mode=T.amx.LutMode.LOOKUP8_2: u8
+                  mode=T.amx.LutMode.LOOKUP64_4: u8
+                  mode=T.amx.LutMode.LOOKUP32_4: u8
+                  mode=T.amx.LutMode.LOOKUP16_4: u8
+                  mode=T.amx.LutMode.LOOKUP8_4: u8
+                  mode=T.amx.LutMode.LOOKUP16_5: u8
+                  mode=T.amx.LutMode.LOOKUP8_5: u8
+              storage=rmem
+              layout=Layout((source_lanes,), (1,))
+    table   Tensor(shape=(table_lanes,), dtype=dtype, storage=rmem, layout=Layout((table_lanes,), (1,)))
+    dst     Tensor:
+              shape=(destination_lanes,)
+              dtype=switch mode:
+                  mode=T.amx.LutMode.F32: u8
+                  mode=T.amx.LutMode.F16: u8
+                  mode=T.amx.LutMode.F64: u8
+                  mode=T.amx.LutMode.I32: u8
+                  mode=T.amx.LutMode.I16: u8
+                  mode=T.amx.LutMode.U32: u8
+                  mode=T.amx.LutMode.U16: u8
+                  mode=T.amx.LutMode.LOOKUP32_2: dtype
+                  mode=T.amx.LutMode.LOOKUP16_2: dtype
+                  mode=T.amx.LutMode.LOOKUP8_2: dtype
+                  mode=T.amx.LutMode.LOOKUP64_4: dtype
+                  mode=T.amx.LutMode.LOOKUP32_4: dtype
+                  mode=T.amx.LutMode.LOOKUP16_4: dtype
+                  mode=T.amx.LutMode.LOOKUP8_4: dtype
+                  mode=T.amx.LutMode.LOOKUP16_5: dtype
+                  mode=T.amx.LutMode.LOOKUP8_5: dtype
+              storage=rmem
+              layout=Layout((destination_lanes,), (1,))
+
+T.unary
+  target             apple.m2_pro
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    kind  any value in {UnaryKind.NEG, UnaryKind.ABS, UnaryKind.RSQRT, UnaryKind.CAST, UnaryKind.NOT, UnaryKind.RELU, UnaryKind.SQUARE, UnaryKind.EXP, UnaryKind.LOG, UnaryKind.CEIL, UnaryKind.ROUND, UnaryKind.EXP2, UnaryKind.LOG2}
+  operands
+    src  Tensor(storage=rmem, layout=any arrangement)
+    dst  Tensor(storage=rmem, layout=any arrangement)
+
+T.amx.vecfp_v2
+  target             apple.m2_pro
+  target capability  amx_vecfp_v2
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    fp_mode         any value in {T.amx.FPMode.F16, T.amx.FPMode.F16_F32, T.amx.FPMode.F32, T.amx.FPMode.F64, T.amx.FPMode.BF16, T.amx.FPMode.BF16_F32} (default T.amx.FPMode.F32)
+    dtype           any value where dtype == (bf16, bf16, f16, f16, f32, f64, f64, f64)[fp_mode]; x_lanes == 512 // Bits('dtype'); y_lanes == 512 // Bits('dtype') (type DType) (default f32)
+    acc_dtype       any value where acc_dtype == (bf16, f32, f16, f32, f32, f64, f64, f64)[fp_mode] (type DType) (default f32)
+    alu             any value where alu in {T.amx.FPALU.ADD_PRODUCT, T.amx.FPALU.SUB_PRODUCT, T.amx.FPALU.POSITIVE_SELECT, T.amx.FPALU.MIN, T.amx.FPALU.MAX, T.amx.FPALU.PRODUCT, T.amx.FPALU.ADD_X, T.amx.FPALU.ADD_Y} in {T.amx.FPALU.ADD_PRODUCT, T.amx.FPALU.SUB_PRODUCT, T.amx.FPALU.POSITIVE_SELECT, T.amx.FPALU.MIN, T.amx.FPALU.MAX, T.amx.FPALU.PRODUCT, T.amx.FPALU.ADD_X, T.amx.FPALU.ADD_Y} (default T.amx.FPALU.ADD_PRODUCT)
+    index_mode      any value where (alu == T.amx.FPALU.ADD_PRODUCT) | (index_mode == T.amx.IndexMode.NONE) in {T.amx.IndexMode.NONE, T.amx.IndexMode.X2, T.amx.IndexMode.Y2, T.amx.IndexMode.X4, T.amx.IndexMode.Y4} (default T.amx.IndexMode.NONE)
+    index_register  any value where 0 <= index_register <= 7; (index_mode != T.amx.IndexMode.NONE) | (index_register == 0) (type int) (default 0)
+    x_offset        any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset        any value where 0 <= y_offset <= 511 (type int) (default 64)
+    z_row           any value where 0 <= z_row <= 63 (type int) (default 0)
+    mask            any value where 0 <= mask <= 511 (type int) (default 0)
+    y_mask          any value where 0 <= y_mask <= 511 (type int) (default 0)
+    shuffle_x       any value in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
+    shuffle_y       any value in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
+    repeat          any value in {T.amx.Repeat.ONE, T.amx.Repeat.TWO, T.amx.Repeat.FOUR} (default T.amx.Repeat.ONE)
+    broadcast_mode  any value where 0 <= broadcast_mode <= 7; (repeat != T.amx.Repeat.ONE) | (broadcast_mode == 0); rows == (0, 1, 2, 0, 4)[repeat]; z_step == 512 // Bits('acc_dtype'); (acc_rows == (0, 1, 2, 0, 4)[repeat]) & (acc_lanes == 512 // Bits('dtype')) & (acc_ratio == Bits('acc_dtype') // Bits('dtype')) & (acc_inner == 512 // Bits('acc_dtype')) & (acc_wide == (0, 0, 1, 1, 1)[Bits('acc_dtype') // Bits('dtype')]) & (acc_step == 64 // (0, 1, 2, 0, 4)[repeat] * 512 // Bits('acc_dtype')); table_side == (0, 1, 1, 1, 1)[index_mode]; lhs_count == (512 // Bits('dtype') * (8, 8, 2, 8, 4)[index_mode] + 7) // 8; lhs_packed == (0, 0, 1, 0, 1)[index_mode]; lhs_row == (512 // Bits('dtype') * (8, 8, 2, 8, 4)[index_mode] + 7) // 8 * (1, 1, 1, 0, 1, 1, 1, 0)[broadcast_mode]; rhs_count == (512 // Bits('dtype') * (8, 2, 8, 4, 8)[index_mode] + 7) // 8; rhs_packed == (0, 1, 0, 1, 0)[index_mode]; rhs_row == (512 // Bits('dtype') * (8, 2, 8, 4, 8)[index_mode] + 7) // 8 * (1, 1, 0, 1, 1, 1, 0, 1)[broadcast_mode] (type int) (default 0)
+  operands
+    acc    Tensor:
+             shape=(acc_rows, acc_lanes)
+             dtype=acc_dtype
+             storage=rmem
+             layout=switch acc_wide:
+                 acc_wide=0: Layout((acc_rows, acc_lanes), (acc_step, 1))
+                 acc_wide=1: Layout((acc_rows, (acc_ratio, acc_inner)), (acc_step, (z_step, 1)))
+    lhs    Tensor:
+             shape=(rows, lhs_count)
+             dtype=switch lhs_packed:
+                 lhs_packed=0: dtype
+                 lhs_packed=1: u8
+             storage=rmem
+             layout=Layout((rows, lhs_count), (lhs_row, 1))
+    rhs    Tensor:
+             shape=(rows, rhs_count)
+             dtype=switch rhs_packed:
+                 rhs_packed=0: dtype
+                 rhs_packed=1: u8
+             storage=rmem
+             layout=Layout((rows, rhs_count), (rhs_row, 1))
+    table  switch table_side: or None (default None)
+             table_side=0: None
+             table_side=1: Tensor(shape=(x_lanes,), dtype=dtype, storage=rmem, layout=Layout((x_lanes,), (1,)))
+
+T.amx.vecint_v2
+  target             apple.m2_pro
+  target capability  amx_vecint_v2
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    alu             any value where alu in {T.amx.IntALU.ADD_PRODUCT, T.amx.IntALU.SUB_PRODUCT, T.amx.IntALU.ADD_SUM, T.amx.IntALU.SUB_SUM, T.amx.IntALU.SHIFT, T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH, T.amx.IntALU.PRODUCT, T.amx.IntALU.ADD_X, T.amx.IntALU.ADD_Y} in {T.amx.IntALU.ADD_PRODUCT, T.amx.IntALU.SUB_PRODUCT, T.amx.IntALU.ADD_SUM, T.amx.IntALU.SUB_SUM, T.amx.IntALU.SHIFT, T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH, T.amx.IntALU.WIDE_PRODUCT, T.amx.IntALU.POPCOUNT, T.amx.IntALU.PRODUCT, T.amx.IntALU.ADD_X, T.amx.IntALU.ADD_Y} (default T.amx.IntALU.ADD_PRODUCT)
+    lane_mode       any value where (alu == T.amx.IntALU.SHIFT) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I32, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16, T.amx.IntLane.I8} | alu in {T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH} & (lane_mode == T.amx.IntLane.NARROW16) | (alu != T.amx.IntALU.SHIFT) & ~(alu in {T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH}) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16, T.amx.IntLane.I8_I16_I32, T.amx.IntLane.I16_I8_I32} in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I32, T.amx.IntLane.I8, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16, T.amx.IntLane.I8_I16_I32, T.amx.IntLane.I16_I8_I32} (default T.amx.IntLane.NARROW16)
+    x_dtype         any value where (alu == T.amx.IntALU.SHIFT) & (x_dtype == u8) | (alu != T.amx.IntALU.SHIFT) & (x_dtype in {i8, u8, i16, u16, i32, u32} & (Bits('x_dtype') == (0, 0, 16, 16, 32, 0, 0, 0, 0, 8, 8, 8, 8, 16)[lane_mode])) (type DType) (default i16)
+    y_dtype         any value where (alu == T.amx.IntALU.SHIFT) & (y_dtype == u8) | (alu != T.amx.IntALU.SHIFT) & (y_dtype in {i8, u8, i16, u16, i32, u32} & (Bits('y_dtype') == (0, 0, 16, 16, 32, 0, 0, 0, 0, 8, 8, 8, 16, 8)[lane_mode])); x_lanes == 512 // Bits('x_dtype'); y_lanes == 512 // Bits('y_dtype'); (input_bits <= Bits('x_dtype')) & (input_bits <= Bits('y_dtype')) & ((input_bits == Bits('x_dtype')) | (input_bits == Bits('y_dtype'))) (type DType) (default i16)
+    acc_dtype       any value where acc_dtype in {i8, u8, i16, u16, i32, u32} & (Bits('acc_dtype') == (0, 0, 16, 32, 32, 0, 0, 0, 0, 8, 32, 16, 32, 32)[lane_mode]) (type DType) (default i16)
+    index_mode      any value where alu in {T.amx.IntALU.ADD_PRODUCT, T.amx.IntALU.WIDE_PRODUCT} | (index_mode == T.amx.IndexMode.NONE) in {T.amx.IndexMode.NONE, T.amx.IndexMode.X2, T.amx.IndexMode.Y2, T.amx.IndexMode.X4, T.amx.IndexMode.Y4} (default T.amx.IndexMode.NONE)
+    index_register  any value where 0 <= index_register <= 7; (index_mode != T.amx.IndexMode.NONE) | (index_register == 0) (type int) (default 0)
+    x_offset        any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset        any value where 0 <= y_offset <= 511 (type int) (default 64)
+    z_row           any value where 0 <= z_row <= 63 (type int) (default 0)
+    shift           any value where 0 <= shift <= 31 (type int) (default 0)
+    mask            any value where 0 <= mask <= 511 (type int) (default 0)
+    mask_y          any value where mask_y == False (type bool) (default False)
+    saturate        any value where saturate in {False, True}; (alu == T.amx.IntALU.SHIFT) | (saturate == False) (type bool) (default False)
+    rounding        any value where rounding in {False, True}; (alu == T.amx.IntALU.SHIFT) | (rounding == False) (type bool) (default False)
+    signed_output   any value where signed_output in {False, True}; (alu == T.amx.IntALU.SHIFT) | (signed_output == False) (type bool) (default False)
+    shuffle_x       any value where (alu != T.amx.IntALU.SHIFT) | (shuffle_x == T.amx.Shuffle.NONE) in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
+    shuffle_y       any value where (alu != T.amx.IntALU.SHIFT) | (shuffle_y == T.amx.Shuffle.NONE) in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
+    repeat          any value in {T.amx.Repeat.ONE, T.amx.Repeat.TWO, T.amx.Repeat.FOUR} (default T.amx.Repeat.ONE)
+    broadcast_mode  any value where 0 <= broadcast_mode <= 7; (repeat != T.amx.Repeat.ONE) | (broadcast_mode == 0); rows == (0, 1, 2, 0, 4)[repeat]; z_step == 512 // Bits('acc_dtype'); (alu == T.amx.IntALU.SHIFT) & ((acc_rows == (0, 1, 2, 0, 4)[repeat]) & (acc_lanes == 512 // Bits('acc_dtype')) & (acc_step == 64 // (0, 1, 2, 0, 4)[repeat] * 512 // Bits('acc_dtype')) & (acc_ratio == 1) & (acc_inner == 512 // Bits('acc_dtype')) & (acc_wide == 0)) | (alu != T.amx.IntALU.SHIFT) & ((acc_rows == (0, 1, 2, 0, 4)[repeat]) & (acc_lanes == 512 // input_bits) & (acc_ratio == Bits('acc_dtype') // input_bits) & (acc_inner == 512 // Bits('acc_dtype')) & (acc_wide == (0, 0, 1, 1, 1)[Bits('acc_dtype') // input_bits]) & (acc_step == 64 // (0, 1, 2, 0, 4)[repeat] * 512 // Bits('acc_dtype'))); has_inputs == (1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1)[alu]; table_side == (0, 1, 2, 1, 2)[index_mode]; lhs_count == (512 // Bits('y_dtype') * (8, 8, 2, 8, 4)[index_mode] + 7) // 8; lhs_packed == (0, 0, 1, 0, 1)[index_mode]; lhs_row == (512 // Bits('y_dtype') * (8, 8, 2, 8, 4)[index_mode] + 7) // 8 * (1, 1, 1, 0, 1, 1, 1, 0)[broadcast_mode]; rhs_count == (512 // Bits('x_dtype') * (8, 2, 8, 4, 8)[index_mode] + 7) // 8; rhs_packed == (0, 1, 0, 1, 0)[index_mode]; rhs_row == (512 // Bits('x_dtype') * (8, 2, 8, 4, 8)[index_mode] + 7) // 8 * (1, 1, 0, 1, 1, 1, 0, 1)[broadcast_mode] (type int) (default 0)
+  operands
+    acc    Tensor:
+             shape=(acc_rows, acc_lanes)
+             dtype=acc_dtype
+             storage=rmem
+             layout=switch acc_wide:
+                 acc_wide=0: Layout((acc_rows, acc_lanes), (acc_step, 1))
+                 acc_wide=1: Layout((acc_rows, (acc_ratio, acc_inner)), (acc_step, (z_step, 1)))
+    lhs    switch has_inputs: or None (default None)
+             has_inputs=0: None
+             has_inputs=1: Tensor:
+                 shape=(rows, lhs_count)
+                 dtype=switch lhs_packed:
+                     lhs_packed=0: y_dtype
+                     lhs_packed=1: u8
+                 storage=rmem
+                 layout=Layout((rows, lhs_count), (lhs_row, 1))
+    rhs    switch has_inputs: or None (default None)
+             has_inputs=0: None
+             has_inputs=1: Tensor:
+                 shape=(rows, rhs_count)
+                 dtype=switch rhs_packed:
+                     rhs_packed=0: x_dtype
+                     rhs_packed=1: u8
+                 storage=rmem
+                 layout=Layout((rows, rhs_count), (rhs_row, 1))
+    table  switch table_side: or None (default None)
+             table_side=0: None
+             table_side=1: Tensor(shape=(x_lanes,), dtype=x_dtype, storage=rmem, layout=Layout((x_lanes,), (1,)))
+             table_side=2: Tensor(shape=(y_lanes,), dtype=y_dtype, storage=rmem, layout=Layout((y_lanes,), (1,)))
+
+T.where
+  target             apple.m2_pro
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  operands
+    cond  Tensor(dtype=bool, storage=rmem, layout=any arrangement)
+    lhs   Tensor(storage=rmem, layout=any arrangement)
+    rhs   Tensor(storage=rmem, layout=any arrangement)
+    dst   Tensor(storage=rmem, layout=any arrangement)
+  between operands
+    lhs.dtype = rhs.dtype
+    lhs.dtype = dst.dtype
+
+T.amx.clr
+  target             apple.m2_pro
+  target capability  amx_clr
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  operands
+    token  Tensor(shape=(1,), dtype=u8, storage=rmem, layout=Layout((1,), (1,)))
+
+T.amx.set
+  target             apple.m2_pro
+  target capability  amx_set
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  operands
+    token  Tensor(shape=(1,), dtype=u8, storage=rmem, layout=Layout((1,), (1,)))
+
+T.copy
+  target             apple.m2_pro
+  execution mesh     one of {Mesh(('core',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,)))); Mesh(('amx',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))}
+  operands
+    src  Tensor:
+           dtype=dtype0
+           storage=storage0
+           layout=switch storage0:
+               storage0=gmem: src.layout
+               storage0=smem: src.layout
+               storage0=rmem: one of {ShardLayout(_, _, Mesh(_, ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout}
+           predicates:
+             Bits('dtype0') % 8 == 0
+             storage0 in {gmem, smem, rmem}
+    dst  Tensor:
+           dtype=dtype1
+           storage=storage1
+           layout=switch storage1:
+               storage1=gmem: dst.layout
+               storage1=smem: dst.layout
+               storage1=rmem: one of {ShardLayout(_, _, Mesh(_, ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout}
+           predicates:
+             Bits('dtype1') % 8 == 0
+             storage1 in {gmem, smem, rmem}
+  between operands
+    src.shape = dst.shape
+    src.dtype = dst.dtype
+
+T.amx.extrx_v2
+  target             apple.m2_pro
+  target capability  amx_extrx_v2
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    mode                  any value in {T.amx.ExtractMode.COPY, T.amx.ExtractMode.LEGACY, T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} (default T.amx.ExtractMode.LEGACY)
+    src_dtype             any value (type DType) (default f32)
+                            predicates:
+                              switch mode:
+                                mode=T.amx.ExtractMode.COPY: one of {u8; i8; u16; i16; u32; i32; f16; bf16; f32; f64}
+                                mode=T.amx.ExtractMode.LEGACY: one of {i16; u16; f16; i32; u32; f32; f64}
+                                mode=T.amx.ExtractMode.INTEGER: one of {i8; u8; i16; u16; i32; u32}
+                                mode=T.amx.ExtractMode.FLOAT: one of {f16; f32; f64}
+    dst_dtype             any value (type DType) (default f32)
+                            predicates:
+                              switch mode:
+                                mode=T.amx.ExtractMode.COPY: src_dtype
+                                mode=T.amx.ExtractMode.LEGACY: src_dtype
+                                mode=T.amx.ExtractMode.INTEGER: dst_dtype where dst_dtype in {i8, u8, i16, u16, i32, u32}; Bits('dst_dtype') <= Bits('src_dtype')
+                                mode=T.amx.ExtractMode.FLOAT: switch src_dtype:
+                                    src_dtype=f16: f16
+                                    src_dtype=f32: one of {f32; f16; bf16}
+                                    src_dtype=f64: f64
+    destination           any value where one of {T.amx.Bank.X; T.amx.Bank.Y}; mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} | (destination == T.amx.Bank.X) in {T.amx.Bank.X, T.amx.Bank.Y, T.amx.Bank.Z} (default T.amx.Bank.X)
+    z_selector            any value where 0 <= z_selector <= 63; (mode != T.amx.ExtractMode.COPY) | (z_selector <= 7) (type int) (default 0)
+    destination_register  any value where 0 <= destination_register <= 7; (mode == T.amx.ExtractMode.COPY) | (destination_register == 0) (type int) (default 0)
+    destination_offset    any value where 0 <= destination_offset <= 511; (mode != T.amx.ExtractMode.COPY) | (destination_offset == 0) (type int) (default 0)
+    repeat                any value where (repeat == T.amx.Repeat.ONE) | mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} in {T.amx.Repeat.ONE, T.amx.Repeat.TWO, T.amx.Repeat.FOUR} (default T.amx.Repeat.ONE)
+    alternating           any value where (alternating == False) | mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} & (Bits('src_dtype') == 32) (type bool) (default False)
+    low_byte_only         any value where (low_byte_only == False) | (mode == T.amx.ExtractMode.LEGACY) & (Bits('src_dtype') == 16) (type bool) (default False)
+    shift                 any value where 0 <= shift <= 31; (mode == T.amx.ExtractMode.INTEGER) | (shift == 0) (type int) (default 0)
+    rounding              any value where (rounding == False) | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
+    saturate              any value where (saturate == False) | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
+    mask                  any value (type int) (default 0)
+                            predicates:
+                              switch mode:
+                                mode=T.amx.ExtractMode.COPY: 0
+                                mode=T.amx.ExtractMode.LEGACY: mask where 0 <= mask <= 127
+                                mode=T.amx.ExtractMode.INTEGER: mask where 0 <= mask <= 511
+                                mode=T.amx.ExtractMode.FLOAT: mask where 0 <= mask <= 511
+                              src_lanes == 64 // (Bits('src_dtype') // 8)
+                              dst_lanes == 64 // (Bits('dst_dtype') // 8)
+                              rows == (0, 1, 2, 0, 4)[repeat]
+                              extract_ratio == Bits('src_dtype') // Bits('dst_dtype')
+                              extract_inner == 512 // Bits('src_dtype')
+                              source_row == 64 // (0, 1, 2, 0, 4)[repeat] * 64 // (Bits('src_dtype') // 8)
+                              switch alternating:
+                                alternating=False: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                alternating=True: switch dst_dtype:
+                                    dst_dtype=u8: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                    dst_dtype=i8: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                    dst_dtype=u16: mask where extract_step == 128 // (Bits('src_dtype') // 8)
+                                    dst_dtype=i16: mask where extract_step == 128 // (Bits('src_dtype') // 8)
+                                    dst_dtype=u32: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                    dst_dtype=i32: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                    dst_dtype=f16: mask where extract_step == 128 // (Bits('src_dtype') // 8)
+                                    dst_dtype=bf16: mask where extract_step == 128 // (Bits('src_dtype') // 8)
+                                    dst_dtype=f32: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                    dst_dtype=f64: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+  operands
+    src  switch mode:
+           mode=T.amx.ExtractMode.COPY: Tensor(shape=(1, src_lanes), dtype=src_dtype, storage=rmem, layout=Layout((1, src_lanes), (0, 1)))
+           mode=T.amx.ExtractMode.LEGACY: Tensor(shape=(1, 1, src_lanes), dtype=src_dtype, storage=rmem, layout=Layout((1, 1, src_lanes), (source_row, src_lanes, 1)))
+           mode=T.amx.ExtractMode.INTEGER: Tensor:
+               shape=(rows, dst_lanes)
+               dtype=src_dtype
+               storage=rmem
+               layout=switch extract_ratio:
+                   extract_ratio=1: Layout((rows, dst_lanes), (source_row, 1))
+                   extract_ratio=2: Layout((rows, (extract_inner, extract_ratio)), (source_row, (1, extract_step)))
+                   extract_ratio=4: Layout((rows, (extract_inner, extract_ratio)), (source_row, (1, extract_step)))
+           mode=T.amx.ExtractMode.FLOAT: Tensor:
+               shape=(rows, dst_lanes)
+               dtype=src_dtype
+               storage=rmem
+               layout=switch extract_ratio:
+                   extract_ratio=1: Layout((rows, dst_lanes), (source_row, 1))
+                   extract_ratio=2: Layout((rows, (extract_inner, extract_ratio)), (source_row, (1, extract_step)))
+                   extract_ratio=4: Layout((rows, (extract_inner, extract_ratio)), (source_row, (1, extract_step)))
+    dst  Tensor(shape=(rows, dst_lanes), dtype=dst_dtype, storage=rmem, layout=Layout((rows, dst_lanes), (dst_lanes, 1)))
+
+T.amx.extry_v2
+  target             apple.m2_pro
+  target capability  amx_extry_v2
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    mode                  any value in {T.amx.ExtractMode.COPY, T.amx.ExtractMode.LEGACY, T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} (default T.amx.ExtractMode.LEGACY)
+    src_dtype             any value (type DType) (default f32)
+                            predicates:
+                              switch mode:
+                                mode=T.amx.ExtractMode.COPY: one of {u8; i8; u16; i16; u32; i32; f16; bf16; f32; f64}
+                                mode=T.amx.ExtractMode.LEGACY: one of {i16; u16; f16; i32; u32; f32; f64}
+                                mode=T.amx.ExtractMode.INTEGER: one of {i8; u8; i16; u16; i32; u32}
+                                mode=T.amx.ExtractMode.FLOAT: one of {f16; f32; f64}
+    dst_dtype             any value (type DType) (default f32)
+                            predicates:
+                              switch mode:
+                                mode=T.amx.ExtractMode.COPY: src_dtype
+                                mode=T.amx.ExtractMode.LEGACY: src_dtype
+                                mode=T.amx.ExtractMode.INTEGER: dst_dtype where dst_dtype in {i8, u8, i16, u16, i32, u32}; Bits('dst_dtype') <= Bits('src_dtype')
+                                mode=T.amx.ExtractMode.FLOAT: switch src_dtype:
+                                    src_dtype=f16: f16
+                                    src_dtype=f32: one of {f32; f16; bf16}
+                                    src_dtype=f64: f64
+    destination           any value where one of {T.amx.Bank.X; T.amx.Bank.Y}; mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} | (destination == T.amx.Bank.Y) in {T.amx.Bank.X, T.amx.Bank.Y, T.amx.Bank.Z} (default T.amx.Bank.Y)
+    z_selector            any value where 0 <= z_selector <= 63; (mode != T.amx.ExtractMode.COPY) | (z_selector <= 7) (type int) (default 0)
+    destination_register  any value where 0 <= destination_register <= 7; (mode == T.amx.ExtractMode.COPY) | (destination_register == 0) (type int) (default 0)
+    destination_offset    any value where 0 <= destination_offset <= 511; (mode != T.amx.ExtractMode.COPY) | (destination_offset == 0) (type int) (default 0)
+    repeat                any value where (repeat == T.amx.Repeat.ONE) | mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} in {T.amx.Repeat.ONE, T.amx.Repeat.TWO, T.amx.Repeat.FOUR} (default T.amx.Repeat.ONE)
+    alternating           any value where (alternating == False) | mode in {T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} & (Bits('src_dtype') == 32) (type bool) (default False)
+    low_byte_only         any value where (low_byte_only == False) | (mode == T.amx.ExtractMode.LEGACY) & (Bits('src_dtype') == 16) (type bool) (default False)
+    shift                 any value where 0 <= shift <= 31; (mode == T.amx.ExtractMode.INTEGER) | (shift == 0) (type int) (default 0)
+    rounding              any value where (rounding == False) | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
+    saturate              any value where (saturate == False) | (mode == T.amx.ExtractMode.INTEGER) (type bool) (default False)
+    mask                  any value (type int) (default 0)
+                            predicates:
+                              switch mode:
+                                mode=T.amx.ExtractMode.COPY: 0
+                                mode=T.amx.ExtractMode.LEGACY: mask where 0 <= mask <= 127
+                                mode=T.amx.ExtractMode.INTEGER: mask where 0 <= mask <= 511
+                                mode=T.amx.ExtractMode.FLOAT: mask where 0 <= mask <= 511
+                              src_lanes == 64 // (Bits('src_dtype') // 8)
+                              dst_lanes == 64 // (Bits('dst_dtype') // 8)
+                              rows == (0, 1, 2, 0, 4)[repeat]
+                              extract_ratio == Bits('src_dtype') // Bits('dst_dtype')
+                              extract_inner == 512 // Bits('src_dtype')
+                              source_row == 64 // (0, 1, 2, 0, 4)[repeat] // (Bits('src_dtype') // 8)
+                              switch alternating:
+                                alternating=False: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                alternating=True: switch dst_dtype:
+                                    dst_dtype=u8: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                    dst_dtype=i8: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                    dst_dtype=u16: mask where extract_step == 128 // (Bits('src_dtype') // 8)
+                                    dst_dtype=i16: mask where extract_step == 128 // (Bits('src_dtype') // 8)
+                                    dst_dtype=u32: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                    dst_dtype=i32: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                    dst_dtype=f16: mask where extract_step == 128 // (Bits('src_dtype') // 8)
+                                    dst_dtype=bf16: mask where extract_step == 128 // (Bits('src_dtype') // 8)
+                                    dst_dtype=f32: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+                                    dst_dtype=f64: mask where extract_step == 64 // (Bits('src_dtype') // 8)
+  operands
+    src  switch mode:
+           mode=T.amx.ExtractMode.COPY: Tensor(shape=(1, src_lanes), dtype=src_dtype, storage=rmem, layout=Layout((1, src_lanes), (0, 1)))
+           mode=T.amx.ExtractMode.LEGACY: Tensor(shape=(rows, 64), dtype=src_dtype, storage=rmem, layout=Layout((rows, 64), (source_row, src_lanes)))
+           mode=T.amx.ExtractMode.INTEGER: Tensor:
+               shape=(rows, dst_lanes)
+               dtype=src_dtype
+               storage=rmem
+               layout=switch extract_ratio:
+                   extract_ratio=1: Layout((rows, dst_lanes), (source_row, 64))
+                   extract_ratio=2: Layout((rows, (extract_inner, extract_ratio)), (source_row, (64, extract_step)))
+                   extract_ratio=4: Layout((rows, (extract_inner, extract_ratio)), (source_row, (64, extract_step)))
+           mode=T.amx.ExtractMode.FLOAT: Tensor:
+               shape=(rows, dst_lanes)
+               dtype=src_dtype
+               storage=rmem
+               layout=switch extract_ratio:
+                   extract_ratio=1: Layout((rows, dst_lanes), (source_row, 64))
+                   extract_ratio=2: Layout((rows, (extract_inner, extract_ratio)), (source_row, (64, extract_step)))
+                   extract_ratio=4: Layout((rows, (extract_inner, extract_ratio)), (source_row, (64, extract_step)))
+    dst  Tensor(shape=(rows, dst_lanes), dtype=dst_dtype, storage=rmem, layout=Layout((rows, dst_lanes), (dst_lanes, 1)))
+
+T.amx.ldx_v2
+  target             apple.m2_pro
+  target capability  amx_ldx_v2
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO; T.amx.TransferCount.FOUR} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
+    nonconsecutive  any value (type bool) (default False)
+                      predicates:
+                        switch count:
+                          count=T.amx.TransferCount.ONE: False
+                          count=T.amx.TransferCount.TWO: False
+                          count=T.amx.TransferCount.FOUR: False
+    dtype           any value where one of {u8; i8; u16; i16; u32; i32; f16; bf16; f32; f64} (type DType) (default u8)
+    register        any value where 0 <= register <= 7 (type int) (default 0)
+    memory_offset   any value where 0 <= memory_offset <= 511; transfer_rows == (0, 1, 2, 0, 4)[count]; transfer_lanes == 512 // Bits('dtype'); transfer_stride == 512 // Bits('dtype') * (1 + (0, 1)[nonconsecutive] * ((0, 1, 4, 0, 2)[count] - 1)) (type int) (default 0)
+  operands
+    src  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=gmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+    dst  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=rmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_stride, 1)))
+
+T.amx.ldy_v2
+  target             apple.m2_pro
+  target capability  amx_ldy_v2
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO; T.amx.TransferCount.FOUR} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
+    nonconsecutive  any value (type bool) (default False)
+                      predicates:
+                        switch count:
+                          count=T.amx.TransferCount.ONE: False
+                          count=T.amx.TransferCount.TWO: False
+                          count=T.amx.TransferCount.FOUR: False
+    dtype           any value where one of {u8; i8; u16; i16; u32; i32; f16; bf16; f32; f64} (type DType) (default u8)
+    register        any value where 0 <= register <= 7 (type int) (default 0)
+    memory_offset   any value where 0 <= memory_offset <= 511; transfer_rows == (0, 1, 2, 0, 4)[count]; transfer_lanes == 512 // Bits('dtype'); transfer_stride == 512 // Bits('dtype') * (1 + (0, 1)[nonconsecutive] * ((0, 1, 4, 0, 2)[count] - 1)) (type int) (default 0)
+  operands
+    src  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=gmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+    dst  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=rmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_stride, 1)))
+
+T.amx.ldz
+  target             apple.m2_pro
+  target capability  amx_ldz
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
+    nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
+    dtype           any value where one of {u8; i8; u16; i16; u32; i32; f16; bf16; f32; f64} (type DType) (default u8)
+    register        any value where 0 <= register <= 63 (type int) (default 0)
+    memory_offset   any value where 0 <= memory_offset <= 511; transfer_rows == (0, 1, 2, 0, 4)[count]; transfer_lanes == 512 // Bits('dtype'); transfer_stride == 512 // Bits('dtype') * (1 + (0, 1)[nonconsecutive] * ((0, 1, 4, 0, 2)[count] - 1)) (type int) (default 0)
+  operands
+    src  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=gmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+    dst  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=rmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+
+T.amx.ldzi
+  target             apple.m2_pro
+  target capability  amx_ldzi
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    count           any value where count == T.amx.TransferCount.ONE in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
+    nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
+    dtype           any value where one of {u32; i32; f32} (type DType) (default u32)
+    register        any value where 0 <= register <= 63 (type int) (default 0)
+    memory_offset   any value where 0 <= memory_offset <= 511; transfer_rows == (0, 1, 2, 0, 4)[count]; transfer_lanes == 512 // Bits('dtype'); transfer_stride == 512 // Bits('dtype') * (1 + (0, 1)[nonconsecutive] * ((0, 1, 4, 0, 2)[count] - 1)) (type int) (default 0)
+  operands
+    src  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=gmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+    dst  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=rmem, layout=Layout((1, (2, 8)), (0, (16, 1))))
+
+T.amx.stx
+  target             apple.m2_pro
+  target capability  amx_stx
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
+    nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
+    dtype           any value where one of {u8; i8; u16; i16; u32; i32; f16; bf16; f32; f64} (type DType) (default u8)
+    register        any value where 0 <= register <= 7 (type int) (default 0)
+    memory_offset   any value where 0 <= memory_offset <= 511; transfer_rows == (0, 1, 2, 0, 4)[count]; transfer_lanes == 512 // Bits('dtype'); transfer_stride == 512 // Bits('dtype') * (1 + (0, 1)[nonconsecutive] * ((0, 1, 4, 0, 2)[count] - 1)) (type int) (default 0)
+  operands
+    src  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=rmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+    dst  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=gmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+
+T.amx.sty
+  target             apple.m2_pro
+  target capability  amx_sty
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
+    nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
+    dtype           any value where one of {u8; i8; u16; i16; u32; i32; f16; bf16; f32; f64} (type DType) (default u8)
+    register        any value where 0 <= register <= 7 (type int) (default 0)
+    memory_offset   any value where 0 <= memory_offset <= 511; transfer_rows == (0, 1, 2, 0, 4)[count]; transfer_lanes == 512 // Bits('dtype'); transfer_stride == 512 // Bits('dtype') * (1 + (0, 1)[nonconsecutive] * ((0, 1, 4, 0, 2)[count] - 1)) (type int) (default 0)
+  operands
+    src  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=rmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+    dst  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=gmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+
+T.amx.stz
+  target             apple.m2_pro
+  target capability  amx_stz
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
+    nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
+    dtype           any value where one of {u8; i8; u16; i16; u32; i32; f16; bf16; f32; f64} (type DType) (default u8)
+    register        any value where 0 <= register <= 63 (type int) (default 0)
+    memory_offset   any value where 0 <= memory_offset <= 511; transfer_rows == (0, 1, 2, 0, 4)[count]; transfer_lanes == 512 // Bits('dtype'); transfer_stride == 512 // Bits('dtype') * (1 + (0, 1)[nonconsecutive] * ((0, 1, 4, 0, 2)[count] - 1)) (type int) (default 0)
+  operands
+    src  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=rmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+    dst  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=gmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+
+T.amx.stzi
+  target             apple.m2_pro
+  target capability  amx_stzi
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    count           any value where count == T.amx.TransferCount.ONE in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
+    nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
+    dtype           any value where one of {u32; i32; f32} (type DType) (default u32)
+    register        any value where 0 <= register <= 63 (type int) (default 0)
+    memory_offset   any value where 0 <= memory_offset <= 511; transfer_rows == (0, 1, 2, 0, 4)[count]; transfer_lanes == 512 // Bits('dtype'); transfer_stride == 512 // Bits('dtype') * (1 + (0, 1)[nonconsecutive] * ((0, 1, 4, 0, 2)[count] - 1)) (type int) (default 0)
+  operands
+    src  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=rmem, layout=Layout((1, (2, 8)), (0, (16, 1))))
+    dst  Tensor(shape=(transfer_rows, transfer_lanes), dtype=dtype, storage=gmem, layout=Layout((transfer_rows, transfer_lanes), (transfer_lanes, 1)))
+
+T.amx.fma16
+  target             apple.m2_pro
+  target capability  amx_fma16
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
+    acc_dtype  any value (type DType) (default f32)
+                 predicates:
+                   switch mode:
+                     mode=T.amx.ProductMode.MATRIX: one of {f16; f32}
+                     mode=T.amx.ProductMode.VECTOR: f16
+    x_dtype    any value where x_dtype == f16 (type DType) (default f16)
+    y_dtype    any value where y_dtype == f16 (type DType) (default f16)
+    out_dtype  any value where out_dtype matches acc_dtype (type DType) or None (default None)
+    x_offset   any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset   any value where 0 <= y_offset <= 511 (type int) (default 0)
+    z_row      any value where 0 <= z_row <= 63 (type int) (default 0)
+    skip_x     any value where one of {False; True} (type bool) (default False)
+    skip_y     any value where one of {False; True} (type bool) (default False)
+    skip_z     any value where one of {False; True} (type bool) (default False)
+    x_mask     any value where 0 <= x_mask <= 127 (type int) (default 0)
+    y_mask     any value (type int) (default 0)
+                 predicates:
+                   switch mode:
+                     mode=T.amx.ProductMode.MATRIX: y_mask where 0 <= y_mask <= 127
+                     mode=T.amx.ProductMode.VECTOR: 0
+  operands
+    acc  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 32
+               mode=T.amx.ProductMode.VECTOR: 1, 32)
+           dtype=acc_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: switch acc_dtype:
+                   acc_dtype=f16: Layout((32, 32), (64, 1))
+                   acc_dtype=f32: Layout((32, (2, 16)), (32, (16, 1)))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 32), (0, 1))
+    lhs  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 32
+               mode=T.amx.ProductMode.VECTOR: 1, switch mode:
+               mode=T.amx.ProductMode.MATRIX: 1
+               mode=T.amx.ProductMode.VECTOR: 32)
+           dtype=y_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((32, 1), (1, 0))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 32), (0, 1))
+    rhs  Tensor(shape=(1, 32), dtype=x_dtype, storage=rmem, layout=Layout((1, 32), (0, 1)))
+
+T.amx.fma32
+  target             apple.m2_pro
+  target capability  amx_fma32
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
+    acc_dtype  any value where acc_dtype == f32 (type DType) (default f32)
+    x_dtype    any value where one of {f16; f32} (type DType) (default f32)
+    y_dtype    any value where one of {f16; f32} (type DType) (default f32)
+    out_dtype  any value where out_dtype matches acc_dtype (type DType) or None (default None)
+    x_offset   any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset   any value where 0 <= y_offset <= 511 (type int) (default 0)
+    z_row      any value where 0 <= z_row <= 63 (type int) (default 0)
+    skip_x     any value where one of {False; True} (type bool) (default False)
+    skip_y     any value where one of {False; True} (type bool) (default False)
+    skip_z     any value where one of {False; True} (type bool) (default False)
+    x_mask     any value where 0 <= x_mask <= 127 (type int) (default 0)
+    y_mask     any value (type int) (default 0)
+                 predicates:
+                   switch mode:
+                     mode=T.amx.ProductMode.MATRIX: y_mask where 0 <= y_mask <= 127
+                     mode=T.amx.ProductMode.VECTOR: 0
+  operands
+    acc  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 16
+               mode=T.amx.ProductMode.VECTOR: 1, 16)
+           dtype=acc_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((16, 16), (64, 1))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 16), (0, 1))
+    lhs  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 16
+               mode=T.amx.ProductMode.VECTOR: 1, switch mode:
+               mode=T.amx.ProductMode.MATRIX: 1
+               mode=T.amx.ProductMode.VECTOR: 16)
+           dtype=y_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((16, 1), (switch y_dtype:
+                   y_dtype=f16: 2
+                   y_dtype=f32: 1, 0))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 16), (0, switch y_dtype:
+                   y_dtype=f16: 2
+                   y_dtype=f32: 1))
+    rhs  Tensor:
+           shape=(1, 16)
+           dtype=x_dtype
+           storage=rmem
+           layout=Layout((1, 16), (0, switch x_dtype:
+               x_dtype=f16: 2
+               x_dtype=f32: 1))
+
+T.amx.fma64
+  target             apple.m2_pro
+  target capability  amx_fma64
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
+    acc_dtype  any value where acc_dtype == f64 (type DType) (default f64)
+    x_dtype    any value where x_dtype == f64 (type DType) (default f64)
+    y_dtype    any value where y_dtype == f64 (type DType) (default f64)
+    out_dtype  any value where out_dtype matches acc_dtype (type DType) or None (default None)
+    x_offset   any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset   any value where 0 <= y_offset <= 511 (type int) (default 0)
+    z_row      any value where 0 <= z_row <= 63 (type int) (default 0)
+    skip_x     any value where one of {False; True} (type bool) (default False)
+    skip_y     any value where one of {False; True} (type bool) (default False)
+    skip_z     any value where one of {False; True} (type bool) (default False)
+    x_mask     any value where 0 <= x_mask <= 127 (type int) (default 0)
+    y_mask     any value (type int) (default 0)
+                 predicates:
+                   switch mode:
+                     mode=T.amx.ProductMode.MATRIX: y_mask where 0 <= y_mask <= 127
+                     mode=T.amx.ProductMode.VECTOR: 0
+  operands
+    acc  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 8
+               mode=T.amx.ProductMode.VECTOR: 1, 8)
+           dtype=acc_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((8, 8), (64, 1))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 8), (0, 1))
+    lhs  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 8
+               mode=T.amx.ProductMode.VECTOR: 1, switch mode:
+               mode=T.amx.ProductMode.MATRIX: 1
+               mode=T.amx.ProductMode.VECTOR: 8)
+           dtype=y_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((8, 1), (1, 0))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 8), (0, 1))
+    rhs  Tensor(shape=(1, 8), dtype=x_dtype, storage=rmem, layout=Layout((1, 8), (0, 1)))
+
+T.amx.fms16
+  target             apple.m2_pro
+  target capability  amx_fms16
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
+    acc_dtype  any value (type DType) (default f32)
+                 predicates:
+                   switch mode:
+                     mode=T.amx.ProductMode.MATRIX: one of {f16; f32}
+                     mode=T.amx.ProductMode.VECTOR: f16
+    x_dtype    any value where x_dtype == f16 (type DType) (default f16)
+    y_dtype    any value where y_dtype == f16 (type DType) (default f16)
+    out_dtype  any value where out_dtype matches acc_dtype (type DType) or None (default None)
+    x_offset   any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset   any value where 0 <= y_offset <= 511 (type int) (default 0)
+    z_row      any value where 0 <= z_row <= 63 (type int) (default 0)
+    skip_x     any value where one of {False; True} (type bool) (default False)
+    skip_y     any value where one of {False; True} (type bool) (default False)
+    skip_z     any value where one of {False; True} (type bool) (default False)
+    x_mask     any value where 0 <= x_mask <= 127 (type int) (default 0)
+    y_mask     any value (type int) (default 0)
+                 predicates:
+                   switch mode:
+                     mode=T.amx.ProductMode.MATRIX: y_mask where 0 <= y_mask <= 127
+                     mode=T.amx.ProductMode.VECTOR: 0
+  operands
+    acc  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 32
+               mode=T.amx.ProductMode.VECTOR: 1, 32)
+           dtype=acc_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: switch acc_dtype:
+                   acc_dtype=f16: Layout((32, 32), (64, 1))
+                   acc_dtype=f32: Layout((32, (2, 16)), (32, (16, 1)))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 32), (0, 1))
+    lhs  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 32
+               mode=T.amx.ProductMode.VECTOR: 1, switch mode:
+               mode=T.amx.ProductMode.MATRIX: 1
+               mode=T.amx.ProductMode.VECTOR: 32)
+           dtype=y_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((32, 1), (1, 0))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 32), (0, 1))
+    rhs  Tensor(shape=(1, 32), dtype=x_dtype, storage=rmem, layout=Layout((1, 32), (0, 1)))
+
+T.amx.fms32
+  target             apple.m2_pro
+  target capability  amx_fms32
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
+    acc_dtype  any value where acc_dtype == f32 (type DType) (default f32)
+    x_dtype    any value where one of {f16; f32} (type DType) (default f32)
+    y_dtype    any value where one of {f16; f32} (type DType) (default f32)
+    out_dtype  any value where out_dtype matches acc_dtype (type DType) or None (default None)
+    x_offset   any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset   any value where 0 <= y_offset <= 511 (type int) (default 0)
+    z_row      any value where 0 <= z_row <= 63 (type int) (default 0)
+    skip_x     any value where one of {False; True} (type bool) (default False)
+    skip_y     any value where one of {False; True} (type bool) (default False)
+    skip_z     any value where one of {False; True} (type bool) (default False)
+    x_mask     any value where 0 <= x_mask <= 127 (type int) (default 0)
+    y_mask     any value (type int) (default 0)
+                 predicates:
+                   switch mode:
+                     mode=T.amx.ProductMode.MATRIX: y_mask where 0 <= y_mask <= 127
+                     mode=T.amx.ProductMode.VECTOR: 0
+  operands
+    acc  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 16
+               mode=T.amx.ProductMode.VECTOR: 1, 16)
+           dtype=acc_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((16, 16), (64, 1))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 16), (0, 1))
+    lhs  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 16
+               mode=T.amx.ProductMode.VECTOR: 1, switch mode:
+               mode=T.amx.ProductMode.MATRIX: 1
+               mode=T.amx.ProductMode.VECTOR: 16)
+           dtype=y_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((16, 1), (switch y_dtype:
+                   y_dtype=f16: 2
+                   y_dtype=f32: 1, 0))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 16), (0, switch y_dtype:
+                   y_dtype=f16: 2
+                   y_dtype=f32: 1))
+    rhs  Tensor:
+           shape=(1, 16)
+           dtype=x_dtype
+           storage=rmem
+           layout=Layout((1, 16), (0, switch x_dtype:
+               x_dtype=f16: 2
+               x_dtype=f32: 1))
+
+T.amx.fms64
+  target             apple.m2_pro
+  target capability  amx_fms64
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
+    acc_dtype  any value where acc_dtype == f64 (type DType) (default f64)
+    x_dtype    any value where x_dtype == f64 (type DType) (default f64)
+    y_dtype    any value where y_dtype == f64 (type DType) (default f64)
+    out_dtype  any value where out_dtype matches acc_dtype (type DType) or None (default None)
+    x_offset   any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset   any value where 0 <= y_offset <= 511 (type int) (default 0)
+    z_row      any value where 0 <= z_row <= 63 (type int) (default 0)
+    skip_x     any value where one of {False; True} (type bool) (default False)
+    skip_y     any value where one of {False; True} (type bool) (default False)
+    skip_z     any value where one of {False; True} (type bool) (default False)
+    x_mask     any value where 0 <= x_mask <= 127 (type int) (default 0)
+    y_mask     any value (type int) (default 0)
+                 predicates:
+                   switch mode:
+                     mode=T.amx.ProductMode.MATRIX: y_mask where 0 <= y_mask <= 127
+                     mode=T.amx.ProductMode.VECTOR: 0
+  operands
+    acc  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 8
+               mode=T.amx.ProductMode.VECTOR: 1, 8)
+           dtype=acc_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((8, 8), (64, 1))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 8), (0, 1))
+    lhs  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 8
+               mode=T.amx.ProductMode.VECTOR: 1, switch mode:
+               mode=T.amx.ProductMode.MATRIX: 1
+               mode=T.amx.ProductMode.VECTOR: 8)
+           dtype=y_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((8, 1), (1, 0))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 8), (0, 1))
+    rhs  Tensor(shape=(1, 8), dtype=x_dtype, storage=rmem, layout=Layout((1, 8), (0, 1)))
+
+T.amx.mac16
+  target             apple.m2_pro
+  target capability  amx_mac16
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
+    acc_dtype  any value (type DType) (default i32)
+                 predicates:
+                   switch mode:
+                     mode=T.amx.ProductMode.MATRIX: one of {i16; u16; i32; u32}
+                     mode=T.amx.ProductMode.VECTOR: one of {i16; u16}
+    x_dtype    any value where one of {i8; i16} (type DType) (default i16)
+    y_dtype    any value where one of {i8; i16} (type DType) (default i16)
+    x_offset   any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset   any value where 0 <= y_offset <= 511 (type int) (default 0)
+    z_row      any value where 0 <= z_row <= 63 (type int) (default 0)
+    skip_x     any value where one of {False; True} (type bool) (default False)
+    skip_y     any value where one of {False; True} (type bool) (default False)
+    skip_z     any value where one of {False; True} (type bool) (default False)
+    x_mask     any value where 0 <= x_mask <= 127 (type int) (default 0)
+    y_mask     any value (type int) (default 0)
+                 predicates:
+                   switch mode:
+                     mode=T.amx.ProductMode.MATRIX: y_mask where 0 <= y_mask <= 127
+                     mode=T.amx.ProductMode.VECTOR: 0
+    shift      any value where 0 <= shift <= 31 (type int) (default 0)
+  operands
+    acc  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 32
+               mode=T.amx.ProductMode.VECTOR: 1, 32)
+           dtype=acc_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: switch acc_dtype:
+                   acc_dtype=i16: Layout((32, 32), (64, 1))
+                   acc_dtype=u16: Layout((32, 32), (64, 1))
+                   acc_dtype=i32: Layout((32, (2, 16)), (32, (16, 1)))
+                   acc_dtype=u32: Layout((32, (2, 16)), (32, (16, 1)))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 32), (0, 1))
+    lhs  Tensor:
+           shape=(switch mode:
+               mode=T.amx.ProductMode.MATRIX: 32
+               mode=T.amx.ProductMode.VECTOR: 1, switch mode:
+               mode=T.amx.ProductMode.MATRIX: 1
+               mode=T.amx.ProductMode.VECTOR: 32)
+           dtype=y_dtype
+           storage=rmem
+           layout=switch mode:
+               mode=T.amx.ProductMode.MATRIX: Layout((32, 1), (switch y_dtype:
+                   y_dtype=i8: 2
+                   y_dtype=i16: 1, 0))
+               mode=T.amx.ProductMode.VECTOR: Layout((1, 32), (0, switch y_dtype:
+                   y_dtype=i8: 2
+                   y_dtype=i16: 1))
+    rhs  Tensor:
+           shape=(1, 32)
+           dtype=x_dtype
+           storage=rmem
+           layout=Layout((1, 32), (0, switch x_dtype:
+               x_dtype=i8: 2
+               x_dtype=i16: 1))
+
+T.amx.matfp_v2
+  target             apple.m2_pro
+  target capability  amx_matfp_v2
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    fp_mode         any value in {T.amx.FPMode.F16, T.amx.FPMode.F16_F32, T.amx.FPMode.F32, T.amx.FPMode.F64, T.amx.FPMode.BF16, T.amx.FPMode.BF16_F32} (default T.amx.FPMode.F32)
+    dtype           any value where dtype == (bf16, bf16, f16, f16, f32, f64, f64, f64)[fp_mode]; x_lanes == 512 // Bits('dtype'); y_lanes == 512 // Bits('dtype') (type DType) (default f32)
+    acc_dtype       any value where acc_dtype == (bf16, f32, f16, f32, f32, f64, f64, f64)[fp_mode] (type DType) (default f32)
+    alu             any value where alu in {T.amx.FPALU.ADD_PRODUCT, T.amx.FPALU.SUB_PRODUCT, T.amx.FPALU.POSITIVE_SELECT} in {T.amx.FPALU.ADD_PRODUCT, T.amx.FPALU.SUB_PRODUCT, T.amx.FPALU.POSITIVE_SELECT, T.amx.FPALU.MIN, T.amx.FPALU.MAX, T.amx.FPALU.PRODUCT, T.amx.FPALU.ADD_X, T.amx.FPALU.ADD_Y} (default T.amx.FPALU.ADD_PRODUCT)
+    index_mode      any value where (alu == T.amx.FPALU.ADD_PRODUCT) | (index_mode == T.amx.IndexMode.NONE) in {T.amx.IndexMode.NONE, T.amx.IndexMode.X2, T.amx.IndexMode.Y2, T.amx.IndexMode.X4, T.amx.IndexMode.Y4} (default T.amx.IndexMode.NONE)
+    index_register  any value where 0 <= index_register <= 7; (index_mode != T.amx.IndexMode.NONE) | (index_register == 0) (type int) (default 0)
+    x_offset        any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset        any value where 0 <= y_offset <= 511 (type int) (default 64)
+    z_row           any value where 0 <= z_row <= 7 (type int) (default 0)
+    mask            any value where 0 <= mask <= 511 (type int) (default 0)
+    y_mask          any value where 0 <= y_mask <= 511 (type int) (default 0)
+    shuffle_x       any value in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
+    shuffle_y       any value in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
+    repeat          any value where repeat == T.amx.Repeat.ONE in {T.amx.Repeat.ONE, T.amx.Repeat.TWO, T.amx.Repeat.FOUR} (default T.amx.Repeat.ONE)
+    broadcast_mode  any value where 0 <= broadcast_mode <= 7; (repeat != T.amx.Repeat.ONE) | (broadcast_mode == 0); rows == 1; z_step == 512 // Bits('acc_dtype'); (acc_rows == 512 // Bits('dtype')) & (acc_lanes == 512 // Bits('dtype')) & (acc_ratio == Bits('acc_dtype') // Bits('dtype')) & (acc_inner == 512 // Bits('acc_dtype')) & (acc_wide == (0, 0, 1, 1, 1)[Bits('acc_dtype') // Bits('dtype')]) & ((Bits('acc_dtype') == Bits('dtype')) & (acc_step == 64) | (Bits('acc_dtype') != Bits('dtype')) & (acc_step == 512 // Bits('dtype'))); table_side == (0, 1, 1, 1, 1)[index_mode]; lhs_count == (512 // Bits('dtype') * (8, 8, 2, 8, 4)[index_mode] + 7) // 8; lhs_packed == (0, 0, 1, 0, 1)[index_mode]; rhs_count == (512 // Bits('dtype') * (8, 2, 8, 4, 8)[index_mode] + 7) // 8; rhs_packed == (0, 1, 0, 1, 0)[index_mode] (type int) (default 0)
+  operands
+    acc    Tensor:
+             shape=(acc_rows, acc_lanes)
+             dtype=acc_dtype
+             storage=rmem
+             layout=switch acc_wide:
+                 acc_wide=0: Layout((acc_rows, acc_lanes), (acc_step, 1))
+                 acc_wide=1: Layout((acc_rows, (acc_ratio, acc_inner)), (acc_step, (z_step, 1)))
+    lhs    switch lhs_packed:
+             lhs_packed=0: Tensor(shape=(y_lanes, 1), dtype=dtype, storage=rmem, layout=Layout((y_lanes, 1), (1, 0)))
+             lhs_packed=1: Tensor(shape=(lhs_count,), dtype=u8, storage=rmem, layout=Layout((lhs_count,), (1,)))
+    rhs    switch rhs_packed:
+             rhs_packed=0: Tensor(shape=(1, x_lanes), dtype=dtype, storage=rmem, layout=Layout((1, x_lanes), (0, 1)))
+             rhs_packed=1: Tensor(shape=(rhs_count,), dtype=u8, storage=rmem, layout=Layout((rhs_count,), (1,)))
+    table  switch table_side: or None (default None)
+             table_side=0: None
+             table_side=1: Tensor(shape=(x_lanes,), dtype=dtype, storage=rmem, layout=Layout((x_lanes,), (1,)))
+
+T.amx.matint_v1
+  target             apple.m2_pro
+  target capability  amx_matint_v1
+  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  parameters
+    alu             any value where alu in {T.amx.IntALU.ADD_PRODUCT, T.amx.IntALU.SUB_PRODUCT, T.amx.IntALU.ADD_SUM, T.amx.IntALU.SUB_SUM, T.amx.IntALU.SHIFT, T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH, T.amx.IntALU.WIDE_PRODUCT, T.amx.IntALU.POPCOUNT}; alu < 10 in {T.amx.IntALU.ADD_PRODUCT, T.amx.IntALU.SUB_PRODUCT, T.amx.IntALU.ADD_SUM, T.amx.IntALU.SUB_SUM, T.amx.IntALU.SHIFT, T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH, T.amx.IntALU.WIDE_PRODUCT, T.amx.IntALU.POPCOUNT, T.amx.IntALU.PRODUCT, T.amx.IntALU.ADD_X, T.amx.IntALU.ADD_Y} (default T.amx.IntALU.ADD_PRODUCT)
+    lane_mode       any value where (alu == T.amx.IntALU.SHIFT) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I32, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16} | alu in {T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH} & (lane_mode == T.amx.IntLane.NARROW16) | (alu == T.amx.IntALU.WIDE_PRODUCT) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16, T.amx.IntLane.I8_I16_I32} | (alu == T.amx.IntALU.POPCOUNT) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I32} | ~(alu in {T.amx.IntALU.SHIFT, T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH, T.amx.IntALU.WIDE_PRODUCT, T.amx.IntALU.POPCOUNT}) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16} in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I32, T.amx.IntLane.I8, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16, T.amx.IntLane.I8_I16_I32, T.amx.IntLane.I16_I8_I32} (default T.amx.IntLane.NARROW16)
+    x_dtype         any value where (alu == T.amx.IntALU.SHIFT) & (x_dtype == u8) | (alu != T.amx.IntALU.SHIFT) & (x_dtype in {i8, u8, i16, u16, i32, u32} & ((alu == T.amx.IntALU.WIDE_PRODUCT) & (Bits('x_dtype') == 8) | (alu != T.amx.IntALU.WIDE_PRODUCT) & (Bits('x_dtype') == (0, 0, 16, 16, 32, 0, 0, 0, 0, 8, 8, 8, 8, 16)[lane_mode]))) (type DType) (default i16)
+    y_dtype         any value where (alu == T.amx.IntALU.SHIFT) & (y_dtype == u8) | (alu != T.amx.IntALU.SHIFT) & (y_dtype in {i8, u8, i16, u16, i32, u32} & ((lane_mode == T.amx.IntLane.I8_I16_I32) & (Bits('y_dtype') == 8) | (lane_mode != T.amx.IntLane.I8_I16_I32) & ((alu == T.amx.IntALU.WIDE_PRODUCT) & (Bits('y_dtype') == 8) | (alu != T.amx.IntALU.WIDE_PRODUCT) & (Bits('y_dtype') == (0, 0, 16, 16, 32, 0, 0, 0, 0, 8, 8, 8, 16, 8)[lane_mode])))); x_lanes == 512 // Bits('x_dtype'); y_lanes == 512 // Bits('y_dtype') (type DType) (default i16)
+    acc_dtype       any value where acc_dtype in {i8, u8, i16, u16, i32, u32} & ((lane_mode == T.amx.IntLane.I8_I16_I32) & (Bits('acc_dtype') == 16) | (lane_mode != T.amx.IntLane.I8_I16_I32) & (Bits('acc_dtype') == (0, 0, 16, 32, 32, 0, 0, 0, 0, 8, 32, 16, 32, 32)[lane_mode])) (type DType) (default i16)
+    index_mode      any value where alu in {T.amx.IntALU.ADD_PRODUCT, T.amx.IntALU.WIDE_PRODUCT} | (index_mode == T.amx.IndexMode.NONE) in {T.amx.IndexMode.NONE, T.amx.IndexMode.X2, T.amx.IndexMode.Y2, T.amx.IndexMode.X4, T.amx.IndexMode.Y4} (default T.amx.IndexMode.NONE)
+    index_register  any value where 0 <= index_register <= 7; (index_mode != T.amx.IndexMode.NONE) | (index_register == 0) (type int) (default 0)
+    x_offset        any value where 0 <= x_offset <= 511 (type int) (default 0)
+    y_offset        any value where 0 <= y_offset <= 511 (type int) (default 64)
+    z_row           any value where 0 <= z_row <= 3 (type int) (default 0)
+    shift           any value where 0 <= shift <= 31 (type int) (default 0)
+    mask            any value where 0 <= mask <= 511 (type int) (default 0)
+    mask_y          any value where one of {False; True} (type bool) (default False)
+    saturate        any value where saturate in {False, True}; (alu == T.amx.IntALU.SHIFT) | (saturate == False) (type bool) (default False)
+    rounding        any value where rounding in {False, True}; (alu == T.amx.IntALU.SHIFT) | (rounding == False) (type bool) (default False)
+    signed_output   any value where signed_output in {False, True}; (alu == T.amx.IntALU.SHIFT) | (signed_output == False) (type bool) (default False)
+    shuffle_x       any value where (alu != T.amx.IntALU.SHIFT) | (shuffle_x == T.amx.Shuffle.NONE) in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
+    shuffle_y       any value where (alu != T.amx.IntALU.SHIFT) | (shuffle_y == T.amx.Shuffle.NONE) in {T.amx.Shuffle.NONE, T.amx.Shuffle.PAIRS, T.amx.Shuffle.QUADS, T.amx.Shuffle.OCTETS} (default T.amx.Shuffle.NONE)
+    repeat          any value where repeat == T.amx.Repeat.ONE in {T.amx.Repeat.ONE, T.amx.Repeat.TWO, T.amx.Repeat.FOUR} (default T.amx.Repeat.ONE)
+    broadcast_mode  any value where 0 <= broadcast_mode <= 7; (repeat != T.amx.Repeat.ONE) | (broadcast_mode == 0); rows == 1; z_step == 512 // Bits('acc_dtype'); (alu == T.amx.IntALU.SHIFT) & ((acc_rows == 512 // Bits('acc_dtype')) & (acc_lanes == 512 // Bits('acc_dtype')) & (acc_step == 64) & (acc_ratio == 1) & (acc_inner == 512 // Bits('acc_dtype')) & (acc_wide == 0)) | (alu != T.amx.IntALU.SHIFT) & ((Bits('x_dtype') == 8) & (acc_rows == 512 // Bits('acc_dtype')) & (acc_lanes == 512 // Bits('x_dtype')) & (acc_step == 64) & (acc_ratio == Bits('acc_dtype') // Bits('x_dtype')) & (acc_inner == 512 // Bits('acc_dtype')) & (acc_wide == (0, 0, 1, 1, 1)[Bits('acc_dtype') // Bits('x_dtype')]) | (Bits('x_dtype') != 8) & ((acc_rows == 512 // Bits('x_dtype')) & (acc_lanes == 512 // Bits('x_dtype')) & (acc_ratio == Bits('acc_dtype') // Bits('x_dtype')) & (acc_inner == 512 // Bits('acc_dtype')) & (acc_wide == (0, 0, 1, 1, 1)[Bits('acc_dtype') // Bits('x_dtype')])) & (acc_step == Bits('x_dtype') // 8 * 512 // Bits('acc_dtype'))); has_inputs == (1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1)[alu]; table_side == (0, 1, 2, 1, 2)[index_mode]; lhs_count == (512 // Bits('y_dtype') * (8, 8, 2, 8, 4)[index_mode] + 7) // 8; lhs_packed == (0, 0, 1, 0, 1)[index_mode]; rhs_count == (512 // Bits('x_dtype') * (8, 2, 8, 4, 8)[index_mode] + 7) // 8; rhs_packed == (0, 1, 0, 1, 0)[index_mode] (type int) (default 0)
+  operands
+    acc    Tensor:
+             shape=(acc_rows, acc_lanes)
+             dtype=acc_dtype
+             storage=rmem
+             layout=switch acc_wide:
+                 acc_wide=0: Layout((acc_rows, acc_lanes), (acc_step, 1))
+                 acc_wide=1: Layout((acc_rows, (acc_ratio, acc_inner)), (acc_step, (z_step, 1)))
+    lhs    switch has_inputs: or None (default None)
+             has_inputs=0: None
+             has_inputs=1: switch lhs_packed:
+                 lhs_packed=0: Tensor(shape=(y_lanes, 1), dtype=y_dtype, storage=rmem, layout=Layout((y_lanes, 1), (1, 0)))
+                 lhs_packed=1: Tensor(shape=(lhs_count,), dtype=u8, storage=rmem, layout=Layout((lhs_count,), (1,)))
+    rhs    switch has_inputs: or None (default None)
+             has_inputs=0: None
+             has_inputs=1: switch rhs_packed:
+                 rhs_packed=0: Tensor(shape=(1, x_lanes), dtype=x_dtype, storage=rmem, layout=Layout((1, x_lanes), (0, 1)))
+                 rhs_packed=1: Tensor(shape=(rhs_count,), dtype=u8, storage=rmem, layout=Layout((rhs_count,), (1,)))
+    table  switch table_side: or None (default None)
+             table_side=0: None
+             table_side=1: Tensor(shape=(x_lanes,), dtype=x_dtype, storage=rmem, layout=Layout((x_lanes,), (1,)))
+             table_side=2: Tensor(shape=(y_lanes,), dtype=y_dtype, storage=rmem, layout=Layout((y_lanes,), (1,)))
+
+T.relu
+  target             apple.m2_pro
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  operands
+    src  Tensor(storage=rmem, layout=any arrangement)
+    dst  Tensor(storage=rmem, layout=any arrangement)
+  between operands
+    src.shape = dst.shape
+    src.dtype = dst.dtype
+
+T.reduce
+  target             apple.m2_pro
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    axes     any value (type tuple)
+    keepdim  any value (type bool)
+    kind     any value in {ReduceKind.MEAN, ReduceKind.SUM, ReduceKind.ABS_MAX, ReduceKind.MAX, ReduceKind.MIN}
+  operands
+    src        Tensor(dtype=src_dtype, layout=ShardLayout(Layout((*_,), (*_,)), _, Mesh(('thread',), ComposedLayout(None, mesh_offset, Layout((*mesh_shape,), (*mesh_stride,)))))) where src_dtype in {f32, f16, bf16}
+    dst        Tensor(dtype=dst_dtype, layout=ShardLayout(None, _, Mesh(('thread',), ComposedLayout(None, mesh_offset, Layout((*mesh_shape,), (*mesh_stride,)))))) where dst_dtype in {f32, f16, bf16}
+    workspace  Tensor(storage=smem, layout=any arrangement) or None (default None)

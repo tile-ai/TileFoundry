@@ -57,7 +57,7 @@ class OpCapability:
     """One target capability exposed by a registered instruction Op.
 
     ``name=None`` imposes no named capability requirement; the target must still
-    admit the instruction's execution topology. A carrier
+    satisfy the instruction's execution mesh Pattern at each call. A carrier
     with several concrete declarations lists one record per variant; the
     declaration and attribute say how an instance of that declaration is bound
     back to the carrier without teaching registry consumers about its shape.
@@ -93,37 +93,8 @@ def target_capabilities(target: object) -> frozenset[str]:
     architecture = getattr(target, "architecture", None)
     return frozenset(getattr(architecture, "capabilities", ()))
 
-æ 这个函数不对啊，不应该加这里
-def _supports_execution_topology(target: object, op_type: type, capability: OpCapability) -> bool:
-    """Require a real execution branch whose levels the target declares.
-
-    Carrier variants must resolve through their bound declaration, just as
-    instruction admission does; a carrier's optional mesh field is not its
-    atom's execution contract.
-    """
-    from tilefoundry.ir.pattern import OrPattern  # noqa: PLC0415
-    from tilefoundry.ir.pattern.utils import declared_execution_mesh  # noqa: PLC0415
-    from tilefoundry.target.facts import TopologyFacts  # noqa: PLC0415
-
-    get_facts = getattr(target, "get_facts", None)
-    if get_facts is None:
-        return False
-    levels = {level.name for level in get_facts(TopologyFacts).topologies}
-    if not levels:
-        return False
-    declaration = (
-        op_type(**{capability.attribute: capability.declaration})
-        if capability.attribute is not None
-        else op_type
-    )
-    # This also expands wildcard memory levels from MemoryExecutionFacts.
-    mesh = declared_execution_mesh(declaration, target)
-    choices = mesh.patterns if isinstance(mesh, OrPattern) else (mesh,)
-    return any(set(choice.topologies) <= levels for choice in choices)
-
-
 def supported_op_capabilities(target: object) -> tuple[tuple[type, OpCapability], ...]:
-    """Enumerate TIR variants admitted by target capabilities and execution levels."""
+    """Enumerate TIR variants admitted by target capabilities."""
     from tilefoundry.ir.core.op_registry import iter_schemas  # noqa: PLC0415
 
     supported = target_capabilities(target)
@@ -133,7 +104,6 @@ def supported_op_capabilities(target: object) -> tuple[tuple[type, OpCapability]
         if schema.dialect == "T" and schema.op_class is not None
         for capability in capabilities_of(schema.op_class)
         if (capability.name is None or capability.name in supported)
-        and _supports_execution_topology(target, schema.op_class, capability)
     )
 
 

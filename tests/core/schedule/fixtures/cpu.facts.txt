@@ -1,2 +1,116 @@
 target cpu
 instructions
+
+T.arange
+  target             cpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    start  any value (type int) (default 0)
+    step   any value (type int) (default 1)
+  operands
+    dst  Tensor(shape=(None,), dtype=one of {i32; i64}, storage=rmem, layout=any arrangement)
+
+T.binary
+  target             cpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    kind  any value in {BinaryKind.ADD, BinaryKind.SUB, BinaryKind.MUL, BinaryKind.DIV, BinaryKind.FLOOR_DIV, BinaryKind.MOD, BinaryKind.MIN, BinaryKind.MAX, BinaryKind.EQ, BinaryKind.NE, BinaryKind.LT, BinaryKind.LE, BinaryKind.GT, BinaryKind.GE, BinaryKind.AND, BinaryKind.OR}
+  operands
+    lhs  Tensor(storage=rmem, layout=any arrangement)
+    rhs  Tensor(storage=rmem, layout=any arrangement)
+    dst  Tensor(storage=rmem, layout=any arrangement)
+
+T.cast
+  target             cpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    dtype  cast_dtype (type DType)
+  operands
+    src  Tensor(storage=rmem, layout=one of {ShardLayout(_, _, Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout})
+    dst  Tensor(dtype=cast_dtype, storage=rmem, layout=one of {ShardLayout(_, _, Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout})
+  between operands
+    src.shape = dst.shape
+    src.dtype != dst.dtype
+
+T.clamp
+  target             cpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    min_val  any value (type float)
+    max_val  any value (type float)
+  operands
+    src  Tensor(storage=rmem, layout=any arrangement)
+    dst  Tensor(storage=rmem, layout=any arrangement)
+  between operands
+    src.dtype = dst.dtype
+
+T.unary
+  target             cpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    kind  any value in {UnaryKind.NEG, UnaryKind.ABS, UnaryKind.RSQRT, UnaryKind.CAST, UnaryKind.NOT, UnaryKind.RELU, UnaryKind.SQUARE, UnaryKind.EXP, UnaryKind.LOG, UnaryKind.CEIL, UnaryKind.ROUND, UnaryKind.EXP2, UnaryKind.LOG2}
+  operands
+    src  Tensor(storage=rmem, layout=any arrangement)
+    dst  Tensor(storage=rmem, layout=any arrangement)
+
+T.where
+  target             cpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  operands
+    cond  Tensor(dtype=bool, storage=rmem, layout=any arrangement)
+    lhs   Tensor(storage=rmem, layout=any arrangement)
+    rhs   Tensor(storage=rmem, layout=any arrangement)
+    dst   Tensor(storage=rmem, layout=any arrangement)
+  between operands
+    lhs.dtype = rhs.dtype
+    lhs.dtype = dst.dtype
+
+T.copy
+  target             cpu
+  execution mesh     one of {}
+  operands
+    src  Tensor:
+           dtype=dtype0
+           storage=storage0
+           layout=switch storage0:
+               storage0=gmem: src.layout
+               storage0=smem: src.layout
+               storage0=rmem: one of {ShardLayout(_, _, Mesh(_, ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout}
+           predicates:
+             Bits('dtype0') % 8 == 0
+             storage0 in {gmem, smem, rmem}
+    dst  Tensor:
+           dtype=dtype1
+           storage=storage1
+           layout=switch storage1:
+               storage1=gmem: dst.layout
+               storage1=smem: dst.layout
+               storage1=rmem: one of {ShardLayout(_, _, Mesh(_, ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout}
+           predicates:
+             Bits('dtype1') % 8 == 0
+             storage1 in {gmem, smem, rmem}
+  between operands
+    src.shape = dst.shape
+    src.dtype = dst.dtype
+
+T.relu
+  target             cpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  operands
+    src  Tensor(storage=rmem, layout=any arrangement)
+    dst  Tensor(storage=rmem, layout=any arrangement)
+  between operands
+    src.shape = dst.shape
+    src.dtype = dst.dtype
+
+T.reduce
+  target             cpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    axes     any value (type tuple)
+    keepdim  any value (type bool)
+    kind     any value in {ReduceKind.MEAN, ReduceKind.SUM, ReduceKind.ABS_MAX, ReduceKind.MAX, ReduceKind.MIN}
+  operands
+    src        Tensor(dtype=src_dtype, layout=ShardLayout(Layout((*_,), (*_,)), _, Mesh(('thread',), ComposedLayout(None, mesh_offset, Layout((*mesh_shape,), (*mesh_stride,)))))) where src_dtype in {f32, f16, bf16}
+    dst        Tensor(dtype=dst_dtype, layout=ShardLayout(None, _, Mesh(('thread',), ComposedLayout(None, mesh_offset, Layout((*mesh_shape,), (*mesh_stride,)))))) where dst_dtype in {f32, f16, bf16}
+    workspace  Tensor(storage=smem, layout=any arrangement) or None (default None)

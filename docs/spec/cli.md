@@ -481,9 +481,9 @@ by the exact `TARGET` identity, optionally narrowed to one fully-qualified
 `INSTRUCTION` name. With no `INSTRUCTION`, it lists every registered TIR Op
 that owns a class-level instruction-capability declaration. A named capability
 must occur in the target architecture's capability set; a declaration with no
-required capability imposes no named feature requirement; the target must
-still provide an admitted execution topology. CPU currently declares no
-hardware topology, so thread-only instructions are not advertised for CPU. A carrier may associate more
+required capability imposes no named feature requirement. Execution mesh
+Patterns are reported as declaration constraints and checked against the actual
+call mesh; the facts inventory does not prove that a concrete call is valid. A carrier may associate more
 than one named declaration with itself. The inventory lists that carrier once,
 while each associated declaration remains addressable by its own exact name.
 With or without a selected name, `facts` reports each declaration's capability,
@@ -491,7 +491,7 @@ execution mesh, parameters (including attribute ranges and defaults), operands,
 and cross-operand constraints. Text and JSON use the same detailed declarations;
 JSON inventory entries carry the same fields as a selected declaration. Supported named variants are included with their complete declarations, so
 a whole-target report also contains each admitted atom's parameter and operand constraints. The
-parameter and operand sections use `PatternPrinter(expand=False).declaration`:
+parameter and operand sections use `PatternPrinter.declaration`:
 conditional constraints stay symbolic and are printed directly. Facts MUST NOT
 enumerate Cartesian products of parameters or invent shared-subtree definitions. A carrier with an
 associated attribute reports execution meshes as alternatives selected by each
