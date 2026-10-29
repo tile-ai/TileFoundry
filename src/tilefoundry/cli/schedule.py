@@ -16,6 +16,7 @@ from tilefoundry.schedule import (
     listing,
     one,
     render,
+    render_all,
     render_candidates,
 )
 
@@ -41,16 +42,19 @@ def run_finalize(
 
 
 def run_facts(
-    instruction: str | None,
+    op: str | None,
     target: str,
     out: str,
     *,
     as_json: bool = False,
 ) -> int:
-    """Write target-filtered instruction facts to ``out``."""
+    """Print target-filtered Op declarations to ``out``."""
     selected = target_by_identity(target)
-    report = listing(selected) if instruction is None else one(selected, instruction)
-    text = json.dumps(report, indent=2) if as_json else render(report)
+    format = "json" if as_json else "text"
+    text = (
+        render_all(listing(selected), selected, format=format)
+        if op is None else render(one(selected, op), selected, format=format)
+    )
     _write(out, text)
     return 0
 

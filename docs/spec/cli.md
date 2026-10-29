@@ -467,7 +467,7 @@ and the two reports used to choose an instruction. Its subcommands are:
 
 ```text
 tilefoundry schedule finalize SOURCE PATH [--json] [--dim NAME=EXTENT ...]
-tilefoundry schedule facts [INSTRUCTION] --target TARGET PATH [--json]
+tilefoundry schedule facts [OP] --target TARGET PATH [--json]
 tilefoundry schedule candidates SOURCE PATH [--json] [--dim NAME=EXTENT ...]
 ```
 
@@ -476,9 +476,9 @@ one extent per `--dim`, and check the entry. `finalize` then runs memory analysi
 and writes the lowered Module as canonical TIR source following
 [passes §7.1](./passes.md#71-converthirtotir), also when it holds a single
 PrimFunction. With `--json`, `PATH` instead
-contains an object whose `source` field is that same canonical TIR. `facts` describes the instructions admitted
+contains an object whose `source` field is that same canonical TIR. `facts` describes the Op declarations admitted
 by the exact `TARGET` identity, optionally narrowed to one fully-qualified
-`INSTRUCTION` name. With no `INSTRUCTION`, it lists every registered TIR Op
+`OP` name. With no `OP`, it lists every registered TIR Op
 that owns a class-level instruction-capability declaration. A named capability
 must occur in the target architecture's capability set; a declaration with no
 required capability imposes no named feature requirement. Execution mesh
@@ -488,7 +488,10 @@ than one named declaration with itself. The inventory lists that carrier once,
 while each associated declaration remains addressable by its own exact name.
 With or without a selected name, `facts` reports each declaration's capability,
 execution mesh, parameters (including attribute ranges and defaults), operands,
-and cross-operand constraints. Text and JSON use the same detailed declarations;
+and cross-operand constraints. The `ops` inventory contains the selected Op declarations.
+Text and JSON read the original declarations directly; JSON dictionaries exist only
+at the serialization boundary. The inventory JSON has `target` and `ops` fields;
+a selected declaration is serialized on its own. Text and JSON use the same detailed declarations;
 JSON inventory entries carry the same fields as a selected declaration. Supported named variants are included with their complete declarations, so
 a whole-target report also contains each admitted atom's parameter and operand constraints. The
 parameter and operand sections use `PatternPrinter.declaration`:
@@ -530,7 +533,7 @@ error.
     `PrimFunction` receives the manager's automatic TIR verification.
   - `--json` changes only representation. It MUST carry the same TIR source or
     report facts as the text form.
-  - `facts --target` is required. `TARGET` and `INSTRUCTION`, when present,
+  - `facts --target` is required. `TARGET` and `OP`, when present,
     match exact identities; neither accepts a short alias or a best-effort
     fallback.
   - A selected instruction with no access relation, an addressable result

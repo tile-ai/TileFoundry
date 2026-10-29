@@ -1,5 +1,5 @@
 target nvidia.h200_sxm
-instructions
+ops
 
 T.arange
   target             nvidia.h200_sxm

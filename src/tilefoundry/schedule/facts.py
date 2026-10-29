@@ -1,102 +1,84 @@
-"""Instruction declarations admitted by one compilation target."""
+"""Select registered Op declarations and print them for one target."""
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from collections.abc import Iterable
+from typing import Literal
 
 from tilefoundry.inspection import PatternPrinter
-from tilefoundry.ir.core import OpCapability, op_identifier
-from tilefoundry.ir.pattern import SwitchPattern, between_rules, declared_execution_mesh
+from tilefoundry.ir.core import Op, OpCapability, get_registered_name
+from tilefoundry.ir.pattern import Pattern, SwitchPattern, between_rules, declared_execution_mesh
 from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
 
 
-def _family_capability(
-    capabilities: tuple[OpCapability, ...],
-) -> str | tuple[str, ...] | None:
-    names = tuple(
-        dict.fromkeys(capability.name for capability in capabilities if capability.name is not None)
-    )
-    if not names:
-        return None
-    return names[0] if len(names) == 1 else names
+def listing(target: Target) -> tuple[type[Op], ...]:
+    """Return original Op classes admitted by the target capabilities."""
+    return tuple(op_type for op_type, _ in capability_families(target))
 
 
-def instructions(target: Target) -> tuple[type, ...]:
-    """Return the registered instruction Ops supported by ``target``."""
-    return tuple(op_type for op_type, _capabilities in capability_families(target))
-
-
-def listing(target: Target) -> dict[str, Any]:
-    """Describe every instruction declaration supported by ``target``."""
-    return {
-        "target": target.identity,
-        "instructions": [
-            {
-                "id": op_identifier(op_type),
-                "capability": _family_capability(capabilities),
-            }
-            for op_type, capabilities in capability_families(target)
-        ],
-    }
-
-
-def _selection(target: Target, wanted_id: str) -> tuple[type, str | tuple[str, ...] | None]:
-    matches: list[tuple[type, str | tuple[str, ...] | None]] = []
+def _selection(target: Target, wanted: str) -> tuple[type, tuple[OpCapability, ...]]:
+    matches = []
     available = []
     for op_type, capabilities in capability_families(target):
-        op_id = op_identifier(op_type)
-        family_capability = _family_capability(capabilities)
-        available.append(op_id)
-        if op_id == wanted_id:
-            matches.append((op_type, family_capability))
+        name = get_registered_name(op_type)
+        available.append(name)
+        if name == wanted:
+            matches.append((op_type, capabilities))
         for capability in capabilities:
-            if capability.attribute is None:
+            if capability.declaration is None:
                 continue
-            declaration = capability.declaration
-            declaration_id = op_identifier(declaration)
-            available.append(declaration_id)
-            if declaration_id == wanted_id:
-                matches.append((declaration, capability.name))
+            name = get_registered_name(capability.declaration)
+            available.append(name)
+            if name == wanted:
+                matches.append((capability.declaration, (capability,)))
     if len(matches) != 1:
-        raise ValueError(
-            f"unknown instruction {wanted_id!r} for target {target.identity!r}; "
-            f"available: {available}"
-        )
+        raise ValueError(f"unknown op {wanted!r} for target {target.identity!r}; available: {available}")
     return matches[0]
 
 
-def one(target: Target, wanted: str | type) -> dict[str, Any]:
-    """Describe one supported instruction declaration by its exact name."""
-    wanted_id = op_identifier(wanted) if isinstance(wanted, type) else wanted
-    op_type, capability = _selection(target, wanted_id)
-    variants = next(
-        (capabilities for carrier, capabilities in capability_families(target) if carrier is op_type),
-        (),
-    )
-    branches = tuple(item for item in variants if item.attribute is not None)
-    if branches:
-        execution_mesh = SwitchPattern(
-            branches[0].attribute,
-            {
-                op_identifier(item.declaration): declared_execution_mesh(
-                    op_type(**{item.attribute: item.declaration}), target
-                )
-                for item in branches
-            },
+def one(target: Target, wanted: str | type) -> type:
+    """Resolve an exact registered Op or associated Atom name to its class."""
+    name = get_registered_name(wanted) if isinstance(wanted, type) else wanted
+    return _selection(target, name)[0]
+
+
+def _variants(declaration: type, capabilities: tuple[OpCapability, ...]) -> tuple[OpCapability, ...]:
+    return tuple(item for item in capabilities
+                 if item.declaration is not None and item.declaration is not declaration)
+
+
+def _execution_mesh(declaration: type, target: Target, capabilities: tuple[OpCapability, ...]) -> Pattern:
+    variants = _variants(declaration, capabilities)
+    if not variants:
+        return declared_execution_mesh(declaration, target)
+    return SwitchPattern(variants[0].attribute, {
+        get_registered_name(item.declaration): declared_execution_mesh(
+            declaration(**{item.attribute: item.declaration}), target,
         )
-    else:
-        execution_mesh = declared_execution_mesh(op_type, target)
-    sections = PatternPrinter().declaration(op_type)
-    return {
+        for item in variants
+    })
+
+
+def _json(declaration: type, target: Target, capabilities: tuple[OpCapability, ...]) -> dict:
+    """Serialize a declaration at the JSON output boundary."""
+    printer = PatternPrinter()
+    sections = printer.declaration(declaration)
+    names = tuple(dict.fromkeys(item.name for item in capabilities if item.name is not None))
+    data = {
         "target": target.identity,
-        "id": op_identifier(op_type),
-        "capability": capability,
-        "execution_mesh": PatternPrinter().described(execution_mesh),
-        "parameters": list(sections.get("parameters", ())),
+        "id": get_registered_name(declaration),
+        "capability": None if not names else names[0] if len(names) == 1 else names,
+        "execution_mesh": printer.described(_execution_mesh(declaration, target, capabilities)),
+        "parameters": list(sections.get("parameters", sections.get("attributes", ()))),
         "operands": list(sections.get("operands", ())),
-        "between": [rule.written() for rule in between_rules(op_type)],
+        "between": [rule.written() for rule in between_rules(declaration)],
     }
+    variants = _variants(declaration, capabilities)
+    if variants:
+        data["variants"] = [_json(item.declaration, target, (item,)) for item in variants]
+    return data
 
 
 def _column(label: str, value: str) -> list[str]:
@@ -105,37 +87,44 @@ def _column(label: str, value: str) -> list[str]:
     return [prefix + first, *(" " * len(prefix) + line for line in rest)]
 
 
-def _written_capability(capability: str | tuple[str, ...] | None) -> str:
-    if capability is None:
-        return "all targets"
-    if isinstance(capability, tuple):
-        return ", ".join(capability)
-    return capability
+def render(declaration: type, target: Target, *, format: Literal["text", "json"] = "text") -> str:
+    """Read a registered declaration directly and print text or JSON."""
+    if format not in ("text", "json"):
+        raise ValueError(f"unknown facts format {format!r}")
+    declaration, capabilities = _selection(target, get_registered_name(declaration))
+    if format == "json":
+        return json.dumps(_json(declaration, target, capabilities), indent=2)
 
-
-def render(data: dict[str, Any]) -> str:
-    """Render one listing or one declaration report as stable text."""
-    if "instructions" in data:
-        rows = data["instructions"]
-        width = max((len(row["id"]) for row in rows), default=0)
-        lines = [f"target {data['target']}", "instructions"]
-        lines.extend(
-            f"  {row['id']:<{width}}  {_written_capability(row['capability'])}" for row in rows
-        )
-        return "\n".join(lines)
-
-    lines = [data["id"], *_column("target", data["target"])]
-    if data["capability"] is not None:
-        lines.extend(_column("target capability", _written_capability(data["capability"])))
-    lines.extend(_column("execution mesh", data["execution_mesh"]))
-    for heading in ("parameters", "operands"):
-        if data[heading]:
-            lines.append(f"  {heading}")
-            lines.extend(data[heading])
-    if data["between"]:
-        lines.append("  between operands")
-        lines.extend(f"    {rule}" for rule in data["between"])
+    printer = PatternPrinter()
+    lines = [get_registered_name(declaration), *_column("target", target.identity)]
+    names = tuple(dict.fromkeys(item.name for item in capabilities if item.name is not None))
+    if names:
+        lines.extend(_column("target capability", ", ".join(names)))
+    lines.extend(_column("execution mesh", printer.described(_execution_mesh(declaration, target, capabilities))))
+    sections = printer.declaration(declaration)
+    for heading, items in (("parameters", sections.get("parameters", sections.get("attributes", ()))),
+                           ("operands", sections.get("operands", ()))):
+        if items:
+            lines.extend((f"  {heading}", *items))
+    between = between_rules(declaration)
+    if between:
+        lines.extend(("  between operands", *(f"    {rule.written()}" for rule in between)))
+    for item in _variants(declaration, capabilities):
+        lines.extend(("", render(item.declaration, target)))
     return "\n".join(lines)
 
 
-__all__ = ["instructions", "listing", "one", "render"]
+def render_all(declarations: Iterable[type], target: Target, *, format: Literal["text", "json"] = "text") -> str:
+    """Print the supplied original declarations in their given order."""
+    if format == "json":
+        return json.dumps({
+            "target": target.identity,
+            "ops": [_json(declaration, target, _selection(target, get_registered_name(declaration))[1])
+                    for declaration in declarations],
+        }, indent=2)
+    if format != "text":
+        raise ValueError(f"unknown facts format {format!r}")
+    return "\n\n".join((f"target {target.identity}\nops", *(render(op, target) for op in declarations)))
+
+
+__all__ = ["listing", "one", "render", "render_all"]

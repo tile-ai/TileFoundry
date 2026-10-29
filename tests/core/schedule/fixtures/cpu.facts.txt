@@ -1,5 +1,5 @@
 target cpu
-instructions
+ops
 
 T.arange
   target             cpu

@@ -243,15 +243,15 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_facts.set_defaults(_command_parser=schedule_facts)
     schedule_facts.add_argument("--target", required=True, metavar="TARGET")
     schedule_facts.add_argument(
-        "instruction_or_out",
-        metavar="INSTRUCTION|PATH",
-        help="one instruction to select, or PATH when listing every instruction",
+        "op_or_out",
+        metavar="OP|PATH",
+        help="one Op to select, or PATH when listing every Op",
     )
     schedule_facts.add_argument(
         "out",
         nargs="?",
         metavar="PATH",
-        help="write one selected instruction here; stdout carries none of it",
+        help="write one selected Op here; stdout carries none of it",
     )
     schedule_facts.add_argument("--json", action="store_true", help="write the same facts as JSON")
     schedule_candidates = schedule_commands.add_parser(
@@ -364,13 +364,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.source, args.out, as_json=args.json, dims=args.dim
                 )
             if args.schedule_command == "facts":
-                instruction, out = (
-                    (None, args.instruction_or_out)
+                op, out = (
+                    (None, args.op_or_out)
                     if args.out is None
-                    else (args.instruction_or_out, args.out)
+                    else (args.op_or_out, args.out)
                 )
                 return run_schedule_facts(
-                    instruction,
+                    op,
                     args.target,
                     out,
                     as_json=args.json,

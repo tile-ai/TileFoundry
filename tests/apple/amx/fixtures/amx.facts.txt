@@ -1,5 +1,5 @@
 target apple.m2_pro
-instructions
+ops
 
 T.arange
   target             apple.m2_pro

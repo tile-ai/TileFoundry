@@ -479,7 +479,7 @@ FIXTURES = (
                 'facts refuse an unknown instruction without output',
                 'T.cuda.sm90.Unknown',
                 'nvidia.h200_sxm',
-                "unknown instruction 'T.cuda.sm90.Unknown'",
+                "unknown op 'T.cuda.sm90.Unknown'",
             ),
             (
                 'facts refuse an unknown target without output',
