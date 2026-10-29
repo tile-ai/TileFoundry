@@ -15,6 +15,7 @@ from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.instruction import check_call
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 from tilefoundry_apple.amx.ir.tir import Fma16, Fma32, Fma64
+from tilefoundry.ir.types.layout import size
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.schedule import candidates
 
@@ -31,8 +32,22 @@ class CandidateState:
 @dataclass(frozen=True)
 class AmxCase(Case):
     explicit: bool = False
+    workers: int = 12
 
     def guard(self, state, problems):
+        assert [(t.name, t.size) for t in state.module.topologies] == [("thread", 12)]
+        contexts = ValuationVisitor.index_contexts(
+            state.entry,
+            TypeInferContext(module=state.module, function=state.entry,
+                             target=state.module.resolve_target(), owner=state.entry),
+        )
+        calls = [expr for expr in collect_exprs(state.entry.body) if isinstance(expr, Call)]
+        assert calls
+        for call in calls:
+            mesh = contexts[id(call)].current_mesh
+            assert tuple(t.name for t in mesh.topologies) == ("thread",)
+            assert size(mesh.layout) == self.workers > 1
+
         supported = {
             "ldx": "ldx_v2", "ldy": "ldy_v2", "extrx": "extrx_v2",
             "extry": "extry_v2", "matfp": "matfp_v2", "vecfp": "vecfp_v2",
@@ -81,6 +96,7 @@ def _rejects(state, label, instruction):
 
 @case
 class MatMul(AmxCase):
+    workers: int = 8
     path: Path = ROOT / "hir_matmul.py"
 
     def guard(self, state, problems):
@@ -118,6 +134,7 @@ class MatMul(AmxCase):
 
 @case
 class Elementwise(AmxCase):
+    workers: int = 4
     path: Path = ROOT / "hir_elementwise.py"
 
     def guard(self, state, problems):
@@ -141,6 +158,7 @@ class Elementwise(AmxCase):
 
 @case
 class Memory(AmxCase):
+    workers: int = 2
     path: Path = ROOT / "hir_memory.py"
 
     def guard(self, state, problems):

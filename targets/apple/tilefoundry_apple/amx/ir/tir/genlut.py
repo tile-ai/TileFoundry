@@ -3,7 +3,7 @@ from tilefoundry.ir.core.param_def import ParamDef,MemoryEffect
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import TensorPattern,LayoutPattern,SwitchPattern,WildcardPattern,OrPattern,RangePattern
 from tilefoundry.ir.pattern import predicates as P
-from tilefoundry.ir.types import DType,StorageKind,Mesh,Topology,Layout
+from tilefoundry.ir.types import DType,StorageKind
 from tilefoundry.ir.pattern.predicates import Bits, In, Table, variable
 from .common import (
     instruction_versions,
@@ -11,22 +11,19 @@ from .common import (
     ProductMode,IndexMode,TransferCount,Repeat,Shuffle,FPMode,IntLane,
     FPALU,IntALU,Bank,ExtractMode,LutMode,
     FLOATS,TYPES,I8,I16,I32,
-    bind,encode,amx_mesh_pattern,
+    bind,encode,
     vector_layout,xy_matrix_layout,z_matrix_layout,z_vector_layout,
     vector_input_layout,packed_input_layout,int_matrix_layout,int_vector_layout,
     extract_source_shape,extract_source_layout,
 )
 R=MemoryEffect.READ
 W=MemoryEffect.WRITE
-AMX=Mesh((Topology('amx',1),),Layout((1,),(1,)),('unit',))
 
 class Genlut(AmxOp):
     """Packed index source, typed table, and only the written destination register."""
     mnemonic='GENLUT'
     capability=OpCapability('amx_genlut')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('source','table','dst')
     writes=('dst',)
     register_roles={'source':'source_bank','table':'table_bank','dst':'destination'}

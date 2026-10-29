@@ -5,7 +5,7 @@ from tilefoundry.ir.core import OpCapability
 from tilefoundry.ir.core.param_def import ParamDef,MemoryEffect
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import TensorPattern,LayoutPattern,SwitchPattern,WildcardPattern,OrPattern,RangePattern
-from tilefoundry.ir.types import DType,StorageKind,Mesh,Topology,Layout
+from tilefoundry.ir.types import DType,StorageKind
 from tilefoundry.ir.pattern.predicates import Bits, In, Table, variable
 from .common import (
     instruction_versions,
@@ -13,14 +13,13 @@ from .common import (
     ProductMode,IndexMode,TransferCount,Repeat,Shuffle,FPMode,IntLane,
     FPALU,IntALU,Bank,ExtractMode,LutMode,
     FLOATS,TYPES,I8,I16,I32,
-    bind,encode,amx_mesh_pattern,
+    bind,encode,
     vector_layout,xy_matrix_layout,z_matrix_layout,z_vector_layout,
     vector_input_layout,packed_input_layout,int_matrix_layout,int_vector_layout,
     extract_source_shape,extract_source_layout,
 )
 R=MemoryEffect.READ
 W=MemoryEffect.WRITE
-AMX=Mesh((Topology('amx',1),),Layout((1,),(1,)),('unit',))
 
 
 
@@ -61,8 +60,6 @@ class Extrx(AmxOp):
     mnemonic='EXTRX'
     capability=OpCapability('amx_extrx')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('src','dst')
     writes=('dst',)
     register_roles={'src':'extract_source','dst':'destination'}
@@ -159,8 +156,6 @@ class Extry(AmxOp):
     mnemonic='EXTRY'
     capability=OpCapability('amx_extry')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('src','dst')
     writes=('dst',)
     register_roles={'src':'extract_source','dst':'destination'}

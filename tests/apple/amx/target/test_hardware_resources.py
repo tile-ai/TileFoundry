@@ -10,7 +10,7 @@ from tests.core.target._hardware import (
     check_document_evidence,
     check_hardware_defaults,
 )
-from tests.core.target._instructions import check_architecture_capabilities
+from tests.core.target._instructions import instruction_declarations
 from tilefoundry_apple.amx.target import AmxTarget
 from tilefoundry_apple.amx.target import spec as amx_spec
 
@@ -39,7 +39,7 @@ def test_no_installed_number_is_repeated_as_a_python_default() -> None:
 
 def test_architecture_bandwidth_evidence_distinguishes_known_from_unavailable() -> None:
     owners = {
-        "apple.amx": {"register.owner": "amx"},
+        "apple.amx": {"register.owner": "thread"},
         "apple.m2_pro": {"memory.unified.owner": "target"},
     }
     check_document_evidence(AmxTarget.hardware, owners)
@@ -47,4 +47,14 @@ def test_architecture_bandwidth_evidence_distinguishes_known_from_unavailable() 
 
 def test_instruction_capabilities_and_execution_resources_are_separate_axes() -> None:
     """Enumerate instruction declarations and reconcile only their capability side."""
-    check_architecture_capabilities(AmxTarget, "tilefoundry_apple.")
+    declared = {
+        capability.name for op, capability in instruction_declarations()
+        if op.__module__.startswith("tilefoundry_apple.")
+    }
+    documented = {
+        capability
+        for document in AmxTarget.hardware.documents().values()
+        if document.kind == "architecture"
+        for capability in amx_spec.build_apple_amx(document).capabilities
+    }
+    assert declared == documented

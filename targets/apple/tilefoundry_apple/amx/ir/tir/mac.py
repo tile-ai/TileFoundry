@@ -6,20 +6,19 @@ from tilefoundry.ir.core import OpCapability
 from tilefoundry.ir.core.param_def import ParamDef,MemoryEffect
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import TensorPattern,LayoutPattern,SwitchPattern,WildcardPattern,OrPattern,RangePattern
-from tilefoundry.ir.types import DType,StorageKind,Mesh,Topology,Layout
+from tilefoundry.ir.types import DType,StorageKind
 from .common import (
     AmxOp,
     ProductMode,IndexMode,TransferCount,Repeat,Shuffle,FPMode,IntLane,
     FPALU,IntALU,Bank,ExtractMode,LutMode,
     FLOATS,TYPES,I8,I16,I32,
-    bind,encode,amx_mesh_pattern,
+    bind,encode,
     vector_layout,xy_matrix_layout,z_matrix_layout,z_vector_layout,
     vector_input_layout,packed_input_layout,int_matrix_layout,int_vector_layout,
     extract_source_shape,extract_source_layout,
 )
 R=MemoryEffect.READ
 W=MemoryEffect.WRITE
-AMX=Mesh((Topology('amx',1),),Layout((1,),(1,)),('unit',))
 
 @register_op(dialect="T", namespace="amx", category="nn", name="mac16")
 class Mac16(AmxOp):
@@ -32,8 +31,6 @@ class Mac16(AmxOp):
     mnemonic='MAC16'
     capability=OpCapability('amx_mac16')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('acc','lhs','rhs')
     writes=('acc',)
     register_roles={'acc':'z','lhs':'y','rhs':'x'}

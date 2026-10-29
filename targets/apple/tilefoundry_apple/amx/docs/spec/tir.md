@@ -8,7 +8,9 @@ that a tensor occupies the required register fragment.
 
 ## 1. Common constraints
 
-- Execution uses one `amx` topology unit, with mesh layout `Layout((1,), (1,))`.
+- Each AMX instruction operates on one CPU thread's private fragments. A
+  `thread` mesh may contain multiple independent invocations; its extent does
+  not multiply the physical AMX engine count or join their register files.
 - Register operands use `rmem`. Transfer memory operands use `gmem`.
 - Layout strides are measured in elements of the operand dtype. Byte offsets
   and register numbers are separate attributes; they are not tensor axes.

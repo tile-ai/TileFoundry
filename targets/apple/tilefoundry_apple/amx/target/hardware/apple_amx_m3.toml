@@ -49,13 +49,6 @@ origin = "reference"
 source = "https://github.com/corsix/amx"
 conditions = "compute dtypes admitted by the M3 static instruction catalogue; each selected instruction Pattern checks its legal operand tuples"
 
-[facts.compute.units_per_core]
-value = 1
-unit = "count"
-origin = "reference"
-source = "https://github.com/corsix/amx"
-conditions = "one AMX coprocessor issues for one core at a time"
-
 [facts.register.x_file]
 value = 512
 unit = "byte"
@@ -78,11 +71,11 @@ source = "https://github.com/corsix/amx"
 conditions = "sixty-four 64-byte Z rows; the accumulator file an outer product lands in"
 
 [facts.register.owner]
-value = "amx"
+value = "thread"
 unit = "name"
 origin = "reference"
 source = "https://github.com/corsix/amx"
-conditions = "the X, Y, and Z files belong to one AMX coprocessor, the execution unit TileFoundry names amx"
+conditions = "logical X, Y, and Z register state is private to the issuing CPU thread; this ownership does not imply one physical matrix engine per thread"
 
 [facts.geometry.f32_outer_product]
 value = "16x16"

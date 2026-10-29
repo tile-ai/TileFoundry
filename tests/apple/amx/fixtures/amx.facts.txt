@@ -47,7 +47,7 @@ T.clamp
 T.amx.genlut_v2
   target             apple.m2_pro
   target capability  amx_genlut_v2
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode                  any value in {T.amx.LutMode.F32, T.amx.LutMode.F16, T.amx.LutMode.F64, T.amx.LutMode.I32, T.amx.LutMode.I16, T.amx.LutMode.U32, T.amx.LutMode.U16, T.amx.LutMode.LOOKUP32_2, T.amx.LutMode.LOOKUP16_2, T.amx.LutMode.LOOKUP8_2, T.amx.LutMode.LOOKUP64_4, T.amx.LutMode.LOOKUP32_4, T.amx.LutMode.LOOKUP16_4, T.amx.LutMode.LOOKUP8_4, T.amx.LutMode.LOOKUP16_5, T.amx.LutMode.LOOKUP8_5}
     bf16                  any value where (bf16 == False) | (mode == T.amx.LutMode.F16) (type bool) (default False)
@@ -158,7 +158,7 @@ T.unary
 T.amx.vecfp_v2
   target             apple.m2_pro
   target capability  amx_vecfp_v2
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     fp_mode         any value in {T.amx.FPMode.F16, T.amx.FPMode.F16_F32, T.amx.FPMode.F32, T.amx.FPMode.F64, T.amx.FPMode.BF16, T.amx.FPMode.BF16_F32} (default T.amx.FPMode.F32)
     dtype           any value where dtype == (bf16, bf16, f16, f16, f32, f64, f64, f64)[fp_mode]; x_lanes == 512 // Bits('dtype'); y_lanes == 512 // Bits('dtype') (type DType) (default f32)
@@ -204,7 +204,7 @@ T.amx.vecfp_v2
 T.amx.vecint_v2
   target             apple.m2_pro
   target capability  amx_vecint_v2
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     alu             any value where alu in {T.amx.IntALU.ADD_PRODUCT, T.amx.IntALU.SUB_PRODUCT, T.amx.IntALU.ADD_SUM, T.amx.IntALU.SUB_SUM, T.amx.IntALU.SHIFT, T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH, T.amx.IntALU.PRODUCT, T.amx.IntALU.ADD_X, T.amx.IntALU.ADD_Y} in {T.amx.IntALU.ADD_PRODUCT, T.amx.IntALU.SUB_PRODUCT, T.amx.IntALU.ADD_SUM, T.amx.IntALU.SUB_SUM, T.amx.IntALU.SHIFT, T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH, T.amx.IntALU.WIDE_PRODUCT, T.amx.IntALU.POPCOUNT, T.amx.IntALU.PRODUCT, T.amx.IntALU.ADD_X, T.amx.IntALU.ADD_Y} (default T.amx.IntALU.ADD_PRODUCT)
     lane_mode       any value where (alu == T.amx.IntALU.SHIFT) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I32, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16, T.amx.IntLane.I8} | alu in {T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH} & (lane_mode == T.amx.IntLane.NARROW16) | (alu != T.amx.IntALU.SHIFT) & ~(alu in {T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH}) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16, T.amx.IntLane.I8_I16_I32, T.amx.IntLane.I16_I8_I32} in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I32, T.amx.IntLane.I8, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16, T.amx.IntLane.I8_I16_I32, T.amx.IntLane.I16_I8_I32} (default T.amx.IntLane.NARROW16)
@@ -272,20 +272,20 @@ T.where
 T.amx.clr
   target             apple.m2_pro
   target capability  amx_clr
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   operands
     token  Tensor(shape=(1,), dtype=u8, storage=rmem, layout=Layout((1,), (1,)))
 
 T.amx.set
   target             apple.m2_pro
   target capability  amx_set
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   operands
     token  Tensor(shape=(1,), dtype=u8, storage=rmem, layout=Layout((1,), (1,)))
 
 T.copy
   target             apple.m2_pro
-  execution mesh     one of {Mesh(('core',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,)))); Mesh(('amx',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))}
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   operands
     src  Tensor:
            dtype=dtype0
@@ -314,7 +314,7 @@ T.copy
 T.amx.extrx_v2
   target             apple.m2_pro
   target capability  amx_extrx_v2
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode                  any value in {T.amx.ExtractMode.COPY, T.amx.ExtractMode.LEGACY, T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} (default T.amx.ExtractMode.LEGACY)
     src_dtype             any value (type DType) (default f32)
@@ -395,7 +395,7 @@ T.amx.extrx_v2
 T.amx.extry_v2
   target             apple.m2_pro
   target capability  amx_extry_v2
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode                  any value in {T.amx.ExtractMode.COPY, T.amx.ExtractMode.LEGACY, T.amx.ExtractMode.INTEGER, T.amx.ExtractMode.FLOAT} (default T.amx.ExtractMode.LEGACY)
     src_dtype             any value (type DType) (default f32)
@@ -476,7 +476,7 @@ T.amx.extry_v2
 T.amx.ldx_v2
   target             apple.m2_pro
   target capability  amx_ldx_v2
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO; T.amx.TransferCount.FOUR} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
     nonconsecutive  any value (type bool) (default False)
@@ -495,7 +495,7 @@ T.amx.ldx_v2
 T.amx.ldy_v2
   target             apple.m2_pro
   target capability  amx_ldy_v2
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO; T.amx.TransferCount.FOUR} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
     nonconsecutive  any value (type bool) (default False)
@@ -514,7 +514,7 @@ T.amx.ldy_v2
 T.amx.ldz
   target             apple.m2_pro
   target capability  amx_ldz
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
     nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
@@ -528,7 +528,7 @@ T.amx.ldz
 T.amx.ldzi
   target             apple.m2_pro
   target capability  amx_ldzi
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     count           any value where count == T.amx.TransferCount.ONE in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
     nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
@@ -542,7 +542,7 @@ T.amx.ldzi
 T.amx.stx
   target             apple.m2_pro
   target capability  amx_stx
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
     nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
@@ -556,7 +556,7 @@ T.amx.stx
 T.amx.sty
   target             apple.m2_pro
   target capability  amx_sty
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
     nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
@@ -570,7 +570,7 @@ T.amx.sty
 T.amx.stz
   target             apple.m2_pro
   target capability  amx_stz
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     count           any value where one of {T.amx.TransferCount.ONE; T.amx.TransferCount.TWO} in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
     nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
@@ -584,7 +584,7 @@ T.amx.stz
 T.amx.stzi
   target             apple.m2_pro
   target capability  amx_stzi
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     count           any value where count == T.amx.TransferCount.ONE in {T.amx.TransferCount.ONE, T.amx.TransferCount.TWO, T.amx.TransferCount.FOUR} (default T.amx.TransferCount.ONE)
     nonconsecutive  any value where nonconsecutive == False (type bool) (default False)
@@ -598,7 +598,7 @@ T.amx.stzi
 T.amx.fma16
   target             apple.m2_pro
   target capability  amx_fma16
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
     acc_dtype  any value (type DType) (default f32)
@@ -649,7 +649,7 @@ T.amx.fma16
 T.amx.fma32
   target             apple.m2_pro
   target capability  amx_fma32
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
     acc_dtype  any value where acc_dtype == f32 (type DType) (default f32)
@@ -704,7 +704,7 @@ T.amx.fma32
 T.amx.fma64
   target             apple.m2_pro
   target capability  amx_fma64
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
     acc_dtype  any value where acc_dtype == f64 (type DType) (default f64)
@@ -749,7 +749,7 @@ T.amx.fma64
 T.amx.fms16
   target             apple.m2_pro
   target capability  amx_fms16
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
     acc_dtype  any value (type DType) (default f32)
@@ -800,7 +800,7 @@ T.amx.fms16
 T.amx.fms32
   target             apple.m2_pro
   target capability  amx_fms32
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
     acc_dtype  any value where acc_dtype == f32 (type DType) (default f32)
@@ -855,7 +855,7 @@ T.amx.fms32
 T.amx.fms64
   target             apple.m2_pro
   target capability  amx_fms64
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
     acc_dtype  any value where acc_dtype == f64 (type DType) (default f64)
@@ -900,7 +900,7 @@ T.amx.fms64
 T.amx.mac16
   target             apple.m2_pro
   target capability  amx_mac16
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     mode       any value in {T.amx.ProductMode.MATRIX, T.amx.ProductMode.VECTOR} (default T.amx.ProductMode.MATRIX)
     acc_dtype  any value (type DType) (default i32)
@@ -963,7 +963,7 @@ T.amx.mac16
 T.amx.matfp_v2
   target             apple.m2_pro
   target capability  amx_matfp_v2
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     fp_mode         any value in {T.amx.FPMode.F16, T.amx.FPMode.F16_F32, T.amx.FPMode.F32, T.amx.FPMode.F64, T.amx.FPMode.BF16, T.amx.FPMode.BF16_F32} (default T.amx.FPMode.F32)
     dtype           any value where dtype == (bf16, bf16, f16, f16, f32, f64, f64, f64)[fp_mode]; x_lanes == 512 // Bits('dtype'); y_lanes == 512 // Bits('dtype') (type DType) (default f32)
@@ -1001,7 +1001,7 @@ T.amx.matfp_v2
 T.amx.matint_v1
   target             apple.m2_pro
   target capability  amx_matint_v1
-  execution mesh     Mesh(('amx',), ComposedLayout(None, amx_origin, Layout(((1,),), ((1,),))))
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   parameters
     alu             any value where alu in {T.amx.IntALU.ADD_PRODUCT, T.amx.IntALU.SUB_PRODUCT, T.amx.IntALU.ADD_SUM, T.amx.IntALU.SUB_SUM, T.amx.IntALU.SHIFT, T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH, T.amx.IntALU.WIDE_PRODUCT, T.amx.IntALU.POPCOUNT}; alu < 10 in {T.amx.IntALU.ADD_PRODUCT, T.amx.IntALU.SUB_PRODUCT, T.amx.IntALU.ADD_SUM, T.amx.IntALU.SUB_SUM, T.amx.IntALU.SHIFT, T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH, T.amx.IntALU.WIDE_PRODUCT, T.amx.IntALU.POPCOUNT, T.amx.IntALU.PRODUCT, T.amx.IntALU.ADD_X, T.amx.IntALU.ADD_Y} (default T.amx.IntALU.ADD_PRODUCT)
     lane_mode       any value where (alu == T.amx.IntALU.SHIFT) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I32, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16} | alu in {T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH} & (lane_mode == T.amx.IntLane.NARROW16) | (alu == T.amx.IntALU.WIDE_PRODUCT) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16, T.amx.IntLane.I8_I16_I32} | (alu == T.amx.IntALU.POPCOUNT) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I32} | ~(alu in {T.amx.IntALU.SHIFT, T.amx.IntALU.SQRDMLAH, T.amx.IntALU.SQRDMLSH, T.amx.IntALU.WIDE_PRODUCT, T.amx.IntALU.POPCOUNT}) & lane_mode in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16} in {T.amx.IntLane.NARROW16, T.amx.IntLane.WIDE16, T.amx.IntLane.I32, T.amx.IntLane.I8, T.amx.IntLane.I8_I8_I32, T.amx.IntLane.I8_I8_I16, T.amx.IntLane.I8_I16_I32, T.amx.IntLane.I16_I8_I32} (default T.amx.IntLane.NARROW16)

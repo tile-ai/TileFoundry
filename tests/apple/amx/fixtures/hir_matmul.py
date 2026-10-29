@@ -7,7 +7,7 @@ from tilefoundry.dsl import *
 from tilefoundry_apple import AmxTarget
 
 
-@module(entry="hir_matmul", target=AmxTarget(), topologies=(Topology("amx", 1),))
+@module(entry="hir_matmul", target=AmxTarget(), topologies=(Topology("thread", 12),))
 class Program:
     @func
     def hir_matmul(
@@ -25,7 +25,7 @@ class Program:
         memory: Tensor[(16, 2), "f32"],
         memory_t: Tensor[(2, 16), "f32"],
     ):
-        with Mesh(("amx",), layout=(1,), names=("unit",)) as _amx:
+        with Mesh(("thread",), layout=(8,), names=("worker",)) as _threads:
             half = tf.matmul(h, ht)
             single = tf.matmul(s, st)
             double = tf.matmul(d, dt)

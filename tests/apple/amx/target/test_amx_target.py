@@ -16,23 +16,12 @@ from tilefoundry_apple import AmxTarget
 
 
 def test_amx_target_reports_and_validates_its_own_topology_levels():
-    """Test amx target reports and validates its own topology levels.
-
-    The AMX levels are the core a tile stream runs on and the AMX unit inside
-    it that issues one atom. The core limit is the measured performance-core
-    count; the unit limit comes from the architecture.
-
-    Each limit is projected as a Target Fact. A declared extent is validated
-    against its level's own limit, and an AMX core count is always static: there
-    is no launch shape to defer it to, so a symbolic extent is refused rather
-    than accepted and counted later.
-    """
+    """Twelve CPU execution positions share AMX capability, not twelve AMX engines."""
     target = AmxTarget()
     levels = target.get_facts(TopologyFacts).topologies
-    assert tuple(level.name for level in levels) == ("core", "amx")
+    assert tuple(level.name for level in levels) == ("thread",)
     assert not any(level.from_target for level in levels)
-    assert target.get_facts(TopologyLevelFacts, "core").max_logical_units == 8
-    assert target.get_facts(TopologyLevelFacts, "amx").max_logical_units == 1
+    assert target.get_facts(TopologyLevelFacts, "thread") == TopologyLevelFacts("thread", 12, 12)
     assert AmxTarget().get_facts(TopologyFacts) == target.get_facts(TopologyFacts)
     assert AmxTarget("apple.m2_pro") == target
     assert target.to_python().text == 'AmxTarget("apple.m2_pro")'
@@ -40,16 +29,18 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
     with pytest.raises(ValueError) as topology_error:
         target.validate_program_topology(Topology("cta", 4))
     assert "unsupported topology level 'cta'" in str(topology_error.value)
-    assert "('core', 'amx')" in str(topology_error.value)
+    assert "('thread',)" in str(topology_error.value)
     with pytest.raises(UnsupportedCapabilityError, match="no Facts projection"):
         target.get_facts(TopologyLevelFacts, "cta")
 
-    target.validate_program_topology(Topology("core", 8))
-    with pytest.raises(ValueError, match="must satisfy 1 <= extent <= 8"):
-        target.validate_program_topology(Topology("core", 9))
+    with pytest.raises(ValueError, match="unsupported topology level 'amx'"):
+        target.validate_program_topology(Topology("amx", 1))
+    target.validate_program_topology(Topology("thread", 12))
+    with pytest.raises(ValueError, match="must satisfy 1 <= extent <= 12"):
+        target.validate_program_topology(Topology("thread", 13))
     with pytest.raises(ValueError, match="must be positive"):
-        target.validate_program_topology(Topology("core", 0))
-    target.validate_program_topology(Topology("core", DimVar("cores", 1, 7)))
+        target.validate_program_topology(Topology("thread", 0))
+    target.validate_program_topology(Topology("thread", DimVar("workers", 1, 12)))
 
 
 def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got():

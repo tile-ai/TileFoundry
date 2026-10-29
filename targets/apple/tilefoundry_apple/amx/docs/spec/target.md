@@ -9,7 +9,6 @@ class AppleAmx:
     name: str
     supported_compute_dtypes: tuple[DType, ...]
     capabilities: tuple[str, ...]
-    amx_units_per_core: int
     staging_bytes: int
     accumulator_bytes: int
     rmem_owner: str
@@ -21,14 +20,15 @@ class AppleAmx:
 
 - constraints:
   - `name` MUST be the architecture identity used by AMX compilation.
-  - AppleAmx MUST own the supported compute DTypes and the per-core AMX unit
-    count. The modelled atom catalogue MAY be narrower than the supported
-    compute DTypes.
+  - AppleAmx MUST own the supported compute DTypes and instruction capabilities.
+    AMX capabilities MUST NOT introduce a separate program topology level.
+    The modelled atom catalogue MAY be narrower than the supported compute DTypes.
   - AppleAmx MUST own the X/Y staging and Z accumulator register files. They are
     ISA geometry, so every part carrying this coprocessor shares them and a
     device MUST NOT restate them. `staging_bytes` MUST be the size of one
     staging file, the X and Y files being equal.
-  - `rmem_owner` MUST be `amx`: each AMX unit owns its register-file values.
+  - `rmem_owner` MUST be `thread`: logical register state belongs to the issuing
+    CPU thread. This does not imply one physical AMX engine per thread.
   - Product- and frequency-dependent throughput values MUST NOT be stored on
     AppleAmx.
   - AMX has no CTA thread level, so AppleAmx MUST carry no CTA thread limit.
@@ -87,13 +87,11 @@ class AppleM2Pro:
     available or unavailable entries from the installed document. Estimates MUST
     state their sources and assumptions separately from measured throughput and
     MUST NOT populate `throughput_for`'s measured-rate map.
-  - AMX `PerformanceServiceFacts` MUST use the measured NEON FP32 rate for host
-    arithmetic. FP16 service MUST divide the documented per-AMX-unit estimate
-    across core streams using the AMX unit count and performance-core count.
-    Non-FLOP work MUST use the documented per-core lane-event estimate.
-    Global-memory bandwidth MUST be shared across the same core streams. AMX
-    reads the level of a `(level, active)` query and ignores `active`.
-    Unrecorded DTypes and services MUST remain absent.
+  - Generic `thread` PerformanceServiceFacts MUST leave rates unknown while
+    placement between performance and efficiency cores is unspecified. Existing
+    P-core observations and estimates MUST NOT be projected as equal rates for
+    all CPU threads. Stored AMX rates and unit-count estimates MUST NOT be
+    multiplied by the CPU thread count.
 
 
 ## 9. `AmxTarget`
@@ -117,8 +115,6 @@ class AmxTarget(Target):
         architecture: Architecture | str | Path | None = None,
     ) -> None: ...
 
-    def topology_limit(self, name: str) -> int: ...
-
     def validate_program_topology(self, topology: Topology) -> None: ...
     def get_analyzer(self, selector: str) -> Analyzer: ...
     def get_facts(self, facts_type: type[FactsT], query=None) -> FactsT: ...
@@ -135,14 +131,14 @@ class AmxTarget(Target):
   - `AmxTarget.available()` MUST contain one value per device document whose
     sole compatible architecture document is available. Its `identity` MUST be
     that device document's ID.
-  - `get_facts(TopologyFacts).topologies` MUST name `("core", "amx")`: the
-    performance core one tile stream runs on, and the AMX unit inside that core
-    which issues one atom. Neither level sets `from_target`.
-  - `topology_limit("core")` MUST equal `device.performance_core_count` and
-    `topology_limit("amx")` MUST equal `architecture.amx_units_per_core`.
-  - Declared topology extents MUST be positive static integers within their
-    level's limit. AMX has no launch shape, so a deferred or symbolic extent
-    MUST NOT be admitted at either level.
+  - `get_facts(TopologyFacts).topologies` MUST contain only `thread`, with logical
+    and physical execution-position limits equal to performance plus efficiency
+    core counts (12 for the installed M2 Pro). It MUST NOT set `from_target`.
+    `parallel_level` MUST be `thread`. These limits describe program workers,
+    not independent AMX matrix engines.
+  - Declared extents MUST be positive and bounded by that limit, including the
+    complete admitted range of a symbolic extent. `amx` MUST be rejected as a
+    topology name. Memory execution MUST use the same `thread` vocabulary.
   - Unsupported topology levels MUST raise an actionable error naming the
     supported levels, from both the limit lookup and topology validation.
 

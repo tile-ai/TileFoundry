@@ -22,7 +22,7 @@ APPLE_M2_PRO_ID = "apple.m2_pro"
 def _memory_owner(reader: SchemaReader, path: str) -> str:
     """Read an owner in the AMX target's topology vocabulary."""
     owner = reader.text(path)
-    allowed = (TARGET_MEMORY_OWNER, "core", "amx")
+    allowed = (TARGET_MEMORY_OWNER, "thread")
     if owner not in allowed:
         raise SchemaValidationError(
             f"{reader.document.id}: memory owner {owner!r} at {path!r} must be "
@@ -49,7 +49,6 @@ def build_apple_amx(document: HardwareDocument) -> AppleAmx:
         name=reader.text("identity.name"),
         supported_compute_dtypes=_dtypes(reader.names("instruction.compute_dtypes"), document),
         capabilities=reader.names("capabilities"),
-        amx_units_per_core=reader.integer("compute.units_per_core", unit="count"),
         staging_bytes=reader.integer("register.x_file", unit="byte"),
         accumulator_bytes=reader.integer("register.z_file", unit="byte"),
         rmem_owner=_memory_owner(reader, "register.owner"),

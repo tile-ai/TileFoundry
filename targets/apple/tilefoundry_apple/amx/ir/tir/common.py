@@ -10,8 +10,8 @@ from math import prod
 from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import ParamDef, collect_param_defs
 from tilefoundry.ir.pattern import Pattern, PatternMatcher, matched, SwitchPattern, TensorPattern, LayoutPattern, OrPattern, WildcardPattern, RangePattern
-from tilefoundry.ir.pattern.utils import fixed_pattern_value,selected_pattern
-from tilefoundry.ir.types import DType,Layout,StorageKind,TensorType,UnitType
+from tilefoundry.ir.pattern.utils import fixed_pattern_value,selected_pattern,thread_execution_mesh
+from tilefoundry.ir.types import DType,Layout,Mesh,StorageKind,TensorType,Topology,UnitType
 from tilefoundry.ir.core.register import register_op, register_type
 
 @register_type(dialect='T',namespace='amx')
@@ -48,6 +48,8 @@ class AmxOp(Op):
     """An instruction with static reference semantics, independent of a Target value."""
 
     generation = 1
+    execution_mesh = Mesh((Topology("thread", 1),), Layout((1,), (1,)), ("worker",))
+    execution_mesh_pattern = staticmethod(thread_execution_mesh)
 
 
 def instruction_versions(template, generations, *, name, category):
@@ -392,11 +394,6 @@ def extract_source_layout(vertical,mode,src,dst,repeat,alternating=False):
     stride=2 if alternating and b==4 and db==2 else 1
     if ratio==1: return LayoutPattern(shape,(row,64 if vertical else 1))
     return LayoutPattern((r,(lanes//ratio,ratio)),(row,(64 if vertical else 1,stride*64//b)))
-
-
-def amx_mesh_pattern():
-    from tilefoundry.ir.pattern import MeshPattern,ComposedLayoutPattern
-    return MeshPattern(('amx',),ComposedLayoutPattern(None,WildcardPattern('amx_origin'),LayoutPattern(((1,),),((1,),))))
 
 
 def access(call,ctx):

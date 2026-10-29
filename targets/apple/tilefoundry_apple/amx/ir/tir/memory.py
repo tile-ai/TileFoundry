@@ -5,7 +5,7 @@ from tilefoundry.ir.core.param_def import ParamDef,MemoryEffect
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import TensorPattern,LayoutPattern,SwitchPattern,WildcardPattern,OrPattern,RangePattern
 from tilefoundry.ir.pattern import predicates as P
-from tilefoundry.ir.types import DType,StorageKind,Mesh,Topology,Layout
+from tilefoundry.ir.types import DType,StorageKind
 from tilefoundry.ir.pattern.predicates import Bits, Table, variable
 from .common import (
     instruction_versions,
@@ -13,22 +13,19 @@ from .common import (
     ProductMode,IndexMode,TransferCount,Repeat,Shuffle,FPMode,IntLane,
     FPALU,IntALU,Bank,ExtractMode,LutMode,
     FLOATS,TYPES,I8,I16,I32,
-    bind,encode,amx_mesh_pattern,
+    bind,encode,
     vector_layout,xy_matrix_layout,z_matrix_layout,z_vector_layout,
     vector_input_layout,packed_input_layout,int_matrix_layout,int_vector_layout,
     extract_source_shape,extract_source_layout,
 )
 R=MemoryEffect.READ
 W=MemoryEffect.WRITE
-AMX=Mesh((Topology('amx',1),),Layout((1,),(1,)),('unit',))
 
 class Ldx(AmxOp):
     hir_matches = (HirMatch(Reshard, operands={'src': 'x', 'dst': 'result'}),)
     mnemonic='LDX'
     capability=OpCapability('amx_ldx')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('src','dst')
     writes=('dst',)
     register_roles={'src':'memory','dst':'x'}
@@ -80,8 +77,6 @@ class Ldy(AmxOp):
     mnemonic='LDY'
     capability=OpCapability('amx_ldy')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('src','dst')
     writes=('dst',)
     register_roles={'src':'memory','dst':'y'}
@@ -134,8 +129,6 @@ class Ldz(AmxOp):
     mnemonic='LDZ'
     capability=OpCapability('amx_ldz')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('src','dst')
     writes=('dst',)
     register_roles={'src':'memory','dst':'z'}
@@ -180,8 +173,6 @@ class Ldzi(AmxOp):
     mnemonic='LDZI'
     capability=OpCapability('amx_ldzi')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('src','dst')
     writes=('dst',)
     register_roles={'src':'memory','dst':'z'}
@@ -227,8 +218,6 @@ class Stx(AmxOp):
     mnemonic='STX'
     capability=OpCapability('amx_stx')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('src','dst')
     writes=('dst',)
     register_roles={'src':'x','dst':'memory'}
@@ -273,8 +262,6 @@ class Sty(AmxOp):
     mnemonic='STY'
     capability=OpCapability('amx_sty')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('src','dst')
     writes=('dst',)
     register_roles={'src':'y','dst':'memory'}
@@ -319,8 +306,6 @@ class Stz(AmxOp):
     mnemonic='STZ'
     capability=OpCapability('amx_stz')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('src','dst')
     writes=('dst',)
     register_roles={'src':'z','dst':'memory'}
@@ -365,8 +350,6 @@ class Stzi(AmxOp):
     mnemonic='STZI'
     capability=OpCapability('amx_stzi')
     resource='amx_engine'
-    execution_mesh=AMX
-    execution_mesh_pattern=staticmethod(amx_mesh_pattern)
     roles=('src','dst')
     writes=('dst',)
     register_roles={'src':'z','dst':'memory'}

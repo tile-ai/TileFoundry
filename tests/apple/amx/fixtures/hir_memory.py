@@ -7,7 +7,7 @@ from tilefoundry.dsl import *
 from tilefoundry_apple import AmxTarget
 
 
-@module(entry="hir_memory", target=AmxTarget(), topologies=(Topology("amx", 1),))
+@module(entry="hir_memory", target=AmxTarget(), topologies=(Topology("thread", 12),))
 class Program:
     @func
     def hir_memory(
@@ -21,7 +21,7 @@ class Program:
         z_float: Tensor[(1, 4, 16), "f32", ((1, 4, 16), (1024, 16, 1)), "rmem"],
         z_int: Tensor[(1, 4, 16), "i32", ((1, 4, 16), (1024, 16, 1)), "rmem"],
     ):
-        with Mesh(("amx",), layout=(1,), names=("unit",)) as _amx:
+        with Mesh(("thread",), layout=(2,), names=("worker",)) as _threads:
             load = tf.reshard(memory, ((1, 16), (16, 1)), "rmem")
             load_interleaved = tf.reshard(memory, Layout((1, (2, 8)), (0, (16, 1))), "rmem")
             store = tf.reshard(registers, ((1, 16), (16, 1)), "gmem")

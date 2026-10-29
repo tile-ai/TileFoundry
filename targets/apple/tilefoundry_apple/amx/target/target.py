@@ -112,23 +112,11 @@ class AmxTarget(Target):
         object.__setattr__(self, "_device_document", device.document)
 
     def _topology_facts(self) -> TopologyFacts:
-        """The two AMX levels, coarsest first.
-
-        Both extents are hardware totals, so neither level takes anything from
-        the target instance.
-        """
+        """CPU execution positions; AMX is an instruction capability."""
+        count = self.device.performance_core_count + self.device.efficiency_core_count
         return TopologyFacts(
-            (
-                TopologyLevelFacts(
-                    "core",
-                    self.device.performance_core_count,
-                    self.device.performance_core_count,
-                ),
-                TopologyLevelFacts(
-                    "amx", self.architecture.topology_limit("amx"), None
-                ),
-            ),
-            parallel_level="core",
+            (TopologyLevelFacts("thread", count, count),),
+            parallel_level="thread",
         )
 
     def get_facts(self, facts_type: type, query: object | None = None):

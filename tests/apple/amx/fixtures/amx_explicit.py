@@ -4,7 +4,7 @@ from tilefoundry_apple import AmxTarget
 from tilefoundry_apple.amx.ir.tir.common import ExtractMode, LutMode
 
 
-@module(entry="amx_explicit", target=AmxTarget(), topologies=(Topology("amx", 1),))
+@module(entry="amx_explicit", target=AmxTarget(), topologies=(Topology("thread", 12),))
 class Program:
     @func
     def amx_explicit(
@@ -15,7 +15,7 @@ class Program:
         extracted: Tensor[(1, 16), "f32", ((1, 16), (0, 1)), "rmem"],
         destination: Tensor[(16,), "f32", ((16,), (1,)), "rmem"],
     ):
-        with Mesh(("amx",), layout=(1,), names=("unit",)) as _amx:
+        with Mesh(("thread",), layout=(12,), names=("worker",)) as _threads:
             enabled = tf.schedule((token,), op=T.amx.set())
             lookup = tf.schedule((indices, table, destination), op=T.amx.genlut_v2(mode=LutMode.LOOKUP32_2, dtype=DType.f32))
             extracted_x = tf.schedule((copy_source, extracted), op=T.amx.extrx_v2(mode=ExtractMode.COPY, src_dtype=DType.f32, dst_dtype=DType.f32))

@@ -2,7 +2,7 @@
 from tilefoundry.dsl import *
 from tilefoundry_apple import AmxTarget
 
-@module(entry="hir_elementwise", target=AmxTarget(), topologies=(Topology("amx", 1),))
+@module(entry="hir_elementwise", target=AmxTarget(), topologies=(Topology("thread", 12),))
 class Program:
     @func
     def hir_elementwise(
@@ -16,7 +16,7 @@ class Program:
         i2: Tensor[(1, 32), "i16", ((1, 32), (0, 1)), "rmem"],
         u: Tensor[(1, 32), "u16", ((1, 32), (0, 1)), "rmem"],
     ):
-        with Mesh(("amx",), layout=(1,), names=("unit",)) as _amx:
+        with Mesh(("thread",), layout=(4,), names=("worker",)) as _threads:
             half_mul = tf.mul(h, h2)
             single_mul = tf.mul(s, s2)
             double_mul = tf.mul(d, d2)
