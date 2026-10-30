@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import EvalError
+from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
@@ -14,6 +14,7 @@ from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     readnone_relations,
@@ -71,10 +72,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
 
 @register_eval(MeshCoord)
 def _eval_mesh_coord(ctx):
-    raise EvalError(
-        "MeshCoord is not modelled: evaluation runs one mesh participant, so there "
-        "is no unit for a coordinate to be the coordinate of "
-        "(docs/spec/evaluator.md section 6)."
+    if ctx.coordinates is None or ctx.mesh != ctx.op.mesh:
+        raise EvalError("MeshCoord requires its static mesh execution scope")
+    axis = int(ctx.args[0].data.item())
+    if not 0 <= axis < len(ctx.coordinates):
+        raise EvalError(f"MeshCoord axis {axis} is out of range")
+    return TensorValue(
+        torch.tensor(ctx.coordinates[axis], dtype=torch.int64, device=ctx.device),
+        ctx.result_type,
     )
 
 

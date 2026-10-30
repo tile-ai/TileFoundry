@@ -16,6 +16,8 @@ class EvaluateContext:
     loaded_module: Any | None = None
     device: str | None = None
     dim_bindings: Mapping[str, int] = field(default_factory=dict)
+    mesh: Any = None
+    coordinates: tuple[int, ...] | None = None
 
     def for_op(self, op: Any, args: tuple[Any, ...], result_type: Any) -> EvaluateContext:
         """Add one Call's evaluated operands while preserving runtime state."""

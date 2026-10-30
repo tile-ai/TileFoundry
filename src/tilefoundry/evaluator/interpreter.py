@@ -5,10 +5,12 @@ Walks a HIR ``Function`` body and returns concrete torch values.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from tilefoundry.evaluator.context import EvaluateContext
 from tilefoundry.evaluator.dim import resolve_dim
+from tilefoundry.evaluator.mesh import MeshValue, distribute, evaluate_op, observe
 from tilefoundry.evaluator.registry import eval_registry
 from tilefoundry.evaluator.value import (
     EvalError,
@@ -24,6 +26,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.pattern import locate_dim_var
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.lazy import torch
@@ -98,8 +101,9 @@ class EvaluatorVisitor(ExprVisitor):
             raise EvalError(
                 f"evaluator: MeshRegion expects {len(region.params)} args, got {len(args)}"
             )
+        args = tuple(distribute(value, region.mesh) for value in args)
         memo = {id(param): (param, value) for param, value in zip(region.params, args)}
-        return EvaluatorVisitor(memo=memo).visit(region.body, ctx)
+        return EvaluatorVisitor(memo=memo).visit(region.body, replace(ctx, mesh=region.mesh))
 
     def visit_leaf_Var(self, var: Var, _operands, ctx: EvaluateContext) -> Value:
         raise EvalError(f"evaluator: unbound variable {var.name!r}")
@@ -146,7 +150,7 @@ class EvaluatorVisitor(ExprVisitor):
             handler = eval_registry.lookup(type(target))
             if handler is None:
                 raise EvalError(f"no @register_eval handler for {type(target).__name__}")
-            return handler(ctx.for_op(target, args, call.type))
+            return evaluate_op(handler, ctx.for_op(target, args, call.type))
         except Exception as error:
             raise EvalError(f"evaluator: {describe_expr(call)}: {error}") from error
 
@@ -174,9 +178,9 @@ class EvaluatorVisitor(ExprVisitor):
                     f"evaluator: call to {target.name!r}: argument for "
                     f"{param.name!r} expects {param.annotation!r}, got {value.type!r}"
                 )
-        function_context = EvaluateContext(
+        function_context = replace(
+            ctx,
             loaded_module=child if child is not None else ctx.loaded_module,
-            device=ctx.device,
             dim_bindings=_bind_dim_vars(target.params, args),
         )
         memo = {id(param): (param, arg) for param, arg in zip(target.params, args)}
@@ -309,6 +313,8 @@ def _run_selected(loaded_module, fn: Function, *activations, device: str | None)
 
 
 def _unwrap(value: Value) -> Any:
+    if isinstance(value, MeshValue):
+        return observe(value)
     if isinstance(value, TensorValue):
         return value.data
     if isinstance(value, TupleValue):
@@ -374,8 +380,12 @@ def _run_bound(fn: Function, args, *, device: str | None = None, reading=None):
     """
     values = _bound_values(fn, args)
     target = _select_variant(fn, values) if fn.variants else fn
-    memo = {id(param): (param, value) for param, value in zip(target.params, values)}
     dim_env = _bind_dim_vars(target.params, values)
+    values = [
+        distribute(value, shard.mesh) if (shard := shard_layout_of(value.type.layout)) else value
+        for value in values
+    ]
+    memo = {id(param): (param, value) for param, value in zip(target.params, values)}
     return _unwrap(
         EvaluatorVisitor(memo=memo).visit(
             target.body,

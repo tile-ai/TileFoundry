@@ -10,8 +10,17 @@ import torch
 from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Var
+from tilefoundry.evaluator.value import EvalError
+from tilefoundry.ir.core import Call, Constant, Var
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.sharding.local import Local
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
+from tilefoundry.ir.types import make_shard_tensor_type
 
 CORE = Path(__file__).parents[1] / "fixtures" / "evaluator" / "core_semantics.py"
 
@@ -91,3 +100,55 @@ CASES = special(CoreEvalCase)
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
 def test_core_eval_case(case: CoreEvalCase) -> None:
     check_case(case)
+
+
+def _mesh_program(body, params, mesh):
+    region = MeshRegion(mesh, body, params, params, type=body.type)
+    return Function.build(name="mesh_reference", params=params, body=region, return_type=body.type)
+
+
+def _coordinate(mesh, axis=0):
+    held = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
+    return Call(MeshCoord(mesh=mesh), (Constant(axis, type=held),), type=held)
+
+
+@pytest.mark.parametrize("participants", (1, 2, 4))
+def test_mesh_coordinates_survive_repeated_calls_and_loop_carries(participants):
+    mesh = Mesh((Topology("gpu", participants),), Layout((participants,), (1,)), ("dp",))
+    held = make_shard_tensor_type((8,), mesh=mesh, attrs=(Split(0),), dtype=DType.f32)
+    x, p = Var("x", type=held), Var("p", type=held)
+    rank = _coordinate(mesh)
+    hundred = Constant(100.0, type=TensorType.scalar(DType.f32))
+    offset = Call(Binary(kind=BinaryKind.MUL), (rank, hundred), type=hundred.type)
+    added = Call(Binary(kind=BinaryKind.ADD), (p, offset), type=held)
+    callee = Function.build(name="rank_add", params=(p,), body=added, return_type=held)
+    first = Call(callee, (x,), type=held)
+    second = Call(callee, (first,), type=held)
+    phi = Var("carried", type=held)
+    iv = Var("i", type=TensorType.scalar(DType.i64))
+    updated = Call(callee, (phi,), type=held)
+    loop = LoopRegion(iv, (phi,), (second,), updated, (updated,), 3, 1, type=held)
+    actual = evaluate(_mesh_program(loop, (x,), mesh), torch.arange(8, dtype=torch.float32))
+    expected = torch.cat([
+        chunk + 500 * rank
+        for rank, chunk in enumerate(torch.arange(8, dtype=torch.float32).chunk(participants))
+    ])
+    assert torch.equal(actual, expected)
+
+
+def test_local_exposes_local_shape_without_a_second_slice():
+    mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
+    held = make_shard_tensor_type((8, 4), mesh=mesh, attrs=(Split(1),), dtype=DType.f32)
+    x = Var("x", type=held)
+    local = Call(Local(), (x,), type=TensorType((8, 2), DType.f32, Layout((8, 2)), StorageKind.GMEM))
+    shape = Call(ShapeOf(), (local,), type=TensorType((2,), DType.i64, Layout((2,)), StorageKind.GMEM))
+    assert torch.equal(
+        evaluate(_mesh_program(shape, (x,), mesh), torch.arange(32).reshape(8, 4)),
+        torch.tensor([8, 2]),
+    )
+
+
+def test_plain_output_does_not_silently_choose_one_participant():
+    mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
+    with pytest.raises(EvalError, match="disagree on a Broadcast/plain output"):
+        evaluate(_mesh_program(_coordinate(mesh), (), mesh))

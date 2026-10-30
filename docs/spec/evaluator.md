@@ -49,7 +49,9 @@ default.
 The values that flow through evaluation form a small hierarchy: a
 single-output node produces a `TensorValue`; a multi-output node (a
 `Tuple`, a `TupleType` `Call`, or a multi-carry `LoopRegion`)
-produces a `TupleValue`.
+produces a `TupleValue`. Internally, a participant-varying tensor is a
+`MeshValue`: one `TensorValue` per logical mesh coordinate plus its existing
+global `TensorType` and `Mesh`. This is an execution carrier, not a new layout.
 
 ```python
 class Value:
@@ -169,6 +171,8 @@ class EvaluateContext:
         loaded_module: attribute; Runtime module reading, when one is active.
         device: attribute; Where the inputs are, or None to leave it to torch.
         dim_bindings: attribute; concrete values for symbolic ShapeDims.
+        mesh: attribute; Active static participant mesh, when present.
+        coordinates: attribute; One op invocation's logical mesh coordinates.
     """
 
     op: Any = None
@@ -177,6 +181,8 @@ class EvaluateContext:
     loaded_module: Any | None = None
     device: str | None = None
     dim_bindings: Mapping[str, int] = field(default_factory=dict)
+    mesh: Any = None
+    coordinates: tuple[int, ...] | None = None
 
     def for_op(self, op: Any, args: tuple[Any, ...], result_type: Any) -> EvaluateContext: ...
 
@@ -253,8 +259,26 @@ are evaluated once in the enclosing scope. With `k = len(yield_values)`:
 
 ## 6. Layout domain
 
-Evaluation models a **single mesh participant** and operates on logical
-values:
+Evaluation operates on logical values and infers participation from
+`MeshRegion` and operand `ShardLayout` values. A static mesh executes its
+participants on the caller's existing torch device; no distributed runtime
+or evaluator mode flag is required. Logical mesh coordinates, including
+permuted physical rank arrangements, select ownership through the same
+local-layout algebra used by `ShardTensor` ([runtime §1.10](runtime.md#110-runtimetensorpy)).
+
+Each operation receives local tensor shapes and actual local data. Function
+calls and loop iterations retain fresh memo scopes and the active mesh.
+`MeshCoord` reads that invocation's logical coordinate; `Local` exposes an
+already-local value without slicing it again. Canonical inputs cannot supply
+unresolved Partial contributions. Static even shards are supported; Dynamic
+distribution and transitions between different meshes are refused explicitly.
+
+Observing an output reconstructs its declared logical tensor from Split
+pieces. Broadcast/plain replicas MUST agree, and an unresolved Partial output
+MUST fail with a request for an explicit Reshard. Reconstruction is an observer
+operation and MUST NOT count as communication performed by the HIR program.
+
+The existing logical-axis rules continue to hold:
 
 - An axis-bearing op (`Reduce`, `rms_norm`, …) addresses its `axis` /
   `axes` in the operand's **logical** `TensorType.shape`, regardless of
@@ -262,8 +286,8 @@ values:
   (e.g. per-head normalisation) is expressed by a logical `Reshape`
   ([hir §1.3](./hir.md#13-op)) to the target logical shape *before* the op; the
   op's axis then indexes that reshaped logical shape. `Reshard` only
-  changes distribution / layout and never changes which values an op
-  reduces or indexes.
+  changes distribution / layout. A local op reduces or indexes the logical
+  axes of the participant's own piece.
 - `as_layout_view(value: TensorValue) -> torch.Tensor` reshapes `data`
   from its logical shape to the element organisation of
   `type.layout.shape` (for a `ShardLayout`, its `layout.shape`) under
@@ -271,11 +295,6 @@ values:
   inverse. These are provided for an op explicitly defined to compute in
   the layout domain; no op in the current set is layout-domain, so none
   of them call these helpers.
-- `Reshard` ([hir §1.3](./hir.md#13-op)) preserves the logical value and MAY
-  reshape it into the target layout's shape; it performs no
-  cross-participant data movement.
-- `Local` ([hir §1.3](./hir.md#13-op)) returns its operand's value only when
-  its input `ShardLayout` has no `Split` attribute. For a split axis it MUST
-  raise `EvalError` saying that the evaluator models one mesh participant and
-  linking to this section, until the mesh evaluator models that path. An
-  unmodelled path MUST identify itself rather than leaking a torch exception.
+- Participant-local operations MUST NOT consume unresolved Partial inputs;
+  resolve them with Reshard first. This reference subset does not yet execute
+  linear operations on unresolved Partial contributions.

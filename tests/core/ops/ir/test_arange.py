@@ -7,6 +7,7 @@ import torch
 
 from tests.core.ops.ir.op_case import Cost, OpCase, check_op_case
 from tilefoundry.dsl import *
+from tilefoundry.evaluator.context import EvaluateContext
 from tilefoundry.evaluator.registry import eval_registry
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Constant
@@ -90,7 +91,7 @@ def test_inner_mesh_coord_binds_multilevel() -> None:
     )
 
 
-def test_mesh_coord_evaluation_refused() -> None:
+def test_mesh_coord_evaluation_requires_execution_scope() -> None:
     handler = eval_registry.lookup(MeshCoord)
-    with pytest.raises(EvalError, match="one mesh participant"):
-        handler(None)
+    with pytest.raises(EvalError, match="static mesh execution scope"):
+        handler(EvaluateContext())
