@@ -112,3 +112,92 @@ def training_program(participants=2, *, retain=False):
                 return finish(y, target_value, dx, g1, g2, w1, w2, v1, v2)
 
     return Training
+
+
+def summarize_training(result):
+    """Read scoped parameter facts from existing memory/allocation records.
+
+    This example has sequential calls and no HIR loops. Traverse each reached
+    call occurrence, not just each function definition. The peak below selects
+    full parameter storage from the allocator's published windows and dedupes
+    accepted aliases; it is not a second allocator or a total training peak.
+    """
+    from math import prod
+
+    from tilefoundry.analysis import RegionMemoryMetadata
+    from tilefoundry.analysis.allocation import AllocationSummaryMetadata
+    from tilefoundry.ir.core import Call, get_metadata
+    from tilefoundry.ir.core.expr import SSAValue
+    from tilefoundry.ir.hir.function import Function
+    from tilefoundry.ir.hir.sharding.reshard import Reshard
+    from tilefoundry.ir.types.shard_layout import shard_layout_of
+    from tilefoundry.ir.visitor import collect_exprs
+
+    def occurrences(function):
+        for value in collect_exprs(function.body):
+            if isinstance(value, Call) and isinstance(value.target, Function):
+                yield from occurrences(value.target)
+            elif isinstance(value, Call) and isinstance(value.target, Reshard):
+                yield value
+
+    count = {"all_gather": 0, "reduce_scatter": 0}
+    gather_results = scatter_inputs = 0
+    participants = result.module.effective_topologies()[0].size
+    for call in occurrences(result.function):
+        source = shard_layout_of(call.args[0].type.layout)
+        target = shard_layout_of(call.type.layout)
+        if source is None or target is None or participants == 1:
+            continue
+        before, after = source.attrs[0], target.attrs[0]
+        if isinstance(before, Split) and isinstance(after, Broadcast):
+            count["all_gather"] += 1
+            gather_results += prod(call.type.shape) * call.type.dtype.bit_width // 8
+        elif isinstance(before, Partial) and isinstance(after, Split):
+            count["reduce_scatter"] += 1
+            scatter_inputs += prod(call.args[0].type.shape) * call.args[0].type.dtype.bit_width // 8
+        else:
+            continue
+    summary = get_metadata(result.function, AllocationSummaryMetadata)
+    by_value = {value.value: value for value in summary.values}
+    memory = get_metadata(result.function, RegionMemoryMetadata)
+    windows = []
+    for window in memory.lifetimes:
+        held = window.value.leaf()
+        shard = shard_layout_of(held.layout)
+        if shard is not None and all(isinstance(attr, Broadcast) for attr in shard.attrs) and held.shape in ((8, 8), (8, 4)):
+            root = summary.root(by_value[window.value])
+            windows.append((root, window))
+    events = {point for _, window in windows for point in (window.defined_at, window.last_used_at)}
+
+    def live_bytes(point):
+        live = {}
+        for root, window in windows:
+            if window.persistent or window.defined_at <= point <= window.last_used_at:
+                live[root] = max(live.get(root, 0), window.bytes)
+        return sum(live.values())
+
+    persistent = sum(by_value[SSAValue(param)].bytes for param in result.function.params[2:])
+    return {
+        "participants": participants,
+        **count,
+        "full_weight_peak_bytes": max(map(live_bytes, events), default=0) if participants > 1 else None,
+        "persistent_parameter_and_velocity_bytes": persistent,
+        "all_gather_result_bytes_per_participant": gather_results,
+        "reduce_scatter_input_bytes_per_participant": scatter_inputs,
+    }
+
+
+if __name__ == "__main__":
+    import argparse
+    import json
+
+    from tilefoundry.analysis import analyze
+    from tilefoundry.analysis.check import check_program
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--participants", type=int, choices=(1, 2, 4), default=2)
+    args = parser.parse_args()
+    for retain in (False, True):
+        program = training_program(args.participants, retain=retain)
+        analysis = analyze(*check_program(program, program.entry_function()), analysis="memory")
+        print(json.dumps({"policy": "retain" if retain else "release", **summarize_training(analysis)}))
