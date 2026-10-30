@@ -1,8 +1,7 @@
 """A row-to-column ownership change across two cards.
 
-The authored ownership differs, while its coalesced physical address box does
-not. Reshard's structural alias contract ignores participant ownership, so this
-case witnesses zero traffic and source storage reuse under that contract.
+The coalesced global address box agrees, but the owning device differs.
+Independent device engines require a materialized result and explicit traffic.
 """
 
 from __future__ import annotations

@@ -13,6 +13,7 @@ from tilefoundry.ir.types import ComposedLayout, TensorType
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
 from tilefoundry.ir.types.layout_algebra import coalesce, domain_offset
+from tilefoundry.ir.types.mesh import separate
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
@@ -87,17 +88,23 @@ def _buffer_alias(call: Call) -> int | None:
         axes = mode_axes(profile)
         independent, splits = set(), []
         if shard is not None:
+            topology_axes = tuple(
+                part.topologies[0].name
+                for part in separate(shard.mesh)
+                for _ in flatten(part.layout).shape
+            )
             for mesh_axis, attr in enumerate(shard.attrs):
                 if (
                     isinstance(attr, Split)
                     and static_dim_value(tuple(flatten(shard.mesh.layout.shape))[mesh_axis]) != 1
-                    and flat.strides[attr.axis] == 0
+                    and (flat.strides[attr.axis] == 0 or topology_axes[mesh_axis] == "gpu")
                 ):
                     position = attr.axis
                     suffix = prod(flat.shape[index] for index in range(position + 1, len(axes))
                                   if axes[index] == axes[position])
-                    splits.append((mesh_axis, axes[position], suffix, flat.shape[position]))
-                    independent.add(position)
+                    splits.append((shard.mesh, mesh_axis, axes[position], suffix, flat.shape[position]))
+                    if flat.strides[attr.axis] == 0:
+                        independent.add(position)
         kept = tuple(
             (extent, step)
             for index, (extent, step) in enumerate(zip(flat.shape, flat.strides, strict=True))

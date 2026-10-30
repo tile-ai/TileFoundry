@@ -81,7 +81,7 @@ class InvariantGemmOperands(FamilyCase):
         assert gmem.total == TrafficBytes(read=18_824_036_352, write=2_214_592_512)
 
 
-def test_reshard_aliases_input_buffer() -> None:
+def test_device_ownership_change_materializes_and_counts_transferred_elements() -> None:
     TransposeShard = load_authored_ir(f"{PLACED / 'tp_all_to_all.py'}:TransposeShard")
     result = analyze(
         *check_program(TransposeShard, TransposeShard.entry_function()), analysis="memory"
@@ -91,13 +91,15 @@ def test_reshard_aliases_input_buffer() -> None:
         for expr in collect_exprs(result.function.body)
         if isinstance(expr, Call) and isinstance(expr.target, Reshard)
     )
-    assert aliased_operand(reshard) == 0
+    assert aliased_operand(reshard) is None
     record = get_metadata(reshard, MemoryMetadata)
-    assert record.buffer_bytes is None and not record.offsets
-    assert record.traffic.communication.of("gpu") is None
+    assert record.buffer_bytes == 128 and record.offsets
+    traffic = record.traffic.communication.of("gpu")
+    assert traffic.at(record.topologies.index("gpu")) == TrafficBytes(read=64, write=64)
+    assert traffic.total == TrafficBytes(read=128, write=128)
     assert (
         get_metadata(result.function, RegionMemoryMetadata).peak_for("gmem").peak_bytes
-        == load_namespace(str(PLACED / "tp_all_to_all.py"))[0]["HELD_BYTES"]
+        == 2 * load_namespace(str(PLACED / "tp_all_to_all.py"))[0]["HELD_BYTES"]
     )
 
 

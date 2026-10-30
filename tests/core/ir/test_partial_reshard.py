@@ -13,6 +13,7 @@ from tilefoundry.ir.types import (
     Mesh,
     Partial,
     ShardLayout,
+    Split,
     StorageKind,
     TensorType,
     Topology,
@@ -54,3 +55,24 @@ def test_broadcast_to_plain_aliases():
     dst = replace(src, layout=src.layout.layout)
     call = Call(Reshard(layout=dst.layout, storage=dst.storage), (Var("src", type=src),), type=dst)
     assert aliased_operand(call) == 0
+
+
+@pytest.mark.parametrize("stride", (0, 4))
+def test_device_gather_materializes_even_with_the_same_global_address_map(stride):
+    mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
+    source = TensorType((4, 4), DType.f32, ShardLayout(Layout((4, 4), (stride, 1)), (Split(0),), mesh), StorageKind.GMEM)
+    result = replace(source, layout=ShardLayout(Layout((4, 4), (4, 1)), (Broadcast(),), mesh))
+    argument = Var("weight", type=source)
+    gather = Call(Reshard(layout=result.layout), (argument,), type=result)
+    unchanged = Call(Reshard(layout=source.layout), (argument,), type=source)
+    assert aliased_operand(gather) is None
+    assert aliased_operand(unchanged) == 0
+
+
+def test_device_rank_permutation_changes_the_storage_instance():
+    mesh = Mesh((Topology("gpu", 4),), Layout((2, 2), (2, 1)), ("row", "col"))
+    source = TensorType((4, 4), DType.f32, ShardLayout(Layout((4, 4)), (Split(0), Split(1)), mesh), StorageKind.GMEM)
+    permuted = replace(mesh, layout=Layout((2, 2), (1, 2)))
+    result = replace(source, layout=replace(source.layout, mesh=permuted))
+    moved = Call(Reshard(layout=result.layout), (Var("x", type=source),), type=result)
+    assert aliased_operand(moved) is None
