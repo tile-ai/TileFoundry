@@ -278,6 +278,17 @@ pieces. Broadcast/plain replicas MUST agree, and an unresolved Partial output
 MUST fail with a request for an explicit Reshard. Reconstruction is an observer
 operation and MUST NOT count as communication performed by the HIR program.
 
+`Reshard` supports unchanged ownership, Broadcast-to-Split, Split-to-Broadcast,
+and Partial(sum)-to-Split/Broadcast. It uses the actual local values: it
+reconstructs Split pieces, verifies replicated contributions, and sums each
+distinct Partial coordinate once. Unchanged mesh coordinates define separate
+subgroups. Unsupported transitions, including general Split-to-Split and
+creation of Partial from a replicated value, MUST fail explicitly. A no-op
+retains the local data; a redistribution materializes its destination values.
+These are logical transfer semantics, not a collective algorithm or timing
+model. Loop bounds must be uniform, statically resolvable values; divergent
+collective control flow is outside this subset.
+
 The existing logical-axis rules continue to hold:
 
 - An axis-bearing op (`Reduce`, `rms_norm`, …) addresses its `axis` /

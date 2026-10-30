@@ -5,7 +5,6 @@ from itertools import zip_longest
 from math import prod
 
 from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
@@ -164,5 +163,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Reshard)
 def _eval_reshard(ctx):
+    from tilefoundry.evaluator.mesh import redistribute  # noqa: PLC0415 -- import cycle
 
-    return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
+    return redistribute(ctx.args[0], ctx.result_type, ctx.mesh)

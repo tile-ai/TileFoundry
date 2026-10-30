@@ -17,8 +17,10 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
 from tilefoundry.ir.types import make_shard_tensor_type
 
@@ -152,3 +154,80 @@ def test_plain_output_does_not_silently_choose_one_participant():
     mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
     with pytest.raises(EvalError, match="disagree on a Broadcast/plain output"):
         evaluate(_mesh_program(_coordinate(mesh), (), mesh))
+
+
+@pytest.mark.parametrize("axis", (0, 1))
+def test_gather_and_scatter_reconstruct_tagged_elements(axis):
+    mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
+    split = make_shard_tensor_type((8, 4), mesh=mesh, attrs=(Split(axis),), dtype=DType.f32)
+    full = make_shard_tensor_type((8, 4), mesh=mesh, attrs=(Broadcast(),), dtype=DType.f32)
+    x = Var("x", type=split)
+    gather = Call(Reshard(layout=full.layout), (x,), type=full)
+    scatter = Call(Reshard(layout=split.layout), (gather,), type=split)
+    data = torch.arange(32, dtype=torch.float32).reshape(8, 4)
+    assert torch.equal(evaluate(_mesh_program(gather, (x,), mesh), data), data)
+    assert torch.equal(evaluate(_mesh_program(scatter, (x,), mesh), data), data)
+
+
+def _partial_product(mesh, groups=False):
+    prefix = (2,) if groups else ()
+    attrs = (Split(0), Split(1)) if groups else (Split(0),)
+    left = make_shard_tensor_type((*prefix, 2, 1), mesh=mesh, attrs=attrs, dtype=DType.f32)
+    right = make_shard_tensor_type((*prefix, 2, 4), mesh=mesh, attrs=attrs, dtype=DType.f32)
+    result = make_shard_tensor_type(
+        (*prefix, 1, 4), mesh=mesh,
+        attrs=(Split(0), Partial("sum")) if groups else (Partial("sum"),), dtype=DType.f32,
+    )
+    a, b = Var("a", type=left), Var("b", type=right)
+    value = Call(MatMul(a_layout="KM"), (a, b), type=result)
+    return (a, b), value
+
+
+@pytest.mark.parametrize("scatter", (False, True))
+@pytest.mark.parametrize("groups", (False, True))
+def test_partial_sum_uses_actual_contributions_and_keeps_subgroups_separate(scatter, groups):
+    mesh = Mesh(
+        (Topology("gpu", 4 if groups else 2),),
+        Layout((2, 2), (1, 2)) if groups else Layout((2,), (1,)),
+        ("replica", "dp") if groups else ("dp",),
+    )
+    params, partial = _partial_product(mesh, groups)
+    target_attr = Split(2 if groups else 1) if scatter else Broadcast()
+    held = make_shard_tensor_type(
+        partial.type.shape, mesh=mesh,
+        attrs=(Split(0), target_attr) if groups else (target_attr,), dtype=DType.f32,
+    )
+    result = Call(Reshard(layout=held.layout), (partial,), type=held)
+    data = torch.tensor([[1., 2., 3., 4.], [10., 20., 30., 40.]])
+    data = torch.stack((data, data * 10)) if groups else data
+    actual = evaluate(_mesh_program(result, params, mesh), torch.ones(params[0].type.shape), data)
+    expected = data.sum(dim=-2, keepdim=True)
+    assert torch.equal(actual, expected)
+    if scatter:
+        rank = _coordinate(mesh, 1 if groups else 0)
+        offset = Call(Binary(kind=BinaryKind.MUL), (rank, Constant(100., type=TensorType.scalar(DType.f32))), type=TensorType.scalar(DType.f32))
+        shifted = Call(Binary(kind=BinaryKind.ADD), (result, offset), type=held)
+        actual = evaluate(_mesh_program(shifted, params, mesh), torch.ones(params[0].type.shape), data)
+        expected[..., 2:] += 100
+        assert torch.equal(actual, expected)
+
+
+def test_unresolved_partial_is_not_a_global_result_or_an_ordinary_operand():
+    mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
+    params, partial = _partial_product(mesh)
+    args = torch.ones(2, 1), torch.arange(8, dtype=torch.float32).reshape(2, 4)
+    with pytest.raises(EvalError, match="cannot observe unresolved Partial"):
+        evaluate(_mesh_program(partial, params, mesh), *args)
+    added = Call(Binary(kind=BinaryKind.ADD), (partial, partial), type=partial.type)
+    with pytest.raises(EvalError, match="resolve Partial with Reshard"):
+        evaluate(_mesh_program(added, params, mesh), *args)
+
+
+def test_unsupported_split_axis_change_has_an_explicit_diagnostic():
+    mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
+    source = make_shard_tensor_type((4, 4), mesh=mesh, attrs=(Split(0),), dtype=DType.f32)
+    target = make_shard_tensor_type((4, 4), mesh=mesh, attrs=(Split(1),), dtype=DType.f32)
+    x = Var("x", type=source)
+    moved = Call(Reshard(layout=target.layout), (x,), type=target)
+    with pytest.raises(EvalError, match="unsupported redistribution"):
+        evaluate(_mesh_program(moved, (x,), mesh), torch.arange(16).reshape(4, 4))

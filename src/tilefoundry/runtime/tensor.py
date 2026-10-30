@@ -26,14 +26,6 @@ from tilefoundry.utils.lazy import torch
 
 def _strided_local_view(tensor, layout, offset):
     """Apply the shared local projection to an already matching tensor engine."""
-    written = normalize_layout(layout).strides
-    actual = normalize_layout(Layout(tuple(tensor.shape), tuple(tensor.stride()))).strides
-    if actual != written:
-        raise ValueError(
-            f"ShardTensor: the tensor is laid out {tuple(tensor.stride())} "
-            f"while its type says {tuple(layout.strides)}; the offset is counted "
-            f"in the type's strides, so the tensor must be laid out in them"
-        )
     return tensor.as_strided(
         layout.shape, layout.strides, storage_offset=tensor.storage_offset() + offset
     )
@@ -96,6 +88,16 @@ class ShardTensor:
         layout, offset = local_layout_and_offset(
             shard, tuple(self.type.shape), tuple(ids[at[name]] for name in topology_levels)
         )
+        written = normalize_layout(layout).strides
+        actual = normalize_layout(
+            Layout(tuple(self.tensor.shape), tuple(self.tensor.stride()))
+        ).strides
+        if actual != written:
+            raise ValueError(
+                f"ShardTensor: the tensor is laid out {tuple(self.tensor.stride())} "
+                f"while its type says {tuple(layout.strides)}; the offset is counted "
+                f"in the type's strides, so the tensor must be laid out in them"
+            )
         return _strided_local_view(self.tensor, layout, offset)
 
 

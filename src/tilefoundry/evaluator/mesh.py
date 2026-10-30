@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from itertools import product
+from math import prod
 
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue, Value
 from tilefoundry.ir.types import Layout, Mesh, TensorType, TupleType
@@ -16,6 +17,7 @@ from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Dynamic,
     Partial,
+    Split,
     _local_readback,
     local_layout,
     shard_layout_of,
@@ -153,6 +155,10 @@ def observe(value: MeshValue):
 
 def evaluate_op(handler, ctx):
     """Execute an ordinary op once per participant with its own local values."""
+    from tilefoundry.ir.hir.sharding.reshard import Reshard  # noqa: PLC0415 -- import cycle
+
+    if isinstance(ctx.op, Reshard):
+        return handler(ctx)
     mesh = ctx.mesh or next((found for arg in ctx.args if (found := mesh_of(arg))), None)
     if mesh is None:
         return handler(ctx)
@@ -173,3 +179,76 @@ def evaluate_op(handler, ctx):
         for index, coordinate in enumerate(coordinates(mesh))
     )
     return pack(results, ctx.result_type, mesh)
+
+
+def redistribute(value, held: TensorType, mesh: Mesh | None):
+    """Resolve explicit logical transfers using actual participant contributions.
+
+    Groups keep every unchanged mesh coordinate fixed. Within a group, Split
+    pieces reconstruct indices, Broadcast copies agree, and distinct Partial
+    coordinates contribute once to a sum. No network schedule is implied.
+    """
+    from tilefoundry.runtime.tensor import logical_local_view  # noqa: PLC0415 -- import cycle
+
+    target_shard = shard_layout_of(held.layout)
+    mesh = mesh or mesh_of(value) or (target_shard.mesh if target_shard else None)
+    if mesh is None:
+        return TensorValue(value.data, held)
+    value = distribute(value, mesh)
+    before, after = attributes(value.type, mesh), attributes(held, mesh)
+    changed = tuple(axis for axis, pair in enumerate(zip(before, after, strict=True)) if pair[0] != pair[1])
+    for axis in changed:
+        source, target = before[axis], after[axis]
+        supported = (
+            isinstance(source, Broadcast) and isinstance(target, Split)
+            or isinstance(source, Split) and isinstance(target, Broadcast)
+            or isinstance(source, Partial) and source.reduction == "sum"
+            and isinstance(target, (Split, Broadcast))
+        )
+        if not supported:
+            raise EvalError(f"unsupported redistribution on mesh axis {axis}: {source} -> {target}")
+    coords = coordinates(mesh)
+    result_type = local_type(held, mesh)
+    if not changed:
+        indices = torch.arange(prod(value.type.shape)).reshape(value.type.shape)
+        if any(not torch.equal(
+            logical_local_view(indices, value.type, coordinate),
+            logical_local_view(indices, held, coordinate),
+        ) for coordinate in coords):
+            raise EvalError("unsupported Split-to-Split redistribution")
+        return MeshValue(
+            tuple(TensorValue(item.data, result_type) for item in value.values), held, mesh,
+        )
+    groups = {}
+    for index, coordinate in enumerate(coords):
+        key = tuple(at for axis, at in enumerate(coordinate) if axis not in changed)
+        groups.setdefault(key, []).append(index)
+    outputs = [None] * len(coords)
+    partial_axes = tuple(axis for axis in changed if isinstance(before[axis], Partial))
+    first = value.values[0].data
+    for members in groups.values():
+        contributions = {}
+        for index in members:
+            coordinate = coords[index]
+            key = tuple(coordinate[axis] for axis in partial_axes)
+            if key not in contributions:
+                contributions[key] = (
+                    torch.zeros(value.type.shape, dtype=first.dtype, device=first.device),
+                    torch.zeros(value.type.shape, dtype=torch.bool, device=first.device),
+                )
+            full, covered = contributions[key]
+            target = logical_local_view(full, value.type, coordinate)
+            written = logical_local_view(covered, value.type, coordinate)
+            data = value.values[index].data
+            if written.any() and not torch.equal(target[written], data[written]):
+                raise EvalError("redistribution found disagreeing Broadcast contributions")
+            target.copy_(data)
+            written.fill_(True)
+        full = sum(item[0] for item in contributions.values())
+        for index in members:
+            if any(not logical_local_view(covered, held, coords[index]).all()
+                   for _, covered in contributions.values()):
+                raise EvalError("redistribution cannot cover the destination shard")
+            data = logical_local_view(full, held, coords[index]).clone()
+            outputs[index] = TensorValue(data, result_type)
+    return MeshValue(tuple(outputs), held, mesh)
