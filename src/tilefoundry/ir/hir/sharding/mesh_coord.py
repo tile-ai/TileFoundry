@@ -72,7 +72,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
 
 @register_eval(MeshCoord)
 def _eval_mesh_coord(ctx):
-    if ctx.coordinates is None or ctx.mesh != ctx.op.mesh:
+    from tilefoundry.evaluator.mesh import same_participants  # noqa: PLC0415 -- import cycle
+
+    if ctx.coordinates is None or not same_participants(ctx.mesh, ctx.op.mesh):
         raise EvalError("MeshCoord requires its static mesh execution scope")
     axis = int(ctx.args[0].data.item())
     if not 0 <= axis < len(ctx.coordinates):

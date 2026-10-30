@@ -260,14 +260,28 @@ are evaluated once in the enclosing scope. With `k = len(yield_values)`:
 ## 6. Layout domain
 
 Evaluation operates on logical values and infers participation from
-`MeshRegion` and operand `ShardLayout` values. A static mesh executes its
+`MeshRegion` and operand `ShardLayout` values. A static, single-level GPU mesh executes its
 participants on the caller's existing torch device; no distributed runtime
 or evaluator mode flag is required. Logical mesh coordinates, including
 permuted physical rank arrangements, select ownership through the same
 local-layout algebra used by `ShardTensor` ([runtime §1.10](runtime.md#110-runtimetensorpy)).
 
+This participant subset requires concrete tensor shapes and evenly divided
+shards. Specialize symbolic GPU tensor shapes before execution. Existing
+in-device CTA/warp/thread reference evaluation keeps its global logical view;
+it does not enumerate those units. Hierarchical GPU-to-CTA execution is outside
+this subset. Crossing an active participant value into a different mesh is refused.
+
 Each operation receives local tensor shapes and actual local data. Function
 calls and loop iterations retain fresh memo scopes and the active mesh.
+Invariant values retain their canonical representation until an operation
+needs participant-local data. In particular, replicated symbolic inputs do
+not need local projection merely because a mesh scope exists. Local projection
+of immutable types and coordinate enumeration may be cached; evaluated data
+and execution memos remain scoped to each call and loop iteration.
+Mesh axis names are labels; matching topology and physical arrangement identify
+the same participants even when those labels differ. Participant-local Reshape
+uses the inferred local result shape rather than the global authored extent.
 `MeshCoord` reads that invocation's logical coordinate; `Local` exposes an
 already-local value without slicing it again. Canonical inputs cannot supply
 unresolved Partial contributions. Static even shards are supported; Dynamic

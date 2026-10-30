@@ -7,6 +7,7 @@ Ownership continues to come from the HIR's Mesh and ShardLayout.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from itertools import product
 from math import prod
 
@@ -35,6 +36,17 @@ class MeshValue(Value):
     mesh: Mesh
 
 
+def participant_mesh(mesh: Mesh) -> bool:
+    """Device participation is distinct from existing in-device reference views."""
+    return len(mesh.topologies) == 1 and mesh.topologies[0].name == "gpu"
+
+
+def same_participants(left: Mesh, right: Mesh) -> bool:
+    """Axis names label a mesh; topology and arrangement identify its units."""
+    return left.topologies == right.topologies and left.layout == right.layout
+
+
+@lru_cache(maxsize=256)
 def coordinates(mesh: Mesh) -> tuple[tuple[int, ...], ...]:
     """Enumerate logical coordinates without assuming physical rank order."""
     shape = flatten(mesh.layout).shape
@@ -48,7 +60,7 @@ def attributes(held: TensorType, mesh: Mesh):
     shard = shard_layout_of(held.layout)
     if shard is None:
         return (Broadcast(),) * len(flatten(mesh.layout).shape)
-    if shard.mesh != mesh:
+    if not same_participants(shard.mesh, mesh):
         raise EvalError("mesh evaluation does not support redistribution between different meshes")
     if len(shard.attrs) != len(flatten(mesh.layout).shape):
         raise EvalError("mesh evaluation requires one distribution attribute per mesh axis")
@@ -57,12 +69,15 @@ def attributes(held: TensorType, mesh: Mesh):
     return shard.attrs
 
 
+@lru_cache(maxsize=256)
 def local_type(held, mesh: Mesh):
     """Present existing op handlers with their participant-local logical shape."""
     if isinstance(held, TupleType):
         return TupleType(tuple(local_type(field, mesh) for field in held.fields))
     if not isinstance(held, TensorType):
         return held
+    if any(type(extent) is not int for extent in held.shape):
+        raise EvalError("GPU participant evaluation requires concrete tensor shapes; specialize first")
     attributes(held, mesh)
     shard = shard_layout_of(held.layout)
     if shard is None:
@@ -79,10 +94,15 @@ def distribute(value: Value, mesh: Mesh) -> Value:
     if isinstance(value, TupleValue):
         return TupleValue(tuple(distribute(item, mesh) for item in value.elements))
     if isinstance(value, MeshValue):
-        if value.mesh != mesh:
+        if not same_participants(value.mesh, mesh):
             raise EvalError("nested mesh evaluation requires the same participant mesh")
         return value
+    if not participant_mesh(mesh):
+        return value
     if not isinstance(value, TensorValue):
+        return value
+    shard = shard_layout_of(value.type.layout)
+    if shard is None or all(isinstance(attr, Broadcast) for attr in shard.attrs):
         return value
     attrs = attributes(value.type, mesh)
     if any(isinstance(attr, Partial) for attr in attrs):
@@ -156,14 +176,17 @@ def observe(value: MeshValue):
 
 def evaluate_op(handler, ctx):
     """Execute an ordinary op once per participant with its own local values."""
+    from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord  # noqa: PLC0415 -- import cycle
     from tilefoundry.ir.hir.sharding.reshard import Reshard  # noqa: PLC0415 -- import cycle
     from tilefoundry.ir.hir.tensor.reduce import Reduce  # noqa: PLC0415 -- import cycle
 
     if isinstance(ctx.op, Reshard):
         return handler(ctx)
     mesh = ctx.mesh or next((found for arg in ctx.args if (found := mesh_of(arg))), None)
-    if mesh is None:
+    if mesh is None or not participant_mesh(mesh):
         return handler(ctx)
+    if not isinstance(ctx.op, MeshCoord) and not any(mesh_of(arg) for arg in ctx.args):
+        return distribute(handler(ctx), mesh)
     args = tuple(distribute(arg, mesh) for arg in ctx.args)
     if isinstance(ctx.op, Reduce):
         source = args[0]
@@ -202,10 +225,19 @@ def redistribute(value, held: TensorType, mesh: Mesh | None):
 
     target_shard = shard_layout_of(held.layout)
     mesh = mesh or mesh_of(value) or (target_shard.mesh if target_shard else None)
-    if mesh is None:
+    if mesh is None or not participant_mesh(mesh):
+        if isinstance(value, MeshValue):
+            raise EvalError("nested mesh evaluation requires the same participant mesh")
         return TensorValue(value.data, held)
     value = distribute(value, mesh)
     before, after = attributes(value.type, mesh), attributes(held, mesh)
+    if isinstance(value, TensorValue):
+        if all(isinstance(attr, Broadcast) for attr in (*before, *after)):
+            return TensorValue(value.data, held)
+        value = MeshValue(
+            (TensorValue(value.data, local_type(value.type, mesh)),) * len(coordinates(mesh)),
+            value.type, mesh,
+        )
     changed = tuple(axis for axis, pair in enumerate(zip(before, after, strict=True)) if pair[0] != pair[1])
     for axis in changed:
         source, target = before[axis], after[axis]

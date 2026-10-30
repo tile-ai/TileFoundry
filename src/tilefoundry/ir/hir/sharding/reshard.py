@@ -102,7 +102,7 @@ def _buffer_alias(call: Call) -> int | None:
                     position = attr.axis
                     suffix = prod(flat.shape[index] for index in range(position + 1, len(axes))
                                   if axes[index] == axes[position])
-                    splits.append((shard.mesh, mesh_axis, axes[position], suffix, flat.shape[position]))
+                    splits.append((shard.mesh.topologies, shard.mesh.layout, mesh_axis, axes[position], suffix, flat.shape[position]))
                     if flat.strides[attr.axis] == 0:
                         independent.add(position)
         kept = tuple(

@@ -22,6 +22,7 @@ from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.reduce import Reduce
+from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
 from tilefoundry.ir.types import make_shard_tensor_type
 
@@ -155,6 +156,17 @@ def test_plain_output_does_not_silently_choose_one_participant():
     mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
     with pytest.raises(EvalError, match="disagree on a Broadcast/plain output"):
         evaluate(_mesh_program(_coordinate(mesh), (), mesh))
+
+
+def test_gpu_reshape_uses_local_extents_across_equivalent_named_meshes():
+    mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
+    renamed = Mesh(mesh.topologies, mesh.layout, ("workers",))
+    source = make_shard_tensor_type((8, 4), mesh=mesh, attrs=(Split(0),), dtype=DType.f32)
+    result = make_shard_tensor_type((8, 2, 2), mesh=renamed, attrs=(Split(0),), dtype=DType.f32)
+    x = Var("x", type=source)
+    reshaped = Call(Reshape(new_shape=(8, 2, 2)), (x,), type=result)
+    data = torch.arange(32, dtype=torch.float32).reshape(8, 4)
+    assert torch.equal(evaluate(_mesh_program(reshaped, (x,), renamed), data), data.reshape(8, 2, 2))
 
 
 @pytest.mark.parametrize("axis", (0, 1))

@@ -227,7 +227,8 @@ def _bound_or_inferred(dim, bindings):
 @register_eval(Reshape)
 def _eval_reshape(ctx):
 
-    shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in ctx.op.new_shape)
+    declared = ctx.result_type.shape if ctx.coordinates is not None else ctx.op.new_shape
+    shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in declared)
     if shape.count(-1) > 1:
         raise EvalError(
             f"reshape: at most one dynamic axis can be inferred, got new_shape={ctx.op.new_shape!r}"
