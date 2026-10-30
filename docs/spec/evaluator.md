@@ -271,6 +271,8 @@ shards. Specialize symbolic GPU tensor shapes before execution. Existing
 in-device CTA/warp/thread reference evaluation keeps its global logical view;
 it does not enumerate those units. Hierarchical GPU-to-CTA execution is outside
 this subset. Crossing an active participant value into a different mesh is refused.
+`Local` on a Split axis requires participant execution; in-device Split views
+remain unsupported rather than returning global data with a local shape.
 
 Each operation receives local tensor shapes and actual local data. Function
 calls and loop iterations retain fresh memo scopes and the active mesh.

@@ -158,6 +158,15 @@ def test_plain_output_does_not_silently_choose_one_participant():
         evaluate(_mesh_program(_coordinate(mesh), (), mesh))
 
 
+def test_local_refuses_split_views_without_device_participant_execution():
+    mesh = Mesh((Topology("cta", 2),), Layout((2,), (1,)), ("row",))
+    held = make_shard_tensor_type((8, 4), mesh=mesh, attrs=(Split(0),), dtype=DType.f32)
+    x = Var("x", type=held)
+    local = Call(Local(), (x,), type=TensorType((4, 4), DType.f32, Layout((4, 4)), StorageKind.GMEM))
+    with pytest.raises(EvalError, match="Local on a Split axis requires GPU participant evaluation"):
+        evaluate(_mesh_program(local, (x,), mesh), torch.arange(32).reshape(8, 4))
+
+
 def test_gpu_reshape_uses_local_extents_across_equivalent_named_meshes():
     mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
     renamed = Mesh(mesh.topologies, mesh.layout, ("workers",))
