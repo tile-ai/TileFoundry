@@ -289,6 +289,14 @@ These are logical transfer semantics, not a collective algorithm or timing
 model. Loop bounds must be uniform, statically resolvable values; divergent
 collective control flow is outside this subset.
 
+`Reduce` already has complete-reduction HIR semantics: a reduced
+Split axis becomes Broadcast. When such an axis is reduced, reference
+execution reconstructs the actual logical input and performs the complete
+reduction, including global mean normalization.
+Reducing only unsplit axes remains participant-local. This differs from
+MatMul's split contraction, which produces unresolved Partial(sum) and needs
+an explicit Reshard. No type-inference rule is changed by this distinction.
+
 The existing logical-axis rules continue to hold:
 
 - An axis-bearing op (`Reduce`, `rms_norm`, …) addresses its `axis` /

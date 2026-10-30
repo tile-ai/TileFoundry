@@ -21,6 +21,7 @@ from tilefoundry.ir.types.shard_layout import (
     _local_readback,
     local_layout,
     shard_layout_of,
+    split_target_axes,
 )
 from tilefoundry.utils.lazy import torch
 
@@ -156,6 +157,7 @@ def observe(value: MeshValue):
 def evaluate_op(handler, ctx):
     """Execute an ordinary op once per participant with its own local values."""
     from tilefoundry.ir.hir.sharding.reshard import Reshard  # noqa: PLC0415 -- import cycle
+    from tilefoundry.ir.hir.tensor.reduce import Reduce  # noqa: PLC0415 -- import cycle
 
     if isinstance(ctx.op, Reshard):
         return handler(ctx)
@@ -163,6 +165,14 @@ def evaluate_op(handler, ctx):
     if mesh is None:
         return handler(ctx)
     args = tuple(distribute(arg, mesh) for arg in ctx.args)
+    if isinstance(ctx.op, Reduce):
+        source = args[0]
+        shard = shard_layout_of(source.type.layout)
+        axes = tuple(axis % len(source.type.shape) for axis in ctx.op.axes)
+        if shard is not None and any(axis in axes for axis in split_target_axes(shard, source.type.shape)):
+            complete = TensorValue(observe(source), source.type)
+            result = handler(replace(ctx, args=(complete,), mesh=None, coordinates=None))
+            return distribute(result, mesh)
     for arg in args:
         if isinstance(arg, MeshValue) and any(
             isinstance(attr, Partial) for attr in attributes(arg.type, mesh)

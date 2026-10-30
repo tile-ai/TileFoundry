@@ -21,6 +21,7 @@ from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
 from tilefoundry.ir.types import make_shard_tensor_type
 
@@ -231,3 +232,20 @@ def test_unsupported_split_axis_change_has_an_explicit_diagnostic():
     moved = Call(Reshard(layout=target.layout), (x,), type=target)
     with pytest.raises(EvalError, match="unsupported redistribution"):
         evaluate(_mesh_program(moved, (x,), mesh), torch.arange(16).reshape(4, 4))
+
+
+@pytest.mark.parametrize("axes", ((0,), (1,), (0, 1)))
+@pytest.mark.parametrize("kind", (ReduceKind.SUM, ReduceKind.MEAN))
+def test_complete_reduction_matches_its_broadcast_or_split_result(axes, kind):
+    mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("dp",))
+    held = make_shard_tensor_type((4, 4), mesh=mesh, attrs=(Split(0),), dtype=DType.f32)
+    output = make_shard_tensor_type(
+        tuple(4 for axis in range(2) if axis not in axes), mesh=mesh,
+        attrs=(Broadcast() if 0 in axes else Split(0),), dtype=DType.f32,
+    )
+    x = Var("x", type=held)
+    reduced = Call(Reduce(axes=axes, kind=kind, keepdim=False), (x,), type=output)
+    data = torch.arange(16, dtype=torch.float32).reshape(4, 4)
+    actual = evaluate(_mesh_program(reduced, (x,), mesh), data)
+    expected = data.sum(dim=axes) if kind is ReduceKind.SUM else data.mean(dim=axes)
+    assert torch.equal(actual, expected)
