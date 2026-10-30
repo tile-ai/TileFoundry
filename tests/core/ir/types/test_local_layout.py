@@ -11,9 +11,11 @@ and over every instance of each, not once per program that happens to run.
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 from itertools import product
 
 import pytest
+import torch
 
 from tilefoundry.ir.types import DType, Layout, Mesh, Topology, make_shard_tensor_type
 from tilefoundry.ir.types.layout import flatten
@@ -28,6 +30,7 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.stride import idx2crd, try_compact_major
 from tilefoundry.ir.types.utils import local_type_of
+from tilefoundry.runtime.tensor import logical_local_view
 
 _GPU, _THREAD = Topology("gpu", 2), Topology("thread", 32)
 
@@ -176,3 +179,30 @@ def test_an_extent_its_mesh_axis_does_not_divide_is_refused() -> None:
 
     with pytest.raises(ValueError, match=r"layout positions .* cross logical axes of \(6,\)"):
         local_layout_and_offset(shard, (6,), (0,))
+
+
+@pytest.mark.parametrize("axis", (0, 1))
+def test_logical_input_uses_ownership_even_with_private_physical_strides(axis):
+    """Canonical reference inputs contain all shards, unlike one device engine."""
+    mesh = Mesh((_GPU,), Layout((2,), (1,)), ("g",))
+    held = make_shard_tensor_type((8, 4), mesh=mesh, attrs=(Split(axis),), dtype=DType.f32)
+    shard = held.layout
+    strides = list(shard.layout.strides)
+    strides[shard.attrs[0].axis] = 0
+    held = replace(held, layout=replace(shard, layout=Layout(shard.shape, tuple(strides))))
+    data = torch.arange(32).reshape(8, 4)
+    for rank in range(2):
+        actual = logical_local_view(data, held, (rank,))
+        assert torch.equal(actual, data.chunk(2, dim=axis)[rank])
+
+
+def test_logical_input_handles_permuted_mesh_axes_and_noncontiguous_data():
+    """Logical coordinates select rows and columns independently of rank order."""
+    mesh = Mesh((Topology("gpu", 4),), Layout((2, 2), (1, 2)), ("row", "col"))
+    held = make_shard_tensor_type((8, 4), mesh=mesh, attrs=(Split(0), Split(1)), dtype=DType.f32)
+    data = torch.arange(32).reshape(4, 8).T
+    for row, col in product(range(2), repeat=2):
+        assert torch.equal(
+            logical_local_view(data, held, (row, col)),
+            data[row * 4 : (row + 1) * 4, col * 2 : (col + 1) * 2],
+        )

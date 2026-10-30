@@ -763,6 +763,14 @@ global `TensorType`, so a checkpoint read hands back every program's data at
 once. `ShardTensor` pairs that owning tensor with the type that shards it, and
 `to_local` is the single place the pair is narrowed to one program.
 
+The HIR evaluator's internal `logical_local_view` uses the same `local_layout`
+algebra over canonical dense logical indices. Its input contains the whole
+logical tensor, even when a device-local physical layout has zero strides on
+private shard modes. It therefore projects ownership using canonical logical
+strides, without interpreting a physical engine offset as a logical index.
+Both paths apply the resulting local shape, strides and offset through the
+same strided-view helper; the checkpoint path retains its physical-stride check.
+
 <!-- generated: py-tensor -->
 ```python
 # src/tilefoundry/runtime/tensor.py
