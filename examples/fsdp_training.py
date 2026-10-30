@@ -24,8 +24,12 @@ def training_program(participants=2, *, retain=False):
     target = CudaTarget("nvidia.h200_sxm", device_count=participants)
     gpu = Topology("gpu", participants)
     mesh = Mesh((gpu,), Layout((participants,), (1,)), ("dp",))
-    s8 = ShardLayout.default((8, 8), mesh, (Split(0),), storage="gmem", owners=target.storage_owners)
-    s4 = ShardLayout.default((8, 4), mesh, (Split(0),), storage="gmem", owners=target.storage_owners)
+    s8 = ShardLayout.default(
+        (8, 8), mesh, (Split(0),), storage="gmem", owners=target.storage_owners
+    )
+    s4 = ShardLayout.default(
+        (8, 4), mesh, (Split(0),), storage="gmem", owners=target.storage_owners
+    )
     b8 = ShardLayout(Layout((8, 8)), (Broadcast(),), mesh)
     b4 = ShardLayout(Layout((8, 4)), (Broadcast(),), mesh)
     local_scale = 2.0 / ((8 // participants) * 4)
@@ -56,14 +60,23 @@ def training_program(participants=2, *, retain=False):
             return tf.matmul(h, full), full
 
         @func
-        def backward2(h: Tensor[(8, 8), "f32", s8], dy: Tensor[(8, 4), "f32", s4], full: Tensor[(8, 4), "f32", b4]):
+        def backward2(
+            h: Tensor[(8, 8), "f32", s8],
+            dy: Tensor[(8, 4), "f32", s4],
+            full: Tensor[(8, 4), "f32", b4],
+        ):
             dh = tf.matmul(dy, full, b_layout="NK")
             partial = tf.matmul(h, dy, a_layout="KM")
             gradient = tf.reshard(partial, layout=s4, storage="gmem")
             return dh, gradient * inverse_participants
 
         @func
-        def backward1(x: Tensor[(8, 8), "f32", s8], h: Tensor[(8, 8), "f32", s8], dh: Tensor[(8, 8), "f32", s8], full: Tensor[(8, 8), "f32", b8]):
+        def backward1(
+            x: Tensor[(8, 8), "f32", s8],
+            h: Tensor[(8, 8), "f32", s8],
+            dh: Tensor[(8, 8), "f32", s8],
+            full: Tensor[(8, 8), "f32", b8],
+        ):
             dz = tf.where(h > 0.0, dh, 0.0)
             dx = tf.matmul(dz, full, b_layout="NK")
             partial = tf.matmul(x, dz, a_layout="KM")
@@ -71,17 +84,36 @@ def training_program(participants=2, *, retain=False):
             return dx, gradient * inverse_participants
 
         @func
-        def regather2(h: Tensor[(8, 8), "f32", s8], dy: Tensor[(8, 4), "f32", s4], w: Tensor[(8, 4), "f32", s4]):
+        def regather2(
+            h: Tensor[(8, 8), "f32", s8],
+            dy: Tensor[(8, 4), "f32", s4],
+            w: Tensor[(8, 4), "f32", s4],
+        ):
             full = tf.reshard(w, layout=b4, storage="gmem")
             return backward2(h, dy, full)
 
         @func
-        def regather1(x: Tensor[(8, 8), "f32", s8], h: Tensor[(8, 8), "f32", s8], dh: Tensor[(8, 8), "f32", s8], w: Tensor[(8, 8), "f32", s8]):
+        def regather1(
+            x: Tensor[(8, 8), "f32", s8],
+            h: Tensor[(8, 8), "f32", s8],
+            dh: Tensor[(8, 8), "f32", s8],
+            w: Tensor[(8, 8), "f32", s8],
+        ):
             full = tf.reshard(w, layout=b8, storage="gmem")
             return backward1(x, h, dh, full)
 
         @func
-        def finish(y: Tensor[(8, 4), "f32", s4], target_value: Tensor[(8, 4), "f32", s4], dx: Tensor[(8, 8), "f32", s8], g1: Tensor[(8, 8), "f32", s8], g2: Tensor[(8, 4), "f32", s4], w1: Tensor[(8, 8), "f32", s8], w2: Tensor[(8, 4), "f32", s4], v1: Tensor[(8, 8), "f32", s8], v2: Tensor[(8, 4), "f32", s4]):
+        def finish(
+            y: Tensor[(8, 4), "f32", s4],
+            target_value: Tensor[(8, 4), "f32", s4],
+            dx: Tensor[(8, 8), "f32", s8],
+            g1: Tensor[(8, 8), "f32", s8],
+            g2: Tensor[(8, 4), "f32", s4],
+            w1: Tensor[(8, 8), "f32", s8],
+            w2: Tensor[(8, 4), "f32", s4],
+            v1: Tensor[(8, 8), "f32", s8],
+            v2: Tensor[(8, 4), "f32", s4],
+        ):
             error = y - target_value
             squared_sum = tf.reduce(error * error, axes=(0, 1), kind=ReduceKind.SUM, keepdim=False)
             loss = squared_sum / 32.0
@@ -92,7 +124,14 @@ def training_program(participants=2, *, retain=False):
             return y, loss, dx, g1, g2, next_w1, next_w2, next_v1, next_v2
 
         @func
-        def release_step(x: Tensor[(8, 8), "f32", s8], target_value: Tensor[(8, 4), "f32", s4], w1: Tensor[(8, 8), "f32", s8], w2: Tensor[(8, 4), "f32", s4], v1: Tensor[(8, 8), "f32", s8], v2: Tensor[(8, 4), "f32", s4]):
+        def release_step(
+            x: Tensor[(8, 8), "f32", s8],
+            target_value: Tensor[(8, 4), "f32", s4],
+            w1: Tensor[(8, 8), "f32", s8],
+            w2: Tensor[(8, 4), "f32", s4],
+            v1: Tensor[(8, 8), "f32", s8],
+            v2: Tensor[(8, 4), "f32", s4],
+        ):
             with Mesh(("gpu",), layout=(participants,), names=("dp",)) as dp:
                 h = forward1(x, w1)
                 y = forward2(h, w2)
@@ -102,7 +141,14 @@ def training_program(participants=2, *, retain=False):
                 return finish(y, target_value, dx, g1, g2, w1, w2, v1, v2)
 
         @func
-        def retain_step(x: Tensor[(8, 8), "f32", s8], target_value: Tensor[(8, 4), "f32", s4], w1: Tensor[(8, 8), "f32", s8], w2: Tensor[(8, 4), "f32", s4], v1: Tensor[(8, 8), "f32", s8], v2: Tensor[(8, 4), "f32", s4]):
+        def retain_step(
+            x: Tensor[(8, 8), "f32", s8],
+            target_value: Tensor[(8, 4), "f32", s4],
+            w1: Tensor[(8, 8), "f32", s8],
+            w2: Tensor[(8, 4), "f32", s4],
+            v1: Tensor[(8, 8), "f32", s8],
+            v2: Tensor[(8, 4), "f32", s4],
+        ):
             with Mesh(("gpu",), layout=(participants,), names=("dp",)) as dp:
                 h, full1 = retain1(x, w1)
                 y, full2 = retain2(h, w2)
@@ -164,7 +210,11 @@ def summarize_training(result):
     for window in memory.lifetimes:
         held = window.value.leaf()
         shard = shard_layout_of(held.layout)
-        if shard is not None and all(isinstance(attr, Broadcast) for attr in shard.attrs) and held.shape in ((8, 8), (8, 4)):
+        if (
+            shard is not None
+            and all(isinstance(attr, Broadcast) for attr in shard.attrs)
+            and held.shape in ((8, 8), (8, 4))
+        ):
             root = summary.root(by_value[window.value])
             windows.append((root, window))
     events = {point for _, window in windows for point in (window.defined_at, window.last_used_at)}
@@ -180,7 +230,9 @@ def summarize_training(result):
     return {
         "participants": participants,
         **count,
-        "full_weight_peak_bytes": max(map(live_bytes, events), default=0) if participants > 1 else None,
+        "full_weight_peak_bytes": max(map(live_bytes, events), default=0)
+        if participants > 1
+        else None,
         "persistent_parameter_and_velocity_bytes": persistent,
         "all_gather_result_bytes_per_participant": gather_results,
         "reduce_scatter_input_bytes_per_participant": scatter_inputs,
@@ -200,4 +252,8 @@ if __name__ == "__main__":
     for retain in (False, True):
         program = training_program(args.participants, retain=retain)
         analysis = analyze(*check_program(program, program.entry_function()), analysis="memory")
-        print(json.dumps({"policy": "retain" if retain else "release", **summarize_training(analysis)}))
+        print(
+            json.dumps(
+                {"policy": "retain" if retain else "release", **summarize_training(analysis)}
+            )
+        )
