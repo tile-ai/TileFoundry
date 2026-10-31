@@ -18,7 +18,7 @@ import isl
 
 from tilefoundry.analysis import MemoryMetadata
 from tilefoundry.analysis.access import AliasKind, buffer_alias, forwarded_leaves
-from tilefoundry.analysis.allocation import AllocationSummaryMetadata
+from tilefoundry.analysis.allocation import AllocationSummaryMetadata, layout_bounds
 from tilefoundry.analysis.emission import (
     Emission,
     accepted_aliases,
@@ -36,14 +36,20 @@ from tilefoundry.analysis.emission import (
     selected_op,
     staged_scalar,
 )
+from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.liveness import LivenessMetadata
+from tilefoundry.analysis.sync import carry_positions, event_of, region_position
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
     Constant,
     Expr,
+    Op,
+    RangeMetadata,
     Tuple,
     Var,
+    attach_metadata,
     get_metadata,
     get_registered_name,
 )
@@ -56,10 +62,10 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord, coordinate_range
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.isl_interop import isl_to_dim, layout_to_isl_map
+from tilefoundry.ir.isl_interop import dim_range, isl_to_dim, layout_to_isl_map
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.tir.arith import Binary as TirBinary
 from tilefoundry.ir.tir.launch import Launch
@@ -93,7 +99,7 @@ from tilefoundry.ir.types.dim import (
 from tilefoundry.ir.types.int_tuple import flatten as flatten_tuple
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout import get as get_layout
-from tilefoundry.ir.types.layout_algebra import composition
+from tilefoundry.ir.types.layout_algebra import composition, domain_offset
 from tilefoundry.ir.types.mesh import axis_keys
 from tilefoundry.ir.types.shard_layout import local_layout, shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx
@@ -168,6 +174,89 @@ def _cut(base, starts, sizes, loops=()) -> Call:
     return window
 
 
+@dataclass(frozen=True)
+class OperandRecord:
+    """What lowering built for one shared memory operand.
+
+    ``origin`` is the byte range its pointer may hold, ``covered`` the half-open
+    bytes it reaches; None stands for bytes lowering cannot bound
+    ([passes §7.1](docs/spec/passes.md#71-converthirtotir)).
+    """
+
+    leaf: SSAValue
+    origin: tuple[int, int] | None
+    covered: tuple[int, int] | None
+
+
+@dataclass(frozen=True)
+class StagedRecord:
+    """A register scalar filled from *source* for the instruction's parameter *param*."""
+
+    source: Expr
+    param: str
+
+
+def _interval(value) -> tuple[int, int] | None:
+    """The inclusive range of a dimension value: its static value, else its stated range."""
+    static = static_dim_value(value)
+    if static is not None:
+        return static, static
+    try:
+        bound = dim_range(value)
+    except (TypeError, ValueError, NotImplementedError, ArithmeticError):
+        return None
+    return None if bound is None else (bound[0], bound[1] - 1)
+
+
+def _reach(origin, type_) -> tuple[int, int] | None:
+    """The bytes a view of *type_* whose pointer holds byte *origin* reaches."""
+    if origin is None:
+        return None
+    try:
+        span = layout_bounds(
+            type_.layout, 0, 0, shard_shape=lambda _layout, shape: shape, offset=_interval
+        )
+    except AnalysisError:
+        return None
+    if span is None:
+        return None
+    bits = type_.dtype.bit_width
+    return origin[0] + span[0] * bits // 8, origin[1] + -(-(span[1] + 1) * bits // 8)
+
+
+def _inside(starts, sizes, shape) -> bool:
+    """Whether a window at *starts* of *sizes* stays inside *shape* for every start value."""
+    for start, size, extent in zip(starts, sizes, shape, strict=True):
+        bound = _interval(start)
+        if bound is None or not isinstance(size, int) or not isinstance(extent, int):
+            return False
+        if bound[0] < 0 or bound[1] + size > extent:
+            return False
+    return True
+
+
+def _moved(origin, type_, starts) -> tuple[int, int] | None:
+    """*origin* moved by what a Slice of a *type_* value at *starts* adds to its pointer.
+
+    As the Slice type places it, a composed layout keeps a static origin in its
+    own offset; any other origin moves the pointer.
+    """
+    if origin is None:
+        return None
+    layout = type_.layout.layout if isinstance(type_.layout, ShardLayout) else type_.layout
+    if isinstance(layout, ComposedLayout):
+        _, moved = domain_offset(starts, layout.outer, type_.shape)
+        if static_dim_value(moved) is not None:
+            return origin
+    else:
+        _, moved = domain_offset(starts, layout, type_.shape)
+    bound = _interval(moved)
+    if bound is None:
+        return None
+    bits = type_.dtype.bit_width
+    return origin[0] + bound[0] * bits // 8, origin[1] + bound[1] * bits // 8
+
+
 @dataclass
 class TirScope:
     mesh: Mesh | None = None
@@ -185,6 +274,7 @@ class TirBuilder:
     blocks: list[TirScope]
     loops: list = field(default_factory=list)
     stage_counters: dict = field(default_factory=dict)
+    records: dict = field(default_factory=dict)
 
     def add(self, stmt):
         self.blocks[-1].entries.append(stmt)
@@ -192,7 +282,40 @@ class TirBuilder:
     def bind(self, var, value):
         self.blocks[-1].entries.append((var, value))
         self.blocks[-1].bound[id(var)] = var
-        return var
+        return self.note(var, self.record_of(value))
+
+    def record_of(self, value):
+        """The record lowering attached to *value* where it built it, if any."""
+        entry = self.records.get(id(value))
+        return None if entry is None or entry[0] is not value else entry[1]
+
+    def note(self, value, record):
+        """Attach *record* to *value*, which lowering has just built."""
+        if record is not None:
+            self.records[id(value)] = (value, record)
+        return value
+
+    def derive(self, base, starts, sizes, built):
+        """The record of *built*, a view lowering cut from *base* at *starts*.
+
+        *built* is *base* itself, the Slice of it, or a TensorView over a pointer
+        to either.
+        """
+        record = self.record_of(base)
+        if not isinstance(record, OperandRecord) or built is base:
+            return record
+        target = built.target if isinstance(built, Call) else None
+        source = built
+        if isinstance(target, TensorView):
+            pointer = built.args[0]
+            source = pointer.args[0] if isinstance(pointer, Call) and isinstance(pointer.target, PtrOf) else None
+        cut = isinstance(source, Call) and isinstance(source.target, Slice)
+        if not (source is base or cut and _inside(starts, sizes, base.type.shape)):
+            return replace(record, origin=None, covered=None)
+        origin = _moved(record.origin, base.type, starts) if cut else record.origin
+        if isinstance(target, TensorView):
+            return replace(record, origin=origin, covered=_reach(origin, built.type))
+        return replace(record, origin=origin)
 
     def build(self, region=None):
         return Sequential(tuple(
@@ -306,11 +429,15 @@ class TirBuilder:
                 return view
             if len(offsets) == 1:
                 pointer = Constant(offsets[0], type=PointerType(storage_type.dtype, storage_type.storage))
+                self.note(pointer, OperandRecord(leaf, (offsets[0], offsets[0]), None))
                 return View(pointer, (), tuple(storage_type.shape), storage_type, stem)
-            fields = tuple(
-                self.bind(Var(ctx.names.fresh(stem), type=storage_type), ctx.storage.view(offset, None, storage_type))
-                for offset in offsets
-            )
+            fields = []
+            for offset in offsets:
+                field_view = ctx.storage.view(offset, None, storage_type)
+                origin = (offset, offset)
+                self.note(field_view, OperandRecord(leaf, origin, _reach(origin, storage_type)))
+                fields.append(self.bind(Var(ctx.names.fresh(stem), type=storage_type), field_view))
+            fields = tuple(fields)
             stages = Var(ctx.names.fresh(f"{stem}_stages"), type=TupleType(tuple(field.type for field in fields)))
             self.bind(stages, Tuple(fields, type=stages.type))
             loops = ctx.storage.placement[id(expr)][1]
@@ -362,6 +489,17 @@ class TirBuilder:
                 if loops:
                     index = simplify_dim(DimMod, (index, len(offsets)))
             selected = Call(TupleGetItem(), (stages, index), type=storage_type)
+            reached = [self.record_of(field).covered for field in fields]
+            self.note(
+                selected,
+                OperandRecord(
+                    leaf,
+                    (min(offsets), max(offsets)),
+                    None
+                    if None in reached
+                    else (min(low for low, _ in reached), max(high for _, high in reached)),
+                ),
+            )
             return View(selected, (), tuple(storage_type.shape), storage_type, stem)
 
     def value(self, value, *, ctx):
@@ -373,6 +511,12 @@ class TirBuilder:
         if known is None:
             base = self.value(value.base, ctx=ctx)
             expression = ctx.storage.materialization(value, base, tuple(self.loops))
+            record = self.record_of(base)
+            if isinstance(record, OperandRecord) and isinstance(base, Constant):
+                record = replace(record, covered=_reach(record.origin, expression.type))
+            else:
+                record = self.derive(base, value.starts, value.sizes, expression)
+            self.note(expression, record)
             stem = (
                 value.stem
                 if isinstance(base, Constant) and isinstance(base.type, PointerType)
@@ -1196,11 +1340,10 @@ class LoweringContext(TypeInferContext):
                 raise LoweringError(f"dimension uses unbound value {value.name!r}")
             return self.builder.value(known[1], ctx=self)
         if isinstance(value, Call) and isinstance(value.target, MeshCoord):
-            return Call(
-                MeshCoord(mesh=value.target.mesh),
-                value.args,
-                type=value.type,
-            )
+            coordinate = Call(MeshCoord(mesh=value.target.mesh), value.args, type=value.type)
+            if (bound := get_metadata(value, RangeMetadata)) is not None:
+                attach_metadata(coordinate, bound)
+            return coordinate
         if isinstance(value, Call) and isinstance(value.target, HirBinary):
             dim_op = _DIM_BINARY.get(value.target.kind)
             if dim_op is None or not isinstance(value.type, TensorType) or value.type.shape != ():
@@ -1281,6 +1424,18 @@ class Lowering(ValuationVisitor[Expr | View]):
             ctx.parameters[id(param)] = physical
             self._memo[id(param)] = (param, physical)
 
+    @cached_property
+    def liveness(self) -> LivenessMetadata:
+        return get_metadata(self.context.function, LivenessMetadata)
+
+    def before(self, position: tuple[int, int], ctx, op: Op | None = None) -> None:
+        """Emit what runs before the child at *position* of the current scope.
+
+        *position* is the child's ``(event, index)`` as the ``sync`` analysis
+        numbers it; *op* is the instruction the child issues, None for an inner
+        region. A target that orders shared memory overrides this.
+        """
+
     def run(self) -> PrimFunction:
         ctx = self.context
         if ctx.function.body is None:
@@ -1294,13 +1449,16 @@ class Lowering(ValuationVisitor[Expr | View]):
                 raise LoweringError(f"return leaf {path!r} cannot be placed on its output: None")
             if (refusal := ctx.storage.answers[leaf].refusal) is not None:
                 raise LoweringError(refusal)
-        for path, type_ in returns:
+        for index, (path, type_) in enumerate(returns):
             output_type = (
                 replace(type_, storage=StorageKind.GMEM)
                 if type_.storage is StorageKind.UMAT
                 else type_
             )
             output = Var(ctx.names.fresh("out"), type=output_type)
+            if output_type.storage is StorageKind.SMEM:
+                root = ctx.storage.answers[SSAValue(ctx.function.body, index)].chain[-1]
+                ctx.builder.note(output, OperandRecord(root, None, None))
             ctx.outputs.append((path, output))
         self.visit(ctx.function.body, ctx=ctx)
         statements = ctx.builder.build(ctx.builder.blocks[0])
@@ -1319,6 +1477,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         binding = Var(
             ctx.names.fresh("cta" if region is ctx.function.body else "scope"), type=_BINDING
         )
+        self.before(region_position(self.liveness, region), ctx)
         with ctx.builder.region(mesh=mesh, binding=binding, owner=region) as scope:
             result = self.visit(region.body, self.on_region_start(region, ctx))
             scope.result = result
@@ -1330,12 +1489,16 @@ class Lowering(ValuationVisitor[Expr | View]):
             initial = self.visit(loop.args[slot], ctx=ctx)
             carried = ctx.result(param)
             if copies_carry_entry(loop, slot, ctx.storage.aliases_of):
+                self.before(carry_positions(self.liveness, loop, slot)[0], ctx, Copy())
                 ctx.builder.transfer(initial, carried, ctx=ctx, source_type=loop.args[slot].type)
             self._memo[id(param)] = (param, carried)
             carried_values.append(carried)
         init = tuple(carried_values)
         induction = Var(loop.induction_var.name, type=_INDEX)
+        if (bound := get_metadata(loop.induction_var, RangeMetadata)) is not None:
+            attach_metadata(induction, bound)
         self._memo[id(loop.induction_var)] = (loop.induction_var, induction)
+        self.before(region_position(self.liveness, loop), ctx)
         with ctx.builder.region(
             loop=(
                 induction,
@@ -1352,6 +1515,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 zip(loop.yield_values, init, yielded, strict=False)
             ):
                 if copies_carry_backedge(loop, slot, ctx.storage.aliases_of):
+                    self.before(carry_positions(self.liveness, loop, slot)[1], ctx, Copy())
                     ctx.builder.transfer(value, carried, ctx=ctx, source_type=source.type)
             for counter, one in (
                 values for key, values in ctx.builder.stage_counters.items() if key[-1] == id(loop)
@@ -1401,6 +1565,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 scalar = Constant(
                     getattr(target, "value", 0.0), type=TensorType.scalar(call.type.dtype)
                 )
+                self.before((event_of(self.liveness, call), 0), ctx, Fill())
                 ctx.builder.transfer(scalar, result, op=Fill(), ctx=ctx)
             return result
         if kind is Emission.UNSCHEDULED:
@@ -1411,6 +1576,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         if kind is Emission.INSERT_SLICE:
             return self.visit_InsertSlice(call, operands, ctx)
         op = ctx.issues.op(call, target=ctx.target)
+        self.before((event_of(self.liveness, call), 0), ctx, op)
         return getattr(self, f"visit_{type(op).__name__}", self.instruction)(
             call, op, operands, ctx
         )
@@ -1459,7 +1625,10 @@ class Lowering(ValuationVisitor[Expr | View]):
     def visit_InsertSlice(self, call: Call, operands, ctx) -> Expr:
         target, update = operands[:2]
         result = ctx.result(call)
+        event, index = event_of(self.liveness, call), 0
         if copies_insert_slice_base(call, ctx.storage.aliases_of):
+            self.before((event, index), ctx, Copy())
+            index += 1
             ctx.builder.transfer(target, result, ctx=ctx, source_type=call.args[0].type)
         if not copies_insert_slice_update(call, ctx.storage.aliases_of):
             return result
@@ -1475,6 +1644,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 )
             ),
         )
+        self.before((event, index), ctx, Copy())
         ctx.builder.transfer(
             update,
             result,
@@ -1509,6 +1679,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             if staged_scalar(value.type):
                 scalar_type = replace(value.type, storage=StorageKind.RMEM)
                 scalar = Var(ctx.names.fresh("scalar"), type=scalar_type)
+                ctx.builder.note(scalar, StagedRecord(operand, param.name))
                 with ctx.builder.region():
                     ctx.builder.bind(
                         scalar, Call(AllocTensor(tensor_type=scalar_type), (), type=scalar_type)
@@ -1594,9 +1765,12 @@ class Lowering(ValuationVisitor[Expr | View]):
                         coord = Call(
                             MeshCoord(mesh=binding_mesh), (i64_const(mesh_axis),), type=_BINDING
                         )
-                        unit_coordinates[key] = ctx.builder.bind(
-                            Var(ctx.names.fresh("unit"), type=_BINDING), coord
-                        )
+                        unit = Var(ctx.names.fresh("unit"), type=_BINDING)
+                        extent = coordinate_range(binding_mesh, mesh_axis)
+                        if extent is not None:
+                            attach_metadata(coord, RangeMetadata(*extent))
+                            attach_metadata(unit, RangeMetadata(*extent))
+                        unit_coordinates[key] = ctx.builder.bind(unit, coord)
                     coordinate = unit_coordinates[key]
                 coords[mesh_axis] = coordinate
             address = source.layout if source is not None else base.type.layout
@@ -1628,7 +1802,10 @@ class Lowering(ValuationVisitor[Expr | View]):
                     Var(ctx.names.fresh(f"{role}_pointer"), type=pointer_type),
                     Call(PtrOf(), (base,), type=pointer_type),
                 )
+                whole = ctx.builder.record_of(base)
                 base = Call(TensorView(layout=local, shape=local_shape), (pointer,), type=local_type)
+                if isinstance(whole, OperandRecord):
+                    ctx.builder.note(base, replace(whole, covered=_reach(whole.origin, local_type)))
             locals_.append(base)
         with ctx.builder.region(mesh=issuers, binding=Var(ctx.names.fresh("threads"), type=_BINDING)):
             locals_ = [
@@ -1643,6 +1820,9 @@ class Lowering(ValuationVisitor[Expr | View]):
                     issued_operands, locals_, plan.tiles, windows, strict=True
                 ):
                     item = ctx.storage.issue_window(base, desired, starts, ctx.builder.loops)
+                    ctx.builder.note(
+                        item, ctx.builder.derive(base, starts, tuple(desired.shape), item)
+                    )
                     issued.append(
                         ctx.builder.bind(Var(ctx.names.fresh(f"{role}_view"), type=item.type), item)
                         if isinstance(item, Call)

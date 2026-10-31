@@ -1,5 +1,48 @@
 # TileFoundry CUDA Spec — Passes
 
+### 7.1 `ConvertHIRToTIR`
+
+```python
+class CudaConvertHIRToTIR(ConvertHIRToTIR):
+    """Lower scheduled HIR with the visitor that emits the sync plan."""
+
+    visitor = CudaLowering
+
+
+class CudaLowering(Lowering):
+    """Emit each function's sync plan and check what lowering issues belongs to it."""
+
+    def before(self, position: tuple[int, int], ctx, op: Op | None = None) -> None: ...
+```
+
+- constraints:
+  - CUDA binds the pass with `@bind(CudaTarget, ConvertHIRToTIR)`; finalization
+    and compile obtain it through `Target.resolve`.
+  - Every function the pass lowers MUST carry `SyncPlanMetadata`
+    ([analysis §1.2.5](../../../../../../docs/spec/analysis.md#125-sync)) whose
+    `basis` is the allocation and liveness records it carries; otherwise
+    lowering raises `LoweringError` and does not analyse again. A caller
+    prepares the Module with `analyze(module, entry, analysis=("memory", "sync"))`
+    and passes the result to `finalize`; `tilefoundry schedule finalize` does
+    the same.
+  - `before` emits the steps the plan holds for that position, in plan order:
+    `cp_async_commit` for a commit, `cp_async_wait(n=0)` for a wait and
+    `T.sync` over the step's mesh for a barrier.
+  - Each planned child is reached once, in plan order, in its planned scope
+    and for the planned instruction. An action's statements run until the
+    next child: one register fill per staged parameter, then one issue, or
+    one per issue point for an instruction with an execution mesh. Each issue
+    equals the planned instruction, attributes included, and runs on the
+    planned mesh.
+  - Every shared memory operand of an action's statements carries the record
+    of [passes §7.1](../../../../../../docs/spec/passes.md#71-converthirtotir);
+    its leaf is an allocation root the planned role holds and, where the plan
+    knows the bytes the role's values own in that allocation, its covered
+    bytes lie within them. Unknown covered bytes there, a missing record or a
+    root the role does not hold raise `LoweringError`. A staged parameter is issued with the scalar
+    prepared for that action and parameter.
+  - Statements outside actions MUST NOT take a shared memory operand.
+
 ### 7.3 `insert_default_host_entry`
 
 ```python

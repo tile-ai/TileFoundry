@@ -8,7 +8,13 @@ from tilefoundry.ir.core.module import Module
 
 
 def finalize(analyzed: AnalysisResult) -> Module:
-    """Lower the root of one memory analysis through ``PassManager``."""
+    """Lower the root of one analysis through ``PassManager``.
+
+    *analyzed* carries at least the ``memory`` family. A Target whose lowering emits
+    the synchronisation plan also needs ``sync``::
+
+        finalize(analyze(module, entry, analysis=("memory", "sync")))
+    """
     return default_pipeline(analyzed.module).run(analyzed.module)
 
 

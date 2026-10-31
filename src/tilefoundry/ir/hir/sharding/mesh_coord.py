@@ -56,17 +56,21 @@ def _(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
     axis = static_dim_value(call.args[0])
     if axis is not None and not 0 <= axis < len(shape):
         ctx.error(call, f"axis {axis} is out of range for rank-{len(shape)} mesh")
-    extents = (shape[axis],) if axis is not None else shape
-    bounds = (
-        (0, max(extents))
-        if extents
-        and all(isinstance(extent, int) and not isinstance(extent, bool) for extent in extents)
-        else None
-    )
     return TypeInferResults(
         TensorType.scalar(DType.i64, storage=StorageKind.RMEM),
-        value_range=bounds,
+        value_range=coordinate_range(call.target.mesh, axis),
     )
+
+
+def coordinate_range(mesh: Mesh, axis: int | None) -> tuple[int, int] | None:
+    """The half-open range of *mesh*'s coordinate along *axis*, or along any axis for None."""
+    shape = flatten(mesh.layout).shape
+    extents = (shape[axis],) if axis is not None else shape
+    if extents and all(
+        isinstance(extent, int) and not isinstance(extent, bool) for extent in extents
+    ):
+        return 0, max(extents)
+    return None
 
 
 @register_eval(MeshCoord)
@@ -81,4 +85,4 @@ def _eval_mesh_coord(ctx):
 register_access_relation(MeshCoord)(readnone_relations(lambda types: ()))
 
 
-__all__ = ["MeshCoord"]
+__all__ = ["MeshCoord", "coordinate_range"]

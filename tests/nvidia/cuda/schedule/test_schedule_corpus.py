@@ -19,6 +19,7 @@ from tests.nvidia.cuda.schedule._support import (
     _direct_operand_matches,
     _region_key,
     _RetainedStatements,
+    core_lowering,
 )
 from tilefoundry.analysis import AnalysisError, AnalysisResult
 from tilefoundry.analysis.api import analyze
@@ -56,10 +57,11 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir import PrimFunction
+from tilefoundry.ir.tir import CpAsyncCommit, CpAsyncWait, PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import Copy, PtrOf, TensorView
+from tilefoundry.ir.tir.sync import Sync
 from tilefoundry.ir.types import (
     ComposedLayout,
     ShardLayout,
@@ -351,11 +353,11 @@ def _candidates(case, checked):
 
 def _sync(case, checked):
     if case.sync_refusal is None:
-        analyze(*checked, analysis=("sync",))
-        return
+        return analyze(*checked, analysis=("memory", "sync"))
     with pytest.raises(AnalysisError) as refused:
         analyze(*checked, analysis=("sync",))
     assert case.sync_refusal in str(refused.value)
+    return analyze(*checked, analysis=("memory",))
 
 
 def _finalize(case, result):
@@ -364,6 +366,9 @@ def _finalize(case, result):
             finalize(result)
         assert case.finalize_refusal in str(refused.value)
         return None
+    if case.sync_refusal:
+        with core_lowering():
+            return finalize(result)
     return finalize(result)
 
 
@@ -410,8 +415,8 @@ def _hir(case, problems):
     candidates_report = problems.run("candidates", _candidates, case, checked)
     if case.candidates_refusal is None:
         problems.run("candidate sites", _hir_candidates, candidates_report)
-    problems.run("sync", _sync, case, checked)
-    lowered = problems.run("finalize", _finalize, case, result)
+    synced = problems.run("sync", _sync, case, checked)
+    lowered = problems.run("finalize", _finalize, case, synced)
     if case.finalize_refusal is None:
         printed = problems.run("print TIR", as_script, lowered)
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
@@ -1069,6 +1074,20 @@ class Sm89E4m3Gemm(ScheduleCase):
     candidates_refusal: str | None = "source has no unscheduled candidate site"
 
     def guard(self, state, problems):
+        """In each K slice, a barrier, the copy, commit, wait and a barrier before each read.
+
+        The leading barrier keeps the next slice's copy behind the last read of the same bytes.
+        """
+        function = _RetainedStatements()
+        function.visit(state.lowered.lookup(state.result.function.name).body)
+        (loop,) = function.loops
+        body = _RetainedStatements()
+        body.visit(loop.body)
+        kinds = (Sync, CopyAsync, CpAsyncCommit, CpAsyncWait, Copy, TiledMma)
+        assert [type(op) for op in body.operations if isinstance(op, kinds)] == [
+            Sync, CopyAsync, CpAsyncCommit, CpAsyncWait, Sync, Copy,
+            Sync, CopyAsync, CpAsyncCommit, CpAsyncWait, Sync, Copy, TiledMma,
+        ]
         tilefoundry.compile(state.lowered)
 
 

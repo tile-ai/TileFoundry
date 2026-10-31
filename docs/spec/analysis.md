@@ -1503,15 +1503,37 @@ The `sync` family decides where lowering emits `cp_async_commit`,
 `cp_async_wait` and `T.sync`, so that every shared memory access follows the
 earlier accesses it depends on, or refuses the Function. It attaches one
 `SyncPlanMetadata` to every analysed Function, an empty one when no step is
-needed.
+needed. A target lowering emits the plan and analyses nothing itself
+([passes §7.1](./passes.md#71-converthirtotir)).
 
 ```python
 class SyncStep:
     kind: str                  # "commit", "wait" or "barrier"
     mesh: Mesh | None = None   # the thread mesh a barrier runs over
 
+class SyncRole:
+    name: str                       # a parameter of the action's instruction
+    read: bool
+    write: bool
+    owned: tuple                    # (allocation root, bytes) per shared memory value;
+                                    # None bytes are unknown
+    argument: object = None         # the HIR value the parameter is issued with
+    staged: bool = False            # issued with a register scalar filled from it
+    @property
+    def spans(self) -> tuple: ...   # the bytes of each `owned` pair
+
+class SyncChild:
+    position: tuple[int, int]
+    scope: tuple[int, int] | None   # the holding inner region, None for the Function
+    op: Op | None = None            # the instruction an action issues
+    roles: tuple[SyncRole, ...] = ()
+    mesh: Mesh | None = None        # the mesh it is issued on; by default the
+                                    # innermost MeshRegion's around it
+
 class SyncPlanMetadata(IRMetadata):
     steps: tuple[tuple[tuple[int, int], tuple[SyncStep, ...]], ...] = ()
+    children: tuple[SyncChild, ...] = ()
+    basis: tuple = ()               # the allocation and liveness records it was made from
     def at(self, position: tuple[int, int]) -> tuple[SyncStep, ...]: ...
 ```
 
@@ -1523,7 +1545,12 @@ class SyncPlanMetadata(IRMetadata):
     `s` of a loop with `n` carried slots copies on entry at `(start, s - n - 1)`
     and on the backedge at `(backedge, s)`, from the loop's liveness window.
     Steps run before that child, in that scope's block, in the order commit,
-    wait, barrier.
+    wait, barrier. `children` lists every child in program order with the scope it
+    sits in; an action also records its instruction and, for each parameter,
+    its effect, each shared memory allocation its values live in with the bytes
+    they own there, its HIR argument and whether it is staged.
+    How a lowering emits the plan and checks what it issues against it is in
+    [passes §7.1](./passes.md#71-converthirtotir).
   - The actions of an event are the ones lowering emits: the selected
     instruction of a Call, and the copies and fills lowering adds. Which
     statements a Call emits, which instruction it issues, which operands that
@@ -1563,6 +1590,10 @@ class SyncPlanMetadata(IRMetadata):
     written at its definition, holds no shared memory value. That summary
     holds the callee's parameters, its returned values, their aliases and the
     internal values of every function it calls in turn.
+  - `basis` records the allocation and liveness records the plan was made
+    from. A lowering compares them with the ones the Function carries; this
+    detects a replaced record only. The program and the inputs above MUST NOT
+    change between analysis and lowering, and the public pipeline keeps it so.
   - The family raises `AnalysisError` for an access that must follow one whose
     completion is `UNKNOWN`, for an access whose completion is `UNKNOWN` that
     may still be in flight when the Function returns, for an action whose mesh

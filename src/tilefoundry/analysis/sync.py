@@ -14,6 +14,7 @@ from tilefoundry.ir.core import (
     Call,
     Constant,
     IRMetadata,
+    Op,
     SSAValue,
     Var,
     VerifyError,
@@ -50,6 +51,7 @@ from .emission import (
     operand_roles,
     operand_types,
     selected_op,
+    staged_scalar,
 )
 from .errors import AnalysisError
 from .liveness import LivenessMetadata
@@ -74,20 +76,52 @@ class SyncStep:
 class SyncRole:
     """One parameter of an action's instruction and the shared memory its values own.
 
-    ``spans`` are byte ranges ``(start, end)``; None stands for unknown bytes.
+    ``owned`` pairs the allocation root of each shared memory value with the byte
+    range ``(start, end)`` the value owns there; None stands for unknown bytes.
+    ``argument`` is the HIR value the parameter is issued with, if any; a
+    ``staged`` parameter is issued with a register scalar filled from it just before.
     """
 
     name: str
     read: bool
     write: bool
-    spans: tuple
+    owned: tuple
+    argument: object = None
+    staged: bool = False
+
+    @property
+    def spans(self) -> tuple:
+        """The byte ranges its values own, None standing for unknown bytes."""
+        return tuple(span for _root, span in self.owned)
+
+
+@dataclass(frozen=True)
+class SyncChild:
+    """One direct child the plan was made for, as lowering must emit it.
+
+    ``scope`` is the position of the inner region holding the child, or None for
+    the function itself. An action issues ``op`` with ``roles`` on ``mesh``, the
+    innermost ``MeshRegion``'s mesh when nothing narrower issues it; an inner
+    region has no ``op``.
+    """
+
+    position: tuple[int, int]
+    scope: tuple[int, int] | None
+    op: Op | None = None
+    roles: tuple[SyncRole, ...] = ()
+    mesh: Mesh | None = None
 
 
 @dataclass(frozen=True)
 class SyncPlanMetadata(IRMetadata):
-    """The steps lowering emits before direct children of lexical scopes."""
+    """The steps lowering emits before direct children of lexical scopes.
+
+    ``basis`` is the allocation and liveness records the plan was made from.
+    """
 
     steps: tuple[tuple[tuple[int, int], tuple[SyncStep, ...]], ...] = ()
+    children: tuple[SyncChild, ...] = ()
+    basis: tuple = ()
 
     def at(self, position: tuple[int, int]) -> tuple[SyncStep, ...]:
         """The steps lowering emits before the child at *position*."""
@@ -102,6 +136,8 @@ class _Action:
     roles: tuple[SyncRole, ...]
     completion: Completion
     name: str
+    op: Op
+    mesh: Mesh | None
 
     @property
     def accesses(self) -> tuple[tuple[bool, tuple], ...]:
@@ -143,6 +179,11 @@ def region_position(liveness: LivenessMetadata, region) -> tuple[int, int]:
     return (next(item.entered_at for item in liveness.regions if item.region is region), -1)
 
 
+def scope_position(liveness: LivenessMetadata, owner) -> tuple[int, int] | None:
+    """The position of the inner region *owner*, or None for a function."""
+    return None if isinstance(owner, Function) else region_position(liveness, owner)
+
+
 def carry_positions(liveness: LivenessMetadata, loop: LoopRegion, slot: int):
     """The positions of a loop slot's entry copy, just before the loop, and backedge copy."""
     start, backedge = liveness.loop_windows[id(loop)]
@@ -155,6 +196,13 @@ def _overlap(a, b) -> bool:
 
 def _mesh_chain(scope) -> tuple[int, ...]:
     return tuple(id(s.owner) for s in reversed(list(scope.ancestors())) if isinstance(s.owner, MeshRegion))
+
+
+def _region_mesh(scope) -> Mesh | None:
+    """The mesh of the innermost ``MeshRegion`` around *scope*."""
+    return next(
+        (node.owner.mesh for node in scope.ancestors() if isinstance(node.owner, MeshRegion)), None
+    )
 
 
 class _Planner:
@@ -183,6 +231,7 @@ class _Planner:
         self.paths: dict[tuple[int, int], tuple] = {}
         self.planned: dict[tuple[int, int], list[SyncStep]] = {}
         self.entered: dict[tuple[int, int], int] = {}
+        self.visited: dict[tuple[int, int], SyncChild] = {}
         self.seq = 0
         self.build()
 
@@ -227,11 +276,14 @@ class _Planner:
         mesh = copy_mesh((source.type, target.type))
         return self.action(position, Copy(), (source, target), name, scope, mesh)
 
-    def action(self, position, op, args, name: str, scope, mesh, *, filled=(), result=()) -> _Action:
+    def action(
+        self, position, op, args, name: str, scope, mesh, *, staged=(), filled=(), result=()
+    ) -> _Action:
         """*op* issued on *mesh* at *position* with *args* in its parameters' order.
 
         A parameter named in *filled* is issued with the call's *result* storage,
-        and also with its argument when one is given.
+        and also with its argument when one is given; one named in *staged* is
+        issued with a register scalar filled from its argument.
         """
         if mesh is not None and (scope.mesh is None or not within_scope(mesh, scope.mesh)):
             raise AnalysisError(
@@ -243,12 +295,14 @@ class _Planner:
                 param.name,
                 bool(param.effect & MemoryEffect.READ),
                 bool(param.effect & MemoryEffect.WRITE),
-                (() if arg is None else self.spans(SSAValue.leaves(arg)))
-                + (self.spans(result) if param.name in filled else ()),
+                (() if arg is None else self.owned(SSAValue.leaves(arg)))
+                + (self.owned(result) if param.name in filled else ()),
+                arg,
+                param.name in staged,
             )
             for param, arg in zip(params, args, strict=True)
         )
-        return _Action(position, roles, completion_of(op), name)
+        return _Action(position, roles, completion_of(op), name, op, mesh)
 
     def call_actions(self, call: Call, event: int, scope) -> list[_Action]:
         """Each instruction lowering issues for *call* at *event*, in order."""
@@ -284,6 +338,9 @@ class _Planner:
                 type(op).__name__,
                 scope,
                 issue_mesh(op, issue_owner(types), scope.mesh),
+                staged=tuple(
+                    param.name for param in supplied if staged_scalar(types[params.index(param)])
+                ),
                 filled=tuple(param.name for param in produced),
                 result=SSAValue.leaves(call),
             )
@@ -304,15 +361,19 @@ class _Planner:
         """The allocation roots these values live in."""
         return tuple(self.summary.root(leaf).value for leaf in leaves if leaf in self.values)
 
-    def spans(self, leaves) -> tuple:
-        """The shared memory byte ranges these values own; None stands for unknown.
+    def owned(self, leaves) -> tuple:
+        """Each shared memory value's allocation root and the bytes it owns; None is unknown.
 
         A returned allocation may live in the output its caller passes.
         """
-        return tuple(
-            None if self.summary.root(leaf).value in self.returned else owned_bytes(self.summary, leaf)
+        roots = (
+            (leaf, self.summary.root(leaf))
             for leaf in leaves
             if leaf in self.values and self.summary.root(leaf).lifetime.memory_level == "smem"
+        )
+        return tuple(
+            (root.value, None if root.value in self.returned else owned_bytes(self.summary, leaf))
+            for leaf, root in roots
         )
 
     def path(self, scope, position) -> tuple:
@@ -335,14 +396,30 @@ class _Planner:
                     f"sync: {self.actions[access.position].name} may still touch shared memory "
                     f"when {self.function.name!r} returns, and no protocol states its completion"
                 )
+        steps = tuple(
+            (position, tuple(planned)) for position, planned in sorted(self.planned.items())
+        )
         return SyncPlanMetadata(
-            tuple((position, tuple(planned)) for position, planned in sorted(self.planned.items()))
+            steps, tuple(self.visited.values()), (self.summary, self.liveness)
         )
 
     def walk(self, scope, state):
         for position, child in self.kids[id(scope)]:
             self.seq += 1
             self.entered[position] = self.seq
+            if position not in self.visited:
+                where = scope_position(self.liveness, scope.owner)
+                self.visited[position] = (
+                    SyncChild(
+                        position,
+                        where,
+                        child.op,
+                        child.roles,
+                        _region_mesh(scope) if child.mesh is None else child.mesh,
+                    )
+                    if isinstance(child, _Action)
+                    else SyncChild(position, where)
+                )
             self.paths.setdefault(position, self.path(scope, position))
             for step in self.planned.get(position, ()):
                 state = self.effect(step, scope, state, self.entered[position])
@@ -457,10 +534,7 @@ class _Planner:
 
         It is the mesh of the innermost ``MeshRegion`` around *scope*.
         """
-        mesh = next(
-            (node.owner.mesh for node in scope.ancestors() if isinstance(node.owner, MeshRegion)),
-            None,
-        )
+        mesh = _region_mesh(scope)
         try:
             barrier = None if mesh is None else classify(mesh)
         except VerifyError as error:
@@ -518,7 +592,13 @@ def analyze_sync(function: Function, context: AnalyzeContext) -> None:
 
 
 __all__ = [
+    "SyncChild",
     "SyncPlanMetadata",
+    "SyncRole",
     "SyncStep",
     "analyze_sync",
+    "carry_positions",
+    "event_of",
+    "region_position",
+    "scope_position",
 ]

@@ -1014,6 +1014,54 @@ def _build_interference_graph(values, windows, by_value):
     }
 
 
+def layout_bounds(layout, low, high, shape=None, *, shard_shape, offset):
+    """The lowest and highest element index *layout* reaches, holes and swizzle phases included.
+
+    *shard_shape* gives the extents to read under a ``ShardLayout``; *offset*
+    turns a ``ComposedLayout`` offset into an inclusive ``(low, high)`` pair. A
+    None from it, or from any part, makes the whole answer None.
+    """
+    if isinstance(layout, ShardLayout):
+        return layout_bounds(
+            layout.layout, low, high, shard_shape(layout, shape), shard_shape=shard_shape,
+            offset=offset,
+        )
+    if isinstance(layout, ComposedLayout):
+        if layout.outer is not None:
+            reached = layout_bounds(
+                layout.outer, low, high, shape, shard_shape=shard_shape, offset=offset
+            )
+            if reached is None:
+                return None
+            low, high = reached
+        moved = offset(layout.offset)
+        if moved is None:
+            return None
+        low, high = low + moved[0], high + moved[1]
+        if layout.inner is None:
+            return low, high
+        return layout_bounds(layout.inner, low, high, shard_shape=shard_shape, offset=offset)
+    if isinstance(layout, Layout):
+        flat = flatten(layout)
+        if not all(isinstance(value, int) for value in (*flat.shape, *flat.strides)):
+            raise AnalysisError(f"allocation: unresolved physical layout {layout!r}")
+        contributions = tuple(
+            (extent - 1) * stride
+            for extent, stride in zip(
+                flat.shape if shape is None else shape, flat.strides, strict=True
+            )
+        )
+        return sum(min(0, value) for value in contributions), sum(
+            max(0, value) for value in contributions
+        )
+    if isinstance(layout, Swizzle):
+        if layout.bits == 0:
+            return low, high
+        period = 1 << (layout.bits + layout.base + abs(layout.shift))
+        return low // period * period, (high // period + 1) * period - 1
+    raise AnalysisError(f"allocation: unsupported physical layout {layout!r}")
+
+
 def storage_bytes(held: TensorType, *, topology_level=None, topologies=()) -> int:
     """A unit's safe arena span, including holes and all reachable swizzle phases."""
     if not is_literal_shape(held.shape):
@@ -1021,45 +1069,22 @@ def storage_bytes(held: TensorType, *, topology_level=None, topologies=()) -> in
     if any(extent == 0 for extent in held.shape):
         return 0
 
-    def bounds(layout, low, high, shape=None):
-        if isinstance(layout, ShardLayout):
-            if topology_level is not None:
-                shape = local_type_of(
-                    replace(held, layout=layout),
-                    topology_level=topology_level,
-                    topologies=topologies,
-                ).shape
-            return bounds(layout.layout, low, high, shape)
-        if isinstance(layout, ComposedLayout):
-            if layout.outer is not None:
-                low, high = bounds(layout.outer, low, high, shape)
-            offset = static_dim_value(layout.offset)
-            if offset is None:
-                raise AnalysisError(f"allocation: unresolved physical offset {layout.offset!r}")
-            if layout.inner is None:
-                return low + offset, high + offset
-            return bounds(layout.inner, low + offset, high + offset)
-        if isinstance(layout, Layout):
-            flat = flatten(layout)
-            if not all(isinstance(value, int) for value in (*flat.shape, *flat.strides)):
-                raise AnalysisError(f"allocation: unresolved physical layout {layout!r}")
-            contributions = tuple(
-                (extent - 1) * stride
-                for extent, stride in zip(
-                    flat.shape if shape is None else shape, flat.strides, strict=True
-                )
-            )
-            return sum(min(0, value) for value in contributions), sum(
-                max(0, value) for value in contributions
-            )
-        if isinstance(layout, Swizzle):
-            if layout.bits == 0:
-                return low, high
-            period = 1 << (layout.bits + layout.base + abs(layout.shift))
-            return low // period * period, (high // period + 1) * period - 1
-        raise AnalysisError(f"allocation: unsupported physical layout {layout!r}")
+    def shard_shape(layout, shape):
+        if topology_level is None:
+            return shape
+        return local_type_of(
+            replace(held, layout=layout), topology_level=topology_level, topologies=topologies
+        ).shape
 
-    low, high = bounds(held.layout, 0, prod(held.shape) - 1)
+    def offset(value):
+        moved = static_dim_value(value)
+        if moved is None:
+            raise AnalysisError(f"allocation: unresolved physical offset {value!r}")
+        return moved, moved
+
+    low, high = layout_bounds(
+        held.layout, 0, prod(held.shape) - 1, shard_shape=shard_shape, offset=offset
+    )
     if not isinstance(low, int) or not isinstance(high, int) or low < 0:
         raise AnalysisError(f"allocation: invalid physical address range [{low}, {high}]")
     return -(-((high + 1) * held.dtype.bit_width) // 8)

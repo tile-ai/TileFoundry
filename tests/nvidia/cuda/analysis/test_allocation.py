@@ -39,7 +39,7 @@ class SequentialCarries(AllocationCase):
     path: Path = Path(__file__).parents[1] / "fixtures/logical/sequential_carries.py"
 
     def guard(self, state, problems):
-        result = analyze(*check_program(state, state.entry_function()), analysis="memory")
+        result = analyze(*check_program(state, state.entry_function()), analysis=("memory", "sync"))
         inserts = [
             value
             for value in collect_exprs(result.function.body)

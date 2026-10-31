@@ -255,6 +255,24 @@ class ConvertHIRToTIR(ModulePass):
     instruction reads and writes, which copies lowering adds for the
     allocation's accepted aliases, and the mesh a copy or an instruction is
     issued on, come from `analysis/emission.py`.
+  - Before each direct child of a lexical scope, in that scope's block, the
+    visitor calls `before(position, ctx, op)`: `position` is the child's
+    position as [analysis §1.2.5](./analysis.md#125-sync) numbers it, and `op`
+    the instruction an added copy, fill or selected instruction issues, None
+    for an inner region. The core visitor emits nothing there; a target
+    visitor MAY emit statements.
+  - Each shared memory operand lowering builds carries a record of what was
+    built, attached where it is built (a declared allocation, an output, a
+    materialized or windowed view, an issue window, a participant local view):
+    the SSA leaf it belongs to in its calling environment and the bytes this
+    operand covers. The covered bytes come from the final pointer and layout
+    once, each holding the part of a Slice displacement the Slice type gives
+    it; an output, or a start or layout lowering cannot bound, makes them
+    unknown. Binding the operand to a Var keeps the record. A staged register
+    scalar carries the HIR value it is filled from and the parameter it is
+    prepared for. A record states containment in the allocation only; which
+    stage, window or issue point an operand selects stays lowering's own
+    correctness.
   - The pass lowers the device root: the callee of the `Launch` in `Module.entry`
     when that entry is a CPU host, otherwise `Module.entry` itself. It returns the
     Module unchanged under `CodegenOptions(emit="skeleton")` or when the Module
