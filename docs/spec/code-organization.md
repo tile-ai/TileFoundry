@@ -41,6 +41,7 @@ truth for the directory's structure and invariants.
 | `analysis/visitor.py` | [analysis](./analysis.md) | The per-call `AnalyzeContext`, carrying the shared root/current `IterationScope` while a family traverses its work. |
 | `analysis/iteration_scope.py` | [analysis](./analysis.md) | The shared `IterationScope` tree built once from normalized HIR; families query it instead of constructing parallel structure. |
 | `analysis/access.py` | [analysis](./analysis.md) | Access relations resolved against authored iteration scopes, retaining each input's original boundary index. |
+| `analysis/emission.py` | [passes](./passes.md) | What lowering emits for each HIR event: the statements a Call emits, the instruction it issues and the operands that instruction reads and writes, and the copies lowering adds from accepted aliases. Decided once, so lowering and any reader of what it emits ask the same code. |
 | `analysis/loop_domain.py` | [analysis](./analysis.md) | isl iteration domains built from authored loop bounds. |
 | `analysis/loop_terms.py` | [analysis](./analysis.md) | IR-only resolution of constants, authored loop axes, strides, and bounded invariant offsets into `LoopTerm`; it has no isl dependency. |
 | `analysis/footprint.py` | [analysis](./analysis.md) | Reserved for future target-independent authored-loop footprint policy; access-relation construction stays in `analysis/access.py`. |

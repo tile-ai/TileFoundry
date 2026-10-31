@@ -19,6 +19,20 @@ import isl
 from tilefoundry.analysis import MemoryMetadata
 from tilefoundry.analysis.access import AliasKind, buffer_alias, forwarded_leaves
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
+from tilefoundry.analysis.emission import (
+    Emission,
+    accepted_aliases,
+    copies_carry_backedge,
+    copies_carry_entry,
+    copies_insert_slice_base,
+    copies_insert_slice_update,
+    emission,
+    operand_roles,
+    operand_types,
+    required_execution_mesh,
+    selected_op,
+    staged_scalar,
+)
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.ir.core import (
     BindingMetadata,
@@ -100,11 +114,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.candidates import (
-    candidate_operands,
-    candidate_ops,
-    sole_candidate,
-)
+from tilefoundry.visitor_registry.candidates import candidate_ops
 from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal, project
 from tilefoundry.visitor_registry.registries import typeinfer_registry
@@ -629,15 +639,10 @@ class StoragePlan:
                     ),
                     parameters,
                 )
-            aliases = tuple(
-                alias
-                for alias in value.aliases
-                if value.lifetime.memory_level != "rmem" or alias.kind is not AliasKind.IN_PLACE
-            )
             answers[leaf] = StorageAnswer(
                 outputs.get(leaf, links.get(leaf)),
                 self.chain(leaf, links),
-                aliases,
+                accepted_aliases(value),
                 getattr(get_metadata(leaf.expr, MemoryMetadata), "offsets", ()),
                 relation,
                 None,
@@ -650,6 +655,9 @@ class StoragePlan:
             )
             for leaf, answer in answers.items()
         }
+
+    def aliases_of(self, leaf):
+        return self.answers[leaf].aliases
 
     def chain(self, leaf, links):
         result = []
@@ -1045,28 +1053,25 @@ class IssuePlan:
     """Instruction selection and one shared geometric projection, without admission."""
 
     def op(self, call, *, target):
-        if isinstance(call.target, ScheduleOp):
-            return call.target.op
+        op = selected_op(call, target)
+        if op is not None:
+            return op
         candidates = candidate_ops(type(call.target), target=target)
         if not candidates:
             raise LoweringError(
                 f"{_label(call)} uses unknown HIR call {type(call.target).__name__}"
             )
-        op = sole_candidate(call, target=target)
-        if op is None:
-            available = ", ".join(get_registered_name(candidate) for candidate in candidates)
-            raise LoweringError(
-                f"{_label(call)} has instruction candidates [{available}] but no automatic "
-                "selection; write tf.schedule to choose the instruction and its attributes"
-            )
-        return op
+        available = ", ".join(get_registered_name(candidate) for candidate in candidates)
+        raise LoweringError(
+            f"{_label(call)} has instruction candidates [{available}] but no automatic "
+            "selection; write tf.schedule to choose the instruction and its attributes"
+        )
 
     def plan(self, call, op, mesh):
+        types = operand_types(call, op)
         if isinstance(call.target, ScheduleOp):
-            types = tuple(arg.type for arg in call.args)
             repeat, order = call.target.repeat, call.target.order
         else:
-            _attributes, types = candidate_operands(call, type(op))
             repeat = order = None
         try:
             projection = project(op, types, mesh, repeat=repeat, order=order)
@@ -1337,10 +1342,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         for slot, param in enumerate(loop.params[: len(loop.yield_values)]):
             initial = self.visit(loop.args[slot], ctx=ctx)
             carried = ctx.result(param)
-            if not any(
-                alias.kind is AliasKind.CARRY_INIT and alias.target == SSAValue(loop.args[slot])
-                for alias in ctx.storage.answers[SSAValue(param)].aliases
-            ):
+            if copies_carry_entry(loop, slot, ctx.storage.aliases_of):
                 ctx.builder.transfer(initial, carried, ctx=ctx, source_type=loop.args[slot].type)
             self._memo[id(param)] = (param, carried)
             carried_values.append(carried)
@@ -1359,13 +1361,10 @@ class Lowering(ValuationVisitor[Expr | View]):
             inner = self.on_region_start(loop, ctx)
             self.visit(loop.body, inner)
             yielded = tuple(self.visit(value, inner) for value in loop.yield_values)
-            for param, source, carried, value in zip(
-                loop.params, loop.yield_values, init, yielded, strict=False
+            for slot, (source, carried, value) in enumerate(
+                zip(loop.yield_values, init, yielded, strict=False)
             ):
-                if not any(
-                    alias.kind is AliasKind.CARRY_YIELD and alias.target == SSAValue(param)
-                    for alias in ctx.storage.answers[SSAValue(source)].aliases
-                ):
+                if copies_carry_backedge(loop, slot, ctx.storage.aliases_of):
                     ctx.builder.transfer(value, carried, ctx=ctx, source_type=source.type)
             for counter, one in (
                 values for key, values in ctx.builder.stage_counters.items() if key[-1] == id(loop)
@@ -1380,11 +1379,8 @@ class Lowering(ValuationVisitor[Expr | View]):
 
     def visit_Call(self, call: Call, ctx) -> Expr:
         target = call.target
-        if (
-            is_dim_op_call(call)
-            or isinstance(target, MeshCoord)
-            or (isinstance(target, HirBinary) and call.type.shape == ())
-        ):
+        kind = emission(call, retained=ctx._callee_context(call) is not None)
+        if kind is Emission.DIMENSION:
             return self.visit(call, ctx=ctx, dimension=True)
         values = {}
         if SSAValue(call) in ctx.storage.answers:
@@ -1395,36 +1391,37 @@ class Lowering(ValuationVisitor[Expr | View]):
                 for value in ctx.storage.runtime_values(call, ctx.memo)
             }
         operands = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
-        if ctx._callee_context(call) is not None:
+        if kind is Emission.CALL:
             return self._lower_call(call, operands, ctx=ctx)
-        name = type(target).__name__
-        if name == "TupleGetItem":
-            source, index = operands
-            return (
-                source.elements[index.value]
-                if isinstance(source, Tuple) and isinstance(index, Constant)
-                else Call(target, (source, index), type=call.type)
-            )
-        if name in ("Slice", "Reshape", "Bitcast") or (
-            name == "Reshard" and aliased_operand(call) is not None
-        ):
+        if kind is Emission.VIEW:
+            if type(target).__name__ == "TupleGetItem":
+                source, index = operands
+                return (
+                    source.elements[index.value]
+                    if isinstance(source, Tuple) and isinstance(index, Constant)
+                    else Call(target, (source, index), type=call.type)
+                )
             return ctx.storage.hir_view(call, operands, values)
-        if name in ("Empty", "Zeros", "FullLike"):
-            if name == "Empty" and call.type.storage is StorageKind.RMEM and target.buffers != 1:
+        if kind in (Emission.ALLOCATE, Emission.FILL):
+            if (
+                kind is Emission.ALLOCATE
+                and call.type.storage is StorageKind.RMEM
+                and target.buffers != 1
+            ):
                 raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
             result = ctx.result(call)
-            if name != "Empty":
+            if kind is Emission.FILL:
                 scalar = Constant(
                     getattr(target, "value", 0.0), type=TensorType.scalar(call.type.dtype)
                 )
                 ctx.builder.transfer(scalar, result, op=Fill(), ctx=ctx)
             return result
-        if name == "IndexSelect":
+        if kind is Emission.UNSCHEDULED:
             raise LoweringError(
                 f"{_label(call)} is an unscheduled IndexSelect; write "
                 "tf.schedule((x, tf.empty(...), idx), op=T.copy_async(fill=...))"
             )
-        if name == "InsertSlice":
+        if kind is Emission.INSERT_SLICE:
             return self.visit_InsertSlice(call, operands, ctx)
         op = ctx.issues.op(call, target=ctx.target)
         return getattr(self, f"visit_{type(op).__name__}", self.instruction)(
@@ -1475,15 +1472,9 @@ class Lowering(ValuationVisitor[Expr | View]):
     def visit_InsertSlice(self, call: Call, operands, ctx) -> Expr:
         target, update = operands[:2]
         result = ctx.result(call)
-        if not any(
-            alias.kind is AliasKind.INSERT_SLICE and alias.target == SSAValue(call.args[0])
-            for alias in ctx.storage.answers[SSAValue(call)].aliases
-        ):
+        if copies_insert_slice_base(call, ctx.storage.aliases_of):
             ctx.builder.transfer(target, result, ctx=ctx, source_type=call.args[0].type)
-        if any(
-            alias.kind is AliasKind.WINDOW and alias.target == SSAValue(call)
-            for alias in ctx.storage.answers[SSAValue(call.args[1])].aliases
-        ):
+        if not copies_insert_slice_update(call, ctx.storage.aliases_of):
             return result
         starts, desired = ctx.storage.window(
             result,
@@ -1512,9 +1503,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         mesh = ctx.enclosing_mesh()
         plan, types, owner = ctx.issues.plan(call, op, mesh)
         params = plan.params
-        reads = tuple(param for param in params if param.effect & MemoryEffect.READ)
-        writes = tuple(param for param in params if param.effect & MemoryEffect.WRITE)
-        produced = tuple(param for param in writes if not param.effect & MemoryEffect.READ)
+        supplied, produced = operand_roles(call, params)
         destination_operand = (
             call.args[params.index(produced[0])]
             if isinstance(call.target, ScheduleOp) and produced
@@ -1523,7 +1512,6 @@ class Lowering(ValuationVisitor[Expr | View]):
 
         written = ctx.result(call) if produced else None
         read_values = {}
-        supplied = params if isinstance(call.target, ScheduleOp) else reads
         for index, (param, operand) in enumerate(zip(supplied, call.args, strict=True)):
             value = written if operand is destination_operand else operands[index]
             if (
@@ -1531,11 +1519,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 and operand.type != types[params.index(param)]
             ):
                 value = ctx.storage.operand(value, types[params.index(param)], whole_tensor=True)
-            if (
-                isinstance(value.type, TensorType)
-                and value.type.shape == ()
-                and value.type.storage is StorageKind.UMAT
-            ):
+            if staged_scalar(value.type):
                 scalar_type = replace(value.type, storage=StorageKind.RMEM)
                 scalar = Var(ctx.names.fresh("scalar"), type=scalar_type)
                 with ctx.builder.region():
@@ -1562,12 +1546,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             else type_
             for type_ in types
         )
-        declaration = getattr(op, "atom", op)
-        required = (
-            declaration.execution_mesh
-            if isinstance(declaration, type)
-            else getattr(declaration, "required_execution_mesh", None)
-        )
+        required = required_execution_mesh(op)
         if required is None:
             if mesh is None:
                 raise LoweringError(f"{_label(call)} instruction issue has no lexical mesh")

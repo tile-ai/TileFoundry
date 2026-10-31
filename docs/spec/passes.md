@@ -251,6 +251,9 @@ class ConvertHIRToTIR(ModulePass):
   - A Target MAY bind a subclass with `@bind(TargetClass, ConvertHIRToTIR)`;
     finalization obtains the pass through `Target.resolve(ConvertHIRToTIR)`. The
     entry function and every callee are lowered by the same `visitor` class.
+  - What a Call emits, the instruction it issues and the operands that
+    instruction reads and writes, and which copies lowering adds for the
+    allocation's accepted aliases, come from `analysis/emission.py`.
   - The pass lowers the device root: the callee of the `Launch` in `Module.entry`
     when that entry is a CPU host, otherwise `Module.entry` itself. It returns the
     Module unchanged under `CodegenOptions(emit="skeleton")` or when the Module
