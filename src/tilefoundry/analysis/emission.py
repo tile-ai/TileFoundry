@@ -1,14 +1,15 @@
 """What lowering emits for each HIR event, decided in one place.
 
 Lowering branches on these answers, and anything that needs to know which
-statements lowering emits, which instruction a call issues and which operands it
-reads and writes asks the same code. The rules are those of
-[passes §7.1](docs/spec/passes.md#71-converthirtotir).
+statements lowering emits, which instruction a call issues, which operands it
+reads and writes and which threads issue it asks the same code. The rules are
+those of [passes §7.1](docs/spec/passes.md#71-converthirtotir).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from enum import Enum, auto
 
 from tilefoundry.ir.core import Call, Op, SSAValue
@@ -17,8 +18,9 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
-from tilefoundry.ir.types import StorageKind, TensorType
+from tilefoundry.ir.types import Broadcast, Mesh, Partial, ShardLayout, StorageKind, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
+from tilefoundry.ir.types.utils import _participant_frame, participant_layout
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import candidate_operands, sole_candidate
 
@@ -120,6 +122,50 @@ def staged_scalar(type_) -> bool:
     )
 
 
+def _participants(layouts) -> Mesh | None:
+    """The participant mesh of the first ``ShardLayout`` among *layouts*, if any."""
+    return next(
+        (participant_layout(layout).mesh for layout in layouts if isinstance(layout, ShardLayout)),
+        None,
+    )
+
+
+def copy_mesh(types) -> Mesh | None:
+    """The mesh a copy between operands of *types* runs on, None for the enclosing one."""
+    return _participants(type_.layout for type_ in types)
+
+
+def issue_owner(types) -> Mesh | None:
+    """The mesh that owns an instruction issued with operands of *types*, if one does.
+
+    ``Partial`` attributes count as ``Broadcast`` here.
+    """
+    return _participants(
+        replace(
+            type_.layout,
+            attrs=tuple(
+                Broadcast() if isinstance(attr, Partial) else attr for attr in type_.layout.attrs
+            ),
+        )
+        if isinstance(type_.layout, ShardLayout)
+        else type_.layout
+        for type_ in types
+    )
+
+
+def issue_mesh(op: Op, owner: Mesh | None, enclosing: Mesh | None) -> Mesh | None:
+    """The mesh lowering issues *op* on, None for the enclosing one.
+
+    An instruction without an execution mesh is issued on its owner; one with
+    an execution mesh on the participant frame of that mesh within the owner, or
+    within *enclosing* when nothing owns it.
+    """
+    required = required_execution_mesh(op)
+    if required is None:
+        return owner
+    return _participant_frame(owner or enclosing, required)[0]
+
+
 def accepted_aliases(value: "AllocationValue") -> tuple[BufferAlias, ...]:
     """Accepted links that lowering executes; a register IN_PLACE tie shares no storage."""
     return tuple(
@@ -167,7 +213,10 @@ __all__ = [
     "copies_carry_entry",
     "copies_insert_slice_base",
     "copies_insert_slice_update",
+    "copy_mesh",
     "emission",
+    "issue_mesh",
+    "issue_owner",
     "operand_roles",
     "operand_types",
     "required_execution_mesh",
