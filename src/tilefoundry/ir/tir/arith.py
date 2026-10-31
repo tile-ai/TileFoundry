@@ -27,6 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.completion import Completion, register_completion
 
 __all__ = ["BinaryKind", "Binary", "UnaryKind", "Unary"]
 
@@ -52,6 +53,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 register_access_relation(Binary)(identity_relations)
+register_completion(Binary, Completion.ON_RETURN)
 
 
 @register_schedule_eval(Binary)
@@ -90,3 +92,4 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 register_access_relation(Unary)(identity_relations)
+register_completion(Unary, Completion.ON_RETURN)

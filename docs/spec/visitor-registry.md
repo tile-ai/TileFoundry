@@ -474,6 +474,38 @@ def register_access_relation(op_cls: type): ...
     at the rank of the value it describes, the result's own rank on the output
     side.
 
+### 4.2 Completion service — `completion`
+
+One registry over classes states when the memory effects an Op declares are
+complete for later accesses. The synchronisation analysis asks it for every
+action that touches shared memory.
+
+```python
+class Completion(Enum):
+    UNKNOWN = "unknown"
+    ON_RETURN = "on_return"
+    CP_ASYNC_GROUP = "cp_async_group"
+
+completion_registry: DispatchRegistry     # keyed by class
+def register_completion(key: type, completion: Completion | Callable[[object], Completion]) -> None: ...
+def completion_of(instance: object) -> Completion: ...
+```
+
+- constraints:
+  - `ON_RETURN` means the effects are complete for the issuing thread once the
+    statement returns. `CP_ASYNC_GROUP` means they complete when the issuing
+    thread waits on the `cp.async` group that holds them. `UNKNOWN` means no
+    protocol states it, and nothing may be ordered after such an access.
+  - Lookup uses the exact class, as every `DispatchRegistry` does. A class with
+    no registration answers `UNKNOWN`; a base class's answer is not inherited.
+  - The declaration sits next to the class's access relation registration, or
+    next to the class when its access relation comes from shared copy semantics
+    or a schedule projection.
+  - A completion that depends on an attribute is a handler that answers for the
+    instance: `TiledMma` answers with its atom's completion.
+  - `register_copy_semantics` registers no completion, because a transfer that
+    reuses Copy's rules may complete asynchronously.
+
 ## 5. Instance 2 — `verify`
 
 Context (extends `TypeInferContext` with the TIR traversal scope cache):

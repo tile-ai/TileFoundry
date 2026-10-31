@@ -16,6 +16,7 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.completion import Completion, register_completion
 
 
 @register_op(dialect='T', category='memory')
@@ -38,6 +39,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 register_access_relation(Fill)(identity_relations)
+register_completion(Fill, Completion.ON_RETURN)
 
 
 @register_verify_stmt(Fill)

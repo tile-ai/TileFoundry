@@ -40,7 +40,7 @@ describes the whole function.
 
 ### 1.2 Analysis families
 
-The first families are `compute-cost`, `memory`, `roofline`, and `performance`.
+The first families are `compute-cost`, `memory`, `roofline`, `performance`, and `sync`.
 Each owns its record types and declares its dependencies and output additions.
 
 | Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
@@ -49,6 +49,7 @@ Each owns its record types and declares its dependencies and output additions.
 | `memory` | - | `MemoryMetadata`, `RegionMemoryMetadata` | `MemoryMetadata` on every measured Call; `RegionMemoryMetadata` on the Function and each occupied `MeshRegion` | the authored program, `MemoryHierarchyFacts`, `TopologyFacts` | `memory`, `advisory` | every measured Call |
 | `roofline` | `compute-cost`, `memory` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
 | `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `TopologyFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
+| `sync` | `memory` | `SyncPlanMetadata` | the Function | the memory family's records and the completion registry | - | - |
 
 Every compact text summary begins with these two lines:
 
@@ -1495,6 +1496,80 @@ model.
     two capacities that both admit a placement MUST produce the same intervals.
   - Performance is a modeled plan and MUST NOT be read as a guarantee about
     lowering, physical occupancy, or runtime performance.
+
+#### 1.2.5 `sync`
+
+The `sync` family decides where lowering emits `cp_async_commit`,
+`cp_async_wait` and `T.sync`, so that every shared memory access follows the
+earlier accesses it depends on, or refuses the Function. It attaches one
+`SyncPlanMetadata` to every analysed Function, an empty one when no step is
+needed.
+
+```python
+class SyncStep:
+    kind: str                  # "commit", "wait" or "barrier"
+    mesh: Mesh | None = None   # the thread mesh a barrier runs over
+
+class SyncPlanMetadata(IRMetadata):
+    steps: tuple[tuple[tuple[int, int], tuple[SyncStep, ...]], ...] = ()
+    def at(self, position: tuple[int, int]) -> tuple[SyncStep, ...]: ...
+```
+
+- constraints:
+  - A position names a direct child of a lexical scope (the Function body, a
+    `MeshRegion` or a `LoopRegion` body) on the Function's liveness timeline.
+    An action is its HIR event and its index among the actions lowering emits
+    for that event; an inner region is its entry event and `-1`. Carried slot
+    `s` of a loop with `n` carried slots copies on entry at `(start, s - n - 1)`
+    and on the backedge at `(backedge, s)`, from the loop's liveness window.
+    Steps run before that child, in that scope's block, in the order commit,
+    wait, barrier.
+  - The actions of an event are the ones lowering emits: the selected
+    instruction of a Call, and the copies and fills lowering adds. Which
+    statements a Call emits, which instruction it issues, which operands that
+    instruction reads and writes and the mesh each action is issued on come
+    from `analysis/emission.py`, which lowering also calls; both call it on the
+    same analysed program. Each action's completion comes from the completion
+    registry
+    ([visitor-registry §4.2](./visitor-registry.md#42-completion-service--completion)).
+  - Scopes are those of the Function's `IterationScope`
+    ([§2.1](#21-shared-iterationscope-and-access)): the scope an expression sits in is its
+    recorded location. The family builds no scope tree of its own; it only
+    orders each scope's children by position.
+  - An access owns the shared memory bytes of its value's allocation leaf, as
+    the memory family places it: each stage's offset and the stage size, all
+    stages together, or for a Tuple result the leaf's own offset and size. A
+    leaf without a placed offset, or whose allocation the Function returns and
+    so may live in the output its caller passes, owns unknown bytes, which
+    overlap everything.
+    The plan orders whole allocations, so it says nothing about which stage or
+    window an access selects.
+  - Two accesses conflict when one of them writes and their bytes overlap. A
+    later access follows an earlier one once a barrier has run over a scope
+    whose mesh chain is a prefix of the later access's; before that barrier,
+    an earlier `cp.async` write is committed and waited on in that scope.
+  - An action runs on the mesh lowering issues it on, or on its lexical
+    scope's mesh when that is None. That mesh MUST lie within its lexical
+    scope's mesh (`within_scope`). Steps are placed in the innermost scope that
+    holds both accesses, before the child that holds the later one, so the
+    issuing threads of both run them; a barrier runs over that scope's mesh.
+    That mesh MUST be a thread mesh `classify` supports, and every loop around
+    the position MUST have bounds every thread sees alike: constants, kernel
+    parameters and their captures, induction variables of such loops, and
+    coordinates of mesh levels the barrier's mesh does not span.
+  - Loops are analysed to a fixed point: the head state joins every body end
+    until it repeats.
+  - A retained call is admitted when the callee's own allocation summary, as
+    written at its definition, holds no shared memory value. That summary
+    holds the callee's parameters, its returned values, their aliases and the
+    internal values of every function it calls in turn.
+  - The family raises `AnalysisError` for an access that must follow one whose
+    completion is `UNKNOWN`, for an access whose completion is `UNKNOWN` that
+    may still be in flight when the Function returns, for an action whose mesh
+    is not provably within its scope, for a barrier no supported uniform scope
+    can hold, for a loop whose state does not settle within its limit, and for
+    a retained call whose callee's summary is missing or holds a shared memory
+    value.
 
 ## 2. Composed analysis
 
