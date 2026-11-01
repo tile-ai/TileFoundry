@@ -26,7 +26,10 @@ from tilefoundry.analysis.emission import (
     copies_carry_entry,
     copies_insert_slice_base,
     copies_insert_slice_update,
+    copy_mesh,
     emission,
+    issue_mesh,
+    issue_owner,
     operand_roles,
     operand_types,
     required_execution_mesh,
@@ -70,7 +73,6 @@ from tilefoundry.ir.types import (
     DType,
     Layout,
     Mesh,
-    Partial,
     PointerType,
     ShardLayout,
     Split,
@@ -150,6 +152,20 @@ class View:
 def _covers(starts, sizes, shape) -> bool:
     """Whether a window at *starts* of *sizes* is the whole operand of *shape*."""
     return tuple(sizes) == tuple(shape) and all(static_dim_value(start) == 0 for start in starts)
+
+
+def _cut(base, starts, sizes, loops=()) -> Call:
+    """*base* windowed at *starts* to *sizes*, with the type Slice infers for it."""
+    keys = Tuple(starts, type=TupleType(tuple(start.type for start in starts)))
+    window = Call(
+        Slice(sizes=tuple(sizes), strides=(1,) * len(sizes)), (base, keys), type=base.type
+    )
+    inferred = typeinfer_registry.lookup(Slice)(
+        window,
+        TypeInferContext(memo={id(arg): (arg, arg.type) for arg in (base, *starts)}, loops=loops),
+    )
+    window.type = getattr(inferred, "type", inferred)
+    return window
 
 
 @dataclass
@@ -381,14 +397,7 @@ class TirBuilder:
         source_type = source.type if source_type is None else source_type
         if not isinstance(source_type, TensorType) or not isinstance(target.type, TensorType):
             raise LoweringError("copy lowering requires tensor operands")
-        mesh = next(
-            (
-                participant_layout(type_.layout).mesh
-                for type_ in (source_type, target.type)
-                if isinstance(type_.layout, ShardLayout)
-            ),
-            None,
-        )
+        mesh = copy_mesh((source_type, target.type))
         with self.region(mesh=mesh, binding=Var(ctx.names.fresh("threads"), type=_BINDING)):
             if isinstance(op, Fill):
                 self.add(Evaluate(op, (self.value(target, ctx=ctx), source)))
@@ -855,22 +864,7 @@ class StoragePlan:
             )
         source = base
         if not view.whole_tensor and not _covers(view.starts, view.sizes, held.shape):
-            keys = Tuple(view.starts, type=TupleType(tuple(start.type for start in view.starts)))
-            source = Call(
-                Slice(sizes=tuple(view.sizes), strides=(1,) * len(view.sizes)),
-                (base, keys),
-                type=TensorType(
-                    tuple(view.sizes), held.dtype, Layout(tuple(view.sizes)), held.storage
-                ),
-            )
-            inferred = typeinfer_registry.lookup(Slice)(
-                source,
-                TypeInferContext(
-                    memo={id(arg): (arg, arg.type) for arg in (base, *view.starts)},
-                    loops=loops,
-                ),
-            )
-            source.type = getattr(inferred, "type", inferred)
+            source = _cut(base, view.starts, view.sizes, loops)
         pointer = Call(PtrOf(), (source,), type=PointerType(held.dtype, held.storage))
         return Call(
             TensorView(layout=desired.layout, shape=tuple(desired.shape)), (pointer,), type=desired
@@ -882,16 +876,7 @@ class StoragePlan:
         The layout offset is relative to the sliced pointer: reduce the
         displacement modulo the swizzle period; the pointer holds its full offset.
         """
-        keys = Tuple(starts, type=TupleType(tuple(value.type for value in starts)))
-        cut = Call(
-            Slice(sizes=tuple(desired.shape), strides=(1,) * len(desired.shape)),
-            (target, keys),
-            type=desired,
-        )
-        inferred = typeinfer_registry.lookup(Slice)(
-            cut, TypeInferContext(memo={id(arg): (arg, arg.type) for arg in (target, *starts)})
-        )
-        type_ = getattr(inferred, "type", inferred)
+        type_ = _cut(target, starts, desired.shape).type
         layout = type_.layout.layout if isinstance(type_.layout, ShardLayout) else type_.layout
         if isinstance(layout, ComposedLayout) and isinstance(layout.inner, Swizzle):
             swizzle = layout.inner
@@ -900,6 +885,24 @@ class StoragePlan:
         if isinstance(type_.layout, ShardLayout):
             layout = replace(type_.layout, layout=layout)
         return starts, replace(desired, layout=layout, storage=target.type.storage)
+
+    def issue_window(self, base, desired, starts, loops):
+        """The operand one issue point takes: *base* cut at *starts*, placed as *desired*."""
+        window = base if _covers(starts, desired.shape, base.type.shape) else _cut(
+            base, starts, desired.shape, loops
+        )
+        if window.type == desired:
+            return window
+        pointer = Call(PtrOf(), (window,), type=PointerType(desired.dtype, desired.storage))
+        address = (
+            window.type.layout.layout
+            if isinstance(window.type.layout, ShardLayout)
+            else window.type.layout
+        )
+        placement = desired.layout
+        layout = replace(placement, layout=address) if isinstance(placement, ShardLayout) else address
+        type_ = replace(window.type, layout=layout)
+        return Call(TensorView(layout=layout, shape=tuple(type_.shape)), (pointer,), type=type_)
 
     def view(self, target, address, desired, *, values=None):
         """Derive an exact physical view; a proved composition carries its origin."""
@@ -1075,23 +1078,7 @@ class IssuePlan:
             repeat = order = None
         try:
             projection = project(op, types, mesh, repeat=repeat, order=order)
-            owner = next(
-                (
-                    participant_layout(
-                        replace(
-                            type_.layout,
-                            attrs=tuple(
-                                Broadcast() if isinstance(attr, Partial) else attr
-                                for attr in type_.layout.attrs
-                            ),
-                        )
-                    ).mesh
-                    for type_ in types
-                    if isinstance(type_.layout, ShardLayout)
-                ),
-                None,
-            )
-            return projection, types, owner
+            return projection, types, issue_owner(types)
         except (ScheduleRefusal, ValueError) as error:
             raise LoweringError(str(error)) from error
 
@@ -1547,11 +1534,12 @@ class Lowering(ValuationVisitor[Expr | View]):
             for type_ in types
         )
         required = required_execution_mesh(op)
+        issuers = issue_mesh(op, owner, mesh)
         if required is None:
             if mesh is None:
                 raise LoweringError(f"{_label(call)} instruction issue has no lexical mesh")
             with ctx.builder.region(
-                mesh=owner, binding=Var(ctx.names.fresh("threads"), type=_BINDING)
+                mesh=issuers, binding=Var(ctx.names.fresh("threads"), type=_BINDING)
             ):
                 issued = []
                 for param, (role, value) in zip(params, issued_operands, strict=True):
@@ -1581,12 +1569,11 @@ class Lowering(ValuationVisitor[Expr | View]):
         for region in ctx.builder.blocks[:-1]:
             for key, value in region.views.items():
                 ctx.builder.blocks[-1].views.setdefault(key, value)
-        frame, _dropped = _participant_frame(owner or mesh, required)
         locals_ = []
         unit_coordinates = {}
         for (role, value), type_, rest in zip(issued_operands, types, plan.rests, strict=True):
             base = ctx.builder.value(ctx.storage.operand(value, type_, whole_tensor=True), ctx=ctx)
-            binding_mesh = rest.mesh if isinstance(rest, ShardLayout) else frame
+            binding_mesh = rest.mesh if isinstance(rest, ShardLayout) else issuers
             _frame, dropped = _participant_frame(binding_mesh, required)
             source = shard_layout_of(base.type.layout)
             attrs = (
@@ -1643,7 +1630,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 )
                 base = Call(TensorView(layout=local, shape=local_shape), (pointer,), type=local_type)
             locals_.append(base)
-        with ctx.builder.region(mesh=frame, binding=Var(ctx.names.fresh("threads"), type=_BINDING)):
+        with ctx.builder.region(mesh=issuers, binding=Var(ctx.names.fresh("threads"), type=_BINDING)):
             locals_ = [
                 ctx.builder.bind(Var(ctx.names.fresh(f"{role}_local"), type=base.type), base)
                 if isinstance(base, Call) and isinstance(base.target, TensorView)
@@ -1655,43 +1642,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 for (role, _value), base, desired, starts in zip(
                     issued_operands, locals_, plan.tiles, windows, strict=True
                 ):
-                    if _covers(starts, desired.shape, base.type.shape):
-                        window = base
-                    else:
-                        keys = Tuple(starts, type=TupleType(tuple(start.type for start in starts)))
-                        window = Call(
-                            Slice(sizes=tuple(desired.shape), strides=(1,) * len(desired.shape)),
-                            (base, keys),
-                            type=desired,
-                        )
-                        inferred = typeinfer_registry.lookup(Slice)(
-                            window,
-                            TypeInferContext(
-                                memo={id(arg): (arg, arg.type) for arg in (base, *starts)},
-                                loops=ctx.builder.loops,
-                            ),
-                        )
-                        window.type = getattr(inferred, "type", inferred)
-                    item = window
-                    if window.type != desired:
-                        pointer = Call(
-                            PtrOf(), (window,), type=PointerType(desired.dtype, desired.storage)
-                        )
-                        address = (
-                            window.type.layout.layout
-                            if isinstance(window.type.layout, ShardLayout)
-                            else window.type.layout
-                        )
-                        placement = desired.layout
-                        layout = (
-                            replace(placement, layout=address)
-                            if isinstance(placement, ShardLayout)
-                            else address
-                        )
-                        type_ = replace(window.type, layout=layout)
-                        item = Call(
-                            TensorView(layout=layout, shape=tuple(type_.shape)), (pointer,), type=type_
-                        )
+                    item = ctx.storage.issue_window(base, desired, starts, ctx.builder.loops)
                     issued.append(
                         ctx.builder.bind(Var(ctx.names.fresh(f"{role}_view"), type=item.type), item)
                         if isinstance(item, Call)
