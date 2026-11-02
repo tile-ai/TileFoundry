@@ -15,7 +15,15 @@ from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
 from tilefoundry.dsl.storage import gmem, rmem
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import Broadcast, Layout, Mesh, ShardLayout, Topology, make_tensor_type
+from tilefoundry.ir.types import (
+    Broadcast,
+    ComposedLayout,
+    Layout,
+    Mesh,
+    ShardLayout,
+    Topology,
+    make_tensor_type,
+)
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
@@ -93,6 +101,42 @@ def test_reshard_transpose_requires_data_movement(storage):
     source = make_tensor_type((4, 4), layout=Layout((4, 4), (4, 1)), storage=storage)
     result = make_tensor_type((4, 4), layout=Layout((4, 4), (1, 4)), storage=storage)
     assert aliases(source, result) is None
+
+
+def _lanes(layout) -> Mesh:
+    return Mesh((Topology("thread", 64),), layout, ("a", "b"))
+
+
+_LANES = _lanes(Layout((4, 8), (8, 1)))
+
+
+@pytest.mark.parametrize("storage", (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM))
+@pytest.mark.parametrize(
+    ("held_by", "moves"),
+    (
+        (_lanes(ComposedLayout(None, 0, Layout((4, 8), (8, 1)))), False),
+        (_lanes(ComposedLayout(None, 32, Layout((4, 8), (8, 1)))), True),
+        (_lanes(Layout((4, 8), (1, 4))), True),
+        (Mesh((Topology("cta", 64),), Layout((4, 8), (8, 1)), ("a", "b")), True),
+    ),
+    ids=(
+        "the same threads with a zero offset",
+        "other threads",
+        "the same threads reordered",
+        "the same numbering on CTAs",
+    ),
+)
+def test_registers_alias_only_where_each_element_keeps_its_thread(storage, held_by, moves):
+    """Register storage aliases only when every element stays with its thread; shared may move."""
+    private = storage is StorageKind.RMEM
+    layout = Layout((4, 8), (0, 0) if private else (8, 1))
+    source = make_tensor_type(
+        (32,), layout=ShardLayout(layout, (Split(0), Split(1)), _LANES), storage=storage
+    )
+    result = make_tensor_type(
+        (32,), layout=ShardLayout(layout, (Split(0), Split(1)), held_by), storage=storage
+    )
+    assert aliases(source, result) == (None if private and moves else 0)
 
 
 def test_private_split_factorizations_alias():

@@ -9,6 +9,7 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, TensorType
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
@@ -43,10 +44,22 @@ class Reshard(Op):
     storage = ParamDef(kind="attribute", default=None)
 
 
+def _holders(layout) -> tuple | None:
+    """The hardware levels holding a register layout and how its mesh numbers them, or None."""
+    shard = shard_layout_of(layout)
+    if shard is None:
+        return None
+    levels = tuple(getattr(topology, "name", topology) for topology in shard.mesh.topologies)
+    offset = shard.mesh.layout.offset if isinstance(shard.mesh.layout, ComposedLayout) else 0
+    return levels, device_layout(shard.mesh), offset
+
+
 @register_buffer_alias(Reshard)
 def _buffer_alias(call: Call) -> int | None:
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage or not is_literal_shape(result.shape):
+        return None
+    if result.storage is StorageKind.RMEM and _holders(source.layout) != _holders(result.layout):
         return None
     if any(
         before != after
