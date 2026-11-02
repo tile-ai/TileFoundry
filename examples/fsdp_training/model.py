@@ -20,7 +20,7 @@ PARAMETER_NAMES = ("embedding", *(f"block{i}.{name}" for i in (1, 2)
                    for name in ("q", "k", "v", "o", "up", "down")), "head")
 
 
-def training_program(participants=2, *, retain=False):
+def training_program(participants=2, *, retain=False, replicas=1):
     """Return one training step; backward is authored explicitly, without AD.
 
     Inputs: one-hot tokens/targets, fixed RoPE matrices and causal mask,
@@ -30,19 +30,26 @@ def training_program(participants=2, *, retain=False):
     """
     if participants not in (1, 2, 4):
         raise ValueError("this example supports 1, 2 or 4 equal participants")
+    if replicas not in (1, 2) or participants % replicas or participants // replicas < replicas:
+        raise ValueError("use replicas=1 for FSDP or participants=4, replicas=2 for HSDP")
     target = CudaTarget("nvidia.h200_sxm", device_count=participants)
     gpu = Topology("gpu", participants)
-    mesh = Mesh((gpu,), Layout((participants,), (1,)), ("dp",))
+    mesh_shape = (participants,) if replicas == 1 else (replicas, participants // replicas)
+    mesh_names = ("shard",) if replicas == 1 else ("replicate", "shard")
+    mesh_layout = Layout(mesh_shape)
+    mesh = Mesh((gpu,), mesh_layout, mesh_names)
 
     def layout(shape, attr):
         if participants == 1:
             attr = Broadcast()
-        return ShardLayout.default(shape, mesh, (attr,), storage="gmem", owners=target.storage_owners)
+        attrs = attr if isinstance(attr, tuple) else ((attr,) if replicas == 1 else (Broadcast(), attr))
+        return ShardLayout.default(shape, mesh, attrs, storage="gmem", owners=target.storage_owners)
 
     def tensor(shape, attr=Split(0)):
         return TensorType(shape, DType.f32, layout(shape, attr), "gmem")
 
-    A, Tokens = tensor((N, C)), tensor((N, V))
+    data_attrs = (Split(0),) * len(mesh_shape) if participants > 1 else (Broadcast(),)
+    A, Tokens = tensor((N, C), data_attrs), tensor((N, V), data_attrs)
     Emb, FullEmb = tensor((V, C)), tensor((V, C), Broadcast())
     Sharded = TupleType(tuple(tensor(shape) for shape in BLOCK_SHAPES))
     Full = TupleType(tuple(tensor(shape, Broadcast()) for shape in BLOCK_SHAPES))
@@ -51,10 +58,15 @@ def training_program(participants=2, *, retain=False):
     full_e = FullEmb.layout
     fq, fk, fv, fo, fu, fd = (field.layout for field in Full.fields)
     sq, sk, sv, so, su, sd = (field.layout for field in Sharded.fields)
+    # Reduce-scatter resolves only the shard axis. Replicas still contribute
+    # distinct gradients until the following all-reduce resolves that axis.
+    reduced_attrs = (Partial("sum"), Split(0)) if replicas > 1 else Split(0)
+    rq, rk, rv, ro, ru, rd = (layout(shape, reduced_attrs) for shape in BLOCK_SHAPES)
+    reduced_e = layout((V, C), reduced_attrs)
     inverse_p = 1.0 / participants
     local_mean_scale = participants / N
     global_mean_scale = 1.0 / N
-    Inverse = tensor((N, 1))
+    Inverse = tensor((N, 1), data_attrs)
     HeadWeight = FullEmb if retain else Emb
     shard_e = Emb.layout
 
@@ -107,14 +119,17 @@ def training_program(participants=2, *, retain=False):
         def backward(dy: A, s: Saved, w: Full, rotation: Rotation):
             y, a, ix, qn, iq, kn, ik, q, k, v, probability, attended, r, ir, relu = s
             pd = tf.matmul(dy, relu * relu, a_layout="KM")
-            gd = tf.reshard(pd, layout=sd, storage="gmem") * inverse_p
+            reduced_d = tf.reshard(pd, layout=rd, storage="gmem")
+            gd = tf.reshard(reduced_d, layout=sd, storage="gmem") * inverse_p
             du = tf.matmul(dy, w[5]) * (2.0 * relu)
             pu = tf.matmul(du, r, a_layout="KM")
-            gu = tf.reshard(pu, layout=su, storage="gmem") * inverse_p
+            reduced_u = tf.reshard(pu, layout=ru, storage="gmem")
+            gu = tf.reshard(reduced_u, layout=su, storage="gmem") * inverse_p
             dr = tf.matmul(du, w[4])
             dresidual = dy + ir * (dr - r * tf.reduce(dr * r, axes=(-1,)))
             po = tf.matmul(dresidual, attended, a_layout="KM")
-            go = tf.reshard(po, layout=so, storage="gmem") * inverse_p
+            reduced_o = tf.reshard(po, layout=ro, storage="gmem")
+            go = tf.reshard(reduced_o, layout=so, storage="gmem") * inverse_p
             dc = tf.transpose(tf.reshape(tf.matmul(dresidual, w[3]), (B, T, G, H // G, D)),
                               perm=(0, 2, 3, 1, 4))
             dv = tf.reduce(tf.matmul(probability, dc, a_layout="KM"), axes=(2,), kind=ReduceKind.SUM)
@@ -134,9 +149,12 @@ def training_program(participants=2, *, retain=False):
             pq = tf.matmul(dqf, a, a_layout="KM")
             pk = tf.matmul(dkf, a, a_layout="KM")
             pv = tf.matmul(dvf, a, a_layout="KM")
-            gq = tf.reshard(pq, layout=sq, storage="gmem") * inverse_p
-            gk = tf.reshard(pk, layout=sk, storage="gmem") * inverse_p
-            gv = tf.reshard(pv, layout=sv, storage="gmem") * inverse_p
+            reduced_q = tf.reshard(pq, layout=rq, storage="gmem")
+            reduced_k = tf.reshard(pk, layout=rk, storage="gmem")
+            reduced_v = tf.reshard(pv, layout=rv, storage="gmem")
+            gq = tf.reshard(reduced_q, layout=sq, storage="gmem") * inverse_p
+            gk = tf.reshard(reduced_k, layout=sk, storage="gmem") * inverse_p
+            gv = tf.reshard(reduced_v, layout=sv, storage="gmem") * inverse_p
             da = tf.matmul(dqf, w[0]) + tf.matmul(dkf, w[1]) + tf.matmul(dvf, w[2])
             dx = dresidual + ix * (da - a * tf.reduce(da * a, axes=(-1,)))
             return dx, gq, gk, gv, go, gu, gd
@@ -190,7 +208,8 @@ def training_program(participants=2, *, retain=False):
         def head_backward(dl: Tokens, z: A, inverse: Inverse, w: HeadWeight):
             full = tf.reshard(w, layout=full_e, storage="gmem")
             partial = tf.matmul(dl, z, a_layout="KM")
-            gradient = tf.reshard(partial, layout=shard_e, storage="gmem") * inverse_p
+            reduced = tf.reshard(partial, layout=reduced_e, storage="gmem")
+            gradient = tf.reshard(reduced, layout=shard_e, storage="gmem") * inverse_p
             dz = tf.matmul(dl, full)
             dx = inverse * (dz - z * tf.reduce(dz * z, axes=(-1,)))
             return dx, gradient
@@ -198,7 +217,8 @@ def training_program(participants=2, *, retain=False):
         @func
         def embedding_backward(tokens: Tokens, dx: A):
             partial = tf.matmul(tokens, dx, a_layout="KM")
-            return tf.reshard(partial, layout=shard_e, storage="gmem") * inverse_p
+            reduced = tf.reshard(partial, layout=reduced_e, storage="gmem")
+            return tf.reshard(reduced, layout=shard_e, storage="gmem") * inverse_p
 
     forward = getattr(Stages, "retain_forward" if retain else "release_forward")
     backward_stage = getattr(Stages, "retain_backward" if retain else "release_backward")
@@ -223,7 +243,7 @@ def training_program(participants=2, *, retain=False):
                  mq2: Tensor[(C, C), "f32", sq], mk2: Tensor[(G * D, C), "f32", sk],
                  mv2: Tensor[(G * D, C), "f32", sv], mo2: Tensor[(C, C), "f32", so],
                  mu2: Tensor[(F, C), "f32", su], md2: Tensor[(C, F), "f32", sd], mh: Emb):
-            with Mesh(("gpu",), layout=(participants,), names=("dp",)) as dp:
+            with Mesh(("gpu",), layout=mesh_layout, names=mesh_names) as dp:
                 x = embedding(tokens, we)
                 (y1, a1, ix1, qn1, iq1, kn1, ik1, qr1, kr1, vr1, p1, at1, r1, ir1, relu1,
                  hq1, hk1, hv1, ho1, hu1, hd1) = forward(x, (q1, k1, v1, o1, u1, d1), rotation, mask)

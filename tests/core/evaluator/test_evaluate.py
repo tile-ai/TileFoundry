@@ -11,7 +11,8 @@ from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.analysis.check import check_program
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
-from tilefoundry.evaluator.value import EvalError
+from tilefoundry.evaluator.mesh import MeshValue, local_type, observe, redistribute
+from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
@@ -256,6 +257,30 @@ def test_partial_sum_uses_actual_contributions_and_keeps_subgroups_separate(scat
         actual = evaluate(_mesh_program(shifted, params, mesh), torch.ones(params[0].type.shape), data)
         expected[..., 2:] += 100
         assert torch.equal(actual, expected)
+
+
+def test_hsdp_reductions_resolve_one_axis_at_a_time():
+    mesh = Mesh((Topology("gpu", 4),), Layout((2, 2), (1, 2)), ("replicate", "shard"))
+    source = make_shard_tensor_type(
+        (1, 4), mesh=mesh, attrs=(Partial("sum"), Partial("sum")), dtype=DType.f32,
+    )
+    scattered = make_shard_tensor_type(
+        (1, 4), mesh=mesh, attrs=(Partial("sum"), Split(1)), dtype=DType.f32,
+    )
+    resolved = make_shard_tensor_type(
+        (1, 4), mesh=mesh, attrs=(Broadcast(), Split(1)), dtype=DType.f32,
+    )
+    base = torch.tensor([[1., 2., 3., 4.]])
+    values = MeshValue(tuple(TensorValue(base * scale, local_type(source, mesh))
+                             for scale in (1, 10, 100, 1000)), source, mesh)
+    first = redistribute(values, scattered, mesh)
+    for index, value in enumerate(first.values):
+        expected = base.chunk(2, dim=1)[index % 2] * (11 if index < 2 else 1100)
+        assert torch.equal(value.data, expected)
+    with pytest.raises(EvalError, match="cannot observe unresolved Partial"):
+        observe(first)
+    final = redistribute(first, resolved, mesh)
+    assert torch.equal(observe(final) / 4, base * (1111 / 4))
 
 
 def test_unresolved_partial_is_not_a_global_result_or_an_ordinary_operand():

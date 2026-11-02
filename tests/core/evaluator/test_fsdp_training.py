@@ -13,9 +13,10 @@ from tilefoundry.evaluator import evaluate
 
 
 @pytest.mark.parametrize("retain", (False, True), ids=("release", "retain"))
-def test_two_block_transformer_training(retain):
-    """One end-to-end smoke case; the example runner sweeps mesh sizes."""
-    program = transformer_program(2, retain=retain)
+@pytest.mark.parametrize(("participants", "replicas"), ((2, 1), (4, 2)), ids=("fsdp", "hsdp"))
+def test_two_block_transformer_training(retain, participants, replicas):
+    """One smoke case per distribution; the runner compares memory policies."""
+    program = transformer_program(participants, retain=retain, replicas=replicas)
     _, function = check_program(program, program.entry_function())
     check_training(function)
 

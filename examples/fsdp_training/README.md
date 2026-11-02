@@ -1,4 +1,4 @@
-# Two-block FSDP training in HIR
+# Two-block FSDP and HSDP training in HIR
 
 This study asks how releasing gathered parameters after forward changes storage and logical communication while preserving the training update. The HIR evaluator simulates participants on CPU. Forward, backward, and momentum SGD are authored explicitly. PyTorch autograd supplies an independent numerical reference.
 
@@ -8,9 +8,10 @@ Use an editable TileFoundry installation with the NVIDIA target, following [the 
 
 ```bash
 python -m examples.fsdp_training.run --participants 1 2 4
+python -m examples.fsdp_training.run --participants 4 --replicas 2
 ```
 
-Each configuration performs two training steps on changing batches, checks logits, global mean loss, every parameter gradient, updated parameters, and momentum buffers, then analyzes memory. The command prints one JSON record per participant count and residency policy. Analysis can take several minutes per configuration. It needs neither a checkpoint nor a dataset download.
+Each configuration performs two training steps on changing batches, checks logits, global mean loss, every parameter gradient, updated parameters, and momentum buffers, then analyzes memory. The first command prints six FSDP records; the second prints two HSDP records on a 2 × 2 logical mesh. Analysis can take several minutes per configuration. It needs neither a checkpoint nor a dataset download.
 
 | File | Responsibility |
 |---|---|
@@ -31,7 +32,7 @@ The fixed FP32 configuration has batch 8, sequence length 8, width 16, four quer
 
 HIR represents the tiny embedding lookup as one-hot matrix multiplication; the reference uses `torch.nn.functional.embedding`. Fixed rotation matrices express RoPE in HIR, while the reference rotates adjacent coordinate pairs. HIR broadcasts K/V over a separate query-group dimension; the reference repeats KV heads before SDPA. These are equivalent small-workload representations, not production embedding or attention kernels.
 
-Every participant receives different complete sequences. Parameters and momentum are split along tensor dimension 0. Linear backward contracts the split token dimension to produce actual `Partial(sum)` contributions. Explicit reduce-scatter followed by one division by the participant count produces gradients of the global mean loss. HIR `Reduce` has complete reduction semantics, used for the scalar loss. The optimizer uses learning rate 0.01 and momentum 0.9, with no dampening, weight decay or Nesterov update. The second step consumes the first step's returned state; inputs are not mutated.
+Every participant receives different complete sequences. Parameters and momentum are split along tensor dimension 0. Linear backward contracts the split token dimension to produce actual `Partial(sum)` contributions. FSDP resolves those with reduce-scatter; HSDP uses reduce-scatter and then all-reduce as described below. Exactly one division by the total participant count produces gradients of the global mean loss. HIR `Reduce` has complete reduction semantics, used for the scalar loss. The optimizer uses learning rate 0.01 and momentum 0.9, with no dampening, weight decay or Nesterov update. The second step consumes the first step's returned state; inputs are not mutated.
 
 Checks use `rtol=5e-4`, `atol=2e-5` for FP32 reduction-order differences. The runner prints the observed maximum absolute errors separately for logits, loss, gradients, parameters and momentum.
 
@@ -41,7 +42,7 @@ Both variants use the same arithmetic and saved activations. The release variant
 
 Embedding backward does not read the embedding weights, so neither variant gathers them again. Each transformer block owns six parameter tensors. The head owns one. A stage boundary groups their lifetimes; it does not declare collective packing or an NCCL launch group.
 
-For multiple participants the per-step logical transfers are:
+For one-dimensional FSDP with multiple participants the per-step logical transfers are:
 
 | Quantity | Release | Retain |
 |---|---:|---:|
@@ -58,7 +59,7 @@ The command above generates all six records. For just the two-participant compar
 
 In `run.py`, `study()` builds and checks each program, runs the independent training comparison, and calls `analyze(..., analysis="memory")`. `summarize_training()` then obtains the table from that analyzed HIR:
 
-1. Walk reached function calls and count `Reshard` transitions: `Split -> Broadcast` is an all-gather and `Partial(sum) -> Split` is a gradient reduce-scatter. Each call occurrence is counted, so invoking a shared block definition twice counts both blocks. Payload is tensor element count times dtype size, using the all-gather result or reduce-scatter input.
+1. Walk reached function calls and inspect each mesh axis of `Reshard`: `Split -> Broadcast` is an all-gather, `Partial(sum) -> Split` is a reduce-scatter, and `Partial(sum) -> Broadcast` is an all-reduce. Each call occurrence is counted, so invoking a shared block definition twice counts both blocks. These graphs stage one changed axis per collective. Payload uses the participant-local shape from the shared logical projection, times dtype size: the all-gather result or the reduction input. Unchanged Split axes still reduce this local payload. The report records the changed axis, group size, and number of disjoint groups in `collective_groups`; occurrence counts are per participant, not multiplied by the number of groups.
 2. Follow call and tuple results back to gathered values, then select their accepted allocation roots from `AllocationSummaryMetadata`. Use the lifetime windows in `RegionMemoryMetadata` to sum simultaneously live bytes, deduplicating aliases by root, and take the maximum over lifetime boundaries. Tensor shape alone does not identify a gathered weight.
 3. Sum the allocation entries for the parameter and momentum inputs to obtain persistent state per participant. Fixed inputs, activations and returned update buffers are outside this selected quantity.
 
@@ -91,8 +92,43 @@ These are selected storage components, not total training memory: saved activati
 
 The result is a storage/communication trade-off. Retention removes re-gathers, while release permits smaller gathered-weight residency. Choosing between them needs a memory constraint or a future scheduled/runtime experiment.
 
+## HSDP: two shard groups with replicated parameter shards
+
+Run `python -m examples.fsdp_training.run --participants 4 --replicas 2`. The logical mesh axes are `(replicate=2, shard=2)`, with coordinates `(0,0), (0,1), (1,0), (1,1)`. Each row is a shard group; each column contains corresponding parameter shards across replicas. This follows the two-dimensional placement convention of [PyTorch FSDP2](https://docs.pytorch.org/docs/main/distributed.fsdp.fully_shard.html).
+
+The distribution states are expressed using existing HIR attributes:
+
+| Value or transition | Replicate axis | Shard axis |
+|---|---|---|
+| Tokens and activations | Split batch | Split batch |
+| Parameters and momentum | Broadcast | Split parameter dimension 0 |
+| Gathered parameters | Broadcast | Broadcast |
+| Local parameter-gradient contributions | Partial(sum) | Partial(sum) |
+| After reduce-scatter within each row | Partial(sum) | Split parameter dimension 0 |
+| After all-reduce within each column | Broadcast | Split parameter dimension 0 |
+
+The reduce-scatter must leave the replicate-axis contribution unresolved. Each column then all-reduces only its parameter shard. The program divides by four after both reductions, once. A small evaluator regression inspects the intermediate values from four distinct contributions and refuses to observe that still-Partial intermediate as a completed tensor. The transformer checks all gradients and both momentum updates against dense training.
+
+The same reporter generates these differences from four-way FSDP:
+
+| Per-step, per-participant quantity | FSDP, 4 shards | HSDP, 2 replicas × 2 shards |
+|---|---:|---:|
+| All-gathers, release / retain | 27 / 14 | 27 / 14 |
+| Reduce-scatters | 14 | 14 |
+| Gradient all-reduces | 0 | 14 |
+| Reduce-scatter input | 26 KiB | 26 KiB |
+| All-reduce input | 0 | 13 KiB |
+| Persistent parameters plus momentum | 13 KiB | 26 KiB |
+| Peak gathered weights, release / retain | 11 / 24 KiB | 11 / 24 KiB |
+
+HSDP's all-gathers and reduce-scatters use two disjoint groups of size two on the `shard` axis. Its all-reduces use two groups of size two on the `replicate` axis. The fourteen full gradients total 26 KiB, so the all-reduce inputs after two-way reduce-scatter total `26 / 2 = 13 KiB` per participant. Parameters plus momentum occupy `52 / 2 = 26 KiB`; replication does not further divide that storage. Gather counts, result payloads and lifetime peaks follow the same stage arithmetic as FSDP above. No-op reshards do not count as transfers.
+
+The mesh describes logical participant groups. A deployment could bind each row to one node and use intra-node gathers/reduce-scatters with inter-node all-reduces. The example does not assign nodes, links or routes, and it does not estimate their bandwidth. Logical projection and propagation determine indices and per-axis value state; physical realization chooses storage strides and owner-local allocation separately. A later communication lowering can consume these groups without changing the training equations.
+
+A separate local check with real PyTorch HSDP on four sm90 GPUs passed two updates for both policies. It used a `(2, 2)` DeviceMesh and verified `Replicate(), Shard(0)` parameter and momentum placements, local shard contents, gradients, logits, and loss. The largest differences were `7.5e-7` for logits, `4.2e-7` for gradients/momentum, and `1.5e-8` for parameters. All four devices were on one host: this validates subgroup numerical behavior, not inter-node transport or HIR-generated distributed execution. The extra hardware comparison remains local; the repository keeps the semantic tests and runnable reference study.
+
 ## Scope
 
-This models minimal FSDP2-style training semantics using existing mesh placements. It supports a single GPU topology level, even shards, and concrete shapes. GQA supplies the workload; the parallelism demonstrated here is data parallel training with sharded parameters, gradients and optimizer state. Muon, mixed precision, accumulation, offload, prefetch/overlap, uneven shards, TP/CP/HSDP, inference and distributed CUDA code generation remain follow-ups.
+This models minimal FSDP2-style training semantics using existing mesh placements, including a 2 × 2 HSDP configuration. It supports a single GPU topology level, even shards, and concrete shapes. GQA supplies the workload; the parallelism demonstrated here is data parallel training with sharded parameters, gradients and optimizer state. Muon, mixed precision, accumulation, offload, prefetch/overlap, uneven shards, TP/CP, inference and distributed CUDA code generation remain follow-ups.
 
-Small ownership, reduction and lifetime regressions live under `tests/core`; CI includes one two-participant transformer smoke case for each policy. The runner supplies the broader 1/2/4-participant study. See [the HIR training tutorial](../../docs/tutorial/fsdp-training.md) for the evaluator contract and related upstream discussions.
+Small ownership, reduction and lifetime regressions live under `tests/core`; CI includes an FSDP and an HSDP transformer smoke case for each policy. The runner supplies the broader residency study. See [the HIR training tutorial](../../docs/tutorial/fsdp-training.md) for the evaluator contract and related upstream discussions.
