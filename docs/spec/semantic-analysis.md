@@ -139,6 +139,15 @@ Both use the one `IslParamValues` dictionary, from isl parameter name to IR valu
 - A mesh coordinate is an isl parameter while the placement is built. The
   access relation service fixes it to the requested unit, 0 on every mesh axis
   unless stated, and removes it before any boundary is counted.
+- `project_domain(domain_shape, tensor_shape, mesh_shape, attrs, coordinates)`
+  derives an immutable coordinate projection and its local logical shape.
+  Unfixed (`None`) mesh coordinates remain available for a subsequent
+  projection. It MUST NOT consult storage strides, storage owners or targets.
+  Applying the projection to a canonical row-major index map selects logical
+  elements; applying it to an authored address map selects physical addresses.
+  Both paths use the same factorization and coordinate selection. `Partial`
+  and `Broadcast` have identical index coverage; their distinct value states
+  remain in the per-axis attributes and are not inferred from this map.
 
 ### 3.2 Relation-driven shard propagation
 
@@ -149,6 +158,14 @@ relation's access maps by a single rule, shared across ops.
 
 ```python
 def partial_reductions_by_axis(layout: object) -> tuple[str | None, ...]: ...
+
+def derive_output_distribution(
+    input_types: tuple,
+    relations,
+    *,
+    partial_reduction_dims: frozenset[int] = frozenset(),
+    complete_reduction_dims: frozenset[int] = frozenset(),
+): ...
 
 def derive_output_shard_layout(
     input_types: tuple,
@@ -164,6 +181,14 @@ def derive_output_shard_layout(
 ```
 
 - constraints:
+  - `derive_output_distribution` returns an analysis result containing the
+    participating mesh and per-axis attributes, or `None` when no input is
+    distributed. Its `Split` indices MUST name logical output tensor axes;
+    `Partial` remains attached to its exact mesh axis. The service MUST NOT
+    consult physical strides, storage owners or the target.
+    `derive_output_shard_layout` consumes that result, then selects a compatible
+    physical carrier or constructs a storage layout. Domain factorization
+    translates logical Split axes into layout positions at that boundary.
   - `derive_output_shard_layout` reads only input types, `AccessRelation.affine`
     (the Op-written mapping before iteration-domain intersection), the requested
     output shape, and the explicit reduction/stride controls. It MUST NOT read

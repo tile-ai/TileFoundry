@@ -19,11 +19,10 @@ from tilefoundry.ir.types.shard_layout import (
     Dynamic,
     Partial,
     Split,
-    _local_readback,
-    local_layout,
     shard_layout_of,
     split_target_axes,
 )
+from tilefoundry.ir.types.shard_projection import project_domain
 from tilefoundry.utils.lazy import torch
 
 
@@ -82,8 +81,10 @@ def local_type(held, mesh: Mesh):
     shard = shard_layout_of(held.layout)
     if shard is None:
         return held
-    layout, _ = local_layout(shard, held.shape, (0,) * len(shard.attrs))
-    shape = _local_readback(layout).shape
+    shape = project_domain(
+        shard.layout.shape, held.shape, flatten(mesh.layout).shape,
+        shard.attrs, (0,) * len(shard.attrs),
+    ).local_shape
     return replace(held, shape=shape, layout=Layout(shape))
 
 

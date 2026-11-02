@@ -10,16 +10,15 @@ See [runtime §1.10](docs/spec/runtime.md#110-runtimetensorpy).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from tilefoundry.ir.types import Placement, Topology
-from tilefoundry.ir.types.layout import Layout, normalize_layout
+from tilefoundry.ir.types.layout import Layout, flatten, normalize_layout
 from tilefoundry.ir.types.shard_layout import (
-    _local_readback,
-    local_layout,
     local_layout_and_offset,
     shard_layout_of,
 )
+from tilefoundry.ir.types.shard_projection import logical_projection
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.utils.lazy import torch
 
@@ -43,9 +42,11 @@ def logical_local_view(tensor, held: TensorType, coordinates: tuple[int | None, 
     shard = shard_layout_of(held.layout)
     if shard is None:
         return tensor
-    canonical = replace(shard, layout=Layout(shard.layout.shape))
-    layout, offset = local_layout(canonical, tuple(held.shape), coordinates)
-    return _strided_local_view(tensor.contiguous(), _local_readback(layout), offset)
+    layout, offset = logical_projection(
+        shard.layout.shape, tuple(held.shape), flatten(shard.mesh.layout).shape,
+        shard.attrs, coordinates,
+    )
+    return _strided_local_view(tensor.contiguous(), layout, offset)
 
 
 @dataclass(frozen=True)
