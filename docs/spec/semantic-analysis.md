@@ -182,8 +182,11 @@ def derive_output_shard_layout(
 
 - constraints:
   - `derive_output_distribution` returns an analysis result containing the
-    participating mesh and per-axis attributes, or `None` when no input is
-    distributed. Its `Split` indices MUST name logical output tensor axes;
+    participating mesh and per-axis attributes, or `None` when no participating
+    input carries `Split` or `Partial`, including all-`Broadcast` inputs. `None`
+    means this rule derives no distribution; it does not establish equality of
+    plain-layout values across participants. Its `Split` indices MUST name
+    logical output tensor axes;
     `Partial` remains attached to its exact mesh axis. The service MUST NOT
     consult physical strides, storage owners or the target.
     `derive_output_shard_layout` consumes that result, then selects a compatible

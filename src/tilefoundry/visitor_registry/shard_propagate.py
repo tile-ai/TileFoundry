@@ -1,6 +1,6 @@
 """Generic shard propagation over a forward access relation.
 
-``derive_output_distribution`` solves per-axis ownership and reduction state
+``derive_output_distribution`` derives per-axis ownership and reduction state
 from affine access structure, without consulting physical strides or targets.
 ``derive_output_shard_layout`` realizes that result in storage. Both use the
 Op-written maps before domain bounds are intersected, so the rule is the same
@@ -221,10 +221,13 @@ def derive_output_distribution(
     partial_reduction_dims: frozenset[int] = frozenset(),
     complete_reduction_dims: frozenset[int] = frozenset(),
 ):
-    """Solve output ownership and reduction state without choosing storage.
+    """Derive output ownership and reduction state without choosing storage.
 
     Input domain shapes map Split positions back to logical tensor axes;
     input strides, storage owners and target capabilities are not consulted.
+    Return None when no participating input carries Split or Partial, including
+    all-Broadcast inputs. This absence of a derived distribution does not prove
+    that plain-layout values agree across participants.
     """
     input_types = _participating_inputs(input_types)
     sharded = [

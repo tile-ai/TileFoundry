@@ -28,7 +28,7 @@ from .run import _transition
 
 
 def describe_tensor(held):
-    """Read index coverage and physical addresses without evaluating tensor data.
+    """Read index coverage and authored storage offsets without evaluating data.
 
     Plain layouts have no inferred holder mesh. Index tags are only coordinates,
     never synthetic Partial values or a numerical check of replica equality.
@@ -129,7 +129,7 @@ def trace_function(function):
                 result = [add(expr, held, scope, parents, type(expr.target).__name__, i)
                           for i, held in enumerate(leaves_of(expr.type))]
         else:
-            raise TypeError(f"ownership explorer does not support {type(expr).__name__}")
+            raise TypeError(f"ownership trace does not support {type(expr).__name__}")
         memo[identity] = result
         return result
 

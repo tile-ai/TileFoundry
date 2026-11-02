@@ -1,1 +1,1 @@
-"""An executable study of FSDP parameter residency in HIR."""
+"""An executable study of FSDP and HSDP parameter residency in HIR."""

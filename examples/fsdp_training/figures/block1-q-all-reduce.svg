@@ -570,8 +570,8 @@
   <text x="52" y="634" class="small">Numbers label global elements, not numerical values. Stronger</text>
   <text x="52" y="651" class="small">fill marks the selected participant's ownership.</text>
   <text x="52" y="684" class="label">Selected element 64 · global (4, 0)</text>
-  <text x="52" y="711">4 declared replicas of a complete value. Replica equality</text>
-  <text x="52" y="731">is checked by numerical evaluation.</text>
+  <text x="52" y="711">4 declared replicas of a complete value. No pending</text>
+  <text x="52" y="731">reduction; this diagram shows declared ownership.</text>
   <text x="614" y="122" class="label">Participant mesh</text>
   <text x="614" y="142" class="small">Rows: replicate axis · columns: shard axis</text>
   <rect x="614" y="169" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />

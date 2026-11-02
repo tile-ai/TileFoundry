@@ -1,4 +1,4 @@
-"""Two small modded-nanogpt-inspired blocks with explicit FSDP training HIR.
+"""Two modded-nanogpt-inspired blocks with explicit FSDP/HSDP training HIR.
 
 GQA is an adaptation, not a reproduction of the modded-nanogpt speedrun.
 The vocabulary is deliberately tiny: one-hot matrix multiplication expresses
@@ -27,7 +27,8 @@ def training_program(participants=2, *, retain=False, replicas=1):
     Inputs: one-hot tokens/targets, fixed RoPE matrices and causal mask,
     fourteen parameters, then their fourteen momentum buffers.
     Outputs: logits, global mean loss, averaged gradients, next parameters,
-    and next momentum buffers. Every parameter/state output remains sharded.
+    and next momentum buffers. Parameter/state outputs preserve their input
+    distribution, including the unsharded single-participant case.
     """
     if (participants, replicas) not in SUPPORTED_MESHES:
         raise ValueError(f"supported (participants, replicas): {SUPPORTED_MESHES}")
@@ -60,7 +61,7 @@ def training_program(participants=2, *, retain=False, replicas=1):
     full_e = FullEmb.layout
     fq, fk, fv, fo, fu, fd = (field.layout for field in Full.fields)
     sq, sk, sv, so, su, sd = (field.layout for field in Sharded.fields)
-    # Reduce-scatter resolves only the shard axis. Replicas still contribute
+    # In HSDP, reduce-scatter resolves only the shard axis. Replicas contribute
     # distinct gradients until the following all-reduce resolves that axis.
     reduced_attrs = (Partial("sum"), Split(0)) if replicas > 1 else Split(0)
     rq, rk, rv, ro, ru, rd = (layout(shape, reduced_attrs) for shape in BLOCK_SHAPES)

@@ -9,9 +9,10 @@ Use an editable TileFoundry installation with the NVIDIA target, following [the 
 ```bash
 python -m examples.fsdp_training.run --participants 1 2 4
 python -m examples.fsdp_training.run --participants 4 --replicas 2
+python -m examples.fsdp_training.run --participants 16 --replicas 4
 ```
 
-Each configuration performs two training steps on changing batches, checks logits, global mean loss, every parameter gradient, updated parameters, and momentum buffers, then analyzes memory. The first command prints six FSDP records; the second prints two HSDP records on a 2 × 2 logical mesh. Analysis can take several minutes per configuration. It needs neither a checkpoint nor a dataset download.
+Each configuration performs two training steps on changing batches, checks logits, global mean loss, every parameter gradient, updated parameters, and momentum buffers, then analyzes memory. The first command prints six FSDP records; the second and third each print two HSDP records, on 2 × 2 and 4 × 4 logical meshes respectively. Analysis can take several minutes per configuration. It needs neither a checkpoint nor a dataset download.
 
 | File | Responsibility |
 |---|---|
@@ -50,13 +51,13 @@ python -m examples.fsdp_training.visualize --participants 2 --replicas 1 --retai
 
 Use `--tensor` for any of the fourteen parameters, `--element` and `--participant` to choose the highlighted mapping, or `--list-values` followed by `--value ID` to render activations and other intermediates. The available named stages are `parameter`, `gather`, `partial`, `reduce-scatter`, `all-reduce`, `gradient`, `momentum` and `updated`; the collective stages depend on the mesh. Large tensors use explicitly labeled windows with every displayed cell preserved, and the local view shows up to four rows. Colors identify logical row tiles and remain stable across stages. `Partial` and `Broadcast` may cover identical indices while representing different value states.
 
-The exporter checks HIR types without executing numerical training or device communication. `trace_function()` follows reached calls, mesh regions and tuple leaves by SSA identity; scalar literals are omitted. `describe_tensor()` reuses logical projection to obtain coverage and the coordinate map, then applies the projection to the authored address map for storage offsets. `ownership_svg.render_svg()` draws any tensor value from that trace using the standard library and existing layout helpers. Only `training_trace()` knows the model's parameter names and input/output signature. No HTML template, browser runtime or plotting dependency is needed to generate the SVGs.
+The exporter checks HIR types without executing numerical training or device communication. `trace_function()` follows reached calls, mesh regions and tuple leaves by SSA identity; scalar literals are omitted. `describe_tensor()` reuses logical projection to obtain coverage and the coordinate map, then applies the projection to the authored address map for storage offsets. `ownership_svg.render_svg()` draws any tensor value from that trace using the standard library and existing layout helpers. `training_trace()` supplies the model's input/output signature and parameter labels; the command-line interface also uses those labels for selection. No HTML template, browser runtime or plotting dependency is needed to generate the SVGs.
 
 Logical and storage offsets are shown separately. Their equality in an authored dense map does not make them the same concept: changing to compact private storage can change the storage offset while preserving logical ownership. Loops and unsupported region kinds are rejected, and plain layouts receive no invented holder mesh.
 
 ## Model and training contract
 
-The workload borrows RMSNorm, QK normalization, rotary position encoding, and a ReLU-squared MLP from [modded-nanogpt's architectural direction](https://github.com/KellerJordan/modded-nanogpt/tree/4ea6b937337a4889b8cfe3f38a93d120048d8f71). GQA is an adaptation: this is not a reproduction of that repository's speedrun model or optimizer.
+The workload borrows selected components from modded-nanogpt: [RMSNorm](https://github.com/KellerJordan/modded-nanogpt/blob/4ea6b937337a4889b8cfe3f38a93d120048d8f71/track_1_short/model/layers.py), [QK normalization and rotary position encoding](https://github.com/KellerJordan/modded-nanogpt/blob/4ea6b937337a4889b8cfe3f38a93d120048d8f71/track_1_short/model/attention.py), and a [ReLU-squared MLP](https://github.com/KellerJordan/modded-nanogpt/blob/4ea6b937337a4889b8cfe3f38a93d120048d8f71/track_1_short/model/gpt.py). GQA is an adaptation: this is not a reproduction of that repository's speedrun model or optimizer.
 
 ```text
 tokens -> embedding -> block 1 -> block 2 -> RMSNorm -> vocabulary head -> cross-entropy
@@ -67,7 +68,7 @@ The baseline FP32 configuration has batch 8 (16 for the 4 × 4 HSDP case), seque
 
 HIR represents the tiny embedding lookup as one-hot matrix multiplication; the reference uses `torch.nn.functional.embedding`. Fixed rotation matrices express RoPE in HIR, while the reference rotates adjacent coordinate pairs. HIR broadcasts K/V over a separate query-group dimension; the reference repeats KV heads before SDPA. These are equivalent small-workload representations, not production embedding or attention kernels.
 
-Every participant receives different complete sequences. Parameters and momentum are split along tensor dimension 0. Linear backward contracts the split token dimension to produce actual `Partial(sum)` contributions. FSDP resolves those with reduce-scatter; HSDP uses reduce-scatter and then all-reduce as described below. Exactly one division by the total participant count produces gradients of the global mean loss. HIR `Reduce` has complete reduction semantics, used for the scalar loss. The optimizer uses learning rate 0.01 and momentum 0.9, with no dampening, weight decay or Nesterov update. The second step consumes the first step's returned state; inputs are not mutated.
+Every participant receives different complete sequences. With multiple participants, parameters and momentum are split along tensor dimension 0 within each shard group; the single-participant case keeps them whole. Linear backward contracts the split token dimension to produce actual `Partial(sum)` contributions. FSDP resolves those with reduce-scatter; HSDP uses reduce-scatter and then all-reduce as described below. Exactly one division by the total participant count produces gradients of the global mean loss. HIR `Reduce` has complete reduction semantics, used for the scalar loss. The optimizer uses learning rate 0.01 and momentum 0.9, with no dampening, weight decay or Nesterov update. The second step consumes the first step's returned state; inputs are not mutated.
 
 Checks use `rtol=5e-4`, `atol=2e-5` for FP32 reduction-order differences. The runner prints the observed maximum absolute errors separately for logits, loss, gradients, parameters and momentum.
 
@@ -90,7 +91,7 @@ For one-dimensional FSDP with multiple participants the per-step logical transfe
 
 ### How the table is generated
 
-The command above generates all six records. For just the two-participant comparison, run `python -m examples.fsdp_training.run --participants 2`. Each record checks two numerical updates but reports the transfers and storage of one training-step graph, not the sum of two steps. `P` is the participant count and 1 KiB is 1,024 bytes.
+The first command above generates the six FSDP records. For just the two-participant comparison, run `python -m examples.fsdp_training.run --participants 2`. Each record checks two numerical updates but reports the transfers and storage of one training-step graph, not the sum of two steps. `P` is the participant count and 1 KiB is 1,024 bytes.
 
 In `run.py`, `study()` builds and checks each program, runs the independent training comparison, and calls `analyze(..., analysis="memory")`. `summarize_training()` then obtains the table from that analyzed HIR:
 
@@ -167,6 +168,8 @@ A separate local check with real PyTorch HSDP on four sm90 GPUs passed two updat
 The larger logical mesh uses four replica groups and four shards per group. Its batch is 16, giving every participant one complete sequence of length 8; all parameter shapes stay the same. The original 1/2/4-participant studies retain batch 8 and their table values. Run `python -m examples.fsdp_training.run --participants 16 --replicas 4` for numerical checks and analysis of both residency policies.
 
 Both 4 × 4 policies passed two updates against the independent dense reference on CPU, including every parameter gradient and momentum update. Maximum absolute differences were `5.1e-7` for logits, `4.8e-7` for loss, `7.5e-8` for gradients/momentum and `1.5e-8` for parameters. These are sixteen simulated HIR participants; no sixteen-GPU execution or inter-node transport is claimed.
+
+There are four disjoint groups of size four for each collective. Four-way reduce-scatter leaves `26 / 4 = 6.5 KiB` of all-reduce input per participant; parameters plus momentum occupy `52 / 4 = 13 KiB`. Gather counts, gather-result and reduce-scatter-input payloads, and gathered-weight peaks match the table above. The final gradient normalization divides by sixteen participants once.
 
 ## Scope
 

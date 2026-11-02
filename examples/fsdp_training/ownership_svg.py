@@ -119,7 +119,7 @@ def render_svg(report, node_id, *, element=None, participant=None, title=None):
     if pending_axes:
         lines(52, 711, f"{len(holders)} holders; {contributions} distinct pending contributions. Sum required on {', '.join(view['pending'])}. Hatching marks incomplete values.", cls=None, width=57, line_height=20)
     elif holders:
-        lines(52, 711, f"{len(holders)} declared {'replicas' if len(holders) > 1 else 'copy'} of a complete value. Replica equality is checked by numerical evaluation.", cls=None, width=57, line_height=20)
+        lines(52, 711, f"{len(holders)} declared {'replicas' if len(holders) > 1 else 'copy'} of a complete value. No pending reduction; this diagram shows declared ownership.", cls=None, width=57, line_height=20)
     else:
         lines(52, 711, "This plain layout does not declare a participant mesh.", cls=None)
 

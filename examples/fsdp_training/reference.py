@@ -67,7 +67,7 @@ class Reference(nn.Module):
 
 
 def check_training(function, *, steps=2, seed=183):
-    """Check every gradient and state leaf over changing batches and two updates."""
+    """Check every gradient and state leaf over changing batches; default: two updates."""
     from tilefoundry.evaluator import evaluate
 
     token_count = int(function.params[0].type.shape[0])

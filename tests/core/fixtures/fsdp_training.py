@@ -173,7 +173,7 @@ def training_program(participants=2, *, retain=False):
 def summarize_training(result):
     """Read scoped parameter facts from existing memory/allocation records.
 
-    This example has sequential calls and no HIR loops. Traverse each reached
+    This MLP fixture has sequential calls and no HIR loops. Traverse each reached
     call occurrence, not just each function definition. The peak below selects
     full parameter storage from the allocator's published windows and dedupes
     accepted aliases; it is not a second allocator or a total training peak.
