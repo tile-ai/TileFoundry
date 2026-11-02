@@ -18,6 +18,7 @@ BLOCK_SHAPES = ((C, C), (G * D, C), (G * D, C), (C, C), (F, C), (C, F))
 PARAMETER_SHAPES = ((V, C), *BLOCK_SHAPES, *BLOCK_SHAPES, (V, C))
 PARAMETER_NAMES = ("embedding", *(f"block{i}.{name}" for i in (1, 2)
                    for name in ("q", "k", "v", "o", "up", "down")), "head")
+SUPPORTED_MESHES = ((1, 1), (2, 1), (4, 1), (4, 2), (16, 4))
 
 
 def training_program(participants=2, *, retain=False, replicas=1):
@@ -28,10 +29,11 @@ def training_program(participants=2, *, retain=False, replicas=1):
     Outputs: logits, global mean loss, averaged gradients, next parameters,
     and next momentum buffers. Every parameter/state output remains sharded.
     """
-    if participants not in (1, 2, 4):
-        raise ValueError("this example supports 1, 2 or 4 equal participants")
-    if replicas not in (1, 2) or participants % replicas or participants // replicas < replicas:
-        raise ValueError("use replicas=1 for FSDP or participants=4, replicas=2 for HSDP")
+    if (participants, replicas) not in SUPPORTED_MESHES:
+        raise ValueError(f"supported (participants, replicas): {SUPPORTED_MESHES}")
+    # Every participant owns complete sequences, including on the 4 x 4 mesh.
+    batch = max(B, participants)
+    tokens_per_batch = batch * T
     target = CudaTarget("nvidia.h200_sxm", device_count=participants)
     gpu = Topology("gpu", participants)
     mesh_shape = (participants,) if replicas == 1 else (replicas, participants // replicas)
@@ -49,7 +51,7 @@ def training_program(participants=2, *, retain=False, replicas=1):
         return TensorType(shape, DType.f32, layout(shape, attr), "gmem")
 
     data_attrs = (Split(0),) * len(mesh_shape) if participants > 1 else (Broadcast(),)
-    A, Tokens = tensor((N, C), data_attrs), tensor((N, V), data_attrs)
+    A, Tokens = tensor((tokens_per_batch, C), data_attrs), tensor((tokens_per_batch, V), data_attrs)
     Emb, FullEmb = tensor((V, C)), tensor((V, C), Broadcast())
     Sharded = TupleType(tuple(tensor(shape) for shape in BLOCK_SHAPES))
     Full = TupleType(tuple(tensor(shape, Broadcast()) for shape in BLOCK_SHAPES))
@@ -64,9 +66,9 @@ def training_program(participants=2, *, retain=False, replicas=1):
     rq, rk, rv, ro, ru, rd = (layout(shape, reduced_attrs) for shape in BLOCK_SHAPES)
     reduced_e = layout((V, C), reduced_attrs)
     inverse_p = 1.0 / participants
-    local_mean_scale = participants / N
-    global_mean_scale = 1.0 / N
-    Inverse = tensor((N, 1), data_attrs)
+    local_mean_scale = participants / tokens_per_batch
+    global_mean_scale = 1.0 / tokens_per_batch
+    Inverse = tensor((tokens_per_batch, 1), data_attrs)
     HeadWeight = FullEmb if retain else Emb
     shard_e = Emb.layout
 
@@ -86,22 +88,22 @@ def training_program(participants=2, *, retain=False, replicas=1):
             ix = tf.rsqrt(tf.reduce(x * x, axes=(-1,)) + EPS)
             a = x * ix
             q0 = tf.transpose(tf.reshape(tf.matmul(a, w[0], b_layout="NK"),
-                                        (B, T, G, H // G, D)), perm=(0, 2, 3, 1, 4))
+                                        (batch, T, G, H // G, D)), perm=(0, 2, 3, 1, 4))
             k0 = tf.transpose(tf.reshape(tf.matmul(a, w[1], b_layout="NK"),
-                                        (B, T, G, 1, D)), perm=(0, 2, 3, 1, 4))
+                                        (batch, T, G, 1, D)), perm=(0, 2, 3, 1, 4))
             v = tf.transpose(tf.reshape(tf.matmul(a, w[2], b_layout="NK"),
-                                       (B, T, G, 1, D)), perm=(0, 2, 3, 1, 4))
+                                       (batch, T, G, 1, D)), perm=(0, 2, 3, 1, 4))
             iq = tf.rsqrt(tf.reduce(q0 * q0, axes=(-1,)) + EPS)
             ik = tf.rsqrt(tf.reduce(k0 * k0, axes=(-1,)) + EPS)
             qn = q0 * iq
             kn = k0 * ik
-            q = tf.reshape(tf.matmul(tf.reshape(qn, (B, G, H // G, T, 1, D)), rotation),
-                           (B, G, H // G, T, D))
-            k = tf.reshape(tf.matmul(tf.reshape(kn, (B, G, 1, T, 1, D)), rotation),
-                           (B, G, 1, T, D))
+            q = tf.reshape(tf.matmul(tf.reshape(qn, (batch, G, H // G, T, 1, D)), rotation),
+                           (batch, G, H // G, T, D))
+            k = tf.reshape(tf.matmul(tf.reshape(kn, (batch, G, 1, T, 1, D)), rotation),
+                           (batch, G, 1, T, D))
             scores = tf.matmul(q, k, b_layout="NK") * 0.5 + mask
             probability = tf.softmax(scores, axis=-1)
-            attended = tf.reshape(tf.transpose(tf.matmul(probability, v), perm=(0, 3, 1, 2, 4)), (N, C))
+            attended = tf.reshape(tf.transpose(tf.matmul(probability, v), perm=(0, 3, 1, 2, 4)), (tokens_per_batch, C))
             residual = x + tf.matmul(attended, w[3], b_layout="NK")
             ir = tf.rsqrt(tf.reduce(residual * residual, axes=(-1,)) + EPS)
             r = residual * ir
@@ -130,22 +132,22 @@ def training_program(participants=2, *, retain=False, replicas=1):
             po = tf.matmul(dresidual, attended, a_layout="KM")
             reduced_o = tf.reshard(po, layout=ro, storage="gmem")
             go = tf.reshard(reduced_o, layout=so, storage="gmem") * inverse_p
-            dc = tf.transpose(tf.reshape(tf.matmul(dresidual, w[3]), (B, T, G, H // G, D)),
+            dc = tf.transpose(tf.reshape(tf.matmul(dresidual, w[3]), (batch, T, G, H // G, D)),
                               perm=(0, 2, 3, 1, 4))
             dv = tf.reduce(tf.matmul(probability, dc, a_layout="KM"), axes=(2,), kind=ReduceKind.SUM)
             dp = tf.matmul(dc, v, b_layout="NK")
             ds = probability * (dp - tf.reduce(dp * probability, axes=(-1,), kind=ReduceKind.SUM))
             dq = tf.matmul(ds, k) * 0.5
             dk = tf.reduce(tf.matmul(ds, q, a_layout="KM"), axes=(2,), kind=ReduceKind.SUM) * 0.5
-            dqn = tf.reshape(tf.matmul(tf.reshape(dq, (B, G, H // G, T, 1, D)),
-                                      rotation, b_layout="NK"), (B, G, H // G, T, D))
-            dkn = tf.reshape(tf.matmul(tf.reshape(dk, (B, G, 1, T, 1, D)),
-                                      rotation, b_layout="NK"), (B, G, 1, T, D))
+            dqn = tf.reshape(tf.matmul(tf.reshape(dq, (batch, G, H // G, T, 1, D)),
+                                      rotation, b_layout="NK"), (batch, G, H // G, T, D))
+            dkn = tf.reshape(tf.matmul(tf.reshape(dk, (batch, G, 1, T, 1, D)),
+                                      rotation, b_layout="NK"), (batch, G, 1, T, D))
             dq0 = iq * (dqn - qn * tf.reduce(dqn * qn, axes=(-1,)))
             dk0 = ik * (dkn - kn * tf.reduce(dkn * kn, axes=(-1,)))
-            dqf = tf.reshape(tf.transpose(dq0, perm=(0, 3, 1, 2, 4)), (N, C))
-            dkf = tf.reshape(tf.transpose(dk0, perm=(0, 3, 1, 2, 4)), (N, G * D))
-            dvf = tf.reshape(tf.transpose(dv, perm=(0, 3, 1, 2, 4)), (N, G * D))
+            dqf = tf.reshape(tf.transpose(dq0, perm=(0, 3, 1, 2, 4)), (tokens_per_batch, C))
+            dkf = tf.reshape(tf.transpose(dk0, perm=(0, 3, 1, 2, 4)), (tokens_per_batch, G * D))
+            dvf = tf.reshape(tf.transpose(dv, perm=(0, 3, 1, 2, 4)), (tokens_per_batch, G * D))
             pq = tf.matmul(dqf, a, a_layout="KM")
             pk = tf.matmul(dkf, a, a_layout="KM")
             pv = tf.matmul(dvf, a, a_layout="KM")

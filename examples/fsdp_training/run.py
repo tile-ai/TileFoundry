@@ -21,7 +21,7 @@ from tilefoundry.ir.types.shard_projection import project_domain
 from tilefoundry.ir.types.utils import leaf_span, leaves_of
 from tilefoundry.ir.visitor import collect_exprs
 
-from .model import training_program
+from .model import SUPPORTED_MESHES, training_program
 from .reference import check_training
 
 
@@ -158,12 +158,12 @@ def study(participants, retain, *, replicas=1):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--participants", nargs="+", type=int, choices=(1, 2, 4), default=(1, 2, 4))
-    parser.add_argument("--replicas", type=int, choices=(1, 2), default=1,
-                        help="2 selects HSDP and requires --participants 4")
+    parser.add_argument("--participants", nargs="+", type=int, choices=(1, 2, 4, 16), default=(1, 2, 4))
+    parser.add_argument("--replicas", type=int, choices=(1, 2, 4), default=1,
+                        help="HSDP: 2 with 4 participants, or 4 with 16 participants")
     args = parser.parse_args()
-    if args.replicas == 2 and args.participants != [4]:
-        parser.error("--replicas 2 requires --participants 4")
+    if any((p, args.replicas) not in SUPPORTED_MESHES for p in args.participants):
+        parser.error(f"supported (participants, replicas): {SUPPORTED_MESHES}")
     for participants in args.participants:
         for retain in (False, True):
             print(json.dumps(study(participants, retain, replicas=args.replicas)), flush=True)
