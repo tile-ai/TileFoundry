@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from tests.core._corpus import Case, case, check_case, special
+from tilefoundry.analysis.check import check_program
 from tilefoundry.dsl import *
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
@@ -25,6 +26,7 @@ from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
 from tilefoundry.ir.types import make_shard_tensor_type
+from tilefoundry_nvidia import CudaTarget
 
 CORE = Path(__file__).parents[1] / "fixtures" / "evaluator" / "core_semantics.py"
 
@@ -69,6 +71,28 @@ def test_equal_params_keep_distinct_bindings():
     result = evaluate(function, torch.tensor([1.0]), torch.tensor([2.0]))
 
     assert torch.equal(result, torch.tensor([1.0]))
+
+
+def test_nested_tuple_argument_preserves_participant_values():
+    """A typed saved-state tuple can cross a retained function boundary."""
+    gpu = Topology("gpu", 2)
+    mesh = Mesh((gpu,), Layout((2,), (1,)), ("dp",))
+    shard = ShardLayout(Layout((4, 2)), (Split(0),), mesh)
+
+    @module(entry="run", target=CudaTarget("nvidia.h200_sxm", device_count=2), topologies=(gpu,))
+    class TupleCall:
+        @func
+        def child(pair: tuple[Tensor[(4, 2), "f32", shard], tuple[Tensor[(4, 2), "f32", shard]]]):
+            return pair[0] + pair[1][0]
+
+        @func
+        def run(x: Tensor[(4, 2), "f32", shard]):
+            with Mesh(("gpu",), (2,), names=("dp",)) as _dp:
+                return child((x, (x * 2.0,)))  # noqa: F821
+
+    _, function = check_program(TupleCall, TupleCall.entry_function())
+    x = torch.arange(8).float().reshape(4, 2)
+    torch.testing.assert_close(evaluate(function, x), 3 * x)
 
 
 @case

@@ -25,6 +25,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.pattern import locate_dim_var
+from tilefoundry.ir.types import TupleType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.utils import types_compatible
@@ -61,6 +62,13 @@ def _devices_match(actual, expected: torch.device) -> bool:
     if actual.type != expected.type:
         return False
     return expected.index is None or actual.index == expected.index
+
+
+def _argument_type(value: Value):
+    """Build an argument contract from the types carried by its tensor leaves."""
+    if isinstance(value, TupleValue):
+        return TupleType(tuple(_argument_type(element) for element in value.elements))
+    return value.type
 
 
 def _bind_dim_vars(params, values) -> dict[str, int]:
@@ -173,10 +181,11 @@ class EvaluatorVisitor(ExprVisitor):
         ]
         target = _select_variant(callee, args) if callee.variants else callee
         for param, value in zip(target.params, args):
-            if not types_compatible(param.annotation, value.type):
+            actual = _argument_type(value)
+            if not types_compatible(param.annotation, actual):
                 raise EvalError(
                     f"evaluator: call to {target.name!r}: argument for "
-                    f"{param.name!r} expects {param.annotation!r}, got {value.type!r}"
+                    f"{param.name!r} expects {param.annotation!r}, got {actual!r}"
                 )
         function_context = replace(
             ctx,
