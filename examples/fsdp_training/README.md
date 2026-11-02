@@ -52,9 +52,40 @@ For multiple participants the per-step logical transfers are:
 | Reduce-scatter input bytes per participant | 26,624 | 26,624 |
 | Persistent parameters plus momentum per participant | 53,248 / P | 53,248 / P |
 
-The runner also reports peak live gathered-weight storage. It identifies gathered values through call/tuple results and uses the allocator's accepted roots and lifetime windows to deduplicate aliases. It does not identify weights by tensor shape. Single-participant execution reports zero interparticipant transfers and `null` for a separate gathered-weight peak, since full weights can alias their original storage.
+### How the table is generated
 
-At two participants, both policies matched the dense reference over two updates with maximum absolute errors of `5.1e-7` for logits, `1.2e-7` for gradients/momentum, and `3.0e-8` for updated parameters; scalar loss agreed at the reported FP32 precision. A separate local check against PyTorch FSDP2 on two L20Z GPUs also passed both policies, with maximum gradient error `3.9e-7`. That check used real sharded parameters, reduced gradients and sharded momentum, and does not establish distributed execution of the HIR or equality of physical communication schedules.
+The command above generates all six records. For just the two-participant comparison, run `python -m examples.fsdp_training.run --participants 2`. Each record checks two numerical updates but reports the transfers and storage of one training-step graph, not the sum of two steps. `P` is the participant count and 1 KiB is 1,024 bytes.
+
+In `run.py`, `study()` builds and checks each program, runs the independent training comparison, and calls `analyze(..., analysis="memory")`. `summarize_training()` then obtains the table from that analyzed HIR:
+
+1. Walk reached function calls and count `Reshard` transitions: `Split -> Broadcast` is an all-gather and `Partial(sum) -> Split` is a gradient reduce-scatter. Each call occurrence is counted, so invoking a shared block definition twice counts both blocks. Payload is tensor element count times dtype size, using the all-gather result or reduce-scatter input.
+2. Follow call and tuple results back to gathered values, then select their accepted allocation roots from `AllocationSummaryMetadata`. Use the lifetime windows in `RegionMemoryMetadata` to sum simultaneously live bytes, deduplicating aliases by root, and take the maximum over lifetime boundaries. Tensor shape alone does not identify a gathered weight.
+3. Sum the allocation entries for the parameter and momentum inputs to obtain persistent state per participant. Fixed inputs, activations and returned update buffers are outside this selected quantity.
+
+The following arithmetic independently explains the generated numbers. Every parameter is FP32, so each element occupies four bytes. Each block has six parameter tensors:
+
+| Parameter | Shape | Full tensor bytes |
+|---|---|---:|
+| Embedding | `[32, 16]` | 2,048 |
+| Q projection, per block | `[16, 16]` | 1,024 |
+| K projection, per block | `[8, 16]` | 512 |
+| V projection, per block | `[8, 16]` | 512 |
+| Output projection, per block | `[16, 16]` | 1,024 |
+| MLP up projection, per block | `[64, 16]` | 4,096 |
+| MLP down projection, per block | `[16, 64]` | 4,096 |
+| Vocabulary head | `[32, 16]` | 2,048 |
+
+One block therefore holds 11,264 bytes (11 KiB). The fourteen tensors together hold `2 + 11 + 11 + 2 = 26 KiB` (26,624 bytes).
+
+- **All-gathers:** forward gathers `1 + 6 + 6 + 1 = 14` tensors. Release re-gathers the two blocks and head during backward, adding `6 + 6 + 1 = 13`, for 27 total. Retain reuses those weights and stays at 14. Embedding backward needs the saved tokens and incoming gradient, not the embedding weights, so there is no embedding re-gather.
+- **Reduce-scatters:** each of the fourteen parameter gradients has one `Partial(sum) -> Split` transition under either policy, giving 14.
+- **Peak gathered-weight storage:** release keeps full weights within each stage, whose largest set is one 11 KiB block. Retain reaches a point where both blocks and the head are live: `11 + 11 + 2 = 24 KiB`. The embedding's gathered weights are already dead. These sums explain the peaks found by the allocation/lifetime analysis.
+- **Collective payloads:** retain gathers 26 KiB of result tensors per participant. Release adds the 24 KiB needed by backward, giving 50 KiB (51,200 bytes). The fourteen reduce-scatter inputs total 26 KiB per participant under both policies. These quantities describe the full tensors entering or leaving logical collectives; they do not subtract a participant's existing shard or estimate network bytes.
+- **Persistent state:** parameters occupy 26 KiB and momentum occupies another 26 KiB. Even sharding gives `52 KiB / P`: 52, 26 and 13 KiB per participant at `P = 1, 2, 4` respectively.
+
+The multi-participant counts, full-tensor payloads and gathered-weight peaks stay the same at `P = 2` and `P = 4`; persistent shards get smaller. Single-participant execution reports zero interparticipant transfers and `null` for a separate gathered-weight peak, since full weights can alias their original storage.
+
+At two participants, both policies matched the dense reference over two updates with maximum absolute errors of `5.1e-7` for logits, `1.2e-7` for gradients/momentum, and `3.0e-8` for updated parameters; scalar loss agreed at the reported FP32 precision. A separate local check against PyTorch FSDP2 on two sm90 GPUs also passed both policies, with maximum gradient error `3.9e-7`. That check used real sharded parameters, reduced gradients and sharded momentum, and does not establish distributed execution of the HIR or equality of physical communication schedules.
 
 These are selected storage components, not total training memory: saved activations, gradients, functional update outputs, fixed inputs and other temporaries also occupy storage. Caller-owned inputs remain persistent. Logical collective payloads are not link traffic, achieved bandwidth, or elapsed time. The H200 target supplies storage ownership for this analysis; no H200 execution or speedup is claimed.
 
