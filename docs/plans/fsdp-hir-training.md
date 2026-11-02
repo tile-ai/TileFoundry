@@ -41,6 +41,7 @@ The first observations describe the original implementation base; the final two 
 - D10 Which byte quantities to publish -- Report logical collective input/output sizes, because an unscheduled HIR operation does not determine a network algorithm, routing, or achieved bandwidth. These sizes are distinct from the allocator's full-weight peak and from network traffic.
 - D11 Which execution boundary to extend -- Enumerate single-level GPU meshes with concrete tensor shapes, because FSDP device ownership differs from the existing global reference semantics of CTA/warp/thread programs. Preserve invariant values, treat mesh names as labels, and use local reshape extents. Full-suite comparison exposed this compatibility boundary; hierarchical GPU-to-CTA execution and symbolic GPU shapes remain follow-up work.
 - D12 How to integrate the new upstream analyses -- Rebase and verify compatibility locally, because emission already consumes the corrected alias proof and the GMEM-only training model needs no shared-memory synchronization. Verify gather versus view classification and unchanged residency under opt-in sync analysis without retaining redundant compatibility-parity tests in the repository. Keep instruction ownership distinct from numerical Partial resolution, and shared-memory completion distinct from future inter-device collective completion.
+- D13 How to present the training workload -- Keep the small MLP as a semantic test fixture and deliver a two-block modded-nanogpt-inspired GQA example as an independently reviewable final commit. The example includes explicit backward, an independent dense reference, a retain/release comparison and reproducible outcomes. Keep the core CI workload to one transformer case per policy; run the 1/2/4-participant study and actual two-GPU PyTorch FSDP2 comparison separately.
 
 ## Milestones
 
@@ -304,6 +305,45 @@ Use local-only probes of ownership classification and 1/2/4-participant residenc
 <!-- policy_ac:end -->
 
 #### Related Files
+- docs/tutorial/fsdp-training.md
+
+### Milestone M9: Two-block transformer residency study
+
+#### Depends
+- M8
+
+#### Target State Design
+
+##### Delivered
+```diff
+# examples/fsdp_training/
++Add a two-block GQA training workload, independent autograd reference,
++and executable retain/release comparison.
+# src/tilefoundry/evaluator/interpreter.py
++Validate retained tuple arguments recursively from their tensor leaves.
+# tests/core
++Keep small semantic fixtures and one transformer smoke case per policy.
+```
+
+##### Accepted by
+Use FP32 RMSNorm, QK normalization, RoPE, ReLU-squared MLPs, untied embedding/head, causal cross-entropy and momentum SGD. Explicit backward produces Partial gradients resolved into parameter shards. The tiny vocabulary uses a documented one-hot embedding representation. GQA is an adaptation of modded-nanogpt's core architecture, not a speedrun reproduction.
+- [x] Two steps at 1/2/4 participants match dense autograd for logits, loss, every gradient, parameters and optimizer state.
+- [x] Both residency policies preserve results and report collective occurrences and gathered-weight storage from HIR facts.
+- [x] Embedding weights are gathered only for forward because embedding backward does not read them.
+- [x] Nested saved-state tuples retain their types and participant values through calls.
+- [x] Core regression tests remain small; the participant matrix is run by the example, and redundant compatibility probes remain local.
+- [x] Documentation records reproducible results and the limits of logical communication/storage accounting.
+
+<!-- policy_ac:start -->
+- [x] Touched tests MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract. <!-- policy_ac: milestone_review-0 -->
+- [ ] A milestone that changes a public contract MUST list the owning `docs/spec/*.md` path in its `#### Related Files`; one that changes none lists no spec path. <!-- policy_ac: spec_impact-0 -->
+<!-- policy_ac:end -->
+
+#### Related Files
+- examples/fsdp_training
+- src/tilefoundry/evaluator/interpreter.py
+- tests/core/evaluator
+- tests/core/analysis
 - docs/tutorial/fsdp-training.md
 
 ## Final Gate

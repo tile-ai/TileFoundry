@@ -8,7 +8,17 @@ not achieved bandwidth or a training-time prediction.
 
 from __future__ import annotations
 
+from math import prod
+
+from tilefoundry.analysis import RegionMemoryMetadata
+from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.dsl import *
+from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.core.expr import SSAValue
+from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.types.shard_layout import shard_layout_of
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry_nvidia import CudaTarget
 
 
@@ -132,7 +142,7 @@ def training_program(participants=2, *, retain=False):
             v1: Tensor[(8, 8), "f32", s8],
             v2: Tensor[(8, 4), "f32", s4],
         ):
-            with Mesh(("gpu",), layout=(participants,), names=("dp",)) as dp:
+            with Mesh(("gpu",), layout=(participants,), names=("dp",)) as _dp:
                 h = forward1(x, w1)
                 y = forward2(h, w2)
                 dy = (y - target_value) * local_scale
@@ -149,7 +159,7 @@ def training_program(participants=2, *, retain=False):
             v1: Tensor[(8, 8), "f32", s8],
             v2: Tensor[(8, 4), "f32", s4],
         ):
-            with Mesh(("gpu",), layout=(participants,), names=("dp",)) as dp:
+            with Mesh(("gpu",), layout=(participants,), names=("dp",)) as _dp:
                 h, full1 = retain1(x, w1)
                 y, full2 = retain2(h, w2)
                 dy = (y - target_value) * local_scale
@@ -168,17 +178,6 @@ def summarize_training(result):
     full parameter storage from the allocator's published windows and dedupes
     accepted aliases; it is not a second allocator or a total training peak.
     """
-    from math import prod
-
-    from tilefoundry.analysis import RegionMemoryMetadata
-    from tilefoundry.analysis.allocation import AllocationSummaryMetadata
-    from tilefoundry.ir.core import Call, get_metadata
-    from tilefoundry.ir.core.expr import SSAValue
-    from tilefoundry.ir.hir.function import Function
-    from tilefoundry.ir.hir.sharding.reshard import Reshard
-    from tilefoundry.ir.types.shard_layout import shard_layout_of
-    from tilefoundry.ir.visitor import collect_exprs
-
     def occurrences(function):
         for value in collect_exprs(function.body):
             if isinstance(value, Call) and isinstance(value.target, Function):
@@ -237,23 +236,3 @@ def summarize_training(result):
         "all_gather_result_bytes_per_participant": gather_results,
         "reduce_scatter_input_bytes_per_participant": scatter_inputs,
     }
-
-
-if __name__ == "__main__":
-    import argparse
-    import json
-
-    from tilefoundry.analysis import analyze
-    from tilefoundry.analysis.check import check_program
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--participants", type=int, choices=(1, 2, 4), default=2)
-    args = parser.parse_args()
-    for retain in (False, True):
-        program = training_program(args.participants, retain=retain)
-        analysis = analyze(*check_program(program, program.entry_function()), analysis="memory")
-        print(
-            json.dumps(
-                {"policy": "retain" if retain else "release", **summarize_training(analysis)}
-            )
-        )

@@ -5,9 +5,19 @@ from __future__ import annotations
 import pytest
 import torch
 
-from examples.fsdp_training import training_program
+from examples.fsdp_training.model import training_program as transformer_program
+from examples.fsdp_training.reference import check_training
+from tests.core.fixtures.fsdp_training import training_program
 from tilefoundry.analysis.check import check_program
 from tilefoundry.evaluator import evaluate
+
+
+@pytest.mark.parametrize("retain", (False, True), ids=("release", "retain"))
+def test_two_block_transformer_training(retain):
+    """One end-to-end smoke case; the example runner sweeps mesh sizes."""
+    program = transformer_program(2, retain=retain)
+    _, function = check_program(program, program.entry_function())
+    check_training(function)
 
 
 @pytest.mark.parametrize("participants", (1, 2, 4))

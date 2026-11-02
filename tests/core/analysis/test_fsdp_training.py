@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from examples.fsdp_training import summarize_training, training_program
+from tests.core.fixtures.fsdp_training import summarize_training, training_program
 from tilefoundry.analysis import MemoryMetadata, RegionMemoryMetadata, analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.dsl import (
