@@ -46,6 +46,14 @@ Output reconstruction is observation, not communication inserted into the progra
 
 This is a minimal FSDP2-style training model, not the complete PyTorch FSDP2 runtime. Uneven shards, full HSDP meshes, grouping multiple parameters, mixed precision, offload, gradient accumulation, communication/computation overlap, prefetch, autograd integration, checkpoint policy, inference, and code generation remain follow-up work. The first next extension should build on these executable semantics and a concrete workload, rather than add a calibrated network model before scheduling exists.
 
+## Upstream analysis boundaries
+
+Lowering's shared emission decisions from [#280](https://github.com/tile-ai/TileFoundry/pull/280) and [#282](https://github.com/tile-ai/TileFoundry/pull/282) consume the existing alias proof: a GPU gather remains an instruction while an unchanged distribution remains a view. Future scheduled lowerings should use these shared decisions for copies and issuing meshes. Their treatment of Partial as Broadcast for instruction ownership does not resolve a numerical Partial contribution; the reference evaluator still requires explicit reduction.
+
+The opt-in `sync` analysis from [#283](https://github.com/tile-ai/TileFoundry/pull/283) plans ordering for shared-memory accesses inside a device. Both GMEM-only training policies produce an empty sync plan at 1, 2 and 4 participants and retain the same memory report. This checks compatibility, not collective completion or generated-kernel correctness. Retained callees holding shared memory are currently refused by that analysis; adding staged kernels requires addressing that boundary first. Its `owned_bytes` helper describes placed shared-memory address ranges and does not replace the lifetime windows used for this example's residency peak.
+
+The example continues to request memory analysis only. No completion declarations, async collective tokens, synchronization lowering, or hardware cost model are added here.
+
 ## Related design work
 
 - [Discussion #181](https://github.com/tile-ai/TileFoundry/discussions/181): participant reference evaluation, Partial values and logical redistribution.

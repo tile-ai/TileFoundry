@@ -10,19 +10,21 @@ target_repo: tilefoundry
 
 Execute static GPU mesh participants and explicit redistributions in the HIR reference evaluator, then model two steps of fully sharded training with separately authored forward and backward functions. Compare release/regather and retain-through-backward parameter residency using existing structured liveness and allocation. This is a reference semantics contribution, not an FSDP runtime or a network performance prediction.
 
-The implementation base is upstream commit `3496c57ca5768cae3ff2410feb174e8ed2cb306e` (#279).
+The original implementation base was upstream commit `3496c57ca5768cae3ff2410feb174e8ed2cb306e` (#279). The branch is rebased onto `3a6a4c035e907ae8b0abe9c132e5098b1910b92d` (#283), which adds the shared emission and synchronization analysis foundations from #280, #282 and #283.
 
 Related work: [discussion #181](https://github.com/tile-ai/TileFoundry/discussions/181), [discussion #183](https://github.com/tile-ai/TileFoundry/discussions/183), the evaluator item in [#255](https://github.com/tile-ai/TileFoundry/issues/255) (originally [#138](https://github.com/tile-ai/TileFoundry/issues/138)), and [#278](https://github.com/tile-ai/TileFoundry/issues/278). Build on the Partial alias correction in [#260](https://github.com/tile-ai/TileFoundry/pull/260), local slicing from [#162](https://github.com/tile-ai/TileFoundry/pull/162) and [#165](https://github.com/tile-ai/TileFoundry/pull/165), and structured lifetimes from [#170](https://github.com/tile-ai/TileFoundry/pull/170). These references identify dependencies and partial coverage, not claims to close their whole scope.
 
 ### Current state
 
-These observations describe the implementation base above.
+The first observations describe the original implementation base; the final two identify the new upstream consumers.
 
 - `src/tilefoundry/evaluator/interpreter.py:93` binds a MeshRegion in one environment without executing its participants.
 - `src/tilefoundry/ir/hir/sharding/reshard.py:175` passes the same data through Reshard; `sharding/mesh_coord.py:76` and `sharding/local.py:47` refuse participant-dependent execution.
 - `src/tilefoundry/runtime/tensor.py:31` uses `local_layout_and_offset` to project a checkpoint tensor through the canonical mesh/layout algebra.
 - `src/tilefoundry/analysis/liveness.py:93` builds structured definition/use intervals; `src/tilefoundry/analysis/allocation.py:424` remaps returned aliases to caller arguments.
 - `tests/nvidia/cuda/fixtures/placed/tp_all_to_all.py:1` documents ownership-blind aliasing, despite the storage-instance requirement in `docs/spec/analysis.md`.
+- At the refreshed base, `src/tilefoundry/analysis/emission.py` classifies Reshard using the same alias proof and centralizes instruction-issuing meshes.
+- `src/tilefoundry/analysis/sync.py` uses existing allocation and liveness records to order shared-memory effects; it refuses retained callees whose allocation summaries hold shared memory.
 
 ### Decisions
 
@@ -38,6 +40,7 @@ These observations describe the implementation base above.
 - D9 How to evaluate the scalar loss -- Preserve Reduce's existing complete-reduction contract, because its inferred result is Broadcast while MatMul contraction produces Partial(sum). A separate M5 corrective commit implements complete reference reductions and tests sum/mean over split and unsplit axes; the example does not invent a new backward or reduction type rule.
 - D10 Which byte quantities to publish -- Report logical collective input/output sizes, because an unscheduled HIR operation does not determine a network algorithm, routing, or achieved bandwidth. These sizes are distinct from the allocator's full-weight peak and from network traffic.
 - D11 Which execution boundary to extend -- Enumerate single-level GPU meshes with concrete tensor shapes, because FSDP device ownership differs from the existing global reference semantics of CTA/warp/thread programs. Preserve invariant values, treat mesh names as labels, and use local reshape extents. Full-suite comparison exposed this compatibility boundary; hierarchical GPU-to-CTA execution and symbolic GPU shapes remain follow-up work.
+- D12 How to integrate the new upstream analyses -- Rebase and verify compatibility locally, because emission already consumes the corrected alias proof and the GMEM-only training model needs no shared-memory synchronization. Verify gather versus view classification and unchanged residency under opt-in sync analysis without retaining redundant compatibility-parity tests in the repository. Keep instruction ownership distinct from numerical Partial resolution, and shared-memory completion distinct from future inter-device collective completion.
 
 ## Milestones
 
@@ -275,6 +278,33 @@ Run the documented workflow, touched suites, full suite against the baseline, an
 - docs/tutorial/fsdp-training.md
 - docs/spec/evaluator.md
 - docs/spec/analysis.md
+
+### Milestone M8: Integrate upstream emission and synchronization analysis
+
+#### Depends
+- M7
+
+#### Target State Design
+
+##### Delivered
+```diff
+# docs/tutorial/fsdp-training.md
++Explain the boundary between instruction ownership, shared-memory completion,
++and participant-local values and future collective completion.
+```
+
+##### Accepted by
+Use local-only probes of ownership classification and 1/2/4-participant residency under opt-in sync analysis, then rerun the complete suite against the refreshed upstream base and repository hooks. Keep the repository's existing feature tests; do not add redundant backward-compatibility parity cases.
+- [x] Gather materialization feeds the shared emission classifier correctly.
+- [x] Both policies keep their residency report and need no shared-memory sync steps.
+- [x] The tutorial distinguishes shared-memory synchronization from distributed collective completion.
+
+<!-- policy_ac:start -->
+- [x] Touched tests MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract. <!-- policy_ac: milestone_review-0 -->
+<!-- policy_ac:end -->
+
+#### Related Files
+- docs/tutorial/fsdp-training.md
 
 ## Final Gate
 
