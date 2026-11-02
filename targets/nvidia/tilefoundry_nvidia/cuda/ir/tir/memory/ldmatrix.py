@@ -9,7 +9,7 @@ from tilefoundry.ir.pattern import OrPattern, SameConstraint, TensorPattern, Wil
 from tilefoundry.ir.tir.memory.copy import register_copy_semantics
 from tilefoundry.ir.types import DType, Mesh
 from tilefoundry.ir.types.storage import StorageKind as S
-from tilefoundry.visitor_registry.completion import Completion, register_completion
+from tilefoundry.visitor_registry.completion import on_return, register_completion
 from tilefoundry_nvidia.cuda.ir.tir.nn.sm80_mma import Mma
 
 
@@ -45,7 +45,7 @@ class LdMatrix(Op):
     between = (SameConstraint("shape", "src", "dst"), SameConstraint("dtype", "src", "dst"))
 
 
-register_completion(LdMatrix, Completion.ON_RETURN)
+register_completion(LdMatrix, on_return)
 
 
 __all__ = ["LdMatrix"]

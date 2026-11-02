@@ -17,7 +17,7 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.tir.memory.copy import register_copy_semantics
 from tilefoundry.ir.types import DType, Layout, Mesh, Split, Topology
 from tilefoundry.ir.types.storage import StorageKind as S
-from tilefoundry.visitor_registry.completion import Completion, register_completion
+from tilefoundry.visitor_registry.completion import on_return, register_completion
 from tilefoundry_nvidia.cuda.ir.tir.nn.mma_atom import execution_mesh_pattern
 
 WARP = Mesh((Topology("thread", 32),), Layout((8, 4), (4, 1)), ("lane8", "lane4"))
@@ -71,7 +71,7 @@ class StMatrix(Op):
         return execution_mesh_pattern(WARP, groups=True)
 
 
-register_completion(StMatrix, Completion.ON_RETURN)
+register_completion(StMatrix, on_return)
 
 
 __all__ = ["StMatrix"]

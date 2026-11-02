@@ -26,7 +26,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.completion import Completion, register_completion
+from tilefoundry.visitor_registry.completion import on_return, register_completion
 
 __all__ = ["Dot"]
 
@@ -100,7 +100,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
         )
 
 
-register_completion(Dot, Completion.ON_RETURN)
+register_completion(Dot, on_return)
 
 
 @register_access_relation(Dot)

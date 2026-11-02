@@ -23,8 +23,10 @@ from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.utils import _participant_frame, participant_layout
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import candidate_operands, sole_candidate
+from tilefoundry.visitor_registry.instruction import call_params
 
 from .access import AliasKind, BufferAlias
+from .errors import AnalysisError
 
 type AliasesOf = Callable[[SSAValue], Sequence[BufferAlias]]
 
@@ -101,6 +103,49 @@ def operand_roles(
     writes = tuple(param for param in params if param.effect & MemoryEffect.WRITE)
     produced = tuple(param for param in writes if not param.effect & MemoryEffect.READ)
     return (tuple(params) if isinstance(call.target, ScheduleOp) else reads), produced
+
+
+def result_param(params: Sequence[ParamDef]) -> ParamDef:
+    """The parameter an instruction's result is; one it also reads is written in place."""
+    return next(param for param in params if param.effect & MemoryEffect.WRITE)
+
+
+def register_storage(leaf: SSAValue, aliases_of: AliasesOf, target) -> SSAValue:
+    """The value whose register storage lowering gives *leaf*.
+
+    An instruction written in place returns its argument's storage; any other
+    value follows its first accepted alias.
+    """
+    seen = set()
+    while leaf not in seen:
+        seen.add(leaf)
+        following = _in_place(leaf, target)
+        if following is None:
+            following = next(
+                (alias.target for alias in aliases_of(leaf) if alias.target != leaf), None
+            )
+        if following is None:
+            return leaf
+        leaf = following
+    raise AnalysisError(f"sync: the register storage links of {leaf} form a cycle")
+
+
+def _in_place(leaf: SSAValue, target) -> SSAValue | None:
+    """The argument an instruction call writes in place, when *leaf* is its result."""
+    call = leaf.expr
+    if not isinstance(call, Call) or leaf.index != 0:
+        return None
+    if emission(call, retained=False) is not Emission.INSTRUCTION:
+        return None
+    op = selected_op(call, target)
+    if op is None:
+        return None
+    params = call_params(op, len(operand_types(call, op)))
+    result = result_param(params)
+    supplied, _produced = operand_roles(call, params)
+    if not result.effect & MemoryEffect.READ or result not in supplied:
+        return None
+    return SSAValue(call.args[supplied.index(result)], 0)
 
 
 def required_execution_mesh(op: Op):
@@ -219,7 +264,9 @@ __all__ = [
     "issue_owner",
     "operand_roles",
     "operand_types",
+    "register_storage",
     "required_execution_mesh",
+    "result_param",
     "selected_op",
     "staged_scalar",
 ]

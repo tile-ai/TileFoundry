@@ -473,6 +473,8 @@ class GEMM_8192X17408X5120_OPTIMAL:
                     ) as scope_1:
                         T.fill(acc, 0.0)
                     for k in range(0, 5120, 64):
+                        T.wgmma_commit_group()
+                        T.wgmma_wait_group(n=0)
                         T.sync(scope)
                         with scope[:1, :32] as scope_2:
                             value = T.tensor_view(
@@ -484,8 +486,6 @@ class GEMM_8192X17408X5120_OPTIMAL:
                             T.copy_async_tensor(value, lhs_ring_4)
                             value_1 = T.tensor_view(
                                 T.ptr_of(b[k:k + 1, ((task // 16) % 68) * 256:((task // 16) % 68) * 256 + 1]),
-                                layout=((64, 256), (17408, 1)),
-                                shape=(64, 256),
 ```
 
 The three `g / bn / mi` loops and `cta.d0` survive lowering. The three RHS slots

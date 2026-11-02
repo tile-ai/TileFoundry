@@ -1,4 +1,4 @@
-"""Lower scheduled HIR for CUDA with the ``sync`` steps before each node that has them.
+"""Lower scheduled HIR for CUDA with the ``sync`` steps at each node that has them.
 
 See [passes §7.1](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/passes.md#71-converthirtotir).
 """
@@ -18,6 +18,21 @@ from tilefoundry.passes.transforms.convert_hir_to_tir import (
 )
 from tilefoundry.target import bind
 from tilefoundry_nvidia.cuda import CudaTarget
+from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import (
+    FenceProxyAsync,
+    WgmmaCommitGroup,
+    WgmmaFence,
+    WgmmaWaitGroup,
+)
+
+_STEPS = {
+    ("commit", "cp_async"): CpAsyncCommit,
+    ("commit", "wgmma"): WgmmaCommitGroup,
+    ("wait", "cp_async"): lambda: CpAsyncWait(n=0),
+    ("wait", "wgmma"): lambda: WgmmaWaitGroup(n=0),
+    ("fence", "wgmma"): WgmmaFence,
+    ("proxy_fence", None): FenceProxyAsync,
+}
 
 
 class CudaLowering(Lowering):
@@ -34,12 +49,10 @@ class CudaLowering(Lowering):
     def before(self, owner: Expr, ctx, tag=None) -> None:
         record = get_metadata(owner, SyncMetadata)
         for step in () if record is None else record.at(tag):
-            if step.kind == "commit":
-                ctx.builder.add(Evaluate(CpAsyncCommit(), ()))
-            elif step.kind == "wait":
-                ctx.builder.add(Evaluate(CpAsyncWait(n=0), ()))
-            else:
+            if step.kind == "barrier":
                 ctx.builder.add(Evaluate(Sync(mesh=step.mesh), ()))
+            else:
+                ctx.builder.add(Evaluate(_STEPS[step.kind, step.group](), ()))
 
 
 @bind(CudaTarget, ConvertHIRToTIR)

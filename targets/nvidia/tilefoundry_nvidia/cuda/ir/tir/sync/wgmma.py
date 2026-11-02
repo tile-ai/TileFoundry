@@ -1,0 +1,74 @@
+"""Effect-form TIR Ops that order wgmma and async proxy accesses.
+
+[tir](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/tir.md#wgmma-group-and-proxy-fence-ops).
+"""
+
+from __future__ import annotations
+
+from tilefoundry.ir.core import Op
+from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.pattern import WildcardPattern, utils
+from tilefoundry.ir.tir.sync import participation, whole_groups
+from tilefoundry.ir.types import UnitType
+from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
+from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import WARPGROUP
+
+__all__ = ["FenceProxyAsync", "WgmmaCommitGroup", "WgmmaFence", "WgmmaWaitGroup"]
+
+
+@register_op(dialect="T", category="sync", name="wgmma_fence")
+class WgmmaFence(Op):
+    """Order earlier register accesses before the warpgroup's next wgmma."""
+
+    execution_mesh = utils.thread_execution_mesh()
+
+
+@register_op(dialect="T", category="sync", name="wgmma_commit_group")
+class WgmmaCommitGroup(Op):
+    """Close the warpgroup's uncommitted wgmmas into one group."""
+
+    execution_mesh = utils.thread_execution_mesh()
+
+
+@register_op(dialect="T", category="sync", name="wgmma_wait_group")
+class WgmmaWaitGroup(Op):
+    """Wait until all but the ``n`` newest committed wgmma groups complete."""
+
+    execution_mesh = utils.thread_execution_mesh()
+
+    n = ParamDef(
+        kind="attribute",
+        annotation=int,
+        pattern=WildcardPattern("wait_groups", predicates=(WildcardPattern("wait_groups") >= 0,)),
+        default=0,
+    )
+
+
+@register_op(dialect="T", category="sync", name="fence_proxy_async")
+class FenceProxyAsync(Op):
+    """Make this thread's earlier shared memory accesses visible to the async proxy."""
+
+    execution_mesh = utils.thread_execution_mesh()
+
+
+def _verify_warpgroups(call, ctx) -> None:
+    """Admit a wgmma group step only where whole, aligned warpgroups run it together.
+
+    The threads are those of the innermost mesh scope, whatever CTAs run it.
+    """
+    mesh = ctx.mesh_scope[-1] if ctx.mesh_scope else None
+    if mesh is None or not whole_groups(mesh, participation(WARPGROUP).count):
+        ctx.error(call, f"{type(call.target).__name__} needs whole warpgroups, got {mesh}")
+
+
+for _op in (WgmmaFence, WgmmaCommitGroup, WgmmaWaitGroup, FenceProxyAsync):
+    register_typeinfer(_op)(lambda call, ctx: UnitType())
+    register_access_relation(_op)(identity_relations)
+for _op in (WgmmaFence, WgmmaCommitGroup, WgmmaWaitGroup):
+    register_verify_stmt(_op)(_verify_warpgroups)
+register_verify_stmt(FenceProxyAsync)(lambda call, ctx: None)

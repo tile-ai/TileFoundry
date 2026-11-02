@@ -33,6 +33,7 @@ from tilefoundry.analysis.emission import (
     operand_roles,
     operand_types,
     required_execution_mesh,
+    result_param,
     selected_op,
     staged_scalar,
 )
@@ -1282,12 +1283,14 @@ class Lowering(ValuationVisitor[Expr | View]):
             self._memo[id(param)] = (param, physical)
 
     def before(self, owner: Expr, ctx, tag=None) -> None:
-        """Emit what runs before the statements lowered for *owner*.
+        """Emit what runs at the statements lowered for *owner* that *tag* names.
 
-        *owner* is a ``Call``, ``MeshRegion`` or ``LoopRegion``; *tag* names a
-        copy lowering adds for it: ``"base"`` or ``"update"`` of an InsertSlice,
-        ``("entry", slot)`` or ``("backedge", slot)`` of a loop. A target that
-        orders shared memory overrides this.
+        *owner* is a ``Call``, ``MeshRegion`` or ``LoopRegion``. The tag None is
+        before its own statements; ``"issue"`` is before each issue of a Call's
+        instruction and ``"after"`` right after its issues, in their region; any
+        other tag names a copy lowering adds for it: ``"base"`` or ``"update"``
+        of an InsertSlice, ``("entry", slot)`` or ``("backedge", slot)`` of a
+        loop. A target that orders memory effects overrides this.
         """
 
     def run(self) -> PrimFunction:
@@ -1577,13 +1580,11 @@ class Lowering(ValuationVisitor[Expr | View]):
                         or param.name == "fill"
                     )
                 }
+                self.before(call, ctx, "issue")
                 ctx.builder.add(Evaluate(type(op)(**attributes), tuple(issued)))
-            result_param = next(param for param in params if param.effect & MemoryEffect.WRITE)
-            return (
-                read_values[result_param.name]
-                if result_param.effect & MemoryEffect.READ
-                else written
-            )
+                self.before(call, ctx, "after")
+            result = result_param(params)
+            return read_values[result.name] if result.effect & MemoryEffect.READ else written
         for region in ctx.builder.blocks[:-1]:
             for key, value in region.views.items():
                 ctx.builder.blocks[-1].views.setdefault(key, value)
@@ -1666,10 +1667,12 @@ class Lowering(ValuationVisitor[Expr | View]):
                         if isinstance(item, Call)
                         else item
                     )
+                self.before(call, ctx, "issue")
                 ctx.builder.add(Evaluate(op, tuple(issued)))
-        result_param = next(param for param in params if param.effect & MemoryEffect.WRITE)
-        if result_param.effect & MemoryEffect.READ:
-            return read_values[result_param.name]
+            self.before(call, ctx, "after")
+        result = result_param(params)
+        if result.effect & MemoryEffect.READ:
+            return read_values[result.name]
         if written is None:
             raise LoweringError(f"{_label(call)} produced no addressable result")
         return written

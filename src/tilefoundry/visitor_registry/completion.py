@@ -1,42 +1,87 @@
-"""When the memory effects an Op declares are complete for later accesses.
+"""When each memory effect of an issued instruction is complete for later accesses.
 
 A synchronisation plan orders a later access after an earlier one only once the
-earlier one is complete. An Op that states nothing is ``UNKNOWN``. See
+earlier one is complete. An effect no declaration states is ``unknown``. See
 [visitor-registry §4.2](docs/spec/visitor-registry.md#42-completion-service--completion).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from enum import Enum
+from dataclasses import dataclass
+
+from tilefoundry.ir.core.param_def import MemoryEffect
 
 from .registries import DispatchRegistry
 
 
-class Completion(Enum):
-    """How an Op's memory effects become complete for the thread that issued it."""
+@dataclass(frozen=True)
+class Issued:
+    """One instruction lowering issues: the Op, its parameters and their types."""
 
-    UNKNOWN = "unknown"
-    ON_RETURN = "on_return"
-    CP_ASYNC_GROUP = "cp_async_group"
+    op: object
+    params: tuple
+    types: tuple
+
+
+@dataclass(frozen=True)
+class Effect:
+    """When one read or write of an issued parameter is complete.
+
+    ``on_return`` effects are complete for the issuing threads when the statement
+    returns; ``group`` ones once those threads wait for ``group``; ``unknown`` ones
+    never. ``proxy`` is the path to shared memory, ``generic`` or ``async``.
+    ``unit`` is the mesh of one group of threads that run the group's steps, and
+    the issue itself, together. A ``fence`` effect on registers needs the group's
+    fence since any other access to them, except an earlier one with the same
+    ``chain``.
+    """
+
+    param: str
+    write: bool
+    mechanism: str
+    group: str | None = None
+    proxy: str = "generic"
+    unit: object = None
+    fence: bool = False
+    chain: object = None
 
 
 completion_registry: DispatchRegistry = DispatchRegistry("completion")
 
 
-def register_completion(
-    key: type, completion: Completion | Callable[[object], Completion]
-) -> None:
-    """Declare *key*'s completion, or a handler that answers for one instance of it."""
-    completion_registry.register(
-        key, completion if callable(completion) else (lambda _instance: completion)
+def effects(issued: Issued, **fields) -> tuple[Effect, ...]:
+    """Each read, then each write, of *issued*'s parameters, all with *fields*."""
+    return tuple(
+        Effect(param.name, write, **fields)
+        for param in issued.params
+        for write in (False, True)
+        if param.effect & (MemoryEffect.WRITE if write else MemoryEffect.READ)
     )
 
 
-def completion_of(instance: object) -> Completion:
-    """The completion declared for *instance*'s exact class, or ``UNKNOWN``."""
-    handler = completion_registry.lookup(type(instance))
-    return Completion.UNKNOWN if handler is None else handler(instance)
+def on_return(issued: Issued) -> tuple[Effect, ...]:
+    """Every effect of *issued* is complete once it returns."""
+    return effects(issued, mechanism="on_return")
 
 
-__all__ = ["Completion", "completion_of", "completion_registry", "register_completion"]
+def register_completion(key: type, handler: Callable[[Issued], tuple[Effect, ...]]) -> None:
+    """Declare the effects of an issued *key* through *handler*."""
+    completion_registry.register(key, handler)
+
+
+def completion_of(issued: Issued, *, key: type | None = None) -> tuple[Effect, ...]:
+    """The effects declared for *issued*, looked up by *key* or its Op's exact class."""
+    handler = completion_registry.lookup(type(issued.op) if key is None else key)
+    return effects(issued, mechanism="unknown") if handler is None else handler(issued)
+
+
+__all__ = [
+    "Effect",
+    "Issued",
+    "completion_of",
+    "completion_registry",
+    "effects",
+    "on_return",
+    "register_completion",
+]

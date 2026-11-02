@@ -25,13 +25,15 @@ class CudaLowering(Lowering):
     `analyze(module, entry, analysis=("memory", "sync"))` and passes the result
     to `finalize`; `tilefoundry schedule finalize` does the same.
   - `before` emits the steps the node's `SyncMetadata` holds for the tag, in
-    order: `cp_async_commit` for a commit, `cp_async_wait(n=0)` for a wait and
-    `T.sync` over the step's mesh for a barrier.
-  - `CopyAsyncTensor`, `CopyReduceAsyncTensor` and `TiledMma` with a wgmma atom
-    declare no completion, so the plan orders them as complete once their
-    statement returns. Their emitters MUST wait before returning: an mbarrier
-    wait for a TMA load, a bulk wait for a TMA store or reduction, and a wgmma
-    commit followed by `wait_group 0`.
+    order. For the `cp_async` group a commit is `cp_async_commit` and a wait
+    `cp_async_wait(n=0)`; for the `wgmma` group a commit is
+    `wgmma_commit_group`, a wait `wgmma_wait_group(n=0)` and a fence
+    `wgmma_fence`. A proxy fence is `fence_proxy_async` and a barrier `T.sync`
+    over the step's mesh.
+  - `CopyAsyncTensor` and `CopyReduceAsyncTensor` declare no completion, so the
+    plan orders them as complete once their statement returns. Their emitters
+    MUST wait before returning: an mbarrier wait for a TMA load, a bulk wait
+    for a TMA store or reduction.
 
 ### 7.3 `insert_default_host_entry`
 

@@ -228,6 +228,12 @@ def participation(mesh: Mesh) -> Participation:
     )
 
 
+def whole_groups(mesh: Mesh, size: int) -> bool:
+    """Whether ``mesh``'s threads are whole, aligned groups of ``size`` threads."""
+    held = participation(mesh)
+    return held.base % size == 0 and held.count % size == 0
+
+
 def classify(mesh: Mesh) -> SyncBarrier:
     """Pick the hardware barrier for ``mesh``.
 
@@ -258,6 +264,7 @@ __all__ = [
     "Participation",
     "participation",
     "classify",
+    "whole_groups",
     "WARP_SIZE",
 ]
 

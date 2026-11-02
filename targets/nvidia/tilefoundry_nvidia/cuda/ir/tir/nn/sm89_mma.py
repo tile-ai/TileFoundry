@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.ir.types import DType, Layout, ShardLayout, Split
-from tilefoundry.visitor_registry.completion import Completion, register_completion
+from tilefoundry.visitor_registry.completion import on_return, register_completion
 
 from .mma_atom import MmaAtom, rmem_fragment
 from .sm80_mma import WARP
@@ -34,7 +34,7 @@ class Mma(MmaAtom):
     B = rmem_fragment((32, 8), DType.fp8e4m3, _B_FRAGMENT)
 
 
-register_completion(Mma, Completion.ON_RETURN)
+register_completion(Mma, on_return)
 
 
 __all__ = ["Mma"]

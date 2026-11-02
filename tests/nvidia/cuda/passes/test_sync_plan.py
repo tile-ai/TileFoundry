@@ -13,11 +13,13 @@ from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.tir import CpAsyncCommit, CpAsyncWait
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.memory import Copy
+from tilefoundry.ir.tir.stmts import Evaluate, For, MeshScope, Sequential
 from tilefoundry.ir.tir.sync import Sync
 from tilefoundry.passes.transforms import LoweringError
 from tilefoundry.schedule import finalize
 from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensor
 from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
+from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import WgmmaCommitGroup, WgmmaFence, WgmmaWaitGroup
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 GEMM = FIXTURES / "schedule/hir/sm89_e4m3_gemm.py"
@@ -27,24 +29,26 @@ def _analyzed(module, analysis=("memory", "sync")):
     return analyze(*check_program(module, module.entry_function()), analysis=analysis)
 
 
-def test_each_row_lands_before_the_column_reads():
-    """A commit, a wait and a barrier between each thread's row copy and the column reads."""
-    result = _analyzed(load_authored_ir(str(FIXTURES / "passes/sync_row_windows.py")))
+def _operations(path):
+    result = _analyzed(load_authored_ir(str(path)))
     lowered = _RetainedStatements()
     lowered.visit(finalize(result).lookup(result.function.name).body)
-    operations = lowered.operations
-    start = next(i for i, op in enumerate(operations) if isinstance(op, CopyAsync))
-    end = next(i for i, op in enumerate(operations) if i > start and isinstance(op, Copy))
-    assert [type(op) for op in operations[start + 1 : end]] == [CpAsyncCommit, CpAsyncWait, Sync]
+    return [type(op) for op in lowered.operations]
+
+
+def test_each_row_lands_before_the_column_reads():
+    """A commit, a wait and a barrier between each thread's row copy and the column reads."""
+    operations = _operations(FIXTURES / "passes/sync_row_windows.py")
+    start = operations.index(CopyAsync)
+    end = operations.index(Copy, start)
+    assert operations[start + 1 : end] == [CpAsyncCommit, CpAsyncWait, Sync]
 
 
 def test_each_lane_reads_its_own_row_without_a_barrier():
     """Each lane writes and reads back only its own row, so its loop gets no barrier."""
-    result = _analyzed(load_authored_ir(str(FIXTURES / "passes/sync_lane_rows.py")))
-    lowered = _RetainedStatements()
-    lowered.visit(finalize(result).lookup(result.function.name).body)
-    assert any(isinstance(op, Copy) for op in lowered.operations)
-    assert not any(isinstance(op, Sync) for op in lowered.operations)
+    operations = _operations(FIXTURES / "passes/sync_lane_rows.py")
+    assert Copy in operations
+    assert Sync not in operations
 
 
 def test_tma_loads_land_before_the_wgmma_reads_them():
@@ -79,6 +83,54 @@ def test_the_back_edge_copies_follow_a_barrier():
     kinds = [type(op) for op in body.operations if isinstance(op, (Sync, Copy, TiledMma))]
     first = kinds.index(Copy)
     assert kinds[first - 2 :] == [TiledMma, Sync, Copy, Copy]
+
+
+def test_each_issue_reading_a_from_registers_gets_its_own_fence():
+    """The RS WGMMA over K = 64 issues four times, each after its own ``wgmma_fence``.
+
+    The copy of A before it in the loop body waits for the last iteration's group.
+    """
+    operations = _operations(FIXTURES / "analysis/sync_wgmma_rs.py")
+    start = operations.index(WgmmaFence)
+    assert operations[start - 3 : start] == [WgmmaCommitGroup, WgmmaWaitGroup, Copy]
+    assert operations[start : start + 10] == [WgmmaFence, TiledMma] * 4 + [
+        WgmmaCommitGroup,
+        WgmmaWaitGroup,
+    ]
+
+
+def test_a_wgmma_completes_where_it_issues_when_its_wait_has_no_place():
+    """No scope holding the loader warp and the warpgroup can run the group's wait.
+
+    So the commit and the wait follow the WGMMA, in the region that issues it.
+    """
+    result = _analyzed(load_authored_ir(str(FIXTURES / "analysis/sync_wgmma_partial.py")))
+    pending, issuing = [finalize(result).lookup(result.function.name).body], []
+    while pending:
+        stmt = pending.pop()
+        inner = stmt.body if isinstance(stmt, (MeshScope, For)) else stmt
+        if isinstance(inner, Sequential):
+            pending.extend(inner.body)
+            kinds = [type(s.callable) for s in inner.body if isinstance(s, Evaluate)]
+            if isinstance(stmt, MeshScope) and TiledMma in kinds:
+                issuing.append(kinds)
+    (kinds,) = issuing
+    last = max(index for index, kind in enumerate(kinds) if kind is TiledMma)
+    assert kinds[last + 1 : last + 3] == [WgmmaCommitGroup, WgmmaWaitGroup]
+
+
+def test_both_groups_complete_before_the_copy_into_their_bytes():
+    """Each group's commit and wait reach the TIR, then the barrier, before the copy."""
+    operations = _operations(FIXTURES / "analysis/sync_two_groups.py")
+    start = operations.index(TiledMma) + 1
+    assert operations[start : start + 6] == [
+        CpAsyncCommit,
+        WgmmaCommitGroup,
+        CpAsyncWait,
+        WgmmaWaitGroup,
+        Sync,
+        Copy,
+    ]
 
 
 def test_lowering_needs_the_sync_analysis():

@@ -88,7 +88,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
-register_completion(TiledMma, lambda op: completion_of(op.atom))
+register_completion(TiledMma, lambda issued: completion_of(issued, key=type(issued.op.atom)))
 
 
 @register_access_relation(TiledMma)

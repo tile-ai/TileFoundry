@@ -1,4 +1,4 @@
-"""Where the sync family orders shared memory, and what it refuses."""
+"""Where the sync family orders shared memory and register accesses, and what it refuses."""
 
 from __future__ import annotations
 
@@ -17,29 +17,56 @@ from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.tir.sync import SyncBarrier
 from tilefoundry.ir.types import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 GEMM = FIXTURES / "schedule/hir/sm89_e4m3_gemm.py"
+_PUBLISHED = (("proxy_fence", None), ("barrier", None))
+_WAITED = (("commit", "wgmma"), ("wait", "wgmma"))
+_FENCE = (("fence", "wgmma"),)
 
 
-def _planned(module):
-    """The analysed Function, and each node with the steps the family attached to it."""
-    result = analyze(*check_program(module, module.entry_function()), analysis=("memory", "sync"))
-    function = result.function
+def _attached(function):
+    """Each node of *function* with the steps the family attached to it, in program order."""
     assert get_metadata(function, SyncPlanMetadata) is not None
     attached = {
         id(expr): (expr, record.steps)
         for expr in collect_exprs(function.body)
         if (record := get_metadata(expr, SyncMetadata)) is not None
     }
-    return function, list(attached.values())
+    return list(attached.values())
+
+
+def _analyzed(module):
+    return analyze(*check_program(module, module.entry_function()), analysis=("memory", "sync"))
+
+
+def _planned(module):
+    """The analysed entry Function, and each of its nodes with the steps attached to it."""
+    function = _analyzed(module).function
+    return function, _attached(function)
 
 
 def _kinds(steps):
     return tuple(step.kind for step in steps)
+
+
+def _steps(attached):
+    """Each node's instruction, None for a region or a retained call, with each tag's steps."""
+    return [
+        (
+            type(owner.target.op).__name__
+            if isinstance(getattr(owner, "target", None), ScheduleOp)
+            else None,
+            tag,
+            tuple((step.kind, step.group) for step in steps),
+        )
+        for owner, tagged in attached
+        for tag, steps in tagged
+    ]
 
 
 def _of_kind(owner, kind):
@@ -170,6 +197,103 @@ class TwiceNestedCalls(SyncCase):
     def guard(self, state, problems):
         with pytest.raises(AnalysisError, match="a scope that no thread mesh binds"):
             _planned(state)
+
+
+@case
+class WgmmaChain(SyncCase):
+    """Copied operands are published and the filled accumulator fenced before the first WGMMA.
+
+    The second, of the same shape, chains on its accumulator: no fence, no wait.
+    """
+
+    path: Path = FIXTURES / "analysis/sync_wgmma_chain.py"
+
+    def guard(self, state, problems):
+        _function, attached = _planned(state)
+        assert _steps(attached) == [
+            ("TiledMma", None, _PUBLISHED + _FENCE),
+            (None, "update", _WAITED),
+        ]
+
+
+@case
+class WgmmaRetainedCall(SyncCase):
+    """A retained call reading the accumulator is an access: the group is waited on before it."""
+
+    path: Path = FIXTURES / "analysis/sync_wgmma_call.py"
+
+    def guard(self, state, problems):
+        _function, attached = _planned(state)
+        assert _steps(attached) == [
+            ("TiledMma", None, _PUBLISHED + _FENCE),
+            (None, None, _WAITED),
+        ]
+        owner, _tagged = attached[1]
+        assert isinstance(owner, Call), "the waits sit before a call, not before a region"
+
+
+@case
+class WgmmaPartialWarpgroups(SyncCase):
+    """The wait for a WGMMA group cannot run over a loader warp beside one warpgroup.
+
+    So the WGMMA completes right after it issues, in its warpgroup.
+    """
+
+    path: Path = FIXTURES / "analysis/sync_wgmma_partial.py"
+
+    def guard(self, state, problems):
+        _function, attached = _planned(state)
+        assert _steps(attached) == [
+            (None, None, (("barrier", None),)),
+            ("TiledMma", None, _FENCE),
+            ("TiledMma", "after", _WAITED),
+            (None, None, (("commit", "cp_async"), ("wait", "cp_async")) + _PUBLISHED),
+        ]
+
+
+@case
+class WgmmaDivergentLoop(SyncCase):
+    """A WGMMA in a loop bounded by the warp cannot be issued by the whole warpgroup together."""
+
+    path: Path = FIXTURES / "analysis/sync_wgmma_divergent.py"
+
+    def guard(self, state, problems):
+        with pytest.raises(AnalysisError, match="collective step is needed inside loop '_j'"):
+            _planned(state)
+
+
+@case
+class WgmmaInFlightAtReturn(SyncCase):
+    """A callee's WGMMA would still write the accumulator it returns, so it completes in place.
+
+    Calls complete on return, so the caller needs no step.
+    """
+
+    path: Path = FIXTURES / "analysis/sync_wgmma_return.py"
+
+    def guard(self, state, problems):
+        functions = {function.name: function for function in _analyzed(state).functions}
+        assert _steps(_attached(functions["gemm"])) == []
+        assert _steps(_attached(functions["issue"])) == [
+            ("TiledMma", None, _PUBLISHED + _FENCE),
+            ("TiledMma", "after", _WAITED),
+        ]
+
+
+@case
+class WgmmaShapes(SyncCase):
+    """BF16, E4M3, BF16 WGMMAs on one accumulator: each later one waits and fences again."""
+
+    path: Path = FIXTURES / "analysis/sync_wgmma_shapes.py"
+
+    def guard(self, state, problems):
+        _function, attached = _planned(state)
+        assert _steps(attached) == [
+            ("TiledMma", None, _PUBLISHED + _FENCE),
+            ("TiledMma", None, _WAITED + _PUBLISHED + _FENCE),
+            ("TiledMma", None, _WAITED + _FENCE),
+            (None, "update", _WAITED),
+        ]
 
 
 @pytest.mark.parametrize(

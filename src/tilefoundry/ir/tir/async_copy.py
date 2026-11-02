@@ -28,7 +28,7 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.completion import Completion, register_completion
+from tilefoundry.visitor_registry.completion import effects, register_completion
 
 ASYNC_WIDTHS = (4, 8, 16)
 
@@ -135,7 +135,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
 
 
-register_completion(CopyAsync, Completion.CP_ASYNC_GROUP)
+register_completion(CopyAsync, lambda issued: effects(issued, mechanism="group", group="cp_async"))
 
 
 @register_access_relation(CopyAsync)

@@ -1,8 +1,8 @@
-"""The ``sync`` family: where lowering orders shared memory accesses.
+"""The ``sync`` family: where lowering orders asynchronous memory effects.
 
 It walks a Function's actions in lowering's order over the shared
-``IterationScope`` and plans a commit, a wait and a barrier before each access
-that must follow an earlier one, or refuses the Function. See
+``IterationScope`` and plans the commits, waits, fences and barriers each
+access needs before it may follow an earlier one, or refuses the Function. See
 [analysis §1.2.5](docs/spec/analysis.md#125-sync).
 """
 
@@ -22,19 +22,18 @@ from tilefoundry.ir.core import (
     get_metadata,
 )
 from tilefoundry.ir.core import attach_metadata as attach
-from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.tir.memory import Copy, Fill
-from tilefoundry.ir.tir.sync import SyncBarrier, classify
+from tilefoundry.ir.tir.sync import SyncBarrier, classify, participation, whole_groups
 from tilefoundry.ir.types import Mesh, ShardLayout, Split, StorageKind, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.mesh import axis_keys, within_scope
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.visitor_registry.completion import Completion, completion_of
+from tilefoundry.visitor_registry.completion import Effect, Issued, completion_of
 from tilefoundry.visitor_registry.instruction import call_params
 
 from .allocation import AllocationSummaryMetadata
@@ -51,6 +50,7 @@ from .emission import (
     issue_owner,
     operand_roles,
     operand_types,
+    register_storage,
     required_execution_mesh,
     selected_op,
 )
@@ -62,46 +62,40 @@ from .visitor import AnalyzeContext
 _DONE = -1
 _UNCOMMITTED = -2
 _LOOP_LIMIT = 64
+_ORDER = ("commit", "wait", "proxy_fence", "barrier", "fence")
 
 
 @dataclass(frozen=True)
 class SyncStep:
-    """One statement lowering emits: ``commit``, ``wait`` or ``barrier``."""
+    """One statement lowering emits.
+
+    ``kind`` is ``commit``, ``wait``, ``proxy_fence``, ``barrier`` or ``fence``. A
+    commit, a wait or a fence is for one completion ``group``; a barrier runs over
+    ``mesh``.
+    """
 
     kind: str
     mesh: Mesh | None = None
-
-
-@dataclass(frozen=True)
-class SyncRole:
-    """One parameter of an action's instruction and the shared memory its values own.
-
-    ``spans`` are byte ranges ``(start, end)``; None stands for unknown bytes.
-    ``threads`` is the layout that gives each byte the parameter touches to one
-    issuing thread, when there is one.
-    """
-
-    name: str
-    read: bool
-    write: bool
-    spans: tuple
-    threads: ShardLayout | None = None
+    group: str | None = None
 
 
 @dataclass(frozen=True)
 class SyncMetadata(IRMetadata):
-    """The steps lowering emits before what it lowers for one HIR node.
+    """The steps lowering emits around what it lowers for one HIR node.
 
-    ``steps`` pairs a tag with its steps. The tag None is the node's own
-    statements: a Call's instruction or Fill, or entering a region. Any other
-    tag names a copy lowering adds for the node: ``"base"`` or ``"update"`` of
-    an InsertSlice, ``("entry", slot)`` or ``("backedge", slot)`` of a loop.
+    ``steps`` pairs a tag with its steps. The tag None is before the node's own
+    statements: a Call's instruction, fill or retained call, or entering a
+    region. ``"issue"`` is before each issue of a Call's instruction and
+    ``"after"`` right after its issues, in the region that issues them. Any
+    other tag names a copy lowering adds for the node: ``"base"`` or
+    ``"update"`` of an InsertSlice, ``("entry", slot)`` or ``("backedge", slot)``
+    of a loop.
     """
 
     steps: tuple[tuple[object, tuple[SyncStep, ...]], ...] = ()
 
     def at(self, tag=None) -> tuple[SyncStep, ...]:
-        """The steps lowering emits before the statements *tag* names."""
+        """The steps lowering emits at the statements *tag* names."""
         return dict(self.steps).get(tag, ())
 
 
@@ -116,8 +110,22 @@ class SyncPlanMetadata(IRMetadata):
 
 
 @dataclass(frozen=True)
+class _Use:
+    """One effect of an action on shared memory bytes or on one register storage.
+
+    ``threads`` is the layout that gives each of those bytes to one issuing
+    thread, when there is one.
+    """
+
+    effect: Effect
+    spans: tuple = ()
+    register: SSAValue | None = None
+    threads: ShardLayout | None = None
+
+
+@dataclass(frozen=True)
 class _Action:
-    """One instruction lowering issues for an HIR node, with what it touches.
+    """One instruction or retained call lowering emits for an HIR node.
 
     ``position`` orders it among its scope's children; ``owner`` and ``tag``
     name it the way lowering reaches it.
@@ -126,37 +134,46 @@ class _Action:
     position: tuple[int, int]
     owner: Expr
     tag: object
-    roles: tuple[SyncRole, ...]
-    completion: Completion
+    uses: tuple[_Use, ...]
     name: str
-
-    @property
-    def accesses(self) -> tuple[tuple[bool, tuple, ShardLayout | None], ...]:
-        """Each read and write as ``(write, spans, threads)``, reads of a parameter first."""
-        return tuple(
-            (write, role.spans, role.threads)
-            for role in self.roles
-            for write in (False, True)
-            if (role.write if write else role.read)
-        )
+    mesh: Mesh | None
 
 
 @dataclass(frozen=True)
 class _Access:
     """One access a later one may have to follow.
 
-    ``ordered`` names the barriers that ordered it, each as the mesh chain of the
-    scope it ran in; it orders the access only for threads inside that scope.
-    ``threads`` is its role's layout giving each byte to one issuing thread.
+    ``ordered`` holds ``(mesh chain, published)`` for each barrier that ordered it;
+    it orders the access only for threads inside that scope, and ``published``
+    says a proxy fence ran before the barrier. ``fenced`` says the issuing threads
+    ran the proxy fence after it, and ``group_fenced`` that its group's fence ran
+    since this register access. ``issuers`` and ``unit`` are the issuing threads and
+    the collective unit whose steps they run together, if any.
     """
 
     position: tuple[int, int]
     write: bool
     spans: tuple
+    register: SSAValue | None
     meshes: tuple[int, ...]
     state: int
-    ordered: frozenset = frozenset()
+    group: str | None = None
+    proxy: str = "generic"
+    chain: object = None
+    issuers: Mesh | None = None
+    unit: Mesh | None = None
     threads: ShardLayout | None = None
+    ordered: frozenset = frozenset()
+    fenced: bool = False
+    group_fenced: bool = False
+
+
+class _Unplaced(Exception):
+    """A step that an asynchronous action needs has no place; it completes in place instead."""
+
+    def __init__(self, position: tuple[int, int], reason: str):
+        super().__init__(reason)
+        self.position = position
 
 
 def _event(liveness: LivenessMetadata, expr) -> int | None:
@@ -203,12 +220,23 @@ def _mesh_chain(scope) -> tuple[int, ...]:
     return tuple(id(s.owner) for s in reversed(list(scope.ancestors())) if isinstance(s.owner, MeshRegion))
 
 
-class _Planner:
-    """One walk of a function in lowering's order, repeated for loops until it settles."""
+def _region_mesh(scope) -> Mesh | None:
+    """The mesh of the innermost ``MeshRegion`` around *scope*."""
+    return next(
+        (node.owner.mesh for node in scope.ancestors() if isinstance(node.owner, MeshRegion)), None
+    )
 
-    def __init__(self, function: Function, context: AnalyzeContext):
+
+class _Planner:
+    """One walk of a function in lowering's order, repeated for loops until it settles.
+
+    The actions at the positions in *in_place* complete right after they issue.
+    """
+
+    def __init__(self, function: Function, context: AnalyzeContext, in_place: frozenset):
         self.function = function
         self.context = context
+        self.in_place = in_place
         self.liveness = get_metadata(function, LivenessMetadata)
         self.summary = get_metadata(function, AllocationSummaryMetadata)
         if self.liveness is None or self.summary is None:
@@ -229,6 +257,8 @@ class _Planner:
         self.names: dict[tuple[int, int], tuple[Expr, object]] = {}
         self.paths: dict[tuple[int, int], tuple] = {}
         self.planned: dict[tuple[int, int], list[SyncStep]] = {}
+        self.issues: dict[tuple[int, int], list[SyncStep]] = {}
+        self.after: dict[tuple[int, int], list[SyncStep]] = {}
         self.entered: dict[tuple[int, int], int] = {}
         self.seq = 0
         self.build()
@@ -278,57 +308,74 @@ class _Planner:
 
     def copy(self, position, owner, tag, source, target, scope, name: str) -> _Action:
         """A ``Copy`` lowering adds for *owner* from *source* into *target*'s storage."""
-        mesh = copy_mesh((source.type, target.type))
-        return self.action(position, owner, tag, Copy(), (source, target), name, scope, mesh)
+        types = (source.type, target.type)
+        return self.action(
+            position, owner, tag, Copy(), (source, target), types, name, scope, copy_mesh(types)
+        )
 
     def action(
-        self,
-        position,
-        owner,
-        tag,
-        op,
-        args,
-        name: str,
-        scope,
-        mesh,
-        *,
-        types=None,
-        filled=(),
-        result=(),
+        self, position, owner, tag, op, args, types, name: str, scope, mesh, *, filled=(), result=()
     ) -> _Action:
-        """*op* issued for *owner* on *mesh* with *args* in its parameters' order.
+        """*op* issued for *owner* on *mesh* with *args* of *types* in its parameters' order.
 
-        *types* are the operand types it is issued with, the arguments' by
-        default. A parameter named in *filled* is issued with the call's
-        *result* storage, and also with its argument when one is given.
+        A parameter named in *filled* is issued with the call's *result* storage,
+        and also with its argument when one is given.
         """
         if mesh is not None and (scope.mesh is None or not within_scope(mesh, scope.mesh)):
             raise AnalysisError(f"sync: {name} is issued on a mesh not within its scope's")
         params = call_params(op, len(args))
-        if types is None:
-            types = tuple(None if arg is None else arg.type for arg in args)
-        roles = tuple(
-            SyncRole(
-                param.name,
-                bool(param.effect & MemoryEffect.READ),
-                bool(param.effect & MemoryEffect.WRITE),
-                (() if arg is None else self.spans(SSAValue.leaves(arg)))
-                + (self.spans(result) if param.name in filled else ()),
-                _threads(op, type_, self.context.target.storage_owners),
+        leaves = {
+            param.name: (() if arg is None else SSAValue.leaves(arg))
+            + (tuple(result) if param.name in filled else ())
+            for param, arg in zip(params, args, strict=True)
+        }
+        owners = self.context.target.storage_owners
+        threads = {
+            param.name: _threads(op, type_, owners)
+            for param, type_ in zip(params, types, strict=True)
+        }
+        effects = completion_of(Issued(op, params, tuple(types)))
+        uses = self.uses(effects, leaves, threads)
+        return _Action(position, owner, tag, uses, name, mesh)
+
+    def uses(self, effects, leaves, threads=None) -> tuple[_Use, ...]:
+        """Each effect on the shared memory bytes and on each register storage it touches."""
+        threads = threads or {}
+        return tuple(
+            use
+            for effect in effects
+            for spans in (self.spans(leaves[effect.param]),)
+            for use in (
+                *((_Use(effect, spans, threads=threads.get(effect.param)),) if spans else ()),
+                *(
+                    _Use(effect, register=register)
+                    for register in self.registers(leaves[effect.param])
+                ),
             )
-            for param, arg, type_ in zip(params, args, types, strict=True)
         )
-        return _Action(position, owner, tag, roles, completion_of(op), name)
+
+    def registers(self, leaves) -> tuple[SSAValue, ...]:
+        """The register storages lowering gives these values."""
+        return tuple(
+            dict.fromkeys(
+                register_storage(leaf, self.aliases_of, self.context.target)
+                for leaf in leaves
+                if leaf in self.values and self.values[leaf].lifetime.memory_level == "rmem"
+            )
+        )
 
     def call_actions(self, call: Call, event: int, scope) -> list[_Action]:
-        """Each instruction lowering issues for *call* at *event*, in order."""
+        """Each instruction or retained call lowering emits for *call* at *event*, in order."""
         callee = scope.attachment(call)
         kind = emission(call, retained=callee is not None)
         if kind is Emission.CALL:
             return self.call(call, event, callee.owner)
         if kind is Emission.FILL:
-            mesh = copy_mesh((call.type,))
-            return [self.action((event, 0), call, None, Fill(), (call, None), "Fill", scope, mesh)]
+            types = (call.type, None)
+            return [self.action(
+                (event, 0), call, None, Fill(), (call, None), types, "Fill", scope,
+                copy_mesh((call.type,)),
+            )]
         if kind is Emission.INSERT_SLICE:
             actions = []
             for tag, source, copies in (
@@ -354,29 +401,38 @@ class _Planner:
                 None,
                 op,
                 tuple(given.get(param.name) for param in params),
+                types,
                 type(op).__name__,
                 scope,
                 issue_mesh(op, issue_owner(types), scope.mesh),
-                types=types,
                 filled=tuple(param.name for param in produced),
                 result=SSAValue.leaves(call),
             )
         ]
 
     def call(self, call: Call, event: int, callee: Function) -> list[_Action]:
-        """A retained call, as one action unless its callee's plan touches no shared memory.
+        """A retained call, which reads its arguments and writes its results.
 
-        Callees are planned before their callers and order their own accesses.
-        Without a summary of what a callee touches, the call reads and writes
-        unknown bytes and may leave ``cp.async`` groups in flight, so whatever
-        conflicts with it waits for all of them.
+        Callees are planned before their callers, order their own accesses and
+        complete them before returning. Unless the callee's plan touches no
+        shared memory, the call also reads and writes unknown shared memory bytes
+        and may leave ``cp.async`` groups in flight, so whatever conflicts with it
+        waits for all of them.
         """
+        leaves = {
+            **{f"argument {index}": SSAValue.leaves(arg) for index, arg in enumerate(call.args)},
+            "result": SSAValue.leaves(call),
+        }
+        effects = tuple(Effect(name, name == "result", "on_return") for name in leaves)
+        uses = [use for use in self.uses(effects, leaves) if use.register is not None]
         plan = get_metadata(callee, SyncPlanMetadata)
-        if plan is not None and not plan.shared:
+        if plan is None or plan.shared:
+            uses += [
+                _Use(Effect("callee", write, "group", "cp_async"), (None,)) for write in (False, True)
+            ]
+        if not uses:
             return []
-        role = SyncRole("callee", True, True, (None,))
-        name = f"the call to {callee.name!r}"
-        return [_Action((event, 0), call, None, (role,), Completion.CP_ASYNC_GROUP, name)]
+        return [_Action((event, 0), call, None, tuple(uses), f"the call to {callee.name!r}", None)]
 
     def roots(self, leaves) -> tuple:
         """The allocation roots these values live in."""
@@ -406,19 +462,29 @@ class _Planner:
         return tuple(reversed(steps))
 
     def run(self) -> None:
-        """Plan the Function and attach each node's steps to it as ``SyncMetadata``."""
-        self.walk(self.root, frozenset())
+        """Plan the Function and attach each node's steps to it as ``SyncMetadata``.
+
+        A collective group still in flight when the Function returns makes its
+        action complete in place.
+        """
+        state = self.walk(self.root, frozenset())
+        for access, _seq in sorted(state, key=lambda item: item[1]):
+            if access.unit is not None and access.state != _DONE:
+                name = self.actions[access.position].name
+                raise _Unplaced(access.position, f"{name} may still be in flight at the return")
         for expr in collect_exprs(self.function.body):
             detach_metadata(expr, SyncMetadata)
         steps: dict[int, tuple[Expr, list]] = {}
         for position, planned in sorted(self.planned.items()):
             owner, tag = self.names[position]
             steps.setdefault(id(owner), (owner, []))[1].append((tag, tuple(planned)))
+        for tag, placed in (("issue", self.issues), ("after", self.after)):
+            for position, planned in sorted(placed.items()):
+                owner, _tag = self.names[position]
+                steps.setdefault(id(owner), (owner, []))[1].append((tag, tuple(planned)))
         for owner, tagged in steps.values():
             attach(owner, SyncMetadata(tuple(tagged)))
-        shared = any(
-            spans for action in self.actions.values() for _write, spans, _threads in action.accesses
-        )
+        shared = any(use.spans for action in self.actions.values() for use in action.uses)
         attach(self.function, SyncPlanMetadata(shared))
 
     def walk(self, scope, state):
@@ -426,10 +492,11 @@ class _Planner:
             self.seq += 1
             self.entered[position] = self.seq
             self.paths.setdefault(position, self.path(scope, position))
-            for step in self.planned.get(position, ()):
-                state = self.effect(step, scope, state, self.entered[position])
-            if isinstance(child, _Action):
-                state = self.evaluate(child, scope, state)
+            action = child if isinstance(child, _Action) else None
+            for step in (*self.planned.get(position, ()), *self.issues.get(position, ())):
+                state = self.effect(step, scope, state, self.entered[position], action)
+            if action is not None:
+                state = self.evaluate(action, scope, state)
             elif isinstance(child.owner, LoopRegion):
                 state = self.loop(child, state)
             else:
@@ -450,41 +517,87 @@ class _Planner:
         raise AnalysisError("sync: the analysis of a loop did not settle within its limit")
 
     def evaluate(self, action: _Action, scope, state):
-        accesses = [access for access in action.accesses if access[1]]
-        for write, spans, threads in accesses:
-            state = self.order(action, write, spans, threads, scope, state)
-        status = _UNCOMMITTED if action.completion is Completion.CP_ASYNC_GROUP else _DONE
+        units = {use.effect.unit for use in action.uses if use.effect.unit is not None}
+        for unit in units:
+            self.collective(scope, unit, action.mesh)
+        for use in action.uses:
+            state = self.order(action, use, scope, state)
+        state = self.group_fence(action, scope, state)
         self.seq += 1
-        meshes = _mesh_chain(scope)
-        made = frozenset(
-            (_Access(action.position, write, spans, meshes, status, threads=threads), self.seq)
-            for write, spans, threads in accesses
-        )
-        return state | made
+        made = frozenset((self.access(action, use, scope), self.seq) for use in action.uses)
+        state = state | made
+        if action.position in self.in_place:
+            state = self.complete_in_place(action, state)
+        return state
 
-    def order(self, action: _Action, write, spans, threads, scope, state):
-        """Plan what must run before this access, and apply it to *state*."""
+    def complete_in_place(self, action: _Action, state):
+        """Commit and wait for *action*'s groups right after it issues, in its issuing region."""
+        steps = self.after.setdefault(action.position, [])
+        for group in dict.fromkeys(
+            use.effect.group for use in action.uses if use.effect.mechanism == "group"
+        ):
+            for kind in ("commit", "wait"):
+                if SyncStep(kind, group=group) not in steps:
+                    steps.append(SyncStep(kind, group=group))
+        return frozenset(
+            (replace(access, state=_DONE) if access.position == action.position else access, seq)
+            for access, seq in state
+        )
+
+    def access(self, action: _Action, use: _Use, scope) -> _Access:
+        """What *use* leaves for later accesses once *action* is issued in *scope*.
+
+        An effect no protocol states is complete when its statement returns.
+        """
+        effect = use.effect
+        status = _UNCOMMITTED if effect.mechanism == "group" else _DONE
+        return _Access(
+            action.position,
+            effect.write,
+            use.spans,
+            use.register,
+            _mesh_chain(scope),
+            status,
+            effect.group,
+            effect.proxy,
+            effect.chain,
+            action.mesh or _region_mesh(scope),
+            effect.unit,
+            use.threads,
+        )
+
+    def order(self, action: _Action, use: _Use, scope, state):
+        """Plan what must run before this use, and apply it to *state*."""
         meshes = _mesh_chain(scope)
         while True:
             pending = [
                 (access, seq)
                 for access, seq in sorted(state, key=lambda item: (item[1], item[0].position))
-                if self.conflicts(access, write, spans, threads, meshes)
+                if self.conflicts(access, use, meshes)
             ]
             if not pending:
                 return state
             access, seq = pending[0]
             meeting, position = self.meeting(access.position, action.position)
             if access.state != _DONE:
+                if access.unit is not None:
+                    try:
+                        self.collective(meeting, access.unit, access.issuers)
+                    except AnalysisError as error:
+                        raise _Unplaced(access.position, str(error)) from None
+                group = access.group
                 if access.state == _UNCOMMITTED:
-                    state = self.plan(SyncStep("commit"), meeting, position, state)
-                state = self.plan(SyncStep("wait"), meeting, position, state)
-            barrier = SyncStep("barrier", self.barrier_mesh(meeting))
-            state = self.plan(barrier, meeting, position, state)
+                    state = self.plan(SyncStep("commit", group=group), meeting, position, state)
+                state = self.plan(SyncStep("wait", group=group), meeting, position, state)
+            if access.register is None:
+                if use.effect.proxy == "async" and access.proxy == "generic":
+                    state = self.plan(SyncStep("proxy_fence"), meeting, position, state)
+                barrier = SyncStep("barrier", self.barrier_mesh(meeting))
+                state = self.plan(barrier, meeting, position, state)
             same = (access.position, access.write, access.meshes, seq)
             if any(
                 (other.position, other.write, other.meshes, later) == same
-                and self.conflicts(other, write, spans, threads, meshes)
+                and self.conflicts(other, use, meshes)
                 for other, later in state
             ):
                 raise AnalysisError(
@@ -492,19 +605,58 @@ class _Planner:
                     f"{self.actions[access.position].name}"
                 )
 
-    def conflicts(self, access, write, spans, threads, meshes) -> bool:
-        """Whether this access must follow *access* across threads or its completion.
+    def conflicts(self, access, use: _Use, meshes) -> bool:
+        """Whether *use* must follow *access*.
 
-        A completed access whose bytes the same threads touched, by the same layout,
-        is behind this one in each thread's own program order.
+        A register still in flight in a group takes no other access before the
+        group's wait (PTX wgmma.wait_group); later effects of the same group only
+        conflict when one writes and their chains differ. A completed access
+        whose bytes the same threads touched, by the same layout, is behind *use*
+        in each thread's own program order.
         """
-        if not (write or access.write):
+        if use.register is not None or access.register is not None:
+            if use.register != access.register or access.state == _DONE:
+                return False
+            if access.group is None or use.effect.group != access.group:
+                return True
+            chained = use.effect.chain is not None and use.effect.chain == access.chain
+            return (use.effect.write or access.write) and not chained
+        if not (use.effect.write or access.write):
             return False
-        if not any(_overlap(a, b) for a in spans for b in access.spans):
+        if not any(_overlap(a, b) for a in use.spans for b in access.spans):
             return False
-        if threads is not None and threads == access.threads and access.state == _DONE:
+        if use.threads is not None and use.threads == access.threads and access.state == _DONE:
             return False
-        return not any(meshes[: len(tag)] == tag for tag in access.ordered)
+        visible = use.effect.proxy == "generic" or access.proxy != "generic"
+        return not any(
+            meshes[: len(tag)] == tag and (visible or published)
+            for tag, published in access.ordered
+        )
+
+    def group_fence(self, action: _Action, scope, state):
+        """Plan the group's fence before an action whose registers were touched since the last.
+
+        An action reading registers no chain links to takes the fence before each issue.
+        """
+        fenced = [use for use in action.uses if use.register is not None and use.effect.fence]
+        if not fenced:
+            return state
+        every = any(use.effect.chain is None for use in fenced)
+
+        def needed(use) -> bool:
+            seen = [access for access, _seq in state if access.register == use.register]
+            return not seen or any(
+                not access.group_fenced and access.chain != use.effect.chain for access in seen
+            )
+
+        if not every and not any(needed(use) for use in fenced):
+            return state
+        step = SyncStep("fence", group=fenced[0].effect.group)
+        placed = self.issues if every else self.planned
+        steps = placed.setdefault(action.position, [])
+        if step not in steps:
+            steps.append(step)
+        return self.effect(step, scope, state, self.entered[action.position], action)
 
     def meeting(self, earlier, later):
         """The scope both positions sit in, and the child of it that holds *later*."""
@@ -520,9 +672,9 @@ class _Planner:
 
     def plan(self, step: SyncStep, scope, position, state):
         planned = self.planned.setdefault(position, [])
-        if all(existing.kind != step.kind for existing in planned):
+        if step not in planned:
             planned.append(step)
-            planned.sort(key=lambda item: ("commit", "wait", "barrier").index(item.kind))
+            planned.sort(key=lambda item: (_ORDER.index(item.kind), item.group or ""))
         return self.effect(step, scope, state, self.entered[position])
 
     def barrier_mesh(self, scope) -> Mesh:
@@ -530,16 +682,42 @@ class _Planner:
 
         It is the mesh of the innermost ``MeshRegion`` around *scope*.
         """
-        mesh = next(
-            (node.owner.mesh for node in scope.ancestors() if isinstance(node.owner, MeshRegion)),
-            None,
-        )
+        mesh = _region_mesh(scope)
         try:
             barrier = None if mesh is None else classify(mesh)
         except VerifyError as error:
             raise AnalysisError(f"sync: {error}") from None
         if barrier is None or barrier is SyncBarrier.GRID:
             raise AnalysisError("sync: a barrier is needed in a scope that no thread mesh binds")
+        self.uniform_loops(scope, mesh, "a barrier")
+        return mesh
+
+    def collective(self, scope, unit: Mesh, threads: Mesh | None) -> None:
+        """Require whole *unit*s of threads, *threads* among them, to reach *scope* together."""
+        mesh = _region_mesh(scope)
+        if mesh is None:
+            raise AnalysisError(
+                "sync: a collective step is needed in a scope that no thread mesh binds"
+            )
+        try:
+            size = participation(unit).count
+            held, needed = participation(mesh), participation(threads or mesh)
+            whole = whole_groups(mesh, size)
+        except VerifyError as error:
+            raise AnalysisError(f"sync: {error}") from None
+        if not whole:
+            raise AnalysisError(
+                f"sync: a collective step is needed over {held.count} threads from {held.base}, "
+                f"which are not whole groups of {size}"
+            )
+        if needed.base < held.base or needed.base + needed.count > held.base + held.count:
+            raise AnalysisError(
+                "sync: a collective step is needed outside the threads that issued it"
+            )
+        self.uniform_loops(scope, mesh, "a collective step")
+
+    def uniform_loops(self, scope, mesh: Mesh, what: str) -> None:
+        """Require every loop around *scope* to have bounds all threads of *mesh* agree on."""
         spanned = {topology.name for topology in mesh.topologies}
         entry = self.context.entry is None or self.function is self.context.entry
         uniform = {id(param) for param in self.function.params} if entry else set()
@@ -550,11 +728,10 @@ class _Planner:
             bounds = (loop.start, loop.extent, loop.step)
             if not all(self.uniform(bound, uniform, spanned, node) for bound in bounds):
                 raise AnalysisError(
-                    f"sync: a barrier is needed inside loop {loop.induction_var.name!r}, "
+                    f"sync: {what} is needed inside loop {loop.induction_var.name!r}, "
                     "whose bounds may differ between the threads that must reach it"
                 )
             uniform.add(id(loop.induction_var))
-        return mesh
 
     def uniform(self, expr, uniform: set[int], spanned: set[str], scope) -> bool:
         """Whether every thread of a barrier's mesh sees the same value of a loop bound."""
@@ -570,24 +747,46 @@ class _Planner:
             return all(self.uniform(arg, uniform, spanned, scope) for arg in expr.args)
         return False
 
-    def effect(self, step: SyncStep, scope, state, limit):
+    def effect(self, step: SyncStep, scope, state, limit, action=None):
         meshes = _mesh_chain(scope)
+        registers = (
+            {use.register for use in action.uses if use.register is not None}
+            if step.kind == "fence" and action is not None
+            else set()
+        )
         out = set()
         for access, seq in state:
             issued = seq < limit and access.meshes[: len(meshes)] == meshes
-            if issued and step.kind == "commit" and access.state != _DONE:
-                access = replace(access, state=0 if access.state == _UNCOMMITTED else access.state)
-            elif issued and step.kind == "wait" and access.state >= 0:
+            grouped = access.group == step.group
+            if issued and step.kind == "commit" and grouped and access.state == _UNCOMMITTED:
+                access = replace(access, state=0)
+            elif issued and step.kind == "wait" and grouped and access.state >= 0:
                 access = replace(access, state=_DONE)
+            elif issued and step.kind == "proxy_fence" and access.state == _DONE:
+                access = replace(access, fenced=True)
             elif issued and step.kind == "barrier" and access.state == _DONE:
-                access = replace(access, ordered=access.ordered | {meshes})
+                access = replace(access, ordered=access.ordered | {(meshes, access.fenced)})
+            elif step.kind == "fence" and seq < limit and access.register in registers:
+                access = replace(access, group_fenced=True)
             out.add((access, seq))
         return frozenset(out)
 
 
 def analyze_sync(function: Function, context: AnalyzeContext) -> None:
-    """Attach the synchronisation plan lowering emits for *function*."""
-    _Planner(function, context).run()
+    """Attach the synchronisation plan lowering emits for *function*.
+
+    An asynchronous action one of whose steps has no place completes right after
+    it issues instead, and the Function is planned again.
+    """
+    in_place: frozenset = frozenset()
+    while True:
+        try:
+            _Planner(function, context, in_place).run()
+            return
+        except _Unplaced as unplaced:
+            if unplaced.position in in_place:
+                raise AnalysisError(f"sync: {unplaced}") from None
+            in_place |= {unplaced.position}
 
 
 __all__ = [
