@@ -18,6 +18,20 @@ Each configuration performs two training steps on changing batches, checks logit
 | `model.py` | Explicit forward/backward HIR and parameter residency policies |
 | `reference.py` | Dense embedding, PyTorch SDPA/autograd, and optimizer oracle |
 | `run.py` | Correctness checks and reports derived from existing HIR facts |
+| `visualize.py` / `ownership.html` | Ownership trace exporter and its standalone interactive view |
+
+## Explore tensor ownership
+
+```bash
+python -m examples.fsdp_training.visualize --output /tmp/hsdp-ownership.html
+python -m examples.fsdp_training.visualize --participants 2 --replicas 1 --retain --output /tmp/fsdp-ownership.html
+```
+
+Open the generated HTML in a browser; it requires no server or external assets. The default is the four-participant, release-policy HSDP example. Choose any of the fourteen parameters to inspect its input, weight reshards, gradient reductions, and next optimizer state. The gradient is a distinct HIR value, not a mutation of the weight. Choose **All model tensor values** to inspect activations and other intermediates; the dependency links navigate to an operation's inputs and uses. Previous/next follows the selected inspection list, not a runtime schedule.
+
+Each participant's band shows exact ownership ranges in the flattened global tensor. Displayed `Split` indices refer to logical tensor axes. `Partial` states are labeled separately because identical index coverage does not mean equal values. A `Reshard` reports the changed mesh axis and exact logical participant groups. Expand **Logical projection and physical storage** to compare local shape, logical offset, and storage offset in elements. The current head-weight input uses a dense address map: participant `(0, 1)` has logical and storage offsets of 256. A compact private address map could instead give storage offset zero without changing logical ownership; the explorer reports the map actually authored in the HIR. Local bytes describe one typed tensor value, not total memory or an allocation/lifetime estimate.
+
+The exporter checks HIR types but does not execute training, prove replica equality, or run device communication. `trace_function()` follows reached function calls, mesh regions, and tuple leaves by SSA identity, keeping repeated calls separate; scalar literals are omitted from dependency navigation. `describe_tensor()` reuses `project_domain`, `logical_projection`, and the same logical selection as reference execution; applying that projection to the authored address map supplies physical offsets. Index tags describe coverage only and are never interpreted as numerical `Partial` contributions. Only `training_trace()` knows this model's parameter names and input/output signature. It adds convenient traces by following dependency edges and reading inferred types. The view supports the example's concrete, even-shard GPU meshes; loops and other region kinds are rejected explicitly. Plain layouts receive no invented holder mesh.
 
 ## Model and training contract
 
