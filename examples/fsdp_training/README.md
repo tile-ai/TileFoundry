@@ -18,20 +18,41 @@ Each configuration performs two training steps on changing batches, checks logit
 | `model.py` | Explicit forward/backward HIR and parameter residency policies |
 | `reference.py` | Dense embedding, PyTorch SDPA/autograd, and optimizer oracle |
 | `run.py` | Correctness checks and reports derived from existing HIR facts |
-| `visualize.py` / `ownership.html` | Ownership trace exporter and its standalone interactive view |
+| `visualize.py` / `ownership_svg.py` | HIR ownership trace and reusable SVG renderer |
 
 ## Explore tensor ownership
 
+The diagrams use numbered cells and colored row tiles, inspired by [CuTe's layout algebra illustrations](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/cute/02_layout_algebra.html). Each number is a global element index, not a tensor value. The participant miniatures show the same logical window; the local tensor keeps those global labels so the mapping can be followed directly.
+
+The checked-in SVGs below are generated from the first block's Q-weight gradient on a **4 × 4 HSDP mesh**. They follow element 64 and participant `(0, 1)` through three existing HIR values. Filled dots identify every holder of that element, a solid frame identifies the selected participant, and dashed frames identify its collective group. Hatching means the held values still need reduction.
+
+**Local backward contributions — sixteen distinct contributions cover the same indices.**
+
+![4 by 4 HSDP gradient contributions](figures/block1-q-partial.svg)
+
+**Reduce-scatter — each row resolves the shard axis. Four replica-axis contributions remain for element 64.**
+
+![4 by 4 HSDP ownership after reduce-scatter](figures/block1-q-reduce-scatter.svg)
+
+**All-reduce — each column resolves the replica axis. The four holders now declare replicas of the completed sum.**
+
+![4 by 4 HSDP ownership after all-reduce](figures/block1-q-all-reduce.svg)
+
+The following scalar operation divides the sum by 16 to produce the global-mean gradient. The diagrams show logical grouping; mesh rows are not assignments to physical nodes.
+
+Reproduce these resolution-independent SVGs from the repository root:
+
 ```bash
-python -m examples.fsdp_training.visualize --output /tmp/hsdp-ownership.html
-python -m examples.fsdp_training.visualize --participants 2 --replicas 1 --retain --output /tmp/fsdp-ownership.html
+python -m examples.fsdp_training.visualize --output-dir examples/fsdp_training/figures
+python -m examples.fsdp_training.visualize --tensor head --stages parameter gather gradient updated --output-dir /tmp/head-ownership
+python -m examples.fsdp_training.visualize --participants 2 --replicas 1 --retain --output-dir /tmp/fsdp-ownership
 ```
 
-Open the generated HTML in a browser; it requires no server or external assets. The default is the four-participant, release-policy HSDP example. Choose any of the fourteen parameters to inspect its input, weight reshards, gradient reductions, and next optimizer state. The gradient is a distinct HIR value, not a mutation of the weight. Choose **All model tensor values** to inspect activations and other intermediates; the dependency links navigate to an operation's inputs and uses. Previous/next follows the selected inspection list, not a runtime schedule.
+Use `--tensor` for any of the fourteen parameters, `--element` and `--participant` to choose the highlighted mapping, or `--list-values` followed by `--value ID` to render activations and other intermediates. The available named stages are `parameter`, `gather`, `partial`, `reduce-scatter`, `all-reduce`, `gradient`, `momentum` and `updated`; the collective stages depend on the mesh. Large tensors use explicitly labeled windows with every displayed cell preserved, and the local view shows up to four rows. Colors identify logical row tiles and remain stable across stages. `Partial` and `Broadcast` may cover identical indices while representing different value states.
 
-Each participant's band shows exact ownership ranges in the flattened global tensor. Displayed `Split` indices refer to logical tensor axes. `Partial` states are labeled separately because identical index coverage does not mean equal values. A `Reshard` reports the changed mesh axis and exact logical participant groups. Expand **Logical projection and physical storage** to compare local shape, logical offset, and storage offset in elements. The current head-weight input uses a dense address map: participant `(0, 1)` has logical and storage offsets of 256. A compact private address map could instead give storage offset zero without changing logical ownership; the explorer reports the map actually authored in the HIR. Local bytes describe one typed tensor value, not total memory or an allocation/lifetime estimate.
+The exporter checks HIR types without executing numerical training or device communication. `trace_function()` follows reached calls, mesh regions and tuple leaves by SSA identity; scalar literals are omitted. `describe_tensor()` reuses logical projection to obtain coverage and the coordinate map, then applies the projection to the authored address map for storage offsets. `ownership_svg.render_svg()` draws any tensor value from that trace using the standard library and existing layout helpers. Only `training_trace()` knows the model's parameter names and input/output signature. No HTML template, browser runtime or plotting dependency is needed to generate the SVGs.
 
-The exporter checks HIR types but does not execute training, prove replica equality, or run device communication. `trace_function()` follows reached function calls, mesh regions, and tuple leaves by SSA identity, keeping repeated calls separate; scalar literals are omitted from dependency navigation. `describe_tensor()` reuses `project_domain`, `logical_projection`, and the same logical selection as reference execution; applying that projection to the authored address map supplies physical offsets. Index tags describe coverage only and are never interpreted as numerical `Partial` contributions. Only `training_trace()` knows this model's parameter names and input/output signature. It adds convenient traces by following dependency edges and reading inferred types. The view supports the example's concrete, even-shard GPU meshes; loops and other region kinds are rejected explicitly. Plain layouts receive no invented holder mesh.
+Logical and storage offsets are shown separately. Their equality in an authored dense map does not make them the same concept: changing to compact private storage can change the storage offset while preserving logical ownership. Loops and unsupported region kinds are rejected, and plain layouts receive no invented holder mesh.
 
 ## Model and training contract
 
@@ -42,7 +63,7 @@ tokens -> embedding -> block 1 -> block 2 -> RMSNorm -> vocabulary head -> cross
 block  -> RMSNorm -> causal GQA -> residual -> RMSNorm -> ReLU² MLP -> residual
 ```
 
-The fixed FP32 configuration has batch 8, sequence length 8, width 16, four query heads, two KV heads, head width 4, MLP width 64, and vocabulary 32. RMSNorm is affine-free, projections have no bias, embedding and head are untied, and there is no dropout. Random nonzero initialization makes every parameter's gradient nonzero on the first step. This avoids a zero output projection concealing an incorrect backward path.
+The baseline FP32 configuration has batch 8 (16 for the 4 × 4 HSDP case), sequence length 8, width 16, four query heads, two KV heads, head width 4, MLP width 64, and vocabulary 32. RMSNorm is affine-free, projections have no bias, embedding and head are untied, and there is no dropout. Random nonzero initialization makes every parameter's gradient nonzero on the first step. This avoids a zero output projection concealing an incorrect backward path.
 
 HIR represents the tiny embedding lookup as one-hot matrix multiplication; the reference uses `torch.nn.functional.embedding`. Fixed rotation matrices express RoPE in HIR, while the reference rotates adjacent coordinate pairs. HIR broadcasts K/V over a separate query-group dimension; the reference repeats KV heads before SDPA. These are equivalent small-workload representations, not production embedding or attention kernels.
 
@@ -141,8 +162,14 @@ The mesh describes logical participant groups. A deployment could bind each row 
 
 A separate local check with real PyTorch HSDP on four sm90 GPUs passed two updates for both policies. It used a `(2, 2)` DeviceMesh and verified `Replicate(), Shard(0)` parameter and momentum placements, local shard contents, gradients, logits, and loss. The largest differences were `7.5e-7` for logits, `4.2e-7` for gradients/momentum, and `1.5e-8` for parameters. All four devices were on one host: this validates subgroup numerical behavior, not inter-node transport or HIR-generated distributed execution. The extra hardware comparison remains local; the repository keeps the semantic tests and runnable reference study.
 
+## 4 × 4 HSDP
+
+The larger logical mesh uses four replica groups and four shards per group. Its batch is 16, giving every participant one complete sequence of length 8; all parameter shapes stay the same. The original 1/2/4-participant studies retain batch 8 and their table values. Run `python -m examples.fsdp_training.run --participants 16 --replicas 4` for numerical checks and analysis of both residency policies.
+
+Both 4 × 4 policies passed two updates against the independent dense reference on CPU, including every parameter gradient and momentum update. Maximum absolute differences were `5.1e-7` for logits, `4.8e-7` for loss, `7.5e-8` for gradients/momentum and `1.5e-8` for parameters. These are sixteen simulated HIR participants; no sixteen-GPU execution or inter-node transport is claimed.
+
 ## Scope
 
-This models minimal FSDP2-style training semantics using existing mesh placements, including a 2 × 2 HSDP configuration. It supports a single GPU topology level, even shards, and concrete shapes. GQA supplies the workload; the parallelism demonstrated here is data parallel training with sharded parameters, gradients and optimizer state. Muon, mixed precision, accumulation, offload, prefetch/overlap, uneven shards, TP/CP, inference and distributed CUDA code generation remain follow-ups.
+This models minimal FSDP2-style training semantics using existing mesh placements, including 2 × 2 and 4 × 4 HSDP configurations. It supports a single GPU topology level, even shards, and concrete shapes. GQA supplies the workload; the parallelism demonstrated here is data parallel training with sharded parameters, gradients and optimizer state. Muon, mixed precision, accumulation, offload, prefetch/overlap, uneven shards, TP/CP, inference and distributed CUDA code generation remain follow-ups.
 
 Small ownership, reduction and lifetime regressions live under `tests/core`; CI includes an FSDP and an HSDP transformer smoke case for each policy. The runner supplies the broader residency study. See [the HIR training tutorial](../../docs/tutorial/fsdp-training.md) for the evaluator contract and related upstream discussions.

@@ -1,9 +1,8 @@
-"""Export a standalone ownership explorer from the checked training HIR."""
+"""Render SVG ownership diagrams from the checked training HIR."""
 
 from __future__ import annotations
 
 import argparse
-import json
 from itertools import product
 from math import prod
 from pathlib import Path
@@ -23,7 +22,8 @@ from tilefoundry.ir.types.shard_projection import axis_layout, logical_projectio
 from tilefoundry.ir.types.utils import leaf_span, leaves_of
 from tilefoundry.runtime.tensor import logical_local_view
 
-from .model import PARAMETER_NAMES, training_program
+from .model import PARAMETER_NAMES, SUPPORTED_MESHES, T, training_program
+from .ownership_svg import render_svg
 from .run import _transition
 
 
@@ -35,7 +35,7 @@ def describe_tensor(held):
     """
     shape = tuple(held.shape)
     shard = shard_layout_of(held.layout)
-    result = {"shape": shape, "dtype": str(held.dtype), "storage": str(held.storage),
+    result = {"shape": shape, "dtype": held.dtype.name, "storage": str(held.storage),
               "elements": prod(shape), "mesh": [], "axes": [], "attrs": [],
               "pending": [], "participants": [], "address_map": str(held.layout)}
     if shard is None:
@@ -65,6 +65,7 @@ def describe_tensor(held):
             "bytes": prod(projection.local_shape) * held.dtype.bit_width // 8,
             "logical_offset": int(logical_offset), "logical_strides": str(logical.strides),
             "physical_offset": int(physical_offset), "physical_map": str(physical),
+            "index_map": {"shape": logical.shape, "strides": logical.strides},
         })
     return result
 
@@ -140,7 +141,7 @@ def trace_function(function):
             "outputs": outputs}
 
 
-def training_trace(participants=4, *, replicas=2, retain=False):
+def training_trace(participants=16, *, replicas=4, retain=False):
     """Add model-specific parameter/output labels to the reusable HIR trace."""
     program = training_program(participants, replicas=replicas, retain=retain)
     _, function = check_program(program, program.entry_function())
@@ -170,46 +171,77 @@ def training_trace(participants=4, *, replicas=2, retain=False):
         stages += [{"node": report["outputs"][2 + 2 * count + index], "label": "Next momentum"},
                    {"node": report["outputs"][2 + count + index], "label": "Next parameter"}]
         traces.append({"name": name, "stages": stages})
-    report.update(traces=traces, participants=participants, replicas=replicas, policy="retain" if retain else "release")
+    report.update(traces=traces, participants=participants, replicas=replicas,
+                  batch=int(function.params[0].type.shape[0]) // T,
+                  policy="retain" if retain else "release")
     return report
 
 
-def render_html(report, *, fragment=False):
-    """Embed the report without external assets, a server, or model execution."""
-    template = Path(__file__).with_name("ownership.html").read_text()
-    payload = json.dumps(report, separators=(",", ":")).replace("<", "\\u003c")
-    content = template.replace("__OWNERSHIP_DATA__", payload)
-    if fragment:
-        return content
-    standalone = """<style>
-      :root { color-scheme: light dark; --foreground: light-dark(#222,#eee);
-        --muted: light-dark(#e9e9e9,#333); --blue: light-dark(#2672bb,#75b8fa);
-        --orange: light-dark(#aa671c,#e5ad64); --font-size-base: 14px; }
-      body { font: 14px/1.5 system-ui,sans-serif; max-width: 900px; margin: 32px auto; padding: 0 20px; }
-      h2,h3 { font-weight: 500; margin: 0; } h2 { font-size: 22px; } h3 { font-size: 15px; }
-      .text-small { font-size: 12px; } .viz-row,.viz-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-      .form-label { display: grid; flex: 1; min-width: 0; gap: 4px; }
-      select,button { font: inherit; padding: 7px; } select { width: 100%; }
-      .table { width: 100%; border-collapse: collapse; } th,td { text-align: left; padding: 8px; border-bottom: 1px solid var(--muted); }
-      .table-responsive { overflow-x: auto; } summary { cursor: pointer; }
-      @media(max-width:460px) { .viz-controls { flex-direction: column; align-items: stretch; } }
-    </style>"""
-    return '<!doctype html>\n<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tensor ownership</title>' + standalone + '<body>\n' + content + '\n</body></html>\n'
+def stage_nodes(report, trace):
+    """Name existing HIR values; gradient stages remain separate from weights."""
+    nodes = report["nodes"]
+    gradient = [stage["node"] for stage in trace["stages"] if stage["label"].startswith("Gradient")]
+    result = {"parameter": trace["stages"][0]["node"], "partial": gradient[0],
+              "gradient": gradient[-1], "momentum": trace["stages"][-2]["node"],
+              "updated": trace["stages"][-1]["node"]}
+    for stage in trace["stages"]:
+        node = nodes[stage["node"]]
+        if stage["label"].startswith("Weight Reshard"):
+            result.setdefault("gather", node["id"])
+        kind = node.get("collective", {}).get("kind")
+        if kind in ("reduce_scatter", "all_reduce"):
+            result[kind.replace("_", "-")] = node["id"]
+    return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--participants", type=int, choices=(1, 2, 4), default=4)
-    parser.add_argument("--replicas", type=int, choices=(1, 2), default=2)
+    parser.add_argument("--participants", type=int, choices=(1, 2, 4, 16), default=16)
+    parser.add_argument("--replicas", type=int, choices=(1, 2, 4), default=4)
     parser.add_argument("--retain", action="store_true")
-    parser.add_argument("--output", type=Path, default=Path("ownership.html"))
+    parser.add_argument("--tensor", choices=PARAMETER_NAMES, default="block1.q")
+    parser.add_argument("--stages", nargs="+", choices=("parameter", "gather", "partial", "reduce-scatter", "all-reduce", "gradient", "momentum", "updated"))
+    parser.add_argument("--value", type=int, help="render an arbitrary tensor value by its HIR trace ID")
+    parser.add_argument("--list-values", action="store_true", help="list IDs for model activations and intermediates")
+    parser.add_argument("--element", type=int, help="highlight this flattened global element")
+    parser.add_argument("--participant", type=int, help="select this logical participant in coordinate order")
+    parser.add_argument("--output-dir", type=Path, default=Path("/tmp/fsdp-ownership"))
     args = parser.parse_args()
-    if args.replicas == 2 and args.participants != 4:
-        parser.error("--replicas 2 requires --participants 4; use --replicas 1 for FSDP")
+    if (args.participants, args.replicas) not in SUPPORTED_MESHES:
+        parser.error(f"supported (participants, replicas): {SUPPORTED_MESHES}")
     report = training_trace(args.participants, replicas=args.replicas, retain=args.retain)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(render_html(report))
-    print(f"Wrote {args.output}: {len(report['nodes'])} tensor values, {len(report['traces'])} parameter traces")
+    if args.list_values:
+        for node in report["nodes"]:
+            print(f"{node['id']:3}  {node['name']}  {node['op']}  {node['scope']}")
+        return
+    if args.value is not None:
+        if not 0 <= args.value < len(report["nodes"]):
+            parser.error("--value is outside the tensor trace")
+        selected = {f"value-{args.value}": args.value}
+        name, element = "model", args.element
+    else:
+        trace = next(trace for trace in report["traces"] if trace["name"] == args.tensor)
+        available = stage_nodes(report, trace)
+        stages = args.stages or [s for s in ("partial", "reduce-scatter", "all-reduce") if s in available]
+        if any(stage not in available for stage in stages):
+            parser.error(f"available stages for this configuration: {tuple(available)}")
+        selected = {stage: available[stage] for stage in stages}
+        name = args.tensor.replace(".", "-")
+        source = report["views"][report["nodes"][available["parameter"]]["view"]]["participants"]
+        participant = min(1, len(source) - 1) if args.participant is None else args.participant
+        if not 0 <= participant < len(source):
+            parser.error("--participant is outside the logical mesh")
+        element = args.element if args.element is not None else source[participant]["runs"][0][0]
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    for stage, node_id in selected.items():
+        try:
+            diagram = render_svg(report, node_id, element=element, participant=args.participant,
+                                 title=f"{args.tensor if args.value is None else 'Model tensor'} · {stage}")
+        except ValueError as error:
+            parser.error(str(error))
+        path = args.output_dir / f"{name}-{stage}.svg"
+        path.write_text(diagram)
+        print(path)
 
 
 if __name__ == "__main__":
