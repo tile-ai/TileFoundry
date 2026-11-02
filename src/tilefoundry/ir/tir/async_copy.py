@@ -28,6 +28,7 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.completion import Completion, register_completion
 
 ASYNC_WIDTHS = (4, 8, 16)
 
@@ -132,6 +133,9 @@ class CopyAsync(Op):
 @register_typeinfer(CopyAsync)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
+
+register_completion(CopyAsync, Completion.CP_ASYNC_GROUP)
 
 
 @register_access_relation(CopyAsync)

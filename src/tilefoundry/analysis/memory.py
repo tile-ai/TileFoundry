@@ -864,8 +864,25 @@ def _memory_findings(peaks, footprint, reuse, cache, wave):
     return errors, advisories
 
 
+def owned_bytes(summary: AllocationSummaryMetadata, leaf: SSAValue) -> tuple[int, int] | None:
+    """The shared memory bytes *leaf*'s allocation owns, as the memory family placed them.
+
+    Every stage's offset with the stage size, all stages together; a Tuple
+    result records no stage size, so the leaf's own size stands for it. None
+    when the allocation has no placed offset.
+    """
+    root = summary.root(leaf)
+    placed = get_metadata(root.value.expr, MemoryMetadata)
+    offsets = () if placed is None else placed.offsets
+    if not offsets:
+        return None
+    size = root.lifetime.bytes if placed.buffer_bytes is None else placed.buffer_bytes
+    return min(offsets), max(offsets) + size
+
+
 __all__ = [
     "MemoryOptions",
     "SELECTOR",
     "analyze_memory",
+    "owned_bytes",
 ]

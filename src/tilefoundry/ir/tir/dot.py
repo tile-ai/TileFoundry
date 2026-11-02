@@ -26,6 +26,7 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.completion import Completion, register_completion
 
 __all__ = ["Dot"]
 
@@ -97,6 +98,9 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
             "that post a partial are the ones lhs's mesh names; lhs must "
             "carry a ShardLayout",
         )
+
+
+register_completion(Dot, Completion.ON_RETURN)
 
 
 @register_access_relation(Dot)

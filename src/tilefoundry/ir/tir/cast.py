@@ -19,6 +19,7 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.completion import Completion, register_completion
 
 _EXECUTION_MESH = utils.thread_execution_mesh()
 _IN_RMEM = utils.tensor_in(StorageKind.RMEM, _EXECUTION_MESH)
@@ -56,3 +57,4 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 register_access_relation(Cast)(identity_relations)
+register_completion(Cast, Completion.ON_RETURN)
