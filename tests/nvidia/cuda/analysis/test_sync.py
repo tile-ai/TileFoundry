@@ -12,14 +12,13 @@ from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.analysis import AnalysisError
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.liveness import LivenessMetadata
-from tilefoundry.analysis.sync import SyncPlanMetadata, event_of, region_position
+from tilefoundry.analysis.sync import SyncMetadata, SyncPlanMetadata
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.tir.sync import SyncBarrier
+from tilefoundry.ir.types import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -27,10 +26,20 @@ GEMM = FIXTURES / "schedule/hir/sm89_e4m3_gemm.py"
 
 
 def _planned(module):
-    """The analysed Function, its plan and its liveness record."""
+    """The analysed Function, and each node with the steps the family attached to it."""
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory", "sync"))
     function = result.function
-    return function, get_metadata(function, SyncPlanMetadata), get_metadata(function, LivenessMetadata)
+    assert get_metadata(function, SyncPlanMetadata) is not None
+    attached = {
+        id(expr): (expr, record.steps)
+        for expr in collect_exprs(function.body)
+        if (record := get_metadata(expr, SyncMetadata)) is not None
+    }
+    return function, list(attached.values())
+
+
+def _kinds(steps):
+    return tuple(step.kind for step in steps)
 
 
 def _of_kind(owner, kind):
@@ -59,24 +68,22 @@ class CpAsyncGemm(SyncCase):
     path: Path = GEMM
 
     def guard(self, state, problems):
-        function, plan, liveness = _planned(state)
-        issued = {
-            (event_of(liveness, call), 0): type(call.target.op).__name__
-            for call in _of_kind(function, Call)
-            if isinstance(call.target, ScheduleOp)
-        }
+        function, attached = _planned(state)
         assert [
-            (issued.get(position), tuple(step.kind for step in steps))
-            for position, steps in plan.steps
+            (type(owner.target.op).__name__, tag, _kinds(steps))
+            for owner, tagged in attached
+            for tag, steps in tagged
         ] == [
-            ("CopyAsync", ("barrier",)),
-            ("Copy", ("commit", "wait", "barrier")),
-            ("CopyAsync", ("barrier",)),
-            ("Copy", ("commit", "wait", "barrier")),
+            ("CopyAsync", None, ("barrier",)),
+            ("Copy", None, ("commit", "wait", "barrier")),
+            ("CopyAsync", None, ("barrier",)),
+            ("Copy", None, ("commit", "wait", "barrier")),
         ]
         (threads,) = _thread_regions(function)
-        meshes = {step.mesh for _position, steps in plan.steps for step in steps if step.mesh}
-        assert meshes == {threads.mesh}
+        meshes = {
+            step.mesh for _owner, tagged in attached for _tag, steps in tagged for step in steps
+        }
+        assert meshes - {None} == {threads.mesh}
 
 
 @case
@@ -86,17 +93,29 @@ class NestedSubsets(SyncCase):
     path: Path = FIXTURES / "analysis/sync_nested_subsets.py"
 
     def guard(self, state, problems):
-        function, plan, liveness = _planned(state)
-        (inner_at, (inner,)), (between_at, (between,)) = plan.steps
-        assert (inner.kind, between.kind) == ("barrier", "barrier")
-        threads, producer, consumer = sorted(
-            _thread_regions(function), key=lambda region: region_position(liveness, region)
-        )
-        assert region_position(liveness, consumer) == between_at
-        assert (inner.mesh, between.mesh) == (producer.mesh, threads.mesh)
+        function, attached = _planned(state)
+        regions = _thread_regions(function)
+        (threads,) = [region for region in regions if _of_kind(region, MeshRegion)]
+        halves = [region for region in regions if region is not threads]
+        (producer,) = [
+            region
+            for region in halves
+            if any(
+                getattr(call.type, "storage", None) is StorageKind.SMEM
+                for call in _of_kind(region, Call)
+            )
+        ]
+        (consumer,) = [region for region in halves if region is not producer]
         (loop,) = _of_kind(producer, LoopRegion)
-        start, backedge = liveness.loop_windows[id(loop)]
-        assert start < inner_at[0] <= backedge
+        by_owner = {id(owner): tagged for owner, tagged in attached}
+        ((between_tag, (between,)),) = by_owner.pop(id(consumer))
+        ((owner, ((inner_tag, (inner,)),)),) = [
+            (owner, tagged) for owner, tagged in attached if id(owner) in by_owner
+        ]
+        assert (between_tag, inner_tag) == (None, None)
+        assert (inner.kind, between.kind) == ("barrier", "barrier")
+        assert (inner.mesh, between.mesh) == (producer.mesh, threads.mesh)
+        assert any(owner is expr for expr in collect_exprs(loop.body))
 
 
 @case
@@ -106,9 +125,9 @@ class CapturedInsertUpdate(SyncCase):
     path: Path = FIXTURES / "schedule/hir/captured_insert_update.py"
 
     def guard(self, state, problems):
-        function, plan, liveness = _planned(state)
+        function, _attached = _planned(state)
         (loop,) = _of_kind(function, LoopRegion)
-        assert [step.kind for step in plan.at(region_position(liveness, loop))] == ["barrier"]
+        assert _kinds(get_metadata(loop, SyncMetadata).at()) == ("barrier",)
 
 
 @case
@@ -119,19 +138,37 @@ class PlainNestedCalls(SyncCase):
     name: str | None = "Plain"
 
     def guard(self, state, problems):
-        _function, plan, _liveness = _planned(state)
-        assert plan.steps == ()
+        _function, attached = _planned(state)
+        assert attached == []
 
 
 @case
 class StagedNestedCalls(SyncCase):
-    """The same nesting refuses the call once its innermost leaf holds shared memory."""
+    """Once the innermost leaf holds shared memory, the call is one action touching any bytes.
+
+    Nothing else in the root touches shared memory, so the call needs no step.
+    """
 
     path: Path = FIXTURES / "analysis/sync_nested_calls.py"
     name: str | None = "Staged"
 
     def guard(self, state, problems):
-        with pytest.raises(AnalysisError, match="touches shared memory; call summaries"):
+        _function, attached = _planned(state)
+        assert attached == []
+
+
+@case
+class TwiceNestedCalls(SyncCase):
+    """Two calls whose callees touch shared memory need a barrier between them.
+
+    The calls sit in the CTA region, where no thread mesh can hold that barrier.
+    """
+
+    path: Path = FIXTURES / "analysis/sync_nested_calls.py"
+    name: str | None = "Twice"
+
+    def guard(self, state, problems):
+        with pytest.raises(AnalysisError, match="a scope that no thread mesh binds"):
             _planned(state)
 
 

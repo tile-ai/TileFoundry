@@ -472,8 +472,8 @@ tilefoundry schedule candidates SOURCE PATH [--json] [--dim NAME=EXTENT ...]
 ```
 
 `analyze`, `candidates` and `finalize` share one front end: load the source, bind
-one extent per `--dim`, and check the entry. `finalize` then runs memory analysis
-and writes the lowered Module as canonical TIR source following
+one extent per `--dim`, and check the entry. `finalize` then runs the memory and
+sync analyses and writes the lowered Module as canonical TIR source following
 [passes §7.1](./passes.md#71-converthirtotir), also when it holds a single
 PrimFunction. With `--json`, `PATH` instead
 contains an object whose `source` field is that same canonical TIR. `facts` describes the Op declarations admitted

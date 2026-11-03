@@ -220,7 +220,7 @@ class _RetainedStatements(StmtVisitor[None]):
 
 def _finalized(module):
     authored = module.entry_function()
-    result = analyze(*check_program(module, authored), analysis=("memory",))
+    result = analyze(*check_program(module, authored), analysis=("memory", "sync"))
     return finalize(result)
 
 

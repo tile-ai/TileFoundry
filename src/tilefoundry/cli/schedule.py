@@ -33,7 +33,7 @@ def run_finalize(
 ) -> int:
     """Finalize ``source`` and write the sole requested representation."""
     program = checked_program(source, dims, command="schedule finalize")
-    analyzed = analyze(program.module, program.entry, analysis=("memory",))
+    analyzed = analyze(program.module, program.entry, analysis=("memory", "sync"))
     module = finalize(analyzed)
     rendered = as_script(module)
     text = json.dumps({"source": rendered}, indent=2) if as_json else rendered

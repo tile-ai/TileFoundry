@@ -56,10 +56,11 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir import PrimFunction
+from tilefoundry.ir.tir import CpAsyncCommit, CpAsyncWait, PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import Copy, PtrOf, TensorView
+from tilefoundry.ir.tir.sync import Sync
 from tilefoundry.ir.types import (
     ComposedLayout,
     ShardLayout,
@@ -127,8 +128,6 @@ class Scheduled:
 
 
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
-_TMA_READ = "TiledMma must follow CopyAsyncTensor, whose completion no protocol states"
-_WGMMA_EXIT = "TiledMma may still touch shared memory when 'gemm' returns"
 
 
 def _analysis_metadata(case, result, analysis, metadata_type):
@@ -351,11 +350,11 @@ def _candidates(case, checked):
 
 def _sync(case, checked):
     if case.sync_refusal is None:
-        analyze(*checked, analysis=("sync",))
-        return
+        return analyze(*checked, analysis=("memory", "sync"))
     with pytest.raises(AnalysisError) as refused:
         analyze(*checked, analysis=("sync",))
     assert case.sync_refusal in str(refused.value)
+    return None
 
 
 def _finalize(case, result):
@@ -410,9 +409,11 @@ def _hir(case, problems):
     candidates_report = problems.run("candidates", _candidates, case, checked)
     if case.candidates_refusal is None:
         problems.run("candidate sites", _hir_candidates, candidates_report)
-    problems.run("sync", _sync, case, checked)
-    lowered = problems.run("finalize", _finalize, case, result)
-    if case.finalize_refusal is None:
+    synced = problems.run("sync", _sync, case, checked)
+    lowered = None
+    if case.sync_refusal is None:
+        lowered = problems.run("finalize", _finalize, case, synced)
+    if case.sync_refusal is None and case.finalize_refusal is None:
         printed = problems.run("print TIR", as_script, lowered)
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         problems.run("TIR operands", _tir_checks, lowered, case.path)
@@ -527,9 +528,6 @@ class PhysicalSlots(ScheduleCase):
 @case
 class BulkReduceStore(ScheduleCase):
     path: Path = ROOT / "hir/bulk_reduce_store.py"
-    sync_refusal: str | None = (
-        "CopyReduceAsyncTensor may still touch shared memory when 'gemm' returns"
-    )
     smem_peak: int = 16_384
     candidates_refusal: str | None = "source has no unscheduled candidate site"
 
@@ -585,7 +583,6 @@ class CapturedInsertUpdate(ScheduleCase):
 @case
 class Fp8BlockScaledGemm(ScheduleCase):
     path: Path = ROOT / "hir/fp8_block_scaled_gemm.py"
-    sync_refusal: str | None = _TMA_READ
     smem_peak: int = 65_536
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -628,7 +625,6 @@ class Fp8BlockScaledGemm(ScheduleCase):
 @case
 class GemmRegisterStore(WgmmaPrice):
     path: Path = ROOT / "hir/gemm_8192x17408x5120_register_store.py"
-    sync_refusal: str | None = _TMA_READ
     smem_peak: int = 196_608
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -645,7 +641,6 @@ class GemmRegisterStore(WgmmaPrice):
 @case
 class GemmTmaStore(ScheduleCase):
     path: Path = ROOT / "hir/gemm_8192x17408x5120_tma_store.py"
-    sync_refusal: str | None = _TMA_READ
     smem_peak: int = 212_992
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -793,7 +788,6 @@ class ViewVisitMemo(ScheduleCase):
 @case
 class WgmmaBMnMajorGroupedN64(PhysicalSlots):
     path: Path = ROOT / "hir/wgmma_b_mn_major_grouped_n64.py"
-    sync_refusal: str | None = _WGMMA_EXIT
     smem_peak: int = 18432
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -806,7 +800,6 @@ class WgmmaBMnMajorGroupedN64(PhysicalSlots):
 @case
 class WgmmaBMnMajorWideLbo(PhysicalSlots):
     path: Path = ROOT / "hir/wgmma_b_mn_major_wide_lbo.py"
-    sync_refusal: str | None = _WGMMA_EXIT
     smem_peak: int = 16384
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -819,7 +812,6 @@ class WgmmaBMnMajorWideLbo(PhysicalSlots):
 @case
 class WgmmaBMnMajorWindowUnitMode(PhysicalSlots):
     path: Path = ROOT / "hir/wgmma_b_mn_major_window_unit_mode.py"
-    sync_refusal: str | None = _WGMMA_EXIT
     smem_peak: int = 34_816
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -832,7 +824,6 @@ class WgmmaBMnMajorWindowUnitMode(PhysicalSlots):
 @case
 class WgmmaCastBetweenSchedules(ScheduleCase):
     path: Path = ROOT / "hir/wgmma_cast_between_schedules.py"
-    sync_refusal: str | None = _TMA_READ
     smem_peak: int = 6_144
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -859,7 +850,6 @@ class WgmmaCastBetweenSchedules(ScheduleCase):
 @case
 class WgmmaN16WithinWarpgroupShare(ScheduleCase):
     path: Path = ROOT / "hir/wgmma_n16_within_warpgroup_share.py"
-    sync_refusal: str | None = _TMA_READ
     smem_peak: int = 61_440
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -992,7 +982,6 @@ class WgmmaN16WithinWarpgroupShare(ScheduleCase):
 @case
 class WgmmaRepeatAlongNOrder(WgmmaPrice):
     path: Path = ROOT / "hir/wgmma_repeat_along_n_order.py"
-    sync_refusal: str | None = _TMA_READ
     smem_peak: int = 24_576
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -1009,7 +998,6 @@ class WgmmaRepeatAlongNOrder(WgmmaPrice):
 @case
 class WgmmaRsAFromAccumulator(WgmmaPrice):
     path: Path = ROOT / "hir/wgmma_rs_a_from_accumulator.py"
-    sync_refusal: str | None = _TMA_READ
     smem_peak: int = 5_120
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -1033,7 +1021,6 @@ class WgmmaRsAFromAccumulator(WgmmaPrice):
 @case
 class WgmmaTma3Stage(ScheduleCase):
     path: Path = ROOT / "hir/wgmma_tma_3stage.py"
-    sync_refusal: str | None = _TMA_READ
     smem_peak: int = 13_824
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
@@ -1069,6 +1056,20 @@ class Sm89E4m3Gemm(ScheduleCase):
     candidates_refusal: str | None = "source has no unscheduled candidate site"
 
     def guard(self, state, problems):
+        """In each K slice, a barrier, the copy, commit, wait and a barrier before each read.
+
+        The leading barrier keeps the next slice's copy behind the last read of the same bytes.
+        """
+        function = _RetainedStatements()
+        function.visit(state.lowered.lookup(state.result.function.name).body)
+        (loop,) = function.loops
+        body = _RetainedStatements()
+        body.visit(loop.body)
+        kinds = (Sync, CopyAsync, CpAsyncCommit, CpAsyncWait, Copy, TiledMma)
+        assert [type(op) for op in body.operations if isinstance(op, kinds)] == [
+            Sync, CopyAsync, CpAsyncCommit, CpAsyncWait, Sync, Copy,
+            Sync, CopyAsync, CpAsyncCommit, CpAsyncWait, Sync, Copy, TiledMma,
+        ]
         tilefoundry.compile(state.lowered)
 
 
@@ -1169,7 +1170,6 @@ EXPECTED = {
         smem_peak=128, candidates_refusal="source has no unscheduled candidate site"
     ),
     "hir/persistent_tile_union_count": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=163_840,
         rmem_peaks={
             "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
@@ -1235,7 +1235,6 @@ EXPECTED = {
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/sm80_mma_ldmatrix": dict(
-        sync_refusal="LdMatrix must follow CopyAsyncTensor, whose completion no protocol states",
         smem_peak=1_536,
         rmem_peaks={
             "thread@32:32#0": RmemPeak(512, "16x8 f32 zero accumulator"),
@@ -1250,7 +1249,6 @@ EXPECTED = {
         },
     ),
     "hir/sparse_decode": dict(
-        sync_refusal=_WGMMA_EXIT,
         smem_peak=16_384,
         rmem_peaks={
             "cta@0:1#0": RmemPeak(
@@ -1295,7 +1293,6 @@ EXPECTED = {
         smem_peak=32, candidates_refusal="source has no unscheduled candidate site"
     ),
     "hir/wgmma_a_k_major": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=6_144,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
@@ -1305,7 +1302,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_a_mn_major": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=6_144,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
@@ -1323,7 +1319,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_b_mn_major_one_atom_column_slice": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=49_152,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(16384, "64x64 f32 accumulator; MMA aliases acc"),
@@ -1332,7 +1327,6 @@ EXPECTED = {
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/wgmma_b_mn_major_two_atom_column_slice": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=49_152,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(32768, "64x128 f32 accumulator; MMA aliases acc"),
@@ -1341,7 +1335,6 @@ EXPECTED = {
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/wgmma_b_nk": dict(
-        sync_refusal=_WGMMA_EXIT,
         smem_peak=2_560,
         rmem_peaks={
             "thread@0:128#0": RmemPeak(
@@ -1350,7 +1343,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_cp_async_loads": dict(
-        sync_refusal="CopyAsync must follow TiledMma, whose completion no protocol states",
         smem_peak=6_144,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
@@ -1360,7 +1352,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_cta_grid_4x17": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=13_824,
         rmem_peaks={
             "thread@128:256#0": RmemPeak(8_192, "128x16 f32 zero accumulator"),
@@ -1370,7 +1361,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_explicit_windows": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=6_144,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
@@ -1380,7 +1370,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_k_slices_of_wide_run": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=12_288,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
@@ -1390,7 +1379,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_one_tile_of_larger_output": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=6_144,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
@@ -1400,7 +1388,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_repeat_along_k": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=36_864,
         rmem_peaks={
             "thread@128:256#0": RmemPeak(8_192, "128x16 f32 zero accumulator"),
@@ -1410,7 +1397,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_rs_a_from_smem": dict(
-        sync_refusal="Copy must follow CopyAsyncTensor, whose completion no protocol states",
         smem_peak=6_144,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
@@ -1423,7 +1409,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_swizzled_smem": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=6_144,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
@@ -1433,7 +1418,6 @@ EXPECTED = {
         },
     ),
     "hir/wgmma_two_schedules": dict(
-        sync_refusal=_TMA_READ,
         smem_peak=12_288,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),

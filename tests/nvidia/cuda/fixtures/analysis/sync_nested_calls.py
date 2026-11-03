@@ -1,7 +1,8 @@
 """A root calls a wrapper instance, whose own body calls its inner instance.
 
 The two roots differ only in the inner leaf: ``Plain``'s holds no shared memory,
-``Staged``'s stages its input through shared memory.
+``Staged``'s stages its input through shared memory. ``Twice`` calls the staged
+wrapper twice in a row.
 """
 
 from tilefoundry.dsl import *
@@ -43,7 +44,7 @@ def _staged_leaf():
     return Leaf
 
 
-def _root(Leaf):
+def _wrapper(Leaf):
     @module(entry="run", target=TARGET, topologies=TOPOLOGIES)
     class Wrapper:
         inner = ModuleList(Leaf, 1)
@@ -52,6 +53,28 @@ def _root(Leaf):
         def run(x: Tensor[(32,), "f32"]) -> Tensor[(32,), "f32"]:
             with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
                 return inner[0](x)  # noqa: F821 -- class-body binding
+
+    return Wrapper
+
+
+def _twice(Leaf):
+    Wrapper = _wrapper(Leaf)
+
+    @module(entry="gemm", target=TARGET, topologies=TOPOLOGIES)
+    class Twice:
+        layers = ModuleList(Wrapper, 2)
+
+        @func
+        def gemm(x: Tensor[(32,), "f32"]) -> Tensor[(32,), "f32"]:
+            with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
+                first = layers[0](x)  # noqa: F821 -- class-body binding
+                return layers[1](first)  # noqa: F821 -- class-body binding
+
+    return Twice
+
+
+def _root(Leaf):
+    Wrapper = _wrapper(Leaf)
 
     @module(entry="gemm", target=TARGET, topologies=TOPOLOGIES)
     class Root:
@@ -67,3 +90,4 @@ def _root(Leaf):
 
 Plain = _root(_plain_leaf())
 Staged = _root(_staged_leaf())
+Twice = _twice(_staged_leaf())
