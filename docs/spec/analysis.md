@@ -1586,10 +1586,10 @@ class SyncPlanMetadata(IRMetadata):
     their `chain`s differ. The later follows once the earlier's group is
     committed and waited on; no barrier is needed. The fence state is kept
     per storage, which is exact only while every access to one register
-    storage runs on the threads that hold its value. Operand reachability and
-    Slice keep that so. A Reshard of register storage onto other threads is
-    still accepted as a view, which breaks it; that is a defect of the alias
-    rule, and this plan does not make up for it.
+    storage runs on the threads that hold its value. Operand reachability,
+    Slice and Reshard keep that so: a Reshard of register storage is a view
+    only when every element keeps its thread
+    ([hir Reshard](./hir.md#reshard)).
   - A `fence` effect needs its group's fence before the action when any access
     to its registers since the last fence is not an effect of that group with
     the same `chain`, or when its registers have no access yet. A `fence`
