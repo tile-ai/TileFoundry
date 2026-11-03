@@ -222,7 +222,9 @@ class ReshardLocations(ScheduleCliCase):
             assert memory["operands"][1]["write"] == byte_count
         assert rows["20"]["buffer_bytes"] == 112
         assert rows["20"]["offsets"]
-        for label in ("14", "15", "16", "17", "18"):
+        moved = rows["14"]["traffic"]["storage"]["rmem"]["logical"]
+        assert moved == {"read": 32, "write": 32}, "the registers change threads"
+        for label in ("15", "16", "17", "18"):
             memory = rows[label]
             assert memory["buffer_bytes"] is None
             assert memory["offsets"] == []

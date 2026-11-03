@@ -152,6 +152,22 @@ def test_registers_move_when_the_mesh_axes_trade_modes():
     assert aliases(source, result) is None
 
 
+def test_registers_move_within_a_thread():
+    """Each element stays on its thread but changes register."""
+    mesh = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("unit",))
+    source = make_tensor_type(
+        (16,),
+        layout=ShardLayout(Layout((4, 2, 2), (4, 2, 1)), (Split(0),), mesh),
+        storage=StorageKind.RMEM,
+    )
+    result = make_tensor_type(
+        (16,),
+        layout=ShardLayout(Layout((4, 2, 2), (4, 1, 2)), (Split(0),), mesh),
+        storage=StorageKind.RMEM,
+    )
+    assert aliases(source, result) is None
+
+
 def test_broadcast_registers_alias_in_another_notation():
     """Every thread of the broadcast axis holds a copy; factoring the local mode keeps them."""
     source = make_tensor_type(
@@ -165,6 +181,15 @@ def test_broadcast_registers_alias_in_another_notation():
         storage=StorageKind.RMEM,
     )
     assert aliases(source, result) == 0
+    one = Mesh(
+        (Topology("thread", 64),), ComposedLayout(None, 0, Layout((1, 8), (8, 1))), ("a", "b")
+    )
+    first = make_tensor_type(
+        (32,),
+        layout=ShardLayout(Layout((8, 4), (4, 1)), (Broadcast(), Split(0)), one),
+        storage=StorageKind.RMEM,
+    )
+    assert aliases(source, first) is None, "copies on four threads are not copies on one"
 
 
 def test_private_split_factorizations_alias():

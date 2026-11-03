@@ -1434,7 +1434,7 @@ EXPECTED = {
     "plain/gemm_8192x17408x5120_cta_grid": dict(sites=SiteCounts(1, 3, detailed=True)),
     "plain/gemm_relu_gemm_tiled": dict(sites=SiteCounts(2, 2, detailed=True)),
     "plain/gemm_relu_gemm_untiled": dict(sites=SiteCounts(2, 0, detailed=True)),
-    "plain/reshard_locations": dict(sites=SiteCounts(0, 4)),
+    "plain/reshard_locations": dict(sites=SiteCounts(0, 5)),
     "plain/sm89_e4m3_gemm": dict(sites=SiteCounts(1, 3, target="nvidia.rtx_6000_ada")),
     "plain/sparse_decode": dict(sites=SiteCounts(2, 4)),
     "plain/unit_mesh_axis_loop_carry": dict(sites=SiteCounts(0, 2)),
