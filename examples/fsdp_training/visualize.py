@@ -28,10 +28,9 @@ from .run import _transition
 
 
 def describe_tensor(held):
-    """Read index coverage and authored storage offsets without evaluating data.
+    """Describe declared ownership and storage offsets using logical index labels.
 
-    Plain layouts have no inferred holder mesh. Index tags are only coordinates,
-    never synthetic Partial values or a numerical check of replica equality.
+    Plain layouts return tensor geometry with an empty participant list.
     """
     shape = tuple(held.shape)
     shard = shard_layout_of(held.layout)
@@ -73,8 +72,11 @@ def describe_tensor(held):
 def trace_function(function):
     """Expand reached calls and tuple leaves by identity, retaining dependencies.
 
-    Each call occurrence has its own bindings and memo. Loops and other region
-    kinds are deliberately unsupported: the example authors both blocks.
+    Each call occurrence has fresh bindings and a memo. Scope labels include
+    traversal positions to distinguish repeated calls to a shared definition.
+
+    Raises:
+        TypeError: A loop or another unsupported expression is encountered.
     """
     nodes, views, view_keys = [], [], {}
 
@@ -118,7 +120,6 @@ def trace_function(function):
             if isinstance(expr, MeshRegion) or isinstance(expr.target, Function):
                 target = expr if isinstance(expr, MeshRegion) else expr.target
                 nested = {id(param): value for param, value in zip(target.params, args, strict=True)}
-                # The sequence number distinguishes repeated calls to a shared definition.
                 name = "mesh" if isinstance(expr, MeshRegion) else target.name
                 result = walk(target.body, nested, {}, f"{scope}/{name}@{len(nodes)}")
             elif isinstance(expr.target, TupleGetItem):

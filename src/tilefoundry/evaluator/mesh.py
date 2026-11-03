@@ -1,7 +1,6 @@
 """Reference execution over static mesh participants on one torch device.
 
-The carrier here is an interpreter value, not another distribution type.
-Ownership continues to come from the HIR's Mesh and ShardLayout.
+Ownership comes from the HIR's Mesh and ShardLayout.
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ class MeshValue(Value):
 
 
 def participant_mesh(mesh: Mesh) -> bool:
-    """Device participation is distinct from existing in-device reference views."""
+    """Recognize a single-level GPU mesh for participant execution."""
     return len(mesh.topologies) == 1 and mesh.topologies[0].name == "gpu"
 
 
@@ -220,7 +219,7 @@ def redistribute(value, held: TensorType, mesh: Mesh | None):
 
     Groups keep every unchanged mesh coordinate fixed. Within a group, Split
     pieces reconstruct indices, Broadcast copies agree, and distinct Partial
-    coordinates contribute once to a sum. No network schedule is implied.
+    coordinates contribute once to a sum.
     """
     from tilefoundry.runtime.tensor import logical_local_view  # noqa: PLC0415 -- import cycle
 

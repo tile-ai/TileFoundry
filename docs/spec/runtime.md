@@ -763,15 +763,6 @@ global `TensorType`, so a checkpoint read hands back every program's data at
 once. `ShardTensor` pairs that owning tensor with the type that shards it, and
 `to_local` is the single place the pair is narrowed to one program.
 
-The HIR evaluator's internal `logical_local_view` and physical `local_layout`
-share the storage-independent `project_domain` coordinate transform. The
-evaluator applies it to canonical dense logical indices. Its input contains the whole
-logical tensor, even when a device-local physical layout has zero strides on
-private shard modes. It therefore projects ownership using canonical logical
-strides, without interpreting a physical engine offset as a logical index.
-Both paths apply the resulting local shape, strides and offset through the
-same strided-view helper; the checkpoint path retains its physical-stride check.
-
 <!-- generated: py-tensor -->
 ```python
 # src/tilefoundry/runtime/tensor.py
@@ -811,6 +802,21 @@ class ShardTensor:
   - what remembers a read weight is keyed by name, program ids and the current
     device together. One weight read on two cards is two tensors, and a key of
     the name alone hands a reader on one card what another card holds.
+
+#### Logical reference views
+
+```python
+def logical_local_view(tensor, held: TensorType, coordinates: tuple[int | None, ...]): ...
+```
+
+- constraints:
+  - The input contains the whole logical tensor. The function MUST select its
+    participant-local elements using the canonical logical index map and the
+    projection defined in
+    [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
+    Authored physical offsets, private-engine strides and swizzles MUST NOT
+    change that selection.
+  - An input type with no `ShardLayout` returns the whole input tensor.
 
 ---
 

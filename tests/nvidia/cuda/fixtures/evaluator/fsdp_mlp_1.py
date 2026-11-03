@@ -1,4 +1,4 @@
-"""Two-layer training on 1 participants with release and retain entry points."""
+"""Two-layer training on one participant with release and retain entry points."""
 
 from __future__ import annotations
 

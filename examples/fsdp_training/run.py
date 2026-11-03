@@ -62,11 +62,10 @@ def _local_bytes(held):
 
 
 def _gathered_leaf(value, bindings=None):
-    """Follow tuple/call results to a gather, without identifying by shape.
+    """Follow call and tuple results to each parameter-gather source.
 
-    This selects parameter gathers in this example; all gathers here are
-    parameters. Allocation's accepted roots and windows still determine the
-    storage identity, lifetime, and byte count.
+    Allocation's accepted roots and windows provide storage identity,
+    lifetime and byte count for these gathered parameters.
     """
     bindings = {} if bindings is None else bindings
     expr, index = value.expr, value.index

@@ -800,12 +800,9 @@ it does not replace the other written strides with defaults.
 Which part of a sharded tensor one mesh instance holds, answered once and read
 by both sides of a launch.
 
-The storage-independent coordinate projection is described in
+The coordinate projection is defined in
 [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
-`local_layout` applies that projection to the authored physical address map;
-logical reference execution applies it to a canonical logical index map.
-Storage-owner rules and swizzles belong to address realization, not to the
-selection of logical tensor elements.
+`local_layout` applies it to the authored physical address map.
 
 ```python
 def local_layout(shard, tensor_shape, ids) -> Layout: ...

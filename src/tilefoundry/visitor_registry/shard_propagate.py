@@ -204,10 +204,11 @@ def _participating_inputs(input_types):
 
 @dataclass(frozen=True)
 class OutputDistribution:
-    """A propagation result, before domain factorization or storage selection.
+    """Hold derived mesh-axis states with Split indices in logical tensor axes.
 
-    Split axes refer to logical tensor axes here. This is an analysis result,
-    not a replacement for the HIR's ShardLayout representation.
+    Attributes:
+        mesh: Participating mesh.
+        attrs: Distribution attributes in mesh-axis order.
     """
 
     mesh: Mesh
@@ -221,13 +222,10 @@ def derive_output_distribution(
     partial_reduction_dims: frozenset[int] = frozenset(),
     complete_reduction_dims: frozenset[int] = frozenset(),
 ):
-    """Derive output ownership and reduction state without choosing storage.
+    """Map input Split positions through logical axes and affine access relations.
 
-    Input domain shapes map Split positions back to logical tensor axes;
-    input strides, storage owners and target capabilities are not consulted.
-    Return None when no participating input carries Split or Partial, including
-    all-Broadcast inputs. This absence of a derived distribution does not prove
-    that plain-layout values agree across participants.
+    Returns:
+        An OutputDistribution when an input carries Split or Partial; otherwise None.
     """
     input_types = _participating_inputs(input_types)
     sharded = [

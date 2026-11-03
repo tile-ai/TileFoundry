@@ -1,8 +1,7 @@
-"""Two modded-nanogpt-inspired blocks with explicit FSDP/HSDP training HIR.
+"""Two GQA blocks with explicit FSDP/HSDP training and parameter residency.
 
-GQA is an adaptation, not a reproduction of the modded-nanogpt speedrun.
-The vocabulary is deliberately tiny: one-hot matrix multiplication expresses
-embedding lookup and its gradient using the existing HIR operations.
+One-hot matrix multiplication expresses the small-vocabulary embedding lookup
+and its gradient using the existing HIR operations.
 """
 
 from __future__ import annotations
@@ -22,17 +21,21 @@ SUPPORTED_MESHES = ((1, 1), (2, 1), (4, 1), (4, 2), (16, 4))
 
 
 def training_program(participants=2, *, retain=False, replicas=1):
-    """Return one training step; backward is authored explicitly, without AD.
+    """Build explicit forward, backward and momentum SGD for one training step.
 
-    Inputs: one-hot tokens/targets, fixed RoPE matrices and causal mask,
-    fourteen parameters, then their fourteen momentum buffers.
-    Outputs: logits, global mean loss, averaged gradients, next parameters,
-    and next momentum buffers. Parameter/state outputs preserve their input
-    distribution, including the unsharded single-participant case.
+    Args:
+        participants: Logical GPU positions, each receiving complete sequences.
+        retain: Keep gathered parameters through backward when true.
+        replicas: Number of replicated shard groups.
+
+    Returns:
+        A module taking one-hot tokens/targets, fixed RoPE and causal mask,
+        fourteen parameters and their momentum buffers. Its entry returns
+        logits, global mean loss, averaged gradients, parameters and momentum.
+        Updated state preserves the input distribution.
     """
     if (participants, replicas) not in SUPPORTED_MESHES:
         raise ValueError(f"supported (participants, replicas): {SUPPORTED_MESHES}")
-    # Every participant owns complete sequences, including on the 4 x 4 mesh.
     batch = max(B, participants)
     tokens_per_batch = batch * T
     target = CudaTarget("nvidia.h200_sxm", device_count=participants)
@@ -61,8 +64,6 @@ def training_program(participants=2, *, retain=False, replicas=1):
     full_e = FullEmb.layout
     fq, fk, fv, fo, fu, fd = (field.layout for field in Full.fields)
     sq, sk, sv, so, su, sd = (field.layout for field in Sharded.fields)
-    # In HSDP, reduce-scatter resolves only the shard axis. Replicas contribute
-    # distinct gradients until the following all-reduce resolves that axis.
     reduced_attrs = (Partial("sum"), Split(0)) if replicas > 1 else Split(0)
     rq, rk, rv, ro, ru, rd = (layout(shape, reduced_attrs) for shape in BLOCK_SHAPES)
     reduced_e = layout((V, C), reduced_attrs)

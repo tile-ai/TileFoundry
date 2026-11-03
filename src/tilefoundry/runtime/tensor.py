@@ -31,14 +31,7 @@ def _strided_local_view(tensor, layout, offset):
 
 
 def logical_local_view(tensor, held: TensorType, coordinates: tuple[int | None, ...]):
-    """Select logical elements through the canonical Split/domain-axis algebra.
-
-    Reference inputs are full logical tensors, even when the HIR declares
-    independent device engines with zero physical strides. Construct the
-    canonical dense address map over the existing layout modes, then use the
-    same projection as checkpoint loading. Physical offsets and swizzles do
-    not alter which logical elements a participant owns.
-    """
+    """Select canonical global tensor elements at the requested mesh coordinates."""
     shard = shard_layout_of(held.layout)
     if shard is None:
         return tensor

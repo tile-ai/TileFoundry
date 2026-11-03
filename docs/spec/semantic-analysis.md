@@ -139,15 +139,38 @@ Both use the one `IslParamValues` dictionary, from isl parameter name to IR valu
 - A mesh coordinate is an isl parameter while the placement is built. The
   access relation service fixes it to the requested unit, 0 on every mesh axis
   unless stated, and removes it before any boundary is counted.
-- `project_domain(domain_shape, tensor_shape, mesh_shape, attrs, coordinates)`
-  derives an immutable coordinate projection and its local logical shape.
-  Unfixed (`None`) mesh coordinates remain available for a subsequent
-  projection. It MUST NOT consult storage strides, storage owners or targets.
-  Applying the projection to a canonical row-major index map selects logical
-  elements; applying it to an authored address map selects physical addresses.
-  Both paths use the same factorization and coordinate selection. `Partial`
-  and `Broadcast` have identical index coverage; their distinct value states
-  remain in the per-axis attributes and are not inferred from this map.
+
+#### Coordinate projection
+
+```python
+class DomainProjection:
+    """Represent a coordinate selection that can be applied to an index map.
+
+    Attributes:
+        local_shape: attribute; Logical tensor shape after the selected mesh cuts.
+    """
+
+    local_shape: tuple
+
+    def apply(self, mapping): ...
+
+def project_domain(domain_shape, tensor_shape, mesh_shape, attrs, coordinates): ...
+```
+
+- constraints:
+  - `project_domain` returns an immutable `DomainProjection`. Its `Split`
+    attributes index the flattened domain modes; `tensor_shape` determines the
+    logical shape of the selected piece. Unfixed (`None`) mesh coordinates MUST
+    remain available for a subsequent projection.
+  - Projection construction MUST depend only on shapes, distribution attributes
+    and selected coordinates, independently of storage strides, owners or targets.
+  - `DomainProjection.apply` returns the selected map and its offset. Applying
+    the projection to a canonical row-major map selects logical elements;
+    applying it to an authored address map selects physical addresses. Both
+    paths MUST use the same factorization and coordinate selection.
+  - `Partial` and `Broadcast` select identical indices. Their distinct value
+    states MUST remain in the per-axis attributes; a projection cannot resolve
+    a pending reduction.
 
 ### 3.2 Relation-driven shard propagation
 
@@ -157,6 +180,17 @@ output `ShardAttr`s are determined from the input shards and the
 relation's access maps by a single rule, shared across ops.
 
 ```python
+class OutputDistribution:
+    """Describe output ownership before physical layout construction.
+
+    Attributes:
+        mesh: attribute; Participating mesh.
+        attrs: attribute; Distribution state in mesh-axis order.
+    """
+
+    mesh: Mesh
+    attrs: tuple
+
 def partial_reductions_by_axis(layout: object) -> tuple[str | None, ...]: ...
 
 def derive_output_distribution(
@@ -169,7 +203,7 @@ def derive_output_distribution(
 
 def derive_output_shard_layout(
     input_types: tuple,
-    relation,
+    relations,
     output_shape: tuple,
     *,
     partial_reduction_dims: frozenset[int] = frozenset(),
@@ -181,17 +215,16 @@ def derive_output_shard_layout(
 ```
 
 - constraints:
-  - `derive_output_distribution` returns an analysis result containing the
-    participating mesh and per-axis attributes, or `None` when no participating
-    input carries `Split` or `Partial`, including all-`Broadcast` inputs. `None`
-    means this rule derives no distribution; it does not establish equality of
-    plain-layout values across participants. Its `Split` indices MUST name
-    logical output tensor axes;
-    `Partial` remains attached to its exact mesh axis. The service MUST NOT
+  - `derive_output_distribution` returns an `OutputDistribution`, or `None` when
+    no participating input carries `Split` or `Partial`, including all-`Broadcast` inputs. `None`
+    derives no distribution: it preserves no explicit replication constraint
+    and establishes no equality of values across participants.
+  - `OutputDistribution.attrs` MUST use logical output tensor axes for `Split`
+    indices and retain `Partial` on its exact mesh axis. Derivation MUST NOT
     consult physical strides, storage owners or the target.
-    `derive_output_shard_layout` consumes that result, then selects a compatible
-    physical carrier or constructs a storage layout. Domain factorization
-    translates logical Split axes into layout positions at that boundary.
+  - `derive_output_shard_layout` consumes that result, then selects a compatible
+    physical carrier or constructs a storage layout. It MUST translate logical
+    `Split` axes into layout positions at that boundary.
   - `derive_output_shard_layout` reads only input types, `AccessRelation.affine`
     (the Op-written mapping before iteration-domain intersection), the requested
     output shape, and the explicit reduction/stride controls. It MUST NOT read
@@ -199,8 +232,7 @@ def derive_output_shard_layout(
   - `partial_reductions_by_axis` returns one entry per mesh axis: the carried
     reduction name for `Partial`, `None` for any other attr, and an empty tuple
     for a non-sharded layout.
-  - With no real input sharding it returns `None`. Inputs with real sharding on
-    different meshes MUST fail.
+  - Inputs carrying `Split` or `Partial` on different meshes MUST fail.
   - `partial_reduction_dims` turns a reduced split into `Partial("sum")`;
     `complete_reduction_dims` turns it into `Broadcast`. The sets MUST NOT
     overlap.
@@ -223,8 +255,10 @@ def derive_output_shard_layout(
   - Propagation applies per input mesh axis:
     1. `Split(k)` maps layout axis `k` to the input's logical tensor axis and
        then to a domain dim through the input access map.
-    2. If that domain dim appears in the output access map, the output carries
-       `Split` on the output layout axis to which the domain dim maps.
+    2. If that domain dim appears in the output access map, the derived
+       distribution carries `Split` on the logical output tensor axis to which
+       the domain dim maps. Physical layout construction translates that axis
+       into an output layout position.
     3. If that domain dim is reduced, the output mesh axis becomes
        `Partial(reduction)` for a `partial` effect or `Broadcast` for a
        `complete` effect. The resulting `Partial` is a value state on that mesh

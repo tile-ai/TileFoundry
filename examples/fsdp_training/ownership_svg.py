@@ -20,11 +20,11 @@ def _holds(participant, index):
 
 
 def render_svg(report, node_id, *, element=None, participant=None, title=None):
-    """Render exact index ownership; numbers label indices, never tensor values.
+    """Render declared ownership with global element indices as cell labels.
 
-    Large tensors use a labeled window, not sampled or aggregated cells. The
-    participant miniatures show that same window. Local order comes from the
-    exported logical map, independently of the physical address map.
+    Large tensors and participant miniatures share a labeled window of cells.
+    Local order comes from the exported logical map. Adjacent same-colored
+    miniature rows share rectangles to keep the SVG compact.
     """
     node = report["nodes"][node_id]
     view = report["views"][node["view"]]
@@ -139,7 +139,6 @@ def render_svg(report, node_id, *, element=None, participant=None, title=None):
         rect(x, y, cell_w - 8, cell_h - 8, **attrs)
         SubElement(svg, "circle", cx=str(x + 10), cy=str(y + 12), r="3", fill="#243040" if _holds(p, index) else "white", stroke="#243040")
         text(x + cell_w / 2 - 2, y + 17, str(tuple(p["coordinate"])), "small", text_anchor="middle")
-        # Coalesce adjacent same-colored rows to keep checked-in SVGs compact.
         boxes = {}
         for r in range(nr):
             c = 0

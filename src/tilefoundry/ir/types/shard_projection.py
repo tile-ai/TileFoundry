@@ -1,10 +1,6 @@
-"""Shard-domain projection, independent of storage and target ownership.
+"""Factor domain modes and fix selected mesh coordinates.
 
-The projection is a coordinate transform. Applying it to a logical row-major
-index map selects global elements; applying the same transform to a storage
-map selects addresses. Neither construction changes per-axis Partial state.
-
-See [shard §7.6](docs/spec/shard.md#76-local_layout).
+See [semantic-analysis §3.1](docs/spec/semantic-analysis.md#31-logical-shape-to-layout-domain).
 """
 
 from __future__ import annotations
@@ -85,7 +81,7 @@ def factor_domain(shape, mesh_shape, attrs):
 
 @dataclass(frozen=True)
 class DomainProjection:
-    """An immutable projection of domain modes, with no storage or mesh binding."""
+    """Factored domain coordinates and their local logical tensor shape."""
 
     shape: tuple
     profile: tuple
@@ -154,12 +150,7 @@ def project_domain(domain_shape, tensor_shape, mesh_shape, attrs, coordinates):
 
 
 def logical_projection(domain_shape, tensor_shape, mesh_shape, attrs, coordinates):
-    """Map one participant's local coordinates into the global logical tensor.
-
-    The returned offset and strides index the canonical logical tensor, never
-    an authored storage layout. Replication and Partial retain the same index
-    coverage; their distinct value semantics remain in attrs and operations.
-    """
+    """Apply the coordinate projection to the canonical row-major logical map."""
     projection = project_domain(domain_shape, tensor_shape, mesh_shape, attrs, coordinates)
     mapping, offset = projection.apply(Layout(domain_shape))
     return axis_layout(mapping), offset

@@ -67,7 +67,11 @@ class Reference(nn.Module):
 
 
 def check_training(function, *, steps=2, seed=183):
-    """Check every gradient and state leaf over changing batches; default: two updates."""
+    """Check gradients and state over changing batches against dense training.
+
+    Require every reference parameter gradient to be nonzero on each update.
+    Random nonzero projections expose each backward path from the first step.
+    """
     from tilefoundry.evaluator import evaluate
 
     token_count = int(function.params[0].type.shape[0])
@@ -90,8 +94,6 @@ def check_training(function, *, steps=2, seed=183):
         for old, current in zip(before, (*weights, *momentum), strict=True):
             assert torch.equal(old, current), "HIR evaluation mutated its inputs"
         expected_gradients = tuple(p.grad.clone() for p in model.weights)
-        # All parameters participate from step one: random nonzero projections
-        # avoid a zero-initialized output projection hiding a backward mistake.
         assert all(g.abs().max() > 1e-8 for g in expected_gradients)
         optimizer.step()
         expected = ((logits.detach().reshape(token_count, V),), (loss.detach(),), expected_gradients,

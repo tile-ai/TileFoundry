@@ -50,12 +50,10 @@ def test_escaping_view_retains_the_full_gathered_backing_storage():
 
 
 def summarize_training(result):
-    """Read scoped parameter facts from existing memory/allocation records.
+    """Read the MLP's scoped parameter facts from memory/allocation records.
 
-    This MLP fixture has sequential calls and no HIR loops. Traverse each reached
-    call occurrence, not just each function definition. The peak below selects
-    full parameter storage from the allocator's published windows and dedupes
-    accepted aliases; it is not a second allocator or a total training peak.
+    Walk each reached call occurrence. Deduplicate accepted allocation roots
+    when summing full-parameter windows over lifetime boundaries.
     """
     def occurrences(function):
         for value in collect_exprs(function.body):
