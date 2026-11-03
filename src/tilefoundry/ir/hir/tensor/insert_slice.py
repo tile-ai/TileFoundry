@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Constant, Op, Tuple
 from tilefoundry.ir.core.param_def import ParamDef
@@ -163,6 +163,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(InsertSlice)
+@per_unit
 def _eval_insert_slice(ctx):
     dst = ctx.args[0].data
     upd = ctx.args[1].data

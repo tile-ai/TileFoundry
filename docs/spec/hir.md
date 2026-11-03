@@ -1581,18 +1581,20 @@ class RoPE(Op):
 
 ```python
 class MeshCoord(Op):
-    """Return the current participant's coordinate along one mesh axis."""
+    """Return the current unit's coordinates along the given mesh axes."""
 
     mesh: Mesh
-    axis: Expr
+    axes: Expr
 ```
 
 - constraints:
-  - The result is an `i64` scalar with `layout=None` and no placement.
+  - `axes` is an `i64` scalar, an `i64` vector, or a tuple of `i64` scalars.
+    The result is one `i64` coordinate per axis -- a scalar for a scalar,
+    a vector of the same length otherwise -- with no placement.
   - Type inference MUST reject a mesh that is not bound by the current
-    `MeshRegion`.
-  - Evaluation MUST raise `EvalError`, because the evaluator models values
-    without selecting one physical participant.
+    `MeshRegion`, and a literal axis outside the mesh's rank.
+  - Evaluation holds one value per unit of `mesh`
+    ([evaluator §6](./evaluator.md#6-layout-domain)).
 
 ##### Reshard
 ```python

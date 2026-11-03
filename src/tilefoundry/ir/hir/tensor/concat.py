@@ -5,7 +5,7 @@ from typing import Tuple
 import isl
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
 from tilefoundry.ir.core.expr import Call
@@ -167,6 +167,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Concat)
+@per_unit
 def _eval_concat(ctx):
 
     out = torch.cat([v.data for v in ctx.args], dim=ctx.op.axis)

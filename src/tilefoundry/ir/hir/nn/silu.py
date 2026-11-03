@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -35,6 +35,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Silu)
+@per_unit
 def _eval_silu(ctx):
     return TensorValue(ShardTensor(ctx.result_type, torch.nn.functional.silu(ctx.args[0].data)))
 

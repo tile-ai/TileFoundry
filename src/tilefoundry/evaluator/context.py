@@ -12,6 +12,8 @@ class EvaluateContext:
 
     op: Any = None
     args: tuple[Any, ...] = ()
+    arg_types: tuple[Any, ...] = ()
+    """The operands' global types; ``per_unit`` keeps them while it localizes ``args``."""
     result_type: Any = None
     loaded_module: Any | None = None
     device: str | None = None
@@ -19,4 +21,5 @@ class EvaluateContext:
 
     def for_op(self, op: Any, args: tuple[Any, ...], result_type: Any) -> EvaluateContext:
         """Add one Call's evaluated operands while preserving runtime state."""
-        return replace(self, op=op, args=args, result_type=result_type)
+        types = tuple(getattr(arg, "type", None) for arg in args)
+        return replace(self, op=op, args=args, arg_types=types, result_type=result_type)

@@ -6,7 +6,7 @@ Contract and constraints: `spec hir § CacheUpdate`.
 from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -220,6 +220,7 @@ def _reject_split_rows(ctx, call: "Call", cache_ty, new_ty) -> None:
 
 
 @register_eval(CacheUpdate)
+@per_unit
 def _eval_cache_update(ctx):
     cache = ctx.args[0].data
     cur_pos = int(ctx.args[1].data.reshape(-1)[0].item())

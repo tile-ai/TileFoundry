@@ -30,7 +30,7 @@ _COMBINE = {"sum": "sum", "max": "amax", "min": "amin"}
 
 def local_type(type: TensorType) -> TensorType:
     """The type of the piece one unit holds: the Local projection of *type*."""
-    shard = shard_layout_of(type.layout)
+    shard = shard_layout_of(getattr(type, "layout", None))
     if shard is None:
         return type
     layout = _local_readback(local_layout(shard, type.shape, (0,) * len(shard.attrs))[0])
@@ -119,7 +119,15 @@ class ShardTensor:
         return ShardTensor(self.type, combine(dim=0))
 
     def reshard(self, type: TensorType) -> "ShardTensor":
-        """The same value under *type*: packed data only changes type."""
+        """The same value under *type*: packed data only changes type.
+
+        A scattered value is gathered first, unless neither type has a
+        ShardLayout: then each unit only moves its own value, which stays its own.
+        """
+        if not self.packed and shard_layout_of(self.type.layout) is None and (
+            shard_layout_of(type.layout) is None
+        ):
+            return ShardTensor(type, self.tensor)
         return ShardTensor(type, self.gather().tensor)
 
 

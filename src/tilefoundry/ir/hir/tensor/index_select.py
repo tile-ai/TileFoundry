@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.kernels import gather
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -120,6 +120,7 @@ def _index_select_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ..
 
 
 @register_eval(IndexSelect)
+@per_unit
 def _eval_index_select(ctx):
     x = ctx.args[0].data
     index = ctx.args[1].data

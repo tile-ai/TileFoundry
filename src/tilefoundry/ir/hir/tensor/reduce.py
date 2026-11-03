@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from math import prod
+
 import isl
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.dim import resolve_dim
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import ReduceKind
@@ -148,7 +151,20 @@ def _greatest_representable(dtype: "torch.dtype"):
     return infinity if held.item() == infinity else torch.finfo(dtype).max
 
 
+def _reduced_count(ctx, axes) -> int | None:
+    """How many elements the reduction covers in the whole input, not in one unit's part.
+
+    A mean over a split axis is Partial sum, so each unit holds its sum over the
+    whole count rather than its own mean.
+    """
+    if not ctx.arg_types:
+        return None
+    shape = ctx.arg_types[0].shape
+    return prod(resolve_dim(shape[axis], ctx.dim_bindings) for axis in axes)
+
+
 @register_eval(Reduce)
+@per_unit
 def _eval_reduce(ctx):
     x = ctx.args[0].data
     axes = tuple(ctx.op.axes)
@@ -168,6 +184,10 @@ def _eval_reduce(ctx):
         return TensorValue(ShardTensor(ctx.result_type, out if keepdim else out.squeeze(dim=axes)))
     if kind is ReduceKind.MEAN:
         out = x.mean(dim=axes, keepdim=keepdim)
+        whole = _reduced_count(ctx, axes)
+        part = prod(x.shape[axis] for axis in axes)
+        if whole is not None and part != whole:
+            out = out * (part / whole)
     elif kind is ReduceKind.SUM:
         out = x.sum(dim=axes, keepdim=keepdim)
     elif kind is ReduceKind.ABS_MAX:

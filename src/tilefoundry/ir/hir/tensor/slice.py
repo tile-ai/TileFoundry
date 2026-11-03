@@ -6,7 +6,7 @@ import isl
 
 from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue
 from tilefoundry.ir.core import Expr, Op, Tuple
 from tilefoundry.ir.core.expr import Call, Constant
@@ -281,6 +281,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Slice)
+@per_unit
 def _eval_slice(ctx):
     op = ctx.op
     starts = ctx.args[1]

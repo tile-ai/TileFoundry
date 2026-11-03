@@ -9,7 +9,7 @@ initial values (e.g. ``-inf`` for an online-softmax running max).
 from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -41,6 +41,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(FullLike)
+@per_unit
 def _eval_full_like(ctx):
     x = ctx.args[0].data
     data = torch.full_like(x, float(ctx.op.value), dtype=to_torch_dtype(ctx.result_type.dtype))

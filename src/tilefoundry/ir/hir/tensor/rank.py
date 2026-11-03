@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -27,6 +27,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Rank)
+@per_unit
 def _eval_rank(ctx):
     data = torch.tensor(ctx.args[0].data.ndim, dtype=torch.int64)
     return TensorValue(ShardTensor(ctx.result_type, data))

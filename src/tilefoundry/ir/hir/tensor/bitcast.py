@@ -7,7 +7,7 @@ from math import prod
 import isl
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -305,6 +305,7 @@ def _bitcast_access(call: Call, ctx) -> tuple[AccessRelation, ...]:
 
 
 @register_eval(Bitcast)
+@per_unit
 def _eval_bitcast(ctx):
     source = ctx.args[0]
     result = ctx.result_type

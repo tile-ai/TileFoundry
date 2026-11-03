@@ -12,7 +12,7 @@ import isl
 
 from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
 from tilefoundry.ir.core import Call, Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -263,6 +263,7 @@ def _local_dim_bindings(x: "TensorValue") -> dict:
 
 
 @register_eval(TopK)
+@per_unit
 def _eval_topk(ctx):
     x = ctx.args[0]
     k = resolve_dim(ctx.op.k, _local_dim_bindings(x))

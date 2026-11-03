@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.kernels import binary
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -207,6 +207,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Binary)
+@per_unit
 def _eval_binary(ctx):
     out = binary(ctx.op.kind, ctx.args[0].data, ctx.args[1].data)
     return TensorValue(ShardTensor(ctx.result_type, out))

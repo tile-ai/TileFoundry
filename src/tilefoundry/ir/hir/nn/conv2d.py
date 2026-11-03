@@ -3,7 +3,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
 from tilefoundry.ir.core.expr import Call, Constant
@@ -303,6 +303,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Conv2D)
+@per_unit
 def _eval_conv2d(ctx):
     input_, weight, bias = (arg.data for arg in ctx.args)
     out = F.conv2d(

@@ -402,6 +402,11 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
 
     def _mesh_coordinate_text(self, value: Call, target: MeshCoord, ctx) -> str:
         """Render one coordinate through the active binding of its mesh."""
+        if value.args and isinstance(value.args[0], Tuple):
+            alias = (ctx if ctx is not None else self.context).mesh_alias(target.mesh)
+            if alias is None:
+                raise ValueError("MeshCoord mesh has no active binding to print")
+            return f"tf.meshcoord({self.visit(value.args[0], ctx)}, mesh={alias})"
         axis = static_dim_value(value.args[0]) if value.args else None
         if axis is None or axis < 0 or axis >= len(flatten(target.mesh.layout).shape):
             raise ValueError("MeshCoord requires a literal in-range axis to print")

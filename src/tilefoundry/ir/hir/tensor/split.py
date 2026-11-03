@@ -3,7 +3,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -115,6 +115,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
 
 
 @register_eval(Split)
+@per_unit
 def _eval_split(ctx):
     source = ctx.args[0].data
     axis = ctx.op.axis + source.ndim if ctx.op.axis < 0 else ctx.op.axis

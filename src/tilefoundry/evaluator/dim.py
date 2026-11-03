@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Callable
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.types.dim import (
@@ -120,7 +120,7 @@ def _dim_op_eval(op_cls: type, fold: Callable[[int, int], int]):
 
 
 for _op_cls, _fold in _FOLDERS.items():
-    register_eval(_op_cls)(_dim_op_eval(_op_cls, _fold))
+    register_eval(_op_cls)(per_unit(_dim_op_eval(_op_cls, _fold)))
 
 
 __all__ = ["resolve_dim"]

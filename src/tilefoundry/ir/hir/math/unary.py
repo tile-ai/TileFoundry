@@ -7,7 +7,7 @@ sugar names (``neg`` / ``abs`` / ``rsqrt`` / ``logical_not``).
 from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import UnaryKind
@@ -83,6 +83,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Unary)
+@per_unit
 def _eval_unary(ctx):
 
     fns = {

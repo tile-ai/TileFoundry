@@ -10,7 +10,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -98,6 +98,7 @@ def _rms_norm_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
 
 
 @register_eval(RMSNorm)
+@per_unit
 def _eval_rms_norm(ctx):
 
     xf = ctx.args[0].data.float()

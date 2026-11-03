@@ -149,6 +149,10 @@ eval_registry: DispatchRegistry[type[Op]]
 def register_eval(op_cls: type[Op]):
     """Return the evaluator registration decorator for an Op class."""
     ...
+
+def per_unit(handler):
+    """Let a handler take inputs that differ per unit."""
+    ...
 ```
 
 Instruction-backed HIR scheduling uses a parallel registry:
@@ -175,6 +179,7 @@ class EvaluateContext:
     Attributes:
         op: attribute; Operation instance.
         args: attribute; Evaluated operands in Call-argument order.
+        arg_types: attribute; The operands' global types.
         result_type: attribute; Call result type.
         loaded_module: attribute; Runtime module reading, when one is active.
         device: attribute; Where the inputs are, or None to leave it to torch.
@@ -183,6 +188,7 @@ class EvaluateContext:
 
     op: Any = None
     args: tuple[Any, ...] = ()
+    arg_types: tuple[Any, ...] = ()
     result_type: Any = None
     loaded_module: Any | None = None
     device: str | None = None
@@ -263,8 +269,23 @@ are evaluated once in the enclosing scope. With `k = len(yield_values)`:
 
 ## 6. Layout domain
 
-Evaluation models a **single mesh participant** and operates on logical
-values:
+A value is held packed -- one global logical tensor, a `Partial` one as its
+reduced value -- unless it differs per unit. Values differ per unit only
+downstream of `MeshCoord` or of `Local` on a `Split` input, and are then held
+scattered, one piece per `Placement`. Whether a value differs is read off how
+it is held, never off its data:
+
+- a handler decorated with `per_unit` runs once when every input is packed,
+  and once per placement when any is scattered: on that unit's piece of each
+  input, under the local result type, with `arg_types` still the global input
+  types. Its results are held scattered.
+- a packed `Partial` input meeting a scattered one MUST raise `EvalError`: its
+  reduced value no longer holds the parts each unit would combine. Scattered
+  inputs held by different units MUST raise `EvalError`.
+- a handler that reads a size MUST read it from a type, never from an
+  attribute stating a global shape, so that it means the same on a unit's
+  piece. A mean over a split axis holds, on each unit, its sum over the
+  global count.
 
 - An axis-bearing op (`Reduce`, `rms_norm`, …) addresses its `axis` /
   `axes` in the operand's **logical** `TensorType.shape`, regardless of
@@ -281,11 +302,11 @@ values:
   inverse. These are provided for an op explicitly defined to compute in
   the layout domain; no op in the current set is layout-domain, so none
   of them call these helpers.
-- `Reshard` ([hir §1.3](./hir.md#13-op)) preserves the logical value and MAY
-  reshape it into the target layout's shape; it performs no
-  cross-participant data movement.
-- `Local` ([hir §1.3](./hir.md#13-op)) returns its operand's value only when
-  its input `ShardLayout` has no `Split` attribute. For a split axis it MUST
-  raise `EvalError` saying that the evaluator models one mesh participant and
-  linking to this section, until the mesh evaluator models that path. An
-  unmodelled path MUST identify itself rather than leaking a torch exception.
+- `Reshard` ([hir §1.3](./hir.md#13-op)) only retypes a packed value. A
+  scattered one is gathered by the meaning of its type -- `Split` pieces side
+  by side, any `Broadcast` piece, `Partial` pieces combined by their
+  reduction -- unless neither type has a `ShardLayout`, when each unit keeps
+  its own value.
+- `Local` ([hir §1.3](./hir.md#13-op)) scatters an input with a `Split` over the
+  units of its mesh, and keeps one without a `Split` packed. On a packed
+  `Partial` input it MUST raise `EvalError`.

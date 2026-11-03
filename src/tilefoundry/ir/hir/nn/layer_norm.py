@@ -3,7 +3,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -93,6 +93,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(LayerNorm)
+@per_unit
 def _eval_layer_norm(ctx):
     x, weight, bias = (arg.data for arg in ctx.args)
     rank = x.ndim

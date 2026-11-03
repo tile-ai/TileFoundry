@@ -4,7 +4,7 @@ from dataclasses import replace
 
 from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.registry import per_unit, register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -226,9 +226,12 @@ def _bound_or_inferred(dim, bindings):
 
 
 @register_eval(Reshape)
+@per_unit
 def _eval_reshape(ctx):
-
-    shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in ctx.op.new_shape)
+    """Reshape to the result type, which is local when each unit runs on its own part."""
+    shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in ctx.result_type.shape)
+    if -1 in shape:
+        shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in ctx.op.new_shape)
     if shape.count(-1) > 1:
         raise EvalError(
             f"reshape: at most one dynamic axis can be inferred, got new_shape={ctx.op.new_shape!r}"
