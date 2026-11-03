@@ -1617,9 +1617,14 @@ class Reshard(Op):
   - Memory analysis and lowering MUST treat a Reshard as a view iff storage
     is unchanged, the shape is literal, both structural address boxes agree,
     and the conversion does not change any mesh axis's `Partial` state. Each
-    thread holds register storage privately, so an `rmem` Reshard is a view
-    only when both meshes place every position on the same hardware unit: the
-    same topology levels, `device_layout` and offset.
+    thread holds register storage privately, so an `rmem` Reshard with a
+    `ShardLayout` is a view only when every logical element keeps the threads
+    that hold it, on the same topology levels, and its register on each. That
+    is the register relation `Dot` pairs operands by (`layout_to_isl_map`
+    numbered by `register_strides`), each divided mesh coordinate read as a
+    thread through `device_layout` and the mesh offset, and every coordinate
+    of an undivided mesh axis holding a copy. Otherwise the structural boxes
+    below decide.
     A Split on a mesh axis of extent 1 places nothing: the box neither records
     it nor treats its tensor mode as independent. A box records every other
     zero-stride Split's mesh axis, logical tensor axis, position within that

@@ -139,6 +139,34 @@ def test_registers_alias_only_where_each_element_keeps_its_thread(storage, held_
     assert aliases(source, result) == (None if private and moves else 0)
 
 
+def test_registers_move_when_the_mesh_axes_trade_modes():
+    """The same mesh and strides; each mesh axis now holds the mode the other one held."""
+    mesh = Mesh((Topology("thread", 16),), Layout((4, 4), (4, 1)), ("a", "b"))
+    layout = Layout((4, 4, 2), (8, 2, 1))
+    source = make_tensor_type(
+        (32,), layout=ShardLayout(layout, (Split(0), Split(1)), mesh), storage=StorageKind.RMEM
+    )
+    result = make_tensor_type(
+        (32,), layout=ShardLayout(layout, (Split(1), Split(0)), mesh), storage=StorageKind.RMEM
+    )
+    assert aliases(source, result) is None
+
+
+def test_broadcast_registers_alias_in_another_notation():
+    """Every thread of the broadcast axis holds a copy; factoring the local mode keeps them."""
+    source = make_tensor_type(
+        (32,),
+        layout=ShardLayout(Layout((8, 4), (4, 1)), (Broadcast(), Split(0)), _LANES),
+        storage=StorageKind.RMEM,
+    )
+    result = make_tensor_type(
+        (32,),
+        layout=ShardLayout(Layout((8, 2, 2), (4, 2, 1)), (Broadcast(), Split(0)), _LANES),
+        storage=StorageKind.RMEM,
+    )
+    assert aliases(source, result) == 0
+
+
 def test_private_split_factorizations_alias():
     mesh = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("unit",))
     source = make_tensor_type(
