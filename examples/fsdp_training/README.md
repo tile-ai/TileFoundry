@@ -68,7 +68,7 @@ The baseline FP32 configuration has batch 8 (16 for the 4 × 4 HSDP case), seque
 
 HIR represents the tiny embedding lookup as one-hot matrix multiplication; the reference uses `torch.nn.functional.embedding`. Fixed rotation matrices express RoPE in HIR, while the reference rotates adjacent coordinate pairs. HIR broadcasts K/V over a separate query-group dimension; the reference repeats KV heads before SDPA. These are equivalent small-workload representations, not production embedding or attention kernels.
 
-Every participant receives different complete sequences. With multiple participants, parameters and momentum are split along tensor dimension 0 within each shard group; the single-participant case keeps them whole. Linear backward contracts the split token dimension to produce actual `Partial(sum)` contributions. FSDP resolves those with reduce-scatter; HSDP uses reduce-scatter and then all-reduce as described below. Exactly one division by the total participant count produces gradients of the global mean loss. HIR `Reduce` has complete reduction semantics, used for the scalar loss. The optimizer uses learning rate 0.01 and momentum 0.9, with no dampening, weight decay or Nesterov update. The second step consumes the first step's returned state; inputs are not mutated.
+Every participant receives different complete sequences. With multiple participants, parameters and momentum are split along tensor dimension 0 within each shard group; the single-participant case keeps them whole. Linear backward contracts the split token dimension to produce actual `Partial(sum)` contributions. FSDP resolves those with reduce-scatter; HSDP uses reduce-scatter and then all-reduce as described below. Exactly one division by the total participant count produces gradients of the global mean loss. HIR `Reduce` has complete reduction semantics, used for the scalar loss. The optimizer uses learning rate 0.01, momentum 0.9 and zero initial velocity, with no dampening, weight decay or Nesterov update. The second step consumes the first step's returned state; inputs are not mutated.
 
 Checks use `rtol=5e-4`, `atol=2e-5` for FP32 reduction-order differences. The runner prints the observed maximum absolute errors separately for logits, loss, gradients, parameters and momentum.
 
@@ -98,6 +98,8 @@ In `run.py`, `study()` builds and checks each program, runs the independent trai
 1. Walk reached function calls and inspect each mesh axis of `Reshard`: `Split -> Broadcast` is an all-gather, `Partial(sum) -> Split` is a reduce-scatter, and `Partial(sum) -> Broadcast` is an all-reduce. Each call occurrence is counted, so invoking a shared block definition twice counts both blocks. These graphs stage one changed axis per collective. Payload uses the participant-local shape from the shared logical projection, times dtype size: the all-gather result or the reduction input. Unchanged Split axes still reduce this local payload. The report records the changed axis, group size, and number of disjoint groups in `collective_groups`; occurrence counts are per participant, not multiplied by the number of groups.
 2. Follow call and tuple results back to gathered values, then select their accepted allocation roots from `AllocationSummaryMetadata`. Use the lifetime windows in `RegionMemoryMetadata` to sum simultaneously live bytes, deduplicating aliases by root, and take the maximum over lifetime boundaries. Tensor shape alone does not identify a gathered weight.
 3. Sum the allocation entries for the parameter and momentum inputs to obtain persistent state per participant. Fixed inputs, activations and returned update buffers are outside this selected quantity.
+
+The escaping-view regression also checks that a 128-byte view keeps its full 256-byte gathered backing allocation reserved while another stage executes.
 
 The following arithmetic independently explains the generated numbers. Every parameter is FP32, so each element occupies four bytes. Each block has six parameter tensors:
 
@@ -171,8 +173,36 @@ Both 4 × 4 policies passed two updates against the independent dense reference 
 
 There are four disjoint groups of size four for each collective. Four-way reduce-scatter leaves `26 / 4 = 6.5 KiB` of all-reduce input per participant; parameters plus momentum occupy `52 / 4 = 13 KiB`. Gather counts, gather-result and reduce-scatter-input payloads, and gathered-weight peaks match the table above. The final gradient normalization divides by sixteen participants once.
 
-## Scope
+## Regression checks
 
-This models minimal FSDP2-style training semantics using existing mesh placements, including 2 × 2 and 4 × 4 HSDP configurations. It supports a single GPU topology level, even shards, and concrete shapes. GQA supplies the workload; the parallelism demonstrated here is data parallel training with sharded parameters, gradients and optimizer state. Muon, mixed precision, accumulation, offload, prefetch/overlap, uneven shards, TP/CP, inference and distributed CUDA code generation remain follow-ups.
+Target-independent ownership and reduction unit tests live under `tests/core`. NVIDIA-backed training, tuple-call and lifetime regressions live under `tests/nvidia/cuda`; they execute the reference tensors on CPU. The training fixtures contain top-level `@module` programs and use the CLI source loader for both policy entry points. CI also exercises the example's FSDP and HSDP transformer builder for each policy. The runner supplies the broader residency study.
 
-Small ownership, reduction and lifetime regressions live under `tests/core`; CI includes an FSDP and an HSDP transformer smoke case for each policy. The runner supplies the broader residency study. See [the HIR training tutorial](../../docs/tutorial/fsdp-training.md) for the evaluator contract and related upstream discussions.
+```bash
+python -m pytest tests/nvidia/cuda/evaluator/test_fsdp_training.py \
+  tests/nvidia/cuda/evaluator/test_mesh_calls.py \
+  tests/nvidia/cuda/analysis/test_fsdp_training.py -q
+```
+
+## Supported reference semantics
+
+`Mesh`, `ShardLayout`, `Split`, `Broadcast` and `Partial` remain the distribution model. Single-level GPU mesh regions and sharded operands select participation automatically, with concrete tensor shapes and even shards. Specialize symbolic GPU tensor shapes first. Existing CTA/warp/thread reference evaluation keeps its global logical view; hierarchical GPU-to-CTA execution is deferred. Local pieces use the storage-independent coordinate projection shared with checkpoint projection and physical layout construction. Mesh coordinates, fresh call/loop scopes, explicit gather/scatter, and sum reductions operate on actual participant values. A permuted 2 × 2 mesh regression checks each HSDP reduction stage and refuses the unresolved intermediate output.
+
+Output reconstruction is observation, not communication inserted into the program. Split pieces reconstruct the declared logical output. Plain/Broadcast replicas must agree, and unresolved Partial values cannot be returned as completed tensors. Supported transitions are unchanged ownership, Broadcast-to-Split, Split-to-Broadcast, and Partial(sum)-to-Split/Broadcast. Dynamic placements, changing participant meshes, general Split-to-Split redistribution, and participant-local computation on unresolved Partial inputs are outside this initial evaluator subset and must be resolved or diagnosed.
+
+GQA supplies the workload; the parallelism modeled here is data parallel training with sharded parameters, gradients and optimizer state. This is a minimal FSDP2-style model rather than the complete PyTorch FSDP2 runtime. Muon, TP/CP, uneven shards, physical multi-node binding, collective packing, mixed precision, offload, gradient accumulation, communication/computation overlap, prefetch, autograd integration, checkpoint policy, inference, and code generation remain follow-up work. The HSDP rows can later map to nodes, with different transport choices within and across rows; those choices do not change the logical reduction equations. No calibrated network model is required for these semantics.
+
+## Logical composition and physical realization
+
+`project_domain` constructs a coordinate transform without storage or target information. A partially fixed projection can be composed with another by applying its transform to the previous index map. The evaluator uses canonical global tensor indices; `local_layout` applies the same transform to the authored physical map, preserving its strides and composition. Storage-owner compaction remains in `ShardLayout.from_modes`.
+
+Relation propagation similarly exposes `derive_output_distribution`: it computes the participating mesh and per-axis Split/Broadcast/Partial result before choosing physical strides. `derive_output_shard_layout` then preserves a compatible physical carrier or constructs a layout for the selected storage. This is a composable derivation for stated layouts and supported affine access relations, not automatic placement search. `Dynamic` inference and cost-guided selection remain outside it.
+
+Identical index coverage does not make Partial and Broadcast interchangeable. A plain layout also does not prove participant values agree: output reconstruction checks that equality. These distinctions remain relevant to [#278](https://github.com/tile-ai/TileFoundry/issues/278); this refactor does not implement its broad canonicalization or invent a holder mesh from execution scope.
+
+## Related design work
+
+- [Discussion #181](https://github.com/tile-ai/TileFoundry/discussions/181): participant reference evaluation, Partial values and logical redistribution.
+- [Discussion #183](https://github.com/tile-ai/TileFoundry/discussions/183): HIR-first distributed modeling and cross-device ownership.
+- [#255](https://github.com/tile-ai/TileFoundry/issues/255), originally [#138](https://github.com/tile-ai/TileFoundry/issues/138): the evaluator work item; this example covers a training subset.
+- [#278](https://github.com/tile-ai/TileFoundry/issues/278): broader Broadcast canonicalization remains separate.
+- [#260](https://github.com/tile-ai/TileFoundry/pull/260), [#162](https://github.com/tile-ai/TileFoundry/pull/162), [#165](https://github.com/tile-ai/TileFoundry/pull/165), and [#170](https://github.com/tile-ai/TileFoundry/pull/170): Partial alias handling, mesh/layout slicing, checkpoint projection, and structured lifetimes used here.
