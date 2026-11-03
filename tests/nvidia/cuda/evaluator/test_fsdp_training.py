@@ -7,7 +7,7 @@ import torch
 
 from examples.fsdp_training.model import training_program as transformer_program
 from examples.fsdp_training.reference import check_training
-from tests.core.fixtures.fsdp_training import training_program
+from tests.nvidia.cuda._fsdp_cases import FSDP_CASES, TrainingCase
 from tilefoundry.analysis.check import check_program
 from tilefoundry.evaluator import evaluate
 
@@ -21,10 +21,10 @@ def test_two_block_transformer_training(retain, participants, replicas):
     check_training(function)
 
 
-@pytest.mark.parametrize("participants", (1, 2, 4))
-@pytest.mark.parametrize("retain", (False, True), ids=("release", "retain"))
-def test_fsdp_training_matches_dense_two_step_momentum_sgd(participants, retain):
-    module = training_program(participants, retain=retain)
+@pytest.mark.parametrize("case", FSDP_CASES, ids=lambda case: case.id)
+def test_fsdp_training_matches_dense_two_step_momentum_sgd(case: TrainingCase):
+    participants = case.participants
+    module = case.load()
     _, function = check_program(module, module.entry_function())
     generator = torch.Generator().manual_seed(183)
     w1 = torch.nn.Parameter(torch.randn(8, 8, generator=generator) / 4)
