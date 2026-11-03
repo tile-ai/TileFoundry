@@ -1542,8 +1542,9 @@ class SyncPlanMetadata(IRMetadata):
     same analysed program. Each effect's completion comes from the completion
     registry
     ([visitor-registry §4.2](./visitor-registry.md#42-completion-service--completion));
-    a retained call's effects complete on return, since the callee's own plan
-    completes its effects before it returns.
+    a retained call's register effects complete on return, since the callee's
+    own plan completes its WGMMA groups before it returns. Its shared memory
+    effects follow the rule for calls below.
   - A register access touches the storage lowering gives its value:
     `register_storage` in `analysis/emission.py` follows an instruction written
     in place to its argument and any other value along its first accepted
@@ -1595,9 +1596,11 @@ class SyncPlanMetadata(IRMetadata):
     effect without a `chain` needs it before every issue, under the tag
     `"issue"`.
   - An action with a `unit` effect MUST run in a scope whose mesh is whole,
-    aligned units holding the issuing threads, with loop bounds every thread
-    sees alike. A step of that group needs the same of the scope it is placed
-    in. When that scope does not have it, or when such an effect may still be
+    aligned units holding the issuing threads, with loop bounds the threads of
+    each unit see alike: what a barrier accepts below, or a thread coordinate
+    that reads one value across each unit. PTX `.aligned` asks this of the
+    threads of one warpgroup, so two units may loop a different number of
+    times. A step of that group needs the same of the scope it is placed in. When that scope does not have it, or when such an effect may still be
     in flight when the Function returns, the action completes in place: its
     group's commit and wait run under the tag `"after"`, and the Function is
     planned again. Its accesses stay recorded as complete, so later accesses
@@ -1621,7 +1624,7 @@ class SyncPlanMetadata(IRMetadata):
     waits for them all.
   - The family raises `AnalysisError` for an action whose mesh is not provably
     within its scope, for an action with a `unit` effect whose own scope is
-    not whole units with loop bounds every thread sees alike, for a barrier no
+    not whole units with loop bounds each unit's threads see alike, for a barrier no
     supported uniform scope can hold, and for a loop whose state does not
     settle within its limit.
 

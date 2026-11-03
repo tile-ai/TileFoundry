@@ -9,6 +9,8 @@ access needs before it may follow an earlier one, or refuses the Function. See
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from itertools import product
+from operator import mul
 
 from tilefoundry.ir.core import (
     Call,
@@ -26,11 +28,13 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.sync import SyncBarrier, classify, participation, whole_groups
 from tilefoundry.ir.types import Mesh, ShardLayout, Split, StorageKind, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
-from tilefoundry.ir.types.mesh import axis_keys, within_scope
+from tilefoundry.ir.types.layout import ComposedLayout
+from tilefoundry.ir.types.mesh import axis_keys, separate, within_scope
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.completion import Effect, Issued, completion_of
@@ -225,6 +229,38 @@ def _region_mesh(scope) -> Mesh | None:
     return next(
         (node.owner.mesh for node in scope.ancestors() if isinstance(node.owner, MeshRegion)), None
     )
+
+
+def _one_coordinate(mesh: Mesh, axis: int, size: int, bases: range) -> bool:
+    """Whether each group of *size* threads from *bases* reads one coordinate on *mesh*'s *axis*.
+
+    Every thread of a group must be one of *mesh*'s. A thread reads
+    ``((thread - start) // stride) % extent`` on an axis of its level, as the
+    runtime's ``mesh_coords`` does.
+    """
+    first = 0
+    for level in separate(mesh):
+        layout = device_layout(level)
+        if axis < first + len(layout.shape):
+            break
+        first += len(layout.shape)
+    else:
+        return False
+    start = level.layout.offset if isinstance(level.layout, ComposedLayout) else 0
+    extents, strides = layout.shape, layout.strides
+    if not all(isinstance(value, int) for value in (start, *extents, *strides)):
+        return False
+    extent, stride = extents[axis - first], strides[axis - first]
+    if extent > 1 and stride <= 0:
+        return False
+    held = {start + sum(map(mul, point, strides)) for point in product(*map(range, extents))}
+    for base in bases:
+        threads = range(base, base + size)
+        if not set(threads) <= held:
+            return False
+        if extent > 1 and len({(thread - start) // stride % extent for thread in threads}) > 1:
+            return False
+    return True
 
 
 class _Planner:
@@ -714,11 +750,26 @@ class _Planner:
             raise AnalysisError(
                 "sync: a collective step is needed outside the threads that issued it"
             )
-        self.uniform_loops(scope, mesh, "a collective step")
+        self.uniform_loops(scope, mesh, "a collective step", size)
 
-    def uniform_loops(self, scope, mesh: Mesh, what: str) -> None:
-        """Require every loop around *scope* to have bounds all threads of *mesh* agree on."""
+    def uniform_loops(self, scope, mesh: Mesh, what: str, unit: int | None = None) -> None:
+        """Require every loop around *scope* to have bounds the threads of *mesh* agree on.
+
+        A barrier needs all of them to agree. A collective step of *unit* threads
+        only needs the threads of each aligned group of *unit* to agree (PTX
+        ``.aligned``), so the trip count may differ from one group to the next.
+        """
         spanned = {topology.name for topology in mesh.topologies}
+        groups = None
+        if unit is not None and len(mesh.topologies) == 1:
+            held = participation(mesh)
+            groups = range(held.base, held.base + held.count, unit)
+
+        def fixed(coordinates: Mesh, axis: int) -> bool:
+            if axis_keys(coordinates)[axis][0] not in spanned:
+                return True
+            return groups is not None and _one_coordinate(coordinates, axis, unit, groups)
+
         entry = self.context.entry is None or self.function is self.context.entry
         uniform = {id(param) for param in self.function.params} if entry else set()
         for node in reversed(list(scope.ancestors())):
@@ -726,25 +777,28 @@ class _Planner:
             if not isinstance(loop, LoopRegion):
                 continue
             bounds = (loop.start, loop.extent, loop.step)
-            if not all(self.uniform(bound, uniform, spanned, node) for bound in bounds):
+            if not all(self.uniform(bound, uniform, fixed, node) for bound in bounds):
                 raise AnalysisError(
                     f"sync: {what} is needed inside loop {loop.induction_var.name!r}, "
                     "whose bounds may differ between the threads that must reach it"
                 )
             uniform.add(id(loop.induction_var))
 
-    def uniform(self, expr, uniform: set[int], spanned: set[str], scope) -> bool:
-        """Whether every thread of a barrier's mesh sees the same value of a loop bound."""
+    def uniform(self, expr, uniform: set[int], fixed, scope) -> bool:
+        """Whether the threads that must agree see the same value of a loop bound.
+
+        ``fixed(mesh, axis)`` says whether they read one coordinate on that mesh axis.
+        """
         if isinstance(expr, Constant) or static_dim_value(expr) is not None:
             return True
         if isinstance(expr, Var):
             return id(expr) in uniform or id(scope.capture_root(expr)) in uniform
         if isinstance(expr, Call) and isinstance(expr.target, MeshCoord):
             axis = static_dim_value(expr.args[0])
-            keys = axis_keys(expr.target.mesh)
-            return axis is not None and 0 <= axis < len(keys) and keys[axis][0] not in spanned
+            count = len(axis_keys(expr.target.mesh))
+            return axis is not None and 0 <= axis < count and fixed(expr.target.mesh, axis)
         if isinstance(expr, Call) and is_dim_op_call(expr):
-            return all(self.uniform(arg, uniform, spanned, scope) for arg in expr.args)
+            return all(self.uniform(arg, uniform, fixed, scope) for arg in expr.args)
         return False
 
     def effect(self, step: SyncStep, scope, state, limit, action=None):

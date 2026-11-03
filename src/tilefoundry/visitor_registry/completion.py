@@ -29,12 +29,12 @@ class Effect:
     """When one read or write of an issued parameter is complete.
 
     ``on_return`` effects are complete for the issuing threads when the statement
-    returns; ``group`` ones once those threads wait for ``group``; ``unknown`` ones
-    never. ``proxy`` is the path to shared memory, ``generic`` or ``async``.
-    ``unit`` is the mesh of one group of threads that run the group's steps, and
-    the issue itself, together. A ``fence`` effect on registers needs the group's
-    fence since any other access to them, except an earlier one with the same
-    ``chain``.
+    returns, ``group`` ones once those threads wait for ``group``, and ``unknown``
+    ones are ordered as ``on_return``, so their emitter must wait for them.
+    ``proxy`` is the path to shared memory, ``generic`` or ``async``. ``unit`` is
+    the mesh of one group of threads that run the group's steps, and the issue
+    itself, together. A ``fence`` effect on registers needs the group's fence
+    since any other access to them, except an earlier one with the same ``chain``.
     """
 
     param: str
