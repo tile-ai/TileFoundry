@@ -1,19 +1,19 @@
 """Generic shard propagation over a forward access relation.
 
-``derive_output_distribution`` derives per-axis ownership and reduction state
-from affine access structure, without consulting physical strides or targets.
-``derive_output_shard_layout`` realizes that result in storage. Both use the
-Op-written maps before domain bounds are intersected, so the rule is the same
-for static and dynamic shapes.
+``derive_output_shard_layout`` derives an op's output ``ShardLayout`` from the
+input shards and the relation access maps by one rule for every op. It reads
+only the maps' affine structure (which domain dim each tensor axis uses), never
+the domain bounds, so it is size-agnostic and identical for static and dynamic
+shapes.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 import isl
 
-from tilefoundry.ir.types import Layout, Mesh, ShardLayout
+from tilefoundry.ir.types import Layout, ShardLayout
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split, shard_layout_of
@@ -187,8 +187,22 @@ def _carrier_layout(
     return carrier
 
 
-def _participating_inputs(input_types):
-    """Align the participating levels before interpreting any mesh-axis index."""
+def derive_output_shard_layout(
+    input_types: tuple,
+    relations,
+    output_shape: tuple,
+    *,
+    partial_reduction_dims: "frozenset[int]" = frozenset(),
+    complete_reduction_dims: "frozenset[int]" = frozenset(),
+    fresh_strides: bool = False,
+    ctx=None,
+    storage=None,
+):
+    """Derive the output ``ShardLayout`` from the input shards and the Op's relations.
+
+    Every input is projected onto the same participating levels -- each level
+    any input distributes -- so mesh axes keep one index across the inputs.
+    """
     layouts = tuple(shard_layout_of(type_.layout) for type_ in input_types)
     required = {
         getattr(topology, "name", topology)
@@ -196,38 +210,10 @@ def _participating_inputs(input_types):
         if any(not isinstance(attr, Broadcast) for attr in layout.attrs)
         for topology in layout.mesh.topologies
     }
-    return tuple(
+    input_types = tuple(
         type_ if layout is None else replace(type_, layout=participant_layout(layout, required or None))
         for type_, layout in zip(input_types, layouts, strict=True)
     )
-
-
-@dataclass(frozen=True)
-class OutputDistribution:
-    """Hold derived mesh-axis states with Split indices in logical tensor axes.
-
-    Attributes:
-        mesh: Participating mesh.
-        attrs: Distribution attributes in mesh-axis order.
-    """
-
-    mesh: Mesh
-    attrs: tuple
-
-
-def derive_output_distribution(
-    input_types: tuple,
-    relations,
-    *,
-    partial_reduction_dims: frozenset[int] = frozenset(),
-    complete_reduction_dims: frozenset[int] = frozenset(),
-):
-    """Map input Split positions through logical axes and affine access relations.
-
-    Returns:
-        An OutputDistribution when an input carries Split or Partial; otherwise None.
-    """
-    input_types = _participating_inputs(input_types)
     sharded = [
         (i, t.layout)
         for i, t in enumerate(input_types)
@@ -236,6 +222,8 @@ def derive_output_distribution(
     ]
     if not sharded:
         return None
+    target = getattr(ctx, "target", None)
+    owners = target.storage_owners if target else StorageOwners((), {})
     mesh = sharded[0][1].mesh
     if any(layout.mesh != mesh for _index, layout in sharded):
         raise ValueError("inputs distribute over different meshes; their mesh axes do not align")
@@ -294,39 +282,9 @@ def derive_output_distribution(
                 )
             attrs[p] = new_attr
 
-    return OutputDistribution(mesh, tuple(attrs))
-
-
-def derive_output_shard_layout(
-    input_types: tuple,
-    relations,
-    output_shape: tuple,
-    *,
-    partial_reduction_dims: frozenset[int] = frozenset(),
-    complete_reduction_dims: frozenset[int] = frozenset(),
-    fresh_strides: bool = False,
-    ctx=None,
-    storage=None,
-):
-    """Derive logical distribution, then realize it using a carrier or storage."""
-    distribution = derive_output_distribution(
-        input_types, relations,
-        partial_reduction_dims=partial_reduction_dims,
-        complete_reduction_dims=complete_reduction_dims,
-    )
-    if distribution is None:
-        return None
-    input_types = _participating_inputs(input_types)
-    target = getattr(ctx, "target", None)
-    owners = target.storage_owners if target else StorageOwners((), {})
-    mesh, attrs = distribution.mesh, distribution.attrs
-    mesh_rank = len(attrs)
-    *input_maps, output_map = (access.affine for access in relations)
     carriers = [
         layout
-        for i, type_ in enumerate(input_types)
-        if isinstance(type_.layout, ShardLayout)
-        and any(isinstance(attr, (Split, Partial)) for attr in type_.layout.attrs)
+        for i, sl in sharded
         if (
             layout := _carrier_layout(
                 input_types[i],
@@ -335,7 +293,7 @@ def derive_output_shard_layout(
                 output_shape,
                 mesh,
                 mesh_rank,
-                list(attrs),
+                attrs,
                 complete_reduction_dims,
                 fresh_strides,
                 storage,
@@ -350,4 +308,4 @@ def derive_output_shard_layout(
     return ShardLayout.default(output_shape, mesh, tuple(attrs), storage=storage, owners=owners)
 
 
-__all__ = ["derive_output_distribution", "derive_output_shard_layout", "partial_reductions_by_axis"]
+__all__ = ["derive_output_shard_layout", "partial_reductions_by_axis"]

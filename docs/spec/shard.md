@@ -800,10 +800,6 @@ it does not replace the other written strides with defaults.
 Which part of a sharded tensor one mesh instance holds, answered once and read
 by both sides of a launch.
 
-The coordinate projection is defined in
-[semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
-`local_layout` applies it to the authored physical address map.
-
 ```python
 def local_layout(shard, tensor_shape, ids) -> Layout: ...
 def local_layout_and_offset(shard, tensor_shape, ids) -> tuple[Layout, int]: ...

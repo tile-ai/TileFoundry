@@ -14,7 +14,6 @@ flowchart TB
     Value["<b>Value</b>"]
     TensorValue["<b>TensorValue</b><br/>(data, type)"]
     TupleValue["<b>TupleValue</b><br/>(elements)"]
-    MeshValue["<b>MeshValue</b><br/>(values, global type, mesh)"]
 
     evaluate --> Evaluator
     Evaluator -. "Call(target=Op)" .-> registry
@@ -23,8 +22,6 @@ flowchart TB
     Evaluator -. produces .-> Value
     Value --> TensorValue
     Value --> TupleValue
-    Value --> MeshValue
-    MeshValue -->|values| TensorValue
 ```
 
 ```python
@@ -49,16 +46,17 @@ default.
 
 ## 1. `Value`
 
-An evaluated tensor is a `TensorValue`, or a `MeshValue` when its data varies
-across participants. A multi-output node (`Tuple`, a `TupleType` `Call`, or a
-multi-carry `LoopRegion`) produces a `TupleValue` containing those values.
+The values that flow through evaluation form a small hierarchy: a
+single-output node produces a `TensorValue`; a multi-output node (a
+`Tuple`, a `TupleType` `Call`, or a multi-carry `LoopRegion`)
+produces a `TupleValue`.
 
 ```python
 class Value:
     """Provide the base of every evaluated value."""
 ```
 
-- constraints: none — abstract base; concrete values are `TensorValue`, `TupleValue` and `MeshValue`.
+- constraints: none — abstract base; concrete values are `TensorValue` / `TupleValue`
 
 ### `TensorValue`
 
@@ -98,29 +96,6 @@ class TupleValue(Value):
 - constraints:
   - `elements` are the per-field `Value`s; `tuple_get_item` projects one
     by static index.
-
-### `MeshValue`
-
-```python
-class MeshValue(Value):
-    """Pair participant-local tensors with their global HIR type and mesh.
-
-    Attributes:
-        values: attribute; Local tensors in logical mesh-coordinate order.
-        type: attribute; Global HIR tensor type, including distribution.
-        mesh: attribute; Active participant mesh.
-    """
-
-    values: tuple[TensorValue, ...]
-    type: TensorType
-    mesh: Mesh
-```
-
-- constraints:
-  - `values` MUST contain one `TensorValue` for each logical coordinate, in
-    lexicographic order over the flattened mesh shape. Each member carries
-    its local tensor shape; `type` retains the global shape and distribution.
-  - Ownership and output reconstruction follow [§6](#6-layout-domain).
 
 ## 2. Parameters and inputs
 
@@ -194,8 +169,6 @@ class EvaluateContext:
         loaded_module: attribute; Runtime module reading, when one is active.
         device: attribute; Where the inputs are, or None to leave it to torch.
         dim_bindings: attribute; concrete values for symbolic ShapeDims.
-        mesh: attribute; Active static participant mesh, when present.
-        coordinates: attribute; One op invocation's logical mesh coordinates.
     """
 
     op: Any = None
@@ -204,8 +177,6 @@ class EvaluateContext:
     loaded_module: Any | None = None
     device: str | None = None
     dim_bindings: Mapping[str, int] = field(default_factory=dict)
-    mesh: Any = None
-    coordinates: tuple[int, ...] | None = None
 
     def for_op(self, op: Any, args: tuple[Any, ...], result_type: Any) -> EvaluateContext: ...
 
@@ -282,60 +253,29 @@ are evaluated once in the enclosing scope. With `k = len(yield_values)`:
 
 ## 6. Layout domain
 
-Evaluation infers participation from `MeshRegion` and operand `ShardLayout`
-values. A static, single-level GPU mesh executes its logical participants on
-the caller's existing torch device. Ownership uses the coordinate projection
-in [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
+Evaluation models a **single mesh participant** and operates on logical
+values:
 
-- constraints:
-  - GPU participant execution MUST require positive static mesh extents,
-    concrete tensor shapes and evenly divided shards. Symbolic GPU tensor
-    shapes MUST be specialized before local projection. `Dynamic` distribution
-    and transitions between different participant meshes MUST be refused.
-  - CTA/warp/thread reference evaluation MUST retain its global logical view.
-    An active GPU participant value MUST NOT cross into a different mesh,
-    including a hierarchical GPU-to-CTA mesh. `Local` on a `Split` axis MUST
-    require GPU participant execution.
-  - Matching topology and physical arrangement identify the same participants;
-    mesh-axis names are labels. Ownership selection MUST use logical mesh
-    coordinates, including when physical ranks are permuted.
-  - Each participant-local operation MUST receive local tensor shapes and data.
-    Calls and loop iterations MUST retain the active mesh and fresh memo scopes.
-    Invariant values remain canonical until an operation needs their local
-    pieces; replicated symbolic inputs need no projection merely to enter a mesh.
-  - `MeshCoord` MUST read the invocation's logical coordinate. `Local` MUST
-    expose an already-local value without slicing it again. Participant-local
-    `Reshape` MUST use the inferred local result shape.
-  - Canonical inputs MUST NOT supply unresolved `Partial` contributions.
-    Ordinary participant-local operations MUST reject unresolved `Partial`
-    operands and require explicit resolution through `Reshard`.
-  - Output reconstruction MUST assemble the declared global tensor from its
-    `Split` pieces, require agreement of `Broadcast`/plain replicas, and reject
-    unresolved `Partial` results. Reconstruction is observation and MUST NOT
-    count as communication performed by the HIR program.
-  - `Reshard` MUST support unchanged ownership, `Broadcast`-to-`Split`,
-    `Split`-to-`Broadcast`, and `Partial(sum)`-to-`Split`/`Broadcast` using actual
-    local values. Unchanged mesh coordinates define separate subgroups. Within
-    each group, `Split` pieces reconstruct indices, replicated contributions
-    agree, and each distinct `Partial` coordinate contributes once to the sum.
-    Unsupported transitions, including general `Split`-to-`Split` and creation
-    of `Partial` from a replica, MUST raise `EvalError`.
-  - A no-op redistribution MUST retain local data; a changed distribution
-    MUST materialize destination values. These are logical value semantics;
-    collective algorithms and transport timing are not part of evaluation.
-  - Loop bounds MUST be uniform, statically resolvable values.
-  - When `Reduce` reduces a `Split` axis, evaluation MUST reconstruct the
-    logical input and perform the complete reduction, including global mean
-    normalization. Reduction over unsplit axes remains participant-local.
-    MatMul's split contraction instead leaves `Partial(sum)` for explicit
-    resolution, according to [hir §1.3](./hir.md#13-op).
-  - An axis-bearing op (`Reduce`, `rms_norm`, ...) MUST address logical tensor
-    axes, regardless of the layout domain. A logical `Reshape`
-    ([hir §1.3](./hir.md#13-op)) expresses different grouping before the op.
-    `Reshard` changes distribution/layout; a local op indexes or reduces the
-    logical axes of its participant's piece.
-  - `as_layout_view(value: TensorValue) -> torch.Tensor` reshapes logical data
-    to the element organization of `type.layout.shape` (the inner layout shape
-    for a `ShardLayout`) in default-contiguous order. `from_layout_view(data,
-    type)` is its inverse. These helpers serve layout-domain operations; the
-    current op handlers operate on logical tensor axes.
+- An axis-bearing op (`Reduce`, `rms_norm`, …) addresses its `axis` /
+  `axes` in the operand's **logical** `TensorType.shape`, regardless of
+  `type.layout`. A computation that must group a logical axis differently
+  (e.g. per-head normalisation) is expressed by a logical `Reshape`
+  ([hir §1.3](./hir.md#13-op)) to the target logical shape *before* the op; the
+  op's axis then indexes that reshaped logical shape. `Reshard` only
+  changes distribution / layout and never changes which values an op
+  reduces or indexes.
+- `as_layout_view(value: TensorValue) -> torch.Tensor` reshapes `data`
+  from its logical shape to the element organisation of
+  `type.layout.shape` (for a `ShardLayout`, its `layout.shape`) under
+  default-contiguous ordering; `from_layout_view(data, type)` is the
+  inverse. These are provided for an op explicitly defined to compute in
+  the layout domain; no op in the current set is layout-domain, so none
+  of them call these helpers.
+- `Reshard` ([hir §1.3](./hir.md#13-op)) preserves the logical value and MAY
+  reshape it into the target layout's shape; it performs no
+  cross-participant data movement.
+- `Local` ([hir §1.3](./hir.md#13-op)) returns its operand's value only when
+  its input `ShardLayout` has no `Split` attribute. For a split axis it MUST
+  raise `EvalError` saying that the evaluator models one mesh participant and
+  linking to this section, until the mesh evaluator models that path. An
+  unmodelled path MUST identify itself rather than leaking a torch exception.

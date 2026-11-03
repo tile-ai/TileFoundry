@@ -5,6 +5,7 @@ from itertools import zip_longest
 from math import prod
 
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
@@ -13,7 +14,6 @@ from tilefoundry.ir.types import ComposedLayout, TensorType
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
 from tilefoundry.ir.types.layout_algebra import coalesce, domain_offset
-from tilefoundry.ir.types.mesh import separate
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
@@ -88,23 +88,17 @@ def _buffer_alias(call: Call) -> int | None:
         axes = mode_axes(profile)
         independent, splits = set(), []
         if shard is not None:
-            topology_axes = tuple(
-                part.topologies[0].name
-                for part in separate(shard.mesh)
-                for _ in flatten(part.layout).shape
-            )
             for mesh_axis, attr in enumerate(shard.attrs):
                 if (
                     isinstance(attr, Split)
                     and static_dim_value(tuple(flatten(shard.mesh.layout.shape))[mesh_axis]) != 1
-                    and (flat.strides[attr.axis] == 0 or topology_axes[mesh_axis] == "gpu")
+                    and flat.strides[attr.axis] == 0
                 ):
                     position = attr.axis
                     suffix = prod(flat.shape[index] for index in range(position + 1, len(axes))
                                   if axes[index] == axes[position])
-                    splits.append((shard.mesh.topologies, shard.mesh.layout, mesh_axis, axes[position], suffix, flat.shape[position]))
-                    if flat.strides[attr.axis] == 0:
-                        independent.add(position)
+                    splits.append((mesh_axis, axes[position], suffix, flat.shape[position]))
+                    independent.add(position)
         kept = tuple(
             (extent, step)
             for index, (extent, step) in enumerate(zip(flat.shape, flat.strides, strict=True))
@@ -170,6 +164,5 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Reshard)
 def _eval_reshard(ctx):
-    from tilefoundry.evaluator.mesh import redistribute  # noqa: PLC0415 -- import cycle
 
-    return redistribute(ctx.args[0], ctx.result_type, ctx.mesh)
+    return TensorValue(data=ctx.args[0].data, type=ctx.result_type)

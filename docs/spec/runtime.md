@@ -803,21 +803,6 @@ class ShardTensor:
     device together. One weight read on two cards is two tensors, and a key of
     the name alone hands a reader on one card what another card holds.
 
-#### Logical reference views
-
-```python
-def logical_local_view(tensor, held: TensorType, coordinates: tuple[int | None, ...]): ...
-```
-
-- constraints:
-  - The input contains the whole logical tensor. The function MUST select its
-    participant-local elements using the canonical logical index map and the
-    projection defined in
-    [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
-    Authored physical offsets, private-engine strides and swizzles MUST NOT
-    change that selection.
-  - An input type with no `ShardLayout` returns the whole input tensor.
-
 ---
 
 ## 2. C++ Runtime Surface

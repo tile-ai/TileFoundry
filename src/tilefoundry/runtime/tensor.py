@@ -13,33 +13,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.types import Placement, Topology
-from tilefoundry.ir.types.layout import Layout, flatten, normalize_layout
-from tilefoundry.ir.types.shard_layout import (
-    local_layout_and_offset,
-    shard_layout_of,
-)
-from tilefoundry.ir.types.shard_projection import logical_projection
+from tilefoundry.ir.types.layout import Layout, normalize_layout
+from tilefoundry.ir.types.shard_layout import local_layout_and_offset, shard_layout_of
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.utils.lazy import torch
-
-
-def _strided_local_view(tensor, layout, offset):
-    """Apply the shared local projection to an already matching tensor engine."""
-    return tensor.as_strided(
-        layout.shape, layout.strides, storage_offset=tensor.storage_offset() + offset
-    )
-
-
-def logical_local_view(tensor, held: TensorType, coordinates: tuple[int | None, ...]):
-    """Select canonical global tensor elements at the requested mesh coordinates."""
-    shard = shard_layout_of(held.layout)
-    if shard is None:
-        return tensor
-    layout, offset = logical_projection(
-        shard.layout.shape, tuple(held.shape), flatten(shard.mesh.layout).shape,
-        shard.attrs, coordinates,
-    )
-    return _strided_local_view(tensor.contiguous(), layout, offset)
 
 
 @dataclass(frozen=True)
@@ -92,7 +69,9 @@ class ShardTensor:
                 f"while its type says {tuple(layout.strides)}; the offset is counted "
                 f"in the type's strides, so the tensor must be laid out in them"
             )
-        return _strided_local_view(self.tensor, layout, offset)
+        return self.tensor.as_strided(
+            layout.shape, layout.strides, storage_offset=self.tensor.storage_offset() + offset
+        )
 
 
 __all__ = ["ShardTensor"]

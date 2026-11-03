@@ -548,10 +548,6 @@ class BufferAlias:
     replica changes the set. A plain end has a copy on every
     instance of the other end's mesh; two sharded ends retain their own mesh
     selections. Every other Reshard MUST retain its independent buffer.
-    In particular, a nonzero global stride on a GPU Split does not make its
-    device engines shared. Split-to-Broadcast materialization and a changed
-    physical rank arrangement cannot alias merely because their coalesced
-    global address layouts agree.
   - Bitcast MUST alias its source and allocate no independent buffer. Its
     declared access relation MUST bijectively map result coordinates to source
     coordinates with the same physical address, requiring the source's

@@ -11,8 +11,6 @@ downstream.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import isl
 import pytest
 
@@ -28,7 +26,6 @@ from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split
 from tilefoundry.utils.isl_utils import as_multi_aff
 from tilefoundry.visitor_registry.access_relation import AccessRelation
 from tilefoundry.visitor_registry.shard_propagate import (
-    derive_output_distribution,
     derive_output_shard_layout,
     partial_reductions_by_axis,
 )
@@ -37,20 +34,6 @@ _GPU = Mesh((Topology("gpu", 8),), Layout((8,), (1,)), names=("g",))
 
 
 _GPU2 = Mesh((Topology("gpu", 4),), Layout((2, 2), (2, 1)), names=("a", "b"))
-
-
-def test_logical_propagation_is_independent_of_physical_strides():
-    lhs = make_tensor_type((8, 8), layout=_shard2((8, 8), Split(0), Split(1)))
-    rhs = make_tensor_type((8, 8), layout=_shard2((8, 8), Broadcast(), Split(0)))
-    transposed_storage = replace(lhs, layout=replace(lhs.layout, layout=Layout((8, 8), (1, 8))))
-    result = derive_output_distribution(
-        (lhs, rhs), _matmul_relation(), partial_reduction_dims=frozenset({2}),
-    )
-    assert result.mesh == _GPU2
-    assert result.attrs == (Split(0), Partial("sum"))
-    assert derive_output_distribution(
-        (transposed_storage, rhs), _matmul_relation(), partial_reduction_dims=frozenset({2}),
-    ) == result
 
 
 def _access(source: str) -> AccessRelation:

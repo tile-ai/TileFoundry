@@ -8,6 +8,7 @@ from tilefoundry.ir.types.stride import idx2crd
 
 from .layout import ComposedLayout, LayoutBase
 from .mesh import Mesh
+from .stride import compact_row_major, crd2idx
 
 
 class ShardAttr:
@@ -48,6 +49,52 @@ def B() -> Broadcast:
     return Broadcast()
 
 
+def _factor_axis(axis_size, mesh_shape, splitting_mesh_axes, logical_axis):
+    """Factor a logical axis once for default construction and taking local."""
+    from .dim import exact_quotient  # noqa: PLC0415
+
+    axis_static = isinstance(axis_size, int) and not isinstance(axis_size, bool)
+    if len(splitting_mesh_axes) == 1 and not axis_static:
+        return (axis_size,)
+    factors = []
+    if not axis_static:
+        residual = axis_size
+        for mesh_axis in splitting_mesh_axes:
+            extent = mesh_shape[mesh_axis]
+            quotient = exact_quotient(residual, extent)
+            if quotient is None:
+                raise ValueError(
+                    f"default_shard_layout: logical axis {logical_axis} size "
+                    f"{axis_size!r} is dynamic; cannot factorize across multiple "
+                    "mesh axes (undecidable division by axis "
+                    f"{mesh_axis} extent {extent!r})"
+                )
+            factors.append(extent)
+            residual = quotient
+    else:
+        extent_product = 1
+        for mesh_axis in splitting_mesh_axes:
+            extent = mesh_shape[mesh_axis]
+            if not isinstance(extent, int) or isinstance(extent, bool):
+                raise ValueError(
+                    f"default_shard_layout: mesh axis {mesh_axis} has a "
+                    f"dynamic extent {extent!r}; cannot factorize logical "
+                    f"axis {logical_axis}"
+                )
+            factors.append(extent)
+            extent_product *= extent
+        if axis_size % extent_product:
+            raise ValueError(
+                f"default_shard_layout: logical axis {logical_axis} size "
+                f"{axis_size} is not divisible by mesh extent product "
+                f"{extent_product}"
+            )
+        residual = axis_size // extent_product
+    if residual != 1:
+        factors.append(residual)
+    return tuple(factors)
+
+
 @dataclass(frozen=True)
 class ShardLayout(LayoutBase):
     """Bind an underlying layout's domain axes to a mesh."""
@@ -59,9 +106,26 @@ class ShardLayout(LayoutBase):
     @classmethod
     def default(cls, shape, mesh, attrs, *, storage, owners):
         """Factor logical axes by their mesh splits, then construct default strides."""
-        from .shard_projection import factor_domain  # noqa: PLC0415 -- staged type imports
+        mesh_shape = flatten(mesh.layout).shape
+        bindings = {}
+        for mesh_axis, attr in enumerate(attrs):
+            if isinstance(attr, Split):
+                if mesh_axis >= len(mesh_shape) or attr.axis >= len(shape):
+                    raise ValueError(f"Split({attr.axis}) has no matching mesh axis {mesh_axis}")
+                bindings.setdefault(attr.axis, []).append(mesh_axis)
+        layout_shape, factor_position = [], {}
+        for logical_axis, axis_size in enumerate(shape):
+            splitting = bindings.get(logical_axis, ())
+            for index, mesh_axis in enumerate(splitting):
+                factor_position[mesh_axis] = len(layout_shape) + index
+            layout_shape.extend(_factor_axis(axis_size, mesh_shape, splitting, logical_axis) if splitting else (axis_size,))
 
-        layout_shape, remapped_attrs = factor_domain(shape, flatten(mesh.layout).shape, attrs)
+        remapped_attrs = tuple(
+            Split(factor_position[mesh_axis]) if isinstance(attr, Split) else attr
+            for mesh_axis, attr in enumerate(attrs)
+        )
+        layout_shape = tuple(layout_shape)
+
         return cls.from_modes(layout_shape, mesh, remapped_attrs, storage=storage, owners=owners)
 
     @classmethod
@@ -174,17 +238,63 @@ def split_target_axes(sl: "ShardLayout", tensor_shape: tuple) -> tuple:
 
 
 def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
-    """Apply a logical domain projection to the authored physical address map."""
-    from .mesh import levels  # noqa: PLC0415
-    from .shard_projection import project_domain  # noqa: PLC0415 -- staged type imports
+    """Fix mesh-axis coordinates with CuTe slice; None keeps an axis."""
+    from tilefoundry.ir.isl_interop import normalize_dim  # noqa: PLC0415
 
-    mesh = flatten(shard.mesh.layout)
+    from .int_tuple import product  # noqa: PLC0415
+    from .int_tuple import unflatten as unflatten_tuple  # noqa: PLC0415
+    from .layout import unflatten  # noqa: PLC0415
+    from .layout_algebra import slice_and_offset  # noqa: PLC0415
+    from .mesh import levels  # noqa: PLC0415
+
+    address = shard.layout
+    primitive = address.outer if isinstance(address, ComposedLayout) else address
+    profile = compatible_profile(primitive.shape, tensor_shape)
+    flat, mesh = flatten(primitive), flatten(shard.mesh.layout)
     coords = tuple(coords) + (None,) * (len(shard.attrs) - len(coords))
-    projection = project_domain(
-        shard.layout.shape, tensor_shape, mesh.shape, shard.attrs, coords
+    shape, strides, fixed, positions = [], [], [], {}
+    for mode, (extent, stride) in enumerate(zip(flat.shape, flat.strides, strict=True)):
+        axes = [
+            axis
+            for axis, attr in enumerate(shard.attrs)
+            if isinstance(attr, Split) and attr.axis == mode
+        ]
+        normalize = any(coords[axis] is not None for axis in axes)
+        factors = _factor_axis(extent, mesh.shape, axes, mode) if normalize else (extent,)
+        steps = compact_row_major(factors)
+        for index, mesh_axis in enumerate(axes):
+            positions[mesh_axis] = len(shape) + (index if normalize else 0)
+        for index, (factor, step) in enumerate(zip(factors, steps, strict=True)):
+            axis = axes[index] if index < len(axes) else None
+            symbolic_whole = len(axes) == 1 and not isinstance(extent, int)
+            fixed.append(
+                coords[axis]
+                if axis is not None and not symbolic_whole and factor == mesh.shape[axis]
+                else None
+            )
+            shape.append(factor)
+            strides.append(normalize_dim(crd2idx(step, factor, stride)))
+    profile = compatible_profile(tuple(shape), tensor_shape)
+    grouped = unflatten(Layout(tuple(shape), tuple(strides)), profile)
+    c = unflatten_tuple(tuple(fixed), profile)
+    sliced, offset = slice_and_offset(
+        c, replace(address, outer=grouped) if isinstance(address, ComposedLayout) else grouped
     )
-    sliced, offset = projection.apply(shard.layout)
-    fixed, positions = projection.coordinates, projection.split_positions
+    local_shape = tuple(
+        normalize_dim(
+            product(
+                tuple(n for n, at in zip(flatten(mode), flatten(coord), strict=True) if at is None)
+            )
+        )
+        for mode, coord in zip(profile, c, strict=True)
+    )
+    inner = sliced.outer if isinstance(sliced, ComposedLayout) else sliced
+    inner = unflatten(flatten(inner), compatible_profile(inner.shape, local_shape))
+    sliced = (
+        replace(sliced, outer=inner, offset=normalize_dim(sliced.offset))
+        if isinstance(sliced, ComposedLayout)
+        else inner
+    )
     kept = {old: new for new, old in enumerate(i for i, at in enumerate(fixed) if at is None)}
     remaining = [axis for axis, at in enumerate(coords) if at is None]
     if remaining:
@@ -217,15 +327,25 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
             for axis in remaining
         )
         sliced = ShardLayout(sliced, attrs, frame)
-    return sliced, offset
+    return sliced, normalize_dim(offset)
 
 
 def _local_readback(layout):
     """Read a local mode tree as the host/HIR logical-axis Layout."""
-    from .shard_projection import axis_layout  # noqa: PLC0415 -- staged type imports
+    from .layout_algebra import coalesce  # noqa: PLC0415
 
     address = layout.layout if isinstance(layout, ShardLayout) else layout
-    return axis_layout(address)
+    result = coalesce(address, (0,) * len(address.shape), major="row")
+    primitive = result.outer if isinstance(result, ComposedLayout) else result
+    shape = tuple(
+        mode[0] if isinstance(mode, tuple) and len(mode) == 1 else mode for mode in primitive.shape
+    )
+    strides = tuple(
+        mode[0] if isinstance(mode, tuple) and len(mode) == 1 else mode
+        for mode in primitive.strides
+    )
+    plain = Layout(shape, strides)
+    return replace(result, outer=plain) if isinstance(result, ComposedLayout) else plain
 
 
 def local_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None, ...]):
