@@ -16,6 +16,7 @@ from pathlib import Path
 
 import torch
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core.param_def import MemoryEffect
 
@@ -342,7 +343,7 @@ def _prepare(op, params, types):
             if raw
             else torch.empty(0, dtype=to_torch_dtype(type.dtype))
         )
-        args.append(TensorValue(tensor.reshape(tuple(type.shape)), type))
+        args.append(TensorValue(ShardTensor(type, tensor.reshape(tuple(type.shape)))))
     return machine, banks, placements, tuple(args)
 
 

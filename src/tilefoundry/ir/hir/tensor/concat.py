@@ -4,6 +4,7 @@ from typing import Tuple
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
@@ -169,4 +170,4 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 def _eval_concat(ctx):
 
     out = torch.cat([v.data for v in ctx.args], dim=ctx.op.axis)
-    return TensorValue(data=out, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, out))

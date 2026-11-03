@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue, to_torch_dtype
 from tilefoundry.ir.core import Op
@@ -215,8 +216,8 @@ def _eval_quant(ctx):
     )
     return TupleValue(
         elements=(
-            TensorValue(data=quantized, type=ctx.result_type.fields[0]),
-            TensorValue(data=scale, type=ctx.result_type.fields[1]),
+            TensorValue(ShardTensor(ctx.result_type.fields[0], quantized)),
+            TensorValue(ShardTensor(ctx.result_type.fields[1], scale)),
         )
     )
 

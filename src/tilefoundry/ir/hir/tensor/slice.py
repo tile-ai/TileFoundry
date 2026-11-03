@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue
@@ -303,7 +304,7 @@ def _eval_slice(ctx):
                 f"stride={stride}, extent={ctx.args[0].data.shape[axis]}"
             )
         key.append(slice(start, start + size * stride, stride))
-    return TensorValue(data=ctx.args[0].data[tuple(key)], type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, ctx.args[0].data[tuple(key)]))
 
 
 __all__ = ["Slice", "slice_size"]

@@ -12,6 +12,7 @@ from tests.core.ops.ir.op_case import (
     infer_call,
     op_case_test,
 )
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.context import EvaluateContext
 from tilefoundry.evaluator.registry import eval_registry
 from tilefoundry.evaluator.value import TensorValue, TupleValue
@@ -71,13 +72,13 @@ def test_split_values_carry_field_types() -> None:
     result = handler(
         EvaluateContext(
             op=op,
-            args=(TensorValue(torch.arange(32).reshape(8, 4).float(), source_type),),
+            args=(TensorValue(ShardTensor(source_type, torch.arange(32).reshape(8, 4).float())),),
             result_type=result_type,
         )
     )
     assert isinstance(result, TupleValue)
     assert tuple((element.type for element in result.elements)) == result_type.fields
-    assert not hasattr(result, "type")
+    assert result.type == result_type
 
 
 def _make_split_costs_one_full_read_and_write() -> OpCase:

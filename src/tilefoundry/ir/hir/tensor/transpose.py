@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -75,4 +76,4 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 @register_eval(Transpose)
 def _eval_transpose(ctx):
     out = torch.permute(ctx.args[0].data, tuple(ctx.op.perm)).contiguous()
-    return TensorValue(data=out, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, out))

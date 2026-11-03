@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -117,10 +118,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 def _eval_index_add(ctx):
     dst, index, src = (arg.data for arg in ctx.args)
     dim = _norm_dim(ctx.op.dim, dst.dim())
-    return TensorValue(
-        data=dst.clone().index_add_(dim, index, src),
-        type=ctx.result_type,
-    )
+    return TensorValue(ShardTensor(ctx.result_type, dst.clone().index_add_(dim, index, src)))
 
 
 __all__ = ["IndexAdd"]

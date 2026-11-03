@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -41,8 +42,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 def _eval_gelu(ctx):
 
     return TensorValue(
-        data=torch.nn.functional.gelu(ctx.args[0].data, approximate=ctx.op.approximate),
-        type=ctx.result_type,
+        ShardTensor(
+            ctx.result_type,
+            torch.nn.functional.gelu(ctx.args[0].data, approximate=ctx.op.approximate),
+        )
     )
 
 

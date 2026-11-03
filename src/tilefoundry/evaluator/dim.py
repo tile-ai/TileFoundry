@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Constant
@@ -109,8 +110,10 @@ def _dim_op_eval(op_cls: type, fold: Callable[[int, int], int]):
         if op_cls in (DimFloorDiv, DimMod) and operands[1] == 0:
             raise EvalError(f"evaluator: {name} by zero")
         return TensorValue(
-            data=ctx.args[0].data.new_tensor(int(fold(*operands))),
-            type=ctx.result_type,
+            ShardTensor(
+                ctx.result_type,
+                ctx.args[0].data.new_tensor(int(fold(*operands))),
+            )
         )
 
     return _eval

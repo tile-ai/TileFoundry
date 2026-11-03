@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
@@ -46,4 +47,4 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 def _eval_cast(ctx):
 
     out = ctx.args[0].data.to(to_torch_dtype(ctx.op.dtype))
-    return TensorValue(data=out, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, out))

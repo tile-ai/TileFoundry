@@ -4,6 +4,7 @@ from dataclasses import replace
 from itertools import zip_longest
 from math import prod
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
@@ -165,4 +166,4 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 @register_eval(Reshard)
 def _eval_reshard(ctx):
 
-    return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, ctx.args[0].data))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
@@ -199,4 +200,4 @@ def _eval_matmul(ctx):
         out = torch.matmul(lhs, rhs)
     else:
         out = torch.matmul(lhs.float(), rhs.float()).to(to_torch_dtype(ctx.result_type.dtype))
-    return TensorValue(data=out, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, out))

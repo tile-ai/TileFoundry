@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
@@ -103,4 +104,4 @@ def _eval_rms_norm(ctx):
     wf = ctx.args[1].data.float()
     ms = xf.pow(2).mean(dim=-1, keepdim=True)
     out = xf * torch.rsqrt(ms + ctx.op.eps) * wf
-    return TensorValue(data=out.to(to_torch_dtype(ctx.result_type.dtype)), type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, out.to(to_torch_dtype(ctx.result_type.dtype))))

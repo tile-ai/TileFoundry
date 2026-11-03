@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
@@ -42,7 +43,7 @@ def _eval_empty(ctx):
 
     shape = tuple(resolve_dim(d, ctx.dim_bindings) for d in ctx.op.type.shape)
     data = torch.zeros(shape, dtype=to_torch_dtype(ctx.op.type.dtype), device=ctx.device)
-    return TensorValue(data=data, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, data))
 
 
 @register_access_relation(Empty)

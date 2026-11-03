@@ -5,6 +5,7 @@ Contract and constraints: `spec hir § CacheUpdate`.
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Constant, Op
@@ -235,7 +236,7 @@ def _eval_cache_update(ctx):
         )
     out = cache.clone()
     out[:, cur_pos : cur_pos + s] = new[:, :s].to(out.dtype)
-    return TensorValue(data=out, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, out))
 
 
 __all__ = ["CacheUpdate"]

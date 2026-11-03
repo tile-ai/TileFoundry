@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -28,7 +29,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 @register_eval(Rank)
 def _eval_rank(ctx):
     data = torch.tensor(ctx.args[0].data.ndim, dtype=torch.int64)
-    return TensorValue(data=data, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, data))
 
 
 register_access_relation(Rank)(readnone_relations(lambda types: ()))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Op
@@ -124,7 +125,7 @@ def _eval_split(ctx):
     parts = torch.chunk(source, n, dim=axis)
     return TupleValue(
         tuple(
-            TensorValue(data=part, type=field_type)
+            TensorValue(ShardTensor(field_type, part))
             for part, field_type in zip(parts, ctx.result_type.fields)
         )
     )

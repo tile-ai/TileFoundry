@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
 from tilefoundry.ir.core import Op
@@ -158,12 +159,16 @@ def _eval_rope(ctx):
     return TupleValue(
         elements=(
             TensorValue(
-                data=q_out.to(to_torch_dtype(ctx.result_type.fields[0].dtype)),
-                type=ctx.result_type.fields[0],
+                ShardTensor(
+                    ctx.result_type.fields[0],
+                    q_out.to(to_torch_dtype(ctx.result_type.fields[0].dtype)),
+                )
             ),
             TensorValue(
-                data=k_out.to(to_torch_dtype(ctx.result_type.fields[1].dtype)),
-                type=ctx.result_type.fields[1],
+                ShardTensor(
+                    ctx.result_type.fields[1],
+                    k_out.to(to_torch_dtype(ctx.result_type.fields[1].dtype)),
+                )
             ),
         )
     )

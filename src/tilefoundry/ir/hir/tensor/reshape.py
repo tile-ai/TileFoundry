@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
@@ -232,4 +233,4 @@ def _eval_reshape(ctx):
         raise EvalError(
             f"reshape: at most one dynamic axis can be inferred, got new_shape={ctx.op.new_shape!r}"
         )
-    return TensorValue(data=ctx.args[0].data.reshape(shape), type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, ctx.args[0].data.reshape(shape)))

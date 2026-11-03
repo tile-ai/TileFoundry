@@ -4,6 +4,7 @@ from typing import Tuple
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -87,7 +88,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 @register_eval(Stack)
 def _eval_stack(ctx):
     data = torch.stack(tuple(arg.data for arg in ctx.args), dim=ctx.op.axis)
-    return TensorValue(data=data, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, data))
 
 
 @register_access_relation(Stack)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
@@ -275,12 +276,16 @@ def _eval_topk(ctx):
     return TupleValue(
         elements=(
             TensorValue(
-                data=vals.to(to_torch_dtype(ctx.result_type.fields[0].dtype)),
-                type=ctx.result_type.fields[0],
+                ShardTensor(
+                    ctx.result_type.fields[0],
+                    vals.to(to_torch_dtype(ctx.result_type.fields[0].dtype)),
+                )
             ),
             TensorValue(
-                data=idx.to(to_torch_dtype(ctx.result_type.fields[1].dtype)),
-                type=ctx.result_type.fields[1],
+                ShardTensor(
+                    ctx.result_type.fields[1],
+                    idx.to(to_torch_dtype(ctx.result_type.fields[1].dtype)),
+                )
             ),
         )
     )

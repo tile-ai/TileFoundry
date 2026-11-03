@@ -6,6 +6,7 @@ from math import prod
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
@@ -322,4 +323,4 @@ def _eval_bitcast(ctx):
         indices[result_index] = source_index
     index = torch.tensor(indices, dtype=torch.int64, device=source.data.device)
     data = source.data.reshape(-1).index_select(0, index).reshape(result.shape)
-    return TensorValue(data=data, type=result)
+    return TensorValue(ShardTensor(result, data))

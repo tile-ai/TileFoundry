@@ -12,7 +12,7 @@ flowchart TB
     registry["<b>eval_registry</b><br/>register_eval(Op)"]
     handler["per-op handler<br/>(EvaluateContext → Value)"]
     Value["<b>Value</b>"]
-    TensorValue["<b>TensorValue</b><br/>(data, type)"]
+    TensorValue["<b>TensorValue</b><br/>(tensor)"]
     TupleValue["<b>TupleValue</b><br/>(elements)"]
 
     evaluate --> Evaluator
@@ -34,7 +34,8 @@ def evaluate(
 
 `evaluate` binds `inputs` to the selected `Function`'s parameters in
 order, walks the body, and returns the logical tensor for a single
-output or a tuple for a `TupleType` result. When passed a `LoadedModule`,
+output or a tuple for a `TupleType` result; an output that differs per unit
+is returned as its scattered `ShardTensor`. When passed a `LoadedModule`,
 it binds only activation inputs; declared constants are loaded lazily from
 that reading at first use. A loaded module runs its declared `entry`; callers
 select another function or child on the `LoadedModule` before calling
@@ -62,20 +63,26 @@ class Value:
 
 ```python
 class TensorValue(Value):
-    """Pair a logical tensor value with its HIR type.
+    """Hold one ShardTensor; its type is the tensor's.
 
     Attributes:
-        data: attribute; Logical tensor value.
-        type: attribute; HIR tensor type, including layout.
+        tensor: attribute; The value, packed or one piece per unit.
+        type: property; ``tensor.type``.
+        data: property; The packed global tensor.
     """
 
-    data: torch.Tensor
-    type: TensorType
+    tensor: ShardTensor
 ```
 
 - constraints:
-  - `data` holds the value in its **logical shape** — the shape of
-    `type` ([types §2](./types.md#2-tensortype)), not a layout-domain shape.
+  - `tensor` is a `ShardTensor` ([runtime §1.10](./runtime.md#110-shardtensor)).
+    Packed, it holds the value in its **logical shape** -- the shape of
+    `type` ([types §2](./types.md#2-tensortype)), not a layout-domain shape --
+    and a `Partial` value as its reduced value, which every consumer type
+    inference admits commutes with. Scattered, it holds one piece per unit
+    ([§6](#6-layout-domain)).
+  - `data` MUST raise `EvalError` for a scattered value: it has no single
+    tensor.
   - `type.layout`, when a `ShardLayout` or `Layout`, drives the
     layout-domain projection of [§6](#6-layout-domain).
   - A scalar value is a rank-0 `data` with a rank-0 `TensorType`.
@@ -96,14 +103,17 @@ class TupleValue(Value):
 - constraints:
   - `elements` are the per-field `Value`s; `tuple_get_item` projects one
     by static index.
+  - `type` is the `TupleType` of the element types, so a tuple argument is
+    checked at a Function boundary like any other.
 
 ## 2. Parameters and inputs
 
 `evaluate` binds each entry-`Function` parameter `Var` to the
 corresponding positional input:
 
-- An input MUST be convertible to a torch tensor; it is cast to the
-  parameter `TensorType`'s dtype.
+- An input MUST be a `ShardTensor` whose type is compatible with the
+  parameter's, or convertible to a torch tensor; a torch input is the packed
+  global value, cast to the parameter `TensorType`'s dtype.
 - Weights and activations are bound identically — a weight is an
   ordinary `Function` parameter, not a distinct constant carrier.
 - Each `DimVar` ([types §3](./types.md#3-dtype)) appearing in a parameter's

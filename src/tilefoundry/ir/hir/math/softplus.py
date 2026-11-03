@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -35,7 +36,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 @register_eval(Softplus)
 def _eval_softplus(ctx):
 
-    return TensorValue(data=torch.nn.functional.softplus(ctx.args[0].data), type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, torch.nn.functional.softplus(ctx.args[0].data)))
 
 
 register_access_relation(Softplus)(identity_relations)

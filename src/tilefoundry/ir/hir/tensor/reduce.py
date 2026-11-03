@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -152,7 +153,7 @@ def _eval_reduce(ctx):
         for axis in axes:
             reduced[axis] = 1
         out = torch.full(reduced, identity, dtype=x.dtype, device=x.device)
-        return TensorValue(data=out if keepdim else out.squeeze(dim=axes), type=ctx.result_type)
+        return TensorValue(ShardTensor(ctx.result_type, out if keepdim else out.squeeze(dim=axes)))
     if kind is ReduceKind.MEAN:
         out = x.mean(dim=axes, keepdim=keepdim)
     elif kind is ReduceKind.SUM:
@@ -165,7 +166,7 @@ def _eval_reduce(ctx):
         out = x.amin(dim=axes, keepdim=keepdim)
     else:
         raise ValueError(f"evaluator: unsupported ReduceKind {kind}")
-    return TensorValue(data=out, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, out))
 
 
 def _kept(shape: tuple) -> int:

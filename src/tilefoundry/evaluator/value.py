@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.core import ShardTensor
+from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.utils.lazy import torch
 
@@ -18,10 +19,20 @@ class Value:
 
 @dataclass(frozen=True)
 class TensorValue(Value):
-    """A logical tensor value paired with its HIR type."""
+    """One ``ShardTensor``; its type is the tensor's."""
 
-    data: torch.Tensor
-    type: TensorType
+    tensor: ShardTensor
+
+    @property
+    def type(self) -> TensorType:
+        return self.tensor.type
+
+    @property
+    def data(self) -> torch.Tensor:
+        """The one global logical tensor; a value that differs per unit has none."""
+        if not self.tensor.packed:
+            raise EvalError("value differs per unit, so it has no single tensor")
+        return self.tensor.tensor
 
 
 @dataclass(frozen=True)
@@ -29,6 +40,11 @@ class TupleValue(Value):
     """An aggregate of values projected by ``tuple_get_item``."""
 
     elements: tuple[Value, ...]
+
+    @property
+    def type(self) -> TupleType:
+        """The element types, which a Function boundary checks a tuple argument against."""
+        return TupleType(tuple(element.type for element in self.elements))
 
 
 _TORCH_DTYPE = {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -97,7 +98,7 @@ def _eval_layer_norm(ctx):
     rank = x.ndim
     axis = ctx.op.axis + rank if ctx.op.axis < 0 else ctx.op.axis
     out = F.layer_norm(x, tuple(x.shape[axis:]), weight, bias, ctx.op.eps)
-    return TensorValue(data=out, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, out))
 
 
 @register_access_relation(LayerNorm)

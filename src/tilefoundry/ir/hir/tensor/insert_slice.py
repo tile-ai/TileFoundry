@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Constant, Op, Tuple
@@ -182,7 +183,7 @@ def _eval_insert_slice(ctx):
     win = tuple(sl)
     out = dst.clone()
     out[win] = upd.reshape(out[win].shape).to(out.dtype)
-    return TensorValue(data=out, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, out))
 
 
 __all__ = ["InsertSlice"]

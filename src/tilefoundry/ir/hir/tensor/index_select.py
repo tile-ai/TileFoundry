@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.kernels import gather
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
@@ -123,10 +124,7 @@ def _eval_index_select(ctx):
     x = ctx.args[0].data
     index = ctx.args[1].data
     dim = _norm_dim(ctx.op.dim, x.dim())
-    return TensorValue(
-        data=gather(x, index, dim, ctx.op.fill_value),
-        type=ctx.result_type,
-    )
+    return TensorValue(ShardTensor(ctx.result_type, gather(x, index, dim, ctx.op.fill_value)))
 
 
 __all__ = ["IndexSelect"]
