@@ -69,7 +69,7 @@ class RuntimeModule:
   - a twin with a sharded weight and no *placement* MUST refuse to read it.
     Nothing else in the system says which of the mesh's positions this process
     holds, and returning the whole tensor would silently give every program
-    every other program's data ([§1.10](#110-runtimetensorpy)).
+    every other program's data ([§1.10](#110-shardtensor)).
     Weight prefixes follow module paths, matching ir attribute addressing.
     Lifecycle: construct (structure) → `load` (remember source) → call. A
     `RuntimeModule` does **not** run `prepare`; it loads straight from the
@@ -756,46 +756,68 @@ def check(
     `RuntimeModule` bound method, a raw torch callable, or an evaluator
     closure — anything callable on *inputs*.
 
-### 1.10 `runtime/tensor.py`
+### 1.10 `ShardTensor`
 
 `Module.prepare` writes one canonical tensor per weight and the HIR keeps the
 global `TensorType`, so a checkpoint read hands back every program's data at
-once. `ShardTensor` pairs that owning tensor with the type that shards it, and
-`to_local` is the single place the pair is narrowed to one program.
+once. `ShardTensor` (in `tilefoundry.core`, exported as `tilefoundry.ShardTensor`)
+pairs a global type with its data, held packed -- one global logical tensor --
+or scattered -- one piece per `Placement`. The evaluator holds its values in the
+same class ([evaluator §1](evaluator.md#1-value)).
 
 <!-- generated: py-tensor -->
 ```python
-# src/tilefoundry/runtime/tensor.py
+# src/tilefoundry/core/tensor.py
+def local_type(type: TensorType) -> TensorType: ...
+
+
 @dataclass(frozen=True)
 class ShardTensor:
-    tensor: torch.Tensor
     type: TensorType
+    tensor: "torch.Tensor | tuple[tuple[Placement, torch.Tensor], ...]"
 
-    def to_local(
-        self, topologies: tuple[Topology, ...], placement: "Placement | None"
-    ) -> torch.Tensor: ...
+    @property
+    def packed(self) -> bool: ...
+
+    @property
+    def placements(self) -> tuple[Placement, ...]: ...
+
+    def local(self, placement: "Placement | None") -> "torch.Tensor": ...
+
+    def scatter(self, placements: tuple[Placement, ...]) -> "ShardTensor": ...
+
+    def gather(self) -> "ShardTensor": ...
+
+    def reshard(self, type: TensorType) -> "ShardTensor": ...
 ```
 <!-- /generated -->
 
 - constraints:
-  - `ShardTensor` carries no `Placement`, coordinate, rank or device map. The
-    program is an argument to `to_local`, so one owning tensor serves every
-    program a host dispatches, and `to_local` is the only way to a slice. Named
-    as `DTensor.to_local`, which answers the same question.
+  - a packed tensor carries no `Placement`: the program is an argument to
+    `local`, so one owning tensor serves every program a host dispatches.
+    Named as `DTensor.to_local`, which answers the same question.
+  - a scattered tensor holds one piece per `Placement`, each of
+    `local_type(type)`; `local` returns the piece its placement holds.
   - a `type` with no `ShardLayout` is every program's whole tensor, and so is
-    an axis the mesh only broadcasts over or reduces across.
-  - which part is one program's MUST come from `local_layout_and_offset`
-    ([shard §7](shard.md#7-shardlayout)), the same algebra the device side runs
-    under that name, rather than from a second walk over the attrs. Host and
-    device read the one layout and the one offset, so a slice is not derived
-    twice and cannot disagree with itself.
+    an axis the mesh only broadcasts over or reduces across. A packed `Partial`
+    value is its reduced value.
+  - which part of a packed tensor is one program's MUST come from
+    `logical_layout_and_offset` ([shard §7](shard.md#7-shardlayout)): the
+    algebra the device side runs as `local_layout_and_offset`, applied to the
+    row-major layout of the same modes. Packed data is logical, while the
+    address stride of a private `Split` may be zero, so the address layout
+    cannot select a piece of it.
+  - `gather` reads a scattered tensor by the meaning of its type: `Split`
+    pieces sit side by side, any `Broadcast` piece serves, and `Partial` pieces
+    combine by their reduction. A type with no `ShardLayout`, or `Partial`
+    reductions that differ, MUST be refused.
   - a level whose id is unfixed MUST be left undivided
     ([shard §5.1](shard.md#51-placement)).
   - a `RuntimeModule`'s public boundary takes and returns `ShardTensor`, while
     a body -- a Python reference or a launched kernel alike -- only ever
     receives the local `torch.Tensor`. A returned tensor is already one
-    program's, so the type it is paired with states that shape and carries no
-    layout: narrowing it again would take a shard of a shard.
+    program's, so it is returned scattered: this program's piece under the
+    declared global type, never narrowed again.
   - a weight narrowed on first use is copied out of the read it came from, so
     the whole canonical tensor is released once every shard it contributes is
     held. A weight the mesh does not divide is kept as the read itself.

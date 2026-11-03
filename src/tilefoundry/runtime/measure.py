@@ -8,9 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, ClassVar, Mapping, Sequence
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.value import from_torch_dtype
 from tilefoundry.ir.types.shard_layout import shard_layout_of
-from tilefoundry.runtime.tensor import ShardTensor
 from tilefoundry.utils.lazy import torch
 
 _NEAR_ZERO = 1e-12
@@ -267,16 +267,16 @@ def flatten_outputs(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
 
     Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``;
     the path list doubles as a structural signature for comparing outputs.
-    A ``ShardTensor`` a module returned is already one program's, so what is
-    compared is the tensor it carries ([runtime §1.10](docs/spec/runtime.md#110-runtimetensorpy)).
+    A ``ShardTensor`` a module returned holds one program's piece, so what is
+    compared is that piece ([runtime §1.10](docs/spec/runtime.md#110-shardtensor)).
     """
     if isinstance(x, ShardTensor):
-        if shard_layout_of(x.type.layout) is not None:
+        if len(x.placements) > 1 or (x.packed and shard_layout_of(x.type.layout) is not None):
             raise TypeError(
-                f"check: {path} is every program's data at once, not one program's; "
-                "narrow it with to_local() before comparing it against a reference"
+                f"check: {path} is more than one program's data; take one program's "
+                "piece with local(placement) before comparing it against a reference"
             )
-        return flatten_outputs(x.tensor, path)
+        return flatten_outputs(x.tensor if x.packed else x.tensor[0][1], path)
     if isinstance(x, torch.Tensor):
         return [(path, x)]
     if isinstance(x, tuple):

@@ -348,14 +348,12 @@ def _local_readback(layout):
     return replace(result, outer=plain) if isinstance(result, ComposedLayout) else plain
 
 
-def local_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None, ...]):
-    """Adapt topology program ids and read back the logical local Layout."""
+def program_coordinates(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ...]:
+    """Each mesh axis's coordinate under per-level program ids; None where a level is unfixed."""
     from .mesh import levels  # noqa: PLC0415
 
-    if any(not isinstance(size, int) or isinstance(size, bool) for size in tensor_shape):
-        raise ValueError("local offset requires concrete bound tensor sizes")
     coords = []
-    for index, arrangement in enumerate(levels(shard.mesh)):
+    for index, arrangement in enumerate(levels(mesh)):
         flat = flatten(arrangement)
         program_id = ids[index] if index < len(ids) else None
         coords.extend(
@@ -363,13 +361,33 @@ def local_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, ids: tuple[
             if program_id is None
             else idx2crd(program_id, flat.shape, flat.strides)
         )
-    layout, offset = local_layout(shard, tensor_shape, tuple(coords))
+    return tuple(coords)
+
+
+def local_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None, ...]):
+    """Adapt topology program ids and read back the logical local Layout."""
+    if any(not isinstance(size, int) or isinstance(size, bool) for size in tensor_shape):
+        raise ValueError("local offset requires concrete bound tensor sizes")
+    layout, offset = local_layout(shard, tensor_shape, program_coordinates(shard.mesh, ids))
     return _local_readback(layout), offset
+
+
+def logical_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None, ...]):
+    """Where the piece *ids* select sits in the row-major logical tensor.
+
+    The same algebra as :func:`local_layout_and_offset`, applied to a row-major
+    layout of the same modes: host data is logical, while the address stride of
+    a private Split may be zero.
+    """
+    address = shard.layout.outer if isinstance(shard.layout, ComposedLayout) else shard.layout
+    return local_layout_and_offset(replace(shard, layout=Layout(address.shape)), tensor_shape, ids)
 
 
 __all__ = [
     "local_layout",
     "local_layout_and_offset",
+    "logical_layout_and_offset",
+    "program_coordinates",
     "ShardAttr",
     "Split",
     "Partial",

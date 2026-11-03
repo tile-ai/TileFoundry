@@ -39,7 +39,7 @@ REGIONS: dict[str, str] = {
     "py-loader": "runtime/loader.py",
     "py-resource": "runtime/resource.py",
     "py-measure": "runtime/measure.py",
-    "py-tensor": "runtime/tensor.py",
+    "py-tensor": "core/tensor.py",
     "py-compile": "compile.py",
     "cpu-runtime": "cpu/runtime.h",
     "cuda-runtime": "cuda/runtime.cuh",

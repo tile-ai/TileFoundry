@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
+from tilefoundry.core import local_type
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Op
@@ -9,7 +8,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard_layout import ShardLayout, Split, _local_readback, local_layout
+from tilefoundry.ir.types.shard_layout import ShardLayout, Split
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     readnone_relations,
@@ -24,20 +23,15 @@ class Local(Op):
     x = ParamDef(kind="input", pattern=is_ranked_tensor())
 
 
-def _local_layout(x_ty: TensorType):
-    return _local_readback(local_layout(x_ty.layout, x_ty.shape, (0,) * len(x_ty.layout.attrs))[0])
-
-
 @register_typeinfer(Local)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     if not isinstance(x_ty.layout, ShardLayout):
         ctx.error(call, "Local() input must have ShardLayout")
     try:
-        layout = _local_layout(x_ty)
+        return local_type(x_ty)
     except ValueError as error:
         ctx.error(call, str(error))
-    return replace(x_ty, shape=layout.shape, layout=layout)
 
 
 @register_eval(Local)
@@ -52,4 +46,4 @@ def _eval_local(ctx):
     return ctx.args[0]
 
 
-register_access_relation(Local)(readnone_relations(lambda types: _local_layout(types[0]).shape))
+register_access_relation(Local)(readnone_relations(lambda types: local_type(types[0]).shape))

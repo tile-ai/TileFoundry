@@ -15,8 +15,11 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import product
 
-from tilefoundry.ir.types.mesh import Topology
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.mesh import Mesh, Topology, levels
+from tilefoundry.ir.types.stride import crd2idx
 
 
 @dataclass(frozen=True)
@@ -33,9 +36,9 @@ class Placement:
 
     ids: Mapping[str, int]
 
-    def program_ids(self, topologies: tuple[Topology, ...]) -> tuple[int | None, ...]:
+    def program_ids(self, topologies: "tuple[Topology | str, ...]") -> tuple[int | None, ...]:
         """This invocation's program id at each of *topologies*, in that order."""
-        return tuple(self.ids.get(topology.name) for topology in topologies)
+        return tuple(self.ids.get(getattr(topology, "name", topology)) for topology in topologies)
 
     @classmethod
     def from_env(cls, topology_level: str = "gpu") -> "Placement":
@@ -54,4 +57,23 @@ class Placement:
         return cls({topology_level: int(rank)})
 
 
-__all__ = ["Placement"]
+def units(mesh: Mesh) -> tuple[tuple[tuple[int, ...], Placement], ...]:
+    """Every unit of *mesh*: its mesh coordinates, row-major, and the Placement naming it.
+
+    A level's program id is that level's coordinates read through the level's
+    arrangement, the inverse of what a local view does with the id.
+    """
+    arrangements = tuple(flatten(arrangement) for arrangement in levels(mesh))
+    names = tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
+    found = []
+    for coordinates in product(*(range(extent) for extent in flatten(mesh.layout).shape)):
+        ids, begin = {}, 0
+        for name, flat in zip(names, arrangements, strict=True):
+            count = len(flat.shape)
+            ids[name] = crd2idx(coordinates[begin : begin + count], flat.shape, flat.strides)
+            begin += count
+        found.append((tuple(coordinates), Placement(ids)))
+    return tuple(found)
+
+
+__all__ = ["Placement", "units"]

@@ -475,10 +475,12 @@ rather than of the model. `Placement` states exactly that and nothing else.
 class Placement:
     ids: Mapping[str, int]
 
-    def program_ids(self, topologies: tuple[Topology, ...]) -> tuple[int | None, ...]: ...
+    def program_ids(self, topologies: tuple[Topology | str, ...]) -> tuple[int | None, ...]: ...
 
     @classmethod
     def from_env(cls, topology_level: str = "gpu") -> "Placement": ...
+
+def units(mesh: Mesh) -> tuple[tuple[tuple[int, ...], Placement], ...]: ...
 ```
 
 - constraints:
@@ -491,6 +493,10 @@ class Placement:
     per ordered `Topology` by lookup. A level the mapping does not name is
     unfixed, which is what makes the answer's length the caller's business
     rather than the caller's arithmetic.
+  - `units(mesh)` lists every unit of a mesh, its coordinates in row-major
+    order beside the `Placement` naming it: each level's id is its coordinates
+    read through that level's arrangement, the inverse of
+    `program_coordinates` ([§7.6](#76-local_layout)).
   - an unfixed level MUST be left undivided rather than read as `0`: the device
     chooses its own `cta` and `thread`, and a host that guessed would hand one
     thread's data back as the whole card's.
@@ -802,7 +808,9 @@ by both sides of a launch.
 
 ```python
 def local_layout(shard, tensor_shape, ids) -> Layout: ...
+def program_coordinates(mesh, ids) -> tuple[int | None, ...]: ...
 def local_layout_and_offset(shard, tensor_shape, ids) -> tuple[Layout, int]: ...
+def logical_layout_and_offset(shard, tensor_shape, ids) -> tuple[Layout, int]: ...
 ```
 
 - constraints:
@@ -829,9 +837,13 @@ def local_layout_and_offset(shard, tensor_shape, ids) -> tuple[Layout, int]: ...
     `local_layout` projection and its canonical check.
   - `local_layout` MUST keep the whole tensor's strides: what one instance
     holds is the same rows the same distance apart, begun further in.
-  - `local_layout_and_offset` counts its offset in exactly those strides, so a
-    host tensor laid out otherwise MUST be refused by name rather than read at
-    the offset's word: `as_strided` would silently read elsewhere.
+  - `local_layout_and_offset` counts its offset in exactly those strides.
+    `logical_layout_and_offset` is the same projection of the row-major layout
+    of the same modes, so its offset counts in a contiguous logical tensor. The
+    host holds logical data and reads through it: the address stride of a
+    private `Split` may be zero and cannot select a piece of a whole tensor.
+  - `program_coordinates` turns per-level program ids into mesh coordinates;
+    a level whose id is `None` leaves its axes `None`.
   - the host states `tensor_shape` and `ids`, which the device reads off its
     own layout and its hardware: [§7.1.1](#711-layoutshape) factors a split
     axis, so the layout's rank is not the tensor's, and a `Placement` may leave
