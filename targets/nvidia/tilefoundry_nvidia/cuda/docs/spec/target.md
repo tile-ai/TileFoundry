@@ -323,8 +323,10 @@ class CudaDevice(Device):
   - `l2_capacity_bytes` MUST be `None` when the installed document records no
     value for it. A recorded absence and a number are both statements about the
     product; a substituted figure would not be.
-  - `gmem_owner` MUST be `target`: all execution units of this single-device
-    Target share one global-memory allocation.
+  - `gmem_owner` MUST be `gpu`: each card's global memory belongs to that
+    card. A `gpu`-level `Split` on gmem is therefore private, and moving it
+    between cards is communication; the levels below `gpu` share the card's
+    allocation.
   - The `memory.hbm.*` facts and the `hbm_*` fields describe the device's
     global memory whatever its technology. A product whose global memory is not
     HBM records its figures there and names the technology in `conditions`.

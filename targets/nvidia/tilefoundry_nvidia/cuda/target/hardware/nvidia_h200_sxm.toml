@@ -35,11 +35,11 @@ source = "https://www.nvidia.com/en-us/data-center/h200/"
 conditions = "141 GB, decimal"
 
 [facts.memory.hbm.owner]
-value = "target"
+value = "gpu"
 unit = "name"
 origin = "derived"
 source = "https://www.nvidia.com/en-us/data-center/h200/"
-conditions = "the stated HBM capacity is one pool shared by all execution units of this single-device target"
+conditions = "the stated HBM capacity is one pool per card, held by that card alone"
 
 [facts.memory.hbm.bandwidth]
 value = 4800000000000

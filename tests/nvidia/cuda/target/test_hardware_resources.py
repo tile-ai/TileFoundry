@@ -228,9 +228,9 @@ def test_a_schema_rejects_a_fact_it_does_not_model() -> None:
 
 
 def test_a_memory_owner_must_use_the_target_vocabulary() -> None:
-    document = _hardware_text("nvidia_h200_sxm.toml").replace('value = "target"', 'value = "warp"')
+    document = _hardware_text("nvidia_h200_sxm.toml").replace('value = "gpu"', 'value = "warp"')
 
-    with pytest.raises(SchemaValidationError, match=r"memory owner 'warp'.*target.*cta.*thread"):
+    with pytest.raises(SchemaValidationError, match=r"memory owner 'warp'.*target.*gpu.*cta.*thread"):
         cuda_spec.build_cuda_device(parse_document(document, origin_label="bad-owner"))
 
 
@@ -316,9 +316,9 @@ def test_architecture_bandwidth_evidence_distinguishes_known_from_unavailable() 
             "memory.register.owner": "thread",
             "memory.tensor.owner": "cta",
         },
-        _RTX_6000_ADA: {"memory.hbm.owner": "target"},
-        _H200: {"memory.hbm.owner": "target"},
-        _B200: {"memory.hbm.owner": "target"},
+        _RTX_6000_ADA: {"memory.hbm.owner": "gpu"},
+        _H200: {"memory.hbm.owner": "gpu"},
+        _B200: {"memory.hbm.owner": "gpu"},
     }
     check_document_evidence(CudaTarget.hardware, owners)
 
