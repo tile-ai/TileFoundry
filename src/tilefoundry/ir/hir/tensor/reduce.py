@@ -45,6 +45,17 @@ def _reduced_axes(call: "Call", rank: int) -> tuple:
     return tuple(a % rank if a < 0 else a for a in call.target.axes)
 
 
+_PARTIAL = {
+    ReduceKind.SUM: "sum",
+    ReduceKind.MEAN: "sum",
+    ReduceKind.MAX: "max",
+    ReduceKind.ABS_MAX: "max",
+    ReduceKind.MIN: "min",
+}
+"""What a reduction over a split axis leaves on that mesh axis: each unit's part,
+combined by this reduction. A mean's parts are its sums over the whole count."""
+
+
 @register_typeinfer(Reduce)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
@@ -81,6 +92,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             relation,
             out_shape,
             complete_reduction_dims=frozenset(reduced),
+            reduction=_PARTIAL[kind],
             fresh_strides=True,
             ctx=ctx,
             storage=x_ty.storage,
