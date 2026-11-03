@@ -1,8 +1,4 @@
-"""A retained callee returns a WGMMA accumulator nothing in it has waited for.
-
-The caller treats the call as complete when it returns, so the callee's WGMMA
-completes right after it issues.
-"""
+"""A retained callee returns a WGMMA accumulator before its group completes."""
 
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import CudaTarget

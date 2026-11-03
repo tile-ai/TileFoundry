@@ -18,9 +18,13 @@ from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp
+from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.sync import SyncBarrier
 from tilefoundry.ir.types import StorageKind
-from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
+from tilefoundry.schedule import finalize
+from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
+from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import WgmmaCommitGroup, WgmmaWaitGroup
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 GEMM = FIXTURES / "schedule/hir/sm89_e4m3_gemm.py"
@@ -200,23 +204,6 @@ class TwiceNestedCalls(SyncCase):
 
 
 @case
-class WgmmaChain(SyncCase):
-    """Copied operands are published and the filled accumulator fenced before the first WGMMA.
-
-    The second, of the same shape, chains on its accumulator: no fence, no wait.
-    """
-
-    path: Path = FIXTURES / "analysis/sync_wgmma_chain.py"
-
-    def guard(self, state, problems):
-        _function, attached = _planned(state)
-        assert _steps(attached) == [
-            ("TiledMma", None, _PUBLISHED + _FENCE),
-            (None, "update", _WAITED),
-        ]
-
-
-@case
 class WgmmaRetainedCall(SyncCase):
     """A retained call reading the accumulator is an access: the group is waited on before it."""
 
@@ -242,13 +229,29 @@ class WgmmaPartialWarpgroups(SyncCase):
     path: Path = FIXTURES / "analysis/sync_wgmma_partial.py"
 
     def guard(self, state, problems):
-        _function, attached = _planned(state)
+        result = _analyzed(state)
+        attached = _attached(result.function)
         assert _steps(attached) == [
             (None, None, (("barrier", None),)),
             ("TiledMma", None, _FENCE),
             ("TiledMma", "after", _WAITED),
             (None, None, (("commit", "cp_async"), ("wait", "cp_async")) + _PUBLISHED),
         ]
+
+        issuing = []
+
+        class IssuingScopes(StmtVisitor):
+            def visit_MeshScope(self, stmt):
+                if isinstance(stmt.body, Sequential):
+                    kinds = [type(s.callable) for s in stmt.body.body if isinstance(s, Evaluate)]
+                    if TiledMma in kinds:
+                        issuing.append(kinds)
+                self.generic_visit(stmt)
+
+        IssuingScopes().visit(finalize(result).lookup(result.function.name).body)
+        (kinds,) = issuing
+        last = max(index for index, kind in enumerate(kinds) if kind is TiledMma)
+        assert kinds[last + 1 : last + 3] == [WgmmaCommitGroup, WgmmaWaitGroup]
 
 
 @case
@@ -301,7 +304,7 @@ class WgmmaInFlightAtReturn(SyncCase):
 
 @case
 class WgmmaShapes(SyncCase):
-    """BF16, E4M3, BF16 WGMMAs on one accumulator: each later one waits and fences again."""
+    """Equal shapes chain without steps; switching BF16 and E4M3 waits and fences again."""
 
     path: Path = FIXTURES / "analysis/sync_wgmma_shapes.py"
 

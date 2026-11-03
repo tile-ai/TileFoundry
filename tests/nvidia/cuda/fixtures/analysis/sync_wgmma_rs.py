@@ -1,10 +1,4 @@
-"""An RS WGMMA over K = 64 issues four times, each reading A from registers.
-
-PTX exempts only accumulator accesses from ``wgmma.fence``, so every issue that
-reads A from registers gets its own fence. Each iteration also copies A, an
-ordinary read of registers the last iteration's WGMMA may still read, so the
-copy waits for the group first.
-"""
+"""An RS WGMMA issues four times and shares A with an ordinary register copy."""
 
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import CudaTarget

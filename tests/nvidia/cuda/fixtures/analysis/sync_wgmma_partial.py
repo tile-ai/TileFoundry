@@ -1,9 +1,4 @@
-"""One loader warp and one compute warpgroup share a loop over K.
-
-Each slice's copy overwrites the tiles the last slice's WGMMA reads, so the wait
-for the WGMMA group belongs in the loop body, over all 160 threads. Five warps are
-not whole warpgroups, so the WGMMA completes right after it issues instead.
-"""
+"""A loader warp and a compute warpgroup share a loop over K."""
 
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import CudaTarget

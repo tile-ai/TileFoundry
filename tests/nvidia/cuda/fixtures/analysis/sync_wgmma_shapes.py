@@ -1,7 +1,6 @@
-"""BF16 (K = 16), E4M3 (K = 32) and BF16 WGMMAs accumulate in turn into one accumulator.
+"""Two BF16 WGMMAs chain, then E4M3 and BF16 change shape on the same accumulator.
 
-Neighbours have different shapes, so PTX does not order one's accumulator access
-after the other's: each after the first waits for the group and fences again.
+The second BF16 needs no step. Each shape change waits for the group and fences again.
 The last reads the BF16 tiles again, so the E4M3 tiles take bytes of their own.
 """
 
@@ -46,6 +45,7 @@ class WgmmaShapes:
                     n=16, dtype="bf16", form=T.cuda.sm90.Form.SS,
                     a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K,
                 )
+                acc = tf.schedule((acc, lhs, rhs), op=T.tiled_mma(atom=bf16))
                 acc = tf.schedule((acc, lhs, rhs), op=T.tiled_mma(atom=bf16))
                 lhs8 = tf.schedule(
                     (a8, tf.empty(Tensor[

@@ -13,7 +13,6 @@ from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.tir import CpAsyncCommit, CpAsyncWait
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.memory import Copy
-from tilefoundry.ir.tir.stmts import Evaluate, For, MeshScope, Sequential
 from tilefoundry.ir.tir.sync import Sync
 from tilefoundry.passes.transforms import LoweringError
 from tilefoundry.schedule import finalize
@@ -97,26 +96,6 @@ def test_each_issue_reading_a_from_registers_gets_its_own_fence():
         WgmmaCommitGroup,
         WgmmaWaitGroup,
     ]
-
-
-def test_a_wgmma_completes_where_it_issues_when_its_wait_has_no_place():
-    """No scope holding the loader warp and the warpgroup can run the group's wait.
-
-    So the commit and the wait follow the WGMMA, in the region that issues it.
-    """
-    result = _analyzed(load_authored_ir(str(FIXTURES / "analysis/sync_wgmma_partial.py")))
-    pending, issuing = [finalize(result).lookup(result.function.name).body], []
-    while pending:
-        stmt = pending.pop()
-        inner = stmt.body if isinstance(stmt, (MeshScope, For)) else stmt
-        if isinstance(inner, Sequential):
-            pending.extend(inner.body)
-            kinds = [type(s.callable) for s in inner.body if isinstance(s, Evaluate)]
-            if isinstance(stmt, MeshScope) and TiledMma in kinds:
-                issuing.append(kinds)
-    (kinds,) = issuing
-    last = max(index for index, kind in enumerate(kinds) if kind is TiledMma)
-    assert kinds[last + 1 : last + 3] == [WgmmaCommitGroup, WgmmaWaitGroup]
 
 
 def test_both_groups_complete_before_the_copy_into_their_bytes():

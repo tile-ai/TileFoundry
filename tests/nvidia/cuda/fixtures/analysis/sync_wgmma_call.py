@@ -1,9 +1,4 @@
-"""A retained callee reads a WGMMA accumulator nothing has waited for yet.
-
-The caller issues one SS WGMMA into ``acc`` and passes the result straight to
-``drain``, which copies the accumulator registers out. The call is the first
-access after the WGMMA, so the wait for the warpgroup's group comes before it.
-"""
+"""A retained callee reads a WGMMA accumulator before its group completes."""
 
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import CudaTarget
