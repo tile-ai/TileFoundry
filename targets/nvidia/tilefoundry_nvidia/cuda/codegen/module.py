@@ -282,8 +282,9 @@ class CudaLinkableModule(LinkableModule):
             dynamic_cta=static_dim_value(geometry[0][0]) is None,
             grid_barrier_state=ctx.needs_grid_barrier_state,
         )
+        arch = target.arch.removesuffix("a") + "a" if ctx.architecture_specific else target.arch
         return cls(
-            target="cuda", language="cu", preamble=preamble, functions=functions, arch=target.arch
+            target="cuda", language="cu", preamble=preamble, functions=functions, arch=arch
         )
 
     def link(self, project: "CMakeProject") -> None:
@@ -295,12 +296,14 @@ class CudaLinkableModule(LinkableModule):
         project.add_source(source, self.source)
         project.enable_language("CUDA")
         project.include(files(__package__).joinpath("include"), _cutlass_include())
+        arch = self.arch.removeprefix("sm_")
         project.append(
             "set_target_properties(${PROJECT_NAME} PROPERTIES\n"
-            f'  CUDA_ARCHITECTURES "{self.arch.removeprefix("sm_")}"\n'
+            "  CUDA_ARCHITECTURES OFF\n"
             "  CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON CUDA_EXTENSIONS OFF)\n"
             f"set_source_files_properties({source} PROPERTIES\n"
             "  # Device headers need C++20; older CMake rejects the CUDA20 dialect.\n"
             "  # A per-source option follows the standard flag; nvcc uses the last -std.\n"
-            '  COMPILE_OPTIONS "-std=c++20;-Wno-deprecated-gpu-targets")\n'
+            '  COMPILE_OPTIONS "-std=c++20;-Wno-deprecated-gpu-targets;'
+            f'--generate-code=arch=compute_{arch},code=[compute_{arch},sm_{arch}]")\n'
         )
