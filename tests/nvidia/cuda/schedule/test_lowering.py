@@ -19,10 +19,8 @@ from tests.nvidia.cuda.schedule._support import (
     _finalized,
     _RetainedStatements,
     _UnstatedInstruction,
-    core_lowering,
     entry_function,
 )
-from tilefoundry.analysis import AnalysisError
 from tilefoundry.analysis.access import AliasKind
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.api import analyze
@@ -31,7 +29,6 @@ from tilefoundry.analysis.metadata import (
     MemoryMetadata,
     RegionMemoryMetadata,
 )
-from tilefoundry.analysis.sync import _Planner
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.inspection import as_script
@@ -86,7 +83,7 @@ def _m1_analysis():
         module,
         analyze(
             *check_program(module, module.entry_function()),
-            analysis=("memory",),
+            analysis=("memory", "sync"),
         ),
     )
 
@@ -98,8 +95,7 @@ def _assert_cli_lowering_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     out = tmp_path / "failed.py"
-    with core_lowering():
-        assert cli_main(["schedule", "finalize", str(source), str(out)]) == 1
+    assert cli_main(["schedule", "finalize", str(source), str(out)]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
     assert message in captured.err
@@ -130,24 +126,29 @@ def _returned_view(storage, chain=False):
 def test_finalize_json_carries_source(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "loop_outputs.py"
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
     out = tmp_path / "finalized.json"
 
     assert cli_main(["schedule", "finalize", str(source), str(out), "--json"]) == 0
     assert capsys.readouterr() == ("", "")
     payload = json.loads(out.read_text())
     assert set(payload) == {"source"}
-    verify_prim_function(entry_function(reload(payload["source"], "LoopOutputs")))
+    verify_prim_function(entry_function(reload(payload["source"], "WGMMA_A_K_MAJOR")))
 
 
-def test_lowering_reports_smem_overflow() -> None:
+def test_lowering_reports_smem_overflow(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     four_stage = VARIANTS / "four_stage_gemm.py"
+
+    out = tmp_path / "finalized.py"
+    assert cli_main(["schedule", "finalize", str(four_stage), str(out)]) == 0
+    assert capsys.readouterr() == ("", "")
     module = load_authored_ir(str(four_stage))
     result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
     memory = get_metadata(result.function, RegionMemoryMetadata)
     assert "smem placement peak 256.00KiB exceeds capacity 227.00KiB" in memory.errors
-    with core_lowering():
-        verify_prim_function(entry_function(finalize(result)))
+    verify_prim_function(entry_function(load_authored_ir(str(out))))
 
 
 def test_lowering_rejects_missing_access_relation(
@@ -519,20 +520,7 @@ def test_lowering_issues_statically_without_readmission(name, issues, monkeypatc
 @pytest.mark.parametrize("storage", [StorageKind.GMEM, StorageKind.SMEM])
 @pytest.mark.parametrize("chain", [False, True])
 def test_returned_view_passes_storage(storage, chain):
-    module = _returned_view(storage, chain)
-    if storage is StorageKind.SMEM:
-        with pytest.raises(AnalysisError, match="call summaries are not supported yet"):
-            _finalized(_returned_view(storage, chain))
-        with (
-            patch.object(_Planner, "admit", lambda self, call, callee: None),
-            pytest.raises(LoweringError, match="takes shared memory outside a planned action"),
-        ):
-            _finalized(_returned_view(storage, chain))
-        result = analyze(*check_program(module, module.entry_function()), analysis="memory")
-        with core_lowering():
-            lowered = finalize(result)
-    else:
-        lowered = _finalized(module)
+    lowered = _finalized(_returned_view(storage, chain))
     verify_module(lowered)
     function = lowered.lookup("root")
     visitor = _RetainedStatements()
@@ -635,7 +623,7 @@ def test_retained_insert_keeps_parameter_storage(later_use, nested):
         ("caller", True): VARIANTS / "retained_caller_returns_output_via_relay.py",
     }[later_use, nested]
     module = load_authored_ir(str(path))
-    result = analyze(*check_program(module, module.entry_function()), analysis="memory")
+    result = analyze(*check_program(module, module.entry_function()), analysis=("memory", "sync"))
     call = next(
         value
         for value in collect_exprs(result.function.body)
@@ -689,7 +677,7 @@ def test_retained_insert_keeps_parameter_storage(later_use, nested):
         assert composed.relation.relation.is_identity()
         assert called.buffer_bytes is None and called.offsets == ()
     if later_use == "caller":
-        with core_lowering(), patch.object(
+        with patch.object(
             TirBuilder, "transfer", autospec=True, side_effect=TirBuilder.transfer
         ) as copy:
             with pytest.raises(LoweringError, match="cannot be placed"):

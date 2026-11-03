@@ -6,7 +6,6 @@ from dataclasses import replace
 from itertools import combinations
 from math import prod
 from pathlib import Path
-from unittest.mock import patch
 
 import torch
 
@@ -46,19 +45,9 @@ from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout_algebra import cosize
 from tilefoundry.ir.types.mesh import levels, make_mesh, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
-from tilefoundry.passes.transforms.convert_hir_to_tir import Lowering
 from tilefoundry.schedule import finalize
 from tilefoundry.visitor_registry.contexts import VerifyContext
 from tilefoundry.visitor_registry.instruction import check_call
-from tilefoundry_nvidia.cuda.passes.transforms import CudaConvertHIRToTIR
-
-
-def core_lowering():
-    """Lower with the core visitor, which emits no shared memory synchronisation.
-
-    Programs the ``sync`` analysis refuses keep their lowering checks this way.
-    """
-    return patch.object(CudaConvertHIRToTIR, "visitor", Lowering)
 
 
 def _region_key(region: MeshRegion, occurrences: dict[str, int]) -> str:

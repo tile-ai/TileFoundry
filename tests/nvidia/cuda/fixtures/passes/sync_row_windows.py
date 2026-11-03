@@ -1,8 +1,7 @@
 """Each of 8 threads lands its own row of x through cp.async, then reads one column in halves.
 
 Thread r copies row r only, so no two threads write the same bytes; reading column r
-crosses threads, so it needs the wait and the barrier the sync plan adds. The windows
-start at the thread's coordinate and at the loop's induction variable.
+crosses threads, so it needs the wait and the barrier the sync plan adds.
 """
 
 from tilefoundry.dsl import *

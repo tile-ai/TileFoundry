@@ -495,7 +495,9 @@ def completion_of(instance: object) -> Completion: ...
   - `ON_RETURN` means the effects are complete for the issuing thread once the
     statement returns. `CP_ASYNC_GROUP` means they complete when the issuing
     thread waits on the `cp.async` group that holds them. `UNKNOWN` means no
-    protocol states it, and nothing may be ordered after such an access.
+    protocol states it; the synchronisation analysis then orders the effects
+    as `ON_RETURN`, so the class's emitter MUST wait for them before the
+    statement returns.
   - Lookup uses the exact class, as every `DispatchRegistry` does. A class with
     no registration answers `UNKNOWN`; a base class's answer is not inherited.
   - The declaration sits next to the class's access relation registration, or

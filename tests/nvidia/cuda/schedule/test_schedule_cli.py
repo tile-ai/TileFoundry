@@ -13,14 +13,8 @@ import torch
 
 from tests.core._corpus import Case, Problems, case, reload
 from tests.nvidia.cuda.schedule._plain import SiteCounts, check_plain_report
-from tests.nvidia.cuda.schedule._support import core_lowering
-from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import check_program
 from tilefoundry.cli import main as cli_main
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.inspection import as_script
 from tilefoundry.ir.tir import PrimFunction
-from tilefoundry.schedule import finalize
 
 
 @dataclass(frozen=True)
@@ -107,16 +101,10 @@ class GmemGatherRefusal(ScheduleCliCase):
 class SmemPlacement(ScheduleCliCase):
 
     def guard(self, state, problems):
-        """The CLI refuses the wgmma in flight at exit; the core lowering places the tiles.
-
-        The second 64x64 bf16 tile ends at 8192 + 8192, the analyzed peak.
-        """
-        _out, captured = state
-        assert "TiledMma may still touch shared memory when 'gemm' returns" in captured.err
-        module = load_authored_ir(self.argv[2])
-        result = analyze(*check_program(module, module.entry_function()), analysis="memory")
-        with core_lowering():
-            lines = as_script(finalize(result)).splitlines()
+        out, captured = state
+        """The second 64x64 bf16 tile ends at 8192 + 8192, the analyzed peak."""
+        assert captured == ("", "")
+        lines = out.read_text().splitlines()
         key_view = next(i for i, line in enumerate(lines) if line.strip() == "ks = T.tensor_view(")
         assert lines[key_view + 1].strip().split(",", 1)[0] == "0", (
             "the lowered key tile starts at 0 bytes"
@@ -416,7 +404,6 @@ FIXTURES = (
             'tests/nvidia/cuda/fixtures/schedule/hir/sparse_decode.py',
             '{out}',
         ),
-        code=1,
     ),
     *(
         Attention(

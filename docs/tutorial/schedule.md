@@ -367,32 +367,141 @@ class GEMM_8192X17408X5120_OPTIMAL:
 
 ## 6. Finalize HIR into TIR
 
-Finalize also orders the program's shared memory accesses: it writes the
-`cp.async` commits and waits and the barriers they need into the TIR, or refuses
-the program. It cannot yet state when a TMA copy or a WGMMA completes, so it
-refuses this one:
+Finalize the extracted program and inspect the beginning of its TIR, including
+persistent loops and buffer placements:
 
 ```bash
 set -euo pipefail
-if ! tilefoundry schedule finalize optimal.py optimal_tir.py 2> refusal.txt; then
-  cat refusal.txt
-fi
+tilefoundry schedule finalize optimal.py optimal_tir.py
+sed -n '1,109p' optimal_tir.py
 ```
 
 ```text
-tilefoundry: error: sync: TiledMma must follow CopyAsyncTensor, whose completion no protocol states
+from __future__ import annotations
+
+from tilefoundry.dsl import *
+from tilefoundry.target import CpuTarget
+from tilefoundry_nvidia import CudaTarget
+
+
+@module(
+    entry="gemm_host",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 132), Topology("thread", 384),),
+)
+class GEMM_8192X17408X5120_OPTIMAL:
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    def gemm(
+        a: Tensor[(8192, 5120), "bf16"], b: Tensor[(5120, 17408), "bf16"], scratch: Tensor[(32768,), "bf16"], scratch_1: Tensor[(142606336,), "bf16"], out: Tensor[(8192, 17408), "bf16"]
+    ):
+        with Mesh((Topology("cta", 132),), layout=(132,), names=("persistent",)) as cta:
+            with Mesh(
+                (Topology("thread", 384),), layout=(3, 128), names=("warpgroup", "participant")
+            ) as scope:
+                T.fill(out, 0.0)
+                lhs_ring_1 = T.tensor_view(
+                    98304,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                    shape=(128, 64),
+                )
+                lhs_ring_2 = T.tensor_view(
+                    114688,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                    shape=(128, 64),
+                )
+                lhs_ring_3 = T.tensor_view(
+                    131072,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                    shape=(128, 64),
+                )
+                lhs_ring_stages = (
+                lhs_ring_1,
+                lhs_ring_2,
+                lhs_ring_3,
+            )
+                rhs_ring_1 = T.tensor_view(
+                    0,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                    shape=(64, 256),
+                )
+                rhs_ring_2 = T.tensor_view(
+                    32768,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                    shape=(64, 256),
+                )
+                rhs_ring_3 = T.tensor_view(
+                    65536,
+                    dtype="bf16",
+                    storage="smem",
+                    layout=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                    shape=(64, 256),
+                )
+                rhs_ring_stages = (
+                rhs_ring_1,
+                rhs_ring_2,
+                rhs_ring_3,
+            )
+                for task in range(cta.persistent, 4352, 132):
+                    acc = T.alloc_tensor(
+                        tensor_type=Tensor[
+                            (128, 256),
+                            "f32",
+                            ShardLayout(
+                            layout=Layout((2, 4, 2, 8, 32, 4, 2), (16384, 16, 8, 1, 512, 128, 64)),
+                            attrs=(S(0), S(1), S(3), S(5)),
+                            mesh=Mesh((Topology("thread", 384),), layout=ComposedLayout(
+                                inner=None,
+                                offset=128,
+                                outer=Layout((2, 4, 8, 4), (128, 32, 4, 1)),
+                            ), names=("group", "warp", "lane8", "lane4")),
+                        ),
+                            "rmem",
+                        ]
+                    )
+                    with Mesh(
+                        scope[1:], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")
+                    ) as scope_1:
+                        T.fill(acc, 0.0)
+                    for k in range(0, 5120, 64):
+                        T.sync(scope)
+                        with scope[:1, :32] as scope_2:
+                            value = T.tensor_view(
+                                T.ptr_of(a[(((task // (68 * 16)) * 16) + (task % 16)) * 128:(((task // (68 * 16)) * 16) + (task % 16)) * 128 + 1, k:k + 1]),
+                                layout=((128, 64), (5120, 1)),
+                                shape=(128, 64),
+                            )
+                            lhs_ring_4 = lhs_ring_stages[((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3]
+                            T.copy_async_tensor(value, lhs_ring_4)
+                            value_1 = T.tensor_view(
+                                T.ptr_of(b[k:k + 1, ((task // 16) % 68) * 256:((task // 16) % 68) * 256 + 1]),
+                                layout=((64, 256), (17408, 1)),
+                                shape=(64, 256),
 ```
 
-The WGMMA reads the ring slot a TMA copy writes. A program that uses them stops
-here until finalize models their completion: mbarrier phases for TMA, and commit
-and wait groups for WGMMA.
+The three `g / bn / mi` loops and `cta.d0` survive lowering. The three RHS slots
+occupy [0, 98304), the three LHS slots occupy [98304, 147456), and output staging
+occupies [147456, 212992). The report and views expose those disjoint intervals;
+the TIR continues with the WGMMA issues and writeback.
+
+The initial `T.fill(out, 0.0)` follows this page's `tf.zeros` plus `insert_slice`
+representation of the output; a CUDA implementation need not clear the whole output
+before overwriting every tile.
 
 ## 7. Implement the TIR for a concrete backend
 
-TIR settles value ownership, layouts, tile order, instruction atoms, allocation,
-and the order of the shared memory accesses finalize proved. A backend
-implementation preserves those decisions while supplying instruction encoding and
-the synchronisation the TIR does not hold.
+TIR settles value ownership, layouts, tile order, instruction atoms, and allocation.
+A backend implementation preserves those decisions while supplying instruction
+encoding and synchronization.
 
 For CUDA on H200, that protocol includes tensor maps and shared-memory descriptors,
 full/empty mbarriers and phases, WGMMA fence/commit/wait, register fences and
