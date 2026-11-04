@@ -10,6 +10,7 @@ from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Split
 from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axes
 from tilefoundry.visitor_registry.candidates import register_candidates
+from tilefoundry.visitor_registry.candidates.common import only_moves
 from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensor
 from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
 from tilefoundry_nvidia.cuda.ir.tir.memory.ldmatrix import LdMatrix
@@ -58,7 +59,9 @@ def _matmul_operands(call, instruction):
     return {}, (call.type, lhs, rhs)
 
 
-register_candidates(Reshard, (CopyAsync, CopyAsyncTensor, CopyReduceAsyncTensor, LdMatrix, StMatrix))
+register_candidates(
+    Reshard, (CopyAsync, CopyAsyncTensor, CopyReduceAsyncTensor, LdMatrix, StMatrix), when=only_moves
+)
 
 
 @register_candidates(IndexSelect, (CopyAsync,))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.kernels import gather
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
@@ -151,9 +152,9 @@ def _copy_async_access(call, ctx):
 @register_schedule_eval(CopyAsync)
 def _eval_scheduled_copy_async(ctx):
     if not is_indexed_copy(ctx.args):
-        return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
+        return TensorValue(ShardTensor(ctx.result_type, ctx.args[0].data))
     source, index = ctx.args[0].data, ctx.args[2].data
-    return TensorValue(data=gather(source, index, 0, ctx.op.fill), type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, gather(source, index, 0, ctx.op.fill)))
 
 
 @register_verify_stmt(CopyAsync)

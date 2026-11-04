@@ -8,18 +8,16 @@ from __future__ import annotations
 
 import inspect
 import types
-from dataclasses import replace
 from typing import Callable
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.ir.core.module import Module, ModuleList
-from tilefoundry.ir.types import Placement, Topology
-from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types import Placement
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.runtime.function import RuntimeFunction
 from tilefoundry.runtime.module import RuntimeModule
 from tilefoundry.runtime.resource import RuntimeResource
-from tilefoundry.runtime.tensor import ShardTensor
 
 _RUNTIME_FUNC_MARK = "_tilefoundry_runtime_func"
 
@@ -114,7 +112,7 @@ class _Twin(RuntimeModule):
         body. Named as ``DTensor.to_local``, which answers the same question.
         """
         if isinstance(value, ShardTensor):
-            return value.to_local(self._topologies, self._placement)
+            return value.to_local(self._placement)
         return value
 
     def _from_local(self, value, declared):
@@ -123,9 +121,9 @@ class _Twin(RuntimeModule):
         The declared return type decides, not the value: what a body hands
         back is a bare ``torch.Tensor`` with nothing on it saying whether it is
         one program's slice or the whole. Only a return type the mesh divides
-        is a distributed value; anything else is one tensor and stays one. The
-        type paired with it states the shape the body actually returned and
-        carries its default local layout: narrowing it again would take a shard of a shard.
+        is a distributed value; anything else is one tensor and stays one. A
+        distributed value is returned scattered, holding only this program's
+        piece under the declared global type, so it is never narrowed twice.
         """
         import torch  # noqa: PLC0415 -- optional runtime dep
 
@@ -133,10 +131,7 @@ class _Twin(RuntimeModule):
             return value
         if shard_layout_of(declared.layout) is None:
             return value
-        return ShardTensor(
-            value,
-            replace(declared, shape=tuple(value.shape), layout=Layout(tuple(value.shape))),
-        )
+        return ShardTensor(declared, ((self._placement, value),))
 
     def _weight(self, name: str):
         """Read one declared weight, narrow it to this program, and memoize it.
@@ -177,9 +172,7 @@ class _Twin(RuntimeModule):
                 f"{value.dtype}, declared {declared.dtype}; the way out is a weight "
                 "converter on the model, not a flag on the read side"
             )
-        local = ShardTensor(value, declared).to_local(
-            self._topologies, self._placement
-        )
+        local = ShardTensor(declared, value).to_local(self._placement)
         self._bound[key] = local if local is value else local.clone()
         return self._bound[key]
 
@@ -292,10 +285,9 @@ def runtime_module(sem: Module) -> Callable[[type], type]:
                     f"runtime N={len(runtime_slot)}, indexed={runtime_slot.indexed}"
                 )
 
-        def __init__(self, ir: Module | None = None, *, topologies: tuple[Topology, ...] = ()) -> None:
+        def __init__(self, ir: Module | None = None) -> None:
             ir = sem if ir is None else ir
             self._ir = ir
-            self._topologies = ir.topologies if ir.topologies is not None else topologies
             self._bound: dict[tuple, object] = {}
             self._resource: RuntimeResource | None = None
             self._placement: Placement | None = None
@@ -310,7 +302,7 @@ def runtime_module(sem: Module) -> Callable[[type], type]:
                     )
                 definitions = child_impl.elements if isinstance(child_impl, ModuleList) else (child_impl,)
                 instances = tuple(
-                    child_cls(ir=child_ir, topologies=self._topologies)
+                    child_cls(ir=child_ir)
                     for child_cls, child_ir in zip(definitions, slot.elements, strict=True)
                 )
                 child = instances if slot.indexed else instances[0]

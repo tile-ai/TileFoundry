@@ -57,7 +57,7 @@ of a thread mesh, not a level.
 
 - constraints:
   - `program_id<TopologyScope::gpu>()` MUST equal the host `Placement`'s id
-    ([runtime §1.10](../../../../../../docs/spec/runtime.md#110-runtimetensorpy)).
+    ([runtime §1.10](../../../../../../docs/spec/runtime.md#110-shardtensor)).
     Devices have no register for their position in the host's mesh.
   - The id travels in a by-value `ProgramMetaData` kernel parameter, hidden
     from the user signature. Before divergence, one thread MUST initialize

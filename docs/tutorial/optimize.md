@@ -69,7 +69,8 @@ class Naive:
                 held = tf.reshard(a, (ROWS @ (cta.tile, m.x), BLOCKS @ m.y, BLOCK @ m.t), "rmem")
                 scaling = tf.reshard(gamma, (1, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
                 rows = tf.cast(held, "f32")
-                mean = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
+                total = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
+                mean = tf.reshard(total, (ROWS @ (cta.tile, m.x), 1), "rmem")
                 normed = tf.cast(rows * tf.rsqrt(mean + EPS), "bf16") * scaling
                 return tf.reshard(normed, (ROWS, H), "gmem")
 
@@ -80,7 +81,8 @@ class Naive:
             with Mesh(("thread",), (PAIR, 4, 32), ("x", "y", "t")) as m:
                 held = tf.reshard(normed, (ROWS @ (cta.tile, m.x), BLOCKS @ m.y, BLOCK @ m.t), "rmem")
                 blocks = tf.reshape(tf.cast(held, "f32"), (ROWS, BLOCKS, BLOCK))
-                scale = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX) * (1.0 / FP8_MAX)
+                peak = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX)
+                scale = tf.reshard(peak, (ROWS @ (cta.tile, m.x), BLOCKS @ m.y, 1), "rmem") * (1.0 / FP8_MAX)
                 quant = tf.cast(tf.clamp(blocks / scale, -FP8_MAX, FP8_MAX), "fp8e4m3")
                 return (
                     tf.reshard(tf.reshape(quant, (ROWS, H)), (ROWS, H), "gmem"),
@@ -95,9 +97,9 @@ grep -E '^# (memory|roofline) ' Naive.txt
 ```
 
 ```text
-# memory traffic=gmem:r7.23MiB/w5.47MiB@logical,r9.02MiB/w5.47MiB@total,r70.00KiB/w42.44KiB@cta,r336B/w224B@thread;rmem:r74.18MiB/w59.68MiB@logical,r75.97MiB/w61.48MiB@total,r589.35KiB/w476.90KiB@cta,r2.54KiB/w2.04KiB@thread footprint=a:3.61MiB;gamma:14.00KiB;norm::v11:7.22MiB;v13:1.80MiB;v15:57.75KiB footprint-precision=exact peak=gmem:7.23MiB;rmem:112.01KiB persistent=gmem:3.62MiB
+# memory traffic=gmem:r7.23MiB/w5.47MiB@logical,r9.02MiB/w5.47MiB@total,r70.00KiB/w42.44KiB@cta,r336B/w224B@thread;rmem:r74.24MiB/w59.74MiB@logical,r76.03MiB/w61.53MiB@total,r589.80KiB/w477.34KiB@cta,r2.60KiB/w2.09KiB@thread footprint=a:3.61MiB;gamma:14.00KiB;norm::v12:7.22MiB;v14:1.80MiB;v16:57.75KiB footprint-precision=exact peak=gmem:7.23MiB;rmem:112.01KiB persistent=gmem:3.62MiB
 # roofline ideal-ns=8697 bound-by=memory
-# memory traffic=gmem:r3.62MiB/w3.61MiB@logical,r5.41MiB/w3.61MiB@total,r42.00KiB/w28.00KiB@cta,r224B/w112B@thread;rmem:r39.72MiB/w32.50MiB@logical,r41.51MiB/w34.29MiB@total,r322.03KiB/w266.02KiB@cta,r1.33KiB/w1.11KiB@thread footprint=a:3.61MiB;gamma:14.00KiB;v11:3.61MiB footprint-precision=exact
+# memory traffic=gmem:r3.62MiB/w3.61MiB@logical,r5.41MiB/w3.61MiB@total,r42.00KiB/w28.00KiB@cta,r224B/w112B@thread;rmem:r39.72MiB/w32.50MiB@logical,r41.51MiB/w34.29MiB@total,r322.04KiB/w266.03KiB@cta,r1.33KiB/w1.11KiB@thread footprint=a:3.61MiB;gamma:14.00KiB;v12:3.61MiB footprint-precision=exact
 # roofline ideal-ns=4952 bound-by=memory
 ```
 
@@ -123,10 +125,12 @@ class Fused:
                 held = tf.reshard(a, (ROWS @ (cta.tile, m.x), BLOCKS @ m.y, BLOCK @ m.t), "rmem")
                 scaling = tf.reshard(gamma, (1, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
                 rows = tf.cast(held, "f32")
-                mean = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
+                total = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
+                mean = tf.reshard(total, (ROWS @ (cta.tile, m.x), 1), "rmem")
                 normed = tf.cast(rows * tf.rsqrt(mean + EPS), "bf16") * scaling
                 blocks = tf.reshape(tf.cast(normed, "f32"), (ROWS, BLOCKS, BLOCK))
-                scale = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX) * (1.0 / FP8_MAX)
+                peak = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX)
+                scale = tf.reshard(peak, (ROWS @ (cta.tile, m.x), BLOCKS @ m.y, 1), "rmem") * (1.0 / FP8_MAX)
                 quant = tf.cast(tf.clamp(blocks / scale, -FP8_MAX, FP8_MAX), "fp8e4m3")
                 return (
                     tf.reshard(tf.reshape(quant, (ROWS, H)), (ROWS, H), "gmem"),
@@ -141,7 +145,7 @@ grep -E '^# (memory|roofline) ' Fused.txt
 ```
 
 ```text
-# memory traffic=gmem:r3.62MiB/w1.86MiB@logical,r5.41MiB/w1.86MiB@total,r42.00KiB/w14.44KiB@cta,r224B/w112B@thread;rmem:r70.57MiB/w56.07MiB@logical,r72.36MiB/w57.87MiB@total,r561.35KiB/w448.90KiB@cta,r2.43KiB/w1.93KiB@thread footprint=a:3.61MiB;gamma:14.00KiB;v22:1.80MiB;v24:57.75KiB footprint-precision=exact peak=gmem:5.48MiB;rmem:112.01KiB persistent=gmem:3.62MiB
+# memory traffic=gmem:r3.62MiB/w1.86MiB@logical,r5.41MiB/w1.86MiB@total,r42.00KiB/w14.44KiB@cta,r224B/w112B@thread;rmem:r70.63MiB/w56.13MiB@logical,r72.42MiB/w57.92MiB@total,r561.80KiB/w449.34KiB@cta,r2.49KiB/w1.98KiB@thread footprint=a:3.61MiB;gamma:14.00KiB;v24:1.80MiB;v26:57.75KiB footprint-precision=exact peak=gmem:5.48MiB;rmem:112.01KiB persistent=gmem:3.62MiB
 # roofline ideal-ns=3755 bound-by=memory
 ```
 

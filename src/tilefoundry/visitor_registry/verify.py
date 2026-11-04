@@ -18,7 +18,7 @@ from tilefoundry.ir.core.module import Module, ModuleList, resolve_symbol
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord, literal_axes
 from tilefoundry.ir.hir.specialize import canonical_specialization_signature
 from tilefoundry.ir.module_utils import list_call_paths
 from tilefoundry.ir.pattern import RangePattern, locate_dim_var
@@ -55,7 +55,7 @@ from tilefoundry.ir.types.mesh import Mesh, make_mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.tensor_type import TupleType
-from tilefoundry.ir.types.utils import static_dim_value, tensor_types
+from tilefoundry.ir.types.utils import tensor_types
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.target import CpuTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
@@ -611,12 +611,10 @@ def _check_bound_coordinates(field: str, bound, scope) -> None:
         if not (isinstance(expr, Call) and isinstance(expr.target, MeshCoord)):
             continue
         mesh = expr.target.mesh
-        axis = static_dim_value(expr.args[0]) if expr.args else None
-        if axis is None or not 0 <= axis < len(flatten(mesh.layout).shape):
-            raise VerifyError(
-                f"For.{field} reads axis {axis!r} of a mesh of rank "
-                f"{len(flatten(mesh.layout).shape)}"
-            )
+        axes = literal_axes(expr.args[0]) if expr.args else None
+        rank = len(flatten(mesh.layout).shape)
+        if axes is None or not all(0 <= axis < rank for axis in axes):
+            raise VerifyError(f"For.{field} reads axes {axes!r} of a mesh of rank {rank}")
         if not any(held is mesh or held == mesh for held in scope):
             raise VerifyError(
                 f"For.{field} reads a coordinate of {mesh!r}, which no enclosing MeshScope binds"

@@ -1,4 +1,4 @@
-"""Weights whose local views cannot be represented on logical tensor axes."""
+"""Weights whose local piece is not one block of the logical tensor."""
 from tilefoundry.dsl import *
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry_nvidia import CudaTarget

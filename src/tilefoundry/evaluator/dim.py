@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from typing import Callable
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.types.dim import (
@@ -101,17 +103,25 @@ def _dim_op_eval(op_cls: type, fold: Callable[[int, int], int]):
         name = op_cls.__name__
         if len(ctx.args) != 2:
             raise EvalError(f"evaluator: {name} takes 2 operands, got {len(ctx.args)}")
-        operands = []
-        for arg in ctx.args:
-            if not isinstance(arg, TensorValue) or arg.data.numel() != 1:
+        if not all(isinstance(arg, TensorValue) for arg in ctx.args):
+            raise EvalError(f"evaluator: {name} operands are single integers")
+
+        def apply(*held):
+            if any(data.numel() != 1 for data in held):
                 raise EvalError(f"evaluator: {name} operands are single integers")
-            operands.append(int(arg.data.reshape(-1)[0].item()))
-        if op_cls in (DimFloorDiv, DimMod) and operands[1] == 0:
-            raise EvalError(f"evaluator: {name} by zero")
-        return TensorValue(
-            data=ctx.args[0].data.new_tensor(int(fold(*operands))),
-            type=ctx.result_type,
+            operands = [int(data.reshape(-1)[0].item()) for data in held]
+            if op_cls in (DimFloorDiv, DimMod) and operands[1] == 0:
+                raise EvalError(f"evaluator: {name} by zero")
+            return held[0].new_tensor(int(fold(*operands)))
+
+        a, b = ctx.args[0].tensor, ctx.args[1].tensor
+        placements = common_placements(a, b)
+        held = (
+            apply(a.tensor, b.tensor)
+            if not placements
+            else tuple((p, apply(a.to_local(p), b.to_local(p))) for p in placements)
         )
+        return TensorValue(ShardTensor(ctx.result_type, held))
 
     return _eval
 

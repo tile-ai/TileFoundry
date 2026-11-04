@@ -81,7 +81,7 @@ class InvariantGemmOperands(FamilyCase):
         assert gmem.total == TrafficBytes(read=18_824_036_352, write=2_214_592_512)
 
 
-def test_reshard_aliases_input_buffer() -> None:
+def test_reshard_across_cards_is_communication() -> None:
     TransposeShard = load_authored_ir(f"{PLACED / 'tp_all_to_all.py'}:TransposeShard")
     result = analyze(
         *check_program(TransposeShard, TransposeShard.entry_function()), analysis="memory"
@@ -91,13 +91,16 @@ def test_reshard_aliases_input_buffer() -> None:
         for expr in collect_exprs(result.function.body)
         if isinstance(expr, Call) and isinstance(expr.target, Reshard)
     )
-    assert aliased_operand(reshard) == 0
+    namespace = load_namespace(str(PLACED / "tp_all_to_all.py"))[0]
+    held, sent, cards = namespace["HELD_BYTES"], namespace["SENT_BYTES"], namespace["GPUS"]
+    assert aliased_operand(reshard) is None
     record = get_metadata(reshard, MemoryMetadata)
-    assert record.buffer_bytes is None and not record.offsets
-    assert record.traffic.communication.of("gpu") is None
+    assert record.buffer_bytes == held
+    moved = record.traffic.communication.of("gpu").total
+    assert (moved.read, moved.write) == (cards * sent, cards * sent)
     assert (
         get_metadata(result.function, RegionMemoryMetadata).peak_for("gmem").peak_bytes
-        == load_namespace(str(PLACED / "tp_all_to_all.py"))[0]["HELD_BYTES"]
+        == 2 * held
     )
 
 

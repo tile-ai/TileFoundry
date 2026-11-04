@@ -1,7 +1,9 @@
 """Target-neutral HIR-to-TIR candidate pairings."""
 
 from dataclasses import replace
+from itertools import zip_longest
 
+from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.math.clamp import Clamp as HirClamp
 from tilefoundry.ir.hir.math.unary import Unary as HirUnary
@@ -23,7 +25,7 @@ from tilefoundry.ir.tir.nn.relu import ReLU as TirReLU
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.tir.where import Where as TirWhere
 from tilefoundry.ir.types import Layout
-from tilefoundry.ir.types.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard_layout import ShardLayout, partial_reductions_by_axis
 from tilefoundry.visitor_registry.access_relation import relations_of
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
@@ -31,10 +33,44 @@ from ..instruction import ScheduleRefusal
 from . import register_candidates
 
 
-@register_candidates(Reshard, (Copy,))
+def combines_partial(call) -> bool:
+    """Whether a reshard resolves a Partial, which combines the units' parts."""
+    return _resolved_reduction(call.args[0].type, call.type) is not None
+
+
+def only_moves(call) -> bool:
+    """Whether a reshard only moves data: it resolves no Partial."""
+    return not combines_partial(call)
+
+
+@register_candidates(Reshard, (Copy,), when=only_moves)
 def _reshard_operands(call, instruction):
-    """Reshard states both transfer types; its landing attributes are already in the result."""
-    return {}, (call.args[0].type, call.type)
+    """Reshard states both transfer types; its landing attributes are already in the result.
+
+    A reduction over no tensor axis combines the Partial the reshard resolves.
+    """
+    source, result = call.args[0].type, call.type
+    if instruction is not TirReduce:
+        return {}, (source, result)
+    kind = ReduceKind(_resolved_reduction(source, result))
+    return {"axes": (), "keepdim": True, "kind": kind}, (source, result)
+
+
+register_candidates(Reshard, (TirReduce,), when=combines_partial)
+
+
+def _resolved_reduction(source, result) -> str | None:
+    """The reduction a reshard performs by dropping its source's Partial axes, if any."""
+    resolved = {
+        kind
+        for kind, kept in zip_longest(
+            partial_reductions_by_axis(source.layout), partial_reductions_by_axis(result.layout)
+        )
+        if kind is not None and kept is None
+    }
+    if len(resolved) > 1:
+        raise ScheduleRefusal(f"a reshard cannot combine Partial reductions {sorted(resolved)} at once")
+    return resolved.pop() if resolved else None
 
 
 register_candidates(HirBinary, (TirBinary,))

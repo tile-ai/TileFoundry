@@ -26,7 +26,7 @@ from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord, literal_axes
 from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.sync import SyncBarrier, classify
 from tilefoundry.ir.types import Mesh, ShardLayout, Split, StorageKind, TensorType
@@ -563,9 +563,11 @@ class _Planner:
         if isinstance(expr, Var):
             return id(expr) in uniform or id(scope.capture_root(expr)) in uniform
         if isinstance(expr, Call) and isinstance(expr.target, MeshCoord):
-            axis = static_dim_value(expr.args[0])
+            axes = literal_axes(expr.args[0])
             keys = axis_keys(expr.target.mesh)
-            return axis is not None and 0 <= axis < len(keys) and keys[axis][0] not in spanned
+            return axes is not None and all(
+                0 <= axis < len(keys) and keys[axis][0] not in spanned for axis in axes
+            )
         if isinstance(expr, Call) and is_dim_op_call(expr):
             return all(self.uniform(arg, uniform, spanned, scope) for arg in expr.args)
         return False

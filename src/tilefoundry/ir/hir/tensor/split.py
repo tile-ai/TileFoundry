@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Op
@@ -115,18 +116,24 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
 
 @register_eval(Split)
 def _eval_split(ctx):
-    source = ctx.args[0].data
-    axis = ctx.op.axis + source.ndim if ctx.op.axis < 0 else ctx.op.axis
-    n = ctx.op.num_splits
-    extent = source.shape[axis]
-    if extent % n:
-        raise ValueError(f"Split: runtime axis {axis} extent {extent} is not divisible by {n}")
-    parts = torch.chunk(source, n, dim=axis)
+    fields = ctx.result_type.fields
+
+    def split(source):
+        axis = ctx.op.axis + source.ndim if ctx.op.axis < 0 else ctx.op.axis
+        n = ctx.op.num_splits
+        extent = source.shape[axis]
+        if extent % n:
+            raise ValueError(f"Split: runtime axis {axis} extent {extent} is not divisible by {n}")
+        return torch.chunk(source, n, dim=axis)
+
+    x = ctx.args[0].tensor
+    if x.is_global:
+        held = split(x.tensor)
+    else:
+        each = [(p, split(t)) for p, t in x.tensor]
+        held = tuple(tuple((p, out[i]) for p, out in each) for i in range(len(fields)))
     return TupleValue(
-        tuple(
-            TensorValue(data=part, type=field_type)
-            for part, field_type in zip(parts, ctx.result_type.fields)
-        )
+        tuple(TensorValue(ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
     )
 
 

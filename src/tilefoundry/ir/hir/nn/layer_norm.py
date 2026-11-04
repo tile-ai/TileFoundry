@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -93,11 +95,18 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(LayerNorm)
 def _eval_layer_norm(ctx):
-    x, weight, bias = (arg.data for arg in ctx.args)
-    rank = x.ndim
-    axis = ctx.op.axis + rank if ctx.op.axis < 0 else ctx.op.axis
-    out = F.layer_norm(x, tuple(x.shape[axis:]), weight, bias, ctx.op.eps)
-    return TensorValue(data=out, type=ctx.result_type)
+    def layer_norm(x, weight, bias):
+        axis = ctx.op.axis + x.ndim if ctx.op.axis < 0 else ctx.op.axis
+        return F.layer_norm(x, tuple(x.shape[axis:]), weight, bias, ctx.op.eps)
+
+    xs = tuple(arg.tensor for arg in ctx.args)
+    placements = common_placements(*xs)
+    held = (
+        layer_norm(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, layer_norm(*(x.to_local(p) for x in xs))) for p in placements)
+    )
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 @register_access_relation(LayerNorm)

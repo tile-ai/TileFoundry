@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -32,8 +33,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Tanh)
 def _eval_tanh(ctx):
-
-    return TensorValue(data=torch.tanh(ctx.args[0].data), type=ctx.result_type)
+    x = ctx.args[0].tensor
+    held = torch.tanh(x.tensor) if x.is_global else tuple((p, torch.tanh(t)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 register_access_relation(Tanh)(identity_relations)

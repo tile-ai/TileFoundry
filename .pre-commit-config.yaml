@@ -42,7 +42,7 @@ repos:
         entry: python scripts/runtime_spec_surface.py --check
         language: system
         pass_filenames: false
-        files: ^(docs/spec/runtime\.md|targets/[^/]+/tilefoundry_[^/]+/[^/]+/(docs/spec/runtime\.md|(codegen/)?include/.*)|src/tilefoundry/(runtime/include/.*|(runtime/.*|compile)\.py))$
+        files: ^(docs/spec/runtime\.md|targets/[^/]+/tilefoundry_[^/]+/[^/]+/(docs/spec/runtime\.md|(codegen/)?include/.*)|src/tilefoundry/(runtime/include/.*|(runtime/.*|core/tensor|compile)\.py))$
       - id: spec-entropy-lint
         name: spec-entropy-lint
         entry: python scripts/spec_entropy_lint.py

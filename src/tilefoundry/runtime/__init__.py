@@ -28,7 +28,6 @@ from .measure import (
 )
 from .module import CompiledModule, RuntimeModule
 from .resource import Absolute, DictResource, Preprocessed, RuntimeResource, SafetensorsResource
-from .tensor import ShardTensor
 
 __all__ = [
     "PREDICATES",
@@ -51,7 +50,6 @@ __all__ = [
     "RuntimeModule",
     "RuntimeResource",
     "SafetensorsResource",
-    "ShardTensor",
     "Ulp",
     "check",
     "runtime_func",

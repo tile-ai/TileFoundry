@@ -9,6 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 import pytest
+import torch
 
 from tests.core._corpus import Case, Problems, case, special
 from tests.nvidia.cuda.analysis._contracts import (
@@ -39,6 +40,7 @@ from tilefoundry.analysis.liveness import LivenessMetadata
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_authored_ir, load_namespace
+from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.module import Module
@@ -203,6 +205,58 @@ class MoreWork(AnalysisCase):
         timeline = summary["timeline"]
         module = load_authored_ir(str(PLACED / smaller))
         assert _predicted_ns(module, dims=dims) <= timeline["end_ns"] - timeline["start_ns"]
+
+
+@dataclass(frozen=True)
+class FsdpTraining(AnalysisCase):
+    """Two training steps on two cards against dense autograd and momentum SGD."""
+
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_348, "rmem": 0})
+
+    def guard(self, state, problems):
+        (participants,) = _constants("fsdp_mlp", "participants")
+        generator = torch.Generator().manual_seed(183)
+        w1 = torch.nn.Parameter(torch.randn(8, 8, generator=generator) / 4)
+        w2 = torch.nn.Parameter(torch.randn(8, 4, generator=generator) / 4)
+        optimizer = torch.optim.SGD((w1, w2), lr=0.01, momentum=0.9)
+        held = (w1.detach().clone(), w2.detach().clone(), torch.zeros_like(w1), torch.zeros_like(w2))
+        for step in range(2):
+            x = (torch.randn(8, 8, generator=generator) / 4 + step / 10).requires_grad_()
+            target = torch.randn(8, 4, generator=generator) / 4
+            optimizer.zero_grad()
+            expected_y = torch.relu(x @ w1) @ w2
+            loss = torch.nn.functional.mse_loss(expected_y, target)
+            loss.backward()
+            expected = (expected_y.detach(), loss.detach(), x.grad, w1.grad.clone(), w2.grad.clone())
+            before = tuple(item.clone() for item in held)
+            actual = evaluate(state.result.function, x.detach(), target, *held)
+            for item, saved in zip(held, before, strict=True):
+                assert torch.equal(item, saved), f"step {step}: an input was written"
+            normalized = (*actual[:2], actual[2] / participants, *actual[3:5])
+            for index, (item, reference) in enumerate(zip(normalized, expected, strict=True)):
+                torch.testing.assert_close(
+                    item, reference, rtol=1e-5, atol=1e-6, msg=lambda m: f"step {step}, output {index}: {m}"
+                )
+            optimizer.step()
+            momentum = tuple(optimizer.state[w]["momentum_buffer"] for w in (w1, w2))
+            held = actual[5:]
+            for index, (item, reference) in enumerate(zip(held, (w1, w2, *momentum), strict=True)):
+                torch.testing.assert_close(
+                    item, reference, rtol=1e-5, atol=1e-6, msg=lambda m: f"step {step}, state {index}: {m}"
+                )
+
+
+@case
+class FsdpReleaseStep(FsdpTraining):
+    path: Path = PLACED / "fsdp_mlp.py"
+    name: str | None = "Training.release_step"
+
+
+@case
+class FsdpRetainStep(FsdpTraining):
+    path: Path = PLACED / "fsdp_mlp.py"
+    name: str | None = "Training.retain_step"
 
 
 @case
@@ -927,7 +981,7 @@ class RmsnormQuantSeq2(AnalysisCase):
             if isinstance(expr, Call) and isinstance(expr.target, Reshape)
         )
         liveness = get_metadata(result.function, LivenessMetadata)
-        assert liveness.interval_of(SSAValue(reshaped)).last_used_at == 19
+        assert liveness.interval_of(SSAValue(reshaped)).last_used_at == 21
         assert get_metadata(reshaped, MemoryMetadata).buffer_bytes is None
         assert not get_metadata(reshaped, MemoryMetadata).offsets
 
@@ -1151,7 +1205,7 @@ EXPECTED = {
     "square_cuda.Model.main[static]": dict(memory_peaks={"gmem": 676, "rmem": 4}),
     "tiny_tp_decoder.DecoderLayer.decode[static]": dict(memory_peaks={"gmem": 48, "rmem": 32}),
     "tiny_tp_decoder.DecoderLayer.project[static]": dict(memory_peaks={"gmem": 96}),
-    "tp_all_to_all.TransposeShard.transpose_shard[static]": dict(memory_peaks={"gmem": 128}),
+    "tp_all_to_all.TransposeShard.transpose_shard[static]": dict(memory_peaks={"gmem": 256}),
     "weighted_cuda.Weighted.scaled[static]": dict(memory_peaks={"gmem": 1_348, "rmem": 8}),
 }
 

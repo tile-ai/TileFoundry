@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -98,9 +100,17 @@ def _rms_norm_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
 
 @register_eval(RMSNorm)
 def _eval_rms_norm(ctx):
+    def rms_norm(x, weight):
+        xf = x.float()
+        ms = xf.pow(2).mean(dim=-1, keepdim=True)
+        out = xf * torch.rsqrt(ms + ctx.op.eps) * weight.float()
+        return out.to(to_torch_dtype(ctx.result_type.dtype))
 
-    xf = ctx.args[0].data.float()
-    wf = ctx.args[1].data.float()
-    ms = xf.pow(2).mean(dim=-1, keepdim=True)
-    out = xf * torch.rsqrt(ms + ctx.op.eps) * wf
-    return TensorValue(data=out.to(to_torch_dtype(ctx.result_type.dtype)), type=ctx.result_type)
+    xs = tuple(arg.tensor for arg in ctx.args)
+    placements = common_placements(*xs)
+    held = (
+        rms_norm(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, rms_norm(*(x.to_local(p) for x in xs))) for p in placements)
+    )
+    return TensorValue(ShardTensor(ctx.result_type, held))

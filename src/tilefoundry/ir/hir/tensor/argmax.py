@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -104,8 +105,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(ArgMax)
 def _eval_argmax(ctx):
-    out = torch.argmax(ctx.args[0].data, dim=ctx.op.axis)
-    return TensorValue(data=out, type=ctx.result_type)
+    def argmax(x):
+        return torch.argmax(x, dim=ctx.op.axis)
+
+    x = ctx.args[0].tensor
+    held = argmax(x.tensor) if x.is_global else tuple((p, argmax(t)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 @register_access_relation(ArgMax)

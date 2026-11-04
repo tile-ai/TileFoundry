@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard_layout import ShardLayout
+from tilefoundry.core import ShardTensor
+from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.utils.lazy import torch
 
 
@@ -18,10 +18,20 @@ class Value:
 
 @dataclass(frozen=True)
 class TensorValue(Value):
-    """A logical tensor value paired with its HIR type."""
+    """One ``ShardTensor``; its type is the tensor's."""
 
-    data: torch.Tensor
-    type: TensorType
+    tensor: ShardTensor
+
+    @property
+    def type(self) -> TensorType:
+        return self.tensor.type
+
+    @property
+    def data(self) -> torch.Tensor:
+        """The one global logical tensor; a local view has none."""
+        if not self.tensor.is_global:
+            raise EvalError("value is a local view; this op reads only the global view")
+        return self.tensor.tensor
 
 
 @dataclass(frozen=True)
@@ -29,6 +39,11 @@ class TupleValue(Value):
     """An aggregate of values projected by ``tuple_get_item``."""
 
     elements: tuple[Value, ...]
+
+    @property
+    def type(self) -> TupleType:
+        """The element types, which a Function boundary checks a tuple argument against."""
+        return TupleType(tuple(element.type for element in self.elements))
 
 
 _TORCH_DTYPE = {
@@ -71,56 +86,3 @@ def from_torch_dtype(dtype: torch.dtype) -> DType:
 def tensor_type_of(data: torch.Tensor, *, like: TensorType) -> TensorType:
     """Describe a concrete tensor using the declaration's non-shape fields."""
     return replace(like, shape=tuple(data.shape), dtype=from_torch_dtype(data.dtype))
-
-
-def _flatten_ints(shape) -> tuple[int, ...]:
-    """Flatten a (possibly nested) IntTuple of static dims into plain ints."""
-    out: list[int] = []
-    for d in shape:
-        if isinstance(d, (tuple, list)):
-            out.extend(_flatten_ints(d))
-        else:
-            out.append(int(d))
-    return tuple(out)
-
-
-def _layout_shape(type) -> tuple[int, ...] | None:
-    """Layout shape.
-
-    The element organisation of ``type.layout`` as a flat int tuple, or
-    ``None`` when its shape is not statically projectable.
-    """
-    layout = type.layout
-    base = layout.layout if isinstance(layout, ShardLayout) else layout
-    shape = base.shape
-    try:
-        return _flatten_ints(shape)
-    except (TypeError, ValueError):
-        return None
-
-
-def as_layout_view(value: TensorValue) -> torch.Tensor:
-    """Project ``value.data`` from its logical shape to the layout-domain element organisation.
-
-    Project ``value.data`` from its logical shape to the layout-domain
-    element organisation. Returns ``data`` unchanged when there is no layout
-    or the element count does not match.
-    """
-    shape = _layout_shape(value.type)
-    if shape is None:
-        return value.data
-    numel = 1
-    for d in shape:
-        numel *= d
-    if value.data.numel() != numel:
-        return value.data
-    return value.data.reshape(shape)
-
-
-def from_layout_view(data: torch.Tensor, type: TensorType) -> torch.Tensor:
-    """Inverse of :func:`as_layout_view`.
-
-    Inverse of :func:`as_layout_view`: reshape a layout-domain tensor back
-    to the logical shape of ``type``.
-    """
-    return data.reshape(tuple(int(d) for d in type.shape))

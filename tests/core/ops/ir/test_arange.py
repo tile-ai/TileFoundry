@@ -6,9 +6,11 @@ import pytest
 import torch
 
 from tests.core.ops.ir.op_case import Cost, OpCase, check_op_case
+from tilefoundry.core import ShardTensor
 from tilefoundry.dsl import *
+from tilefoundry.evaluator.context import EvaluateContext
 from tilefoundry.evaluator.registry import eval_registry
-from tilefoundry.evaluator.value import EvalError
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
@@ -90,7 +92,8 @@ def test_inner_mesh_coord_binds_multilevel() -> None:
     )
 
 
-def test_mesh_coord_evaluation_refused() -> None:
+def test_mesh_coord_evaluates_one_value_per_unit() -> None:
     handler = eval_registry.lookup(MeshCoord)
-    with pytest.raises(EvalError, match="one mesh participant"):
-        handler(None)
+    axis = TensorValue(ShardTensor(TensorType.scalar(DType.i64), torch.tensor(0)))
+    result = handler(EvaluateContext(op=MeshCoord(mesh=_COORD_MESH), args=(axis,), result_type=_COORD_INDEX))
+    assert [int(piece) for _, piece in result.tensor.tensor] == [0, 1, 2, 3]

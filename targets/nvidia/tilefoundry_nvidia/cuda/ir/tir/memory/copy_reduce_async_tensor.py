@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op, OpCapability
@@ -63,7 +64,7 @@ register_access_relation(CopyReduceAsyncTensor)(identity_relations)
 
 @register_schedule_eval(CopyReduceAsyncTensor)
 def _(ctx):
-    return TensorValue(data=ctx.args[1].data + ctx.args[0].data, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, ctx.args[1].data + ctx.args[0].data))
 
 
 @register_cost_evaluator(CopyReduceAsyncTensor)

@@ -9,8 +9,10 @@ the TIR effect-form ``Binary`` Stmt that writes into ``dst``.
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.kernels import binary
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -207,8 +209,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Binary)
 def _eval_binary(ctx):
-    out = binary(ctx.op.kind, ctx.args[0].data, ctx.args[1].data)
-    return TensorValue(data=out, type=ctx.result_type)
+    a, b = ctx.args[0].tensor, ctx.args[1].tensor
+    placements = common_placements(a, b)
+    held = (
+        binary(ctx.op.kind, a.tensor, b.tensor)
+        if not placements
+        else tuple((p, binary(ctx.op.kind, a.to_local(p), b.to_local(p))) for p in placements)
+    )
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["Binary"]

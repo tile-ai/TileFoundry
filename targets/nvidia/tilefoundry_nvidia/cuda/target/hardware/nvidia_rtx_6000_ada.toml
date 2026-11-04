@@ -35,11 +35,11 @@ source = "https://www.nvidia.com/en-us/design-visualization/rtx-6000/"
 conditions = "48 GB GDDR6 with ECC, decimal; recorded under the hbm key, which names the device's global memory whatever its technology"
 
 [facts.memory.hbm.owner]
-value = "target"
+value = "gpu"
 unit = "name"
 origin = "derived"
 source = "https://www.nvidia.com/en-us/design-visualization/rtx-6000/"
-conditions = "the stated GDDR6 capacity is one pool shared by all execution units of this single-device target"
+conditions = "the stated GDDR6 capacity is one pool per card, held by that card alone"
 
 [facts.memory.hbm.bandwidth]
 value = 960000000000

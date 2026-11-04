@@ -21,24 +21,6 @@ from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.utils import participant_layout
 
 
-def partial_reductions_by_axis(
-    layout: object,
-) -> tuple[str | None, ...]:
-    """Return each mesh axis's carried Partial reduction, if any.
-
-    The tuple index is the mesh-axis index in ``ShardLayout.attrs``. A
-    ``None`` entry denotes an attr that is not a ``Partial``; a non-sharded
-    layout returns an empty tuple.
-    """
-    layout = shard_layout_of(layout)
-    if layout is None:
-        return ()
-    return tuple(
-        attr.reduction if isinstance(attr, Partial) else None
-        for attr in layout.attrs
-    )
-
-
 def _result_access(ma: isl.multi_aff) -> dict[int, tuple[str, int | None]]:
     """How each result axis of the Op-written affine reads the domain."""
     n_in = ma.dim(isl.dim_type.IN)
@@ -92,6 +74,7 @@ def _carrier_layout(
     mesh_rank,
     propagated_attrs,
     complete_reduction_dims,
+    reduction,
     fresh_strides,
     storage,
     owners,
@@ -150,12 +133,12 @@ def _carrier_layout(
 
     out_attrs: list = [Broadcast() for _ in range(mesh_rank)]
     for p_mesh, attr in enumerate(sl.attrs):
-        if (
-            isinstance(attr, Split)
-            and attr.axis in new_pos_of
-            and pos_dom[attr.axis] not in complete_reduction_dims
-        ):
-            out_attrs[p_mesh] = Split(new_pos_of[attr.axis])
+        if isinstance(attr, Split) and attr.axis in new_pos_of:
+            out_attrs[p_mesh] = (
+                Partial(reduction)
+                if pos_dom[attr.axis] in complete_reduction_dims
+                else Split(new_pos_of[attr.axis])
+            )
         elif isinstance(attr, Partial):
             out_attrs[p_mesh] = Partial(attr.reduction)
 
@@ -194,6 +177,7 @@ def derive_output_shard_layout(
     *,
     partial_reduction_dims: "frozenset[int]" = frozenset(),
     complete_reduction_dims: "frozenset[int]" = frozenset(),
+    reduction: str = "sum",
     fresh_strides: bool = False,
     ctx=None,
     storage=None,
@@ -262,8 +246,8 @@ def derive_output_shard_layout(
                     f"input {i} mesh axis {p}: Split on a non-projection access "
                     "is not supported for shard propagation"
                 )
-            if ddim in complete_reduction_dims:
-                new_attr = Broadcast()
+            if ddim in complete_reduction_dims or ddim in partial_reduction_dims:
+                new_attr = Partial(reduction)
             elif ddim in domain_to_out_axis:
                 new_attr = Split(domain_to_out_axis[ddim])
             elif ddim in out_all_dims:
@@ -271,8 +255,6 @@ def derive_output_shard_layout(
                     f"input {i} mesh axis {p}: domain dim survives only via a "
                     "non-projection output access; cannot derive output layout axis"
                 )
-            elif ddim in partial_reduction_dims:
-                new_attr = Partial("sum")
             else:
                 new_attr = Broadcast()
             if not isinstance(attrs[p], Broadcast) and attrs[p] != new_attr:
@@ -295,6 +277,7 @@ def derive_output_shard_layout(
                 mesh_rank,
                 attrs,
                 complete_reduction_dims,
+                reduction,
                 fresh_strides,
                 storage,
                 owners,
@@ -308,4 +291,4 @@ def derive_output_shard_layout(
     return ShardLayout.default(output_shape, mesh, tuple(attrs), storage=storage, owners=owners)
 
 
-__all__ = ["derive_output_shard_layout", "partial_reductions_by_axis"]
+__all__ = ["derive_output_shard_layout"]
